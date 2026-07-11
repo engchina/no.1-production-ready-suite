@@ -1,29 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ArrowDownUp,
-  Code2,
   Database,
   FileJson,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
-  Search,
   Trash2,
   UserCog,
   X,
 } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import {
+  Button,
+  EmptyState,
+  PageHeader,
+  StatusBadge,
+  ToggleChip,
+  toast,
+} from "@engchina/production-ready-ui";
 
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
   ExecutionConfirmationField,
+  SelectionListPanel,
 } from "../components/DbAdminShared";
 import {
+  DbManagementSearchField,
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
   DbObjectManagementTabs,
@@ -42,6 +52,7 @@ import type {
 } from "../types";
 
 type ActiveView = "list" | "create" | "oracle";
+type ProfileStatusFilter = "active" | "archived";
 type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
 
@@ -75,6 +86,8 @@ const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   comments: true,
   annotations: false,
   constraints: false,
+  role: "",
+  additional_instructions: "",
 };
 
 const EMPTY_FORM: ProfileFormState = {
@@ -89,6 +102,15 @@ const EMPTY_FORM: ProfileFormState = {
   fewShotText: "",
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
 };
+
+function emptyProfileForm(): ProfileFormState {
+  return {
+    ...EMPTY_FORM,
+    allowedTables: [],
+    allowedViews: [],
+    selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG },
+  };
+}
 
 const inputClass =
   "min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200";
@@ -178,6 +200,8 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
       model: form.selectAiConfig.model.trim(),
       embedding_model: form.selectAiConfig.embedding_model.trim() || "cohere.embed-v4.0",
       max_tokens: Number(form.selectAiConfig.max_tokens) || 32000,
+      role: form.selectAiConfig.role.trim(),
+      additional_instructions: form.selectAiConfig.additional_instructions.trim(),
     },
   };
 }
@@ -284,8 +308,10 @@ function ProfileList({
   selectedId,
   loading,
   search,
+  statusFilter,
   sort,
   onSearchChange,
+  onStatusFilterChange,
   onSortChange,
   onSelect,
 }: {
@@ -293,8 +319,10 @@ function ProfileList({
   selectedId: string | null;
   loading: boolean;
   search: string;
+  statusFilter: ProfileStatusFilter;
   sort: SortState;
   onSearchChange: (value: string) => void;
+  onStatusFilterChange: (value: ProfileStatusFilter) => void;
   onSortChange: (key: SortKey) => void;
   onSelect: (profile: Nl2SqlProfile) => void;
 }) {
@@ -307,18 +335,32 @@ function ProfileList({
         description={t("profiles.list.hint")}
         action={<StatusBadge variant="info" label={t("profiles.objects.count", { count: profiles.length })} />}
       />
-      <label className="grid gap-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-800">
-        <span>{t("profiles.list.search")}</span>
-        <span className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-          <input
-            value={search}
-            onChange={(event) => onSearchChange(event.currentTarget.value)}
-            className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-            placeholder={t("profiles.list.searchPlaceholder")}
-          />
-        </span>
-      </label>
+      <div
+        className="flex flex-wrap items-center gap-1"
+        role="group"
+        aria-label={t("profiles.filter.statusLabel")}
+      >
+        <ToggleChip
+          selected={statusFilter === "active"}
+          onClick={() => onStatusFilterChange("active")}
+        >
+          {t("profiles.filter.active")}
+        </ToggleChip>
+        <ToggleChip
+          selected={statusFilter === "archived"}
+          onClick={() => onStatusFilterChange("archived")}
+        >
+          {t("profiles.filter.archived")}
+        </ToggleChip>
+      </div>
+      <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <DbManagementSearchField
+          label={t("profiles.list.search")}
+          placeholder={t("profiles.list.searchPlaceholder")}
+          value={search}
+          onChange={onSearchChange}
+        />
+      </div>
       {loading ? (
         <div className="grid gap-2" data-testid="profile-list-skeleton">
           {Array.from({ length: 6 }, (_, index) => (
@@ -327,8 +369,20 @@ function ProfileList({
         </div>
       ) : profiles.length === 0 ? (
         <EmptyState
-          title={search.trim() ? t("profiles.list.noResultsTitle") : t("profiles.empty.title")}
-          hint={search.trim() ? t("profiles.list.noResultsHint") : t("profiles.empty.hint")}
+          title={
+            search.trim()
+              ? t("profiles.list.noResultsTitle")
+              : statusFilter === "archived"
+                ? t("profiles.empty.archivedTitle")
+                : t("profiles.empty.title")
+          }
+          hint={
+            search.trim()
+              ? t("profiles.list.noResultsHint")
+              : statusFilter === "archived"
+                ? t("profiles.empty.archivedHint")
+                : t("profiles.empty.hint")
+          }
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
@@ -385,50 +439,6 @@ function ProfileList({
           </div>
         </div>
       )}
-    </section>
-  );
-}
-
-function ObjectCheckboxGrid({
-  title,
-  items,
-  selected,
-  dataTestId,
-  emptyText,
-  onToggle,
-}: {
-  title: string;
-  items: string[];
-  selected: string[];
-  dataTestId: string;
-  emptyText: string;
-  onToggle: (name: string) => void;
-}) {
-  return (
-    <section className="grid min-w-0 gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-        <StatusBadge variant="neutral" label={t("profiles.objects.selected", { count: selected.length })} />
-      </div>
-      <div data-testid={dataTestId} className="grid h-[28rem] content-start gap-2 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 md:grid-cols-2">
-        {items.length === 0 ? (
-          <div className="grid min-h-24 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
-            {emptyText}
-          </div>
-        ) : (
-          items.map((name) => (
-            <label key={name} className="flex min-h-11 min-w-0 items-center gap-2 rounded-md border border-slate-200 p-3 text-sm">
-              <input
-                type="checkbox"
-                checked={selected.includes(name)}
-                onChange={() => onToggle(name)}
-                className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
-              />
-              <span className="break-all font-mono text-xs font-semibold text-slate-900">{name}</span>
-            </label>
-          ))
-        )}
-      </div>
     </section>
   );
 }
@@ -509,6 +519,47 @@ function SelectAiConfigFields({
           </label>
         ))}
       </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid content-start gap-1 text-sm font-medium text-slate-800">
+          <label htmlFor="profile-select-ai-role">{t("profiles.field.role")}</label>
+          <textarea
+            id="profile-select-ai-role"
+            aria-describedby="profile-select-ai-role-hint"
+            value={form.selectAiConfig.role}
+            rows={6}
+            onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
+            className={`${textareaClass} min-h-40`}
+            placeholder={t("profiles.placeholder.role")}
+          />
+          <p id="profile-select-ai-role-hint" className="text-xs font-normal leading-5 text-slate-600">
+            {t("profiles.field.roleHint")}
+          </p>
+        </div>
+        <div className="grid content-start gap-1 text-sm font-medium text-slate-800">
+          <label htmlFor="profile-select-ai-additional-instructions">
+            {t("profiles.field.additionalInstructions")}
+          </label>
+          <textarea
+            id="profile-select-ai-additional-instructions"
+            aria-describedby="profile-select-ai-additional-instructions-hint"
+            value={form.selectAiConfig.additional_instructions}
+            rows={6}
+            onChange={(event) =>
+              updateSelectAiConfig(setForm, {
+                additional_instructions: event.currentTarget.value,
+              })
+            }
+            className={`${textareaClass} min-h-40`}
+            placeholder={t("profiles.placeholder.additionalInstructions")}
+          />
+          <p
+            id="profile-select-ai-additional-instructions-hint"
+            className="text-xs font-normal leading-5 text-slate-600"
+          >
+            {t("profiles.field.additionalInstructionsHint")}
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
@@ -529,8 +580,8 @@ function ProfileEditor({
   onToggleView,
   onSave,
   onArchive,
+  onRestore,
   onReset,
-  onOraclePreview,
   onOracleExecute,
   onOracleConfirmationChange,
 }: {
@@ -549,12 +600,13 @@ function ProfileEditor({
   onToggleView: (name: string) => void;
   onSave: () => void;
   onArchive: () => void;
+  onRestore: () => void;
   onReset: () => void;
-  onOraclePreview: () => void;
   onOracleExecute: () => void;
   onOracleConfirmationChange: (value: string) => void;
 }) {
-  const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE" || oracleConfirmation.trim() === (oraclePreview?.profile_name ?? "");
+  const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
+  const archived = selectedProfile?.archived === true;
   return (
     <section className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
       <DbObjectPanelHeader
@@ -564,22 +616,35 @@ function ProfileEditor({
         description={selectedProfile?.name ?? t("profiles.empty.hint")}
         action={
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={onReset}>
-              <RotateCcw size={15} aria-hidden="true" />
-              <span>{t("profiles.action.reset")}</span>
-            </Button>
-            <Button type="button" variant="danger" size="sm" disabled={!selectedProfile || saving} onClick={onArchive}>
-              <Archive size={15} aria-hidden="true" />
-              <span>{t("profiles.action.archive")}</span>
-            </Button>
-            <Button type="button" variant="primary" size="sm" loading={saving} onClick={onSave}>
-              <Save size={15} aria-hidden="true" />
-              <span>{t("profiles.action.save")}</span>
-            </Button>
+            {archived ? (
+              <>
+                <StatusBadge variant="neutral" label={t("profiles.status.archived")} />
+                <Button type="button" variant="primary" size="sm" loading={saving} onClick={onRestore}>
+                  <ArchiveRestore size={15} aria-hidden="true" />
+                  <span>{t("profiles.action.restore")}</span>
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={onReset}>
+                  <RotateCcw size={15} aria-hidden="true" />
+                  <span>{t("profiles.action.reset")}</span>
+                </Button>
+                <Button type="button" variant="danger" size="sm" disabled={!selectedProfile || saving} onClick={onArchive}>
+                  <Archive size={15} aria-hidden="true" />
+                  <span>{t("profiles.action.archive")}</span>
+                </Button>
+                <Button type="button" variant="primary" size="sm" loading={saving} onClick={onSave}>
+                  <Save size={15} aria-hidden="true" />
+                  <span>{t("profiles.action.save")}</span>
+                </Button>
+              </>
+            )}
           </div>
         }
       />
 
+      <fieldset disabled={archived} className="contents">
       <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
         <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.basic")}</h3>
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_10rem]">
@@ -587,7 +652,10 @@ function ProfileEditor({
             <span>{t("profiles.field.name")}</span>
             <input
               value={form.name}
-              onChange={(event) => onFormChange((current) => ({ ...current, name: event.currentTarget.value }))}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                onFormChange((current) => ({ ...current, name: value }));
+              }}
               className={inputClass}
             />
           </label>
@@ -595,7 +663,10 @@ function ProfileEditor({
             <span>{t("profiles.field.category")}</span>
             <input
               value={form.category}
-              onChange={(event) => onFormChange((current) => ({ ...current, category: event.currentTarget.value }))}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                onFormChange((current) => ({ ...current, category: value }));
+              }}
               className={inputClass}
             />
           </label>
@@ -606,7 +677,10 @@ function ProfileEditor({
               min={1}
               max={5000}
               value={form.defaultRowLimit}
-              onChange={(event) => onFormChange((current) => ({ ...current, defaultRowLimit: Number(event.currentTarget.value) || 100 }))}
+              onChange={(event) => {
+                const value = Number(event.currentTarget.value) || 100;
+                onFormChange((current) => ({ ...current, defaultRowLimit: value }));
+              }}
               className={inputClass}
             />
           </label>
@@ -616,43 +690,54 @@ function ProfileEditor({
           <textarea
             value={form.description}
             rows={3}
-            onChange={(event) => onFormChange((current) => ({ ...current, description: event.currentTarget.value }))}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              onFormChange((current) => ({ ...current, description: value }));
+            }}
             className={textareaClass}
           />
         </label>
       </section>
 
       <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="profile-allowed-object-list">
-        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.objects")}</h3>
-            <p className="mt-1 text-sm text-slate-600">{t("profiles.field.allowedObjects")}</p>
-          </div>
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800 md:w-72">
-            <span>{t("profiles.objects.filter")}</span>
-            <input
-              value={objectFilter}
-              onChange={(event) => onObjectFilterChange(event.currentTarget.value)}
-              className={inputClass}
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.objects")}</h3>
+          <p className="mt-1 text-sm text-slate-600">{t("profiles.field.allowedObjects")}</p>
+        </div>
+        <div
+          className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
+          data-testid="profile-object-search-toolbar"
+        >
+          <div className="w-full md:max-w-2xl">
+            <DbManagementSearchField
+              label={t("profiles.objects.filter")}
               placeholder={t("profiles.objects.filterPlaceholder")}
+              value={objectFilter}
+              onChange={onObjectFilterChange}
             />
-          </label>
+          </div>
         </div>
         <div className="grid gap-3 xl:grid-cols-2">
-          <ObjectCheckboxGrid
+          <SelectionListPanel
             title={t("profiles.objects.tablesTitle")}
             items={tableNames}
-            selected={form.allowedTables}
+            selectedItems={form.allowedTables}
+            selectedCountLabel={t("profiles.objects.selected", { count: form.allowedTables.length })}
             dataTestId="profile-allowed-table-list"
-            emptyText={t("profiles.objects.emptyTables")}
+            ariaLabel={t("profiles.objects.tablesTitle")}
+            emptyTitle={t("profiles.objects.emptyTables")}
+            emptyHint={t("profiles.objects.emptyTablesHint")}
             onToggle={onToggleTable}
           />
-          <ObjectCheckboxGrid
+          <SelectionListPanel
             title={t("profiles.objects.viewsTitle")}
             items={viewNames}
-            selected={form.allowedViews}
+            selectedItems={form.allowedViews}
+            selectedCountLabel={t("profiles.objects.selected", { count: form.allowedViews.length })}
             dataTestId="profile-allowed-view-list"
-            emptyText={t("profiles.objects.emptyViews")}
+            ariaLabel={t("profiles.objects.viewsTitle")}
+            emptyTitle={t("profiles.objects.emptyViews")}
+            emptyHint={t("profiles.objects.emptyViewsHint")}
             onToggle={onToggleView}
           />
         </div>
@@ -667,7 +752,10 @@ function ProfileEditor({
               value={form.glossaryText}
               rows={6}
               placeholder={t("profiles.placeholder.glossary")}
-              onChange={(event) => onFormChange((current) => ({ ...current, glossaryText: event.currentTarget.value }))}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                onFormChange((current) => ({ ...current, glossaryText: value }));
+              }}
               className={`${textareaClass} font-mono`}
             />
           </label>
@@ -676,7 +764,10 @@ function ProfileEditor({
             <textarea
               value={form.sqlRulesText}
               rows={6}
-              onChange={(event) => onFormChange((current) => ({ ...current, sqlRulesText: event.currentTarget.value }))}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                onFormChange((current) => ({ ...current, sqlRulesText: value }));
+              }}
               className={textareaClass}
             />
           </label>
@@ -687,7 +778,10 @@ function ProfileEditor({
             value={form.fewShotText}
             rows={4}
             placeholder={t("profiles.placeholder.fewShot")}
-            onChange={(event) => onFormChange((current) => ({ ...current, fewShotText: event.currentTarget.value }))}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              onFormChange((current) => ({ ...current, fewShotText: value }));
+            }}
             className={`${textareaClass} font-mono`}
           />
         </label>
@@ -702,16 +796,12 @@ function ProfileEditor({
             <p className="mt-1 text-sm text-slate-600">{t("profiles.oracle.hint")}</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-            <Button type="button" variant="secondary" size="sm" loading={oracleLoading} onClick={onOraclePreview}>
-              <Code2 size={15} aria-hidden="true" />
-              <span>{t("profiles.action.previewOracle")}</span>
-            </Button>
             <Button
               type="button"
               variant="primary"
               size="sm"
               loading={oracleLoading}
-              disabled={!oraclePreview || !oracleConfirmed}
+              disabled={!selectedProfile || !oracleConfirmed}
               onClick={onOracleExecute}
             >
               <Database size={15} aria-hidden="true" />
@@ -730,12 +820,12 @@ function ProfileEditor({
           value={oracleConfirmation}
           onChange={onOracleConfirmationChange}
           confirmed={oracleConfirmed}
-          placeholder={oraclePreview?.profile_name || "ADMIN_EXECUTE"}
-          expectedLabel={oraclePreview?.profile_name || "ADMIN_EXECUTE"}
+          placeholder="ADMIN_EXECUTE"
+          expectedLabel="ADMIN_EXECUTE"
           helper={t("profiles.oracle.executeHint")}
-          disabled={!oraclePreview}
         />
       </section>
+      </fieldset>
     </section>
   );
 }
@@ -792,7 +882,7 @@ function OracleProfilesPanel({
   loading: string;
   onSelect: (profile: SelectAiDbProfile) => void;
   onJsonChange: (value: string) => void;
-  onSaveJson: (execute: boolean) => void;
+  onSaveJson: () => void;
   onOpenDrop: (name: string) => void;
   onCloseDrop: () => void;
   onDropConfirmationChange: (value: string) => void;
@@ -801,8 +891,12 @@ function OracleProfilesPanel({
   const dropConfirmed = dropConfirmation.trim() === dropTargetName || dropConfirmation.trim() === "ADMIN_EXECUTE";
   const selectedDescription = selectedProfile?.description || selectedProfile?.category || "";
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.2fr)]">
-      <section className="grid min-w-0 content-start gap-3">
+    <>
+      <FixedSplitPane
+        splitId="profile-management-oracle"
+        preferredWidePane="right"
+        left={
+          <section className="grid min-w-0 content-start gap-3">
         <DbObjectPanelHeader
           icon={Database}
           title={t("profiles.oracle.list")}
@@ -871,20 +965,17 @@ function OracleProfilesPanel({
             {warning}
           </p>
         ))}
-      </section>
-
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4" aria-label={t("profiles.oracle.detail")}>
+          </section>
+        }
+        right={
+          <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4" aria-label={t("profiles.oracle.detail")}>
         <DbObjectPanelHeader
           icon={FileJson}
           title={selectedProfile?.name || t("profiles.oracle.detail")}
           description={selectedProfile ? selectedDescription || profileObjectList(selectedProfile) || "-" : t("profiles.oracle.noSelection")}
           action={
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button type="button" variant="secondary" size="sm" disabled={!profileJson.trim()} loading={loading === "oracle-save"} onClick={() => onSaveJson(false)}>
-                <Save size={15} aria-hidden="true" />
-                <span>{t("profiles.oracle.saveDryRun")}</span>
-              </Button>
-              <Button type="button" variant="primary" size="sm" disabled={!profileJson.trim()} loading={loading === "oracle-save"} onClick={() => onSaveJson(true)}>
+              <Button type="button" variant="primary" size="sm" disabled={!profileJson.trim()} loading={loading === "oracle-save"} onClick={onSaveJson}>
                 <Database size={15} aria-hidden="true" />
                 <span>{t("profiles.oracle.saveExecute")}</span>
               </Button>
@@ -917,7 +1008,9 @@ function OracleProfilesPanel({
         ) : (
           <EmptyState title={t("profiles.oracle.noSelection")} hint={t("profiles.oracle.hint")} />
         )}
-      </section>
+          </section>
+        }
+      />
 
       {dropTargetName && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-3 sm:items-center" role="presentation">
@@ -966,11 +1059,12 @@ function OracleProfilesPanel({
           </section>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
 export function ProfileManagementPage() {
+  const confirm = useConfirm();
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [views, setViews] = useState<DbAdminObjectsData | null>(null);
@@ -980,6 +1074,7 @@ export function ProfileManagementPage() {
   const [profileJson, setProfileJson] = useState("");
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
   const [activeView, setActiveView] = useState<ActiveView>("list");
+  const [profileStatusFilter, setProfileStatusFilter] = useState<ProfileStatusFilter>("active");
   const [profileSearch, setProfileSearch] = useState("");
   const [objectFilter, setObjectFilter] = useState("");
   const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
@@ -1026,6 +1121,7 @@ export function ProfileManagementPage() {
     const q = profileSearch.trim().toLowerCase();
     return profiles
       .filter((profile) => {
+        if (profile.archived !== (profileStatusFilter === "archived")) return false;
         if (!q) return true;
         return (
           profile.name.toLowerCase().includes(q) ||
@@ -1039,7 +1135,7 @@ export function ProfileManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return profileSort.direction === "asc" ? result : -result;
       });
-  }, [profileSearch, profileSort, profiles]);
+  }, [profileSearch, profileSort, profileStatusFilter, profiles]);
 
   const selectProfile = (profile: Nl2SqlProfile) => {
     const normalized = normalizeProfile(profile);
@@ -1061,7 +1157,7 @@ export function ProfileManagementPage() {
     setMessage("");
     try {
       const [profileData, catalogData, viewData, dbProfileData] = await Promise.all([
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles?include_archived=true"),
         apiGet<SchemaCatalog>("/api/schema/catalog"),
         apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
         apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"),
@@ -1071,10 +1167,17 @@ export function ProfileManagementPage() {
       setCatalog(catalogData);
       setViews(viewData);
       setDbProfiles(dbProfileData);
-      const nextProfile = normalizedProfiles.find((profile) => profile.id === selectedId) ?? normalizedProfiles[0] ?? null;
+      const showingArchived = profileStatusFilter === "archived";
+      const nextProfile =
+        normalizedProfiles.find(
+          (profile) => profile.id === selectedId && profile.archived === showingArchived
+        ) ?? normalizedProfiles.find((profile) => profile.archived === showingArchived) ?? null;
       if (nextProfile) {
         setSelectedId(nextProfile.id);
         setForm(profileToForm(nextProfile));
+      } else {
+        setSelectedId(null);
+        setForm(emptyProfileForm());
       }
       const nextOracle =
         dbProfileData.profiles.find((profile) => profile.name === selectedOracleProfileName) ??
@@ -1096,11 +1199,33 @@ export function ProfileManagementPage() {
 
   const startNew = () => {
     setSelectedId(null);
-    setForm(EMPTY_FORM);
+    setForm(emptyProfileForm());
     setActiveView("create");
     setOraclePreview(null);
     setOracleConfirmation("");
     setMessage("");
+  };
+
+  const handleReset = () => {
+    setForm(selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm());
+    setOraclePreview(null);
+    setOracleConfirmation("");
+    setMessage("");
+  };
+
+  const handleProfileStatusFilterChange = (status: ProfileStatusFilter) => {
+    setProfileStatusFilter(status);
+    setProfileSearch("");
+    const nextProfile = profiles.find((profile) => profile.archived === (status === "archived")) ?? null;
+    if (nextProfile) {
+      selectProfile(nextProfile);
+    } else {
+      setSelectedId(null);
+      setForm(emptyProfileForm());
+      setOraclePreview(null);
+      setOracleConfirmation("");
+      setMessage("");
+    }
   };
 
   const toggleObject = (kind: "table" | "view", name: string) => {
@@ -1140,37 +1265,41 @@ export function ProfileManagementPage() {
 
   const archiveSelected = async () => {
     if (!selectedProfile) return;
+    const ok = await confirm({
+      title: t("profiles.confirm.archiveTitle"),
+      description: t("profiles.confirm.archiveDescription", { name: selectedProfile.name }),
+      confirmLabel: t("profiles.action.archive"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
     setLoading("archive");
-    setMessage("");
     try {
       await apiPost<Nl2SqlProfile>(`/api/nl2sql/profiles/${selectedProfile.id}/archive`);
       setSelectedId(null);
-      setForm(EMPTY_FORM);
+      setForm(emptyProfileForm());
       await load();
-      setMessage(t("profiles.message.archived"));
+      toast.success(t("profiles.message.archived"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.archive"));
+      toast.error(err instanceof Error ? err.message : t("profiles.error.archive"));
     } finally {
       setLoading("");
     }
   };
 
-  const previewOracleProfile = async () => {
-    const profile = selectedProfile;
-    if (!profile) return;
-    setLoading("oracle-preview");
-    setMessage("");
+  const restoreSelected = async () => {
+    if (!selectedProfile?.archived) return;
+    setLoading("restore");
     try {
-      const result = await apiPost<SelectAiDbProfileMutationData>(`/api/nl2sql/profiles/${profile.id}/select-ai-profile`, {
-        execute: false,
-        confirmation: "",
-        reason: "ui-profile-management-select-ai-dry-run",
-      });
-      setOraclePreview(result);
-      setOracleConfirmation("");
-      setMessage(t("profiles.message.oraclePreview"));
+      const restored = await apiPost<Nl2SqlProfile>(`/api/nl2sql/profiles/${selectedProfile.id}/restore`);
+      await load();
+      setProfileStatusFilter("active");
+      setSelectedId(restored.id);
+      setForm(profileToForm(normalizeProfile(restored)));
+      setActiveView("list");
+      toast.success(t("profiles.message.restored"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
+      toast.error(err instanceof Error ? err.message : t("profiles.error.restore"));
     } finally {
       setLoading("");
     }
@@ -1178,12 +1307,11 @@ export function ProfileManagementPage() {
 
   const executeOracleProfile = async () => {
     const profile = selectedProfile;
-    if (!profile || !oraclePreview) return;
+    if (!profile) return;
     setLoading("oracle-preview");
     setMessage("");
     try {
       const result = await apiPost<SelectAiDbProfileMutationData>(`/api/nl2sql/profiles/${profile.id}/select-ai-profile`, {
-        execute: true,
         confirmation: oracleConfirmation,
         reason: "ui-profile-management-select-ai-upsert",
       });
@@ -1197,9 +1325,17 @@ export function ProfileManagementPage() {
     }
   };
 
-  const saveOracleJson = async (execute: boolean) => {
+  const saveOracleJson = async () => {
     const profile = selectedOracleProfile;
     if (!profile) return;
+    const ok = await confirm({
+      title: t("profiles.oracle.saveConfirmTitle"),
+      description: t("profiles.oracle.saveConfirmDescription", { name: profile.name }),
+      confirmLabel: t("profiles.oracle.saveExecute"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
     setLoading("oracle-save");
     setMessage("");
     try {
@@ -1210,13 +1346,12 @@ export function ProfileManagementPage() {
         description: profile.description ?? "",
         category: profile.category ?? "",
         original_name: profile.name,
-        execute,
-        confirmation: execute ? profile.name : "",
+        confirmation: profile.name,
         reason: "ui-profile-management-oracle-json-save",
       });
       setOraclePreview(result);
       setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
-      setMessage(execute && result.executed ? t("profiles.message.oracleSaved") : t("profiles.message.oraclePreview"));
+      setMessage(result.executed ? t("profiles.message.oracleSaved") : result.warnings.join(" ") || t("profiles.error.oracle"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
     } finally {
@@ -1230,7 +1365,6 @@ export function ProfileManagementPage() {
     setMessage("");
     try {
       const result = await apiPost(`/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(dropTargetName)}/drop`, {
-        execute: true,
         confirmation: dropConfirmation,
         reason: "ui-profile-management-oracle-drop",
       });
@@ -1254,6 +1388,10 @@ export function ProfileManagementPage() {
   };
 
   const handleTabChange = (view: ActiveView) => {
+    if (view === "create") {
+      startNew();
+      return;
+    }
     setActiveView(view);
   };
 
@@ -1264,7 +1402,7 @@ export function ProfileManagementPage() {
       tableNames={filteredTableNames}
       viewNames={filteredViewNames}
       objectFilter={objectFilter}
-      saving={loading === "save" || loading === "archive"}
+      saving={loading === "save" || loading === "archive" || loading === "restore"}
       oraclePreview={oraclePreview}
       oracleConfirmation={oracleConfirmation}
       oracleLoading={loading === "oracle-preview"}
@@ -1274,8 +1412,8 @@ export function ProfileManagementPage() {
       onToggleView={(name) => toggleObject("view", name)}
       onSave={() => void save()}
       onArchive={() => void archiveSelected()}
-      onReset={startNew}
-      onOraclePreview={() => void previewOracleProfile()}
+      onRestore={() => void restoreSelected()}
+      onReset={handleReset}
       onOracleExecute={() => void executeOracleProfile()}
       onOracleConfirmationChange={setOracleConfirmation}
     />
@@ -1286,18 +1424,6 @@ export function ProfileManagementPage() {
       <PageHeader
         title={t("nav.profiles")}
         subtitle={t("profiles.subtitle")}
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="secondary" loading={loading === "load"} onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("profiles.action.refresh")}</span>
-            </Button>
-            <Button type="button" size="sm" variant="primary" onClick={startNew}>
-              <Plus size={15} aria-hidden="true" />
-              <span>{t("profiles.action.new")}</span>
-            </Button>
-          </div>
-        }
       />
 
       <main className="grid gap-4 p-4 lg:p-8">
@@ -1308,8 +1434,10 @@ export function ProfileManagementPage() {
         )}
 
         <StatusBar
-          profileCount={profiles.length}
-          objectCount={profiles.reduce((sum, profile) => sum + profile.allowed_tables.length + (profile.allowed_views ?? []).length, 0)}
+          profileCount={profiles.filter((profile) => !profile.archived).length}
+          objectCount={profiles
+            .filter((profile) => !profile.archived)
+            .reduce((sum, profile) => sum + profile.allowed_tables.length + (profile.allowed_views ?? []).length, 0)}
           oracleProfileCount={dbProfiles?.profiles.length ?? 0}
           runtime={dbProfiles?.runtime ?? "deterministic"}
           loading={loading === "load"}
@@ -1334,15 +1462,18 @@ export function ProfileManagementPage() {
             labelledBy="profile-management-tab-list"
             idPrefix={PROFILE_MANAGEMENT_ID}
             ariaLabel={t("profiles.workspace.label")}
-            className="xl:grid-cols-[minmax(28rem,0.85fr)_minmax(0,1.35fr)]"
+            splitId="profile-management-list"
+            preferredWidePane="right"
           >
             <ProfileList
               profiles={filteredProfiles}
               selectedId={selectedId}
               loading={loading === "load" && profiles.length === 0}
               search={profileSearch}
+              statusFilter={profileStatusFilter}
               sort={profileSort}
               onSearchChange={setProfileSearch}
+              onStatusFilterChange={handleProfileStatusFilterChange}
               onSortChange={toggleSort}
               onSelect={selectProfile}
             />
@@ -1374,7 +1505,7 @@ export function ProfileManagementPage() {
               loading={loading}
               onSelect={selectOracleProfile}
               onJsonChange={setProfileJson}
-              onSaveJson={(execute) => void saveOracleJson(execute)}
+              onSaveJson={() => void saveOracleJson()}
               onOpenDrop={(name) => {
                 setDropTargetName(name);
                 setDropConfirmation("");

@@ -497,6 +497,74 @@ class OracleNl2SqlAdapter:
                 except Exception:
                     column.sample_values = []
 
+    def fetch_metadata_sample_values(
+        self, targets: list[dict[str, Any]], sample_limit: int
+    ) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
+        """選択済み table/view の列代表値を、生成時の指定件数で取得する。"""
+        if sample_limit <= 0:
+            return {}, []
+
+        samples: dict[str, dict[str, list[str]]] = {}
+        warnings: list[str] = []
+        try:
+            with self.connection() as conn, conn.cursor() as cursor:
+                for target in targets:
+                    object_name = _strict_sql_name(str(target.get("object_name") or ""))
+                    requested_columns = [
+                        _strict_sql_name(str(column))
+                        for column in target.get("columns", [])
+                        if str(column).strip()
+                    ]
+                    cursor.execute(
+                        """
+                        SELECT column_name FROM user_tab_columns
+                        WHERE table_name = :object_name
+                        ORDER BY column_id
+                        """,
+                        {"object_name": object_name},
+                    )
+                    available_columns = {str(row[0]).upper() for row in cursor}
+                    columns = requested_columns or list(available_columns)
+                    columns = [column for column in columns if column in available_columns]
+                    skipped_columns = set(requested_columns) - available_columns
+                    if skipped_columns:
+                        warnings.append(
+                            f"{object_name}: 存在しない列を除外しました: "
+                            + ", ".join(sorted(skipped_columns))
+                        )
+                    if not columns:
+                        warnings.append(f"{object_name}: サンプル取得可能な列がありません。")
+                        continue
+                    object_samples: dict[str, list[str]] = {}
+                    quoted_object = _quote_identifier(object_name)
+                    for column in columns:
+                        try:
+                            quoted_column = _quote_identifier(column)
+                            cursor.execute(
+                                (
+                                    f"SELECT DISTINCT {quoted_column} "  # nosec B608
+                                    f"FROM {quoted_object} "
+                                    f"WHERE {quoted_column} IS NOT NULL "
+                                    "FETCH FIRST :sample_rows ROWS ONLY"
+                                ),
+                                {"sample_rows": sample_limit},
+                            )
+                            values = [_coerce_text(row[0]) for row in cursor]
+                            values = [value for value in values if value]
+                            if values:
+                                object_samples[column] = values
+                        except Exception as exc:
+                            warnings.append(
+                                f"{object_name}.{column}: サンプル取得に失敗しました: {exc}"
+                            )
+                    if object_samples:
+                        samples[object_name] = object_samples
+        except Exception as exc:
+            if isinstance(exc, OracleAdapterError):
+                raise
+            raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
+        return samples, warnings
+
     def execute_select(self, sql: str, max_rows: int) -> QueryResults:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
@@ -1085,6 +1153,55 @@ class OracleNl2SqlAdapter:
             "table_name": table_name,
         }
 
+    def add_select_ai_feedback(
+        self,
+        *,
+        profile_name: str,
+        sql_text: str,
+        feedback_type: str,
+        response: str,
+        feedback_content: str,
+    ) -> dict[str, Any]:
+        """Add one DBMS_CLOUD_AI feedback entry."""
+        safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.FEEDBACK(
+                            profile_name => :profile_name,
+                            sql_text => :sql_text,
+                            feedback_type => :feedback_type,
+                            response => :response,
+                            feedback_content => :feedback_content,
+                            operation => 'ADD'
+                        );
+                    END;
+                    """,
+                    {
+                        "profile_name": safe_profile,
+                        "sql_text": sql_text,
+                        "feedback_type": feedback_type,
+                        "response": response,
+                        "feedback_content": feedback_content,
+                    },
+                )
+                conn.commit()
+            except Exception as exc:
+                raise OracleAdapterError(
+                    f"Select AI feedback の追加に失敗しました: {exc}"
+                ) from exc
+        return {
+            "runtime": "oracle",
+            "package": "DBMS_CLOUD_AI",
+            "profile_name": safe_profile,
+            "index_name": index_name,
+            "table_name": table_name,
+            "sql_text": sql_text,
+            "feedback_type": feedback_type,
+        }
+
     def update_select_ai_feedback_vector_index(
         self, *, profile_name: str, similarity_threshold: float, match_limit: int
     ) -> dict[str, Any]:
@@ -1658,24 +1775,49 @@ class OracleNl2SqlAdapter:
         return results
 
     def generate_select_ai_sql(
-        self, *, profile_name: str, question: str, action: str = "showsql"
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        action: str = "showsql",
+        attributes: dict[str, str] | None = None,
     ) -> str:
         """Oracle Select AI profile で SQL を生成する。
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         """
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT DBMS_CLOUD_AI.GENERATE(
-                    prompt => :prompt,
-                    profile_name => :profile_name,
-                    action => :action
+            binds: dict[str, str] = {
+                "prompt": question,
+                "profile_name": profile_name,
+                "action": action,
+            }
+            if attributes:
+                binds["attributes"] = json.dumps(attributes, ensure_ascii=False)
+                cursor.execute(
+                    """
+                    SELECT DBMS_CLOUD_AI.GENERATE(
+                        prompt => :prompt,
+                        profile_name => :profile_name,
+                        action => :action,
+                        attributes => :attributes
+                    )
+                    FROM DUAL
+                    """,
+                    binds,
                 )
-                FROM DUAL
-                """,
-                {"prompt": question, "profile_name": profile_name, "action": action},
-            )
+            else:
+                cursor.execute(
+                    """
+                    SELECT DBMS_CLOUD_AI.GENERATE(
+                        prompt => :prompt,
+                        profile_name => :profile_name,
+                        action => :action
+                    )
+                    FROM DUAL
+                    """,
+                    binds,
+                )
             row = cursor.fetchone()
             text = _coerce_text(row[0] if row else "")
         return _extract_select_statement(text)

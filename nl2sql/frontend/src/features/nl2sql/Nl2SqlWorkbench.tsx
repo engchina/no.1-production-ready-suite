@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, Code2, Eye, History, Play, RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
+import { BookOpenText, ChevronDown, Code2, Eye, History, Play, RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -12,6 +12,7 @@ import {
   PageHeader,
 } from "@engchina/production-ready-ui";
 
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { SqlFileInput } from "./components/DbAdminShared";
@@ -21,6 +22,7 @@ import { GeneratedSqlPanel } from "./components/GeneratedSqlPanel";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
+import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
 import { previewExecutePayload, previewToGeneratedSqlPanelData, sqlExecutePayload } from "./previewState";
 import { prefillFromSearchParams } from "./queryPrefillState";
@@ -92,6 +94,9 @@ export function Nl2SqlWorkbench() {
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(true);
   const [rewriteUseSchema, setRewriteUseSchema] = useState(true);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
+  const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
+  const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
+  const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useState("");
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -143,6 +148,16 @@ export function Nl2SqlWorkbench() {
   const active = jobActive || previewLoading || previewExecuteLoading || sqlExecuteLoading;
   const elapsedSeconds = useOperationTimer(jobActive, jobStartedAt);
   const latestHistory = useMemo(() => lastMatchingHistory(history, result), [history, result]);
+  const selectAiOverrides = useMemo(() => {
+    if (engine !== "select_ai") return null;
+    const role = selectAiRoleOverride.trim();
+    const additionalInstructions = selectAiInstructionsOverride.trim();
+    if (!role && !additionalInstructions) return null;
+    return {
+      role,
+      additional_instructions: additionalInstructions,
+    };
+  }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
 
   useEffect(() => {
     void loadCatalog();
@@ -272,6 +287,7 @@ export function Nl2SqlWorkbench() {
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
         row_limit: rowLimit,
+        select_ai_overrides: selectAiOverrides,
       });
       setPreviewResult(previewToGeneratedSqlPanelData(data));
       setPreviewExecutionResults(null);
@@ -364,6 +380,7 @@ export function Nl2SqlWorkbench() {
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
         row_limit: rowLimit,
+        select_ai_overrides: selectAiOverrides,
       });
       trackJob(data, startedAt);
       await pollJob(data.job_id);
@@ -388,21 +405,26 @@ export function Nl2SqlWorkbench() {
         }
       />
 
-      <main className="grid gap-5 p-4 lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.4fr)] lg:p-8">
-        <section className="space-y-5">
-          <SchemaReferencePanel
-            catalog={catalog}
-            loading={loadingCatalog}
-            selection={selection}
-            disabled={active}
-            insertMode={inputMode === "sql" ? "physical" : "logical"}
-            onToggleTable={toggleTable}
-            onToggleColumn={toggleColumn}
-            onInsert={insertSchemaText}
-          />
-        </section>
-
-        <section className="space-y-5">
+      <main className="p-4 lg:p-8">
+        <FixedSplitPane
+          splitId="nl2sql-workbench"
+          preferredWidePane="right"
+          left={
+            <section className="space-y-5">
+              <SchemaReferencePanel
+                catalog={catalog}
+                loading={loadingCatalog}
+                selection={selection}
+                disabled={active}
+                insertMode={inputMode === "sql" ? "physical" : "logical"}
+                onToggleTable={toggleTable}
+                onToggleColumn={toggleColumn}
+                onInsert={insertSchemaText}
+              />
+            </section>
+          }
+          right={
+            <section className="space-y-5">
           <Card>
             <CardHeader>
               <CardTitle>{t("nl2sql.workbench.title")}</CardTitle>
@@ -436,6 +458,57 @@ export function Nl2SqlWorkbench() {
 
               {inputMode === "natural" && (
                 <EngineSelector value={engine} onChange={setEngine} disabled={active} />
+              )}
+
+              {inputMode === "natural" && engine === "select_ai" && (
+                <section className="overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="md"
+                    className="min-h-11 w-full justify-between rounded-none px-4 text-left"
+                    aria-expanded={selectAiAdvancedOpen}
+                    aria-controls="select-ai-request-overrides"
+                    onClick={() => setSelectAiAdvancedOpen((current) => !current)}
+                    disabled={active}
+                  >
+                    <span>{t("nl2sql.selectAiOverrides.title")}</span>
+                    <ChevronDown
+                      size={16}
+                      className={selectAiAdvancedOpen ? "rotate-180 transition-transform" : "transition-transform"}
+                      aria-hidden="true"
+                    />
+                  </Button>
+                  {selectAiAdvancedOpen && (
+                    <div id="select-ai-request-overrides" className="grid gap-4 border-t border-slate-200 p-4">
+                      <p className="text-sm leading-6 text-slate-600">
+                        {t("nl2sql.selectAiOverrides.hint")}
+                      </p>
+                      <label className="grid gap-1 text-sm font-medium text-slate-800">
+                        <span>{t("nl2sql.selectAiOverrides.role")}</span>
+                        <textarea
+                          value={selectAiRoleOverride}
+                          onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
+                          disabled={active}
+                          rows={3}
+                          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                          placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm font-medium text-slate-800">
+                        <span>{t("nl2sql.selectAiOverrides.additionalInstructions")}</span>
+                        <textarea
+                          value={selectAiInstructionsOverride}
+                          onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
+                          disabled={active}
+                          rows={5}
+                          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                          placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
+                        />
+                      </label>
+                    </div>
+                  )}
+                </section>
               )}
 
               <div className="grid gap-4 md:grid-cols-[1fr_10rem]">
@@ -707,6 +780,9 @@ export function Nl2SqlWorkbench() {
                           setPreviewExecutionResults(null);
                           setSqlExecutionResults(null);
                           setRewriteData(null);
+                          setSelectAiRoleOverride("");
+                          setSelectAiInstructionsOverride("");
+                          setSelectAiAdvancedOpen(false);
                           setError("");
                         }}
                       >
@@ -826,7 +902,17 @@ export function Nl2SqlWorkbench() {
           {inputMode === "natural" && (
             <FeedbackPanel result={result} history={latestHistory} onSaved={refreshHistory} />
           )}
-        </section>
+          {inputMode === "natural" && (
+            <SelectAiFeedbackAddPanel
+              result={result ?? previewResult}
+              history={latestHistory}
+              selectedProfileId={profileId}
+              questionText={question}
+            />
+          )}
+            </section>
+          }
+        />
       </main>
     </>
   );

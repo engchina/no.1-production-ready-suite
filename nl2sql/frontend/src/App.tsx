@@ -20,10 +20,11 @@ import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
 import { DataManagementPage } from "@/features/nl2sql/pages/DataManagementPage";
 import { EngineOperationsPage } from "@/features/nl2sql/pages/EngineOperationsPage";
 import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
+import { FeedbackManagementPage } from "@/features/nl2sql/pages/FeedbackManagementPage";
 import { GlossaryRulesPage } from "@/features/nl2sql/pages/GlossaryRulesPage";
 import { HistoryPage } from "@/features/nl2sql/pages/HistoryPage";
 import { LearningPage } from "@/features/nl2sql/pages/LearningPage";
-import { QuestionLearningPage } from "@/features/nl2sql/pages/QuestionLearningPage";
+import { QuestionClassifierModelsPage } from "@/features/nl2sql/pages/QuestionLearningPage";
 import {
   AnnotationManagementPage,
   CommentManagementPage,
@@ -58,8 +59,13 @@ export function App() {
         <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />
         <Route path={APP_ROUTES.sqlAnalysis} element={<SqlAnalysisPage />} />
         <Route path={APP_ROUTES.sqlToQuestion} element={<SqlToQuestionPage />} />
+        <Route path={APP_ROUTES.feedbackManagement} element={<FeedbackManagementPage />} />
         <Route path={APP_ROUTES.learning} element={<LearningPage />} />
-        <Route path={APP_ROUTES.questionLearning} element={<QuestionLearningPage />} />
+        <Route
+          path={APP_ROUTES.questionLearning}
+          element={<Navigate to={APP_ROUTES.questionClassifierModels} replace />}
+        />
+        <Route path={APP_ROUTES.questionClassifierModels} element={<QuestionClassifierModelsPage />} />
         <Route path={APP_ROUTES.history} element={<HistoryPage />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
         <Route path={APP_ROUTES.engineOperations} element={<EngineOperationsPage />} />

@@ -55,6 +55,13 @@ export interface ProfileSelectAiConfig {
   comments: boolean;
   annotations: boolean;
   constraints: boolean;
+  role: string;
+  additional_instructions: string;
+}
+
+export interface SelectAiRequestOverrides {
+  role: string;
+  additional_instructions: string;
 }
 
 export interface Nl2SqlProfile {
@@ -99,14 +106,9 @@ export interface ProfileLearningMaterialImportData {
   profile: Nl2SqlProfile;
 }
 
-export interface LegacySqlRuleEntry {
-  category: string;
-  rule: string;
-}
-
 export interface LegacyLearningMaterialData {
   glossary: Record<string, string>;
-  rule_entries: LegacySqlRuleEntry[];
+  rules: string[];
 }
 
 export interface ProfileRecommendationCandidate {
@@ -142,6 +144,13 @@ export interface ClassifierTrainingExample {
 export interface ClassifierImportData {
   imported_count: number;
   skipped_count: number;
+  total_examples: number;
+  categories: string[];
+  warnings: string[];
+  examples: ClassifierTrainingExample[];
+}
+
+export interface ClassifierTrainingDataData {
   total_examples: number;
   categories: string[];
   warnings: string[];
@@ -737,7 +746,6 @@ export interface SampleDataMutationData {
   step: "tables" | "views" | "data" | "all";
   runtime: string;
   executed: boolean;
-  dry_run: boolean;
   objects: string[];
   statements: DbAdminStatementResult[];
   warnings: string[];
@@ -752,7 +760,6 @@ export interface DbAdminImportTabularData {
   mode: string;
   columns: CsvImportColumn[];
   row_count: number;
-  dry_run: boolean;
   executed: boolean;
   ddl: string;
   insert_sql: string;
@@ -771,6 +778,22 @@ export type DbAdminStatementPolicy =
 export interface MetadataSqlTarget {
   object_name: string;
   object_type: "table" | "view";
+}
+
+export interface MetadataSqlSampleTarget extends MetadataSqlTarget {
+  columns: string[];
+}
+
+export interface MetadataSqlSamplePayload {
+  targets: MetadataSqlSampleTarget[];
+  sample_limit: number;
+}
+
+export interface MetadataSqlSampleData {
+  sample_text: string;
+  sample_count: number;
+  runtime: string;
+  warnings: string[];
 }
 
 export interface MetadataSqlGeneratePayload {
@@ -807,7 +830,6 @@ export interface DbAdminCsvUploadData {
   error_count: number;
   row_errors: string[];
   hint: string;
-  dry_run: boolean;
   executed: boolean;
   runtime: string;
   sample_rows: Array<Record<string, string | null>>;
@@ -889,6 +911,22 @@ export interface SelectAiFeedbackEntriesData {
   items: SelectAiFeedbackEntry[];
   total: number;
   warnings: string[];
+}
+
+export type SelectAiFeedbackAddType = "positive" | "negative";
+
+export interface SelectAiFeedbackAddData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  sql_text: string;
+  stored_feedback_type: string;
+  plsql_preview: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
 }
 
 export interface SelectAiFeedbackMutationData {

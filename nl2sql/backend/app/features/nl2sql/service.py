@@ -70,6 +70,7 @@ from .models import (
     ClassifierPredictionData,
     ClassifierPredictRequest,
     ClassifierStatusData,
+    ClassifierTrainingDataData,
     ClassifierTrainingExample,
     ClassifierTrainRequest,
     CommentApplyData,
@@ -133,9 +134,10 @@ from .models import (
     JobData,
     JobStatus,
     LegacyLearningMaterialData,
-    LegacySqlRuleEntry,
     MetadataSqlGenerateData,
     MetadataSqlGenerateRequest,
+    MetadataSqlSampleData,
+    MetadataSqlSampleRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
     Nl2SqlResult,
@@ -168,6 +170,8 @@ from .models import (
     SelectAiDbProfileMutationData,
     SelectAiDbProfilesData,
     SelectAiDbProfileUpsertRequest,
+    SelectAiFeedbackAddData,
+    SelectAiFeedbackAddRequest,
     SelectAiFeedbackDeleteRequest,
     SelectAiFeedbackEntriesData,
     SelectAiFeedbackEntry,
@@ -175,6 +179,7 @@ from .models import (
     SelectAiFeedbackVectorIndexRequest,
     SelectAiProfilesExportData,
     SelectAiProfilesImportRequest,
+    SelectAiRequestOverrides,
     SimilarHistoryData,
     SimilarHistoryItem,
     SimilarHistoryRequest,
@@ -568,31 +573,154 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
 def _annotation_statement_error(statement: str) -> str:
     norm = re.sub(r"\s+", " ", statement.strip())
     object_ref = _SQL_OBJECT_REF
-    if re.match(
+    allowed_patterns = (
         rf"^alter\s+table\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
-        norm,
-        flags=re.IGNORECASE,
-    ):
-        return ""
-    if re.match(
         rf"^alter\s+table\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
-        norm,
-        flags=re.IGNORECASE,
-    ):
-        return ""
-    if re.match(
         rf"^alter\s+table\s+{object_ref}\s+modify\s+.+\s+annotations\s*\(.+\)\s*$",
-        norm,
-        flags=re.IGNORECASE,
-    ):
-        return ""
-    if re.match(
         rf"^alter\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
-        norm,
-        flags=re.IGNORECASE,
-    ):
-        return ""
+    )
+    if any(re.match(pattern, norm, flags=re.IGNORECASE) for pattern in allowed_patterns):
+        return _annotation_clause_error(statement)
     return f"禁止された操作です。{_DB_ADMIN_POLICY_LABELS['annotation_sql']} のみ実行できます。"
+
+
+def _split_annotation_items(value: str) -> list[str]:
+    """ANNOTATIONS 内を、引用符中のカンマを保ったまま項目へ分割する。"""
+    items: list[str] = []
+    buffer: list[str] = []
+    in_single = False
+    in_double = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        next_char = value[index + 1] if index + 1 < len(value) else ""
+        if in_single:
+            buffer.append(char)
+            if char == "'" and next_char == "'":
+                buffer.append(next_char)
+                index += 2
+                continue
+            if char == "'":
+                in_single = False
+        elif in_double:
+            buffer.append(char)
+            if char == '"' and next_char == '"':
+                buffer.append(next_char)
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+        elif char == "'":
+            in_single = True
+            buffer.append(char)
+        elif char == '"':
+            in_double = True
+            buffer.append(char)
+        elif char == ",":
+            item = "".join(buffer).strip()
+            if item:
+                items.append(item)
+            buffer = []
+        else:
+            buffer.append(char)
+        index += 1
+    item = "".join(buffer).strip()
+    if item:
+        items.append(item)
+    return items
+
+
+def _annotation_item_name(value: str) -> tuple[str, bool]:
+    """操作句を除いた annotation 名と、二重引用符の有無を返す。"""
+    remainder = re.sub(
+        r"^\s*(?:add(?:\s+(?:if\s+not\s+exists|or\s+replace))?|"
+        r"drop(?:\s+if\s+exists)?|replace)\s+",
+        "",
+        value,
+        count=1,
+        flags=re.IGNORECASE,
+    ).lstrip()
+    quoted = re.match(r'^"((?:[^"]|"")+)"', remainder)
+    if quoted:
+        return quoted.group(1).replace('""', '"'), True
+    unquoted = re.match(r"^([A-Za-z_][\w$#]*)", remainder)
+    return (unquoted.group(1), False) if unquoted else ("", False)
+
+
+def _annotation_clause_contents(statement: str) -> list[tuple[int, int, str]]:
+    """ANNOTATIONS(...) の内側位置と内容を引用符対応で抽出する。"""
+    clauses: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\bannotations\s*\(", statement, flags=re.IGNORECASE):
+        start = match.end()
+        depth = 1
+        in_single = False
+        in_double = False
+        index = start
+        while index < len(statement):
+            char = statement[index]
+            next_char = statement[index + 1] if index + 1 < len(statement) else ""
+            if in_single:
+                if char == "'" and next_char == "'":
+                    index += 2
+                    continue
+                if char == "'":
+                    in_single = False
+            elif in_double:
+                if char == '"' and next_char == '"':
+                    index += 2
+                    continue
+                if char == '"':
+                    in_double = False
+            elif char == "'":
+                in_single = True
+            elif char == '"':
+                in_double = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    clauses.append((start, index, statement[start:index]))
+                    break
+            index += 1
+    return clauses
+
+
+def _annotation_clause_error(statement: str) -> str:
+    clauses = _annotation_clause_contents(statement)
+    if not clauses:
+        return "ANNOTATIONS 句の括弧が不正です。"
+    for _start, _end, content in clauses:
+        items = _split_annotation_items(content)
+        if not items:
+            return "ANNOTATIONS 句に annotation 名を指定してください。"
+        for item in items:
+            name, quoted = _annotation_item_name(item)
+            if not name:
+                return f"ANNOTATIONS 句の annotation 名が不正です: {item}"
+            if name.upper() == "COMMENT" and not quoted:
+                return (
+                    "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。"
+                    "説明には UI_Display を使用するか、意図的な名前であれば "
+                    '\"COMMENT\" と二重引用符で囲んでください。'
+                )
+    return ""
+
+
+def _without_sample_annotations(statement: str) -> str:
+    """サンプル未取得時に sample_header / sample_data だけを安全に除外する。"""
+    filtered = statement
+    clauses = _annotation_clause_contents(statement)
+    for start, end, content in reversed(clauses):
+        kept = []
+        for item in _split_annotation_items(content):
+            name, _quoted = _annotation_item_name(item)
+            if name.lower() not in {"sample_header", "sample_data"}:
+                kept.append(item)
+        if not kept:
+            return ""
+        filtered = filtered[:start] + ", ".join(kept) + filtered[end:]
+    return filtered
 
 
 def _utc_now() -> str:
@@ -1130,44 +1258,38 @@ class Nl2SqlService:
         warnings: list[str] = []
         executed = False
         results: list[DbAdminStatementResult]
-        if request.execute:
-            confirmation_error = self._sample_confirmation_error(request.confirmation)
-            if confirmation_error:
-                warnings.append(confirmation_error)
-                results = self._statement_results(
-                    statements,
-                    status="confirmation_required",
-                    error_message=confirmation_error,
+        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        if confirmation_error:
+            warnings.append(confirmation_error)
+            results = self._statement_results(
+                statements,
+                status="confirmation_required",
+                error_message=confirmation_error,
+            )
+        elif self._use_oracle_runtime():
+            execution = self.execute_db_admin_sql(
+                DbAdminExecuteRequest(
+                    sql=";\n".join(statements),
+                    confirmation="ADMIN_EXECUTE",
+                    reason=request.reason or "sql-assist-sample-import",
                 )
-            elif self._use_oracle_runtime():
-                execution = self.execute_db_admin_sql(
-                    DbAdminExecuteRequest(
-                        sql=";\n".join(statements),
-                        execute=True,
-                        confirmation="ADMIN_EXECUTE",
-                        reason=request.reason or "sql-assist-sample-import",
-                    )
-                )
-                results = execution.statements
-                warnings.extend(execution.warnings)
-                executed = execution.executed
-                if executed:
-                    self._ensure_sample_profile()
-            else:
-                self._apply_sample_import_to_catalog(step)
+            )
+            results = execution.statements
+            warnings.extend(execution.warnings)
+            executed = execution.executed
+            if executed:
                 self._ensure_sample_profile()
-                results = self._statement_results(statements, status="applied_to_local_state")
-                executed = True
-                self._persist_state()
         else:
-            results = self._statement_results(statements, status="dry_run")
-            warnings.append("Dry-run のため sample data は import していません。")
+            self._apply_sample_import_to_catalog(step)
+            self._ensure_sample_profile()
+            results = self._statement_results(statements, status="applied_to_local_state")
+            executed = True
+            self._persist_state()
         return SampleDataMutationData(
             operation="import",
             step=step,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            dry_run=not request.execute,
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
@@ -1182,55 +1304,49 @@ class Nl2SqlService:
         warnings: list[str] = []
         executed = False
         results: list[DbAdminStatementResult]
-        if request.execute:
-            confirmation_error = self._sample_confirmation_error(request.confirmation)
-            if confirmation_error:
-                warnings.append(confirmation_error)
-                results = self._statement_results(
-                    statements,
-                    status="confirmation_required",
-                    error_message=confirmation_error,
+        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        if confirmation_error:
+            warnings.append(confirmation_error)
+            results = self._statement_results(
+                statements,
+                status="confirmation_required",
+                error_message=confirmation_error,
+            )
+        elif self._use_oracle_runtime():
+            execution = self.execute_db_admin_sql(
+                DbAdminExecuteRequest(
+                    sql=";\n".join(statements),
+                    confirmation="ADMIN_EXECUTE",
+                    reason=request.reason or "sql-assist-sample-delete",
                 )
-            elif self._use_oracle_runtime():
-                execution = self.execute_db_admin_sql(
-                    DbAdminExecuteRequest(
-                        sql=";\n".join(statements),
-                        execute=True,
-                        confirmation="ADMIN_EXECUTE",
-                        reason=request.reason or "sql-assist-sample-delete",
+            )
+            warnings.extend(execution.warnings)
+            results = []
+            for index, item in enumerate(execution.statements):
+                if item.status == "error" and self._is_missing_object_error(
+                    item.error_message
+                ):
+                    statement = item.sql or (
+                        statements[index] if index < len(statements) else ""
                     )
-                )
-                warnings.extend(execution.warnings)
-                results = []
-                for index, item in enumerate(execution.statements):
-                    if item.status == "error" and self._is_missing_object_error(
-                        item.error_message
-                    ):
-                        statement = item.sql or (
-                            statements[index] if index < len(statements) else ""
-                        )
-                        warnings.append(f"{statement}: 対象が存在しないため skip しました。")
-                        item = item.model_copy(update={"status": "skipped_missing_object"})
-                    results.append(item)
-                executed = bool(results) and all(
-                    item.status in {"success", "skipped_missing_object"} for item in results
-                )
-                if executed:
-                    self._remove_sample_from_state()
-            else:
+                    warnings.append(f"{statement}: 対象が存在しないため skip しました。")
+                    item = item.model_copy(update={"status": "skipped_missing_object"})
+                results.append(item)
+            executed = bool(results) and all(
+                item.status in {"success", "skipped_missing_object"} for item in results
+            )
+            if executed:
                 self._remove_sample_from_state()
-                results = self._statement_results(statements, status="applied_to_local_state")
-                executed = True
-                self._persist_state()
         else:
-            results = self._statement_results(statements, status="dry_run")
-            warnings.append("Dry-run のため sample data は削除していません。")
+            self._remove_sample_from_state()
+            results = self._statement_results(statements, status="applied_to_local_state")
+            executed = True
+            self._persist_state()
         return SampleDataMutationData(
             operation="delete",
             step=SampleDataStep.ALL,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            dry_run=not request.execute,
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
@@ -1447,13 +1563,93 @@ class Nl2SqlService:
         normalized = message.upper()
         return any(code in normalized for code in ("ORA-00942", "ORA-04043"))
 
-    def list_profiles(self) -> list[Nl2SqlProfile]:
+    def list_profiles(self, *, include_archived: bool = False) -> list[Nl2SqlProfile]:
         with self._lock:
-            return [profile for profile in self._profiles.values() if not profile.archived]
+            return [
+                profile
+                for profile in self._profiles.values()
+                if include_archived or not profile.archived
+            ]
 
     def profile_allowed_object_names(self, profile: Nl2SqlProfile) -> list[str]:
         """Profile が検索・Select AI で参照できる table/view 名を返す。"""
         return self._dedupe_object_names([*profile.allowed_tables, *profile.allowed_views])
+
+    def build_select_ai_additional_instructions(
+        self,
+        profile: Nl2SqlProfile,
+        request_instructions: str = "",
+    ) -> str:
+        """業務 profile の文脈を Select AI 用の決定論的な指示へまとめる。"""
+        sections: list[str] = []
+        description = profile.description.strip()
+        if description:
+            sections.append(f"## 業務説明\n{description}")
+
+        glossary_lines = [
+            f"- {term.strip()}: {definition.strip()}"
+            for term, definition in sorted(
+                self._effective_glossary(profile).items(), key=lambda item: item[0]
+            )
+            if term.strip() and definition.strip()
+        ]
+        if glossary_lines:
+            sections.append("## 業務用語集\n" + "\n".join(glossary_lines))
+
+        rule_lines = [
+            f"- {rule.strip()}" for rule in self._effective_sql_rules(profile) if rule.strip()
+        ]
+        if rule_lines:
+            sections.append("## SQL 生成ルール\n" + "\n".join(rule_lines))
+
+        persistent = profile.select_ai_config.additional_instructions.strip()
+        if persistent:
+            sections.append(f"## プロファイル追加指示\n{persistent}")
+
+        request_value = request_instructions.strip()
+        if request_value:
+            sections.append(f"## 今回の追加指示\n{request_value}")
+        return "\n\n".join(sections)
+
+    def _select_ai_generate_attributes(
+        self,
+        profile: Nl2SqlProfile,
+        overrides: SelectAiRequestOverrides | None,
+    ) -> dict[str, str] | None:
+        if overrides is None or not overrides.has_values():
+            return None
+        attributes: dict[str, str] = {}
+        role = overrides.role.strip() or profile.select_ai_config.role.strip()
+        instructions = self.build_select_ai_additional_instructions(
+            profile,
+            overrides.additional_instructions,
+        )
+        if role:
+            attributes["role"] = role
+        if instructions:
+            attributes["additional_instructions"] = instructions
+        return attributes or None
+
+    def _redact_select_ai_context_attributes(
+        self, attributes: dict[str, Any]
+    ) -> dict[str, Any]:
+        """監査・engine meta から業務 prompt 本文を除外する。"""
+        redacted = {
+            key: value
+            for key, value in attributes.items()
+            if key not in {"role", "additional_instructions"}
+        }
+        role = str(attributes.get("role") or "")
+        instructions = str(attributes.get("additional_instructions") or "")
+        redacted.update(
+            {
+                "role_applied": bool(role),
+                "role_length": len(role),
+                "additional_instructions_applied": bool(instructions),
+                "additional_instructions_length": len(instructions),
+            }
+        )
+        return redacted
 
     def build_select_ai_profile_attributes(self, profile: Nl2SqlProfile) -> dict[str, Any]:
         """業務 profile から OCI 固定の DBMS_CLOUD_AI attributes を組み立てる。"""
@@ -1486,6 +1682,12 @@ class Nl2SqlService:
             attributes["model"] = model
         if embedding_model:
             attributes["embedding_model"] = embedding_model
+        role = config.role.strip()
+        if role:
+            attributes["role"] = role
+        additional_instructions = self.build_select_ai_additional_instructions(profile)
+        if additional_instructions:
+            attributes["additional_instructions"] = additional_instructions
         return attributes
 
     def create_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
@@ -1594,10 +1796,10 @@ class Nl2SqlService:
 
     def import_legacy_rules(self, *, filename: str, content: bytes) -> LegacyLearningMaterialData:
         warnings: list[str] = []
-        rule_entries = self._parse_legacy_rules_file(filename, content, warnings)
+        rules = self._parse_legacy_rules_file(filename, content, warnings)
         with self._lock:
             self._legacy_learning_material = self._legacy_learning_material.model_copy(
-                update={"rule_entries": rule_entries}
+                update={"rules": rules}
             )
         self._persist_state()
         return self.get_legacy_learning_material()
@@ -1621,15 +1823,18 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "rules"
-        sheet.append(["CATEGORY", "RULE"])
-        for entry in material.rule_entries:
-            sheet.append([entry.category, entry.rule])
+        sheet.append(["RULE"])
+        for rule in material.rules:
+            sheet.append([rule])
         buffer = io.BytesIO()
         workbook.save(buffer)
         return "rules.xlsx", buffer.getvalue()
 
     def archive_profile(self, profile_id: str) -> Nl2SqlProfile:
         return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": True}))
+
+    def restore_profile(self, profile_id: str) -> Nl2SqlProfile:
+        return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": False}))
 
     def get_profile(self, profile_id: str | None) -> Nl2SqlProfile:
         with self._lock:
@@ -1674,6 +1879,7 @@ class Nl2SqlService:
             profile=self.get_profile(request.profile_id),
             allowed=allowed,
             row_limit=request.row_limit,
+            select_ai_overrides=request.select_ai_overrides,
         )
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         analysis = self.analyze_sql(generated.generated_sql, allowed, row_limit)
@@ -1893,12 +2099,10 @@ class Nl2SqlService:
         )
 
     def feedback_index_status(self) -> FeedbackIndexData:
-        return self._feedback_index_data(operation="status", execute=False, include_bad=False)
+        return self._feedback_index_data(operation="status", include_bad=False)
 
     def rebuild_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
-        return self._feedback_index_data(
-            operation="rebuild", execute=request.execute, include_bad=request.include_bad
-        )
+        return self._feedback_index_data(operation="rebuild", include_bad=request.include_bad)
 
     def clear_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
         started = time.monotonic()
@@ -1910,27 +2114,24 @@ class Nl2SqlService:
             source_count = len(self._history)
             indexable_count = len(self._feedback_indexable_history(request.include_bad))
             current_indexed = len(self._feedback_indexed_ids)
-        if request.execute:
-            if not self._use_oracle_runtime():
-                warnings.append(
-                    "Feedback vector index の clear 実行には "
-                    "NL2SQL_RUNTIME_MODE=oracle が必要です。"
-                )
-            else:
-                try:
-                    settings = get_settings()
-                    self._oracle_adapter.clear_feedback_vector_index(
-                        table_name=settings.nl2sql_feedback_vector_table,
-                        index_name=settings.nl2sql_feedback_vector_index,
-                    )
-                    with self._lock:
-                        self._feedback_indexed_ids = set()
-                    executed = True
-                    self._persist_state()
-                except OracleAdapterError as exc:
-                    warnings.append(str(exc))
+        if not self._use_oracle_runtime():
+            warnings.append(
+                "Feedback vector index の clear 実行には "
+                "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+            )
         else:
-            warnings.append("Dry-run のため feedback index は削除していません。")
+            try:
+                settings = get_settings()
+                self._oracle_adapter.clear_feedback_vector_index(
+                    table_name=settings.nl2sql_feedback_vector_table,
+                    index_name=settings.nl2sql_feedback_vector_index,
+                )
+                with self._lock:
+                    self._feedback_indexed_ids = set()
+                executed = True
+                self._persist_state()
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
         embedding_configured = self._embedding_client.is_configured()
         settings = get_settings()
         return FeedbackIndexData(
@@ -2079,6 +2280,18 @@ class Nl2SqlService:
             categories=all_categories,
             warnings=warnings,
             examples=examples[:50],
+        )
+
+    def classifier_training_data(self) -> ClassifierTrainingDataData:
+        with self._lock:
+            examples = list(self._classifier_examples)
+        categories = sorted({item.category for item in examples})
+        warnings = [] if examples else ["分類器の training data が未登録です。"]
+        return ClassifierTrainingDataData(
+            total_examples=len(examples),
+            categories=categories,
+            warnings=warnings,
+            examples=examples,
         )
 
     def train_classifier(self, request: ClassifierTrainRequest) -> ClassifierStatusData:
@@ -2522,31 +2735,22 @@ class Nl2SqlService:
 
     def _parse_legacy_rules_file(
         self, filename: str, content: bytes, warnings: list[str]
-    ) -> list[LegacySqlRuleEntry]:
-        entries: list[LegacySqlRuleEntry] = []
-        seen: set[tuple[str, str]] = set()
+    ) -> list[str]:
+        rules: list[str] = []
+        seen: set[str] = set()
         for headers, rows in self._legacy_material_rows(filename, content, warnings):
-            category_index = self._learning_header_index(
-                headers, {"CATEGORY", "PROFILE", "カテゴリ", "分類"}
-            )
             rule_index = self._learning_header_index(
                 headers, {"RULE", "SQL_RULE", "GUIDELINE", "INSTRUCTION", "TEXT", "ルール"}
             )
             for row in rows:
                 rule = self._row_cell(row, rule_index)
-                if not rule:
+                if not rule or rule in seen:
                     continue
-                category = self._row_cell(row, category_index) or "共通"
-                if category.lower() == "nan":
-                    category = "共通"
-                key = (category, rule)
-                if key in seen:
-                    continue
-                seen.add(key)
-                entries.append(LegacySqlRuleEntry(category=category, rule=rule))
-        if not entries:
-            warnings.append("取り込み可能な CATEGORY/RULE 列が見つかりません。")
-        return entries
+                seen.add(rule)
+                rules.append(rule)
+        if not rules:
+            warnings.append("取り込み可能な RULE 列が見つかりません。")
+        return rules
 
     def _parse_profile_learning_material_csv(
         self,
@@ -2775,9 +2979,7 @@ class Nl2SqlService:
             return scored[0][1]
         return profiles[0] if profiles else None
 
-    def _feedback_index_data(
-        self, *, operation: str, execute: bool, include_bad: bool
-    ) -> FeedbackIndexData:
+    def _feedback_index_data(self, *, operation: str, include_bad: bool) -> FeedbackIndexData:
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
@@ -2787,7 +2989,7 @@ class Nl2SqlService:
             source_count = len(self._history)
             indexed_count = len(self._feedback_indexed_ids)
         executed = False
-        if operation == "rebuild" and execute:
+        if operation == "rebuild":
             if not self._use_oracle_runtime():
                 warnings.append(
                     "Feedback vector index の rebuild 実行には "
@@ -2828,9 +3030,6 @@ class Nl2SqlService:
                     self._persist_state()
                 except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
                     warnings.append(str(exc))
-        elif operation == "rebuild":
-            warnings.append("Dry-run のため feedback index は再構築していません。")
-            indexed_count = len(indexable)
         settings = get_settings()
         return FeedbackIndexData(
             operation=operation,
@@ -3886,6 +4085,7 @@ class Nl2SqlService:
                     + ["OCI Enterprise AI が未設定のため deterministic SQL を使用しました。"]
                 }
             )
+
         try:
             raw = self._enterprise_ai_client.generate(
                 prompt=(
@@ -3915,6 +4115,75 @@ class Nl2SqlService:
                 }
             )
 
+    def get_metadata_samples(self, request: MetadataSqlSampleRequest) -> MetadataSqlSampleData:
+        """コメント/アノテーション SQL 生成に使う列代表値を取得する。"""
+        if request.sample_limit == 0:
+            runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+            return MetadataSqlSampleData(runtime=runtime)
+
+        warnings: list[str] = []
+        samples: dict[str, dict[str, list[str]]]
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        if self._use_oracle_runtime():
+            try:
+                samples, adapter_warnings = self._oracle_adapter.fetch_metadata_sample_values(
+                    [target.model_dump() for target in request.targets], request.sample_limit
+                )
+                warnings.extend(adapter_warnings)
+            except OracleAdapterError as exc:
+                warnings.append(f"Oracle のサンプル再取得に失敗したため既存値を使用しました: {exc}")
+                samples = self._metadata_samples_from_catalog(request)
+        else:
+            warnings.append("deterministic runtime のため既存のサンプル値を使用しました。")
+            samples = self._metadata_samples_from_catalog(request)
+
+        sample_text, sample_count = self._format_metadata_samples(request, samples)
+        return MetadataSqlSampleData(
+            sample_text=sample_text,
+            sample_count=sample_count,
+            runtime=runtime,
+            warnings=warnings,
+        )
+
+    def _metadata_samples_from_catalog(
+        self, request: MetadataSqlSampleRequest
+    ) -> dict[str, dict[str, list[str]]]:
+        samples: dict[str, dict[str, list[str]]] = {}
+        for target in request.targets:
+            table = self._find_catalog_table(target.object_name)
+            if table is None:
+                continue
+            requested_columns = {column.upper() for column in target.columns}
+            values = {
+                column.column_name.upper(): column.sample_values[: request.sample_limit]
+                for column in table.columns
+                if (not requested_columns or column.column_name.upper() in requested_columns)
+                and column.sample_values
+            }
+            if values:
+                samples[table.table_name.upper()] = values
+        return samples
+
+    def _format_metadata_samples(
+        self,
+        request: MetadataSqlSampleRequest,
+        samples: dict[str, dict[str, list[str]]],
+    ) -> tuple[str, int]:
+        blocks: list[str] = []
+        sample_count = 0
+        for target in request.targets:
+            object_name = _normalize_identifier(target.object_name)
+            column_samples = samples.get(object_name, {})
+            lines: list[str] = []
+            for column in target.columns:
+                values = column_samples.get(_normalize_identifier(column), [])
+                if values:
+                    lines.append(f"{column}: {', '.join(values)}")
+                    sample_count += len(values)
+            if lines:
+                blocks.append(f"OBJECT: {target.object_name}\n" + "\n".join(lines))
+        return "\n\n".join(blocks), sample_count
+
     def generate_annotation_sql(
         self, request: MetadataSqlGenerateRequest,
     ) -> MetadataSqlGenerateData:
@@ -3936,21 +4205,51 @@ class Nl2SqlService:
                 }
             )
         try:
+            has_samples = bool(request.sample_text.strip())
             raw = self._enterprise_ai_client.generate(
                 prompt=(
-                    "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW ANNOTATIONS 文のみを"
-                    "生成してください。説明文、前置き、markdown code fence は出力しないでください。"
+                    "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW の ANNOTATIONS 文のみを"
+                    "生成してください。\n\n"
+                    "出力ルール:\n"
+                    "- 純粋な ALTER TABLE/ALTER VIEW ANNOTATIONS ステートメントのみを出力\n"
+                    "- Markdown 記号、説明文、前置きは出力しない\n"
+                    "- テーブル・ビューは A-Z 順、列は定義順で出力\n"
+                    "- ビュー列の annotation は生成しない\n\n"
+                    "annotation の割り当て:\n"
+                    "- COMMENT: は入力メタデータの項目名であり、annotation 名として使用しない\n"
+                    "- 表・ビュー・列の説明や表示名には UI_Display を使用\n"
+                    "- 列型には data_type、NULL 可否には nullable を使用\n"
+                    + (
+                        "- サンプルがあるため sample_header / sample_data を生成可能\n"
+                        if has_samples
+                        else "- サンプルが無いため sample_header / sample_data を生成しない\n"
+                    )
+                    + "- annotation 名 COMMENT は生成しない\n\n"
+                    "参考例:\n"
+                    "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Table 1');\n"
+                    "ALTER TABLE T1 MODIFY (ID ANNOTATIONS "
+                    "(ADD IF NOT EXISTS UI_Display 'ID', data_type 'NUMBER', nullable 'N'));\n"
+                    "ALTER VIEW SALES_V ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Sales View');"
                 ),
                 context=self._metadata_generation_context(request),
                 system_prompt=(
-                    "あなたはOracleデータベース専門家です。純粋なアノテーションステートメントのみを"
-                    "出力してください。テーブルは ALTER TABLE <表> ANNOTATIONS、列は "
-                    "ALTER TABLE <表> MODIFY (<列> ANNOTATIONS ...)、ビューは ALTER VIEW "
-                    "<ビュー> ANNOTATIONS を使います。ビュー列のアノテーションは生成しません。"
-                    "値内の単一引用符は '' にエスケープします。"
+                    "あなたは Oracle Database の専門家です。純粋な annotation SQL のみを"
+                    "出力してください。\n"
+                    "テーブル: ALTER TABLE <表> ANNOTATIONS (<annotation>);\n"
+                    "列: ALTER TABLE <表> MODIFY (<列> ANNOTATIONS (<annotation>));\n"
+                    "ビュー: ALTER VIEW <ビュー> ANNOTATIONS (<annotation>);\n"
+                    "ADD / DROP / REPLACE を使用できます。再実行可能な追加には "
+                    "ADD IF NOT EXISTS を使用してください。annotation 名は Oracle 識別子です。"
+                    "予約語や空白を含む名前は二重引用符で囲み、未引用の COMMENT は禁止します。"
+                    "値は最大4000文字で、値内の単一引用符は '' にエスケープしてください。"
+                    "複数 annotation は同じ括弧内へカンマ区切りで指定できます。"
                 ),
             )
-            sql = self._clean_generated_metadata_sql(raw, "annotation_sql")
+            sql = self._clean_generated_metadata_sql(
+                raw,
+                "annotation_sql",
+                has_annotation_samples=has_samples,
+            )
             return MetadataSqlGenerateData(
                 sql=sql,
                 source="oci_enterprise_ai",
@@ -4073,7 +4372,10 @@ class Nl2SqlService:
     def _deterministic_annotation_sql(self, request: MetadataSqlGenerateRequest) -> str:
         statements: list[str] = []
         target_types = self._metadata_target_types(request)
-        selected_tables = self._selected_metadata_tables(request)
+        selected_tables = sorted(
+            self._selected_metadata_tables(request),
+            key=lambda table: table.table_name.upper(),
+        )
         for table in selected_tables:
             object_value = table.comment or table.logical_name or table.table_name
             if (
@@ -4082,49 +4384,73 @@ class Nl2SqlService:
             ):
                 statements.append(
                     f"ALTER VIEW {_quote_identifier(table.table_name)} "
-                    f"ANNOTATIONS (UI_Display {_quote_sql_string(object_value)});"
+                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"{_quote_sql_string(object_value)});"
                 )
                 continue
             statements.append(
                 f"ALTER TABLE {_quote_identifier(table.table_name)} "
-                f"ANNOTATIONS (UI_Display {_quote_sql_string(object_value)});"
+                "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                f"{_quote_sql_string(object_value)});"
             )
             for column in table.columns:
                 column_value = column.comment or column.logical_name or column.column_name
                 statements.append(
                     f"ALTER TABLE {_quote_identifier(table.table_name)} "
                     f"MODIFY ({_quote_identifier(column.column_name)} "
-                    f"ANNOTATIONS (UI_Display {_quote_sql_string(column_value)}));"
+                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"{_quote_sql_string(column_value)}));"
                 )
         if selected_tables:
             return "\n".join(statements)
-        for item in self._metadata_input_objects(request):
+        for item in sorted(
+            self._metadata_input_objects(request),
+            key=lambda value: str(value["name"]).upper(),
+        ):
             object_value = item["comment"] or item["name"]
             if item["type"] == "view":
                 statements.append(
                     f"ALTER VIEW {_quote_identifier(item['name'])} "
-                    f"ANNOTATIONS (UI_Display {_quote_sql_string(object_value)});"
+                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"{_quote_sql_string(object_value)});"
                 )
                 continue
             statements.append(
                 f"ALTER TABLE {_quote_identifier(item['name'])} "
-                f"ANNOTATIONS (UI_Display {_quote_sql_string(object_value)});"
+                "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                f"{_quote_sql_string(object_value)});"
             )
             for column in item["columns"]:
                 column_value = column["comment"] or column["name"]
                 statements.append(
                     f"ALTER TABLE {_quote_identifier(item['name'])} "
                     f"MODIFY ({_quote_identifier(column['name'])} "
-                    f"ANNOTATIONS (UI_Display {_quote_sql_string(column_value)}));"
+                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"{_quote_sql_string(column_value)}));"
                 )
         return "\n".join(statements)
 
-    def _clean_generated_metadata_sql(self, raw: str, policy: str) -> str:
+    def _clean_generated_metadata_sql(
+        self,
+        raw: str,
+        policy: str,
+        *,
+        has_annotation_samples: bool = True,
+    ) -> str:
         cleaned = self._strip_code_fence(raw)
         statements = []
         for statement in _split_sql_statements(cleaned):
-            if not _db_admin_policy_error(statement, policy):
-                statements.append(statement.rstrip(";") + ";")
+            candidate = statement
+            if policy == "annotation_sql" and not has_annotation_samples:
+                candidate = _without_sample_annotations(candidate)
+                if not candidate:
+                    continue
+            policy_error = _db_admin_policy_error(candidate, policy)
+            if policy_error:
+                if policy == "annotation_sql":
+                    raise ValueError(policy_error)
+                continue
+            statements.append(candidate.rstrip(";") + ";")
         if not statements:
             raise ValueError("許可された metadata SQL が生成されませんでした。")
         return "\n".join(statements)
@@ -4142,7 +4468,7 @@ class Nl2SqlService:
 
         executed = False
         runtime = "deterministic"
-        if request.execute and statements:
+        if statements:
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
                 target="ADMIN_EXECUTE",
@@ -4187,7 +4513,7 @@ class Nl2SqlService:
                         statement.model_copy(update={"status": "error", "error_message": str(exc)})
                         for statement in statements
                     ]
-        elif request.execute and not statements:
+        else:
             warnings.append("適用対象の COMMENT がありません。")
 
         if not request.items:
@@ -4260,7 +4586,7 @@ class Nl2SqlService:
 
         executed = False
         runtime = "deterministic"
-        if request.execute and statements:
+        if statements:
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
                 target="ADMIN_EXECUTE",
@@ -4301,7 +4627,7 @@ class Nl2SqlService:
                         statement.model_copy(update={"status": "error", "error_message": str(exc)})
                         for statement in statements
                     ]
-        elif request.execute and not statements:
+        else:
             warnings.append("適用対象の ANNOTATIONS がありません。")
 
         if not request.items:
@@ -4458,7 +4784,7 @@ class Nl2SqlService:
         if not safe_objects:
             warnings.append("synthetic data の対象にできる table がありません。")
         executed = False
-        status = "dry_run"
+        status = "error"
         operation_id = ""
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
@@ -4473,7 +4799,7 @@ class Nl2SqlService:
         message = f"{object_summary} に {row_count} 行/表の synthetic data を生成する plan です。"
         if not safe_objects:
             message = "synthetic data の対象にできる table がありません。"
-        if request.execute and safe_objects:
+        if safe_objects:
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
                 target=safe_table_name or "ADMIN_EXECUTE",
@@ -4518,9 +4844,6 @@ class Nl2SqlService:
                 except OracleAdapterError as exc:
                     status = "error"
                     warnings.append(str(exc))
-        elif request.execute and not safe_objects:
-            status = "error"
-
         return SyntheticDataOperationData(
             operation_id=operation_id,
             table_name=safe_table_name,
@@ -5461,32 +5784,30 @@ class Nl2SqlService:
     def drop_db_admin_table(self, request: DbAdminDropTableRequest) -> DbAdminExecuteData:
         table_name = self._sanitize_import_table_name(request.table_name)
         sql = f"DROP TABLE {_quote_identifier(table_name)}" f"{' PURGE' if request.purge else ''}"
-        if request.execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=request.confirmation,
-                target=table_name,
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=request.confirmation,
+            target=table_name,
+        )
+        if confirmation_error:
+            return DbAdminExecuteData(
+                executed=False,
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                statements=[
+                    DbAdminStatementResult(
+                        index=1,
+                        statement_type="DDL",
+                        status="confirmation_required",
+                        sql=sql,
+                        error_message=confirmation_error,
+                    )
+                ],
+                warnings=[confirmation_error],
+                timing=self._timing(_utc_now(), time.monotonic(), "db_admin_drop_table"),
             )
-            if confirmation_error:
-                return DbAdminExecuteData(
-                    executed=False,
-                    runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                    statements=[
-                        DbAdminStatementResult(
-                            index=1,
-                            statement_type="DDL",
-                            status="confirmation_required",
-                            sql=sql,
-                            error_message=confirmation_error,
-                        )
-                    ],
-                    warnings=[confirmation_error],
-                    timing=self._timing(_utc_now(), time.monotonic(), "db_admin_drop_table"),
-                )
         execution = self.execute_db_admin_sql(
             DbAdminExecuteRequest(
                 sql=sql,
-                execute=request.execute,
-                confirmation="ADMIN_EXECUTE" if request.execute else "",
+                confirmation="ADMIN_EXECUTE",
                 reason=request.reason,
             )
         )
@@ -5542,22 +5863,6 @@ class Nl2SqlService:
                 ],
                 committed=False,
                 warnings=warnings,
-                timing=self._timing(created_at, started, "db_admin_execute"),
-            )
-        if not request.execute:
-            return DbAdminExecuteData(
-                executed=False,
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                statements=[
-                    DbAdminStatementResult(
-                        index=index + 1,
-                        statement_type=kind,
-                        status="dry_run",
-                        sql=statements[index],
-                    )
-                    for index, kind in enumerate(statement_types)
-                ],
-                warnings=["Dry-run のため SQL は実行していません。"],
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
         confirmation_error = self._admin_confirmation_error(
@@ -5680,35 +5985,34 @@ class Nl2SqlService:
         ddl = self._csv_import_ddl(table_name, columns)
         insert_sql = self._csv_import_insert_sql(table_name, columns)
         executed = False
-        if request.execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=request.confirmation,
-                target="ADMIN_EXECUTE",
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=request.confirmation,
+            target="ADMIN_EXECUTE",
+        )
+        if confirmation_error:
+            warnings.append(confirmation_error)
+        elif self._use_oracle_runtime():
+            self._oracle_adapter.import_tabular_table(
+                table_name=table_name,
+                columns=columns,
+                rows=rows,
+                mode=mode,
             )
-            if confirmation_error:
-                warnings.append(confirmation_error)
-            elif self._use_oracle_runtime():
-                self._oracle_adapter.import_tabular_table(
-                    table_name=table_name,
-                    columns=columns,
-                    rows=rows,
-                    mode=mode,
-                )
-                executed = True
-                self._record_admin_audit(
-                    operation="db_admin_import_tabular",
-                    target=table_name,
-                    executed=True,
-                    reason=request.reason,
-                    detail={"mode": mode, "row_count": len(rows), "filename": request.filename},
-                )
-                try:
-                    self._catalog = self._oracle_adapter.fetch_catalog()
-                    self._persist_state()
-                except OracleAdapterError as exc:
-                    warnings.append(f"import 後の schema refresh に失敗しました: {exc}")
-            else:
-                warnings.append("Tabular import 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+            executed = True
+            self._record_admin_audit(
+                operation="db_admin_import_tabular",
+                target=table_name,
+                executed=True,
+                reason=request.reason,
+                detail={"mode": mode, "row_count": len(rows), "filename": request.filename},
+            )
+            try:
+                self._catalog = self._oracle_adapter.fetch_catalog()
+                self._persist_state()
+            except OracleAdapterError as exc:
+                warnings.append(f"import 後の schema refresh に失敗しました: {exc}")
+        else:
+            warnings.append("Tabular import 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return DbAdminImportTabularData(
             table_name=table_name,
             filename=request.filename,
@@ -5716,7 +6020,6 @@ class Nl2SqlService:
             mode=mode,
             columns=columns,
             row_count=len(rows),
-            dry_run=not executed,
             executed=executed,
             ddl=ddl,
             insert_sql=insert_sql,
@@ -5794,29 +6097,13 @@ class Nl2SqlService:
                     DbAdminStatementResult(
                         index=index + 1,
                         statement_type=statement_types[index],
-                        status="blocked" if policy_errors[index] else "dry_run",
+                        status="blocked",
                         sql=statements[index],
                         error_message=policy_errors[index],
                     )
                     for index in range(len(statements))
                 ],
                 warnings=warnings,
-                timing=self._timing(created_at, started, "db_admin_statements"),
-            )
-        if not request.execute:
-            return DbAdminExecuteData(
-                executed=False,
-                runtime=runtime,
-                statements=[
-                    DbAdminStatementResult(
-                        index=index + 1,
-                        statement_type=kind,
-                        status="dry_run",
-                        sql=statements[index],
-                    )
-                    for index, kind in enumerate(statement_types)
-                ],
-                warnings=["Dry-run のため SQL は実行していません。"],
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
         confirmation_error = self._admin_confirmation_error(
@@ -5920,33 +6207,31 @@ class Nl2SqlService:
     def drop_db_admin_view(self, request: DbAdminDropViewRequest) -> DbAdminExecuteData:
         view_name = self._sanitize_import_table_name(request.view_name)
         sql = f"DROP VIEW {_quote_identifier(view_name)}"
-        if request.execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=request.confirmation,
-                target=view_name,
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=request.confirmation,
+            target=view_name,
+        )
+        if confirmation_error:
+            return DbAdminExecuteData(
+                executed=False,
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                statements=[
+                    DbAdminStatementResult(
+                        index=1,
+                        statement_type="DDL",
+                        status="confirmation_required",
+                        sql=sql,
+                        error_message=confirmation_error,
+                    )
+                ],
+                warnings=[confirmation_error],
+                timing=self._timing(_utc_now(), time.monotonic(), "db_admin_drop_view"),
             )
-            if confirmation_error:
-                return DbAdminExecuteData(
-                    executed=False,
-                    runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                    statements=[
-                        DbAdminStatementResult(
-                            index=1,
-                            statement_type="DDL",
-                            status="confirmation_required",
-                            sql=sql,
-                            error_message=confirmation_error,
-                        )
-                    ],
-                    warnings=[confirmation_error],
-                    timing=self._timing(_utc_now(), time.monotonic(), "db_admin_drop_view"),
-                )
         return self.execute_db_admin_statements(
             DbAdminStatementsRequest(
                 sql=sql,
                 policy="view_ddl",
-                execute=request.execute,
-                confirmation="ADMIN_EXECUTE" if request.execute else "",
+                confirmation="ADMIN_EXECUTE",
                 reason=request.reason,
             )
         )
@@ -6026,54 +6311,51 @@ class Nl2SqlService:
         row_errors: list[str] = []
         hint = ""
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
-        if request.execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=request.confirmation,
-                target=table_name,
-            )
-            if confirmation_error:
-                warnings.append(confirmation_error)
-            elif self._use_oracle_runtime():
-                try:
-                    result = self._oracle_adapter.upload_csv_to_existing_table(
-                        table_name=table_name,
-                        columns=columns,
-                        rows=rows,
-                        truncate=truncate,
-                    )
-                except OracleAdapterError as exc:
-                    warnings.append(str(exc))
-                else:
-                    executed = True
-                    matched_columns = list(result.get("matched_columns") or matched_columns)
-                    unmatched_csv = list(
-                        result.get("unmatched_csv_columns") or unmatched_csv
-                    )
-                    success_count = int(result.get("success_count") or 0)
-                    error_count = int(result.get("error_count") or 0)
-                    row_errors = list(result.get("row_errors") or [])
-                    hint = str(result.get("hint") or "")
-                    self._record_admin_audit(
-                        operation="db_admin_upload_csv",
-                        target=table_name,
-                        executed=True,
-                        reason=request.reason,
-                        detail={
-                            "mode": request.mode,
-                            "row_count": len(rows),
-                            "success_count": success_count,
-                            "error_count": error_count,
-                            "filename": request.filename,
-                        },
-                    )
-                    if success_count > 0:
-                        try:
-                            self._catalog = self._oracle_adapter.fetch_catalog()
-                            self._persist_state()
-                        except OracleAdapterError as exc:
-                            warnings.append(f"upload 後の schema refresh に失敗しました: {exc}")
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=request.confirmation,
+            target=table_name,
+        )
+        if confirmation_error:
+            warnings.append(confirmation_error)
+        elif self._use_oracle_runtime():
+            try:
+                result = self._oracle_adapter.upload_csv_to_existing_table(
+                    table_name=table_name,
+                    columns=columns,
+                    rows=rows,
+                    truncate=truncate,
+                )
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
             else:
-                warnings.append("CSV アップロード実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+                executed = True
+                matched_columns = list(result.get("matched_columns") or matched_columns)
+                unmatched_csv = list(result.get("unmatched_csv_columns") or unmatched_csv)
+                success_count = int(result.get("success_count") or 0)
+                error_count = int(result.get("error_count") or 0)
+                row_errors = list(result.get("row_errors") or [])
+                hint = str(result.get("hint") or "")
+                self._record_admin_audit(
+                    operation="db_admin_upload_csv",
+                    target=table_name,
+                    executed=True,
+                    reason=request.reason,
+                    detail={
+                        "mode": request.mode,
+                        "row_count": len(rows),
+                        "success_count": success_count,
+                        "error_count": error_count,
+                        "filename": request.filename,
+                    },
+                )
+                if success_count > 0:
+                    try:
+                        self._catalog = self._oracle_adapter.fetch_catalog()
+                        self._persist_state()
+                    except OracleAdapterError as exc:
+                        warnings.append(f"upload 後の schema refresh に失敗しました: {exc}")
+        else:
+            warnings.append("CSV アップロード実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return DbAdminCsvUploadData(
             table_name=table_name,
             filename=request.filename,
@@ -6085,7 +6367,6 @@ class Nl2SqlService:
             error_count=error_count,
             row_errors=row_errors,
             hint=hint,
-            dry_run=not executed,
             executed=executed,
             runtime=runtime,
             sample_rows=rows[:5],
@@ -6096,7 +6377,7 @@ class Nl2SqlService:
     def _match_csv_columns_to_catalog(
         self, table_name: str, columns: list[CsvImportColumn]
     ) -> tuple[list[str], list[str]]:
-        """catalog 上のテーブル列と CSV 列を大文字比較でマッチングする(dry-run 用)。"""
+        """catalog 上のテーブル列と CSV 列を大文字比較でマッチングする。"""
         table = self._find_catalog_table(table_name)
         if table is None:
             return [], [column.source_name for column in columns]
@@ -6458,18 +6739,21 @@ class Nl2SqlService:
             "allowed_tables": profile.allowed_tables,
             "allowed_views": profile.allowed_views,
             "allowed_objects": self.profile_allowed_object_names(profile),
-            "profile_attributes": attributes,
+            "profile_attributes": self._redact_select_ai_context_attributes(attributes),
             "runtime": "deterministic",
         }
         if self._use_oracle_runtime():
             try:
-                engine_meta.update(
-                    self._oracle_adapter.upsert_select_ai_profile_low_level(
-                        profile_name=profile_name,
-                        description=profile.description,
-                        attributes=attributes,
-                    )
+                oracle_meta = self._oracle_adapter.upsert_select_ai_profile_low_level(
+                    profile_name=profile_name,
+                    description=profile.description,
+                    attributes=attributes,
                 )
+                if isinstance(oracle_meta.get("attributes"), dict):
+                    oracle_meta["attributes"] = self._redact_select_ai_context_attributes(
+                        oracle_meta["attributes"]
+                    )
+                engine_meta.update(oracle_meta)
             except OracleAdapterError as exc:
                 refreshed = False
                 status = "error"
@@ -6506,7 +6790,6 @@ class Nl2SqlService:
                 attributes=attributes,
                 description=profile.description,
                 category=profile.category or profile.name,
-                execute=request.execute,
                 confirmation=request.confirmation,
                 reason=request.reason,
             )
@@ -6573,7 +6856,7 @@ class Nl2SqlService:
             if any(cell.strip() for cell in row)
         ]
         if not rows:
-            warnings.append("データ行がありません。DDL の dry-run のみ生成しました。")
+            warnings.append("データ行がありません。取込対象を確認してください。")
         return columns, rows, warnings
 
     def _sanitize_import_table_name(self, table_name: str) -> str:
@@ -6613,7 +6896,7 @@ class Nl2SqlService:
     def _csv_import_insert_sql(self, table_name: str, columns: list[CsvImportColumn]) -> str:
         column_names = ", ".join(f'"{column.column_name}"' for column in columns)
         binds = ", ".join(f":c{index}" for index, _column in enumerate(columns))
-        # Safe: dry-run SQL from sanitized CSV identifiers; execution path uses Oracle binds.
+        # Safe: generated SQL uses sanitized CSV identifiers; execution path uses Oracle binds.
         return f'INSERT INTO "{table_name}" ({column_names}) VALUES ({binds})'  # nosec B608
 
     def refresh_select_ai_agent_assets(self, profile_id: str | None) -> AssetRefreshData:
@@ -6736,37 +7019,35 @@ class Nl2SqlService:
         self,
         profile_id: str | None,
         engines: list[Nl2SqlEngine],
-        execute: bool,
         confirmation: str = "",
         reason: str = "",
     ) -> list[AssetCleanupData]:
-        """Select AI / Agent assets の dry-run / 明示 cleanup を行う。"""
-        if execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=confirmation,
-                target="ADMIN_EXECUTE",
-            )
-            if confirmation_error:
-                return [
-                    AssetCleanupData(
-                        engine=engine,
-                        executed=False,
-                        status="confirmation_required",
-                        cleaned_at=_utc_now(),
-                        warning=confirmation_error,
-                        engine_meta={"runtime": "deterministic"},
-                    )
-                    for engine in engines
-                    if engine != Nl2SqlEngine.AUTO
-                ]
+        """Select AI / Agent assets を確認後に cleanup する。"""
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=confirmation,
+            target="ADMIN_EXECUTE",
+        )
+        if confirmation_error:
+            return [
+                AssetCleanupData(
+                    engine=engine,
+                    executed=False,
+                    status="confirmation_required",
+                    cleaned_at=_utc_now(),
+                    warning=confirmation_error,
+                    engine_meta={"runtime": "deterministic"},
+                )
+                for engine in engines
+                if engine != Nl2SqlEngine.AUTO
+            ]
         cleaned: list[AssetCleanupData] = []
         for engine in engines:
             if engine == Nl2SqlEngine.AUTO:
                 continue
             if engine == Nl2SqlEngine.SELECT_AI:
-                cleaned.append(self._cleanup_select_ai_profile(profile_id, execute))
+                cleaned.append(self._cleanup_select_ai_profile(profile_id))
             elif engine == Nl2SqlEngine.SELECT_AI_AGENT:
-                cleaned.append(self._cleanup_select_ai_agent_assets(profile_id, execute))
+                cleaned.append(self._cleanup_select_ai_agent_assets(profile_id))
             else:
                 cleaned.append(
                     AssetCleanupData(
@@ -6778,7 +7059,7 @@ class Nl2SqlService:
                         engine_meta={"runtime": "deterministic"},
                     )
                 )
-        if execute and any(item.executed for item in cleaned):
+        if any(item.executed for item in cleaned):
             self._record_admin_audit(
                 operation="select_ai_assets_cleanup",
                 target="ADMIN_EXECUTE",
@@ -6987,6 +7268,94 @@ class Nl2SqlService:
                 warnings=[str(exc)],
             )
 
+    def add_select_ai_feedback(
+        self, request: SelectAiFeedbackAddRequest
+    ) -> SelectAiFeedbackAddData:
+        profile_name = request.profile_name.strip()
+        if not profile_name:
+            profile_name = self._select_ai_profile_name(self.get_profile(request.profile_id))
+        sql_text = self._select_ai_feedback_showsql(request.question)
+        stored_feedback_type = "NEGATIVE"
+        response = (
+            request.generated_sql.strip()
+            if request.feedback_type == "positive" and not request.response.strip()
+            else request.response.strip()
+        )
+        feedback_content = request.feedback_content.strip()
+        plsql_preview = self._select_ai_feedback_plsql_preview(
+            profile_name=profile_name,
+            sql_text=sql_text,
+            feedback_type=stored_feedback_type,
+            response=response,
+            feedback_content=feedback_content,
+        )
+        if not response:
+            return SelectAiFeedbackAddData(
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                executed=False,
+                status="validation_error",
+                profile_name=profile_name,
+                sql_text=sql_text,
+                stored_feedback_type=stored_feedback_type,
+                plsql_preview=plsql_preview,
+                warnings=["feedback response が空です。生成SQLまたは修正SQLを入力してください。"],
+            )
+        if not self._use_oracle_runtime():
+            return SelectAiFeedbackAddData(
+                runtime="deterministic",
+                executed=False,
+                status="requires_oracle",
+                profile_name=profile_name,
+                sql_text=sql_text,
+                stored_feedback_type=stored_feedback_type,
+                plsql_preview=plsql_preview,
+                warnings=[
+                    "Select AI feedback 追加には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                ],
+            )
+        try:
+            meta = self._oracle_adapter.add_select_ai_feedback(
+                profile_name=profile_name,
+                sql_text=sql_text,
+                feedback_type=stored_feedback_type,
+                response=response,
+                feedback_content=feedback_content,
+            )
+            self._record_admin_audit(
+                operation="select_ai_feedback_add",
+                target=str(meta.get("profile_name") or profile_name),
+                executed=True,
+                reason="ui-select-ai-feedback-add",
+                detail={
+                    "sql_text": sql_text,
+                    "feedback_type": stored_feedback_type,
+                    "source_feedback_type": request.feedback_type,
+                },
+            )
+            return SelectAiFeedbackAddData(
+                runtime="oracle",
+                executed=True,
+                status="added",
+                profile_name=str(meta.get("profile_name") or profile_name),
+                index_name=str(meta.get("index_name") or ""),
+                table_name=str(meta.get("table_name") or ""),
+                sql_text=sql_text,
+                stored_feedback_type=stored_feedback_type,
+                plsql_preview=plsql_preview,
+                engine_meta=meta,
+            )
+        except OracleAdapterError as exc:
+            return SelectAiFeedbackAddData(
+                runtime="oracle",
+                executed=False,
+                status="error",
+                profile_name=profile_name,
+                sql_text=sql_text,
+                stored_feedback_type=stored_feedback_type,
+                plsql_preview=plsql_preview,
+                warnings=[str(exc)],
+            )
+
     def update_select_ai_feedback_vector_index(
         self, request: SelectAiFeedbackVectorIndexRequest
     ) -> SelectAiFeedbackMutationData:
@@ -7046,29 +7415,6 @@ class Nl2SqlService:
             "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(profile_name => :name, attributes => :attrs); END;",
         ]
         warnings: list[str] = []
-        if not request.execute:
-            return SelectAiDbProfileMutationData(
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                executed=False,
-                status="dry_run",
-                profile_name=profile_name,
-                original_name=original_name,
-                ddl=ddl,
-                profile=self._enrich_select_ai_db_profile(
-                    SelectAiDbProfile(
-                        name=profile_name,
-                        status="dry_run",
-                        description=request.description,
-                        category=request.category,
-                        attributes=request.attributes,
-                        object_list=(
-                            request.attributes.get("object_list", [])
-                            if isinstance(request.attributes.get("object_list"), list)
-                            else []
-                        ),
-                    ),
-                ),
-            )
         confirmation_error = self._admin_confirmation_error(
             confirmation=request.confirmation,
             target=profile_name,
@@ -7112,7 +7458,9 @@ class Nl2SqlService:
                 detail={
                     "original_name": original_name,
                     "category": request.category,
-                    "attributes": request.attributes,
+                    "attributes": self._redact_select_ai_context_attributes(
+                        request.attributes
+                    ),
                 },
             )
             return SelectAiDbProfileMutationData(
@@ -7124,7 +7472,12 @@ class Nl2SqlService:
                 ddl=ddl,
                 profile=detail,
                 warnings=warnings,
-                engine_meta=meta,
+                engine_meta={
+                    **meta,
+                    "attributes": self._redact_select_ai_context_attributes(
+                        request.attributes
+                    ),
+                },
             )
         except OracleAdapterError as exc:
             return SelectAiDbProfileMutationData(
@@ -7155,7 +7508,6 @@ class Nl2SqlService:
                         attributes=profile.attributes,
                         description=profile.description,
                         category=profile.category,
-                        execute=request.execute,
                         confirmation=request.confirmation,
                         reason=request.reason,
                     )
@@ -7164,41 +7516,38 @@ class Nl2SqlService:
         return results
 
     def drop_select_ai_db_profile(
-        self, profile_name: str, execute: bool, confirmation: str = "", reason: str = ""
+        self, profile_name: str, confirmation: str = "", reason: str = ""
     ) -> AssetCleanupData:
         cleaned_at = _utc_now()
-        status = "dry_run"
+        status = "error"
         warning = ""
         executed = False
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
-        if execute:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=confirmation,
-                target=profile_name,
-            )
-            if confirmation_error:
-                status = "confirmation_required"
-                warning = confirmation_error
-            elif not self._use_oracle_runtime():
-                status = "error"
-                warning = "DBMS_CLOUD_AI profile drop には NL2SQL_RUNTIME_MODE=oracle が必要です。"
-            else:
-                try:
-                    engine_meta.update(
-                        self._oracle_adapter.drop_select_ai_profile(profile_name=profile_name)
-                    )
-                    status = "cleaned"
-                    executed = True
-                    self._record_admin_audit(
-                        operation="select_ai_profile_drop",
-                        target=profile_name,
-                        executed=True,
-                        reason=reason,
-                        detail={},
-                    )
-                except OracleAdapterError as exc:
-                    status = "error"
-                    warning = str(exc)
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=confirmation,
+            target=profile_name,
+        )
+        if confirmation_error:
+            status = "confirmation_required"
+            warning = confirmation_error
+        elif not self._use_oracle_runtime():
+            warning = "DBMS_CLOUD_AI profile drop には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+        else:
+            try:
+                engine_meta.update(
+                    self._oracle_adapter.drop_select_ai_profile(profile_name=profile_name)
+                )
+                status = "cleaned"
+                executed = True
+                self._record_admin_audit(
+                    operation="select_ai_profile_drop",
+                    target=profile_name,
+                    executed=True,
+                    reason=reason,
+                    detail={},
+                )
+            except OracleAdapterError as exc:
+                warning = str(exc)
         return AssetCleanupData(
             engine=Nl2SqlEngine.SELECT_AI,
             executed=executed,
@@ -7353,7 +7702,6 @@ class Nl2SqlService:
         return self.cleanup_select_ai_assets(
             profile_id=request.profile_id,
             engines=[Nl2SqlEngine.SELECT_AI_AGENT],
-            execute=request.execute,
             confirmation=request.confirmation,
             reason=request.reason,
         )
@@ -7426,29 +7774,26 @@ class Nl2SqlService:
                 warnings=[str(exc)],
             )
 
-    def _cleanup_select_ai_profile(self, profile_id: str | None, execute: bool) -> AssetCleanupData:
+    def _cleanup_select_ai_profile(self, profile_id: str | None) -> AssetCleanupData:
         profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         warning = ""
-        status = "dry_run"
+        status = "error"
         executed = False
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
-        if execute:
-            if self._use_oracle_runtime():
-                try:
-                    engine_meta.update(
-                        self._oracle_adapter.drop_select_ai_profile(profile_name=profile_name)
-                    )
-                    status = "cleaned"
-                    executed = True
-                    with self._lock:
-                        self._asset_meta.pop(Nl2SqlEngine.SELECT_AI, None)
-                except OracleAdapterError as exc:
-                    status = "error"
-                    warning = str(exc)
-            else:
-                status = "error"
-                warning = "cleanup の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+        if self._use_oracle_runtime():
+            try:
+                engine_meta.update(
+                    self._oracle_adapter.drop_select_ai_profile(profile_name=profile_name)
+                )
+                status = "cleaned"
+                executed = True
+                with self._lock:
+                    self._asset_meta.pop(Nl2SqlEngine.SELECT_AI, None)
+            except OracleAdapterError as exc:
+                warning = str(exc)
+        else:
+            warning = "cleanup の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
         return AssetCleanupData(
             engine=Nl2SqlEngine.SELECT_AI,
             executed=executed,
@@ -7460,9 +7805,7 @@ class Nl2SqlService:
             engine_meta=engine_meta,
         )
 
-    def _cleanup_select_ai_agent_assets(
-        self, profile_id: str | None, execute: bool
-    ) -> AssetCleanupData:
+    def _cleanup_select_ai_agent_assets(self, profile_id: str | None) -> AssetCleanupData:
         profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         asset_names = self._select_ai_agent_asset_names(profile)
@@ -7470,31 +7813,28 @@ class Nl2SqlService:
         if asset_meta and asset_meta.profile_name == profile_name and asset_meta.team_name:
             asset_names["team"] = asset_meta.team_name
         warning = ""
-        status = "dry_run"
+        status = "error"
         executed = False
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
-        if execute:
-            if self._use_oracle_runtime():
-                try:
-                    engine_meta.update(
-                        self._oracle_adapter.drop_select_ai_agent_assets(
-                            profile_name=profile_name,
-                            tool_name=asset_names["tool"],
-                            agent_name=asset_names["agent"],
-                            task_name=asset_names["task"],
-                            team_name=asset_names["team"],
-                        )
+        if self._use_oracle_runtime():
+            try:
+                engine_meta.update(
+                    self._oracle_adapter.drop_select_ai_agent_assets(
+                        profile_name=profile_name,
+                        tool_name=asset_names["tool"],
+                        agent_name=asset_names["agent"],
+                        task_name=asset_names["task"],
+                        team_name=asset_names["team"],
                     )
-                    status = "cleaned"
-                    executed = True
-                    with self._lock:
-                        self._asset_meta.pop(Nl2SqlEngine.SELECT_AI_AGENT, None)
-                except OracleAdapterError as exc:
-                    status = "error"
-                    warning = str(exc)
-            else:
-                status = "error"
-                warning = "cleanup の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                )
+                status = "cleaned"
+                executed = True
+                with self._lock:
+                    self._asset_meta.pop(Nl2SqlEngine.SELECT_AI_AGENT, None)
+            except OracleAdapterError as exc:
+                warning = str(exc)
+        else:
+            warning = "cleanup の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
         return AssetCleanupData(
             engine=Nl2SqlEngine.SELECT_AI_AGENT,
             executed=executed,
@@ -7542,26 +7882,15 @@ class Nl2SqlService:
             default_row_limit=get_settings().nl2sql_default_row_limit,
         )
 
-    def _profile_rule_category(self, profile: Nl2SqlProfile) -> str:
-        return profile.category.strip() or profile.name.strip()
-
     def _effective_glossary(self, profile: Nl2SqlProfile) -> dict[str, str]:
         with self._lock:
             legacy = dict(self._legacy_learning_material.glossary)
         return {**legacy, **profile.glossary}
 
     def _effective_sql_rules(self, profile: Nl2SqlProfile) -> list[str]:
-        target_category = self._profile_rule_category(profile)
-        categories = {"共通"}
-        if target_category:
-            categories.add(target_category)
         with self._lock:
-            legacy_rules = [
-                entry.rule
-                for entry in self._legacy_learning_material.rule_entries
-                if entry.category in categories
-            ]
-        return self._merge_unique_strings(legacy_rules, profile.sql_rules)
+            global_rules = list(self._legacy_learning_material.rules)
+        return self._merge_unique_strings(global_rules, profile.sql_rules)
 
     def _append_rules_to_question(self, question: str, profile: Nl2SqlProfile) -> str:
         rules = self._effective_sql_rules(profile)
@@ -7987,6 +8316,7 @@ class Nl2SqlService:
             profile=profile,
             allowed=allowed,
             row_limit=row_limit,
+            select_ai_overrides=request.select_ai_overrides,
         )
         stage_timings.append(
             StageTiming(stage="generate_sql", elapsed_ms=_elapsed_ms(stage_started))
@@ -8058,6 +8388,7 @@ class Nl2SqlService:
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
         row_limit: int | None,
+        select_ai_overrides: SelectAiRequestOverrides | None = None,
     ) -> GeneratedSql:
         if not self._use_oracle_runtime() and not self._catalog.tables:
             raise ValueError(_SCHEMA_EMPTY_MESSAGE)
@@ -8074,7 +8405,13 @@ class Nl2SqlService:
         for candidate in candidates:
             try:
                 return self._generate_sql(
-                    candidate, question, profile, allowed, row_limit, fallback_messages
+                    candidate,
+                    question,
+                    profile,
+                    allowed,
+                    row_limit,
+                    fallback_messages,
+                    select_ai_overrides,
                 )
             except RuntimeError as exc:
                 fallback_messages.append(f"{candidate.value}: {exc}")
@@ -8088,10 +8425,12 @@ class Nl2SqlService:
         allowed: AllowedObjects,
         row_limit: int | None,
         fallback_messages: list[str],
+        select_ai_overrides: SelectAiRequestOverrides | None = None,
     ) -> GeneratedSql:
         # テスト/デモ用の明示的 failure trigger。実 adapter では不要。
         if f"{engine.value}_fail" in question.lower():
             raise RuntimeError("明示的な fallback テスト要求")
+        effective_question = self.rewrite_question(question, profile)
         meta: dict[str, Any] = {
             "profile_id": profile.id,
             "profile_name": profile.name,
@@ -8099,7 +8438,7 @@ class Nl2SqlService:
             "allowed_tables": allowed.table_names or self.profile_allowed_object_names(profile),
         }
         learning_examples = self._learning_examples_for_generation(
-            question=question,
+            question=effective_question,
             profile=profile,
         )
         history_examples = [
@@ -8133,23 +8472,24 @@ class Nl2SqlService:
             try:
                 return self._generate_oracle_sql(
                     engine=engine,
-                    question=question,
+                    question=effective_question,
                     profile=profile,
                     fallback_messages=fallback_messages,
                     meta=dict(meta),
                     learning_examples=learning_examples,
+                    select_ai_overrides=select_ai_overrides,
                 )
             except OracleAdapterError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
         if not self._catalog.tables:
             raise ValueError(_SCHEMA_EMPTY_MESSAGE)
-        table = self._choose_table(question, profile, allowed)
+        table = self._choose_table(effective_question, profile, allowed)
         columns = self._choose_columns(table, allowed)
         direct_configured = self._enterprise_ai_client.is_configured()
         if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and direct_configured:
             try:
                 return self._generate_enterprise_ai_direct_sql(
-                    question=question,
+                    question=effective_question,
                     profile=profile,
                     allowed=allowed,
                     row_limit=row_limit or profile.default_row_limit,
@@ -8321,6 +8661,7 @@ class Nl2SqlService:
         fallback_messages: list[str],
         meta: dict[str, Any],
         learning_examples: list[LearningExample],
+        select_ai_overrides: SelectAiRequestOverrides | None = None,
     ) -> GeneratedSql:
         runtime_question = self._augment_question_with_learning_examples(
             question,
@@ -8329,10 +8670,32 @@ class Nl2SqlService:
         runtime_question = self._append_rules_to_question(runtime_question, profile)
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
-            sql = self._oracle_adapter.generate_select_ai_sql(
-                profile_name=profile_name, question=runtime_question
-            )
+            attributes = self._select_ai_generate_attributes(profile, select_ai_overrides)
+            if attributes:
+                sql = self._oracle_adapter.generate_select_ai_sql(
+                    profile_name=profile_name,
+                    question=runtime_question,
+                    attributes=attributes,
+                )
+            else:
+                sql = self._oracle_adapter.generate_select_ai_sql(
+                    profile_name=profile_name,
+                    question=runtime_question,
+                )
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
+            if attributes:
+                meta.update(
+                    {
+                        "select_ai_role_applied": "role" in attributes,
+                        "select_ai_role_length": len(attributes.get("role", "")),
+                        "select_ai_additional_instructions_applied": (
+                            "additional_instructions" in attributes
+                        ),
+                        "select_ai_additional_instructions_length": len(
+                            attributes.get("additional_instructions", "")
+                        ),
+                    }
+                )
         else:
             team_name = self._select_ai_runtime_team_name(profile)
             tool_name = self._select_ai_agent_asset_names(profile)["tool"]
@@ -8359,6 +8722,40 @@ class Nl2SqlService:
 
     def _use_oracle_runtime(self) -> bool:
         return get_settings().nl2sql_runtime_mode.strip().lower() == "oracle"
+
+    def _select_ai_feedback_showsql(self, question: str) -> str:
+        cleaned = question.strip()
+        if cleaned.endswith(";"):
+            cleaned = cleaned[:-1].rstrip()
+        return f"select ai showsql {cleaned}"
+
+    def _select_ai_feedback_plsql_preview(
+        self,
+        *,
+        profile_name: str,
+        sql_text: str,
+        feedback_type: str,
+        response: str,
+        feedback_content: str,
+    ) -> str:
+        response_expr = "NULL" if not response else _quote_sql_string(response)
+        feedback_content_expr = (
+            "NULL" if not feedback_content else _quote_sql_string(feedback_content)
+        )
+        return "\n".join(
+            [
+                "BEGIN",
+                "  DBMS_CLOUD_AI.FEEDBACK(",
+                f"    profile_name => {_quote_sql_string(profile_name)},",
+                f"    sql_text => {_quote_sql_string(sql_text)},",
+                f"    feedback_type => {_quote_sql_string(feedback_type)},",
+                f"    response => {response_expr},",
+                f"    feedback_content => {feedback_content_expr},",
+                "    operation => 'ADD'",
+                "  );",
+                "END;",
+            ]
+        )
 
     def _select_ai_profile_name(self, profile: Nl2SqlProfile) -> str:
         configured = profile.select_ai_config.profile_name.strip()

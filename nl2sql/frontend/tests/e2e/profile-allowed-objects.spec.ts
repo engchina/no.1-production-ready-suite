@@ -18,6 +18,8 @@ const selectAiConfig = {
   comments: true,
   annotations: false,
   constraints: false,
+  role: "既定の Oracle SQL アシスタント",
+  additional_instructions: "金額は円単位で表示する。",
 };
 
 const schemaCatalog = {
@@ -95,7 +97,7 @@ const dbProfiles = {
   profiles: [
     {
       name: "NL2SQL_DEFAULT_PROFILE",
-      status: "dry_run",
+      status: "ready",
       owner: "APP",
       created_at: "2026-06-21T10:00:00.000Z",
       description: "既定プロファイル",
@@ -116,6 +118,8 @@ const dbProfiles = {
         region: "ap-osaka-1",
         model: "cohere.command-r-plus",
         embedding_model: "cohere.embed-v4.0",
+        role: "既定の Oracle SQL アシスタント",
+        additional_instructions: "金額は円単位で表示する。",
         object_list: [
           { owner: "APP", name: "TABLE_01" },
           { owner: "APP", name: "VIEW_02" },
@@ -126,31 +130,57 @@ const dbProfiles = {
   warnings: [],
 };
 
-async function mockProfileApi(page: Page) {
-  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, schemaCatalog));
+async function mockProfileApi(
+  page: Page,
+  options: {
+    catalog?: typeof schemaCatalog;
+    viewItems?: Array<{ name: string; owner: string; object_type: string; row_count: null; comment: string }>;
+    profileItems?: typeof profiles;
+  } = {}
+) {
+  const viewItems = options.viewItems ?? [
+    { name: "VIEW_02", owner: "APP", object_type: "VIEW", row_count: null, comment: "view" },
+    { name: "V_$SESSION", owner: "SYS", object_type: "VIEW", row_count: null, comment: "system" },
+  ];
+  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, options.catalog ?? schemaCatalog));
   await page.route("**/api/nl2sql/db-admin/views", (route) =>
     fulfillJson(route, {
       runtime: "deterministic",
-      items: [
-        { name: "VIEW_02", owner: "APP", object_type: "VIEW", row_count: null, comment: "view" },
-        { name: "V_$SESSION", owner: "SYS", object_type: "VIEW", row_count: null, comment: "system" },
-      ],
+      items: viewItems,
       warnings: [],
     })
   );
   await page.route("**/api/nl2sql/select-ai/db-profiles?include_detail=true", (route) => fulfillJson(route, dbProfiles));
-  await page.route("**/api/nl2sql/profiles", (route) => fulfillJson(route, profiles));
+  await page.route("**/api/nl2sql/profiles?include_archived=true", (route) => fulfillJson(route, options.profileItems ?? profiles));
 }
 
 test("業務プロファイルは表とビューを固定高リストで管理できる", async ({ page }) => {
   let savedPayload: Record<string, unknown> | null = null;
+  let oraclePayload: Record<string, unknown> | null = null;
   await mockProfileApi(page);
-  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+  await page.route("**/api/nl2sql/profiles/default**", async (route) => {
     savedPayload = route.request().postDataJSON() as Record<string, unknown>;
     await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default" });
   });
+  await page.route("**/api/nl2sql/profiles/default/select-ai-profile", async (route) => {
+    oraclePayload = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfillJson(route, {
+      runtime: "oracle",
+      executed: true,
+      status: "saved",
+      profile_name: "NL2SQL_DEFAULT_PROFILE",
+      original_name: "",
+      ddl: ["BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(profile_name => :name, attributes => :attrs); END;"],
+      profile: dbProfiles.profiles[0],
+      warnings: [],
+      engine_meta: {},
+    });
+  });
 
   await page.goto("/profiles");
+
+  await expect(page.getByRole("button", { name: "新規", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "再読込", exact: true })).toHaveCount(1);
 
   const listTab = page.getByRole("tab", { name: "一覧と詳細" });
   const createTab = page.getByRole("tab", { name: "新規作成" });
@@ -158,11 +188,13 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(listTab).toHaveAttribute("aria-selected", "true");
   await listTab.press("ArrowRight");
   await expect(createTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
   await createTab.press("ArrowRight");
   await expect(oracleTab).toHaveAttribute("aria-selected", "true");
   await oracleTab.press("ArrowLeft");
   await expect(createTab).toHaveAttribute("aria-selected", "true");
   await listTab.click();
+  await page.getByRole("button", { name: /既定プロファイル 許可オブジェクトの表示確認/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
@@ -174,6 +206,38 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByText("V_$SESSION", { exact: true })).toHaveCount(0);
   await expect(page.getByText("表論理名_01", { exact: true })).toHaveCount(0);
   await expect(page.getByText("ビューコメント_02", { exact: true })).toHaveCount(0);
+
+  const objectSection = page.getByTestId("profile-allowed-object-list");
+  const objectSearchToolbar = page.getByTestId("profile-object-search-toolbar");
+  const objectSearch = page.getByRole("searchbox", { name: "オブジェクト検索" });
+  await expect(objectSearch).toHaveAttribute("placeholder", "表・ビュー名で検索");
+  await expect(objectSearchToolbar.locator("svg.lucide-search")).toBeVisible();
+
+  const [headingBox, toolbarBox, listsBox, searchBox] = await Promise.all([
+    objectSection.getByText("対象オブジェクト", { exact: true }).boundingBox(),
+    objectSearchToolbar.boundingBox(),
+    tableList.boundingBox(),
+    objectSearch.boundingBox(),
+  ]);
+  expect(headingBox).not.toBeNull();
+  expect(toolbarBox).not.toBeNull();
+  expect(listsBox).not.toBeNull();
+  expect(searchBox).not.toBeNull();
+  expect(toolbarBox!.y).toBeGreaterThan(headingBox!.y);
+  expect(listsBox!.y).toBeGreaterThan(toolbarBox!.y + toolbarBox!.height - 1);
+  expect(searchBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x + 11);
+  expect(searchBox!.x).toBeLessThanOrEqual(toolbarBox!.x + 14);
+
+  await expect(tableList.getByLabel("TABLE_01")).toBeChecked();
+  await expect(viewList.getByLabel("VIEW_02")).toBeChecked();
+  await objectSearch.fill("03");
+  await expect(tableList.getByText("TABLE_03", { exact: true })).toBeVisible();
+  await expect(viewList.getByText("VIEW_03", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("TABLE_01", { exact: true })).toHaveCount(0);
+  await expect(viewList.getByText("VIEW_02", { exact: true })).toHaveCount(0);
+  await objectSearch.clear();
+  await expect(tableList.getByLabel("TABLE_01")).toBeChecked();
+  await expect(viewList.getByLabel("VIEW_02")).toBeChecked();
 
   const fit = await tableList.evaluate((node) => {
     const listBox = node.getBoundingClientRect();
@@ -196,6 +260,13 @@ test("業務プロファイルは表とビューを固定高リストで管理�
 
   await tableList.getByLabel("TABLE_03").check();
   await viewList.getByLabel("VIEW_04").check();
+  const roleField = page.getByLabel("アシスタントロール");
+  const instructionsField = page.getByLabel("追加指示", { exact: true });
+  const roleBox = await roleField.boundingBox();
+  const instructionsBox = await instructionsField.boundingBox();
+  expect(roleBox?.height).toBe(instructionsBox?.height);
+  await roleField.fill("財務分析向け Oracle SQL アシスタント");
+  await instructionsField.fill("日付は DATE 型で返す。");
   await page.getByRole("button", { name: "保存" }).click();
   const payload = savedPayload as {
     allowed_tables: string[];
@@ -207,7 +278,30 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   expect(payload?.select_ai_config).toMatchObject({
     embedding_model: "cohere.embed-v4.0",
     enforce_object_list: true,
+    role: "財務分析向け Oracle SQL アシスタント",
+    additional_instructions: "日付は DATE 型で返す。",
   });
+
+  await page.getByLabel("実行確認語").last().fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "Oracle Profile 反映" }).click();
+  expect(oraclePayload).toMatchObject({
+    confirmation: "ADMIN_EXECUTE",
+    reason: "ui-profile-management-select-ai-upsert",
+  });
+  expect(oraclePayload).not.toHaveProperty("execute");
+  await expect(page.getByTestId("profile-oracle-result").getByText("saved")).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  const mobileRoleBox = await roleField.boundingBox();
+  const mobileInstructionsBox = await instructionsField.boundingBox();
+  expect(mobileRoleBox?.height).toBe(mobileInstructionsBox?.height);
+  const [mobileToolbarBox, mobileSearchBox] = await Promise.all([
+    objectSearchToolbar.boundingBox(),
+    objectSearch.boundingBox(),
+  ]);
+  expect(mobileToolbarBox).not.toBeNull();
+  expect(mobileSearchBox).not.toBeNull();
+  expect(mobileSearchBox!.width).toBeGreaterThanOrEqual(mobileToolbarBox!.width - 26);
 
   const bodyWidth = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -216,9 +310,70 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
 });
 
+test("業務プロファイルの対象オブジェクト空状態はExcelプレビュー風の広い面で表示する", async ({ page }) => {
+  await mockProfileApi(page, {
+    catalog: { ...schemaCatalog, tables: [] },
+    viewItems: [],
+  });
+
+  await page.goto("/profiles");
+  await page.getByRole("button", { name: /既定プロファイル 許可オブジェクトの表示確認/ }).click();
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const viewList = page.getByTestId("profile-allowed-view-list");
+
+  await expect(tableList).toHaveAttribute("aria-label", "テーブル選択");
+  await expect(viewList).toHaveAttribute("aria-label", "ビュー選択");
+  await expect(tableList.getByText("選択できるテーブルがありません。")).toBeVisible();
+  await expect(tableList.getByText("Oracle からテーブルを読み込むとここに表示されます。")).toBeVisible();
+  await expect(viewList.getByText("選択できるビューがありません。")).toBeVisible();
+  await expect(viewList.getByText("Oracle からビューを読み込むとここに表示されます。")).toBeVisible();
+  await expect(tableList.locator("label")).toHaveCount(0);
+  await expect(viewList.locator("label")).toHaveCount(0);
+
+  const surface = await tableList.evaluate((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      height: node.getBoundingClientRect().height,
+      borderStyle: style.borderStyle,
+      backgroundColor: style.backgroundColor,
+      dashedDescendants: node.querySelectorAll(".border-dashed").length,
+      noHorizontalOverflow: node.scrollWidth <= node.clientWidth + 1,
+    };
+  });
+  expect(surface.height).toBeGreaterThanOrEqual(388);
+  expect(surface.height).toBeLessThanOrEqual(396);
+  expect(surface.borderStyle).toBe("solid");
+  expect(surface.backgroundColor).toBe("rgb(255, 255, 255)");
+  expect(surface.dashedDescendants).toBe(0);
+  expect(surface.noHorizontalOverflow).toBe(true);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  const mobileWidth = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth + 1);
+});
+
 test("Oracle Profile タブで JSON と SQL preview と drop 確認を扱える", async ({ page }) => {
   let dropPayload: Record<string, unknown> | null = null;
+  let savePayload: Record<string, unknown> | null = null;
   await mockProfileApi(page);
+  await page.route("**/api/nl2sql/select-ai/db-profiles", async (route) => {
+    savePayload = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfillJson(route, {
+      runtime: "oracle",
+      executed: true,
+      status: "saved",
+      profile_name: "NL2SQL_DEFAULT_PROFILE",
+      original_name: "NL2SQL_DEFAULT_PROFILE",
+      ddl: [],
+      profile: dbProfiles.profiles[0],
+      warnings: [],
+      engine_meta: {},
+    });
+  });
   await page.route("**/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop", async (route) => {
     dropPayload = route.request().postDataJSON() as Record<string, unknown>;
     await fulfillJson(route, {
@@ -242,6 +397,16 @@ test("Oracle Profile タブで JSON と SQL preview と drop 確認を扱える"
   await expect(page.getByText("DBMS_CLOUD_AI.CREATE_PROFILE")).toBeVisible();
   await expect(page.getByLabel("Attributes JSON")).toHaveValue(/"provider": "oci"/);
 
+  await page.getByRole("button", { name: "保存実行" }).click();
+  const saveDialog = page.getByRole("alertdialog", { name: "Oracle Profile 保存の確認" });
+  await expect(saveDialog).toBeVisible();
+  await saveDialog.getByRole("button", { name: "保存実行" }).click();
+  expect(savePayload).toMatchObject({
+    profile_name: "NL2SQL_DEFAULT_PROFILE",
+    confirmation: "NL2SQL_DEFAULT_PROFILE",
+  });
+  expect(savePayload).not.toHaveProperty("execute");
+
   await page.getByRole("button", { name: "Drop 実行" }).click();
   const dialog = page.getByRole("dialog", { name: "Oracle Profile Drop の確認" });
   const executeButton = dialog.getByRole("button", { name: "Drop 実行" });
@@ -250,7 +415,7 @@ test("Oracle Profile タブで JSON と SQL preview と drop 確認を扱える"
   await expect(executeButton).toBeEnabled();
   await executeButton.click();
   expect(dropPayload).toMatchObject({
-    execute: true,
     confirmation: "NL2SQL_DEFAULT_PROFILE",
   });
+  expect(dropPayload).not.toHaveProperty("execute");
 });

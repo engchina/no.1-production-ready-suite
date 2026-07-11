@@ -31,6 +31,7 @@ from .models import (
     ClassifierPredictionData,
     ClassifierPredictRequest,
     ClassifierStatusData,
+    ClassifierTrainingDataData,
     ClassifierTrainRequest,
     CommentApplyData,
     CommentApplyRequest,
@@ -80,6 +81,8 @@ from .models import (
     LegacyLearningMaterialData,
     MetadataSqlGenerateData,
     MetadataSqlGenerateRequest,
+    MetadataSqlSampleData,
+    MetadataSqlSampleRequest,
     Nl2SqlProfile,
     PreviewData,
     PreviewRequest,
@@ -104,6 +107,8 @@ from .models import (
     SelectAiDbProfileMutationData,
     SelectAiDbProfilesData,
     SelectAiDbProfileUpsertRequest,
+    SelectAiFeedbackAddData,
+    SelectAiFeedbackAddRequest,
     SelectAiFeedbackDeleteRequest,
     SelectAiFeedbackEntriesData,
     SelectAiFeedbackMutationData,
@@ -172,9 +177,11 @@ async def get_job(job_id: str) -> ApiResponse[JobData]:
 
 
 @router.get("/profiles", response_model=ApiResponse[list[Nl2SqlProfile]])
-async def list_profiles() -> ApiResponse[list[Nl2SqlProfile]]:
+async def list_profiles(include_archived: bool = False) -> ApiResponse[list[Nl2SqlProfile]]:
     """NL2SQL profile 一覧。"""
-    return ApiResponse(data=nl2sql_service.list_profiles())
+    return ApiResponse(
+        data=nl2sql_service.list_profiles(include_archived=include_archived)
+    )
 
 
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
@@ -314,6 +321,17 @@ async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
         ) from exc
 
 
+@router.post("/profiles/{profile_id}/restore", response_model=ApiResponse[Nl2SqlProfile])
+async def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+    """archive 済みの NL2SQL profile を復元する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.restore_profile(profile_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
+
+
 @router.post(
     "/profiles/{profile_id}/select-ai-profile",
     response_model=ApiResponse[SelectAiDbProfileMutationData],
@@ -322,7 +340,7 @@ async def upsert_profile_select_ai_profile(
     profile_id: str,
     req: ProfileSelectAiProfileRequest,
 ) -> ApiResponse[SelectAiDbProfileMutationData]:
-    """業務 profile から Oracle DBMS_CLOUD_AI profile を dry-run / 作成する。"""
+    """業務 profile から Oracle DBMS_CLOUD_AI profile を作成する。"""
     try:
         return ApiResponse(data=nl2sql_service.upsert_profile_select_ai_profile(profile_id, req))
     except KeyError as exc:
@@ -349,12 +367,11 @@ async def refresh_select_ai_agent_assets(
 async def cleanup_select_ai_assets(
     req: AssetCleanupRequest,
 ) -> ApiResponse[list[AssetCleanupData]]:
-    """Oracle Select AI / Agent assets の dry-run / cleanup を実行する。"""
+    """Oracle Select AI / Agent assets の cleanup を実行する。"""
     return ApiResponse(
         data=nl2sql_service.cleanup_select_ai_assets(
             profile_id=req.profile_id,
             engines=req.engines,
-            execute=req.execute,
             confirmation=req.confirmation,
             reason=req.reason,
         )
@@ -387,6 +404,17 @@ async def select_ai_feedback(
 ) -> ApiResponse[SelectAiFeedbackEntriesData]:
     """Oracle DBMS_CLOUD_AI profile feedback vector entries を返す。"""
     return ApiResponse(data=nl2sql_service.list_select_ai_feedback_entries(profile_name, limit))
+
+
+@router.post(
+    "/select-ai/feedback/add",
+    response_model=ApiResponse[SelectAiFeedbackAddData],
+)
+async def add_select_ai_feedback(
+    req: SelectAiFeedbackAddRequest,
+) -> ApiResponse[SelectAiFeedbackAddData]:
+    """Oracle DBMS_CLOUD_AI profile feedback entry を追加する。"""
+    return ApiResponse(data=nl2sql_service.add_select_ai_feedback(req))
 
 
 @router.post(
@@ -471,11 +499,10 @@ async def drop_select_ai_db_profile(
     profile_name: str,
     req: SelectAiDbProfileDropRequest,
 ) -> ApiResponse[AssetCleanupData]:
-    """Oracle DBMS_CLOUD_AI profile を名前指定で dry-run / drop する。"""
+    """Oracle DBMS_CLOUD_AI profile を名前指定で drop する。"""
     return ApiResponse(
         data=nl2sql_service.drop_select_ai_db_profile(
             profile_name,
-            req.execute,
             confirmation=req.confirmation,
             reason=req.reason,
         )
@@ -519,7 +546,7 @@ async def create_select_ai_agent_conversation(
 async def cleanup_select_ai_agent_assets(
     req: AssetCleanupRequest,
 ) -> ApiResponse[list[AssetCleanupData]]:
-    """Oracle Select AI Agent low-level assets の dry-run / cleanup を実行する。"""
+    """Oracle Select AI Agent low-level assets の cleanup を実行する。"""
     return ApiResponse(data=nl2sql_service.cleanup_select_ai_agent_assets_low_level(req))
 
 
@@ -577,7 +604,7 @@ async def sample_data_info() -> ApiResponse[SampleDataInfo]:
 async def import_sample_data(
     req: SampleDataMutationRequest,
 ) -> ApiResponse[SampleDataMutationData]:
-    """Optional SQL Assist sample data import dry-run / execution."""
+    """Optional SQL Assist sample data import execution."""
     return ApiResponse(data=nl2sql_service.import_sample_data(req))
 
 
@@ -585,7 +612,7 @@ async def import_sample_data(
 async def delete_sample_data(
     req: SampleDataMutationRequest,
 ) -> ApiResponse[SampleDataMutationData]:
-    """Optional SQL Assist sample data delete dry-run / execution."""
+    """Optional SQL Assist sample data delete execution."""
     return ApiResponse(data=nl2sql_service.delete_sample_data(req))
 
 
@@ -645,6 +672,12 @@ async def classifier_status() -> ApiResponse[ClassifierStatusData]:
 async def classifier_models() -> ApiResponse[ClassifierModelsData]:
     """Persisted LogisticRegression classifier model versions を返す。"""
     return ApiResponse(data=nl2sql_service.list_classifier_models())
+
+
+@router.get("/classifier/training-data", response_model=ApiResponse[ClassifierTrainingDataData])
+async def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
+    """Classifier training data 一覧を返す。"""
+    return ApiResponse(data=nl2sql_service.classifier_training_data())
 
 
 @router.post("/classifier/training-data/import", response_model=ApiResponse[ClassifierImportData])
@@ -867,9 +900,17 @@ async def generate_comment_sql(
     return ApiResponse(data=nl2sql_service.generate_comment_sql(req))
 
 
+@router.post("/metadata-samples", response_model=ApiResponse[MetadataSqlSampleData])
+async def metadata_samples(
+    req: MetadataSqlSampleRequest,
+) -> ApiResponse[MetadataSqlSampleData]:
+    """コメント/アノテーション SQL 生成向けの列代表値を再取得する。"""
+    return ApiResponse(data=nl2sql_service.get_metadata_samples(req))
+
+
 @router.post("/comments/apply", response_model=ApiResponse[CommentApplyData])
 async def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyData]:
-    """COMMENT ON TABLE/COLUMN の dry-run / restricted execution。"""
+    """COMMENT ON TABLE/COLUMN の restricted execution。"""
     return ApiResponse(data=nl2sql_service.apply_comments(req))
 
 
@@ -889,7 +930,7 @@ async def generate_annotation_sql(
 
 @router.post("/annotations/apply", response_model=ApiResponse[AnnotationApplyData])
 async def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationApplyData]:
-    """Oracle annotation の dry-run / restricted execution。"""
+    """Oracle annotation の restricted execution。"""
     return ApiResponse(data=nl2sql_service.apply_annotations(req))
 
 
@@ -919,7 +960,7 @@ async def db_admin_view_detail(view_name: str) -> ApiResponse[DbAdminObjectDetai
 
 @router.post("/db-admin/drop-table", response_model=ApiResponse[DbAdminExecuteData])
 async def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdminExecuteData]:
-    """DB admin DROP TABLE dry-run / execution。"""
+    """DB admin DROP TABLE execution。"""
     return ApiResponse(data=nl2sql_service.drop_db_admin_table(req))
 
 
@@ -937,7 +978,7 @@ async def db_admin_statements(req: DbAdminStatementsRequest) -> ApiResponse[DbAd
 
 @router.post("/db-admin/drop-view", response_model=ApiResponse[DbAdminExecuteData])
 async def db_admin_drop_view(req: DbAdminDropViewRequest) -> ApiResponse[DbAdminExecuteData]:
-    """DB admin DROP VIEW dry-run / execution。"""
+    """DB admin DROP VIEW execution。"""
     return ApiResponse(data=nl2sql_service.drop_db_admin_view(req))
 
 
@@ -1027,7 +1068,7 @@ async def synthetic_cases(
 async def generate_synthetic_data(
     req: SyntheticDataGenerateRequest,
 ) -> ApiResponse[SyntheticDataOperationData]:
-    """DBMS_CLOUD_AI synthetic table data generation の dry-run / execution。"""
+    """DBMS_CLOUD_AI synthetic table data generation execution。"""
     return ApiResponse(data=nl2sql_service.generate_synthetic_data(req))
 
 

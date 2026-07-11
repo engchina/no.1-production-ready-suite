@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Children, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Code2,
@@ -13,8 +13,10 @@ import {
 
 import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import type { DbAdminObjectDetail, DbAdminObjectSummary, SchemaCatalog } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
@@ -115,6 +117,8 @@ export function DbObjectManagementPanelShell({
   ariaLabel,
   idPrefix,
   className = "",
+  splitId,
+  preferredWidePane = "right",
   children,
 }: {
   id: string;
@@ -122,8 +126,13 @@ export function DbObjectManagementPanelShell({
   ariaLabel?: string;
   idPrefix: string;
   className?: string;
+  splitId?: string;
+  preferredWidePane?: FixedSplitWidePane;
   children: ReactNode;
 }) {
+  const panelChildren = Children.toArray(children);
+  const splitPaneId = splitId && panelChildren.length === 2 ? splitId : null;
+
   return (
     <section
       id={id}
@@ -134,7 +143,16 @@ export function DbObjectManagementPanelShell({
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
-      {children}
+      {splitPaneId ? (
+        <FixedSplitPane
+          splitId={splitPaneId}
+          preferredWidePane={preferredWidePane}
+          left={panelChildren[0]}
+          right={panelChildren[1]}
+        />
+      ) : (
+        children
+      )}
     </section>
   );
 }
@@ -163,6 +181,38 @@ export function DbObjectPanelHeader({
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
+  );
+}
+
+export function DbManagementSearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+      <span>{label}</span>
+      <span className="relative">
+        <Search
+          size={16}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          aria-hidden="true"
+        />
+        <input
+          type="search"
+          value={value}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+          placeholder={placeholder}
+        />
+      </span>
+    </label>
   );
 }
 
@@ -371,18 +421,12 @@ export function DbObjectGrid({
 
       <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
         <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
-            <span>{t("dbAdmin.search.label")}</span>
-            <span className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-              <input
-                value={search}
-                onChange={(event) => onSearchChange(event.currentTarget.value)}
-                className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                placeholder={t("dbAdmin.search.placeholder")}
-              />
-            </span>
-          </label>
+          <DbManagementSearchField
+            label={t("dbAdmin.search.label")}
+            placeholder={t("dbAdmin.search.placeholder")}
+            value={search}
+            onChange={onSearchChange}
+          />
           <label className="grid gap-1 text-sm font-medium text-slate-800">
             <span>{labels.filter}</span>
             <select

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
   Download,
-  FileSpreadsheet,
   Layers3,
   RefreshCw,
   Save,
@@ -11,7 +12,9 @@ import {
 
 import {
   Button,
+  Banner,
   EmptyState,
+  FormStatus,
   PageHeader,
   StatusBadge,
 } from "@engchina/production-ready-ui";
@@ -37,11 +40,14 @@ import type {
   ProfileUpsertPayload,
 } from "../types";
 
-type ActiveView = "legacy" | "profile";
+type ActiveView = "globalTerms" | "globalRules" | "profile";
 type LegacyKind = "terms" | "rules";
-type MessageTone = "success" | "danger" | "neutral";
+type MessageTone = "success" | "danger";
 
 const GLOSSARY_RULES_ID = "glossary-rules";
+const GLOBAL_PAGE_SIZE = 10;
+const GLOBAL_PREVIEW_TEXT_CLASS =
+  "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 
 interface GlossaryFormState {
   glossaryText: string;
@@ -182,21 +188,15 @@ function profileToPayload(profile: Nl2SqlProfile, form: GlossaryFormState): Prof
   };
 }
 
-function messageClass(tone: MessageTone) {
-  if (tone === "danger") return "border-red-200 bg-red-50 text-red-800";
-  if (tone === "success") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  return "border-slate-200 bg-slate-50 text-slate-700";
-}
-
 export function GlossaryRulesPage() {
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [legacyMaterial, setLegacyMaterial] = useState<LegacyLearningMaterialData>({
     glossary: {},
-    rule_entries: [],
+    rules: [],
   });
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<GlossaryFormState>(EMPTY_FORM);
-  const [activeView, setActiveView] = useState<ActiveView>("legacy");
+  const [activeView, setActiveView] = useState<ActiveView>("globalTerms");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [legacyBusy, setLegacyBusy] = useState<LegacyKind | "">("");
@@ -221,9 +221,9 @@ export function GlossaryRulesPage() {
       })),
     [legacyMaterial.glossary]
   );
-  const legacyRules = legacyMaterial.rule_entries;
+  const legacyRules = legacyMaterial.rules;
 
-  const load = async () => {
+  const load = async (announce = false) => {
     setLoading(true);
     setMessage(null);
     try {
@@ -237,6 +237,9 @@ export function GlossaryRulesPage() {
       setSelectedId(next?.id ?? "");
       setForm(next ? profileToForm(next) : EMPTY_FORM);
       setLastLoadedAt(new Date().toISOString());
+      if (announce) {
+        setMessage({ tone: "success", text: t("glossary.message.serverLoaded") });
+      }
     } catch (err) {
       setMessage({ tone: "danger", text: err instanceof Error ? err.message : t("glossary.error.load") });
     } finally {
@@ -286,7 +289,7 @@ export function GlossaryRulesPage() {
         tone: "success",
         text: t("glossary.message.legacyImported", {
           terms: Object.keys(data.glossary).length,
-          rules: data.rule_entries.length,
+          rules: data.rules.length,
         }),
       });
     } catch (err) {
@@ -321,11 +324,8 @@ export function GlossaryRulesPage() {
   };
 
   const exportRules = () => {
-    const category = selectedProfile?.name ?? "共通";
-    const rows = lines(form.sqlRulesText).map(
-      (rule) => `${escapeCsvCell(category)},${escapeCsvCell(rule)}`
-    );
-    downloadCsv("nl2sql_rules.csv", ["CATEGORY,RULE", ...rows].join("\n"));
+    const rows = lines(form.sqlRulesText).map((rule) => escapeCsvCell(rule));
+    downloadCsv("nl2sql_rules.csv", ["RULE", ...rows].join("\n"));
   };
 
   const exportExamples = () => {
@@ -440,12 +440,6 @@ export function GlossaryRulesPage() {
         subtitle={t("glossary.subtitle")}
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <div className={`rounded-md border px-4 py-3 text-sm ${messageClass(message.tone)}`} role={message.tone === "danger" ? "alert" : "status"}>
-            {message.text}
-          </div>
-        )}
-
         <GlossaryStatusBar
           termsCount={legacyTerms.length}
           rulesCount={legacyRules.length}
@@ -453,13 +447,20 @@ export function GlossaryRulesPage() {
           selectedProfileName={selectedProfile?.name ?? ""}
           lastLoadedAt={lastLoadedAt}
           loading={loading}
-          onRefresh={() => void load()}
+          onRefresh={() => void load(true)}
         />
+
+        {message?.tone === "danger" ? (
+          <Banner severity="danger">{message.text}</Banner>
+        ) : (
+          <FormStatus tone="success" message={message?.text} />
+        )}
 
         <DbObjectManagementTabs
           activeView={activeView}
           tabs={[
-            { id: "legacy", label: t("glossary.tabs.legacy"), icon: FileSpreadsheet },
+            { id: "globalTerms", label: t("glossary.tabs.globalTerms"), icon: BookOpen },
+            { id: "globalRules", label: t("glossary.tabs.globalRules"), icon: Layers3 },
             { id: "profile", label: t("glossary.tabs.profile"), icon: UserCog },
           ] satisfies Array<DbObjectTab<ActiveView>>}
           idPrefix={GLOSSARY_RULES_ID}
@@ -467,47 +468,47 @@ export function GlossaryRulesPage() {
           onViewChange={setActiveView}
         />
 
-        {activeView === "legacy" ? (
+        {activeView === "globalTerms" ? (
           <DbObjectManagementPanelShell
-            id="glossary-rules-panel-legacy"
-            labelledBy="glossary-rules-tab-legacy"
+            id="glossary-rules-panel-globalTerms"
+            labelledBy="glossary-rules-tab-globalTerms"
             idPrefix={GLOSSARY_RULES_ID}
-            ariaLabel={t("glossary.legacy.workspace")}
+            ariaLabel={t("glossary.globalTerms.workspace")}
           >
-            <DbObjectPanelHeader
-              title={t("glossary.legacy.title")}
-              description={t("glossary.legacy.hint")}
-              icon={BookOpen}
-              action={<StatusBadge variant="info" label={t("glossary.legacy.compatBadge")} />}
+            <GlobalMaterialPanel
+              kind="terms"
+              title={t("glossary.globalTerms.title")}
+              description={t("glossary.globalTerms.hint")}
+              countLabel={t("glossary.count.terms", { count: legacyTerms.length })}
+              importLabel={t("glossary.globalTerms.import")}
+              exportLabel={t("glossary.globalTerms.export")}
+              filename={legacyTermsFilename}
+              busy={legacyBusy === "terms"}
+              rows={legacyTerms}
+              onImport={(file) => void importLegacyMaterial(file, "terms")}
+              onExport={() => void exportLegacyMaterial("terms")}
             />
-            <div className="grid gap-4 xl:grid-cols-2">
-              <LegacyMaterialPanel
-                kind="terms"
-                title={t("glossary.legacy.terms")}
-                description={t("glossary.legacy.termsHint")}
-                countLabel={t("glossary.count.terms", { count: legacyTerms.length })}
-                importLabel={t("glossary.legacy.importTerms")}
-                exportLabel={t("glossary.legacy.exportTerms")}
-                filename={legacyTermsFilename}
-                busy={legacyBusy === "terms"}
-                rows={legacyTerms}
-                onImport={(file) => void importLegacyMaterial(file, "terms")}
-                onExport={() => void exportLegacyMaterial("terms")}
-              />
-              <LegacyMaterialPanel
-                kind="rules"
-                title={t("glossary.legacy.rules")}
-                description={t("glossary.legacy.rulesHint")}
-                countLabel={t("glossary.count.rules", { count: legacyRules.length })}
-                importLabel={t("glossary.legacy.importRules")}
-                exportLabel={t("glossary.legacy.exportRules")}
-                filename={legacyRulesFilename}
-                busy={legacyBusy === "rules"}
-                rows={legacyRules}
-                onImport={(file) => void importLegacyMaterial(file, "rules")}
-                onExport={() => void exportLegacyMaterial("rules")}
-              />
-            </div>
+          </DbObjectManagementPanelShell>
+        ) : activeView === "globalRules" ? (
+          <DbObjectManagementPanelShell
+            id="glossary-rules-panel-globalRules"
+            labelledBy="glossary-rules-tab-globalRules"
+            idPrefix={GLOSSARY_RULES_ID}
+            ariaLabel={t("glossary.globalRules.workspace")}
+          >
+            <GlobalMaterialPanel
+              kind="rules"
+              title={t("glossary.globalRules.title")}
+              description={t("glossary.globalRules.hint")}
+              countLabel={t("glossary.count.rules", { count: legacyRules.length })}
+              importLabel={t("glossary.globalRules.import")}
+              exportLabel={t("glossary.globalRules.export")}
+              filename={legacyRulesFilename}
+              busy={legacyBusy === "rules"}
+              rows={legacyRules}
+              onImport={(file) => void importLegacyMaterial(file, "rules")}
+              onExport={() => void exportLegacyMaterial("rules")}
+            />
           </DbObjectManagementPanelShell>
         ) : (
           <DbObjectManagementPanelShell
@@ -515,7 +516,8 @@ export function GlossaryRulesPage() {
             labelledBy="glossary-rules-tab-profile"
             idPrefix={GLOSSARY_RULES_ID}
             ariaLabel={t("glossary.profile.workspace")}
-            className="xl:grid-cols-[minmax(18rem,0.62fr)_minmax(0,1.5fr)]"
+            splitId="glossary-rules-profile"
+            preferredWidePane="right"
           >
             <ProfileListPanel
               profiles={profiles}
@@ -638,7 +640,7 @@ function GlossaryStatusBar({
   );
 }
 
-function LegacyMaterialPanel({
+function GlobalMaterialPanel({
   kind,
   title,
   description,
@@ -659,7 +661,7 @@ function LegacyMaterialPanel({
   exportLabel: string;
   filename: string;
   busy: boolean;
-  rows: Array<{ term: string; definition: string }> | Array<{ category: string; rule: string }>;
+  rows: Array<{ term: string; definition: string }> | string[];
   onImport: (file: File) => void;
   onExport: () => void;
 }) {
@@ -697,18 +699,28 @@ function LegacyMaterialPanel({
           <span>{exportLabel}</span>
         </Button>
       </div>
-      <LegacyPreviewTable kind={kind} rows={rows} />
+      <GlobalPreviewTable kind={kind} rows={rows} />
     </section>
   );
 }
 
-function LegacyPreviewTable({
+function GlobalPreviewTable({
   kind,
   rows,
 }: {
   kind: LegacyKind;
-  rows: Array<{ term: string; definition: string }> | Array<{ category: string; rule: string }>;
+  rows: Array<{ term: string; definition: string }> | string[];
 }) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / GLOBAL_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const start = (currentPage - 1) * GLOBAL_PAGE_SIZE;
+  const visibleRows = rows.slice(start, start + GLOBAL_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows]);
+
   if (rows.length === 0) {
     return (
       <div className="rounded-md border border-slate-200 bg-white p-4">
@@ -719,29 +731,115 @@ function LegacyPreviewTable({
 
   const isTerms = kind === "terms";
   return (
-    <div className="overflow-hidden rounded-md border border-slate-200 bg-white" data-testid={`glossary-${kind}-preview`}>
-      <div className="max-h-80 overflow-auto">
-        <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-600">
-            <tr>
-              <th className="w-56 px-3 py-2">{isTerms ? "TERM" : "CATEGORY"}</th>
-              <th className="px-3 py-2">{isTerms ? "DEFINITION" : "RULE"}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-slate-800">
-            {rows.map((row, index) => (
-              <tr key={isTerms ? `${(row as { term: string }).term}-${index}` : `${(row as { rule: string }).rule}-${index}`}>
-                <td className="break-words px-3 py-2 font-mono text-xs text-slate-700">
-                  {isTerms ? (row as { term: string }).term : (row as { category: string }).category}
-                </td>
-                <td className="break-words px-3 py-2">
-                  {isTerms ? (row as { definition: string }).definition : (row as { rule: string }).rule}
-                </td>
+    <div className="grid gap-2" data-testid={`glossary-${kind}-preview`}>
+      <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed divide-y divide-slate-200 text-left text-sm">
+            <colgroup>
+              <col className="w-12" />
+              {isTerms && <col className="w-32 sm:w-56" />}
+              <col />
+            </colgroup>
+            <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+              <tr>
+                <th scope="col" className="px-3 py-2 text-right">
+                  {t("glossary.preview.rowNumber")}
+                </th>
+                {isTerms && (
+                  <th scope="col" className="px-3 py-2">
+                    TERM
+                  </th>
+                )}
+                <th scope="col" className="px-3 py-2">
+                  {isTerms ? "DEFINITION" : "RULE"}
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {visibleRows.map((row, index) => {
+                const absoluteIndex = start + index;
+                if (isTerms) {
+                  const termRow = row as { term: string; definition: string };
+                  return (
+                    <tr key={`${termRow.term}-${absoluteIndex}`}>
+                      <td
+                        className="px-3 py-2 text-right text-xs tabular-nums text-slate-500"
+                        data-testid="glossary-terms-row-number"
+                      >
+                        {absoluteIndex + 1}
+                      </td>
+                      <td className="px-3 py-2 align-top font-mono text-xs text-slate-700 [overflow-wrap:anywhere]">
+                        {termRow.term}
+                      </td>
+                      <td className="min-w-0 px-3 py-2 align-top">
+                        <div className={GLOBAL_PREVIEW_TEXT_CLASS} data-testid="glossary-definition-preview-text">
+                          {termRow.definition}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+                const rule = row as string;
+                return (
+                  <tr key={`${rule}-${absoluteIndex}`}>
+                    <td
+                      className="px-3 py-2 text-right text-xs tabular-nums text-slate-500"
+                      data-testid="glossary-rules-row-number"
+                    >
+                      {absoluteIndex + 1}
+                    </td>
+                    <td className="min-w-0 px-3 py-2 align-top">
+                      <div className={GLOBAL_PREVIEW_TEXT_CLASS} data-testid="glossary-rule-preview-text">
+                        {rule}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
+      {rows.length > GLOBAL_PAGE_SIZE && (
+        <nav
+          className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600"
+          aria-label={t("glossary.pagination.label")}
+          data-testid={`glossary-${kind}-pagination`}
+        >
+          <span>
+            {t("glossary.pagination.range", {
+              start: start + 1,
+              end: Math.min(start + GLOBAL_PAGE_SIZE, rows.length),
+              total: rows.length,
+            })}
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+            >
+              <ChevronLeft size={15} aria-hidden="true" />
+              <span>{t("glossary.pagination.prev")}</span>
+            </Button>
+            <span className="inline-flex min-h-8 items-center rounded-md border border-slate-200 px-3 text-slate-700">
+              {t("glossary.pagination.page", { page: currentPage, total: totalPages })}
+            </span>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            >
+              <span>{t("glossary.pagination.next")}</span>
+              <ChevronRight size={15} aria-hidden="true" />
+            </Button>
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

@@ -454,9 +454,6 @@ function resultSummary(result: DbAdminExecuteData): { variant: ResultStatusVaria
   if (statuses.includes("blocked")) return { variant: "danger", label: t("dbAdmin.result.summary.blocked") };
   if (statuses.includes("confirmation_required")) return { variant: "info", label: t("dbAdmin.result.summary.confirmation") };
   if (statuses.includes("requires_oracle")) return { variant: "info", label: t("dbAdmin.result.summary.requiresOracle") };
-  if (statuses.length > 0 && statuses.every((status) => status === "dry_run")) {
-    return { variant: "neutral", label: t("dbAdmin.result.summary.preview") };
-  }
   return { variant: "neutral", label: t("dbAdmin.result.summary.notExecuted") };
 }
 
@@ -486,6 +483,16 @@ function oracleErrorGuidance(code: string | null) {
       actions: [
         t("dbAdmin.result.error.ora00942.action.target"),
         t("dbAdmin.result.error.action.refresh"),
+      ],
+    };
+  }
+  if (code === "ORA-11548") {
+    return {
+      cause: t("dbAdmin.result.error.ora11548.cause"),
+      actions: [
+        t("dbAdmin.result.error.ora11548.action.name"),
+        t("dbAdmin.result.error.ora11548.action.quote"),
+        t("dbAdmin.result.error.ora11548.action.regenerate"),
       ],
     };
   }
@@ -699,6 +706,80 @@ export function FileInputControl({
   );
 }
 
+export function SelectionListPanel({
+  title,
+  selectedCountLabel,
+  items,
+  selectedItems,
+  emptyTitle,
+  emptyHint,
+  ariaLabel,
+  dataTestId,
+  onToggle,
+}: {
+  title: string;
+  selectedCountLabel: string;
+  items: string[];
+  selectedItems: string[];
+  emptyTitle: string;
+  emptyHint: string;
+  ariaLabel: string;
+  dataTestId: string;
+  onToggle: (name: string) => void;
+}) {
+  const selectedSet = useMemo(() => new Set(selectedItems), [selectedItems]);
+
+  return (
+    <section className="grid min-w-0 gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <StatusBadge
+          variant={selectedItems.length > 0 ? "info" : "neutral"}
+          label={selectedCountLabel}
+        />
+      </div>
+      <div
+        role="group"
+        aria-label={ariaLabel}
+        data-testid={dataTestId}
+        className="grid h-[28rem] overflow-y-auto rounded-md border border-slate-200 bg-white"
+      >
+        {items.length === 0 ? (
+          <div className="grid min-h-full place-items-center p-4">
+            <EmptyState title={emptyTitle} hint={emptyHint} />
+          </div>
+        ) : (
+          <div className="grid content-start gap-2 p-2 md:grid-cols-2">
+            {items.map((name) => {
+              const selected = selectedSet.has(name);
+              return (
+                <label
+                  key={name}
+                  className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md border p-3 text-sm transition-colors ${
+                    selected
+                      ? "border-sky-200 bg-sky-50 text-sky-950"
+                      : "border-slate-200 text-slate-800 hover:border-sky-200 hover:bg-sky-50/50"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => onToggle(name)}
+                    className="h-4 w-4 shrink-0 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                  />
+                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-slate-900">
+                    {name}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /** .sql/.txt ファイルを読み込んで textarea へ流し込むボタン。 */
 export function SqlFileInput({
   onLoad,
@@ -761,7 +842,6 @@ export function StatementRunnerCard({
   onExecuted?: () => void | Promise<void>;
 }) {
   const [sql, setSql] = useState("");
-  const [execute, setExecute] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -774,16 +854,14 @@ export function StatementRunnerCard({
 
   const run = async () => {
     if (!sql.trim()) return;
-    const shouldExecute = executeOnly || execute;
-    if (shouldExecute && !confirmation.trim()) return;
+    if (!confirmation.trim()) return;
     setLoading(true);
     setMessage("");
     try {
       const data = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/statements", {
         sql,
         policy,
-        execute: shouldExecute,
-        confirmation: shouldExecute ? confirmation : "",
+        confirmation,
         reason: `ui-db-admin-${policy}`,
       });
       setResult(data);
@@ -797,9 +875,8 @@ export function StatementRunnerCard({
     }
   };
 
-  const shouldExecute = executeOnly || execute;
   const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
-  const canRun = Boolean(sql.trim()) && (!shouldExecute || isConfirmed);
+  const canRun = Boolean(sql.trim()) && isConfirmed;
   const progressNode = progress?.({ hasSql: Boolean(sql.trim()), isConfirmed, canRun });
 
   const header = executeOnly ? (
@@ -813,7 +890,7 @@ export function StatementRunnerCard({
       </div>
       <Button
         type="button"
-        variant={shouldExecute ? "danger" : "secondary"}
+        variant="danger"
         size="sm"
         className="w-full sm:w-auto"
         loading={loading}
@@ -821,7 +898,7 @@ export function StatementRunnerCard({
         onClick={() => void run()}
       >
         <Play size={15} aria-hidden="true" />
-        <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
+        <span>{t("dbAdmin.runner.run")}</span>
       </Button>
     </div>
   ) : (
@@ -832,14 +909,14 @@ export function StatementRunnerCard({
       </CardTitle>
       <Button
         type="button"
-        variant={shouldExecute ? "danger" : "secondary"}
+        variant="danger"
         size="sm"
         loading={loading}
         disabled={!canRun}
         onClick={() => void run()}
       >
         <Play size={15} aria-hidden="true" />
-        <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
+        <span>{t("dbAdmin.runner.run")}</span>
       </Button>
     </div>
   );
@@ -851,8 +928,7 @@ export function StatementRunnerCard({
       confirmed={isConfirmed}
       placeholder="ADMIN_EXECUTE"
       expectedLabel="ADMIN_EXECUTE"
-      helper={shouldExecute ? t("dbAdmin.confirmation.adminHelper") : t("dbAdmin.confirmation.dryRunHelper")}
-      disabled={!shouldExecute}
+      helper={t("dbAdmin.confirmation.adminHelper")}
     />
   );
 
@@ -891,11 +967,6 @@ export function StatementRunnerCard({
           className="min-h-52 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
         />
       </label>
-      {!executeOnly && (
-        <p className="text-xs leading-5 text-slate-500">
-          {t("dbAdmin.runner.previewHint")}
-        </p>
-      )}
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <SqlFileInput
           resetSignal={sqlFileResetSignal}
@@ -921,18 +992,7 @@ export function StatementRunnerCard({
           <span>{t("dbAdmin.runner.clear")}</span>
         </Button>
       </div>
-      <div className={executeOnly ? "grid gap-3" : "grid gap-3 sm:grid-cols-2"}>
-        {!executeOnly && (
-          <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-            <input
-              type="checkbox"
-              checked={execute}
-              onChange={(event) => setExecute(event.currentTarget.checked)}
-              className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
-            />
-            <span>{t("dbAdmin.runner.execute")}</span>
-          </label>
-        )}
+      <div className="grid gap-3">
         {executeOnly ? (
           <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
             <legend className="px-1 text-sm font-semibold text-slate-900">

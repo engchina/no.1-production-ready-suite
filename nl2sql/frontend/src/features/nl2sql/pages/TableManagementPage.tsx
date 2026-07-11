@@ -337,7 +337,6 @@ export function TableManagementPage() {
         filename: importFilename || "upload.csv",
         sheet_name: importSheet,
         mode: importMode,
-        execute: true,
         confirmation: importConfirmation,
         reason: "ui-table-management-import-tabular",
       });
@@ -385,7 +384,6 @@ export function TableManagementPage() {
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-table", {
         table_name: dropTargetName,
-        execute: true,
         confirmation: dropConfirmation,
         reason: "ui-table-management-drop",
       });
@@ -509,7 +507,8 @@ export function TableManagementPage() {
             labelledBy="table-management-tab-list"
             idPrefix="table-management"
             ariaLabel={t("tableMgmt.workspace.label")}
-            className="xl:grid-cols-[minmax(28rem,0.9fr)_minmax(0,1.2fr)]"
+            splitId="table-management-list"
+            preferredWidePane="right"
           >
             <DbObjectGrid
               idPrefix="table-management"

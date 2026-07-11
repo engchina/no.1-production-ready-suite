@@ -19,6 +19,7 @@ from app.features.nl2sql.models import (
     DbAdminJoinWhereRequest,
     DbAdminStatementsRequest,
     MetadataSqlGenerateRequest,
+    MetadataSqlSampleRequest,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
@@ -26,6 +27,7 @@ from app.features.nl2sql.models import (
     SchemaTable,
 )
 from app.features.nl2sql.oracle_adapter import (
+    OracleAdapterError,
     _flexible_date_value,
     _normalize_select_ai_object_list,
 )
@@ -72,6 +74,20 @@ class _FakeStatementsAdapter:
         return SchemaCatalog(refreshed_at="2026-07-10T00:00:00+00:00", tables=[])
 
 
+class _FakeMetadataSamplesAdapter:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[list[dict[str, Any]], int]] = []
+
+    def fetch_metadata_sample_values(
+        self, targets: list[dict[str, Any]], sample_limit: int
+    ) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
+        self.calls.append((targets, sample_limit))
+        if self.fail:
+            raise OracleAdapterError("接続できません")
+        return {"EMPLOYEE": {"EMPLOYEE_NAME": ["山田", "佐藤"]}}, []
+
+
 class _OracleRuntimeService(Nl2SqlService):
     def __init__(self, adapter: Any) -> None:
         super().__init__(store=MemoryNl2SqlStore())
@@ -115,7 +131,6 @@ def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
             step=SampleDataStep.ALL,
-            execute=True,
             confirmation="SQL_ASSIST_SAMPLE",
         )
     )
@@ -136,7 +151,7 @@ def test_statement_policy_table_ddl_accepts_and_blocks() -> None:
         )
     )
     assert allowed.executed is False
-    assert [item.status for item in allowed.statements] == ["dry_run"] * 5
+    assert [item.status for item in allowed.statements] == ["confirmation_required"] * 5
 
     blocked = service.execute_db_admin_statements(
         DbAdminStatementsRequest(
@@ -145,7 +160,7 @@ def test_statement_policy_table_ddl_accepts_and_blocks() -> None:
         )
     )
     assert blocked.executed is False
-    assert blocked.statements[0].status == "dry_run"
+    assert blocked.statements[0].status == "blocked"
     assert blocked.statements[1].status == "blocked"
     assert "禁止された操作" in blocked.statements[1].error_message
     assert any("禁止された操作" in warning for warning in blocked.warnings)
@@ -191,7 +206,7 @@ def test_statement_policy_view_ddl_and_data_dml() -> None:
             policy="view_ddl",
         )
     )
-    assert [item.status for item in view_ok.statements] == ["dry_run"] * 3
+    assert [item.status for item in view_ok.statements] == ["confirmation_required"] * 3
 
     view_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="CREATE TABLE T1 (ID NUMBER)", policy="view_ddl")
@@ -208,7 +223,7 @@ def test_statement_policy_view_ddl_and_data_dml() -> None:
             policy="data_dml",
         )
     )
-    assert [item.status for item in dml_ok.statements] == ["dry_run"] * 5
+    assert [item.status for item in dml_ok.statements] == ["confirmation_required"] * 5
 
     select_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="SELECT * FROM T1", policy="data_dml")
@@ -229,7 +244,7 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
             policy="comment_sql",
         )
     )
-    assert [item.status for item in comment_ok.statements] == ["dry_run"] * 4
+    assert [item.status for item in comment_ok.statements] == ["confirmation_required"] * 4
 
     comment_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="CREATE TABLE T1 (ID NUMBER)", policy="comment_sql")
@@ -242,17 +257,50 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
                 "ALTER TABLE T1 ANNOTATIONS (UI_Display 'T1');\n"
                 "ALTER TABLE T1 MODIFY (ID ANNOTATIONS (UI_Display 'ID'));\n"
                 "ALTER TABLE T1 MODIFY ID ANNOTATIONS (UI_Display 'ID');\n"
-                "ALTER VIEW V1 ANNOTATIONS (UI_Display 'V1')"
+                "ALTER VIEW V1 ANNOTATIONS (UI_Display 'V1');\n"
+                "ALTER TABLE T1 ANNOTATIONS (Business_Label '業務名');\n"
+                "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS \"COMMENT\" '説明')"
             ),
             policy="annotation_sql",
         )
     )
-    assert [item.status for item in annotation_ok.statements] == ["dry_run"] * 4
+    assert [item.status for item in annotation_ok.statements] == ["confirmation_required"] * 6
 
     annotation_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="ALTER TABLE T1 ADD C1 NUMBER", policy="annotation_sql")
     )
     assert annotation_ng.statements[0].status == "blocked"
+
+
+def test_annotation_comment_name_is_blocked_before_oracle_execution() -> None:
+    adapter = _FakeStatementsAdapter([])
+    service = _OracleRuntimeService(adapter)
+    invalid_sql = (
+        "ALTER TABLE DEPARTMENT ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT '部署情報を管理するテーブル');\n"
+        "ALTER TABLE DEPARTMENT MODIFY (DEPARTMENT_ID ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT '部署ID。主キー。'));\n"
+        "ALTER TABLE DEPARTMENT MODIFY (DEPARTMENT_NAME ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT '部署名。'));\n"
+        "ALTER TABLE DEPARTMENT MODIFY (LOCATION ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT '所在地。'));\n"
+        "ALTER TABLE DEPARTMENT MODIFY (CREATED_AT ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT 'レコード作成日時。'));"
+    )
+
+    result = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql=invalid_sql,
+            policy="annotation_sql",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is False
+    assert adapter.calls == []
+    assert {item.status for item in result.statements} == {"blocked"}
+    assert all("ORA-11548" in item.error_message for item in result.statements)
+    assert all("UI_Display" in item.error_message for item in result.statements)
 
 
 def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
@@ -261,7 +309,6 @@ def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
         DbAdminStatementsRequest(
             sql="CREATE TABLE T1 (ID NUMBER)",
             policy="table_ddl",
-            execute=True,
         )
     )
     assert missing_confirmation.statements[0].status == "confirmation_required"
@@ -270,7 +317,6 @@ def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
         DbAdminStatementsRequest(
             sql="CREATE TABLE T1 (ID NUMBER)",
             policy="table_ddl",
-            execute=True,
             confirmation="ADMIN_EXECUTE",
         )
     )
@@ -303,7 +349,6 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
         DbAdminStatementsRequest(
             sql="CREATE TABLE T1 (ID NUMBER); COMMENT ON TABLE MISSING IS 'x'",
             policy="table_ddl",
-            execute=True,
             confirmation="ADMIN_EXECUTE",
         )
     )
@@ -361,21 +406,193 @@ def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
     )
 
 
+def test_annotation_generation_ports_reference_prompt_and_filters_sample_annotations() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    enterprise_ai = FakeEnterpriseAiClient(
+        "```sql\n"
+        "ALTER TABLE T1 ANNOTATIONS "
+        "(UI_Display 'T, One', sample_header 'ID,NAME', sample_data '1,A');\n"
+        "```"
+    )
+    service._enterprise_ai_client = enterprise_ai
+
+    result = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "T1", "object_type": "table"}],
+            structure_text="OBJECT: T1\nTYPE: table\nCOMMENT: T One",
+            sample_text="",
+        )
+    )
+
+    assert result.source == "oci_enterprise_ai"
+    assert result.sql == "ALTER TABLE T1 ANNOTATIONS (UI_Display 'T, One');"
+    assert "COMMENT: は入力メタデータ" in enterprise_ai.calls[0]["prompt"]
+    assert "sample_header / sample_data を生成しない" in enterprise_ai.calls[0]["prompt"]
+    assert "未引用の COMMENT は禁止" in enterprise_ai.calls[0]["system_prompt"]
+
+    with_samples_ai = FakeEnterpriseAiClient(
+        "ALTER TABLE T1 ANNOTATIONS "
+        "(UI_Display 'T One', sample_header 'ID,NAME', sample_data '1,A');"
+    )
+    service._enterprise_ai_client = with_samples_ai
+    with_samples = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "T1", "object_type": "table"}],
+            structure_text="OBJECT: T1\nTYPE: table\nCOMMENT: T One",
+            sample_text="OBJECT: T1\nID: 1\nNAME: A",
+        )
+    )
+
+    assert "sample_header 'ID,NAME'" in with_samples.sql
+    assert "sample_data '1,A'" in with_samples.sql
+    assert "sample_header / sample_data を生成可能" in with_samples_ai.calls[0]["prompt"]
+
+
+def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "ALTER TABLE DEPARTMENT ANNOTATIONS "
+        "(ADD IF NOT EXISTS COMMENT '部署情報を管理するテーブル');"
+    )
+
+    result = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "DEPARTMENT", "object_type": "table"}],
+            structure_text=(
+                "OBJECT: DEPARTMENT\nTYPE: table\n"
+                "COMMENT: 部署情報を管理するテーブル"
+            ),
+        )
+    )
+
+    assert result.source == "deterministic"
+    assert "ADD IF NOT EXISTS UI_Display" in result.sql
+    assert "ADD IF NOT EXISTS COMMENT" not in result.sql
+    assert any("ORA-11548" in warning for warning in result.warnings)
+
+
+def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    result = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[
+                {"object_name": "B_TABLE", "object_type": "table"},
+                {"object_name": "A_TABLE", "object_type": "table"},
+                {"object_name": "V_TABLE", "object_type": "view"},
+            ],
+            structure_text=(
+                "OBJECT: B_TABLE\nTYPE: table\nCOMMENT: B\n"
+                "- B_ID: NUMBER NULLABLE=N COMMENT=B's ID\n\n"
+                "OBJECT: A_TABLE\nTYPE: table\nCOMMENT: O'Brien\n"
+                "- A_ID: NUMBER NULLABLE=N COMMENT=A ID\n\n"
+                "OBJECT: V_TABLE\nTYPE: view\nCOMMENT: View\n"
+                "- V_ID: NUMBER NULLABLE=Y COMMENT=View ID"
+            ),
+        )
+    )
+
+    assert result.sql.index('ALTER TABLE "A_TABLE"') < result.sql.index(
+        'ALTER TABLE "B_TABLE"'
+    )
+    assert "O''Brien" in result.sql
+    assert "ADD IF NOT EXISTS UI_Display" in result.sql
+    assert 'MODIFY ("V_ID"' not in result.sql
+
+
+def test_metadata_samples_use_requested_limit_and_generation_context() -> None:
+    adapter = _FakeMetadataSamplesAdapter()
+    service = _OracleRuntimeService(adapter)
+    request = MetadataSqlSampleRequest(
+        targets=[
+            {
+                "object_name": "EMPLOYEE",
+                "object_type": "table",
+                "columns": ["EMPLOYEE_NAME"],
+            },
+            {
+                "object_name": "V_EMPLOYEE",
+                "object_type": "view",
+                "columns": ["EMPLOYEE_NAME"],
+            },
+        ],
+        sample_limit=10,
+    )
+
+    samples = service.get_metadata_samples(request)
+
+    assert adapter.calls[0][1] == 10
+    assert adapter.calls[0][0][1]["object_type"] == "view"
+    assert samples.sample_count == 2
+    assert "EMPLOYEE_NAME: 山田, 佐藤" in samples.sample_text
+
+    enterprise_ai = FakeEnterpriseAiClient("COMMENT ON TABLE EMPLOYEE IS '社員';")
+    service._enterprise_ai_client = enterprise_ai
+    service.generate_comment_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "EMPLOYEE", "object_type": "table"}],
+            structure_text="OBJECT: EMPLOYEE",
+            sample_text=samples.sample_text,
+        )
+    )
+    assert "<サンプル>" in enterprise_ai.calls[0]["context"]
+    assert "EMPLOYEE_NAME: 山田, 佐藤" in enterprise_ai.calls[0]["context"]
+
+    empty = service.get_metadata_samples(request.model_copy(update={"sample_limit": 0}))
+    assert empty.sample_text == ""
+    assert empty.sample_count == 0
+    assert len(adapter.calls) == 1
+
+
+def test_metadata_samples_fall_back_to_catalog_when_oracle_fails() -> None:
+    service = _OracleRuntimeService(_FakeMetadataSamplesAdapter(fail=True))
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="EMPLOYEE",
+                logical_name="社員",
+                columns=[
+                    SchemaColumn(
+                        column_name="EMPLOYEE_NAME",
+                        logical_name="社員名",
+                        data_type="VARCHAR2(100)",
+                        sample_values=["山田", "佐藤", "鈴木"],
+                    )
+                ],
+            )
+        ],
+    )
+
+    samples = service.get_metadata_samples(
+        MetadataSqlSampleRequest(
+            targets=[
+                {
+                    "object_name": "EMPLOYEE",
+                    "object_type": "table",
+                    "columns": ["EMPLOYEE_NAME"],
+                }
+            ],
+            sample_limit=2,
+        )
+    )
+
+    assert samples.sample_text == "OBJECT: EMPLOYEE\nEMPLOYEE_NAME: 山田, 佐藤"
+    assert samples.sample_count == 2
+    assert any("既存値" in warning for warning in samples.warnings)
+
+
 def test_drop_view_confirmation_and_requires_oracle() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
-    dry_run = service.drop_db_admin_view(DbAdminDropViewRequest(view_name="V_EMP_DEPT"))
-    assert dry_run.executed is False
-    assert dry_run.statements[0].status == "dry_run"
-    assert 'DROP VIEW "V_EMP_DEPT"' in dry_run.statements[0].sql
-
-    missing = service.drop_db_admin_view(
-        DbAdminDropViewRequest(view_name="V_EMP_DEPT", execute=True)
-    )
+    missing = service.drop_db_admin_view(DbAdminDropViewRequest(view_name="V_EMP_DEPT"))
+    assert missing.executed is False
     assert missing.statements[0].status == "confirmation_required"
+    assert 'DROP VIEW "V_EMP_DEPT"' in missing.statements[0].sql
 
     requires_oracle = service.drop_db_admin_view(
-        DbAdminDropViewRequest(view_name="V_EMP_DEPT", execute=True, confirmation="V_EMP_DEPT")
+        DbAdminDropViewRequest(view_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
     )
     assert requires_oracle.statements[0].status == "requires_oracle"
 
@@ -488,7 +705,7 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
     ]
 
 
-def test_upload_csv_dry_run_matches_catalog_columns() -> None:
+def test_upload_csv_validates_confirmation_and_matches_catalog_columns() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
     table = service._catalog.tables[0]
@@ -503,8 +720,8 @@ def test_upload_csv_dry_run_matches_catalog_columns() -> None:
             filename="upload.csv",
         )
     )
-    assert result.dry_run is True
     assert result.executed is False
+    assert any("confirmation=" in warning for warning in result.warnings)
     assert known_column.upper() in result.matched_columns
     assert "UNKNOWN_COLUMN" in result.unmatched_csv_columns
     assert result.row_count == 2
@@ -513,7 +730,6 @@ def test_upload_csv_dry_run_matches_catalog_columns() -> None:
         DbAdminCsvUploadRequest(
             table_name=table.table_name,
             content_base64=base64.b64encode(csv_text.encode()).decode(),
-            execute=True,
             confirmation=result.table_name,
         )
     )
@@ -531,7 +747,6 @@ def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
             table_name="IMPORTED_ORDERS",
             content_base64=content_base64,
             filename="orders.csv",
-            execute=True,
             confirmation="IMPORTED_ORDERS",
         )
     )
@@ -543,7 +758,6 @@ def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
             table_name="IMPORTED_ORDERS",
             content_base64=content_base64,
             filename="orders.csv",
-            execute=True,
             confirmation="ADMIN_EXECUTE",
         )
     )

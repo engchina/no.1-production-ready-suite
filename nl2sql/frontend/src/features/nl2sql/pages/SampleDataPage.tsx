@@ -151,7 +151,6 @@ export function SampleDataPage() {
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
         step: sampleStep,
-        execute: true,
         confirmation: sampleConfirmation.trim(),
         reason: "ui-sample-import",
       });
@@ -170,7 +169,6 @@ export function SampleDataPage() {
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/delete", {
         step: "all",
-        execute: true,
         confirmation: sampleConfirmation.trim(),
         reason: "ui-sample-delete",
       });
@@ -224,7 +222,8 @@ export function SampleDataPage() {
           labelledBy={`sample-data-tab-${activeAction}`}
           idPrefix={SAMPLE_DATA_ID}
           ariaLabel={t("dataTools.sample.workspace.label")}
-          className="xl:grid-cols-[minmax(22rem,0.45fr)_minmax(0,1fr)]"
+          splitId={`sample-data-${activeAction}`}
+          preferredWidePane="right"
         >
           <section className="grid min-w-0 content-start gap-4" aria-labelledby="sample-data-action-heading">
             <DbObjectPanelHeader
@@ -232,12 +231,6 @@ export function SampleDataPage() {
               icon={isDeleteAction ? Trash2 : FileSpreadsheet}
               title={actionTitle}
               description={actionDescription}
-              action={
-                <StatusBadge
-                  variant={confirmationMatched ? "success" : "neutral"}
-                  label={confirmationMatched ? t("dbAdmin.confirmation.status.confirmed") : t("dbAdmin.confirmation.status.pending")}
-                />
-              }
             />
 
             {!isDeleteAction && (

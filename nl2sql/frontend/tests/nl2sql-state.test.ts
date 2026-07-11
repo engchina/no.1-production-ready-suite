@@ -14,6 +14,21 @@ import {
 } from "../src/features/nl2sql/jobPersistence.ts";
 import { elapsedSecondsSince, formatElapsed } from "../src/features/nl2sql/operationTiming.ts";
 import {
+  adjustFixedSplitFraction,
+  clampFixedSplitFraction,
+  fixedSplitFractionForRatio,
+  fixedSplitGridTemplateColumns,
+  fixedSplitStateForFraction,
+  fixedSplitStateForRatio,
+  fixedSplitStorageKey,
+  isFixedSplitRatio,
+  nearestFixedSplitRatio,
+  nextFixedSplitRatio,
+  nextFixedSplitStateFromFraction,
+  parseFixedSplitStorageValue,
+  serializeFixedSplitState,
+} from "../src/lib/fixed-split-pane.ts";
+import {
   previewExecutePayload,
   previewToGeneratedSqlPanelData,
   sqlExecutePayload,
@@ -74,6 +89,70 @@ class MemoryStorage implements ActiveJobStorage {
 
 test("schema insertion uses denpyo-style logical table and column names", () => {
   assert.equal(buildSchemaInsertText(invoiceTable, invoiceColumn), "\"請求\".\"請求金額\"");
+});
+
+test("fixed split pane stores ratio per page split id", () => {
+  assert.equal(
+    fixedSplitStorageKey("profile-management-oracle"),
+    "production-ready-nl2sql.fixedSplitPane.profile-management-oracle"
+  );
+  assert.equal(isFixedSplitRatio("leftWide"), true);
+  assert.equal(isFixedSplitRatio("freeResize"), false);
+});
+
+test("fixed split pane cycles equal to left-wide to right-wide", () => {
+  assert.equal(nextFixedSplitRatio("equal"), "leftWide");
+  assert.equal(nextFixedSplitRatio("leftWide"), "rightWide");
+  assert.equal(nextFixedSplitRatio("rightWide"), "equal");
+});
+
+test("fixed split pane reads legacy and draggable storage values", () => {
+  const legacy = parseFixedSplitStorageValue("leftWide");
+  assert.equal(legacy.ratio, "leftWide");
+  assert.ok(Math.abs(legacy.leftFraction - fixedSplitFractionForRatio("leftWide")) < 0.000001);
+
+  const restored = parseFixedSplitStorageValue(serializeFixedSplitState(fixedSplitStateForFraction(0.6)));
+  assert.equal(restored.ratio, "leftWide");
+  assert.equal(restored.leftFraction, 0.6);
+
+  const ratioOnly = parseFixedSplitStorageValue(JSON.stringify({ ratio: "rightWide" }));
+  assert.deepEqual(ratioOnly, fixedSplitStateForRatio("rightWide"));
+
+  assert.deepEqual(parseFixedSplitStorageValue("not-json"), fixedSplitStateForRatio("equal"));
+});
+
+test("fixed split pane clamps dragged fraction and detects nearest fixed ratio", () => {
+  assert.equal(clampFixedSplitFraction(0.1), 0.25);
+  assert.equal(clampFixedSplitFraction(0.9), 0.75);
+  assert.equal(nearestFixedSplitRatio(0.5), "equal");
+  assert.equal(nearestFixedSplitRatio(0.63), "leftWide");
+  assert.equal(nearestFixedSplitRatio(0.37), "rightWide");
+});
+
+test("fixed split pane double-click cycle rounds draggable fractions before advancing", () => {
+  assert.deepEqual(nextFixedSplitStateFromFraction(0.5), fixedSplitStateForRatio("leftWide"));
+  assert.deepEqual(
+    nextFixedSplitStateFromFraction(fixedSplitFractionForRatio("leftWide")),
+    fixedSplitStateForRatio("rightWide")
+  );
+  assert.deepEqual(
+    nextFixedSplitStateFromFraction(fixedSplitFractionForRatio("rightWide")),
+    fixedSplitStateForRatio("equal")
+  );
+  assert.deepEqual(nextFixedSplitStateFromFraction(0.6), fixedSplitStateForRatio("rightWide"));
+});
+
+test("fixed split pane keyboard adjustment uses pixel-equivalent fractions", () => {
+  assert.equal(adjustFixedSplitFraction(0.5, 24, 1000), 0.524);
+  assert.equal(adjustFixedSplitFraction(0.5, -72, 1000), 0.428);
+  assert.equal(adjustFixedSplitFraction(0.5, -400, 1000), 0.25);
+});
+
+test("fixed split pane grid templates use equal and golden-ratio tracks", () => {
+  assert.equal(fixedSplitGridTemplateColumns("equal"), "minmax(0, 1fr) 14px minmax(0, 1fr)");
+  assert.match(fixedSplitGridTemplateColumns("leftWide"), /1\.618fr/);
+  assert.match(fixedSplitGridTemplateColumns("rightWide"), /1\.618fr/);
+  assert.equal(fixedSplitGridTemplateColumns(0.6), "minmax(0, 0.6fr) 14px minmax(0, 0.4fr)");
 });
 
 test("schema SQL insertion uses quoted physical table and column names", () => {

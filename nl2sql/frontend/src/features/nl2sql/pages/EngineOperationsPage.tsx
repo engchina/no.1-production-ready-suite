@@ -3,6 +3,7 @@ import { Bot, Code2, Database, Download, FileJson, Gauge, ListChecks, RefreshCw,
 
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { engineLabel } from "../labels";
@@ -35,14 +36,11 @@ export function EngineOperationsPage() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
   const [refreshResults, setRefreshResults] = useState<AssetRefreshData[]>([]);
   const [cleanupResults, setCleanupResults] = useState<AssetCleanupData[]>([]);
-  const [cleanupExecute, setCleanupExecute] = useState(false);
   const [cleanupConfirmation, setCleanupConfirmation] = useState("");
   const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
-  const [dbProfileDropExecute, setDbProfileDropExecute] = useState(false);
   const [dbProfileDropConfirmation, setDbProfileDropConfirmation] = useState("");
   const [dbProfileDropResults, setDbProfileDropResults] = useState<AssetCleanupData[]>([]);
   const [profileJson, setProfileJson] = useState("");
-  const [profileExecute, setProfileExecute] = useState(false);
   const [profileConfirmation, setProfileConfirmation] = useState("");
   const [profileMutation, setProfileMutation] = useState<SelectAiDbProfileMutationData | null>(null);
   const [profileExport, setProfileExport] = useState<SelectAiProfilesExportData | null>(null);
@@ -111,8 +109,7 @@ export function EngineOperationsPage() {
       const result = await apiPost<AssetCleanupData[]>("/api/nl2sql/select-ai/assets/cleanup", {
         profile_id: profileId || null,
         engines: ["select_ai_agent", "select_ai"],
-        execute: cleanupExecute,
-        confirmation: cleanupExecute ? cleanupConfirmation : "",
+        confirmation: cleanupConfirmation,
         reason: "ui-engine-cleanup",
       });
       setCleanupResults(result);
@@ -131,8 +128,7 @@ export function EngineOperationsPage() {
       const result = await apiPost<AssetCleanupData>(
         `/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(profileName)}/drop`,
         {
-          execute: dbProfileDropExecute,
-          confirmation: dbProfileDropExecute ? dbProfileDropConfirmation : "",
+          confirmation: dbProfileDropConfirmation,
           reason: "ui-db-profile-drop",
         }
       );
@@ -178,8 +174,7 @@ export function EngineOperationsPage() {
         attributes: parsed.attributes || parsed,
         description: parsed.description || "",
         category: parsed.category || "",
-        execute: profileExecute,
-        confirmation: profileExecute ? profileConfirmation : "",
+        confirmation: profileConfirmation,
         reason: "ui-profile-json-save",
       });
       setProfileMutation(result);
@@ -388,35 +383,25 @@ export function EngineOperationsPage() {
                 </div>
                 <Button
                   type="button"
-                  variant={cleanupExecute ? "danger" : "secondary"}
+                  variant="danger"
                   size="sm"
                   loading={loading === "cleanup"}
                   onClick={() => void cleanupAssets()}
                 >
                   <Database size={15} aria-hidden="true" />
-                  <span>{cleanupExecute ? t("engineOps.cleanup.execute") : t("engineOps.cleanup.dryRun")}</span>
+                  <span>{t("engineOps.cleanup.execute")}</span>
                 </Button>
               </div>
-              <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+              <label className="grid max-w-sm gap-1 text-sm font-medium text-slate-800">
+                <span>{t("engineOps.confirmation")}</span>
                 <input
-                  type="checkbox"
-                  checked={cleanupExecute}
-                  onChange={(event) => setCleanupExecute(event.currentTarget.checked)}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                  value={cleanupConfirmation}
+                  onChange={(event) => setCleanupConfirmation(event.currentTarget.value)}
+                  className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  placeholder="ADMIN_EXECUTE"
                 />
-                <span>{t("engineOps.cleanup.confirm")}</span>
+                <span className="text-xs font-normal text-slate-500">{t("engineOps.cleanup.confirm")}</span>
               </label>
-              {cleanupExecute && (
-                <label className="grid max-w-sm gap-1 text-sm font-medium text-slate-800">
-                  <span>{t("engineOps.confirmation")}</span>
-                  <input
-                    value={cleanupConfirmation}
-                    onChange={(event) => setCleanupConfirmation(event.currentTarget.value)}
-                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                    placeholder="ADMIN_EXECUTE"
-                  />
-                </label>
-              )}
               <div className="grid gap-2 md:grid-cols-2">
                 {cleanupResults.map((item) => (
                   <section key={`${item.engine}-${item.profile_name}-${item.team_name}`} className="rounded-md border border-slate-200 p-3 text-sm">
@@ -437,33 +422,27 @@ export function EngineOperationsPage() {
               </div>
             </section>
 
-            <section className="grid gap-3 border-t border-slate-200 pt-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="grid content-start gap-3">
+            <section className="border-t border-slate-200 pt-4">
+              <FixedSplitPane
+                splitId="engine-operations-db-agent"
+                preferredWidePane="right"
+                left={
+                  <div className="grid content-start gap-3">
                 <p className="font-semibold text-slate-900">{t("engineOps.dbProfiles.title")}</p>
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge variant="neutral" label={dbProfiles?.runtime ?? "deterministic"} />
                   <StatusBadge variant="neutral" label={`${dbProfiles?.profiles.length ?? 0} profiles`} />
                 </div>
-                <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                <label className="grid gap-1 text-sm font-medium text-slate-800">
+                  <span>{t("engineOps.confirmation")}</span>
                   <input
-                    type="checkbox"
-                    checked={dbProfileDropExecute}
-                    onChange={(event) => setDbProfileDropExecute(event.currentTarget.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+                    value={dbProfileDropConfirmation}
+                    onChange={(event) => setDbProfileDropConfirmation(event.currentTarget.value)}
+                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    placeholder="PROFILE_NAME / ADMIN_EXECUTE"
                   />
-                  <span>{t("engineOps.dbProfiles.dropConfirm")}</span>
+                  <span className="text-xs font-normal text-slate-500">{t("engineOps.dbProfiles.dropConfirm")}</span>
                 </label>
-                {dbProfileDropExecute && (
-                  <label className="grid gap-1 text-sm font-medium text-slate-800">
-                    <span>{t("engineOps.confirmation")}</span>
-                    <input
-                      value={dbProfileDropConfirmation}
-                      onChange={(event) => setDbProfileDropConfirmation(event.currentTarget.value)}
-                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                      placeholder="PROFILE_NAME / ADMIN_EXECUTE"
-                    />
-                  </label>
-                )}
                 <div className="grid gap-2">
                   {(dbProfiles?.profiles ?? []).slice(0, 6).map((profile) => (
                     <div key={profile.name} className="rounded-md border border-slate-200 p-3 text-sm">
@@ -483,17 +462,13 @@ export function EngineOperationsPage() {
                           </Button>
                           <Button
                             type="button"
-                            variant={dbProfileDropExecute ? "danger" : "secondary"}
+                            variant="danger"
                             size="sm"
                             loading={loading === `db-profile-drop-${profile.name}`}
                             onClick={() => void dropDbProfile(profile.name)}
                           >
                             <Trash2 size={15} aria-hidden="true" />
-                            <span>
-                              {dbProfileDropExecute
-                                ? t("engineOps.dbProfiles.dropExecute")
-                                : t("engineOps.dbProfiles.dropDryRun")}
-                            </span>
+                            <span>{t("engineOps.dbProfiles.dropExecute")}</span>
                           </Button>
                         </div>
                       </div>
@@ -559,14 +534,14 @@ export function EngineOperationsPage() {
                       </Button>
                       <Button
                         type="button"
-                        variant={profileExecute ? "danger" : "secondary"}
+                        variant="danger"
                         size="sm"
                         loading={loading === "db-profile-save"}
                         disabled={!profileJson.trim()}
                         onClick={() => void saveDbProfileJson()}
                       >
                         <Save size={15} aria-hidden="true" />
-                        <span>{profileExecute ? t("engineOps.dbProfiles.saveExecute") : t("engineOps.dbProfiles.saveDryRun")}</span>
+                        <span>{t("engineOps.dbProfiles.saveExecute")}</span>
                       </Button>
                     </div>
                   </div>
@@ -576,16 +551,7 @@ export function EngineOperationsPage() {
                     rows={10}
                     className="min-h-60 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
                   />
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-800">
-                      <input
-                        type="checkbox"
-                        checked={profileExecute}
-                        onChange={(event) => setProfileExecute(event.currentTarget.checked)}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
-                      />
-                      <span>{t("engineOps.dbProfiles.saveExecuteConfirm")}</span>
-                    </label>
+                  <div className="grid gap-3">
                     <label className="grid gap-1 text-sm font-medium text-slate-800">
                       <span>{t("engineOps.confirmation")}</span>
                       <input
@@ -594,6 +560,7 @@ export function EngineOperationsPage() {
                         className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
                         placeholder="PROFILE_NAME / ADMIN_EXECUTE"
                       />
+                      <span className="text-xs font-normal text-slate-500">{t("engineOps.dbProfiles.saveExecuteConfirm")}</span>
                     </label>
                   </div>
                   {profileExport && (
@@ -618,8 +585,10 @@ export function EngineOperationsPage() {
                     </div>
                   )}
                 </section>
-              </div>
-              <div className="grid content-start gap-3">
+                  </div>
+                }
+                right={
+                  <div className="grid content-start gap-3">
                 <p className="font-semibold text-slate-900">{t("engineOps.agentRun.title")}</p>
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge variant="neutral" label={agentAssets?.runtime ?? "deterministic"} />
@@ -757,7 +726,9 @@ export function EngineOperationsPage() {
                     ))}
                   </div>
                 )}
-              </div>
+                  </div>
+                }
+              />
             </section>
           </CardContent>
         </Card>

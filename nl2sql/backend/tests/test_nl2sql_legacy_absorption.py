@@ -100,7 +100,6 @@ def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
             step=SampleDataStep.ALL,
-            execute=True,
             confirmation="SQL_ASSIST_SAMPLE",
         )
     )
@@ -134,6 +133,13 @@ def test_classifier_training_predicts_and_drives_profile_recommendation() -> Non
         replace=True,
     )
     assert imported.imported_count == 4
+    training_data = service.classifier_training_data()
+    assert training_data.total_examples == 4
+    assert training_data.categories == ["入金管理", "標準業務プロファイル"]
+    assert [(item.category, item.text) for item in training_data.examples[:2]] == [
+        ("標準業務プロファイル", "請求金額が大きい取引先を見たい"),
+        ("標準業務プロファイル", "売上合計を顧客別に確認したい"),
+    ]
 
     status = service.train_classifier(ClassifierTrainRequest())
     assert status.ready
@@ -174,23 +180,14 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
     assert selected.select_result is not None
     assert selected.statements[0].statement_type == "SELECT"
 
-    dry_run = service.execute_db_admin_sql(
+    confirmation_required = service.execute_db_admin_sql(
         DbAdminExecuteRequest(sql="COMMENT ON TABLE \"INVOICES\" IS '請求';")
     )
-    assert dry_run.executed is False
-    assert dry_run.statements[0].status == "dry_run"
-
-    blocked = service.execute_db_admin_sql(
-        DbAdminExecuteRequest(
-            sql="COMMENT ON TABLE \"INVOICES\" IS '請求';",
-            execute=True,
-        )
-    )
-    assert blocked.executed is False
-    assert blocked.statements[0].status == "confirmation_required"
+    assert confirmation_required.executed is False
+    assert confirmation_required.statements[0].status == "confirmation_required"
 
 
-def test_select_ai_profile_json_and_synthetic_object_list_dry_run() -> None:
+def test_select_ai_profile_mutation_requires_confirmation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
     profile = service.upsert_select_ai_db_profile(
@@ -201,9 +198,8 @@ def test_select_ai_profile_json_and_synthetic_object_list_dry_run() -> None:
             category="test",
         )
     )
-    assert profile.status == "dry_run"
-    assert profile.profile is not None
-    assert profile.profile.attributes["object_list"][0]["name"] == "INVOICES"
+    assert profile.status == "confirmation_required"
+    assert profile.profile is None
 
     synthetic = service.generate_synthetic_data(
         SyntheticDataGenerateRequest(
@@ -237,6 +233,8 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
                 "comments": True,
                 "annotations": True,
                 "constraints": True,
+                "role": "財務 SQL アシスタント",
+                "additional_instructions": "金額は円単位で表示する。",
             },
         )
     )
@@ -244,6 +242,8 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
     assert created.allowed_views == ["V_INVOICE_SUMMARY"]
     assert created.select_ai_config.profile_name == "FINANCE_SELECT_AI"
     assert created.select_ai_config.embedding_model == "cohere.embed-v4.0"
+    assert created.select_ai_config.role == "財務 SQL アシスタント"
+    assert created.select_ai_config.additional_instructions == "金額は円単位で表示する。"
 
     updated = service.update_profile(
         "finance",
@@ -275,9 +275,11 @@ def test_profile_legacy_snapshot_defaults_allowed_views_and_select_ai_config() -
     assert profile.allowed_views == []
     assert profile.select_ai_config.embedding_model == "cohere.embed-v4.0"
     assert profile.select_ai_config.enforce_object_list is True
+    assert profile.select_ai_config.role == ""
+    assert profile.select_ai_config.additional_instructions == ""
 
 
-def test_profile_select_ai_dry_run_uses_tables_and_views_object_list() -> None:
+def test_profile_select_ai_attributes_use_tables_and_views_object_list() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     cast(Any, service)._catalog = SchemaCatalog(
         refreshed_at="2026-07-10T00:00:00+00:00",
@@ -294,7 +296,7 @@ def test_profile_select_ai_dry_run_uses_tables_and_views_object_list() -> None:
         Nl2SqlProfile(
             id="finance",
             name="財務プロファイル",
-            description="Select AI dry-run 対象。",
+            description="Select AI 属性生成対象。",
             allowed_tables=["INVOICES"],
             allowed_views=["V_INVOICE_SUMMARY"],
             select_ai_config={
@@ -302,26 +304,24 @@ def test_profile_select_ai_dry_run_uses_tables_and_views_object_list() -> None:
                 "region": "ap-osaka-1",
                 "model": "cohere.command-r-plus",
                 "embedding_model": "cohere.embed-v4.0",
+                "role": "財務 SQL アシスタント",
+                "additional_instructions": "金額は円単位で表示する。",
             },
         )
     )
 
-    dry_run = service.upsert_profile_select_ai_profile(
-        "finance",
-        ProfileSelectAiProfileRequest(execute=False, reason="pytest-dry-run"),
-    )
+    profile = service.get_profile("finance")
+    attributes = service.build_select_ai_profile_attributes(profile)
 
-    assert dry_run.executed is False
-    assert dry_run.status == "dry_run"
-    assert dry_run.profile is not None
-    assert dry_run.profile.name == "FINANCE_SELECT_AI"
-    assert dry_run.profile.attributes["provider"] == "oci"
-    assert dry_run.profile.attributes["embedding_model"] == "cohere.embed-v4.0"
-    object_list = dry_run.profile.attributes["object_list"]
+    assert attributes["provider"] == "oci"
+    assert attributes["embedding_model"] == "cohere.embed-v4.0"
+    assert attributes["role"] == "財務 SQL アシスタント"
+    instructions = attributes["additional_instructions"]
+    assert "## 業務説明" in instructions
+    assert "## プロファイル追加指示\n金額は円単位で表示する。" in instructions
+    object_list = attributes["object_list"]
     assert [item["name"] for item in object_list] == ["INVOICES", "V_INVOICE_SUMMARY"]
     assert all(item["owner"] for item in object_list)
-    assert dry_run.profile.tables == ["INVOICES"]
-    assert dry_run.profile.views == ["V_INVOICE_SUMMARY"]
 
 
 def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() -> None:
@@ -338,7 +338,7 @@ def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() ->
 
     missing_confirmation = service.upsert_profile_select_ai_profile(
         "finance",
-        ProfileSelectAiProfileRequest(execute=True),
+        ProfileSelectAiProfileRequest(),
     )
     assert missing_confirmation.status == "confirmation_required"
     assert missing_confirmation.executed is False
@@ -346,7 +346,6 @@ def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() ->
     requires_oracle = service.upsert_profile_select_ai_profile(
         "finance",
         ProfileSelectAiProfileRequest(
-            execute=True,
             confirmation="FINANCE_SELECT_AI",
             reason="pytest-execute",
         ),
@@ -378,9 +377,28 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     assert imported.imported_count == 3
     assert imported.skipped_count == 2
     assert imported.categories == ["入金管理", "標準業務プロファイル"]
+    listed = service.classifier_training_data()
+    assert listed.total_examples == 3
+    assert [item.text for item in listed.examples] == [
+        "請求金額を確認したい",
+        "未入金の請求を確認したい",
+        "未入金の請求を確認したい",
+    ]
+
+    replacement_payload = "CATEGORY,TEXT\n監査,監査ログを確認したい\n".encode()
+    replaced = service.import_classifier_training_data(
+        filename="replacement.csv",
+        content=replacement_payload,
+        replace=True,
+    )
+    assert replaced.imported_count == 1
+    replaced_listing = service.classifier_training_data()
+    assert replaced_listing.total_examples == 1
+    assert replaced_listing.categories == ["監査"]
+    assert replaced_listing.examples[0].text == "監査ログを確認したい"
 
 
-def test_annotations_and_synthetic_data_support_dry_run_without_oracle() -> None:
+def test_annotations_and_synthetic_data_require_confirmation_without_oracle() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
 
@@ -398,17 +416,17 @@ def test_annotations_and_synthetic_data_support_dry_run_without_oracle() -> None
                     annotation_value=first.annotation_value,
                 )
             ],
-            execute=False,
         )
     )
     assert not applied.executed
     assert applied.statements
+    assert applied.statements[0].status == "confirmation_required"
     assert "ANNOTATIONS" in applied.statements[0].sql
 
     synthetic = service.generate_synthetic_data(
-        SyntheticDataGenerateRequest(table_name="EMPLOYEE", row_count=5, execute=False)
+        SyntheticDataGenerateRequest(table_name="EMPLOYEE", row_count=5)
     )
-    assert synthetic.status == "dry_run"
+    assert synthetic.status == "confirmation_required"
     assert synthetic.table_name == "EMPLOYEE"
     assert synthetic.row_count == 5
 
@@ -442,7 +460,6 @@ def test_synthetic_data_rejects_blob_table_before_oracle_call(
         SyntheticDataGenerateRequest(
             table_name="DENPYO_FILES",
             row_count=1,
-            execute=True,
             confirmation="ADMIN_EXECUTE",
         )
     )
@@ -506,7 +523,6 @@ def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
         SyntheticDataGenerateRequest(
             object_list=["DENPYO_FILES", "INVOICES"],
             row_count=2,
-            execute=True,
             confirmation="ADMIN_EXECUTE",
             profile_name="NL2SQL_PROFILE",
         )
@@ -616,7 +632,7 @@ def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace()
     assert replaced.profile.few_shot_examples == []
 
 
-def test_legacy_learning_material_imports_exports_and_resolves_by_category() -> None:
+def test_global_learning_material_imports_exports_and_applies_all_rules() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service.create_profile(
         Nl2SqlProfile(
@@ -651,16 +667,17 @@ def test_legacy_learning_material_imports_exports_and_resolves_by_category() -> 
         filename="rules.xlsx",
         content=_workbook_bytes(rules_book),
     )
-    assert len(material.rule_entries) == 3
+    assert material.rules == ["共通ルール", "大阪ルール", "東京ルール"]
 
     profile = service.get_profile("osaka")
     assert cast(Any, service)._effective_glossary(profile)["売上"] == "PROFILE.SALES"
     assert cast(Any, service)._effective_sql_rules(profile) == [
         "共通ルール",
         "大阪ルール",
+        "東京ルール",
         "profile 固有ルール",
     ]
-    assert "東京ルール" not in cast(Any, service)._append_rules_to_question("質問", profile)
+    assert "東京ルール" in cast(Any, service)._append_rules_to_question("質問", profile)
 
     terms_filename, terms_bytes = service.export_legacy_terms_xlsx()
     rules_filename, rules_bytes = service.export_legacy_rules_xlsx()
@@ -669,7 +686,64 @@ def test_legacy_learning_material_imports_exports_and_resolves_by_category() -> 
     terms_export = openpyxl.load_workbook(io.BytesIO(terms_bytes), read_only=True)
     rules_export = openpyxl.load_workbook(io.BytesIO(rules_bytes), read_only=True)
     assert terms_export.active["A1"].value == "TERM"
-    assert rules_export.active["A1"].value == "CATEGORY"
+    assert rules_export.active["A1"].value == "RULE"
+    assert rules_export.active["B1"].value is None
+
+
+def test_global_rule_xlsx_preserves_newlines_blank_lines_and_indentation() -> None:
+    store = MemoryNl2SqlStore()
+    service = Nl2SqlService(store=store)
+    multiline_rule = (
+        "SELECT customer_name\n\n"
+        "    FROM customers\n"
+        "    WHERE customer_status = 'ACTIVE'"
+    )
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "rules"
+    sheet.append(["RULE"])
+    sheet.append([multiline_rule])
+
+    imported = service.import_legacy_rules(
+        filename="rules.xlsx",
+        content=_workbook_bytes(workbook),
+    )
+
+    assert imported.rules == [multiline_rule]
+    assert Nl2SqlService(store=store).get_legacy_learning_material().rules == [multiline_rule]
+
+    _, exported_bytes = service.export_legacy_rules_xlsx()
+    exported = openpyxl.load_workbook(io.BytesIO(exported_bytes), read_only=True)
+    assert exported.active["A2"].value == multiline_rule
+
+
+def test_legacy_rule_entries_snapshot_migrates_to_global_rules() -> None:
+    store = MemoryNl2SqlStore()
+    store.save_snapshot(
+        {
+            "legacy_learning_material": {
+                "glossary": {"売上": "INVOICES.TOTAL_AMOUNT"},
+                "rule_entries": [
+                    {"category": "OSAKA", "rule": "日付条件は TRUNC を使う"},
+                    {"category": "TOKYO", "rule": "日付条件は TRUNC を使う"},
+                    {"category": "共通", "rule": "SELECT/WITH のみ"},
+                ],
+            }
+        }
+    )
+
+    service = Nl2SqlService(store=store)
+
+    assert service.get_legacy_learning_material().rules == [
+        "日付条件は TRUNC を使う",
+        "SELECT/WITH のみ",
+    ]
+    persisted = store.load_snapshot()
+    assert persisted is not None
+    material = cast(dict[str, Any], persisted["legacy_learning_material"])
+    assert material["rules"] == ["日付条件は TRUNC を使う", "SELECT/WITH のみ"]
+    assert "rule_entries" not in material
 
 
 def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
@@ -682,8 +756,13 @@ def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
             name="ルール検証",
             category="OSAKA",
             allowed_tables=["INVOICES"],
+            glossary={"請求金額": "INVOICES.TAX_AMOUNT"},
             sql_rules=["profile 固有ルール"],
         )
+    )
+    service.import_legacy_terms(
+        filename="terms.csv",
+        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
     )
     service.import_legacy_rules(
         filename="rules.csv",
@@ -695,14 +774,14 @@ def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
 
     service.preview(
         PreviewRequest(
-            question="請求を確認したい",
+            question="売上と請求金額を確認したい",
             engine=Nl2SqlEngine.SELECT_AI,
             profile_id="rules",
         )
     )
     service.preview(
         PreviewRequest(
-            question="請求を確認したい",
+            question="売上と請求金額を確認したい",
             engine=Nl2SqlEngine.SELECT_AI_AGENT,
             profile_id="rules",
         )
@@ -711,25 +790,86 @@ def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
     assert len(fake_oracle.questions) == 2
     for question in fake_oracle.questions:
         assert "=== Rules ===" in question
+        assert "売上=INVOICES.TOTAL_AMOUNT" in question
+        assert "請求金額=INVOICES.TAX_AMOUNT" in question
         assert "共通ルール" in question
         assert "大阪ルール" in question
+        assert "東京ルール" in question
         assert "profile 固有ルール" in question
-        assert "東京ルール" not in question
 
 
-async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
+def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                columns=[
+                    SchemaColumn(
+                        column_name="TOTAL_AMOUNT",
+                        logical_name="売上",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="TAX_AMOUNT",
+                        logical_name="請求金額",
+                        data_type="NUMBER",
+                    ),
+                ],
+            )
+        ],
+    )
+    service.import_legacy_terms(
+        filename="terms.csv",
+        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+    )
+    service.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\nグローバルルール\n".encode(),
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="billing-direct",
+            name="請求管理",
+            allowed_tables=["INVOICES"],
+            glossary={"請求金額": "INVOICES.TAX_AMOUNT"},
+            sql_rules=["プロファイル固有ルール"],
+        )
+    )
+    fake = FakeEnterpriseAiClient(
+        '{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES","explanation":"売上を取得します。"}'
+    )
+    cast(Any, service)._enterprise_ai_client = fake
+
+    service.preview(
+        PreviewRequest(
+            question="売上と請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="billing-direct",
+        )
+    )
+
+    assert fake.calls
+    assert "売上=INVOICES.TOTAL_AMOUNT" in fake.calls[0]["prompt"]
+    assert "請求金額=INVOICES.TAX_AMOUNT" in fake.calls[0]["prompt"]
+    assert "- 売上: INVOICES.TOTAL_AMOUNT" in fake.calls[0]["context"]
+    assert "- 請求金額: INVOICES.TAX_AMOUNT" in fake.calls[0]["context"]
+    assert "- グローバルルール" in fake.calls[0]["context"]
+    assert "- プロファイル固有ルール" in fake.calls[0]["context"]
+
+
+async def test_db_profile_drop_endpoint_rejects_legacy_execute_and_runs_with_confirmation(
     monkeypatch: Any,
 ) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        dry_run = await client.post(
+        legacy_request = await client.post(
             "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
             json={"execute": False},
         )
-        assert dry_run.status_code == 200
-        dry_run_data = dry_run.json()["data"]
-        assert dry_run_data["executed"] is False
-        assert dry_run_data["status"] == "dry_run"
+        assert legacy_request.status_code == 422
 
         from app.features.nl2sql import router as nl2sql_router
 
@@ -737,18 +877,16 @@ async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
 
         def fake_drop(
             profile_name: str,
-            execute: bool,
             confirmation: str = "",
             reason: str = "",
         ) -> AssetCleanupData:
             captured["profile_name"] = profile_name
-            captured["execute"] = execute
             captured["confirmation"] = confirmation
             captured["reason"] = reason
             return AssetCleanupData(
                 engine=Nl2SqlEngine.SELECT_AI,
-                executed=execute,
-                status="cleaned" if execute else "dry_run",
+                executed=True,
+                status="cleaned",
                 profile_name=profile_name,
                 asset_names={"profile": profile_name},
                 engine_meta={"runtime": "mock"},
@@ -762,7 +900,6 @@ async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
         executed = await client.post(
             "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
             json={
-                "execute": True,
                 "confirmation": "NL2SQL_DEFAULT_PROFILE",
                 "reason": "test",
             },
@@ -772,7 +909,6 @@ async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
     assert executed.json()["data"]["status"] == "cleaned"
     assert captured == {
         "profile_name": "NL2SQL_DEFAULT_PROFILE",
-        "execute": True,
         "confirmation": "NL2SQL_DEFAULT_PROFILE",
         "reason": "test",
     }
@@ -879,6 +1015,14 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
 
 def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_legacy_terms(
+        filename="terms.csv",
+        content="TERM,DEFINITION\n請求表,INVOICES\n".encode(),
+    )
+    service.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\n金額列には業務名を使う\n".encode(),
+    )
     service.create_profile(
         Nl2SqlProfile(
             id="billing",
@@ -908,5 +1052,12 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     assert "請求金額" in reversed_sql.logical_structure
     assert fake.calls
     assert "profile: 請求管理" in fake.calls[0]["context"]
+    assert "- 請求表: INVOICES" in fake.calls[0]["context"]
     assert "- 請求金額: INVOICES.TOTAL_AMOUNT" in fake.calls[0]["context"]
+    assert "- 金額列には業務名を使う" in fake.calls[0]["context"]
     assert "logical_structure" in fake.calls[0]["system_prompt"]
+
+    deterministic = service.reverse_sql(
+        ReverseSqlRequest(sql="SELECT TOTAL_AMOUNT FROM INVOICES", profile_id="billing")
+    )
+    assert "請求表" in deterministic.question

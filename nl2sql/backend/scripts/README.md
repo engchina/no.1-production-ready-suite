@@ -106,7 +106,7 @@ uv run python scripts/nl2sql_manual_integration.py --require-oracle --refresh-ca
 ```
 
 Support checks for the absorbed No.1-SQL-Assist features (comment suggestions,
-COMMENT ON dry-run, synthetic cases, deterministic evaluation, persisted
+COMMENT ON SQL generation, synthetic cases, deterministic evaluation, persisted
 evaluation sets/run history, feedback vector index plan). This does not run DDL
 against business tables; it creates and archives one temporary NL2SQL evaluation
 set and records one deterministic evaluation run in the NL2SQL state store:
@@ -130,10 +130,10 @@ print environment variables or secrets:
 uv run python scripts/nl2sql_manual_integration.py --require-oracle --debug-raw-preview
 ```
 
-Cleanup dry-run for manual Oracle assets:
+Cleanup manual Oracle assets after explicit confirmation:
 
 ```bash
-uv run python scripts/nl2sql_manual_integration.py --cleanup-assets --profile-id manual_integration
+uv run python scripts/nl2sql_manual_integration.py --cleanup-assets --confirm-cleanup --profile-id manual_integration
 ```
 
 Confirmed cleanup:
@@ -159,7 +159,7 @@ When `--refresh-assets` is used, the script prints `diagnostics_after_refresh`
 so the initial pre-refresh readiness warning can be distinguished from the
 post-refresh state.
 `--check-supporting-features` does not run DDL against business tables; it
-validates metadata suggestions, COMMENT ON dry-run SQL, evaluation helper
+validates metadata suggestions, COMMENT ON SQL generation, evaluation helper
 flows, persisted evaluation set create/update/archive, evaluation run history,
 and the Oracle 26ai feedback vector index plan.
 `--debug-raw-preview` is for troubleshooting live Oracle package responses when

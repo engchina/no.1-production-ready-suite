@@ -53,7 +53,6 @@ export function LearningPage() {
   const [feedbackIndex, setFeedbackIndex] = useState<FeedbackIndexData | null>(null);
   const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntriesData | null>(null);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
-  const [feedbackIndexExecute, setFeedbackIndexExecute] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
@@ -229,13 +228,18 @@ export function LearningPage() {
   };
 
   const rebuildFeedbackIndex = async () => {
+    const ok = await confirm({
+      title: t("learning.index.rebuildConfirmTitle"),
+      description: t("learning.index.rebuildConfirmDescription"),
+      confirmLabel: t("learning.index.rebuild"),
+      tone: "info",
+    });
+    if (!ok) return;
     setLoading("feedback-index");
     setMessage("");
     try {
       setFeedbackIndex(
-        await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/rebuild", {
-          execute: feedbackIndexExecute,
-        })
+        await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/rebuild", {})
       );
       setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
     } catch (err) {
@@ -247,13 +251,19 @@ export function LearningPage() {
   };
 
   const clearFeedbackIndex = async () => {
+    const ok = await confirm({
+      title: t("learning.index.clearConfirmTitle"),
+      description: t("learning.index.clearConfirmDescription"),
+      confirmLabel: t("learning.index.clear"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
     setLoading("feedback-index-clear");
     setMessage("");
     try {
       setFeedbackIndex(
-        await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/clear", {
-          execute: feedbackIndexExecute,
-        })
+        await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/clear", {})
       );
       setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
     } catch (err) {
@@ -689,15 +699,6 @@ export function LearningPage() {
                   <span>{t("learning.index.saveConfig")}</span>
                 </Button>
               </section>
-              <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-                <input
-                  type="checkbox"
-                  checked={feedbackIndexExecute}
-                  onChange={(event) => setFeedbackIndexExecute(event.currentTarget.checked)}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
-                />
-                <span>{t("learning.index.execute")}</span>
-              </label>
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -707,19 +708,17 @@ export function LearningPage() {
                   onClick={() => void rebuildFeedbackIndex()}
                 >
                   <RefreshCw size={15} aria-hidden="true" />
-                  <span>
-                    {feedbackIndexExecute ? t("learning.index.rebuild") : t("learning.index.rebuildDryRun")}
-                  </span>
+                  <span>{t("learning.index.rebuild")}</span>
                 </Button>
                 <Button
                   type="button"
                   size="sm"
-                  variant={feedbackIndexExecute ? "danger" : "secondary"}
+                  variant="danger"
                   loading={loading === "feedback-index-clear"}
                   onClick={() => void clearFeedbackIndex()}
                 >
                   <Trash2 size={15} aria-hidden="true" />
-                  <span>{feedbackIndexExecute ? t("learning.index.clear") : t("learning.index.clearDryRun")}</span>
+                  <span>{t("learning.index.clear")}</span>
                 </Button>
               </div>
             </div>

@@ -12,7 +12,7 @@ export function SqlToQuestionPage() {
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [sql, setSql] = useState("");
-  const [useGlossary, setUseGlossary] = useState(false);
+  const [useGlossary, setUseGlossary] = useState(true);
   const [structureText, setStructureText] = useState("");
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [loading, setLoading] = useState(false);

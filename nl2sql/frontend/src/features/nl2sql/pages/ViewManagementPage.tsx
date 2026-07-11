@@ -307,7 +307,6 @@ export function ViewManagementPage() {
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-view", {
         view_name: dropTargetName,
-        execute: true,
         confirmation: dropConfirmation,
         reason: "ui-view-management-drop",
       });
@@ -431,7 +430,8 @@ export function ViewManagementPage() {
             labelledBy="view-management-tab-list"
             idPrefix={VIEW_MANAGEMENT_ID}
             ariaLabel={t("viewMgmt.workspace.label")}
-            className="xl:grid-cols-[minmax(28rem,0.9fr)_minmax(0,1.2fr)]"
+            splitId="view-management-list"
+            preferredWidePane="right"
           >
             <DbObjectGrid
               idPrefix={VIEW_MANAGEMENT_ID}

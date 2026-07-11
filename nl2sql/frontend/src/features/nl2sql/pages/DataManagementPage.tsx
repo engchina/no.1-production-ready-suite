@@ -205,7 +205,6 @@ export function DataManagementPage() {
         content_base64: csvBase64,
         filename: csvFilename || "upload.csv",
         mode: csvMode,
-        execute: true,
         confirmation: csvConfirmation,
         reason: "ui-data-management-csv",
       });
@@ -269,7 +268,6 @@ export function DataManagementPage() {
         user_prompt: syntheticPrompt,
         sample_rows: syntheticSampleRows,
         use_comments: syntheticUseComments,
-        execute: true,
         confirmation: syntheticConfirmation,
         reason: "ui-synthetic-data",
       });
@@ -367,7 +365,8 @@ export function DataManagementPage() {
             labelledBy="data-management-tab-preview"
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.preview")}
-            className="xl:grid-cols-[minmax(24rem,0.75fr)_minmax(0,1.25fr)]"
+            splitId="data-management-preview"
+            preferredWidePane="right"
           >
             <PreviewControlsPanel
               previewObjects={previewObjects}

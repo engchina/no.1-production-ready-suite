@@ -1,6 +1,7 @@
 """health / NL2SQL preview の疎通テスト（Oracle 不要）。"""
 
 import asyncio
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -25,6 +26,7 @@ from app.features.nl2sql.models import (
     SampleDataStep,
     SchemaCatalog,
     SchemaTable,
+    SelectAiFeedbackAddRequest,
     SelectAiFeedbackDeleteRequest,
     SelectAiFeedbackVectorIndexRequest,
     SimilarHistoryRequest,
@@ -143,6 +145,8 @@ class _FakeOracleCursor:
                 raise RuntimeError("ORA-00942: table or view does not exist")
         elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
             self._row = ("conversation-001",)
+        elif "DBMS_CLOUD_AI.GENERATE(" in normalized_sql:
+            self._row = ("SELECT TOTAL_AMOUNT FROM INVOICES",)
         elif "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA" in normalized_sql:
             if normalized_sql.startswith("SELECT"):
                 if self.db.synthetic_function_signature_failures > 0:
@@ -214,11 +218,19 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
     def __init__(self, db: _FakeOracleDb) -> None:
         super().__init__(db)
         self.questions: list[str] = []
+        self.attributes: list[dict[str, str] | None] = []
 
     def generate_select_ai_sql(
-        self, *, profile_name: str, question: str, action: str = "showsql"
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        action: str = "showsql",
+        attributes: dict[str, str] | None = None,
     ) -> str:
+        del profile_name, action
         self.questions.append(question)
+        self.attributes.append(attributes)
         return "SELECT TOTAL_AMOUNT FROM INVOICES"
 
     def run_select_ai_agent_team(
@@ -323,7 +335,6 @@ def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
             step=SampleDataStep.ALL,
-            execute=True,
             confirmation="SQL_ASSIST_SAMPLE",
         )
     )
@@ -332,7 +343,7 @@ def _import_sample(service: Nl2SqlService) -> None:
 async def _api_import_sample(client: httpx.AsyncClient) -> None:
     resp = await client.post(
         "/api/nl2sql/sample-data/import",
-        json={"step": "all", "execute": True, "confirmation": "SQL_ASSIST_SAMPLE"},
+        json={"step": "all", "confirmation": "SQL_ASSIST_SAMPLE"},
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["executed"] is True
@@ -376,15 +387,11 @@ async def test_sample_import_enables_preview_and_delete() -> None:
         assert info_resp.status_code == 200
         assert info_resp.json()["data"]["imported_objects"] == []
 
-        dry_run_resp = await client.post(
+        legacy_execute_resp = await client.post(
             "/api/nl2sql/sample-data/import",
             json={"step": "tables", "execute": False},
         )
-        assert dry_run_resp.status_code == 200
-        dry_run_data = dry_run_resp.json()["data"]
-        assert dry_run_data["executed"] is False
-        assert dry_run_data["statements"]
-        assert {item["status"] for item in dry_run_data["statements"]} == {"dry_run"}
+        assert legacy_execute_resp.status_code == 422
 
         await _api_import_sample(client)
         catalog_resp = await client.get("/api/schema/catalog")
@@ -399,7 +406,7 @@ async def test_sample_import_enables_preview_and_delete() -> None:
         assert resp.status_code == 200
         delete_resp = await client.post(
             "/api/nl2sql/sample-data/delete",
-            json={"execute": True, "confirmation": "SQL_ASSIST_SAMPLE"},
+            json={"confirmation": "SQL_ASSIST_SAMPLE"},
         )
 
     data = resp.json()["data"]
@@ -471,6 +478,130 @@ def test_oracle_runtime_question_includes_learning_examples() -> None:
     assert "請求金額を確認したい" in adapter.questions[0]
 
 
+def test_select_ai_request_overrides_use_effective_profile_context() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="finance_context",
+            name="財務分析",
+            description="請求と入金を分析します。",
+            glossary={"四半期": "4 月開始の会計四半期", "売上": "INVOICES.TOTAL_AMOUNT"},
+            sql_rules=["SELECT/WITH のみ", "日付は DATE 型で返す"],
+            select_ai_config={
+                "role": "既定の財務 SQL アシスタント",
+                "additional_instructions": "金額は円単位で表示する。",
+            },
+        )
+    )
+
+    preview = service.preview(
+        PreviewRequest(
+            question="前四半期の売上を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            select_ai_overrides={
+                "role": "今回だけ CFO 向けに説明するアシスタント",
+                "additional_instructions": "現在日付を基準にしてください。",
+            },
+        )
+    )
+
+    assert adapter.attributes
+    attributes = adapter.attributes[0] or {}
+    assert attributes["role"] == "今回だけ CFO 向けに説明するアシスタント"
+    instructions = attributes["additional_instructions"]
+    assert instructions.index("## 業務説明") < instructions.index("## 業務用語集")
+    assert instructions.index("- 四半期:") < instructions.index("- 売上:")
+    assert "## SQL 生成ルール" in instructions
+    assert "## プロファイル追加指示" in instructions
+    assert instructions.endswith("## 今回の追加指示\n現在日付を基準にしてください。")
+    assert preview.engine_meta["select_ai_role_applied"] is True
+    assert preview.engine_meta["select_ai_additional_instructions_length"] == len(instructions)
+    assert "現在日付を基準にしてください。" not in str(preview.engine_meta)
+
+
+def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="job_context",
+            name="ジョブ文脈",
+            allowed_tables=["INVOICES"],
+            select_ai_config={"role": "既定ロール"},
+        )
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            select_ai_overrides={
+                "role": "ジョブ専用ロール",
+                "additional_instructions": "最新月だけを対象にする。",
+            },
+        )
+    )
+    job = service.get_job(created.job_id)
+    for _ in range(100):
+        if job is not None and job.status not in {JobStatus.PENDING, JobStatus.RUNNING}:
+            break
+        time.sleep(0.01)
+        job = service.get_job(created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert adapter.attributes[0] is not None
+    assert adapter.attributes[0]["role"] == "ジョブ専用ロール"
+    assert "## 今回の追加指示\n最新月だけを対象にする。" in adapter.attributes[0][
+        "additional_instructions"
+    ]
+
+
+def test_oracle_adapter_generate_select_ai_sql_binds_unicode_attributes() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql = adapter.generate_select_ai_sql(
+        profile_name="FINANCE_PROFILE",
+        question="前四半期の売上は?",
+        attributes={
+            "role": "財務 SQL アシスタント",
+            "additional_instructions": "日付は DATE 型で返す。",
+        },
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert "attributes => :attributes" in fake_db.executed[-1]
+    params = fake_db.executed_params[-1] or {}
+    assert '"role": "財務 SQL アシスタント"' in str(params["attributes"])
+
+
+async def test_select_ai_overrides_require_select_ai_engine() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        preview_resp = await client.post(
+            "/api/nl2sql/preview",
+            json={
+                "question": "売上を確認したい",
+                "engine": "auto",
+                "select_ai_overrides": {"role": "財務アシスタント"},
+            },
+        )
+        job_resp = await client.post(
+            "/api/nl2sql/jobs",
+            json={
+                "question": "売上を確認したい",
+                "engine": "enterprise_ai_direct",
+                "select_ai_overrides": {"additional_instructions": "円で表示"},
+            },
+        )
+
+    assert preview_resp.status_code == 422
+    assert job_resp.status_code == 422
+
+
 def test_oracle_select_ai_extracts_sql_from_error_wrapped_response() -> None:
     raw = (
         "Sorry, unfortunately a valid SELECT statement could not be generated. "
@@ -523,11 +654,10 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     service = _OracleRuntimeNl2SqlService(adapter)
 
     imported = service.import_sample_data(
-        SampleDataMutationRequest(execute=True, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
     )
 
     assert imported.executed is True
-    assert imported.dry_run is False
     assert imported.runtime == "oracle"
     assert adapter.admin_execute_calls == 1
     assert any("CREATE TABLE DEPARTMENT" in statement for statement in adapter.admin_statements)
@@ -551,22 +681,20 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
     service._oracle_adapter = missing_adapter
     deleted = service.delete_sample_data(
-        SampleDataMutationRequest(execute=True, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
     )
 
     assert deleted.executed is True
-    assert deleted.dry_run is False
     assert {statement.status for statement in deleted.statements} == {"skipped_missing_object"}
     assert deleted.warnings
     assert missing_adapter.admin_execute_calls == 1
     assert all("DROP" in statement for statement in missing_adapter.admin_statements)
 
     rejected = service.import_sample_data(
-        SampleDataMutationRequest(execute=True, confirmation="WRONG")
+        SampleDataMutationRequest(confirmation="WRONG")
     )
 
     assert rejected.executed is False
-    assert rejected.dry_run is False
     assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
 
 
@@ -788,6 +916,29 @@ async def test_profile_crud_create_update_archive() -> None:
         assert archive_resp.status_code == 200
         list_resp = await client.get("/api/nl2sql/profiles")
 
+        archived_list_resp = await client.get(
+            "/api/nl2sql/profiles", params={"include_archived": "true"}
+        )
+        assert archived_list_resp.status_code == 200
+        archived_profiles = archived_list_resp.json()["data"]
+        assert any(
+            profile["id"] == profile_id and profile["archived"]
+            for profile in archived_profiles
+        )
+
+        restore_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/restore")
+        assert restore_resp.status_code == 200
+        assert restore_resp.json()["data"]["archived"] is False
+        restored_list_resp = await client.get("/api/nl2sql/profiles")
+        assert profile_id in {
+            profile["id"] for profile in restored_list_resp.json()["data"]
+        }
+
+        missing_restore_resp = await client.post(
+            "/api/nl2sql/profiles/profile-does-not-exist/restore"
+        )
+        assert missing_restore_resp.status_code == 404
+
     assert list_resp.status_code == 200
     assert profile_id not in {profile["id"] for profile in list_resp.json()["data"]}
 
@@ -916,18 +1067,12 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert index_status["vector_backend"] == "oracle_26ai"
         assert index_status["indexable_count"] >= 1
 
-        rebuild_dry_run_resp = await client.post(
+        legacy_rebuild_resp = await client.post(
             "/api/nl2sql/feedback-index/rebuild", json={"execute": False}
         )
-        assert rebuild_dry_run_resp.status_code == 200
-        rebuild_dry_run = rebuild_dry_run_resp.json()["data"]
-        assert rebuild_dry_run["executed"] is False
-        assert "VECTOR(1536, FLOAT32)" in " ".join(rebuild_dry_run["ddl"])
-        assert rebuild_dry_run["indexed_count"] >= 1
+        assert legacy_rebuild_resp.status_code == 422
 
-        rebuild_resp = await client.post(
-            "/api/nl2sql/feedback-index/rebuild", json={"execute": True}
-        )
+        rebuild_resp = await client.post("/api/nl2sql/feedback-index/rebuild", json={})
         assert rebuild_resp.status_code == 200
         rebuild_data = rebuild_resp.json()["data"]
         assert rebuild_data["executed"] is False
@@ -952,7 +1097,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         examples = preview_resp.json()["data"]["engine_meta"]["similar_history_examples"]
         assert examples[0]["history_id"] == history_item["id"]
 
-        clear_resp = await client.post("/api/nl2sql/feedback-index/clear", json={"execute": True})
+        clear_resp = await client.post("/api/nl2sql/feedback-index/clear", json={})
         assert clear_resp.status_code == 200
         clear_data = clear_resp.json()["data"]
         assert clear_data["executed"] is False
@@ -1029,7 +1174,7 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
                     {
                         "object_name": "EMPLOYEE",
                         "object_type": "table",
-                        "comment": "社員情報's dry-run",
+                        "comment": "社員情報's 確認",
                     },
                     {
                         "object_name": "EMPLOYEE.EMPLOYEE_NAME",
@@ -1037,16 +1182,15 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
                         "comment": "社員名",
                     },
                 ],
-                "execute": False,
             },
         )
         assert apply_resp.status_code == 200
         apply_data = apply_resp.json()["data"]
         assert apply_data["executed"] is False
-        assert apply_data["statements"][0]["status"] == "dry_run"
+        assert apply_data["statements"][0]["status"] == "confirmation_required"
         assert (
             apply_data["statements"][0]["sql"]
-            == "COMMENT ON TABLE \"EMPLOYEE\" IS '社員情報''s dry-run';"
+            == "COMMENT ON TABLE \"EMPLOYEE\" IS '社員情報''s 確認';"
         )
         assert (
             apply_data["statements"][1]["sql"]
@@ -1063,7 +1207,6 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
                         "comment": "社員名",
                     }
                 ],
-                "execute": True,
             },
         )
         assert execute_apply_resp.status_code == 200
@@ -1082,7 +1225,6 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
                         "comment": "社員名",
                     }
                 ],
-                "execute": True,
                 "confirmation": "ADMIN_EXECUTE",
             },
         )
@@ -1463,7 +1605,7 @@ def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table()
         )
     )
 
-    data = service.rebuild_feedback_index(FeedbackIndexRequest(execute=True))
+    data = service.rebuild_feedback_index(FeedbackIndexRequest())
 
     assert data.executed is True
     assert data.status == "ready"
@@ -1498,6 +1640,47 @@ def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
     assert entries.items[0].sql_id == "sql-001"
     assert entries.items[0].sql_text == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert any('FROM "DEFAULT_FEEDBACK_VECINDEX$VECTAB"' in sql for sql in fake_db.executed)
+
+    added = service.add_select_ai_feedback(
+        SelectAiFeedbackAddRequest(
+            profile_id="default",
+            question="請求金額を確認したい;",
+            feedback_type="positive",
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            feedback_content="正しい SQL",
+        )
+    )
+
+    assert added.executed is True
+    assert added.status == "added"
+    assert added.profile_name == "NL2SQL_DEFAULT_PROFILE"
+    assert added.sql_text == "select ai showsql 請求金額を確認したい"
+    assert added.stored_feedback_type == "NEGATIVE"
+    assert "operation => 'ADD'" in added.plsql_preview
+    assert any(
+        (params or {}).get("feedback_type") == "NEGATIVE"
+        and (params or {}).get("response") == "SELECT TOTAL_AMOUNT FROM INVOICES"
+        and (params or {}).get("feedback_content") == "正しい SQL"
+        for params in fake_db.executed_params
+    )
+
+    corrected = service.add_select_ai_feedback(
+        SelectAiFeedbackAddRequest(
+            profile_id="default",
+            profile_name="CUSTOM_PROFILE",
+            question="請求金額を確認したい",
+            feedback_type="negative",
+            response="SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES",
+        )
+    )
+
+    assert corrected.executed is True
+    assert corrected.profile_name == "CUSTOM_PROFILE"
+    assert any(
+        (params or {}).get("profile_name") == "CUSTOM_PROFILE"
+        and (params or {}).get("response") == "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES"
+        for params in fake_db.executed_params
+    )
 
     deleted = service.delete_select_ai_feedback(
         SelectAiFeedbackDeleteRequest(
@@ -1559,6 +1742,14 @@ def test_service_select_ai_feedback_management_requires_oracle_runtime() -> None
     service = Nl2SqlService()
 
     entries = service.list_select_ai_feedback_entries("default")
+    added = service.add_select_ai_feedback(
+        SelectAiFeedbackAddRequest(
+            profile_id="default",
+            question="請求金額を確認したい",
+            feedback_type="positive",
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+        )
+    )
     deleted = service.delete_select_ai_feedback(
         SelectAiFeedbackDeleteRequest(profile_name="default", sql_text="select ai showsql x")
     )
@@ -1568,8 +1759,20 @@ def test_service_select_ai_feedback_management_requires_oracle_runtime() -> None
 
     assert entries.items == []
     assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(entries.warnings)
+    assert added.status == "requires_oracle"
+    assert added.executed is False
     assert deleted.status == "requires_oracle"
     assert updated.status == "requires_oracle"
+
+
+def test_select_ai_feedback_add_negative_requires_response() -> None:
+    with pytest.raises(ValueError):
+        SelectAiFeedbackAddRequest(
+            profile_id="default",
+            question="請求金額を確認したい",
+            feedback_type="negative",
+            response="",
+        )
 
 
 def test_service_similar_history_uses_oracle_vector_search(
@@ -1781,6 +1984,14 @@ def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
     assert select_ai.status == "ready"
     assert select_ai.engine_meta["runtime"] == "oracle"
     assert select_ai.warning == ""
+    profile_attributes = select_ai.engine_meta["profile_attributes"]
+    assert "role" not in profile_attributes
+    assert "additional_instructions" not in profile_attributes
+    assert profile_attributes["additional_instructions_applied"] is True
+    assert profile_attributes["additional_instructions_length"] > 0
+    oracle_attributes = select_ai.engine_meta["attributes"]
+    assert "additional_instructions" not in oracle_attributes
+    assert oracle_attributes["additional_instructions_applied"] is True
     assert agent.status == "ready"
     assert agent.engine_meta["runtime"] == "oracle"
     assert agent.asset_names["team"].endswith("_TEAM")
@@ -1879,20 +2090,19 @@ def test_oracle_adapter_refresh_agent_retries_when_generated_profile_exists() ->
     assert any("DBMS_SQL_TRANSLATOR.DROP_PROFILE" in sql for sql in fake_db.executed)
 
 
-def test_service_cleanup_assets_dry_run_lists_targets_without_oracle_calls() -> None:
+def test_service_cleanup_assets_requires_confirmation_without_oracle_calls() -> None:
     fake_db = _FakeOracleDb()
     service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
 
     cleanup = service.cleanup_select_ai_assets(
         profile_id=None,
         engines=[Nl2SqlEngine.SELECT_AI_AGENT],
-        execute=False,
     )
 
     assert len(cleanup) == 1
-    assert cleanup[0].status == "dry_run"
+    assert cleanup[0].status == "confirmation_required"
     assert cleanup[0].executed is False
-    assert cleanup[0].asset_names["team"].endswith("_TEAM")
+    assert cleanup[0].asset_names == {}
     assert fake_db.executed == []
 
 
@@ -1903,7 +2113,6 @@ def test_service_cleanup_assets_executes_oracle_drops_when_confirmed() -> None:
     cleanup = service.cleanup_select_ai_assets(
         profile_id=None,
         engines=[Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT],
-        execute=True,
         confirmation="ADMIN_EXECUTE",
     )
 

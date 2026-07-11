@@ -158,8 +158,9 @@ const prepareManagementScenarios = [
     path: "/glossary-rules",
     idPrefix: "glossary-rules",
     tabs: [
-      { id: "legacy", tabName: "旧版互換 用語集・ルール" },
-      { id: "profile", tabName: "Profile 固有編集" },
+      { id: "globalTerms", tabName: "グローバル用語集" },
+      { id: "globalRules", tabName: "グローバルルール" },
+      { id: "profile", tabName: "プロファイル固有" },
     ],
   },
 ] as const;
@@ -297,7 +298,7 @@ async function mockGlossaryRulesApi(page: Page) {
   await page.route("**/api/nl2sql/legacy-learning-material", (route) =>
     fulfillJson(route, {
       glossary: { 売上: "SALES.AMOUNT" },
-      rule_entries: [{ category: "基本", rule: "SELECT のみ" }],
+      rules: ["SELECT のみ"],
     })
   );
 }
@@ -394,6 +395,22 @@ for (const scenario of scenarios) {
     expect(fit.lastBelow).toBe(true);
     }
   );
+
+  test(`${scenario.title}は共通検索フィールドで絞り込める`, async ({ page }) => {
+    await mockObjectManagementApi(page, scenario);
+    await page.goto(scenario.path);
+
+    const search = page.getByRole("searchbox", { name: "検索" });
+    await expect(search).toHaveAttribute("placeholder", "名前・コメントで絞り込み");
+    await expect(search.locator("xpath=ancestor::label").locator("svg.lucide-search")).toBeVisible();
+
+    const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
+    await search.fill("_01");
+    await expect(grid.locator("tbody tr")).toHaveCount(1);
+    await expect(grid.getByText(`${scenario.prefix}_01`, { exact: true })).toBeVisible();
+    await search.clear();
+    await expect(grid.locator("tbody tr")).toHaveCount(30);
+  });
 }
 
 for (const scenario of metadataScenarios) {
@@ -622,7 +639,6 @@ for (const scenario of metadataScenarios) {
       if (target.id === "execute") {
         await expect(panel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
         await expect(panel.getByLabel("Oracle に実行する")).toHaveCount(0);
-        await expect(panel.getByText(/Dry-run/i)).toHaveCount(0);
         await expect(panel.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
       }
     }
@@ -828,7 +844,7 @@ test("Excel/CSV 取込の実行確認語は ADMIN_EXECUTE 固定で判定する"
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
 
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await expect(confirmationField.getByText("確認済み")).toBeVisible();
+  await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(executeButton).toBeDisabled();
 
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");

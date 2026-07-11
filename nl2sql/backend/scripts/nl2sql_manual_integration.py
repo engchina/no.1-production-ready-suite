@@ -315,7 +315,6 @@ def _import_sample_data(enabled: bool) -> StepResult | None:
         data = nl2sql_service.import_sample_data(
             SampleDataMutationRequest(
                 step=SampleDataStep.ALL,
-                execute=True,
                 confirmation="SQL_ASSIST_SAMPLE",
             )
         )
@@ -401,10 +400,19 @@ def _asset_result(engine: Nl2SqlEngine, data: AssetRefreshData) -> StepResult:
 def _cleanup_assets(
     *, engines: list[Nl2SqlEngine], profile_id: str | None, confirm: bool
 ) -> list[StepResult]:
+    if not confirm:
+        return [
+            StepResult(
+                name="cleanup_assets",
+                ok=True,
+                message="skipped; --confirm-cleanup is required",
+            )
+        ]
     cleanup_results = nl2sql_service.cleanup_select_ai_assets(
         profile_id=profile_id,
         engines=engines,
-        execute=confirm,
+        confirmation="ADMIN_EXECUTE",
+        reason="manual-integration-cleanup",
     )
     return [_cleanup_result(data) for data in cleanup_results]
 
@@ -610,24 +618,20 @@ def _supporting_features(
             )
             for item in comments.suggestions[: min(len(comments.suggestions), 5)]
         ]
-        comment_apply = nl2sql_service.apply_comments(
-            CommentApplyRequest(items=comment_items, execute=False)
-        )
+        comment_statements = [nl2sql_service._comment_statement(item) for item in comment_items]
         results.append(
             StepResult(
-                name="support_comment_apply_dry_run",
-                ok=(
-                    not comment_apply.executed
-                    and len(comment_apply.statements) == len(comment_items)
-                ),
+                name="support_comment_sql_generation",
+                ok=len(comment_statements) == len(comment_items),
                 message=(
-                    f"statements={len(comment_apply.statements)}; "
-                    f"warnings={len(comment_apply.warnings)}"
+                    f"statements={len(comment_statements)}; warnings=0"
                 ),
             )
         )
     except Exception as exc:
-        results.append(StepResult(name="support_comment_apply_dry_run", ok=False, message=str(exc)))
+        results.append(
+            StepResult(name="support_comment_sql_generation", ok=False, message=str(exc))
+        )
 
     try:
         synthetic = nl2sql_service.synthetic_cases(profile_id=profile_id, limit=synthetic_limit)
@@ -701,14 +705,13 @@ def _supporting_features(
 
     try:
         status = nl2sql_service.feedback_index_status()
-        rebuild = nl2sql_service.rebuild_feedback_index(FeedbackIndexRequest(execute=False))
         results.append(
             StepResult(
                 name="support_feedback_index",
-                ok=not rebuild.executed and rebuild.vector_dimension == 1536,
+                ok=not status.executed and status.vector_dimension == 1536,
                 message=(
-                    f"status={status.status}; indexable={rebuild.indexable_count}; "
-                    f"backend={rebuild.vector_backend}; ddl={len(rebuild.ddl)}"
+                    f"status={status.status}; indexable={status.indexable_count}; "
+                    f"backend={status.vector_backend}; ddl={len(status.ddl)}"
                 ),
             )
         )
@@ -732,21 +735,21 @@ def _seed_demo_learning() -> StepResult:
     )
 
 
-def _feedback_index_smoke(*, execute: bool, include_bad: bool) -> StepResult:
+def _feedback_index_smoke(*, include_bad: bool) -> StepResult:
     try:
         data = nl2sql_service.rebuild_feedback_index(
-            FeedbackIndexRequest(execute=execute, include_bad=include_bad)
+            FeedbackIndexRequest(include_bad=include_bad)
         )
     except Exception as exc:
         return StepResult(name="feedback_index_rebuild", ok=False, message=str(exc))
     ok = (
         data.vector_dimension == 1536
         and data.vector_backend == "oracle_26ai"
-        and ((data.executed and execute) or (not data.executed and not execute))
+        and data.executed
         and not data.warnings
     )
     message = (
-        f"execute={execute}; executed={data.executed}; runtime={data.runtime}; "
+        f"executed={data.executed}; runtime={data.runtime}; "
         f"status={data.status}; indexable={data.indexable_count}; "
         f"indexed={data.indexed_count}; backend={data.vector_backend}; "
         f"embedding_configured={data.embedding_configured}; warnings={len(data.warnings)}"
@@ -777,11 +780,7 @@ def _legacy_absorption_checks(
             require_oracle_state=require_classifier_oracle_state,
         ),
     ]
-    db_profile_dry_run = _legacy_db_profile_smoke(
-        execute_drop=False,
-        drop_name=db_profile_drop_name,
-    )
-    results.extend(db_profile_dry_run[:1])
+    results.extend(_legacy_db_profile_smoke(execute_drop=False, drop_name=db_profile_drop_name))
     results.extend(_legacy_agent_smoke(profile_id=profile_id, question=question))
     results.append(_legacy_comments_smoke(execute=execute_comments, allowed_tables=allowed_tables))
     results.append(
@@ -801,7 +800,6 @@ def _legacy_absorption_checks(
             execute_index=execute_feedback_index,
         )
     )
-    results.extend(db_profile_dry_run[1:])
     return results
 
 
@@ -862,6 +860,8 @@ def _legacy_db_profile_smoke(*, execute_drop: bool, drop_name: str) -> list[Step
                 f"warnings={len(profiles.warnings)}"
             ),
         )
+        if not execute_drop:
+            return [list_result]
         if not profiles.profiles:
             drop_result = StepResult(
                 name="legacy_db_profile_drop",
@@ -870,7 +870,11 @@ def _legacy_db_profile_smoke(*, execute_drop: bool, drop_name: str) -> list[Step
             )
         else:
             target = drop_name.strip() or profiles.profiles[0].name
-            dropped = nl2sql_service.drop_select_ai_db_profile(target, execute_drop)
+            dropped = nl2sql_service.drop_select_ai_db_profile(
+                target,
+                confirmation=target,
+                reason="manual-integration-profile-drop",
+            )
             drop_result = StepResult(
                 name="legacy_db_profile_drop",
                 ok=dropped.status != "error",
@@ -937,6 +941,12 @@ def _legacy_agent_smoke(*, profile_id: str | None, question: str) -> list[StepRe
 
 
 def _legacy_comments_smoke(*, execute: bool, allowed_tables: list[str]) -> StepResult:
+    if not execute:
+        return StepResult(
+            name="legacy_comments_apply",
+            ok=True,
+            message="skipped; explicit execute flag required",
+        )
     try:
         allowed = {table.strip().upper() for table in allowed_tables if table.strip()}
         suggestions = nl2sql_service.suggest_comments(
@@ -955,12 +965,18 @@ def _legacy_comments_smoke(*, execute: bool, allowed_tables: list[str]) -> StepR
             )
             for item in filtered_suggestions[:1]
         ]
-        applied = nl2sql_service.apply_comments(CommentApplyRequest(items=items, execute=execute))
+        applied = nl2sql_service.apply_comments(
+            CommentApplyRequest(
+                items=items,
+                confirmation="ADMIN_EXECUTE",
+                reason="manual-integration-comments",
+            )
+        )
     except Exception as exc:
         return StepResult(name="legacy_comments_apply", ok=False, message=str(exc))
     return StepResult(
         name="legacy_comments_apply",
-        ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
+        ok=bool(items) and applied.executed,
         message=(
             f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
             f"suggestions={len(suggestions.suggestions)}; "
@@ -972,6 +988,12 @@ def _legacy_comments_smoke(*, execute: bool, allowed_tables: list[str]) -> StepR
 
 
 def _legacy_annotations_smoke(*, execute: bool, allowed_tables: list[str]) -> StepResult:
+    if not execute:
+        return StepResult(
+            name="legacy_annotations_apply",
+            ok=True,
+            message="skipped; explicit execute flag required",
+        )
     try:
         allowed = {table.strip().upper() for table in allowed_tables if table.strip()}
         suggestions = nl2sql_service.suggest_annotations()
@@ -994,13 +1016,17 @@ def _legacy_annotations_smoke(*, execute: bool, allowed_tables: list[str]) -> St
             for item in filtered_suggestions[:1]
         ]
         applied = nl2sql_service.apply_annotations(
-            AnnotationApplyRequest(items=items, execute=execute)
+            AnnotationApplyRequest(
+                items=items,
+                confirmation="ADMIN_EXECUTE",
+                reason="manual-integration-annotations",
+            )
         )
     except Exception as exc:
         return StepResult(name="legacy_annotations_apply", ok=False, message=str(exc))
     return StepResult(
         name="legacy_annotations_apply",
-        ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
+        ok=bool(items) and applied.executed,
         message=(
             f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
             f"suggestions={len(suggestions.suggestions)}; "
@@ -1014,6 +1040,12 @@ def _legacy_annotations_smoke(*, execute: bool, allowed_tables: list[str]) -> St
 def _legacy_synthetic_data_smoke(
     *, profile_id: str | None, allowed_tables: list[str], execute: bool
 ) -> StepResult:
+    if not execute:
+        return StepResult(
+            name="legacy_synthetic_data",
+            ok=True,
+            message="skipped; explicit execute flag required",
+        )
     try:
         catalog = nl2sql_service.get_catalog()
         table_name = allowed_tables[0] if allowed_tables else catalog.tables[0].table_name
@@ -1024,7 +1056,8 @@ def _legacy_synthetic_data_smoke(
                 table_name=table_name,
                 row_count=1,
                 profile_name=profile_name,
-                execute=execute,
+                confirmation=table_name,
+                reason="manual-integration-synthetic-data",
             )
         )
         status_summary = "-"
@@ -1035,7 +1068,7 @@ def _legacy_synthetic_data_smoke(
         return StepResult(name="legacy_synthetic_data", ok=False, message=str(exc))
     return StepResult(
         name="legacy_synthetic_data",
-        ok=operation.status != "error" and (not execute or operation.executed),
+        ok=operation.status != "error" and operation.executed,
         message=(
             f"table={operation.table_name}; execute={execute}; "
             f"executed={operation.executed}; runtime={operation.runtime}; "
@@ -1051,8 +1084,10 @@ def _legacy_feedback_vector_smoke(
     results: list[StepResult] = []
     try:
         seeded = nl2sql_service.seed_demo_learning_data()
-        rebuild = nl2sql_service.rebuild_feedback_index(
-            FeedbackIndexRequest(execute=execute_index, include_bad=False)
+        rebuild = (
+            nl2sql_service.rebuild_feedback_index(FeedbackIndexRequest(include_bad=False))
+            if execute_index
+            else nl2sql_service.feedback_index_status()
         )
         results.append(
             StepResult(
@@ -1477,8 +1512,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cleanup-assets",
         action="store_true",
         help=(
-            "List Select AI / Agent assets that would be dropped. "
-            "Use --confirm-cleanup to execute. Cleanup mode exits before preview."
+            "Drop Select AI / Agent assets. Requires --confirm-cleanup and exits "
+            "before query preview."
         ),
     )
     parser.add_argument(
@@ -1506,7 +1541,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Run no.1-sql-assist legacy absorption smoke checks: classifier, "
             "Select AI profile list/drop, Agent ops, comments, annotations, "
             "synthetic DB data, and feedback vector search. Destructive DB "
-            "steps stay dry-run unless their --execute-* flag is passed."
+            "steps are skipped unless their --execute-* flag is passed."
         ),
     )
     parser.add_argument(
@@ -1522,7 +1557,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Exact Select AI DB profile name used by --check-legacy-absorption. "
-            "Required with --execute-db-profile-drop; optional for dry-run."
+            "Required with --execute-db-profile-drop."
         ),
     )
     parser.add_argument(
@@ -1675,6 +1710,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.confirm_cleanup and not args.cleanup_assets:
         parser.error("--confirm-cleanup requires --cleanup-assets")
+    if args.cleanup_assets and not args.confirm_cleanup:
+        parser.error("--cleanup-assets requires --confirm-cleanup")
     if args.execute_db_profile_drop and not args.check_legacy_absorption:
         parser.error("--execute-db-profile-drop requires --check-legacy-absorption")
     if args.db_profile_drop_name and not args.check_legacy_absorption:
@@ -1706,28 +1743,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "table mutation smoke only allows disposable NL2SQL_* tables; "
             f"unsafe={','.join(unsafe_tables)}"
-        )
-    if (
-        args.cleanup_assets
-        and not args.confirm_cleanup
-        and not require_oracle
-        and not args.require_enterprise_ai
-        and not args.require_feedback_embedding
-        and not require_oracle_persistence
-        and not require_refreshed_assets
-    ):
-        return _print_results(
-            _cleanup_assets(
-                engines=args.engines,
-                profile_id=args.profile_id,
-                confirm=False,
-            ),
-            json_report_path=args.json_report,
-            release_gate=release_gate,
-            engines=args.engines,
-            profile_id=args.profile_id,
-            allowed_tables=allowed.table_names,
-            started_at=started_at,
         )
     diagnostics_result = _diagnostics_with_timeout(
         require_oracle,
@@ -1843,7 +1858,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.execute_feedback_index:
-        results.append(_feedback_index_smoke(execute=True, include_bad=True))
+        results.append(_feedback_index_smoke(include_bad=True))
 
     if args.debug_raw_preview:
         results.extend(_debug_raw_preview(profile_id=profile_id, question=args.question))

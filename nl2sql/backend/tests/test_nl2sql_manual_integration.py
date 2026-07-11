@@ -275,9 +275,9 @@ def test_manual_integration_execute_feedback_index_smoke(
     monkeypatch.setattr(
         script,
         "_feedback_index_smoke",
-        lambda *, execute, include_bad: script.StepResult(
+        lambda *, include_bad: script.StepResult(
             name="feedback_index_rebuild",
-            ok=execute and include_bad,
+            ok=include_bad,
             message=(
                 "execute=True; executed=True; runtime=oracle; status=ready; "
                 "indexable=3; indexed=3; backend=oracle_26ai; "
@@ -324,8 +324,14 @@ def test_manual_integration_execute_feedback_index_smoke(
 
 
 def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(
+        cast(Any, script).nl2sql_service,
+        "_enterprise_ai_client",
+        _UnconfiguredEnterpriseAiClient(),
+    )
     exit_code = script.main(
         [
             "--engines",
@@ -534,7 +540,7 @@ def test_manual_integration_supporting_features_smoke(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "[ok] support_comments:" in output
-    assert "[ok] support_comment_apply_dry_run:" in output
+    assert "[ok] support_comment_sql_generation:" in output
     assert "[ok] support_synthetic_evaluation:" in output
     assert "[ok] support_evaluation_sets:" in output
     assert "[ok] support_feedback_index:" in output
@@ -553,16 +559,16 @@ def test_manual_integration_legacy_absorption_flags_and_report(
         captured.update(kwargs)
         return [
             script.StepResult(name="legacy_classifier", ok=True, message="ready=True"),
-            script.StepResult(name="legacy_db_profile_drop", ok=True, message="dry_run"),
+            script.StepResult(name="legacy_db_profile_drop", ok=True, message="skipped"),
         ]
 
     monkeypatch.setattr(script, "_legacy_absorption_checks", legacy_stub)
     monkeypatch.setattr(
         script,
         "_feedback_index_smoke",
-        lambda *, execute, include_bad: script.StepResult(
+        lambda *, include_bad: script.StepResult(
             name="feedback_index_rebuild",
-            ok=execute and include_bad,
+            ok=include_bad,
             message="execute=True; executed=True",
         ),
     )
@@ -726,58 +732,48 @@ def test_raw_summary_truncates_multiline_text() -> None:
     assert summary.endswith("...'")
 
 
-def test_manual_integration_cleanup_assets_is_dry_run_without_confirm(
+def test_manual_integration_cleanup_assets_requires_confirm(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
         script,
         "_diagnostics_with_timeout",
-        lambda _require_oracle, _timeout: pytest.fail("cleanup dry-run should not run diagnostics"),
+        lambda _require_oracle, _timeout: pytest.fail("cleanup validation should run first"),
     )
 
-    exit_code = script.main(
-        [
-            "--cleanup-assets",
-            "--engines",
-            "select_ai_agent",
-            "--profile-id",
-            "default",
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert "[ok] cleanup_select_ai_agent:" in output
-    assert "status=dry_run" in output
-    assert "executed=False" in output
-    assert "preview_select_ai_agent" not in output
+    with pytest.raises(SystemExit):
+        script.main(
+            [
+                "--cleanup-assets",
+                "--engines",
+                "select_ai_agent",
+                "--profile-id",
+                "default",
+            ]
+        )
 
 
-def test_manual_integration_cleanup_dry_run_honors_explicit_profile_id(
+def test_manual_integration_cleanup_requires_confirm_for_explicit_profile_id(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
         script,
         "_diagnostics_with_timeout",
-        lambda _require_oracle, _timeout: pytest.fail("cleanup dry-run should not run diagnostics"),
+        lambda _require_oracle, _timeout: pytest.fail("cleanup validation should run first"),
     )
 
-    exit_code = script.main(
-        [
-            "--cleanup-assets",
-            "--engines",
-            "select_ai_agent",
-            "--profile-id",
-            "manual_agent_v9",
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert "NL2SQL_MANUAL_AGENT_V9_TEAM" in output
-    assert "NL2SQL_DEFAULT_TEAM" not in output
+    with pytest.raises(SystemExit):
+        script.main(
+            [
+                "--cleanup-assets",
+                "--engines",
+                "select_ai_agent",
+                "--profile-id",
+                "manual_agent_v9",
+            ]
+        )
 
 
 def test_manual_integration_confirm_cleanup_requires_cleanup_flag() -> None:

@@ -62,8 +62,9 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.improve",
     items: [
+      { href: APP_ROUTES.feedbackManagement, labelKey: "nav.feedbackManagement", icon: MessageSquareText },
       { href: APP_ROUTES.learning, labelKey: "nav.learning", icon: MessageSquareText },
-      { href: APP_ROUTES.questionLearning, labelKey: "nav.questionLearning", icon: BrainCircuit },
+      { href: APP_ROUTES.questionClassifierModels, labelKey: "nav.questionClassifierModels", icon: BrainCircuit },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
       { href: APP_ROUTES.engineOperations, labelKey: "nav.engineOperations", icon: Bot },
       {

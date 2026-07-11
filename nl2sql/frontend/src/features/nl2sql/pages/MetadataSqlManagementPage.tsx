@@ -35,6 +35,8 @@ import type {
   DbAdminStatementPolicy,
   MetadataSqlGenerateData,
   MetadataSqlGeneratePayload,
+  MetadataSqlSampleData,
+  MetadataSqlSamplePayload,
   MetadataSqlTarget,
   SchemaCatalog,
 } from "../types";
@@ -61,9 +63,10 @@ const ANNOTATION_EXTRA_TEXT =
   "ANNOTATIONSの安全な適用ガイド:\n" +
   "- DROPとADDは同一文で混在させず、別々のALTER文に分割\n" +
   "- 重複名を避けるため、可能ならADD IF NOT EXISTSを使う\n" +
-  "- 値内の'は''へエスケープする\n" +
-  "例(表): ALTER TABLE USERS ANNOTATIONS (ADD UI_Display 'Users');\n" +
-  "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD UI_Display 'ID'));";
+  "- COMMENT: は入力項目名であり、説明用annotation名にはUI_Displayを使う\n" +
+  "- 値内の'は''へエスケープし、予約語や空白を含むannotation名は二重引用符で囲む\n" +
+  "例(表): ALTER TABLE USERS ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Users');\n" +
+  "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'ID'));";
 
 export function CommentManagementPage() {
   return <MetadataSqlManagementPage mode="comment" />;
@@ -81,6 +84,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
   const [sampleLimit, setSampleLimit] = useState(10);
+  const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
   const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("targets");
@@ -169,6 +173,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
     setDetails([]);
+    setRefreshedSampleText(null);
     setGenerated(null);
   };
 
@@ -197,6 +202,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         )
       );
       setDetails(nextDetails);
+      setRefreshedSampleText(null);
       setGenerated(null);
       setActiveView("input");
     } catch (err) {
@@ -214,19 +220,30 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setLoading("generate");
     setMessage("");
     try {
+      const samplePayload: MetadataSqlSamplePayload = {
+        targets: details.map((detail) => ({
+          object_name: detail.name,
+          object_type: detail.object_type === "view" ? "view" : "table",
+          columns: detail.columns.map((column) => column.column_name),
+        })),
+        sample_limit: sampleLimit,
+      };
+      const samples = await apiPost<MetadataSqlSampleData>("/api/nl2sql/metadata-samples", samplePayload);
+      setRefreshedSampleText(samples.sample_text);
       const payload: MetadataSqlGeneratePayload = {
         targets: selectedTargets,
         structure_text: inputTexts.structureText,
         primary_key_text: inputTexts.primaryKeyText,
         foreign_key_text: inputTexts.foreignKeyText,
-        sample_text: inputTexts.sampleText,
+        sample_text: samples.sample_text,
         extra_text: extraText,
       };
       const path =
         mode === "comment"
           ? "/api/nl2sql/comments/generate-sql"
           : "/api/nl2sql/annotations/generate-sql";
-      setGenerated(await apiPost<MetadataSqlGenerateData>(path, payload));
+      const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
+      setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
       setActiveView("execute");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
@@ -322,9 +339,13 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               detailsReady={details.length > 0}
               selectedCount={selectedTargets.length}
               sampleLimit={sampleLimit}
+              sampleText={refreshedSampleText ?? inputTexts.sampleText}
               extraText={extraText}
               loading={loading === "generate"}
-              onSampleLimitChange={setSampleLimit}
+              onSampleLimitChange={(value) => {
+                setSampleLimit(value);
+                setRefreshedSampleText(null);
+              }}
               onExtraTextChange={setExtraText}
               onGenerate={() => void generateSql()}
             />
@@ -516,6 +537,7 @@ function MetadataInputPanel({
   detailsReady,
   selectedCount,
   sampleLimit,
+  sampleText,
   extraText,
   loading,
   onSampleLimitChange,
@@ -527,6 +549,7 @@ function MetadataInputPanel({
   detailsReady: boolean;
   selectedCount: number;
   sampleLimit: number;
+  sampleText: string;
   extraText: string;
   loading: boolean;
   onSampleLimitChange: (value: number) => void;
@@ -579,7 +602,10 @@ function MetadataInputPanel({
               min={0}
               max={100}
               value={sampleLimit}
-              onChange={(event) => onSampleLimitChange(Number(event.currentTarget.value))}
+              onChange={(event) => {
+                const value = Number(event.currentTarget.value);
+                onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
+              }}
               className="min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
             />
           </label>
@@ -589,7 +615,7 @@ function MetadataInputPanel({
 
       <div className="grid gap-3 xl:grid-cols-2">
         <MetadataTextarea label={t("metadataSql.input.structure")} value={inputTexts.structureText} rows={8} />
-        <MetadataTextarea label={t("metadataSql.input.sample")} value={inputTexts.sampleText} rows={8} />
+        <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
         <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
         <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
       </div>

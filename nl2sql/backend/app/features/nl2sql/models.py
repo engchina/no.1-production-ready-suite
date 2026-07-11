@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Nl2SqlEngine(StrEnum):
@@ -114,6 +114,8 @@ class ProfileSelectAiConfig(BaseModel):
     comments: bool = True
     annotations: bool = False
     constraints: bool = False
+    role: str = ""
+    additional_instructions: str = ""
 
 
 class Nl2SqlProfile(BaseModel):
@@ -150,12 +152,22 @@ class ProfileUpsertRequest(BaseModel):
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
 
 
-class ProfileSelectAiProfileRequest(BaseModel):
-    """業務 profile から DBMS_CLOUD_AI profile を dry-run / 作成する request."""
+class StrictMutationRequest(BaseModel):
+    """Reject stale mutation fields instead of silently changing their meaning."""
 
-    execute: bool = False
+    model_config = ConfigDict(extra="forbid")
+
+
+class AdminExecutionConfirmation(StrictMutationRequest):
+    """Common confirmation fields for admin/destructive operations."""
+
     confirmation: str = ""
     reason: str = ""
+
+
+class ProfileSelectAiProfileRequest(AdminExecutionConfirmation):
+    """業務 profile から DBMS_CLOUD_AI profile を作成する request."""
+
     attributes_override: dict[str, Any] | None = None
 
 
@@ -173,18 +185,28 @@ class ProfileLearningMaterialImportData(BaseModel):
     profile: Nl2SqlProfile
 
 
-class LegacySqlRuleEntry(BaseModel):
-    """旧版 rules.xlsx の 1 行."""
-
-    category: str = "共通"
-    rule: str
-
-
 class LegacyLearningMaterialData(BaseModel):
-    """旧版 terms.xlsx / rules.xlsx 互換の用語・ルール."""
+    """全 profile で共有するグローバル用語・ルール."""
 
     glossary: dict[str, str] = Field(default_factory=dict)
-    rule_entries: list[LegacySqlRuleEntry] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_rule_entries(cls, value: Any) -> Any:
+        """旧 snapshot の CATEGORY/RULE 行を、順序を保って全局ルールへ移行する。"""
+        if not isinstance(value, dict) or "rules" in value:
+            return value
+        migrated = dict(value)
+        rules: list[str] = []
+        seen: set[str] = set()
+        for entry in migrated.pop("rule_entries", []) or []:
+            rule = str(entry.get("rule") if isinstance(entry, dict) else "").strip()
+            if rule and rule not in seen:
+                seen.add(rule)
+                rules.append(rule)
+        migrated["rules"] = rules
+        return migrated
 
 
 class SafetyReport(BaseModel):
@@ -205,14 +227,6 @@ class QueryResults(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     total: int
-
-
-class AdminExecutionConfirmation(BaseModel):
-    """Common confirmation fields for admin/destructive operations."""
-
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
 
 
 class DbAdminObjectSummary(BaseModel):
@@ -247,7 +261,7 @@ class DbAdminObjectsData(BaseModel):
 
 
 class DbAdminDropTableRequest(AdminExecutionConfirmation):
-    """Drop table dry-run / execution request."""
+    """Drop table execution request."""
 
     table_name: str = Field(min_length=1)
     purge: bool = True
@@ -302,7 +316,7 @@ class SampleDataInfo(BaseModel):
 
 
 class SampleDataMutationRequest(AdminExecutionConfirmation):
-    """Sample data import/delete dry-run / execution request."""
+    """Sample data import/delete execution request."""
 
     step: SampleDataStep = SampleDataStep.ALL
 
@@ -314,7 +328,6 @@ class SampleDataMutationData(BaseModel):
     step: SampleDataStep = SampleDataStep.ALL
     runtime: str = "deterministic"
     executed: bool = False
-    dry_run: bool = True
     objects: list[str] = Field(default_factory=list)
     statements: list[DbAdminStatementResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -323,7 +336,7 @@ class SampleDataMutationData(BaseModel):
 
 
 class DbAdminImportTabularRequest(AdminExecutionConfirmation):
-    """CSV/XLSX tabular import dry-run / execution request."""
+    """CSV/XLSX tabular import execution request."""
 
     table_name: str = Field(min_length=1)
     content_base64: str = Field(min_length=1)
@@ -350,7 +363,7 @@ class DbAdminStatementsRequest(AdminExecutionConfirmation):
 
 
 class DbAdminDropViewRequest(AdminExecutionConfirmation):
-    """Drop view dry-run / execution request."""
+    """Drop view execution request."""
 
     view_name: str = Field(min_length=1)
 
@@ -383,7 +396,7 @@ class DbAdminCsvUploadRequest(AdminExecutionConfirmation):
 
 
 class DbAdminCsvUploadData(BaseModel):
-    """CSV アップロード dry-run / execution response。"""
+    """CSV アップロード execution response。"""
 
     table_name: str
     filename: str = ""
@@ -395,7 +408,6 @@ class DbAdminCsvUploadData(BaseModel):
     error_count: int = 0
     row_errors: list[str] = Field(default_factory=list)
     hint: str = ""
-    dry_run: bool = True
     executed: bool = False
     runtime: str = "deterministic"
     sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
@@ -456,6 +468,25 @@ class Nl2SqlResult(BaseModel):
     timing: TimingEnvelope
 
 
+class SelectAiRequestOverrides(BaseModel):
+    """1 回の DBMS_CLOUD_AI.GENERATE 呼び出しだけに適用する属性。"""
+
+    role: str = ""
+    additional_instructions: str = ""
+
+    def has_values(self) -> bool:
+        return bool(self.role.strip() or self.additional_instructions.strip())
+
+
+def _validate_select_ai_request_overrides(
+    engine: Nl2SqlEngine, overrides: SelectAiRequestOverrides | None
+) -> None:
+    if overrides is not None and overrides.has_values() and engine != Nl2SqlEngine.SELECT_AI:
+        raise ValueError(
+            "select_ai_overrides は engine=select_ai の場合のみ指定できます。"
+        )
+
+
 class PreviewRequest(BaseModel):
     """自然言語から SQL を生成し、実行せずに safety を返す。"""
 
@@ -464,6 +495,12 @@ class PreviewRequest(BaseModel):
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
+    select_ai_overrides: SelectAiRequestOverrides | None = None
+
+    @model_validator(mode="after")
+    def validate_select_ai_overrides(self) -> PreviewRequest:
+        _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
+        return self
 
 
 class PreviewData(BaseModel):
@@ -505,6 +542,12 @@ class JobCreateRequest(BaseModel):
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
+    select_ai_overrides: SelectAiRequestOverrides | None = None
+
+    @model_validator(mode="after")
+    def validate_select_ai_overrides(self) -> JobCreateRequest:
+        _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
+        return self
 
 
 class JobCreateData(BaseModel):
@@ -572,10 +615,9 @@ class FeedbackData(BaseModel):
     comment: str = ""
 
 
-class FeedbackIndexRequest(BaseModel):
+class FeedbackIndexRequest(StrictMutationRequest):
     """Feedback learning index management request."""
 
-    execute: bool = False
     include_bad: bool = False
 
 
@@ -722,6 +764,15 @@ class ClassifierImportData(BaseModel):
     imported_count: int
     skipped_count: int = 0
     total_examples: int
+    categories: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    examples: list[ClassifierTrainingExample] = Field(default_factory=list)
+
+
+class ClassifierTrainingDataData(BaseModel):
+    """Classifier training data listing response."""
+
+    total_examples: int = 0
     categories: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     examples: list[ClassifierTrainingExample] = Field(default_factory=list)
@@ -938,7 +989,7 @@ class AssetCleanupData(BaseModel):
 
     engine: Nl2SqlEngine
     executed: bool
-    status: str = "dry_run"
+    status: str = "error"
     cleaned_at: str = ""
     profile_name: str = ""
     team_name: str = ""
@@ -947,18 +998,13 @@ class AssetCleanupData(BaseModel):
     engine_meta: dict[str, Any] = Field(default_factory=dict)
 
 
-class AssetCleanupRequest(BaseModel):
+class AssetCleanupRequest(AdminExecutionConfirmation):
     """Select AI / Agent asset cleanup request."""
 
     profile_id: str | None = None
     engines: list[Nl2SqlEngine] = Field(
         default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
     )
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
-
-
 class SelectAiDbProfile(BaseModel):
     """Oracle DBMS_CLOUD_AI profile metadata."""
 
@@ -987,12 +1033,8 @@ class SelectAiDbProfilesData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SelectAiDbProfileDropRequest(BaseModel):
+class SelectAiDbProfileDropRequest(AdminExecutionConfirmation):
     """Drop an Oracle Select AI profile by exact profile name."""
-
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
 
 
 class SelectAiDbProfileDetailData(BaseModel):
@@ -1018,7 +1060,7 @@ class SelectAiDbProfileMutationData(BaseModel):
 
     runtime: str = "deterministic"
     executed: bool = False
-    status: str = "dry_run"
+    status: str = "error"
     profile_name: str = ""
     original_name: str = ""
     ddl: list[str] = Field(default_factory=list)
@@ -1078,12 +1120,46 @@ class SelectAiFeedbackVectorIndexRequest(BaseModel):
     match_limit: int = Field(default=3, ge=1, le=5)
 
 
+class SelectAiFeedbackAddRequest(BaseModel):
+    """Add one DBMS_CLOUD_AI feedback item from the SQL generation flow."""
+
+    profile_id: str = Field(default="default", min_length=1)
+    profile_name: str = ""
+    question: str = Field(min_length=1)
+    feedback_type: Literal["positive", "negative"] = "positive"
+    response: str = ""
+    feedback_content: str = ""
+    generated_sql: str = ""
+
+    @model_validator(mode="after")
+    def validate_feedback_payload(self) -> SelectAiFeedbackAddRequest:
+        if self.feedback_type == "negative" and not self.response.strip():
+            raise ValueError("negative feedback では修正SQL(response)が必須です。")
+        return self
+
+
+class SelectAiFeedbackAddData(BaseModel):
+    """DBMS_CLOUD_AI feedback ADD mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "error"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    sql_text: str = ""
+    stored_feedback_type: str = ""
+    plsql_preview: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class SelectAiFeedbackMutationData(BaseModel):
     """Oracle Select AI feedback mutation response."""
 
     runtime: str = "deterministic"
     executed: bool = False
-    status: str = "dry_run"
+    status: str = "error"
     profile_name: str = ""
     index_name: str = ""
     table_name: str = ""
@@ -1286,7 +1362,7 @@ class ReverseSqlRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     profile_id: str | None = None
-    use_glossary: bool = False
+    use_glossary: bool = True
 
 
 class ReverseSqlData(BaseModel):
@@ -1332,13 +1408,10 @@ class CommentApplyItem(BaseModel):
     comment: str = Field(min_length=1, max_length=4000)
 
 
-class CommentApplyRequest(BaseModel):
-    """Restricted COMMENT ON dry-run / execution request."""
+class CommentApplyRequest(AdminExecutionConfirmation):
+    """Restricted COMMENT ON execution request."""
 
     items: list[CommentApplyItem] = Field(default_factory=list)
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
 
 
 class CommentApplyStatement(BaseModel):
@@ -1348,12 +1421,12 @@ class CommentApplyStatement(BaseModel):
     object_type: str
     comment: str
     sql: str
-    status: str = "dry_run"
+    status: str = "pending"
     error_message: str = ""
 
 
 class CommentApplyData(BaseModel):
-    """Restricted COMMENT ON dry-run / execution response."""
+    """Restricted COMMENT ON execution response."""
 
     executed: bool = False
     runtime: str = "deterministic"
@@ -1388,13 +1461,10 @@ class AnnotationApplyItem(BaseModel):
     annotation_value: str = Field(min_length=1, max_length=4000)
 
 
-class AnnotationApplyRequest(BaseModel):
-    """Restricted Oracle annotation dry-run / execution request."""
+class AnnotationApplyRequest(AdminExecutionConfirmation):
+    """Restricted Oracle annotation execution request."""
 
     items: list[AnnotationApplyItem] = Field(default_factory=list)
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
 
 
 class AnnotationApplyStatement(BaseModel):
@@ -1405,7 +1475,7 @@ class AnnotationApplyStatement(BaseModel):
     annotation_name: str
     annotation_value: str
     sql: str
-    status: str = "dry_run"
+    status: str = "pending"
     error_message: str = ""
 
 
@@ -1424,6 +1494,28 @@ class MetadataSqlTarget(BaseModel):
 
     object_name: str = Field(min_length=1, max_length=260)
     object_type: Literal["table", "view"] = "table"
+
+
+class MetadataSqlSampleTarget(MetadataSqlTarget):
+    """対象オブジェクトから代表値を取得するための列指定。"""
+
+    columns: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class MetadataSqlSampleRequest(BaseModel):
+    """コメント/アノテーション SQL 生成前のサンプル再取得要求。"""
+
+    targets: list[MetadataSqlSampleTarget] = Field(default_factory=list, max_length=100)
+    sample_limit: int = Field(default=10, ge=0, le=100)
+
+
+class MetadataSqlSampleData(BaseModel):
+    """SQL 生成に渡す再取得済みサンプル。"""
+
+    sample_text: str = ""
+    sample_count: int = 0
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class MetadataSqlGenerateRequest(BaseModel):
@@ -1452,7 +1544,7 @@ class SyntheticCasesData(BaseModel):
     cases: list[SyntheticCase]
 
 
-class SyntheticDataGenerateRequest(BaseModel):
+class SyntheticDataGenerateRequest(AdminExecutionConfirmation):
     """DBMS_CLOUD_AI synthetic table data generation request."""
 
     table_name: str = ""
@@ -1465,9 +1557,6 @@ class SyntheticDataGenerateRequest(BaseModel):
     extra_prompt: str = ""
     sample_rows: int = Field(default=0, ge=0, le=100)
     use_comments: bool = True
-    execute: bool = False
-    confirmation: str = ""
-    reason: str = ""
 
 
 class SyntheticDataOperationData(BaseModel):
@@ -1479,7 +1568,7 @@ class SyntheticDataOperationData(BaseModel):
     row_count: int
     executed: bool = False
     runtime: str = "deterministic"
-    status: str = "dry_run"
+    status: str = "error"
     message: str = ""
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
@@ -1593,7 +1682,7 @@ class CsvImportColumn(BaseModel):
 
 
 class DbAdminImportTabularData(BaseModel):
-    """Tabular import preview / execution response."""
+    """Tabular import execution response."""
 
     table_name: str
     filename: str = ""
@@ -1601,7 +1690,6 @@ class DbAdminImportTabularData(BaseModel):
     mode: str = "create"
     columns: list[CsvImportColumn]
     row_count: int
-    dry_run: bool
     executed: bool
     ddl: str
     insert_sql: str

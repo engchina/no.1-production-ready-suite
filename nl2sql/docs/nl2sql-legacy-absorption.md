@@ -10,11 +10,11 @@
 - `GET /classifier`: training data と classifier artifact の状態を確認する。
 - `POST /rewrite`: glossary/schema/extra prompt を使い、OCI Enterprise AI で自然言語質問を書き換える。未設定または失敗時は deterministic rewrite。
 - `GET /select-ai/db-profiles`: Oracle DBMS_CLOUD_AI profile 一覧を表示する。
-- `POST /select-ai/db-profiles/{profile_name}/drop`: profile 名を指定して drop dry-run または実行を行う。
+- `POST /select-ai/db-profiles/{profile_name}/drop`: profile 名と確認語を指定して drop を実行する。
 - `POST /select-ai-agent/run-team`: Select AI Agent team を実行する。
 - `GET /select-ai-agent/conversations`: Agent conversation 履歴を取得する。
-- `POST /comments/suggest`, `POST /comments/apply`: COMMENT ON 候補生成と dry-run/実行。
-- `POST /annotations/generate`, `POST /annotations/apply`: Oracle annotations 候補生成と dry-run/実行。
+- `POST /comments/suggest`, `POST /comments/apply`: COMMENT ON 候補生成と確認後の実行。
+- `POST /annotations/generate`, `POST /annotations/apply`: Oracle annotations 候補生成と確認後の実行。
 - `POST /synthetic-data/generate`, `GET /synthetic-data/operations/{operation_id}`: DBMS_CLOUD_AI synthetic data 生成と operation 状態確認。
 
 LLM/VLM は OCI Enterprise AI のみ、embedding は OCI GenAI のみ、永続 state と SQL/DB 操作は Oracle に集約する。外部 LLM provider や外部 vector DB は使わない。
@@ -23,7 +23,7 @@ LLM/VLM は OCI Enterprise AI のみ、embedding は OCI GenAI のみ、永続 s
 
 - `Learning`: LogisticRegression 分類器の training import/train/predict、feedback vector entries/config/rebuild を扱う。
 - `Query Workbench`: Query Rewrite パネルを持つ。glossary/schema/extra prompt の使用有無を切り替える。
-- `Engine Operations`: Select AI / Agent assets の refresh/cleanup、DB profile 一覧、DB profile 単体 drop dry-run/実行、Agent run/conversations/privileges、manual integration report import を扱う。
+- `Engine Operations`: Select AI / Agent assets の refresh/cleanup、DB profile 一覧、DB profile 単体 drop、Agent run/conversations/privileges、manual integration report import を扱う。
 - `Data Tools`: Excel/CSV import/export、COMMENT ON、annotations、DBMS_CLOUD_AI synthetic data を扱う。
 - `SQL Analysis`: deterministic analysis/reverse と Enterprise AI deep reverse を扱う。
 
@@ -68,7 +68,7 @@ NL2SQL_SELECT_AI_MODEL=...
 
 ## Live Smoke
 
-旧版吸収の本番 smoke は backend から実行する。既定では destructive DB 操作は dry-run。
+旧版吸収の本番 smoke は backend から実行する。destructive DB 操作は明示実行フラグが無い場合はスキップする。
 
 ```bash
 cd backend
@@ -102,8 +102,8 @@ procedure 型 signature の両方をサポートする。
 
 ## 危険操作ポリシー
 
-- destructive/live DB 操作はすべて dry-run を既定にする。
-- CLI では `--execute-*` または既存の `--confirm-cleanup` が無い限り DB 変更を行わない。
+- destructive/live DB 操作はすべて確認後に直接実行し、事前実行モードは提供しない。
+- CLI では `--execute-*` または `--confirm-cleanup` が無い限り対象ステップをスキップし、DB 変更を行わない。
 - DB profile drop の実行は `--db-profile-drop-name` で disposable profile を明示した場合のみ許可する。
 - table mutation の実行は `NL2SQL_` prefix の disposable allowed table に限定する。
 - UI では実行チェックボックスをオンにしたときだけ danger variant の実行ボタンに切り替える。
