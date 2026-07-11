@@ -7070,13 +7070,30 @@ class Nl2SqlService:
         self._persist_state()
         return cleaned
 
-    def list_select_ai_db_profiles(self, include_detail: bool = False) -> SelectAiDbProfilesData:
+    def list_select_ai_db_profiles(
+        self,
+        include_detail: bool = False,
+        *,
+        business_profiles_only: bool = False,
+        include_archived_business_profiles: bool = True,
+    ) -> SelectAiDbProfilesData:
         warnings: list[str] = []
+        business_profile_names = (
+            self._business_select_ai_profile_names(
+                include_archived=include_archived_business_profiles
+            )
+            if business_profiles_only
+            else None
+        )
         if self._use_oracle_runtime():
             try:
                 profiles: list[SelectAiDbProfile] = []
                 for item in self._oracle_adapter.list_select_ai_profiles():
                     profile = SelectAiDbProfile.model_validate(item)
+                    if not self._is_business_select_ai_profile(
+                        profile.name, business_profile_names
+                    ):
+                        continue
                     if include_detail:
                         try:
                             detail = self._oracle_adapter.get_select_ai_profile_detail(
@@ -7109,6 +7126,9 @@ class Nl2SqlService:
                 )
                 for data in self._asset_meta.values()
                 if data.profile_name
+                and self._is_business_select_ai_profile(
+                    data.profile_name, business_profile_names
+                )
             ]
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if not self._use_oracle_runtime():
@@ -8763,6 +8783,25 @@ class Nl2SqlService:
             return configured
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"
         return f"{prefix}_{profile.id.upper()}_PROFILE"
+
+    def _business_select_ai_profile_names(self, *, include_archived: bool) -> set[str]:
+        with self._lock:
+            profiles = list(self._profiles.values())
+        names: set[str] = set()
+        for profile in profiles:
+            if profile.archived and not include_archived:
+                continue
+            profile_name = self._select_ai_profile_name(profile).strip()
+            if profile_name:
+                names.add(profile_name.upper())
+        return names
+
+    def _is_business_select_ai_profile(
+        self, profile_name: str, business_profile_names: set[str] | None
+    ) -> bool:
+        if business_profile_names is None:
+            return True
+        return profile_name.strip().upper() in business_profile_names
 
     def _select_ai_team_name(self, profile: Nl2SqlProfile) -> str:
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"

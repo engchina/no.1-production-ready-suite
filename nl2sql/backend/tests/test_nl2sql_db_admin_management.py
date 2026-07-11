@@ -11,6 +11,7 @@ import pytest
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
+    AssetRefreshData,
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewRequest,
@@ -20,6 +21,8 @@ from app.features.nl2sql.models import (
     DbAdminStatementsRequest,
     MetadataSqlGenerateRequest,
     MetadataSqlSampleRequest,
+    Nl2SqlEngine,
+    Nl2SqlProfile,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
@@ -127,6 +130,31 @@ class _FakeSelectAiProfileAdapter:
         }
 
 
+class _FakeMixedSelectAiProfileAdapter:
+    """業務 profile 由来/無関係の DBMS_CLOUD_AI profile を混在させる fake adapter。"""
+
+    def __init__(self) -> None:
+        self.detail_calls: list[str] = []
+
+    def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        return [
+            {"name": "FINANCE_SELECT_AI", "status": "available"},
+            {"name": "ARCHIVED_SELECT_AI", "status": "available"},
+            {"name": "NL2SQL_DERIVED_FILTER_PROFILE", "status": "available"},
+            {"name": "MANUAL_SELECT_AI", "status": "available"},
+        ]
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        self.detail_calls.append(profile_name)
+        return {
+            "name": profile_name,
+            "attributes": {
+                "provider": "oci",
+                "object_list": [{"owner": "APP", "name": "INVOICES"}],
+            },
+        }
+
+
 def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
@@ -192,6 +220,109 @@ def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> N
     assert profile.region == "ap-osaka-1"
     assert profile.model == "cohere.command-r-plus"
     assert profile.embedding_model == "cohere.embed-v4.0"
+
+
+def test_select_ai_db_profiles_can_filter_to_business_profile_names() -> None:
+    adapter = _FakeMixedSelectAiProfileAdapter()
+    service = _OracleRuntimeService(adapter)
+    service.create_profile(
+        Nl2SqlProfile(
+            id="finance_filter",
+            name="財務プロファイル",
+            description="明示 profile 名で照合する。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+            select_ai_config={"profile_name": "FINANCE_SELECT_AI"},
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="archived_filter",
+            name="アーカイブプロファイル",
+            description="archived も既定では照合対象にする。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+            select_ai_config={"profile_name": "ARCHIVED_SELECT_AI"},
+            archived=True,
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="derived_filter",
+            name="導出名プロファイル",
+            description="profile_name 空欄時は既存導出名で照合する。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+        )
+    )
+
+    data = service.list_select_ai_db_profiles(
+        include_detail=True,
+        business_profiles_only=True,
+        include_archived_business_profiles=True,
+    )
+
+    assert [profile.name for profile in data.profiles] == [
+        "FINANCE_SELECT_AI",
+        "ARCHIVED_SELECT_AI",
+        "NL2SQL_DERIVED_FILTER_PROFILE",
+    ]
+    assert "MANUAL_SELECT_AI" not in adapter.detail_calls
+
+    active_only = service.list_select_ai_db_profiles(
+        business_profiles_only=True,
+        include_archived_business_profiles=False,
+    )
+
+    assert [profile.name for profile in active_only.profiles] == [
+        "FINANCE_SELECT_AI",
+        "NL2SQL_DERIVED_FILTER_PROFILE",
+    ]
+
+
+def test_select_ai_db_profiles_filter_also_applies_to_asset_metadata_fallback() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="finance_filter",
+            name="財務プロファイル",
+            description="deterministic fallback の照合対象。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+            select_ai_config={"profile_name": "FINANCE_SELECT_AI"},
+        )
+    )
+    cast(Any, service)._asset_meta = {
+        Nl2SqlEngine.SELECT_AI: AssetRefreshData(
+            engine=Nl2SqlEngine.SELECT_AI,
+            refreshed=True,
+            status="ready",
+            profile_name="FINANCE_SELECT_AI",
+        ),
+        Nl2SqlEngine.SELECT_AI_AGENT: AssetRefreshData(
+            engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            refreshed=True,
+            status="ready",
+            profile_name="MANUAL_SELECT_AI",
+        ),
+    }
+
+    data = service.list_select_ai_db_profiles(business_profiles_only=True)
+
+    assert data.runtime == "deterministic"
+    assert [profile.name for profile in data.profiles] == ["FINANCE_SELECT_AI"]
 
 
 def test_statement_policy_view_ddl_and_data_dml() -> None:

@@ -57,6 +57,8 @@ type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
 
 const PROFILE_MANAGEMENT_ID = "profile-management";
+const BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL =
+  "/api/nl2sql/select-ai/db-profiles?include_detail=true&business_profiles_only=true&include_archived_business_profiles=true";
 
 interface SortState {
   key: SortKey;
@@ -910,9 +912,9 @@ function OracleProfilesPanel({
             ) : (
               <table className="w-full min-w-[34rem] table-fixed divide-y divide-slate-200 text-left text-sm">
                 <colgroup>
-                  <col />
-                  <col className="w-[7rem]" />
-                  <col className="w-[9rem]" />
+                  <col className="w-[12rem]" />
+                  <col className="w-[6.5rem]" />
+                  <col className="w-[14rem]" />
                 </colgroup>
                 <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-600">
                   <tr>
@@ -929,11 +931,13 @@ function OracleProfilesPanel({
                         <td className="px-3 py-2 align-top">
                           <button
                             type="button"
-                            className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                            className="grid w-full min-w-0 max-w-full text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
                             aria-current={selected ? "true" : undefined}
                             onClick={() => onSelect(profile)}
                           >
-                            <span className="break-all font-mono text-xs font-semibold text-sky-900">{profile.name}</span>
+                            <span className="block w-full min-w-0 whitespace-normal break-all font-mono text-xs font-semibold leading-5 text-sky-900">
+                              {profile.name}
+                            </span>
                             <span className="line-clamp-2 text-xs leading-5 text-slate-600">{profileObjectList(profile) || "-"}</span>
                           </button>
                         </td>
@@ -941,12 +945,12 @@ function OracleProfilesPanel({
                           <StatusBadge variant="neutral" label={profile.status || "-"} />
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
+                          <div className="flex flex-nowrap items-center justify-end gap-2">
+                            <Button type="button" variant="secondary" size="sm" className="shrink-0 whitespace-nowrap" onClick={() => onSelect(profile)}>
                               <FileJson size={15} aria-hidden="true" />
                               <span>{t("engineOps.dbProfiles.detail")}</span>
                             </Button>
-                            <Button type="button" variant="danger" size="sm" onClick={() => onOpenDrop(profile.name)}>
+                            <Button type="button" variant="danger" size="sm" className="shrink-0 whitespace-nowrap" onClick={() => onOpenDrop(profile.name)}>
                               <Trash2 size={15} aria-hidden="true" />
                               <span>{t("profiles.oracle.drop")}</span>
                             </Button>
@@ -1152,6 +1156,19 @@ export function ProfileManagementPage() {
     setMessage("");
   };
 
+  const applyDbProfiles = (data: SelectAiDbProfilesData, preferredName = selectedOracleProfileName) => {
+    setDbProfiles(data);
+    const nextOracle = preferredName
+      ? data.profiles.find((profile) => profile.name === preferredName) ?? null
+      : data.profiles[0] ?? null;
+    if (nextOracle) {
+      selectOracleProfile(nextOracle);
+    } else {
+      setSelectedOracleProfileName("");
+      setProfileJson("");
+    }
+  };
+
   const load = async () => {
     setLoading("load");
     setMessage("");
@@ -1160,13 +1177,13 @@ export function ProfileManagementPage() {
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles?include_archived=true"),
         apiGet<SchemaCatalog>("/api/schema/catalog"),
         apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
-        apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"),
+        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL),
       ]);
       const normalizedProfiles = profileData.map(normalizeProfile);
       setProfiles(normalizedProfiles);
       setCatalog(catalogData);
       setViews(viewData);
-      setDbProfiles(dbProfileData);
+      applyDbProfiles(dbProfileData);
       const showingArchived = profileStatusFilter === "archived";
       const nextProfile =
         normalizedProfiles.find(
@@ -1178,13 +1195,6 @@ export function ProfileManagementPage() {
       } else {
         setSelectedId(null);
         setForm(emptyProfileForm());
-      }
-      const nextOracle =
-        dbProfileData.profiles.find((profile) => profile.name === selectedOracleProfileName) ??
-        dbProfileData.profiles[0] ??
-        null;
-      if (nextOracle) {
-        selectOracleProfile(nextOracle);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.load"));
@@ -1316,7 +1326,7 @@ export function ProfileManagementPage() {
         reason: "ui-profile-management-select-ai-upsert",
       });
       setOraclePreview(result);
-      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
       setMessage(result.executed ? t("profiles.message.oracleSaved") : result.warnings.join(" ") || t("profiles.error.oracle"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
@@ -1350,7 +1360,7 @@ export function ProfileManagementPage() {
         reason: "ui-profile-management-oracle-json-save",
       });
       setOraclePreview(result);
-      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
       setMessage(result.executed ? t("profiles.message.oracleSaved") : result.warnings.join(" ") || t("profiles.error.oracle"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
@@ -1371,7 +1381,7 @@ export function ProfileManagementPage() {
       void result;
       setDropTargetName("");
       setDropConfirmation("");
-      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
       setMessage(t("profiles.message.oracleDropped"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));

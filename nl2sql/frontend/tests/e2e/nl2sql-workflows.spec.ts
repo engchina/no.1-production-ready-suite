@@ -1091,29 +1091,44 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       },
     ])
   );
+  const filteredDbProfiles = {
+    runtime: "deterministic",
+    profiles: [
+      {
+        name: "NL2SQL_DEFAULT_PROFILE",
+        status: "ready",
+        owner: "APP",
+        created_at: "2026-06-21T10:00:00.000Z",
+        object_list: [],
+        attributes: { profile_attributes: { object_list: [{ owner: "APP", name: "INVOICES" }] } },
+      },
+    ],
+    warnings: [],
+  };
+  const allDbProfiles = {
+    ...filteredDbProfiles,
+    profiles: [
+      ...filteredDbProfiles.profiles,
+      {
+        name: "NL2SQL_MANUAL_AGENT_V2_PROFILE",
+        status: "ready",
+        owner: "APP",
+        created_at: "2026-06-21T10:00:00.000Z",
+        object_list: [],
+        attributes: { PROFILE_ATTRIBUTES: { OBJECT_LIST: JSON.stringify([{ OWNER: "APP", NAME: "PAYMENTS" }]) } },
+      },
+    ],
+  };
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true",
+    (route) => fulfillJson(route, filteredDbProfiles)
+  );
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?include_detail=true&business_profiles_only=true&include_archived_business_profiles=true",
+    (route) => fulfillJson(route, filteredDbProfiles)
+  );
   await page.route("**/api/nl2sql/select-ai/db-profiles", (route) =>
-    fulfillJson(route, {
-      runtime: "deterministic",
-      profiles: [
-        {
-          name: "NL2SQL_DEFAULT_PROFILE",
-          status: "ready",
-          owner: "APP",
-          created_at: "2026-06-21T10:00:00.000Z",
-          object_list: [],
-          attributes: { profile_attributes: { object_list: [{ owner: "APP", name: "INVOICES" }] } },
-        },
-        {
-          name: "NL2SQL_MANUAL_AGENT_V2_PROFILE",
-          status: "ready",
-          owner: "APP",
-          created_at: "2026-06-21T10:00:00.000Z",
-          object_list: [],
-          attributes: { PROFILE_ATTRIBUTES: { OBJECT_LIST: JSON.stringify([{ OWNER: "APP", NAME: "PAYMENTS" }]) } },
-        },
-      ],
-      warnings: [],
-    })
+    fulfillJson(route, allDbProfiles)
   );
   await page.route("**/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE", (route) =>
     fulfillJson(route, {
@@ -2070,6 +2085,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await page.goto("/feedback-management");
   await expect(page.getByRole("heading", { name: "フィードバック管理" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "フィードバック一覧" })).toHaveAttribute("aria-selected", "true");
+  const profileSelect = page.getByLabel("DBMS_CLOUD_AI profile");
+  await expect(profileSelect).toHaveValue("NL2SQL_DEFAULT_PROFILE");
+  await expect(profileSelect.locator("option")).toHaveCount(1);
+  await expect(profileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
   await expect(page.getByTestId("feedback-management-entry-count")).toHaveText("1");
   await expect(page.getByText("NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX").first()).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "CONTENT" })).toBeVisible();

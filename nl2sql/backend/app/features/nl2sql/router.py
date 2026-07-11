@@ -381,9 +381,17 @@ async def cleanup_select_ai_assets(
 @router.get("/select-ai/db-profiles", response_model=ApiResponse[SelectAiDbProfilesData])
 async def select_ai_db_profiles(
     include_detail: bool = False,
+    business_profiles_only: bool = False,
+    include_archived_business_profiles: bool = True,
 ) -> ApiResponse[SelectAiDbProfilesData]:
     """Oracle DBMS_CLOUD_AI profile 一覧を返す。"""
-    return ApiResponse(data=nl2sql_service.list_select_ai_db_profiles(include_detail))
+    return ApiResponse(
+        data=nl2sql_service.list_select_ai_db_profiles(
+            include_detail=include_detail,
+            business_profiles_only=business_profiles_only,
+            include_archived_business_profiles=include_archived_business_profiles,
+        )
+    )
 
 
 @router.get(

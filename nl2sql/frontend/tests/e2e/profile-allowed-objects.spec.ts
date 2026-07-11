@@ -130,12 +130,54 @@ const dbProfiles = {
   warnings: [],
 };
 
+const longOracleProfileName =
+  "DTAIPR_1171E8D8A630_LONG_ORACLE_PROFILE_NAME_THAT_SHOULD_WRAP_INSIDE_THE_LEFT_COLUMN";
+
+const longNameDbProfiles = {
+  ...dbProfiles,
+  profiles: [
+    {
+      ...dbProfiles.profiles[0],
+      name: longOracleProfileName,
+      description: "長い Oracle Profile 名の折り返し確認",
+    },
+  ],
+};
+
+const unfilteredDbProfiles = {
+  ...dbProfiles,
+  profiles: [
+    ...dbProfiles.profiles,
+    {
+      name: "MANUAL_SELECT_AI",
+      status: "ready",
+      owner: "APP",
+      created_at: "2026-06-21T10:00:00.000Z",
+      description: "業務プロファイル外で作成された profile",
+      category: "manual",
+      object_list: [{ owner: "APP", name: "TABLE_99" }],
+      tables: ["TABLE_99"],
+      views: [],
+      region: "ap-osaka-1",
+      model: "cohere.command-r-plus",
+      embedding_model: "cohere.embed-v4.0",
+      schema_text: "",
+      context_ddl: "",
+      attributes: {
+        provider: "oci",
+        object_list: [{ owner: "APP", name: "TABLE_99" }],
+      },
+    },
+  ],
+};
+
 async function mockProfileApi(
   page: Page,
   options: {
     catalog?: typeof schemaCatalog;
     viewItems?: Array<{ name: string; owner: string; object_type: string; row_count: null; comment: string }>;
     profileItems?: typeof profiles;
+    dbProfileData?: typeof dbProfiles;
   } = {}
 ) {
   const viewItems = options.viewItems ?? [
@@ -150,7 +192,13 @@ async function mockProfileApi(
       warnings: [],
     })
   );
-  await page.route("**/api/nl2sql/select-ai/db-profiles?include_detail=true", (route) => fulfillJson(route, dbProfiles));
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?include_detail=true&business_profiles_only=true&include_archived_business_profiles=true",
+    (route) => fulfillJson(route, options.dbProfileData ?? dbProfiles)
+  );
+  await page.route("**/api/nl2sql/select-ai/db-profiles?include_detail=true", (route) =>
+    fulfillJson(route, unfilteredDbProfiles)
+  );
   await page.route("**/api/nl2sql/profiles?include_archived=true", (route) => fulfillJson(route, options.profileItems ?? profiles));
 }
 
@@ -356,6 +404,59 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
   expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth + 1);
 });
 
+test("Oracle Profile 一覧は長い profile 名を折り返し操作ボタンを横並びに保つ", async ({ page }) => {
+  await mockProfileApi(page, { dbProfileData: longNameDbProfiles });
+
+  await page.goto("/profiles");
+  await page.getByRole("tab", { name: "Oracle Profile" }).click();
+
+  const oracleList = page.getByTestId("profile-oracle-list");
+  await expect(oracleList.getByText(longOracleProfileName)).toBeVisible();
+
+  const row = oracleList.getByRole("row").filter({ hasText: longOracleProfileName });
+  await expect(row.getByRole("button", { name: "詳細" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Drop 実行" })).toBeVisible();
+
+  const metrics = await row.evaluate((rowNode) => {
+    const cells = Array.from(rowNode.querySelectorAll("td"));
+    const profileName = cells[0]?.querySelector("button > span");
+    const buttons = Array.from(cells[2]?.querySelectorAll("button") ?? []);
+    if (!cells[0] || !cells[2] || !profileName || buttons.length < 2) {
+      throw new Error("Oracle Profile list row was not rendered as expected.");
+    }
+
+    const nameCellRect = cells[0].getBoundingClientRect();
+    const actionCellRect = cells[2].getBoundingClientRect();
+    const profileNameRect = profileName.getBoundingClientRect();
+    const profileNameStyle = window.getComputedStyle(profileName);
+    const detailRect = buttons[0].getBoundingClientRect();
+    const dropRect = buttons[1].getBoundingClientRect();
+
+    return {
+      actionCellWidth: actionCellRect.width,
+      buttonBottomDelta: Math.abs(detailRect.bottom - dropRect.bottom),
+      buttonTopDelta: Math.abs(detailRect.top - dropRect.top),
+      detailRight: detailRect.right,
+      dropLeft: dropRect.left,
+      nameCellWidth: nameCellRect.width,
+      profileNameHeight: profileNameRect.height,
+      profileNameLineHeight: Number.parseFloat(profileNameStyle.lineHeight),
+    };
+  });
+
+  expect(metrics.profileNameHeight).toBeGreaterThan(metrics.profileNameLineHeight * 1.5);
+  expect(metrics.nameCellWidth).toBeLessThan(metrics.actionCellWidth);
+  expect(metrics.buttonTopDelta).toBeLessThan(2);
+  expect(metrics.buttonBottomDelta).toBeLessThan(2);
+  expect(metrics.detailRight).toBeLessThan(metrics.dropLeft);
+
+  const bodyWidth = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
+});
+
 test("Oracle Profile タブで JSON と SQL preview と drop 確認を扱える", async ({ page }) => {
   let dropPayload: Record<string, unknown> | null = null;
   let savePayload: Record<string, unknown> | null = null;
@@ -393,6 +494,7 @@ test("Oracle Profile タブで JSON と SQL preview と drop 確認を扱える"
   await page.getByRole("tab", { name: "Oracle Profile" }).click();
 
   await expect(page.getByTestId("profile-oracle-list").getByText("NL2SQL_DEFAULT_PROFILE")).toBeVisible();
+  await expect(page.getByTestId("profile-oracle-list").getByText("MANUAL_SELECT_AI")).toHaveCount(0);
   await expect(page.getByText("cohere.embed-v4.0").first()).toBeVisible();
   await expect(page.getByText("DBMS_CLOUD_AI.CREATE_PROFILE")).toBeVisible();
   await expect(page.getByLabel("Attributes JSON")).toHaveValue(/"provider": "oci"/);

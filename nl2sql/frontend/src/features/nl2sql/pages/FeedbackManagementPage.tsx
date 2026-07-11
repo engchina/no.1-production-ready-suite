@@ -28,6 +28,8 @@ const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "entries", label: t("feedbackManagement.tabs.entries"), icon: MessageSquareText },
   { id: "vectorIndex", label: t("feedbackManagement.tabs.vectorIndex"), icon: DatabaseZap },
 ];
+const BUSINESS_SELECT_AI_DB_PROFILES_URL =
+  "/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true";
 
 function formatAttributes(entry: SelectAiFeedbackEntry) {
   if (entry.raw_attributes) return entry.raw_attributes;
@@ -91,8 +93,13 @@ export function FeedbackManagementPage() {
     setLoading("load");
     setMessage("");
     try {
-      const dbProfileData = await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles");
-      const nextProfile = profileName || dbProfileData.profiles[0]?.name || "";
+      const dbProfileData = await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL);
+      const hasCurrentProfile = dbProfileData.profiles.some((profile) => profile.name === profileName);
+      const nextProfile = !profileName
+        ? dbProfileData.profiles[0]?.name || ""
+        : hasCurrentProfile
+          ? profileName
+          : "";
       const feedbackData = nextProfile ? await fetchSelectAiFeedback(nextProfile) : null;
       setDbProfiles(dbProfileData);
       setProfileName(nextProfile);
