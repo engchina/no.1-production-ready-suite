@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sqlAnalyzePayload } from "../src/features/nl2sql/analysisState.ts";
 import {
   ACTIVE_JOB_ID_KEY,
   ACTIVE_JOB_STARTED_AT_KEY,
@@ -19,6 +18,7 @@ import {
   fixedSplitFractionForRatio,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
+  fixedSplitStateForPreferredWidePane,
   fixedSplitStateForRatio,
   fixedSplitStorageKey,
   isFixedSplitRatio,
@@ -38,6 +38,10 @@ import {
   parseNl2SqlEngine,
   prefillFromSearchParams,
 } from "../src/features/nl2sql/queryPrefillState.ts";
+import {
+  filterAndSortHistory,
+  selectedVisibleHistoryId,
+} from "../src/features/nl2sql/historyManagementState.ts";
 import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/schemaDisplayCore.ts";
 import type { HistoryItem, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
@@ -119,6 +123,13 @@ test("fixed split pane reads legacy and draggable storage values", () => {
   assert.deepEqual(ratioOnly, fixedSplitStateForRatio("rightWide"));
 
   assert.deepEqual(parseFixedSplitStorageValue("not-json"), fixedSplitStateForRatio("equal"));
+});
+
+test("fixed split pane uses the preferred wide pane when storage is absent", () => {
+  const rightWide = fixedSplitStateForPreferredWidePane("right");
+  assert.deepEqual(parseFixedSplitStorageValue(null, rightWide), fixedSplitStateForRatio("rightWide"));
+  assert.deepEqual(parseFixedSplitStorageValue("leftWide", rightWide), fixedSplitStateForRatio("leftWide"));
+  assert.deepEqual(parseFixedSplitStorageValue("not-json", rightWide), fixedSplitStateForRatio("rightWide"));
 });
 
 test("fixed split pane clamps dragged fraction and detects nearest fixed ratio", () => {
@@ -227,30 +238,17 @@ test("schema metadata helpers format counts and sample values for compact UI", (
   assert.equal(formatSampleValues(invoiceColumn.sample_values), "12000, 9800, 45100");
 });
 
-test("SQL analysis payload trims SQL and clamps row limits", () => {
-  assert.deepEqual(sqlAnalyzePayload(" SELECT * FROM INVOICES ", 0), {
-    sql: "SELECT * FROM INVOICES",
-    row_limit: 1,
-  });
-  assert.deepEqual(sqlAnalyzePayload("SELECT * FROM CUSTOMERS", 9000), {
-    sql: "SELECT * FROM CUSTOMERS",
-    row_limit: 5000,
-  });
-});
-
 test("SQL execution payload trims SQL and preserves execution scope", () => {
   assert.deepEqual(
     sqlExecutePayload(
       " SELECT TOTAL_AMOUNT FROM INVOICES ",
       "finance",
-      { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
-      250
+      { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } }
     ),
     {
       sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
       profile_id: "finance",
       allowed_objects: { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
-      row_limit: 250,
     }
   );
 });
@@ -289,13 +287,13 @@ test("preview response maps to generated SQL panel data", () => {
   const preview: PreviewData = {
     sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     is_safe: true,
-    row_limit: 100,
+    row_limit: 0,
     note: "preview ready",
     engine: "select_ai",
     engine_meta: { profile_name: "P" },
     fallback_reason: "",
     rewritten_question: "請求金額を一覧で見る",
-    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
+    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     safety: null,
     recommendations: ["SELECT-only です。"],
     repaired_sql: "",
@@ -308,12 +306,12 @@ test("preview response maps to generated SQL panel data", () => {
     engine_meta: { profile_name: "P" },
     fallback_reason: "",
     generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
+    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     explanation: "preview ready",
     safety: {
       is_safe: true,
       is_select_only: true,
-      row_limit_applied: 100,
+      row_limit_applied: 0,
       blocked_reason: "",
       warnings: [],
       referenced_tables: [],
@@ -331,8 +329,7 @@ test("preview execute payload preserves selected allowed objects", () => {
     previewExecutePayload(
       " SELECT TOTAL_AMOUNT FROM INVOICES ",
       "default",
-      { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
-      50
+      { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } }
     ),
     {
       sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
@@ -341,7 +338,6 @@ test("preview execute payload preserves selected allowed objects", () => {
         table_names: ["INVOICES"],
         columns: { INVOICES: ["TOTAL_AMOUNT"] },
       },
-      row_limit: 50,
     }
   );
 });
@@ -373,4 +369,92 @@ test("history rerun URL and query prefill preserve question, engine, and profile
     profileId: "finance",
   });
   assert.equal(parseNl2SqlEngine("bad_engine"), null);
+});
+
+const historyManagementItems: HistoryItem[] = [
+  {
+    id: "h-new",
+    question: "未入金の顧客を確認",
+    engine: "select_ai_agent",
+    generated_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
+    created_at: "2026-06-22T10:00:00Z",
+    elapsed_ms: 250,
+    feedback_rating: "good",
+    profile_id: "finance",
+    profile_name: "経理プロファイル",
+    rewritten_question: "未入金顧客",
+    executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
+    safety_is_safe: true,
+    result_row_count: 2,
+    result_columns: ["CUSTOMER_NAME"],
+    feedback_comment: "期待通り",
+  },
+  {
+    id: "h-old",
+    question: "監査ログを確認",
+    engine: "select_ai",
+    generated_sql: "DELETE FROM AUDIT_LOG",
+    created_at: "2026-06-20T10:00:00Z",
+    elapsed_ms: 30,
+    feedback_rating: null,
+    profile_id: "audit",
+    profile_name: "監査プロファイル",
+    rewritten_question: "",
+    executable_sql: "",
+    safety_is_safe: false,
+    result_row_count: 0,
+    result_columns: [],
+    feedback_comment: "",
+  },
+];
+
+test("history management filters searchable fields, feedback, and safety", () => {
+  const searched = filterAndSortHistory(historyManagementItems, {
+    search: "経理プロファイル",
+    feedback: "all",
+    safety: "all",
+    sort: { key: "created_at", direction: "desc" },
+  });
+  assert.deepEqual(searched.map((item) => item.id), ["h-new"]);
+
+  const blockedUnrated = filterAndSortHistory(historyManagementItems, {
+    search: "AUDIT_LOG",
+    feedback: "unrated",
+    safety: "blocked",
+    sort: { key: "created_at", direction: "desc" },
+  });
+  assert.deepEqual(blockedUnrated.map((item) => item.id), ["h-old"]);
+});
+
+test("history management sorts by execution time and question", () => {
+  const oldestFirst = filterAndSortHistory(historyManagementItems, {
+    search: "",
+    feedback: "all",
+    safety: "all",
+    sort: { key: "created_at", direction: "asc" },
+  });
+  assert.deepEqual(oldestFirst.map((item) => item.id), ["h-old", "h-new"]);
+
+  const questionAscending = filterAndSortHistory(historyManagementItems, {
+    search: "",
+    feedback: "all",
+    safety: "all",
+    sort: { key: "question", direction: "asc" },
+  });
+  const questionDescending = filterAndSortHistory(historyManagementItems, {
+    search: "",
+    feedback: "all",
+    safety: "all",
+    sort: { key: "question", direction: "desc" },
+  });
+  assert.deepEqual(
+    questionDescending.map((item) => item.id),
+    questionAscending.map((item) => item.id).reverse()
+  );
+});
+
+test("history management preserves a visible selection and falls back to the first row", () => {
+  assert.equal(selectedVisibleHistoryId(historyManagementItems, "h-old"), "h-old");
+  assert.equal(selectedVisibleHistoryId(historyManagementItems, "missing"), "h-new");
+  assert.equal(selectedVisibleHistoryId([], "h-old"), "");
 });

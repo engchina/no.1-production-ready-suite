@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import {
+  Banner,
   Button,
   EmptyState,
   PageHeader,
@@ -19,15 +20,15 @@ import {
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
-  DbObjectManagementPanelShell,
-  DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectStatusBar,
   DbObjectStepIndicator,
-  type DbObjectTab,
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
+
+// タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
+const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 import type {
   DbAdminObjectDetail,
   DbAdminObjectsData,
@@ -42,7 +43,6 @@ import type {
 } from "../types";
 
 type MetadataMode = "comment" | "annotation";
-type ActiveView = "targets" | "input" | "execute";
 type TargetFilter = "all" | "table" | "view";
 type TargetSortKey = "name" | "object_type" | "owner";
 type TargetSortDirection = "asc" | "desc";
@@ -87,7 +87,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
   const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
-  const [activeView, setActiveView] = useState<ActiveView>("targets");
   const [targetSearch, setTargetSearch] = useState("");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
@@ -110,11 +109,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     [catalog, details, sampleLimit]
   );
   const policy: DbAdminStatementPolicy = mode === "comment" ? "comment_sql" : "annotation_sql";
-  const tabs: Array<DbObjectTab<ActiveView>> = [
-    { id: "targets", label: t("metadataSql.tabs.targets"), icon: Table2 },
-    { id: "input", label: t("metadataSql.tabs.input"), icon: FileText },
-    { id: "execute", label: t("metadataSql.tabs.execute"), icon: Code2 },
-  ];
+  const stepIndex = generated ? 2 : details.length > 0 ? 1 : 0;
 
   const filteredTargets = useMemo(() => {
     const q = targetSearch.trim().toLowerCase();
@@ -204,7 +199,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setDetails(nextDetails);
       setRefreshedSampleText(null);
       setGenerated(null);
-      setActiveView("input");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.details"));
     } finally {
@@ -244,7 +238,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           : "/api/nl2sql/annotations/generate-sql";
       const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
       setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
-      setActiveView("execute");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
     } finally {
@@ -264,18 +257,17 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {message && (
-          <div
-            className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between"
-            role="alert"
+          <Banner
+            severity="danger"
+            action={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.action.refresh")}</span>
+              </Button>
+            }
           >
-            <span>
-              {message} {t("metadataSql.error.retryHint")}
-            </span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
-            </Button>
-          </div>
+            {message} {t("metadataSql.error.retryHint")}
+          </Banner>
         )}
 
         <DbObjectStatusBar
@@ -295,77 +287,61 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           onSchemaRefresh={() => void load(true)}
         />
 
-        <DbObjectManagementTabs
-          idPrefix={pageId}
-          tabs={tabs}
-          activeView={activeView}
-          ariaLabel={t("metadataSql.tabs.label")}
-          onViewChange={setActiveView}
+        <DbObjectStepIndicator
+          steps={[
+            t("metadataSql.steps.targets"),
+            t("metadataSql.steps.input"),
+            t("metadataSql.steps.execute"),
+          ]}
+          activeIndex={stepIndex}
+          ariaLabel={t("metadataSql.steps.label")}
+          dataTestId={`${pageId}-steps`}
         />
 
-        {activeView === "targets" ? (
-          <DbObjectManagementPanelShell
-            id={`${pageId}-panel-targets`}
-            labelledBy={`${pageId}-tab-targets`}
-            idPrefix={pageId}
-            ariaLabel={t("metadataSql.workspace.targets")}
-          >
-            <MetadataTargetGrid
-              pageId={pageId}
-              items={filteredTargets}
-              selectedKeys={selectedKeys}
-              loading={loading === "load" && !tables && !views}
-              search={targetSearch}
-              filter={targetFilter}
-              sort={targetSort}
-              onSearchChange={setTargetSearch}
-              onFilterChange={setTargetFilter}
-              onSortChange={toggleSort}
-              onToggle={toggleTarget}
-              onFetchDetails={() => void fetchDetails()}
-              fetchingDetails={loading === "details"}
-            />
-          </DbObjectManagementPanelShell>
-        ) : activeView === "input" ? (
-          <DbObjectManagementPanelShell
-            id={`${pageId}-panel-input`}
-            labelledBy={`${pageId}-tab-input`}
-            idPrefix={pageId}
-            ariaLabel={t("metadataSql.workspace.input")}
-          >
-            <MetadataInputPanel
-              pageId={pageId}
-              inputTexts={inputTexts}
-              detailsReady={details.length > 0}
-              selectedCount={selectedTargets.length}
-              sampleLimit={sampleLimit}
-              sampleText={refreshedSampleText ?? inputTexts.sampleText}
-              extraText={extraText}
-              loading={loading === "generate"}
-              onSampleLimitChange={(value) => {
-                setSampleLimit(value);
-                setRefreshedSampleText(null);
-              }}
-              onExtraTextChange={setExtraText}
-              onGenerate={() => void generateSql()}
-            />
-          </DbObjectManagementPanelShell>
-        ) : (
-          <DbObjectManagementPanelShell
-            id={`${pageId}-panel-execute`}
-            labelledBy={`${pageId}-tab-execute`}
-            idPrefix={pageId}
-            ariaLabel={t("metadataSql.workspace.execute")}
-          >
-            <MetadataExecutePanel
-              pageId={pageId}
-              mode={mode}
-              generated={generated}
-              policy={policy}
-              onExecuted={() => load(true)}
-            />
-          </DbObjectManagementPanelShell>
-        )}
+        <section id={`${pageId}-panel-targets`} aria-labelledby={`${pageId}-targets-heading`} className={PANEL_CLASS}>
+          <MetadataTargetGrid
+            pageId={pageId}
+            items={filteredTargets}
+            selectedKeys={selectedKeys}
+            loading={loading === "load" && !tables && !views}
+            search={targetSearch}
+            filter={targetFilter}
+            sort={targetSort}
+            onSearchChange={setTargetSearch}
+            onFilterChange={setTargetFilter}
+            onSortChange={toggleSort}
+            onToggle={toggleTarget}
+            onFetchDetails={() => void fetchDetails()}
+            fetchingDetails={loading === "details"}
+          />
+        </section>
+
+        <section id={`${pageId}-panel-input`} className={PANEL_CLASS}>
+          <MetadataInputPanel
+            inputTexts={inputTexts}
+            detailsReady={details.length > 0}
+            selectedCount={selectedTargets.length}
+            sampleLimit={sampleLimit}
+            sampleText={refreshedSampleText ?? inputTexts.sampleText}
+            extraText={extraText}
+            loading={loading === "generate"}
+            onSampleLimitChange={(value) => {
+              setSampleLimit(value);
+              setRefreshedSampleText(null);
+            }}
+            onExtraTextChange={setExtraText}
+            onGenerate={() => void generateSql()}
+          />
+        </section>
+
+        <section id={`${pageId}-panel-execute`} className={PANEL_CLASS}>
+          <MetadataExecutePanel
+            mode={mode}
+            generated={generated}
+            policy={policy}
+            onExecuted={() => load(true)}
+          />
+        </section>
       </main>
     </>
   );
@@ -427,26 +403,26 @@ function MetadataTargetGrid({
         }
       />
 
-      <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
         <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("dbAdmin.search.label")}</span>
             <span className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
               <input
                 value={search}
                 onChange={(event) => onSearchChange(event.currentTarget.value)}
-                className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                 placeholder={t("metadataSql.targets.searchPlaceholder")}
               />
             </span>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("metadataSql.targets.typeFilter")}</span>
             <select
               value={filter}
               onChange={(event) => onFilterChange(event.currentTarget.value as TargetFilter)}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
             >
               <option value="all">{t("metadataSql.targets.typeFilterAll")}</option>
               <option value="table">{t("metadataSql.targets.typeFilterTables")}</option>
@@ -464,16 +440,16 @@ function MetadataTargetGrid({
           hint={hasActiveFilter ? t("metadataSql.targets.noResultsHint") : t("metadataSql.targets.emptyHint")}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+        <div className="overflow-hidden rounded-md border border-border bg-card">
           <div className="max-h-[42rem] overflow-auto" data-testid="db-admin-object-list">
-            <table className="w-full min-w-[42rem] table-fixed divide-y divide-slate-200 text-left text-sm" data-testid={`${pageId}-target-grid`}>
+            <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
                 <col className="w-[16rem]" />
                 <col className="w-[6rem]" />
                 <col className="w-[7rem]" />
                 <col />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-600">
+              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2">
                     <TargetSortButton label={t("metadataSql.targets.grid.objectName")} sortKey="name" sort={sort} onToggle={onSortChange} />
@@ -487,24 +463,24 @@ function MetadataTargetGrid({
                   <th className="whitespace-nowrap px-3 py-2">{t("metadataSql.targets.grid.comment")}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border/70">
                 {items.map((item) => {
                   const selected = selectedSet.has(item.key);
                   return (
-                    <tr key={item.key} className={selected ? "bg-sky-50" : "hover:bg-slate-50"}>
+                    <tr key={item.key} className={selected ? "bg-primary/10" : "hover:bg-background"}>
                       <td className="px-3 py-2 align-top">
-                        <label className="flex min-h-11 cursor-pointer items-start gap-3 text-slate-800">
+                        <label className="flex min-h-11 cursor-pointer items-start gap-3 text-foreground">
                           <input
                             type="checkbox"
                             checked={selected}
                             onChange={() => onToggle(item)}
-                            className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
                           />
                           <span className="min-w-0">
-                            <span className="block break-all font-mono text-xs font-semibold text-sky-800">
+                            <span className="block break-all font-mono text-xs font-semibold text-primary">
                               {item.object_name}
                             </span>
-                            <span className="mt-1 block text-xs text-slate-500">
+                            <span className="mt-1 block text-xs text-muted">
                               {t("metadataSql.targets.grid.toggleHint")}
                             </span>
                           </span>
@@ -513,10 +489,10 @@ function MetadataTargetGrid({
                       <td className="whitespace-nowrap px-3 py-2 align-top">
                         <StatusBadge variant="neutral" label={targetTypeLabel(item.object_type)} />
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-xs text-slate-600">
+                      <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-xs text-muted">
                         {item.owner || "-"}
                       </td>
-                      <td className="break-words px-3 py-2 align-top text-sm text-slate-700">
+                      <td className="break-words px-3 py-2 align-top text-sm text-foreground">
                         {item.comment || "-"}
                       </td>
                     </tr>
@@ -532,7 +508,6 @@ function MetadataTargetGrid({
 }
 
 function MetadataInputPanel({
-  pageId,
   inputTexts,
   detailsReady,
   selectedCount,
@@ -544,7 +519,6 @@ function MetadataInputPanel({
   onExtraTextChange,
   onGenerate,
 }: {
-  pageId: string;
   inputTexts: ReturnType<typeof buildMetadataInputTexts>;
   detailsReady: boolean;
   selectedCount: number;
@@ -578,24 +552,13 @@ function MetadataInputPanel({
         }
       />
 
-      <DbObjectStepIndicator
-        steps={[
-          t("metadataSql.steps.targets"),
-          t("metadataSql.steps.input"),
-          t("metadataSql.steps.execute"),
-        ]}
-        activeIndex={detailsReady ? 1 : 0}
-        ariaLabel={t("metadataSql.steps.label")}
-        dataTestId={`${pageId}-input-steps`}
-      />
-
       {!detailsReady && (
         <EmptyState title={t("metadataSql.input.emptyTitle")} hint={t("metadataSql.input.emptyHint")} />
       )}
 
-      <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800 sm:w-44">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:w-44">
             <span>{t("metadataSql.input.sampleLimit")}</span>
             <input
               type="number"
@@ -606,7 +569,7 @@ function MetadataInputPanel({
                 const value = Number(event.currentTarget.value);
                 onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
               }}
-              className="min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className="min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
             />
           </label>
           <StatusBadge variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
@@ -620,13 +583,13 @@ function MetadataInputPanel({
         <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
       </div>
 
-      <label className="grid gap-1 text-sm font-medium text-slate-800">
+      <label className="grid gap-1 text-sm font-medium text-foreground">
         <span>{t("metadataSql.input.extra")}</span>
         <textarea
           value={extraText}
           onChange={(event) => onExtraTextChange(event.currentTarget.value)}
           rows={6}
-          className="min-h-32 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+          className="min-h-32 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
         />
       </label>
     </div>
@@ -634,13 +597,11 @@ function MetadataInputPanel({
 }
 
 function MetadataExecutePanel({
-  pageId,
   mode,
   generated,
   policy,
   onExecuted,
 }: {
-  pageId: string;
   mode: MetadataMode;
   generated: MetadataSqlGenerateData | null;
   policy: DbAdminStatementPolicy;
@@ -659,23 +620,12 @@ function MetadataExecutePanel({
         }
       />
 
-      <DbObjectStepIndicator
-        steps={[
-          t("metadataSql.steps.targets"),
-          t("metadataSql.steps.input"),
-          t("metadataSql.steps.execute"),
-        ]}
-        activeIndex={generated ? 2 : 1}
-        ariaLabel={t("metadataSql.steps.label")}
-        dataTestId={`${pageId}-execute-steps`}
-      />
-
       {!generated && (
         <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
       )}
 
       {generated?.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
           {warning}
         </p>
       ))}
@@ -699,13 +649,13 @@ function MetadataExecutePanel({
 
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
       <span>{label}</span>
       <textarea
         readOnly
         value={value}
         rows={rows}
-        className="rounded-md border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-800"
+        className="rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground"
       />
     </label>
   );
@@ -726,12 +676,12 @@ function TargetSortButton({
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-slate-700 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-sky-700" : "text-slate-400"} aria-hidden="true" />
+      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
     </button>
   );
 }
@@ -748,7 +698,7 @@ function MetadataTargetListSkeleton({ pageId }: { pageId: string }) {
 }
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-slate-100 ${className}`} aria-hidden="true" />;
+  return <div className={`animate-pulse rounded-md bg-muted/30 ${className}`} aria-hidden="true" />;
 }
 
 function targetItemsFromObjects(items: DbAdminObjectSummary[], objectType: MetadataSqlTarget["object_type"]) {

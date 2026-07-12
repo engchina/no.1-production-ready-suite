@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import stat
 from io import BytesIO
 from pathlib import Path
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from zipfile import ZipFile
 
-from fastapi.testclient import TestClient
+import httpx
 from pytest import MonkeyPatch
 
 from app.clients.oci_database import AutonomousDatabaseInfo
@@ -16,7 +17,30 @@ from app.features.settings import router as settings_router
 from app.main import app
 from app.settings import Settings, get_settings, load_persisted_model_settings
 
-client = TestClient(app)
+
+class _AsgiTestClient:
+    """httpx 0.x と Starlette 1.x の同期 TestClient 非互換を避ける薄い test client。"""
+
+    @staticmethod
+    def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
+        async def send() -> httpx.Response:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://test",
+            ) as async_client:
+                return await async_client.request(method, path, **kwargs)
+
+        return asyncio.run(send())
+
+    def post(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self._request("POST", path, **kwargs)
+
+    def patch(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self._request("PATCH", path, **kwargs)
+
+
+client = _AsgiTestClient()
 
 
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
@@ -51,7 +75,13 @@ def test_read_object_storage_namespace_uses_oci_sdk(
             return SimpleNamespace(ObjectStorageClient=FakeObjectStorageClient)
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.features.settings.router.importlib.import_module", fake_import_module)
+    # importlib.import_module 自体を書き換えると、TestClient/AnyIO の遅延 import まで
+    # 偽装されて request が待ち続けるため、router が参照する module だけを差し替える。
+    monkeypatch.setattr(
+        settings_router,
+        "importlib",
+        SimpleNamespace(import_module=fake_import_module),
+    )
     config_file = tmp_path / "config"
 
     resp = client.post(
@@ -81,7 +111,11 @@ def test_read_object_storage_namespace_reports_oci_errors(
             raise RuntimeError("sdk unavailable")
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.features.settings.router.importlib.import_module", fake_import_module)
+    monkeypatch.setattr(
+        settings_router,
+        "importlib",
+        SimpleNamespace(import_module=fake_import_module),
+    )
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
@@ -124,7 +158,11 @@ def test_read_object_storage_namespace_refuses_encrypted_private_key_without_pro
             return SimpleNamespace(ObjectStorageClient=FakeObjectStorageClient)
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.features.settings.router.importlib.import_module", fake_import_module)
+    monkeypatch.setattr(
+        settings_router,
+        "importlib",
+        SimpleNamespace(import_module=fake_import_module),
+    )
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",

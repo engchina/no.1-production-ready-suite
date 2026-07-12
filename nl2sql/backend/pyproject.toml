@@ -21,6 +21,7 @@ dependencies = [
   "scikit-learn>=1.7",
   "joblib>=1.5",
   "openpyxl>=3.1",
+  "sqlglot>=27",
 ]
 
 [dependency-groups]

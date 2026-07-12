@@ -15,6 +15,8 @@
   "dependencies": {
     "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
     "@tanstack/react-query": "^5.62.0",
+    "@xyflow/react": "^12.9.3",
+    "d3-force": "^3.0.0",
     "lucide-react": "^0.468.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
@@ -24,6 +26,7 @@
   "devDependencies": {
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.0.0",
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

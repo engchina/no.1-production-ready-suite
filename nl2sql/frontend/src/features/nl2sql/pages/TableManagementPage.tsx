@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
+import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
+  Banner,
   Button,
   PageHeader,
   StatusBadge,
+  toast,
 } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPost } from "@/lib/api";
@@ -21,7 +23,6 @@ import {
   DbObjectDetailPanel,
   DbObjectGrid,
   DbObjectManagementPanelShell,
-  DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectStatusBar,
   DbObjectStepIndicator,
@@ -31,7 +32,6 @@ import {
   type DbObjectFilter,
   type DbObjectSortKey,
   type DbObjectSortState,
-  type DbObjectTab,
 } from "../components/DbObjectManagementShared";
 import type {
   DbAdminExecuteData,
@@ -44,9 +44,9 @@ import type {
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
 
-const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-slate-800";
+const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
 const importControlClass =
-  "h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200";
+  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40";
 
 function ImportWizard({
   table,
@@ -173,7 +173,7 @@ function ImportWizard({
         </div>
 
         {result && (
-          <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm" aria-label={t("tableMgmt.importWizard.result")}>
+          <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("tableMgmt.importWizard.result")}>
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
               <StatusBadge variant="info" label={result.table_name} />
@@ -181,11 +181,11 @@ function ImportWizard({
               <StatusBadge variant="neutral" label={result.mode} />
             </div>
             {result.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
                 {warning}
               </p>
             ))}
-            <pre className="overflow-auto rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800">
+            <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground">
               <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
             </pre>
             {result.sample_rows.length > 0 && (
@@ -200,8 +200,8 @@ function ImportWizard({
           </section>
         )}
 
-      <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-        <legend className="px-1 text-sm font-semibold text-slate-900">{t("tableMgmt.importWizard.executeTitle")}</legend>
+      <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+        <legend className="px-1 text-sm font-semibold text-foreground">{t("tableMgmt.importWizard.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
           onChange={onConfirmationChange}
@@ -388,8 +388,10 @@ export function TableManagementPage() {
         reason: "ui-table-management-drop",
       });
       if (result.executed) {
+        const dropped = dropTargetName;
         setDropTargetName("");
         setDropConfirmation("");
+        toast.success(t("tableMgmt.drop.success", { name: dropped }));
         await load(true);
       }
     } catch (err) {
@@ -463,13 +465,17 @@ export function TableManagementPage() {
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {message && (
-          <div className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between" role="alert">
-            <span>{message} {t("tableMgmt.error.retryHint")}</span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
-            </Button>
-          </div>
+          <Banner
+            severity="danger"
+            action={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.action.refresh")}</span>
+              </Button>
+            }
+          >
+            {message} {t("tableMgmt.error.retryHint")}
+          </Banner>
         )}
 
         <DbObjectStatusBar
@@ -489,27 +495,30 @@ export function TableManagementPage() {
           onSchemaRefresh={() => void load(true)}
         />
 
-        <DbObjectManagementTabs
-          activeView={activeView}
-          tabs={[
-            { id: "list", label: t("tableMgmt.list.title"), icon: Table2 },
-            { id: "create", label: t("tableMgmt.create.title"), icon: Code2 },
-            { id: "import", label: t("dataTools.dbAdmin.importTitle"), icon: Upload },
-          ] satisfies Array<DbObjectTab<ActiveView>>}
-          idPrefix="table-management"
-          ariaLabel={t("tableMgmt.tabs.label")}
-          onViewChange={setActiveView}
-        />
-
         {activeView === "list" ? (
-          <DbObjectManagementPanelShell
-            id="table-management-panel-list"
-            labelledBy="table-management-tab-list"
-            idPrefix="table-management"
-            ariaLabel={t("tableMgmt.workspace.label")}
-            splitId="table-management-list"
-            preferredWidePane="right"
-          >
+          <>
+            <div
+              className="flex flex-wrap items-center justify-end gap-2"
+              data-testid="table-management-actions"
+              aria-label={t("tableMgmt.tabs.label")}
+            >
+              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("create")}>
+                <Code2 size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.create.title")}</span>
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("import")}>
+                <Upload size={15} aria-hidden="true" />
+                <span>{t("dataTools.dbAdmin.importTitle")}</span>
+              </Button>
+            </div>
+            <DbObjectManagementPanelShell
+              id="table-management-panel-list"
+              role="region"
+              idPrefix="table-management"
+              ariaLabel={t("tableMgmt.workspace.label")}
+              splitId="table-management-list"
+              preferredWidePane="right"
+            >
             <DbObjectGrid
               idPrefix="table-management"
               headingId="table-grid-heading"
@@ -566,16 +575,25 @@ export function TableManagementPage() {
               onExport={(name) => void downloadColumnsXlsx(name)}
               onDrop={openDropDialog}
             />
-          </DbObjectManagementPanelShell>
+            </DbObjectManagementPanelShell>
+          </>
         ) : (
-          <DbObjectManagementPanelShell
-            id={`table-management-panel-${activeView}`}
-            labelledBy={`table-management-tab-${activeView}`}
-            idPrefix="table-management"
-            ariaLabel={t("tableMgmt.toolbar.taskPanel")}
-          >
-            {taskContent}
-          </DbObjectManagementPanelShell>
+          <>
+            <div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView("list")}>
+                <ArrowLeft size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.action.backToList")}</span>
+              </Button>
+            </div>
+            <DbObjectManagementPanelShell
+              id={`table-management-panel-${activeView}`}
+              role="region"
+              idPrefix="table-management"
+              ariaLabel={t("tableMgmt.toolbar.taskPanel")}
+            >
+              {taskContent}
+            </DbObjectManagementPanelShell>
+          </>
         )}
       </main>
 

@@ -49,13 +49,13 @@ export function FeedbackPanel({
         <CardTitle>{t("nl2sql.feedback.title")}</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <label className="grid gap-1 text-sm font-medium text-slate-800">
+        <label className="grid gap-1 text-sm font-medium text-foreground">
           <span>{t("nl2sql.feedback.comment")}</span>
           <textarea
             value={comment}
             onChange={(event) => setComment(event.currentTarget.value)}
             rows={3}
-            className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+            className="min-h-24 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
             placeholder={t("nl2sql.feedback.commentPlaceholder")}
           />
         </label>

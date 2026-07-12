@@ -1,7 +1,6 @@
 import {
   ArrowRightLeft,
   BookOpen,
-  Bot,
   BrainCircuit,
   Cloud,
   Database,
@@ -10,7 +9,10 @@ import {
   FlaskConical,
   History,
   KeyRound,
+  Layers3,
   MessageSquareText,
+  Network,
+  Palette,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -56,23 +58,17 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.commentManagement, labelKey: "nav.commentManagement", icon: MessageSquareText },
       { href: APP_ROUTES.annotationManagement, labelKey: "nav.annotationManagement", icon: BookOpen },
       { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: UserCog },
+      { href: APP_ROUTES.ontologyBuild, labelKey: "nav.ontologyBuild", icon: Network },
       { href: APP_ROUTES.glossaryRules, labelKey: "nav.glossaryRules", icon: BookOpen },
+      { href: APP_ROUTES.globalRules, labelKey: "nav.globalRules", icon: Layers3 },
     ],
   },
   {
     titleKey: "nav.section.improve",
     items: [
       { href: APP_ROUTES.feedbackManagement, labelKey: "nav.feedbackManagement", icon: MessageSquareText },
-      { href: APP_ROUTES.learning, labelKey: "nav.learning", icon: MessageSquareText },
       { href: APP_ROUTES.questionClassifierModels, labelKey: "nav.questionClassifierModels", icon: BrainCircuit },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
-      { href: APP_ROUTES.engineOperations, labelKey: "nav.engineOperations", icon: Bot },
-      {
-        href: APP_ROUTES.nl2sqlSettingsModel,
-        labelKey: "nav.nl2sqlSettingsModel",
-        sidebarLabelKey: "nav.nl2sqlSettingsModel.sidebar",
-        icon: Settings,
-      },
       {
         href: APP_ROUTES.nl2sqlSettingsDatabase,
         labelKey: "nav.nl2sqlSettingsDatabase",
@@ -103,6 +99,7 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsDatabase.sidebar",
         icon: Database,
       },
+      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
   },
 ];

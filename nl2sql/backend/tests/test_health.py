@@ -34,10 +34,18 @@ from app.features.nl2sql.models import (
 )
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter, _extract_select_statement
 from app.features.nl2sql.router import is_select_only
-from app.features.nl2sql.service import Nl2SqlService, _extract_referenced_tables
+from app.features.nl2sql.service import GeneratedSql, Nl2SqlService, _extract_referenced_tables
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
 from app.main import app
 from app.settings import get_settings
+
+EXPECTED_NL2SQL_JOB_STAGES = [
+    "prepare_context",
+    "generate_sql",
+    "safety_check",
+    "execute_sql",
+    "format_results",
+]
 
 
 def _transport() -> httpx.ASGITransport:
@@ -117,12 +125,13 @@ class _FakeOracleCursor:
             self.db.state_json = str((params or {})["state_json"])
         elif normalized_sql.startswith("SELECT state_json"):
             self._row = (self.db.state_json,) if self.db.state_json else None
-        elif "FROM user_tab_columns" in normalized_sql:
+        elif "FROM all_tab_columns" in normalized_sql:
             self._rows = self.db.catalog_rows
-        elif "FROM user_constraints" in normalized_sql:
+        elif "FROM all_constraints uc" in normalized_sql:
             self._rows = self.db.constraint_rows
         elif normalized_sql.startswith("SELECT DISTINCT"):
-            table_name = normalized_sql.split('FROM "')[1].split('"', 1)[0]
+            from_target = normalized_sql.split(" FROM ", 1)[1].split(" WHERE ", 1)[0]
+            table_name = from_target.replace('"', "").split(".")[-1]
             column_name = normalized_sql.split('SELECT DISTINCT "')[1].split('"', 1)[0]
             self._rows = [
                 (value,) for value in self.db.sample_values.get((table_name, column_name), [])
@@ -439,11 +448,12 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
-    assert preview.executable_sql.endswith("FETCH FIRST 100 ROWS ONLY")
+    assert preview.executable_sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert fake_client.calls
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
     assert "V_EMP_DEPT" in fake_client.calls[0]["context"]
     assert "SELECT または WITH" in fake_client.calls[0]["system_prompt"]
+    assert "FETCH FIRST" not in fake_client.calls[0]["system_prompt"]
 
 
 def test_oracle_runtime_question_includes_learning_examples() -> None:
@@ -511,10 +521,12 @@ def test_select_ai_request_overrides_use_effective_profile_context() -> None:
     attributes = adapter.attributes[0] or {}
     assert attributes["role"] == "今回だけ CFO 向けに説明するアシスタント"
     instructions = attributes["additional_instructions"]
-    assert instructions.index("## 業務説明") < instructions.index("## 業務用語集")
+    assert "## 業務説明" not in instructions
     assert instructions.index("- 四半期:") < instructions.index("- 売上:")
-    assert "## SQL 生成ルール" in instructions
+    assert "## SQL 生成ルール" not in instructions
     assert "## プロファイル追加指示" in instructions
+    assert "SELECT/WITH のみ" in instructions
+    assert "日付は DATE 型で返す" in instructions
     assert instructions.endswith("## 今回の追加指示\n現在日付を基準にしてください。")
     assert preview.engine_meta["select_ai_role_applied"] is True
     assert preview.engine_meta["select_ai_additional_instructions_length"] == len(instructions)
@@ -553,11 +565,95 @@ def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
 
     assert job is not None
     assert job.status == JobStatus.DONE
+    assert [step.stage for step in job.steps] == EXPECTED_NL2SQL_JOB_STAGES
+    assert [step.status.value for step in job.steps] == ["done"] * 5
+    assert all(step.elapsed_ms is not None and step.elapsed_ms >= 0 for step in job.steps)
+    assert job.timing is not None
+    assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     assert adapter.attributes[0] is not None
     assert adapter.attributes[0]["role"] == "ジョブ専用ロール"
-    assert "## 今回の追加指示\n最新月だけを対象にする。" in adapter.attributes[0][
-        "additional_instructions"
+    assert (
+        "## 今回の追加指示\n最新月だけを対象にする。"
+        in adapter.attributes[0]["additional_instructions"]
+    )
+
+
+def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="safe_scope",
+            name="安全範囲",
+            allowed_tables=["EMPLOYEE"],
+        )
+    )
+    service._generate_with_fallback = lambda **_kwargs: GeneratedSql(  # type: ignore[method-assign]
+        engine=Nl2SqlEngine.SELECT_AI,
+        generated_sql="SELECT PROJECT_ID FROM PROJECT",
+        explanation="許可範囲外の表を参照するテスト SQL",
+        engine_meta={},
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="許可範囲外のプロジェクトを確認",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        )
+    )
+    job = service.get_job(created.job_id)
+    for _ in range(100):
+        if job is not None and job.status not in {JobStatus.PENDING, JobStatus.RUNNING}:
+            break
+        time.sleep(0.01)
+        job = service.get_job(created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.ERROR
+    assert [step.stage for step in job.steps] == EXPECTED_NL2SQL_JOB_STAGES
+    assert [step.status.value for step in job.steps] == [
+        "done",
+        "done",
+        "error",
+        "skipped",
+        "done",
     ]
+    assert job.result is not None
+    assert job.result.safety.is_safe is False
+    assert job.result.results.total == 0
+
+
+def test_legacy_job_snapshot_is_normalized_to_current_steps() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    legacy_snapshot = {
+        "job_id": "legacy-job",
+        "request": {"question": "旧ジョブ"},
+        "status": "error",
+        "created_at": "2026-06-21T10:00:00+00:00",
+        "error_message": "安全性確認で停止しました。",
+        "timing": {
+            "created_at": "2026-06-21T10:00:00+00:00",
+            "stage_timings": [
+                {"stage": "prepare_context", "elapsed_ms": 10},
+                {"stage": "generate_sql", "elapsed_ms": 20},
+                {"stage": "safety_and_execute", "elapsed_ms": 5},
+            ],
+        },
+    }
+
+    restored = service._job_from_snapshot(legacy_snapshot)
+
+    assert [step.stage for step in restored.steps] == EXPECTED_NL2SQL_JOB_STAGES
+    assert [step.status.value for step in restored.steps] == [
+        "done",
+        "done",
+        "error",
+        "skipped",
+        "pending",
+    ]
+    assert restored.steps[2].elapsed_ms == 5
+    assert restored.steps[3].elapsed_ms == 5
 
 
 def test_oracle_adapter_generate_select_ai_sql_binds_unicode_attributes() -> None:
@@ -690,9 +786,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     assert missing_adapter.admin_execute_calls == 1
     assert all("DROP" in statement for statement in missing_adapter.admin_statements)
 
-    rejected = service.import_sample_data(
-        SampleDataMutationRequest(confirmation="WRONG")
-    )
+    rejected = service.import_sample_data(SampleDataMutationRequest(confirmation="WRONG"))
 
     assert rejected.executed is False
     assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
@@ -723,7 +817,10 @@ async def test_job_supports_select_ai_agent_and_timing() -> None:
             result_resp = await client.get(f"/api/nl2sql/jobs/{job_id}")
             data = result_resp.json()["data"]
     assert data["status"] in {"done", "running", "pending"}
+    assert [step["stage"] for step in data["steps"]] == EXPECTED_NL2SQL_JOB_STAGES
     if data["status"] == "done":
+        assert [step["status"] for step in data["steps"]] == ["done"] * 5
+        assert all(step["elapsed_ms"] is not None for step in data["steps"])
         assert data["result"]["engine"] == "select_ai_agent"
         assert data["result"]["engine_meta"]["team_name"].endswith("_TEAM")
         assert data["result"]["timing"]["elapsed_ms"] >= 0
@@ -769,7 +866,7 @@ async def test_allowed_objects_rejects_unselected_columns() -> None:
     assert execute_resp.status_code == 400
 
 
-async def test_analyze_converts_limit_clause_to_oracle_fetch_first() -> None:
+async def test_analyze_reports_limit_clause_without_default_fetch_first() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         resp = await client.post(
             "/api/nl2sql/analyze",
@@ -778,10 +875,9 @@ async def test_analyze_converts_limit_clause_to_oracle_fetch_first() -> None:
 
     assert resp.status_code == 200
     data = resp.json()["data"]
-    expected = "SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY"
     assert data["safety"]["is_safe"] is True
-    assert data["executable_sql"] == expected
-    assert data["repaired_sql"] == expected
+    assert data["executable_sql"] == "SELECT INVOICE_ID FROM INVOICES LIMIT 10"
+    assert data["repaired_sql"] == ""
     assert "LIMIT" in " ".join(data["safety"]["warnings"])
     assert "FETCH FIRST" in " ".join(data["recommendations"])
 
@@ -803,7 +899,7 @@ async def test_allowed_objects_rejects_wildcard_when_columns_are_limited() -> No
     data = resp.json()["data"]
     assert data["safety"]["is_safe"] is False
     assert "SELECT *" in " ".join(data["safety"]["warnings"])
-    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
+    assert data["repaired_sql"] == "SELECT INVOICE_ID FROM INVOICES"
     assert data["optimization_hints"]
 
 
@@ -819,7 +915,7 @@ async def test_analyze_repairs_first_select_from_multi_statement() -> None:
     assert data["safety"]["is_safe"] is False
     assert data["safety"]["is_select_only"] is False
     assert data["executable_sql"] == ""
-    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
+    assert data["repaired_sql"] == "SELECT INVOICE_ID FROM INVOICES"
     assert "修復候補" in " ".join(data["recommendations"])
 
 
@@ -840,9 +936,7 @@ async def test_repair_oracle_error_replaces_invalid_column_with_allowed_columns(
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["error_code"] == "ORA-00904"
-    assert data["repaired_sql"] == (
-        "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY"
-    )
+    assert data["repaired_sql"] == "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES"
     assert data["safety"]["is_safe"] is True
     assert "列名" in data["explanation"]
 
@@ -860,7 +954,7 @@ async def test_repair_oracle_error_converts_limit_syntax() -> None:
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["error_code"] == "ORA-00933"
-    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
+    assert data["repaired_sql"] == "SELECT INVOICE_ID FROM INVOICES FETCH FIRST 10 ROWS ONLY"
     assert "FETCH FIRST" in " ".join(data["recommendations"])
 
 
@@ -886,7 +980,7 @@ async def test_asset_refresh_feedback_and_evaluation() -> None:
     assert eval_resp.json()["data"]["total_cases"] == 1
 
 
-async def test_profile_crud_create_update_archive() -> None:
+async def test_profile_crud_create_update_archive_delete() -> None:
     payload = {
         "name": "請求分析",
         "description": "請求テーブルだけを見る profile",
@@ -903,6 +997,8 @@ async def test_profile_crud_create_update_archive() -> None:
         created = create_resp.json()["data"]
         profile_id = created["id"]
         assert created["allowed_tables"] == ["INVOICES"]
+        assert created["sql_rules"] == []
+        assert "SELECT/WITH のみ" in created["select_ai_config"]["additional_instructions"]
 
         update_resp = await client.patch(
             f"/api/nl2sql/profiles/{profile_id}",
@@ -911,6 +1007,7 @@ async def test_profile_crud_create_update_archive() -> None:
         assert update_resp.status_code == 200
         assert update_resp.json()["data"]["name"] == "請求分析 v2"
         assert update_resp.json()["data"]["default_row_limit"] == 50
+        assert update_resp.json()["data"]["sql_rules"] == []
 
         archive_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/archive")
         assert archive_resp.status_code == 200
@@ -922,17 +1019,31 @@ async def test_profile_crud_create_update_archive() -> None:
         assert archived_list_resp.status_code == 200
         archived_profiles = archived_list_resp.json()["data"]
         assert any(
-            profile["id"] == profile_id and profile["archived"]
-            for profile in archived_profiles
+            profile["id"] == profile_id and profile["archived"] for profile in archived_profiles
         )
 
         restore_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/restore")
         assert restore_resp.status_code == 200
         assert restore_resp.json()["data"]["archived"] is False
         restored_list_resp = await client.get("/api/nl2sql/profiles")
-        assert profile_id in {
-            profile["id"] for profile in restored_list_resp.json()["data"]
+        assert profile_id in {profile["id"] for profile in restored_list_resp.json()["data"]}
+
+        delete_resp = await client.delete(f"/api/nl2sql/profiles/{profile_id}")
+        assert delete_resp.status_code == 200
+        assert delete_resp.json()["data"]["id"] == profile_id
+        deleted_list_resp = await client.get(
+            "/api/nl2sql/profiles", params={"include_archived": "true"}
+        )
+        assert deleted_list_resp.status_code == 200
+        assert profile_id not in {
+            profile["id"] for profile in deleted_list_resp.json()["data"]
         }
+
+        restore_deleted_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/restore")
+        assert restore_deleted_resp.status_code == 404
+
+        missing_delete_resp = await client.delete("/api/nl2sql/profiles/profile-does-not-exist")
+        assert missing_delete_resp.status_code == 404
 
         missing_restore_resp = await client.post(
             "/api/nl2sql/profiles/profile-does-not-exist/restore"
@@ -971,6 +1082,7 @@ async def test_profile_training_examples_update_and_evaluate() -> None:
         assert update_resp.status_code == 200
         updated = update_resp.json()["data"]
         assert updated["few_shot_examples"] == training_examples
+        assert updated["sql_rules"] == []
 
         eval_resp = await client.post(
             "/api/nl2sql/evaluate",
@@ -1314,7 +1426,7 @@ def test_compare_execute_collects_engine_execution_errors() -> None:
     original_execute_sql = service.execute_sql
     calls = 0
 
-    def flaky_execute(sql: str, allowed: Any, row_limit: int) -> Any:
+    def flaky_execute(sql: str, allowed: Any, row_limit: int | None) -> Any:
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -1368,6 +1480,10 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
 
     assert job is not None
     assert job.status == JobStatus.DONE
+    assert [step.stage for step in job.steps] == EXPECTED_NL2SQL_JOB_STAGES
+    assert [step.status.value for step in job.steps] == ["done"] * 5
+    assert job.timing is not None
+    assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
     compare_data = service.compare_engines(
@@ -1407,6 +1523,9 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     restored_job = reloaded.get_job(job_info.job_id)
     assert restored_job is not None
     assert restored_job.status == JobStatus.DONE
+    assert [(step.stage, step.status.value, step.elapsed_ms) for step in restored_job.steps] == [
+        (step.stage, step.status.value, step.elapsed_ms) for step in job.steps
+    ]
     restored_history = reloaded.list_history().items[0]
     assert restored_history.id == history_item.id
     assert restored_history.feedback_rating == FeedbackRating.GOOD
@@ -1426,6 +1545,20 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_evaluation_run.profile_id == profile.id
     assert restored_evaluation_run.result.total_cases == evaluation.total_cases
     assert "NL2SQL deterministic evaluation" in restored_evaluation_run.report
+
+
+def test_nl2sql_store_persists_empty_profile_list_after_physical_delete() -> None:
+    store = MemoryNl2SqlStore()
+    service = Nl2SqlService(store=store)
+
+    deleted = service.delete_profile("default")
+    assert deleted.id == "default"
+    assert service.list_profiles(include_archived=True) == []
+
+    reloaded = Nl2SqlService(store=store)
+    assert reloaded.list_profiles(include_archived=True) == []
+    with pytest.raises(ValueError):
+        reloaded.get_profile("default")
 
 
 def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
@@ -1512,6 +1645,7 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
     fake_db = _FakeOracleDb()
     fake_db.catalog_rows = [
         (
+            "APP",
             "INVOICES",
             "請求",
             "INVOICE_ID",
@@ -1520,8 +1654,10 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
             "N",
             1,
             1280,
+            "TABLE",
         ),
         (
+            "APP",
             "INVOICES",
             "請求",
             "CUSTOMER_NAME",
@@ -1530,6 +1666,7 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
             "Y",
             2,
             1280,
+            "TABLE",
         ),
     ]
     fake_db.constraint_rows = [
@@ -1555,8 +1692,8 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
     assert table.columns[0].nullable is False
     assert table.columns[0].sample_values == ["INV-001", "INV-002"]
     assert table.columns[1].sample_values == ["青山商事", "東京製作所"]
-    assert any("FROM user_tab_columns" in sql for sql in fake_db.executed)
-    assert any("FROM user_constraints" in sql for sql in fake_db.executed)
+    assert any("FROM all_tab_columns" in sql for sql in fake_db.executed)
+    assert any("FROM all_constraints uc" in sql for sql in fake_db.executed)
     assert any('SELECT DISTINCT "INVOICE_ID"' in sql for sql in fake_db.executed)
 
 
@@ -1987,11 +2124,11 @@ def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
     profile_attributes = select_ai.engine_meta["profile_attributes"]
     assert "role" not in profile_attributes
     assert "additional_instructions" not in profile_attributes
-    assert profile_attributes["additional_instructions_applied"] is True
-    assert profile_attributes["additional_instructions_length"] > 0
+    assert profile_attributes["additional_instructions_applied"] is False
+    assert profile_attributes["additional_instructions_length"] == 0
     oracle_attributes = select_ai.engine_meta["attributes"]
     assert "additional_instructions" not in oracle_attributes
-    assert oracle_attributes["additional_instructions_applied"] is True
+    assert oracle_attributes["additional_instructions_applied"] is False
     assert agent.status == "ready"
     assert agent.engine_meta["runtime"] == "oracle"
     assert agent.asset_names["team"].endswith("_TEAM")

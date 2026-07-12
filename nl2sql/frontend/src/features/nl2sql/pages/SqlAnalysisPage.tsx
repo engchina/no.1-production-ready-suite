@@ -1,43 +1,69 @@
 import { useState } from "react";
-import { Play, ShieldCheck, Wrench } from "lucide-react";
+import { FileSearch, Play, ShieldCheck, Wrench } from "lucide-react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
+import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
+import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { DEFAULT_ANALYZE_SQL, sqlAnalyzePayload } from "../analysisState";
-import { Nl2SqlResultTable } from "../components/Nl2SqlResultTable";
+import { QueryResultsTable } from "../components/DbAdminShared";
+import {
+  DbObjectManagementStatusBar,
+  DbObjectPanelHeader,
+  DbObjectStepIndicator,
+} from "../components/DbObjectManagementShared";
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import type { AnalyzeData, QueryResults, RepairData } from "../types";
+
+const DEFAULT_ANALYZE_SQL = "";
+
+// タブではなく 1 画面スクロール + ステッパー。各工程セクションの共通カード枠。
+const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 
 export function SqlAnalysisPage() {
   const [analysisSql, setAnalysisSql] = useState(DEFAULT_ANALYZE_SQL);
-  const [analysisRowLimit, setAnalysisRowLimit] = useState(100);
   const [analysisUseLlm, setAnalysisUseLlm] = useState(false);
   const [analysis, setAnalysis] = useState<AnalyzeData | null>(null);
   const [execution, setExecution] = useState<QueryResults | null>(null);
   const [repairSql, setRepairSql] = useState("");
-  const [repairError, setRepairError] = useState("");
+  const [repairErrorMessage, setRepairErrorMessage] = useState("");
   const [repair, setRepair] = useState<RepairData | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [executeLoading, setExecuteLoading] = useState(false);
   const [repairLoading, setRepairLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [analysisError, setAnalysisError] = useState("");
+  const [executeError, setExecuteError] = useState("");
+  const [repairActionError, setRepairActionError] = useState("");
+
+  const invalidateAnalysis = () => {
+    setAnalysis(null);
+    setExecution(null);
+    setAnalysisError("");
+    setExecuteError("");
+  };
+
+  const invalidateRepair = () => {
+    setRepair(null);
+    setRepairActionError("");
+  };
 
   const analyzeSql = async () => {
     const sql = analysisSql.trim();
     if (!sql) return;
     setAnalysisLoading(true);
-    setMessage("");
+    setAnalysisError("");
+    setExecuteError("");
     setExecution(null);
     try {
       setAnalysis(
         await apiPost<AnalyzeData>("/api/nl2sql/analyze", {
-          ...sqlAnalyzePayload(sql, analysisRowLimit),
+          sql,
           use_llm: analysisUseLlm,
         })
       );
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.analyze"));
+      setAnalysisError(actionableError(err, t("sqlAnalysis.error.analyze")));
     } finally {
       setAnalysisLoading(false);
     }
@@ -47,16 +73,12 @@ export function SqlAnalysisPage() {
     const sql = analysis?.executable_sql.trim();
     if (!sql || !analysis?.safety.is_safe) return;
     setExecuteLoading(true);
-    setMessage("");
+    setExecuteError("");
     try {
-      setExecution(
-        await apiPost<QueryResults>("/api/nl2sql/execute", {
-          sql,
-          row_limit: analysisRowLimit,
-        })
-      );
+      const data = await apiPost<QueryResults>("/api/nl2sql/execute", { sql });
+      setExecution(data);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.execute"));
+      setExecuteError(actionableError(err, t("sqlAnalysis.error.execute")));
     } finally {
       setExecuteLoading(false);
     }
@@ -64,179 +86,285 @@ export function SqlAnalysisPage() {
 
   const repairOracleError = async () => {
     const sql = repairSql.trim();
-    const errorMessage = repairError.trim();
+    const errorMessage = repairErrorMessage.trim();
     if (!sql || !errorMessage) return;
     setRepairLoading(true);
-    setMessage("");
+    setRepairActionError("");
     try {
       setRepair(
         await apiPost<RepairData>("/api/nl2sql/repair", {
           sql,
           error_message: errorMessage,
-          row_limit: analysisRowLimit,
         })
       );
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.repair"));
+      setRepairActionError(actionableError(err, t("sqlAnalysis.error.repair")));
     } finally {
       setRepairLoading(false);
     }
   };
 
+  const workflowState = resolveWorkflowState({
+    analysisSql,
+    repairSql,
+    repairErrorMessage,
+    analysis,
+    execution,
+    repair,
+    analysisLoading,
+    executeLoading,
+    repairLoading,
+  });
+  const safety = repair ? repair.safety : analysis?.safety;
+  const safetyState = safety
+    ? safety.is_safe
+      ? t("nl2sql.safety.safe")
+      : t("nl2sql.safety.blocked")
+    : t("sqlAnalysis.safety.unverified");
+  const stepIndex = repair ? 2 : execution ? 1 : 0;
+
   return (
     <>
       <PageHeader title={t("nav.sqlAnalysis")} subtitle={t("sqlAnalysis.subtitle")} />
-      <main className="grid gap-5 p-4 lg:p-8">
-        {message && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-            {message}
-          </div>
-        )}
+      <main className="grid gap-4 p-4 lg:p-8">
+        <DbObjectManagementStatusBar
+          ariaLabel={t("sqlAnalysis.status.aria")}
+          metrics={[
+            { label: t("sqlAnalysis.metric.workflow"), value: workflowState },
+            { label: t("sqlAnalysis.metric.safety"), value: safetyState },
+            {
+              label: t("sqlAnalysis.metric.resultRows"),
+              value: execution ? formatNumber(execution.total) : "-",
+              emphasis: Boolean(execution),
+              testId: "sql-analysis-result-count",
+            },
+          ]}
+        />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck size={18} aria-hidden="true" />
-              {t("sqlAnalysis.analyze.title")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.85fr)]">
-            <div className="grid content-start gap-4">
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
+        <DbObjectStepIndicator
+          steps={[
+            t("sqlAnalysis.tabs.analysis"),
+            t("sqlAnalysis.tabs.execution"),
+            t("sqlAnalysis.tabs.repair"),
+          ]}
+          activeIndex={stepIndex}
+          ariaLabel={t("sqlAnalysis.tabs.label")}
+          dataTestId="sql-analysis-steps"
+        />
+
+        <section
+          id="sql-analysis-panel-analysis"
+          aria-labelledby="sql-analysis-input-heading"
+          className={PANEL_CLASS}
+        >
+          <FixedSplitPane
+            splitId="sql-analysis-workspace"
+            preferredWidePane="right"
+            left={
+              <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-analysis-input-heading">
+              <DbObjectPanelHeader
+                headingId="sql-analysis-input-heading"
+                icon={ShieldCheck}
+                title={t("sqlAnalysis.analyze.title")}
+                description={t("sqlAnalysis.analyze.hint")}
+              />
+
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                 <span>{t("sqlAnalysis.sql.label")}</span>
                 <textarea
                   value={analysisSql}
-                  onChange={(event) => setAnalysisSql(event.currentTarget.value)}
-                  rows={8}
-                  className="min-h-48 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  onChange={(event) => {
+                    setAnalysisSql(event.currentTarget.value);
+                    invalidateAnalysis();
+                  }}
+                  disabled={analysisLoading || executeLoading}
+                  rows={10}
+                  className="min-h-64 min-w-0 resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-[minmax(9rem,12rem)_auto] sm:items-end">
-                <label className="grid gap-1 text-sm font-medium text-slate-800">
-                  <span>{t("nl2sql.rowLimit.label")}</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={5000}
-                    value={analysisRowLimit}
-                    onChange={(event) => setAnalysisRowLimit(Number(event.currentTarget.value))}
-                    className="min-h-11 rounded-md border border-slate-300 px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800">
-                    <input
-                      type="checkbox"
-                      checked={analysisUseLlm}
-                      onChange={(event) => setAnalysisUseLlm(event.currentTarget.checked)}
-                      className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
-                    />
-                    <span>{t("sqlAnalysis.useLlm")}</span>
-                  </label>
-                  <Button
-                    type="button"
-                    loading={analysisLoading}
-                    disabled={!analysisSql.trim()}
-                    onClick={() => void analyzeSql()}
-                  >
-                    <ShieldCheck size={16} aria-hidden="true" />
-                    <span>{t("sqlAnalysis.action.analyze")}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    loading={executeLoading}
-                    disabled={!analysis?.safety.is_safe || !analysis.executable_sql}
-                    onClick={() => void executeAnalyzedSql()}
-                  >
-                    <Play size={16} aria-hidden="true" />
-                    <span>{t("sqlAnalysis.action.execute")}</span>
-                  </Button>
-                </div>
+
+              <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={analysisUseLlm}
+                  onChange={(event) => {
+                    setAnalysisUseLlm(event.currentTarget.checked);
+                    invalidateAnalysis();
+                  }}
+                  disabled={analysisLoading || executeLoading}
+                  className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                />
+                <span>{t("sqlAnalysis.useLlm")}</span>
+              </label>
+
+              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  className="w-full whitespace-nowrap sm:w-auto"
+                  loading={analysisLoading}
+                  disabled={!analysisSql.trim() || executeLoading}
+                  onClick={() => void analyzeSql()}
+                >
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  <span>{t("sqlAnalysis.action.analyze")}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full whitespace-nowrap sm:w-auto"
+                  loading={executeLoading}
+                  disabled={analysisLoading || !analysis?.safety.is_safe || !analysis.executable_sql}
+                  onClick={() => void executeAnalyzedSql()}
+                >
+                  <Play size={16} aria-hidden="true" />
+                  <span>{t("sqlAnalysis.action.execute")}</span>
+                </Button>
+                <FormStatus tone="danger" message={analysisError || executeError} className="sm:ml-auto" />
               </div>
-            </div>
+              </section>
+            }
+            right={
+              <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-analysis-result-heading">
+              <DbObjectPanelHeader
+                headingId="sql-analysis-result-heading"
+                icon={FileSearch}
+                title={t("sqlAnalysis.result.title")}
+                description={t("sqlAnalysis.result.hint")}
+              />
+              <AnalysisResult analysis={analysis} loading={analysisLoading} />
+              </section>
+            }
+          />
+        </section>
 
-            <AnalysisResult analysis={analysis} />
-          </CardContent>
-        </Card>
+        <section
+          id="sql-analysis-panel-execution"
+          aria-labelledby="sql-analysis-execution-heading"
+          className={PANEL_CLASS}
+        >
+          <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-analysis-execution-heading">
+              <DbObjectPanelHeader
+                headingId="sql-analysis-execution-heading"
+                icon={Play}
+                title={t("sqlAnalysis.execution.title")}
+                description={t("sqlAnalysis.execution.hint")}
+              />
+              {execution ? (
+                <div className="grid min-w-0 gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge
+                      variant="info"
+                      label={t("sqlAnalysis.execution.rows", { count: execution.total })}
+                    />
+                  </div>
+                  <QueryResultsTable results={execution} />
+                </div>
+              ) : (
+                <EmptyState
+                  title={t("sqlAnalysis.execution.emptyTitle")}
+                  hint={t("sqlAnalysis.execution.emptyHint")}
+                />
+              )}
+          </section>
+        </section>
 
-        <Nl2SqlResultTable results={execution} />
+        <section
+          id="sql-analysis-panel-repair"
+          aria-labelledby="sql-analysis-repair-heading"
+          className={PANEL_CLASS}
+        >
+          <FixedSplitPane
+            splitId="sql-analysis-repair"
+            preferredWidePane="right"
+            left={
+              <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-analysis-repair-heading">
+              <DbObjectPanelHeader
+                headingId="sql-analysis-repair-heading"
+                icon={Wrench}
+                title={t("sqlAnalysis.repair.title")}
+                description={t("sqlAnalysis.repair.hint")}
+              />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wrench size={18} aria-hidden="true" />
-              {t("sqlAnalysis.repair.title")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.85fr)]">
-            <div className="grid content-start gap-4">
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                 <span>{t("sqlAnalysis.repair.sql")}</span>
                 <textarea
                   value={repairSql}
-                  onChange={(event) => setRepairSql(event.currentTarget.value)}
-                  rows={5}
-                  className="min-h-32 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  onChange={(event) => {
+                    setRepairSql(event.currentTarget.value);
+                    invalidateRepair();
+                  }}
+                  disabled={repairLoading}
+                  rows={6}
+                  className="min-h-40 min-w-0 resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
                 />
               </label>
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                 <span>{t("sqlAnalysis.repair.error")}</span>
                 <textarea
-                  value={repairError}
-                  onChange={(event) => setRepairError(event.currentTarget.value)}
-                  rows={3}
-                  className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  value={repairErrorMessage}
+                  onChange={(event) => {
+                    setRepairErrorMessage(event.currentTarget.value);
+                    invalidateRepair();
+                  }}
+                  disabled={repairLoading}
+                  rows={4}
+                  className="min-h-28 min-w-0 resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
                 />
               </label>
-              <Button
-                type="button"
-                loading={repairLoading}
-                disabled={!repairSql.trim() || !repairError.trim()}
-                onClick={() => void repairOracleError()}
-              >
-                <Wrench size={16} aria-hidden="true" />
-                <span>{t("sqlAnalysis.action.repair")}</span>
-              </Button>
-            </div>
 
-            {repair ? (
-              <section className="grid content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                <div className="flex flex-wrap gap-2">
-                  <StatusBadge variant="info" label={repair.error_code || "-"} />
-                  <StatusBadge
-                    variant={repair.safety.is_safe ? "success" : "warning"}
-                    label={repair.safety.is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
-                  />
-                </div>
-                <p className="text-slate-700">{repair.explanation}</p>
-                <SqlSnippet label={t("sqlAnalysis.repair.repairedSql")} sql={repair.repaired_sql} />
-                <TextList label={t("sqlAnalysis.recommendations")} items={repair.recommendations} />
+              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  className="w-full whitespace-nowrap sm:w-auto"
+                  loading={repairLoading}
+                  disabled={!repairSql.trim() || !repairErrorMessage.trim()}
+                  onClick={() => void repairOracleError()}
+                >
+                  <Wrench size={16} aria-hidden="true" />
+                  <span>{t("sqlAnalysis.action.repair")}</span>
+                </Button>
+                <FormStatus tone="danger" message={repairActionError} className="sm:ml-auto" />
+              </div>
               </section>
-            ) : (
-              <section className="grid min-h-48 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                {t("sqlAnalysis.repair.empty")}
+            }
+            right={
+              <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-analysis-repair-result-heading">
+              <DbObjectPanelHeader
+                headingId="sql-analysis-repair-result-heading"
+                icon={FileSearch}
+                title={t("sqlAnalysis.repair.resultTitle")}
+                description={t("sqlAnalysis.repair.resultHint")}
+              />
+              <RepairResult repair={repair} loading={repairLoading} />
               </section>
-            )}
-          </CardContent>
-        </Card>
-
+            }
+          />
+        </section>
       </main>
     </>
   );
 }
 
-function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
+function AnalysisResult({ analysis, loading }: { analysis: AnalyzeData | null; loading: boolean }) {
+  if (loading) {
+    return <ResultSkeleton ariaLabel={t("sqlAnalysis.result.loading")} />;
+  }
   if (!analysis) {
     return (
-      <section className="grid min-h-48 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-        {t("sqlAnalysis.empty")}
-      </section>
+      <EmptyState
+        title={t("sqlAnalysis.result.emptyTitle")}
+        hint={t("sqlAnalysis.result.emptyHint")}
+      />
     );
   }
 
   return (
-    <section className="grid content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge
           variant={analysis.safety.is_safe ? "success" : "danger"}
@@ -248,14 +376,32 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
         />
         <StatusBadge
           variant="neutral"
-          label={t("sqlAnalysis.rowLimit", { count: analysis.safety.row_limit_applied })}
+          label={
+            analysis.safety.row_limit_applied > 0
+              ? t("sqlAnalysis.rowLimit", { count: analysis.safety.row_limit_applied })
+              : t("sqlAnalysis.rowLimitUnlimited")
+          }
         />
-        <StatusBadge variant={analysis.llm_enhanced ? "success" : "neutral"} label={analysis.llm_enhanced ? "OCI Enterprise AI" : "deterministic"} />
-        {analysis.risk_level && <StatusBadge variant={analysis.risk_level === "high" ? "danger" : analysis.risk_level === "medium" ? "warning" : "success"} label={analysis.risk_level} />}
+        <StatusBadge
+          variant={analysis.llm_enhanced ? "success" : "neutral"}
+          label={analysis.llm_enhanced ? "OCI Enterprise AI" : "deterministic"}
+        />
+        {analysis.risk_level && (
+          <StatusBadge
+            variant={
+              analysis.risk_level === "high"
+                ? "danger"
+                : analysis.risk_level === "medium"
+                  ? "warning"
+                  : "success"
+            }
+            label={analysis.risk_level}
+          />
+        )}
       </div>
-      <p className="text-slate-700">{analysis.explanation}</p>
+      <p className="text-foreground">{analysis.explanation}</p>
       {analysis.safety.blocked_reason && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+        <p className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-danger">
           {analysis.safety.blocked_reason}
         </p>
       )}
@@ -276,10 +422,7 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
       <TextList label={t("sqlAnalysis.joins")} items={analysis.joins ?? []} />
       <TextList label={t("sqlAnalysis.aggregations")} items={analysis.aggregations ?? []} />
       <div className="grid gap-3 sm:grid-cols-2">
-        <CompactFact
-          label={t("sqlAnalysis.statementType")}
-          value={analysis.statement_type || "-"}
-        />
+        <CompactFact label={t("sqlAnalysis.statementType")} value={analysis.statement_type || "-"} />
         <CompactFact
           label={t("sqlAnalysis.referencedTables")}
           value={(analysis.object_names ?? analysis.safety.referenced_tables).join(", ") || "-"}
@@ -294,14 +437,52 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
   );
 }
 
+function RepairResult({ repair, loading }: { repair: RepairData | null; loading: boolean }) {
+  if (loading) {
+    return <ResultSkeleton ariaLabel={t("sqlAnalysis.repair.loading")} />;
+  }
+  if (!repair) {
+    return (
+      <EmptyState
+        title={t("sqlAnalysis.repair.emptyTitle")}
+        hint={t("sqlAnalysis.repair.emptyHint")}
+      />
+    );
+  }
+  return (
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3 text-sm">
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge variant="info" label={repair.error_code || "-"} />
+        <StatusBadge
+          variant={repair.safety.is_safe ? "success" : "warning"}
+          label={repair.safety.is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
+        />
+      </div>
+      <p className="text-foreground">{repair.explanation}</p>
+      <SqlSnippet label={t("sqlAnalysis.repair.repairedSql")} sql={repair.repaired_sql} />
+      <TextList label={t("sqlAnalysis.recommendations")} items={repair.recommendations} />
+    </section>
+  );
+}
+
+function ResultSkeleton({ ariaLabel }: { ariaLabel: string }) {
+  return (
+    <div className="grid min-h-48 gap-3" aria-label={ariaLabel} data-testid="sql-analysis-result-skeleton">
+      <div className="h-8 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
+      <div className="h-20 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
+      <div className="h-32 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
+    </div>
+  );
+}
+
 function TextList({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
-    <div>
-      <p className="mb-1 text-xs font-medium text-slate-500">{label}</p>
+    <div className="min-w-0">
+      <p className="mb-1 text-xs font-medium text-muted">{label}</p>
       <ul className="grid gap-1">
         {items.map((item) => (
-          <li key={item} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-700">
+          <li key={item} className="break-words rounded-md border border-border bg-card px-3 py-2 text-foreground">
             {item}
           </li>
         ))}
@@ -312,9 +493,9 @@ function TextList({ label, items }: { label: string; items: string[] }) {
 
 function SqlSnippet({ label, sql }: { label: string; sql: string }) {
   return (
-    <div>
-      <p className="mb-1 text-xs font-medium text-slate-500">{label}</p>
-      <pre className="overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+    <div className="min-w-0">
+      <p className="mb-1 text-xs font-medium text-muted">{label}</p>
+      <pre className="max-w-full overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
         <code>{sql || "-"}</code>
       </pre>
     </div>
@@ -323,9 +504,47 @@ function SqlSnippet({ label, sql }: { label: string; sql: string }) {
 
 function CompactFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-slate-200 bg-white p-3">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</p>
+    <div className="min-w-0 rounded-md border border-border bg-card p-3">
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
     </div>
   );
+}
+
+function actionableError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  return `${message} ${t("sqlAnalysis.error.retryHint")}`;
+}
+
+function resolveWorkflowState({
+  analysisSql,
+  repairSql,
+  repairErrorMessage,
+  analysis,
+  execution,
+  repair,
+  analysisLoading,
+  executeLoading,
+  repairLoading,
+}: {
+  analysisSql: string;
+  repairSql: string;
+  repairErrorMessage: string;
+  analysis: AnalyzeData | null;
+  execution: QueryResults | null;
+  repair: RepairData | null;
+  analysisLoading: boolean;
+  executeLoading: boolean;
+  repairLoading: boolean;
+}) {
+  // 1 画面化に伴い activeView 非依存の単一状態解決へ。進行が進んだものを優先表示する。
+  if (analysisLoading) return t("sqlAnalysis.workflow.analyzing");
+  if (executeLoading) return t("sqlAnalysis.workflow.executing");
+  if (repairLoading) return t("sqlAnalysis.workflow.repairing");
+  if (repair) return t("sqlAnalysis.workflow.repaired");
+  if (execution) return t("sqlAnalysis.workflow.executed");
+  if (analysis) return t("sqlAnalysis.workflow.analyzed");
+  if (repairSql.trim() && repairErrorMessage.trim()) return t("sqlAnalysis.workflow.repairReady");
+  if (analysisSql.trim()) return t("sqlAnalysis.workflow.analysisReady");
+  return t("sqlAnalysis.workflow.analysisWaiting");
 }

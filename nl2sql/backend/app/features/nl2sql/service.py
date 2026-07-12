@@ -119,6 +119,7 @@ from .models import (
     EvaluationSet,
     EvaluationSetsData,
     EvaluationSetUpsertRequest,
+    ExplainPlanData,
     FeedbackData,
     FeedbackEntriesData,
     FeedbackIndexData,
@@ -133,6 +134,8 @@ from .models import (
     JobCreateRequest,
     JobData,
     JobStatus,
+    JobStepData,
+    JobStepStatus,
     LegacyLearningMaterialData,
     MetadataSqlGenerateData,
     MetadataSqlGenerateRequest,
@@ -147,6 +150,7 @@ from .models import (
     ProfileRecommendationCandidate,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
+    ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
     QueryResults,
     RepairData,
@@ -193,6 +197,7 @@ from .models import (
     TimingEnvelope,
 )
 from .oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
+from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 
 logger = logging.getLogger(__name__)
@@ -543,9 +548,7 @@ _DB_ADMIN_STATEMENT_POLICIES: dict[str, tuple[re.Pattern[str], ...]] = {
             re.IGNORECASE,
         ),
     ),
-    "annotation_sql": (
-        re.compile(r"^alter\s+(table|view)\b", re.IGNORECASE),
-    ),
+    "annotation_sql": (re.compile(r"^alter\s+(table|view)\b", re.IGNORECASE),),
 }
 
 _DB_ADMIN_POLICY_LABELS = {
@@ -702,7 +705,7 @@ def _annotation_clause_error(statement: str) -> str:
                 return (
                     "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。"
                     "説明には UI_Display を使用するか、意図的な名前であれば "
-                    '\"COMMENT\" と二重引用符で囲んでください。'
+                    '"COMMENT" と二重引用符で囲んでください。'
                 )
     return ""
 
@@ -922,7 +925,7 @@ def _extract_referenced_columns(sql: str, referenced_tables: list[str]) -> tuple
 
 def _table_allowed(referenced_tables: list[str], allowed: AllowedObjects) -> bool:
     if not allowed.table_names:
-        return True
+        return not allowed.enforce_table_scope or not referenced_tables
     allowed_set = {_normalize_identifier(table) for table in allowed.table_names}
     return all(table in allowed_set for table in referenced_tables)
 
@@ -974,9 +977,12 @@ def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
 
 
-def enforce_row_limit(sql: str, row_limit: int) -> str:
+def enforce_row_limit(sql: str, row_limit: int | None) -> str:
     """Oracle 向けに row limit を明示する。すでに FETCH FIRST があれば置換する。"""
-    normalized = _strip_row_limit(sql.strip().rstrip(";"))
+    normalized = sql.strip().rstrip(";")
+    if not row_limit:
+        return normalized
+    normalized = _strip_row_limit(normalized)
     return f"{normalized} FETCH FIRST {row_limit} ROWS ONLY"
 
 
@@ -1012,6 +1018,96 @@ class StoredJob:
     result: Nl2SqlResult | None = None
     error_message: str | None = None
     timing: TimingEnvelope | None = None
+    steps: list[JobStepData] = field(default_factory=list)
+
+
+_NL2SQL_JOB_STAGES = (
+    "prepare_context",
+    "generate_sql",
+    "safety_check",
+    "execute_sql",
+    "format_results",
+)
+
+
+def _new_job_steps() -> list[JobStepData]:
+    return [JobStepData(stage=stage) for stage in _NL2SQL_JOB_STAGES]
+
+
+def _job_failure_step_index(steps: list[JobStepData]) -> int | None:
+    for expected_status in (JobStepStatus.RUNNING, JobStepStatus.PENDING):
+        for index, step in enumerate(steps):
+            if step.status == expected_status:
+                return index
+    return None
+
+
+def _restore_job_steps(
+    raw_steps: list[dict[str, Any]],
+    *,
+    status: JobStatus,
+    timing: TimingEnvelope | None,
+    has_result: bool,
+) -> list[JobStepData]:
+    """旧 snapshot の3段階 timing も現在の5段階契約へ正規化する。"""
+
+    parsed = [JobStepData.model_validate(step) for step in raw_steps]
+    by_stage = {step.stage: step for step in parsed}
+    legacy_step = by_stage.get("safety_and_execute")
+    timing_by_stage = (
+        {item.stage: item.elapsed_ms for item in timing.stage_timings} if timing else {}
+    )
+    legacy_elapsed = timing_by_stage.get("safety_and_execute")
+    restored: list[JobStepData] = []
+
+    for stage in _NL2SQL_JOB_STAGES:
+        step = by_stage.get(stage)
+        if step is not None:
+            restored.append(step)
+            continue
+        if stage in {"safety_check", "execute_sql"} and legacy_step is not None:
+            legacy_status = legacy_step.status
+            if status == JobStatus.ERROR:
+                legacy_status = (
+                    JobStepStatus.ERROR if stage == "safety_check" else JobStepStatus.SKIPPED
+                )
+            restored.append(
+                legacy_step.model_copy(update={"stage": stage, "status": legacy_status})
+            )
+            continue
+        elapsed_ms = timing_by_stage.get(stage)
+        if elapsed_ms is None and stage in {"safety_check", "execute_sql"}:
+            elapsed_ms = legacy_elapsed
+        completed = elapsed_ms is not None or status == JobStatus.DONE
+        if stage == "format_results" and has_result:
+            completed = True
+        restored.append(
+            JobStepData(
+                stage=stage,
+                status=JobStepStatus.DONE if completed else JobStepStatus.PENDING,
+                elapsed_ms=elapsed_ms,
+            )
+        )
+
+    if status == JobStatus.ERROR and not any(
+        step.status == JobStepStatus.ERROR for step in restored
+    ):
+        safety_index = _NL2SQL_JOB_STAGES.index("safety_check")
+        execute_index = _NL2SQL_JOB_STAGES.index("execute_sql")
+        if legacy_elapsed is not None or timing_by_stage.get("safety_check") is not None:
+            restored[safety_index] = restored[safety_index].model_copy(
+                update={"status": JobStepStatus.ERROR}
+            )
+            restored[execute_index] = restored[execute_index].model_copy(
+                update={"status": JobStepStatus.SKIPPED}
+            )
+        else:
+            failure_index = _job_failure_step_index(restored)
+            if failure_index is not None:
+                restored[failure_index] = restored[failure_index].model_copy(
+                    update={"status": JobStepStatus.ERROR}
+                )
+    return restored
 
 
 class Nl2SqlService:
@@ -1029,13 +1125,10 @@ class Nl2SqlService:
             "default": Nl2SqlProfile(
                 id="default",
                 name="標準プロファイル",
-                description=(
-                    "業務表は未固定です。schema refresh または明示 import 後に"
-                    "対象表を選択します。"
-                ),
+                description="",
                 allowed_tables=[],
                 glossary={},
-                sql_rules=["SELECT/WITH のみ", "FETCH FIRST で行数制限"],
+                sql_rules=[],
                 default_row_limit=settings.nl2sql_default_row_limit,
                 few_shot_examples=[],
             )
@@ -1079,7 +1172,12 @@ class Nl2SqlService:
             return
         try:
             catalog = SchemaCatalog.model_validate(snapshot.get("catalog", self._catalog))
-            profiles = [Nl2SqlProfile.model_validate(item) for item in snapshot.get("profiles", [])]
+            profile_items = (
+                snapshot["profiles"]
+                if "profiles" in snapshot
+                else [profile.model_dump(mode="json") for profile in self._profiles.values()]
+            )
+            profiles = [Nl2SqlProfile.model_validate(item) for item in profile_items]
             jobs = {
                 item["job_id"]: self._job_from_snapshot(item)
                 for item in snapshot.get("jobs", [])
@@ -1125,8 +1223,7 @@ class Nl2SqlService:
             return
         with self._lock:
             self._catalog = catalog
-            if profiles:
-                self._profiles = {profile.id: profile for profile in profiles}
+            self._profiles = {profile.id: profile for profile in profiles}
             self._jobs = jobs
             self._recover_interrupted_jobs()
             self._history = history
@@ -1150,6 +1247,46 @@ class Nl2SqlService:
             self._admin_audit = admin_audit[-200:]
             self._legacy_learning_material = legacy_learning_material
 
+    def _merge_additional_instruction_lines(
+        self,
+        existing: str,
+        additions: Iterable[str],
+    ) -> str:
+        base = existing.strip()
+        seen = {line.strip() for line in base.splitlines() if line.strip()}
+        next_lines: list[str] = []
+        for value in additions:
+            line = str(value or "").strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            next_lines.append(line)
+        if not next_lines:
+            return base
+        if base:
+            return "\n".join([base, *next_lines])
+        return "\n".join(next_lines)
+
+    def _profile_with_sql_rules_absorbed(
+        self,
+        profile: Nl2SqlProfile,
+        *,
+        inherited_rules: Iterable[str] | None = None,
+    ) -> Nl2SqlProfile:
+        config = ProfileSelectAiConfig.model_validate(profile.select_ai_config)
+        rules = self._merge_unique_strings(list(inherited_rules or []), profile.sql_rules)
+        if not rules:
+            return profile.model_copy(update={"sql_rules": [], "select_ai_config": config})
+        config = config.model_copy(
+            update={
+                "additional_instructions": self._merge_additional_instruction_lines(
+                    config.additional_instructions,
+                    rules,
+                )
+            }
+        )
+        return profile.model_copy(update={"sql_rules": [], "select_ai_config": config})
+
     def _recover_interrupted_jobs(self) -> None:
         now = _utc_now()
         for job in self._jobs.values():
@@ -1159,6 +1296,11 @@ class Nl2SqlService:
                 job.error_message = (
                     "サーバ再起動前に完了しなかったため、ジョブを終了扱いにしました。"
                 )
+                failure_index = _job_failure_step_index(job.steps)
+                if failure_index is not None:
+                    job.steps[failure_index] = job.steps[failure_index].model_copy(
+                        update={"status": JobStepStatus.ERROR}
+                    )
 
     def _persist_state(self) -> None:
         with self._lock:
@@ -1209,20 +1351,30 @@ class Nl2SqlService:
             "result": job.result.model_dump(mode="json") if job.result else None,
             "error_message": job.error_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
+            "steps": [step.model_dump(mode="json") for step in job.steps],
         }
 
     def _job_from_snapshot(self, data: dict[str, Any]) -> StoredJob:
+        status = JobStatus(data.get("status", JobStatus.PENDING))
+        timing = TimingEnvelope.model_validate(data["timing"]) if data.get("timing") else None
+        result = Nl2SqlResult.model_validate(data["result"]) if data.get("result") else None
         return StoredJob(
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
-            status=JobStatus(data.get("status", JobStatus.PENDING)),
+            status=status,
             created_at=str(data.get("created_at") or _utc_now()),
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
             elapsed_ms=data.get("elapsed_ms"),
-            result=Nl2SqlResult.model_validate(data["result"]) if data.get("result") else None,
+            result=result,
             error_message=data.get("error_message"),
-            timing=TimingEnvelope.model_validate(data["timing"]) if data.get("timing") else None,
+            timing=timing,
+            steps=_restore_job_steps(
+                data.get("steps", []),
+                status=status,
+                timing=timing,
+                has_result=result is not None,
+            ),
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -1323,12 +1475,8 @@ class Nl2SqlService:
             warnings.extend(execution.warnings)
             results = []
             for index, item in enumerate(execution.statements):
-                if item.status == "error" and self._is_missing_object_error(
-                    item.error_message
-                ):
-                    statement = item.sql or (
-                        statements[index] if index < len(statements) else ""
-                    )
+                if item.status == "error" and self._is_missing_object_error(item.error_message):
+                    statement = item.sql or (statements[index] if index < len(statements) else "")
                     warnings.append(f"{statement}: 対象が存在しないため skip しました。")
                     item = item.model_copy(update={"status": "skipped_missing_object"})
                 results.append(item)
@@ -1410,9 +1558,7 @@ class Nl2SqlService:
         self._catalog = SchemaCatalog(
             refreshed_at=_utc_now(),
             tables=[
-                table
-                for table in self._catalog.tables
-                if table.table_name not in sample_objects
+                table for table in self._catalog.tables if table.table_name not in sample_objects
             ],
         )
         profile = self._profiles.get(_SAMPLE_PROFILE_ID)
@@ -1427,9 +1573,12 @@ class Nl2SqlService:
             description="DEPARTMENT / EMPLOYEE / PROJECT の明示 import sample profile。",
             allowed_tables=self._sample_imported_objects(),
             glossary={},
-            sql_rules=["SELECT/WITH のみ", "sample data は明示 import 後のみ利用"],
+            sql_rules=[],
             default_row_limit=get_settings().nl2sql_default_row_limit,
             few_shot_examples=[],
+            select_ai_config=ProfileSelectAiConfig(
+                additional_instructions="sample data は明示 import 後のみ利用",
+            ),
             archived=False,
         )
 
@@ -1443,9 +1592,7 @@ class Nl2SqlService:
             row_counts = self._sample_row_counts()
             if not tables:
                 tables.extend(
-                    table
-                    for table in self._catalog.tables
-                    if table.table_name in _SAMPLE_TABLES
+                    table for table in self._catalog.tables if table.table_name in _SAMPLE_TABLES
                 )
             tables = [
                 table.model_copy(
@@ -1484,8 +1631,7 @@ class Nl2SqlService:
                         logical_name=column_name,
                         data_type=data_type,
                         nullable=(
-                            "NOT NULL" not in line.upper()
-                            and "PRIMARY KEY" not in line.upper()
+                            "NOT NULL" not in line.upper() and "PRIMARY KEY" not in line.upper()
                         ),
                     )
                 )
@@ -1582,9 +1728,6 @@ class Nl2SqlService:
     ) -> str:
         """業務 profile の文脈を Select AI 用の決定論的な指示へまとめる。"""
         sections: list[str] = []
-        description = profile.description.strip()
-        if description:
-            sections.append(f"## 業務説明\n{description}")
 
         glossary_lines = [
             f"- {term.strip()}: {definition.strip()}"
@@ -1630,9 +1773,7 @@ class Nl2SqlService:
             attributes["additional_instructions"] = instructions
         return attributes or None
 
-    def _redact_select_ai_context_attributes(
-        self, attributes: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _redact_select_ai_context_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """監査・engine meta から業務 prompt 本文を除外する。"""
         redacted = {
             key: value
@@ -1691,6 +1832,7 @@ class Nl2SqlService:
         return attributes
 
     def create_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
+        profile = self._profile_with_sql_rules_absorbed(profile)
         with self._lock:
             self._profiles[profile.id] = profile
         self._persist_state()
@@ -1701,10 +1843,16 @@ class Nl2SqlService:
     ) -> Nl2SqlProfile:
         with self._lock:
             current = self._profiles[profile_id]
-            updated = patcher(current)
+            updated = self._profile_with_sql_rules_absorbed(patcher(current))
             self._profiles[profile_id] = updated
         self._persist_state()
         return updated
+
+    def delete_profile(self, profile_id: str) -> Nl2SqlProfile:
+        with self._lock:
+            deleted = self._profiles.pop(profile_id)
+        self._persist_state()
+        return deleted
 
     def import_profile_learning_material(
         self,
@@ -1728,20 +1876,27 @@ class Nl2SqlService:
         def patch(current: Nl2SqlProfile) -> Nl2SqlProfile:
             if normalized_mode == "replace":
                 glossary = parsed["terms"]
-                rules = parsed["rules"]
                 examples = parsed["examples"]
             else:
                 glossary = {**current.glossary, **parsed["terms"]}
-                rules = self._merge_unique_strings(current.sql_rules, parsed["rules"])
                 examples = self._merge_few_shot_examples(
                     current.few_shot_examples,
                     parsed["examples"],
                 )
+            config = current.select_ai_config.model_copy(
+                update={
+                    "additional_instructions": self._merge_additional_instruction_lines(
+                        current.select_ai_config.additional_instructions,
+                        parsed["rules"],
+                    )
+                }
+            )
             return current.model_copy(
                 update={
                     "glossary": glossary,
-                    "sql_rules": rules,
+                    "sql_rules": [],
                     "few_shot_examples": examples,
+                    "select_ai_config": config,
                 }
             )
 
@@ -1767,10 +1922,6 @@ class Nl2SqlService:
         terms_sheet.append(["TERM", "DEFINITION"])
         for term, definition in profile.glossary.items():
             terms_sheet.append([term, definition])
-        rules_sheet = workbook.create_sheet("rules")
-        rules_sheet.append(["CATEGORY", "RULE"])
-        for rule in profile.sql_rules:
-            rules_sheet.append([profile.name, rule])
         examples_sheet = workbook.create_sheet("few_shot")
         examples_sheet.append(["QUESTION", "SQL"])
         for example in profile.few_shot_examples:
@@ -1838,19 +1989,77 @@ class Nl2SqlService:
 
     def get_profile(self, profile_id: str | None) -> Nl2SqlProfile:
         with self._lock:
-            if profile_id and profile_id in self._profiles:
-                return self._profiles[profile_id]
-            return self._profiles["default"]
+            resolved_id = profile_id or "default"
+            profile = self._profiles.get(resolved_id)
+            if profile is None or profile.archived:
+                raise ValueError("指定された profile が見つからないか、利用できません。")
+            return profile
+
+    def _transition_job_steps(
+        self,
+        job_id: str,
+        *,
+        completed_stage: str | None = None,
+        completed_status: JobStepStatus = JobStepStatus.DONE,
+        elapsed_ms: int | None = None,
+        running_stage: str | None = None,
+    ) -> None:
+        """実処理と UI の段階表示を同じ job snapshot 上で進める。"""
+
+        with self._lock:
+            job = self._jobs[job_id]
+            known_stages = {step.stage for step in job.steps}
+            requested_stages = {
+                stage for stage in (completed_stage, running_stage) if stage is not None
+            }
+            unknown_stages = requested_stages - known_stages
+            if unknown_stages:
+                raise RuntimeError(
+                    "未定義の NL2SQL job stage です: " + ", ".join(sorted(unknown_stages))
+                )
+            next_steps: list[JobStepData] = []
+            for step in job.steps:
+                if completed_stage and step.stage == completed_stage:
+                    step = step.model_copy(
+                        update={"status": completed_status, "elapsed_ms": elapsed_ms}
+                    )
+                elif running_stage and step.stage == running_stage:
+                    step = step.model_copy(
+                        update={"status": JobStepStatus.RUNNING, "elapsed_ms": None}
+                    )
+                next_steps.append(step)
+            job.steps = next_steps
+            if job.timing is not None:
+                job.timing = job.timing.model_copy(
+                    update={
+                        "stage_timings": [
+                            StageTiming(stage=step.stage, elapsed_ms=step.elapsed_ms)
+                            for step in job.steps
+                            if step.elapsed_ms is not None
+                        ]
+                    }
+                )
+        self._persist_state()
 
     def start_job(self, request: JobCreateRequest) -> JobCreateData:
+        # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
+        # error へ隠さない。
+        self.get_profile(request.profile_id)
+        self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         job_id = str(uuid.uuid4())
-        job = StoredJob(job_id=job_id, request=request)
+        job = StoredJob(job_id=job_id, request=request, steps=_new_job_steps())
         with self._lock:
             self._jobs[job_id] = job
         self._persist_state()
+        response = JobCreateData(
+            job_id=job_id,
+            status=job.status,
+            created_at=job.created_at,
+            steps=[step.model_copy() for step in job.steps],
+        )
         thread = threading.Thread(target=self._run_job_safely, args=(job_id,), daemon=True)
         thread.start()
-        return JobCreateData(job_id=job_id, status=job.status, created_at=job.created_at)
+        return response
 
     def get_job(self, job_id: str) -> JobData | None:
         with self._lock:
@@ -1867,6 +2076,7 @@ class Nl2SqlService:
                 result=job.result,
                 error_message=job.error_message,
                 timing=job.timing,
+                steps=job.steps,
             )
 
     def preview(self, request: PreviewRequest) -> PreviewData:
@@ -1880,6 +2090,7 @@ class Nl2SqlService:
             allowed=allowed,
             row_limit=request.row_limit,
             select_ai_overrides=request.select_ai_overrides,
+            ontology_context=request.ontology_context,
         )
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         analysis = self.analyze_sql(generated.generated_sql, allowed, row_limit)
@@ -1893,7 +2104,7 @@ class Nl2SqlService:
         return PreviewData(
             sql=generated.generated_sql,
             is_safe=analysis.safety.is_safe,
-            row_limit=row_limit,
+            row_limit=row_limit or 0,
             note=f"質問を受領しました: {request.question[:80]}",
             engine=generated.engine,
             engine_meta=generated.engine_meta,
@@ -1913,7 +2124,7 @@ class Nl2SqlService:
         self,
         sql: str,
         allowed: AllowedObjects,
-        row_limit: int,
+        row_limit: int | None,
     ) -> tuple[SafetyReport, str, QueryResults]:
         executable = enforce_row_limit(sql, row_limit)
         if not self._use_oracle_runtime() and not self._catalog.tables:
@@ -1921,7 +2132,7 @@ class Nl2SqlService:
                 SafetyReport(
                     is_safe=False,
                     is_select_only=is_select_only(sql),
-                    row_limit_applied=row_limit,
+                    row_limit_applied=row_limit or 0,
                     blocked_reason=_SCHEMA_EMPTY_MESSAGE,
                 ),
                 executable,
@@ -1938,20 +2149,62 @@ class Nl2SqlService:
             )
         return analysis.safety, executable, self._mock_execute(executable, row_limit)
 
+    def explain_sql(self, sql: str) -> ExplainPlanData:
+        """意味 validation を代替しない Oracle performance check。"""
+
+        semantic = parse_oracle_sql(sql)
+        if semantic.graph is None:
+            return ExplainPlanData(
+                available=False,
+                warning="SQL AST を解析できないため EXPLAIN PLAN を実行しません。",
+            )
+        if not self._use_oracle_runtime():
+            return ExplainPlanData(
+                available=False,
+                warning="deterministic runtime では Oracle EXPLAIN PLAN を実行しません。",
+            )
+        return self._oracle_adapter.explain_select(sql)
+
     def analyze_sql(
         self,
         sql: str,
         allowed: AllowedObjects,
-        row_limit: int,
+        row_limit: int | None,
         *,
         use_llm: bool = False,
     ) -> AnalyzeData:
-        referenced = _extract_referenced_tables(sql)
-        referenced_columns, has_wildcard = _extract_referenced_columns(sql, referenced)
-        select_only = is_select_only(sql)
+        semantic = parse_oracle_sql(sql)
+        graph = semantic.graph
+        referenced = (
+            [table.name.upper() for table in graph.tables if not table.is_cte] if graph else []
+        )
+        alias_to_table = (
+            {
+                table.alias.upper(): table.name.upper()
+                for table in graph.tables
+                if table.alias and not table.is_cte
+            }
+            if graph
+            else {}
+        )
+        referenced_columns: list[str] = []
+        if graph:
+            for column in graph.columns:
+                table = alias_to_table.get(column.table.upper(), column.table.upper())
+                if not table and len(set(referenced)) == 1:
+                    table = referenced[0]
+                value = f"{table}.{column.name.upper()}" if table else column.name.upper()
+                if value and value not in referenced_columns:
+                    referenced_columns.append(value)
+        has_wildcard = bool(
+            graph and any("*" in projection.expression_sql for projection in graph.projections)
+        )
+        select_only = graph is not None and is_select_only(sql)
         warnings: list[str] = []
         blocked_reason = ""
-        if not select_only:
+        if graph is None:
+            blocked_reason = semantic.validation.findings[0].message_ja
+        elif not select_only:
             blocked_reason = (
                 "SELECT/WITH 以外、複数 statement、または危険語を含む SQL は実行できません。"
             )
@@ -1961,7 +2214,7 @@ class Nl2SqlService:
             blocked_reason = "許可されていない列を参照しています。"
         if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
             warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
-        elif "fetch first" not in sql.lower():
+        elif row_limit and "fetch first" not in sql.lower():
             warnings.append("行数制限が見つからないため実行時に FETCH FIRST を付与します。")
         if sql.strip().endswith(";") and ";" not in sql.strip().rstrip(";"):
             warnings.append("API 実行時は末尾のセミコロンを除去します。")
@@ -1970,7 +2223,7 @@ class Nl2SqlService:
         safety = SafetyReport(
             is_safe=not blocked_reason,
             is_select_only=select_only,
-            row_limit_applied=row_limit,
+            row_limit_applied=row_limit or 0,
             blocked_reason=blocked_reason,
             warnings=warnings,
             referenced_tables=referenced,
@@ -2027,7 +2280,7 @@ class Nl2SqlService:
             return self._enhance_sql_analysis_with_llm(data, sql, allowed)
         return data
 
-    def repair_oracle_error(self, request: RepairRequest, row_limit: int) -> RepairData:
+    def repair_oracle_error(self, request: RepairRequest, row_limit: int | None) -> RepairData:
         """Oracle error message をヒントに SELECT SQL の修復候補を返す。"""
         error_code = self._oracle_error_code(request.error_message)
         base = self.analyze_sql(request.sql, request.allowed_objects, row_limit)
@@ -2068,6 +2321,53 @@ class Nl2SqlService:
     def list_history(self) -> HistoryData:
         with self._lock:
             return HistoryData(items=list(reversed(self._history[-50:])))
+
+    def record_ontology_history(
+        self,
+        *,
+        session_id: str,
+        question: str,
+        rewritten_question: str,
+        engine: Nl2SqlEngine,
+        generated_sql: str,
+        executable_sql: str,
+        profile_id: str,
+        result: QueryResults,
+        ontology_trace_summary: dict[str, Any],
+        elapsed_ms: int | None = None,
+    ) -> HistoryItem:
+        """Query Session 実行を legacy history へ一度だけ投影する。"""
+
+        with self._lock:
+            existing = next(
+                (item for item in self._history if item.session_id == session_id),
+                None,
+            )
+            if existing is not None:
+                return existing.model_copy(deep=True)
+            profile = self._profiles.get(profile_id)
+            if profile is None or profile.archived:
+                raise ValueError("指定された profile は存在しないか、アーカイブされています。")
+            item = HistoryItem(
+                id=str(uuid.uuid4()),
+                question=question,
+                engine=engine,
+                generated_sql=generated_sql,
+                created_at=_utc_now(),
+                elapsed_ms=elapsed_ms,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                rewritten_question=rewritten_question,
+                executable_sql=executable_sql,
+                safety_is_safe=True,
+                result_row_count=result.total,
+                result_columns=result.columns,
+                session_id=session_id,
+                ontology_trace_summary=dict(ontology_trace_summary),
+            )
+            self._history.append(item)
+        self._persist_state()
+        return item.model_copy(deep=True)
 
     def save_feedback(
         self, history_id: str, rating: FeedbackRating, comment: str = ""
@@ -2116,8 +2416,7 @@ class Nl2SqlService:
             current_indexed = len(self._feedback_indexed_ids)
         if not self._use_oracle_runtime():
             warnings.append(
-                "Feedback vector index の clear 実行には "
-                "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                "Feedback vector index の clear 実行には " "NL2SQL_RUNTIME_MODE=oracle が必要です。"
             )
         else:
             try:
@@ -2968,7 +3267,7 @@ class Nl2SqlService:
             (
                 len(
                     _similarity_tokens(category)
-                    & _similarity_tokens(f"{profile.name} {profile.description}")
+                    & _similarity_tokens(f"{profile.name} {profile.category}")
                 ),
                 profile,
             )
@@ -3642,7 +3941,7 @@ class Nl2SqlService:
                     f"## {result.engine.value}",
                     f"Safe: {'yes' if result.is_safe else 'no'}",
                     f"Elapsed: {elapsed}",
-                    f"Row limit: {result.row_limit}",
+                    f"Row limit: {result.row_limit if result.row_limit else 'none'}",
                     "Tables: " + (", ".join(safety.referenced_tables) if safety else "-"),
                     "Columns: " + (", ".join(safety.referenced_columns) if safety else "-"),
                     f"Execution: {execution_text}",
@@ -3760,9 +4059,7 @@ class Nl2SqlService:
                 lines.append(f"- {label}: " + "; ".join(items))
         return "\n".join(lines)
 
-    def _apply_reverse_glossary(
-        self, text: str, *, profile: Nl2SqlProfile, enabled: bool
-    ) -> str:
+    def _apply_reverse_glossary(self, text: str, *, profile: Nl2SqlProfile, enabled: bool) -> str:
         glossary = self._effective_glossary(profile)
         if not enabled or not glossary:
             return text
@@ -4066,7 +4363,8 @@ class Nl2SqlService:
         return AnnotationSuggestionData(suggestions=suggestions)
 
     def generate_comment_sql(
-        self, request: MetadataSqlGenerateRequest,
+        self,
+        request: MetadataSqlGenerateRequest,
     ) -> MetadataSqlGenerateData:
         """SQL Assist コメント管理の SQL 生成を OCI Enterprise AI へ再マップする。"""
         started = time.monotonic()
@@ -4185,7 +4483,8 @@ class Nl2SqlService:
         return "\n\n".join(blocks), sample_count
 
     def generate_annotation_sql(
-        self, request: MetadataSqlGenerateRequest,
+        self,
+        request: MetadataSqlGenerateRequest,
     ) -> MetadataSqlGenerateData:
         """SQL Assist アノテーション管理の SQL 生成を OCI Enterprise AI へ再マップする。"""
         started = time.monotonic()
@@ -4715,8 +5014,7 @@ class Nl2SqlService:
         return [
             column
             for column in table.columns
-            if _synthetic_data_type_key(column.data_type)
-            in _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES
+            if _synthetic_data_type_key(column.data_type) in _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES
         ]
 
     def _find_catalog_column(self, table: SchemaTable, column_name: str) -> SchemaColumn | None:
@@ -4770,8 +5068,7 @@ class Nl2SqlService:
             unsupported_columns = self._synthetic_unsupported_columns(table)
             if unsupported_columns:
                 column_text = ", ".join(
-                    f"{column.column_name}({column.data_type})"
-                    for column in unsupported_columns
+                    f"{column.column_name}({column.data_type})" for column in unsupported_columns
                 )
                 warnings.append(
                     f"{table.table_name}: DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA は "
@@ -6148,9 +6445,7 @@ class Nl2SqlService:
         try:
             statement_results = [
                 DbAdminStatementResult.model_validate(item)
-                for item in self._oracle_adapter.execute_admin_statements(
-                    statements, atomic=False
-                )
+                for item in self._oracle_adapter.execute_admin_statements(statements, atomic=False)
             ]
         except OracleAdapterError as exc:
             warnings.append(str(exc))
@@ -6191,9 +6486,7 @@ class Nl2SqlService:
             except OracleAdapterError as exc:
                 warnings.append(f"実行後の schema refresh に失敗しました: {exc}")
         if 0 < success_count < len(statement_results):
-            warnings.append(
-                f"部分的に成功しました({success_count}/{len(statement_results)} 件)。"
-            )
+            warnings.append(f"部分的に成功しました({success_count}/{len(statement_results)} 件)。")
         return DbAdminExecuteData(
             executed=committed,
             runtime="oracle",
@@ -6433,9 +6726,7 @@ class Nl2SqlService:
             return DbAdminAiAnalysisData(analysis=analysis, source="oci_enterprise_ai")
         except (EnterpriseAiDirectError, ValueError) as exc:
             return deterministic.model_copy(
-                update={
-                    "warnings": [f"Enterprise AI 分析に失敗したため fallback しました: {exc}"]
-                }
+                update={"warnings": [f"Enterprise AI 分析に失敗したため fallback しました: {exc}"]}
             )
 
     def _deterministic_failure_analysis(
@@ -6498,9 +6789,7 @@ class Nl2SqlService:
             ),
         )
 
-    def extract_db_admin_join_where(
-        self, request: DbAdminJoinWhereRequest
-    ) -> DbAdminJoinWhereData:
+    def extract_db_admin_join_where(self, request: DbAdminJoinWhereRequest) -> DbAdminJoinWhereData:
         """ビュー DDL から JOIN/WHERE 条件を抽出する(SQL Assist の AI 抽出再マップ)。"""
         match = re.search(r"\b(SELECT|WITH)\b[\s\S]*", request.ddl, re.IGNORECASE)
         view_sql = match.group(0) if match else request.ddl
@@ -6552,9 +6841,7 @@ class Nl2SqlService:
         self, raw: str, prompt_profile: _JoinWherePromptProfile
     ) -> DbAdminJoinWhereData:
         cleaned = self._clean_join_where_ai_text(raw)
-        parsed = re.search(
-            r"JOIN:\s*([\s\S]*?)\n\s*WHERE:\s*([\s\S]*)$", cleaned, re.IGNORECASE
-        )
+        parsed = re.search(r"JOIN:\s*([\s\S]*?)\n\s*WHERE:\s*([\s\S]*)$", cleaned, re.IGNORECASE)
         if not parsed:
             raise ValueError("JOIN:/WHERE: フォーマットを解析できませんでした。")
         return DbAdminJoinWhereData(
@@ -6746,7 +7033,7 @@ class Nl2SqlService:
             try:
                 oracle_meta = self._oracle_adapter.upsert_select_ai_profile_low_level(
                     profile_name=profile_name,
-                    description=profile.description,
+                    description="",
                     attributes=attributes,
                 )
                 if isinstance(oracle_meta.get("attributes"), dict):
@@ -6788,7 +7075,7 @@ class Nl2SqlService:
             SelectAiDbProfileUpsertRequest(
                 profile_name=profile_name,
                 attributes=attributes,
-                description=profile.description,
+                description="",
                 category=profile.category or profile.name,
                 confirmation=request.confirmation,
                 reason=request.reason,
@@ -7126,9 +7413,7 @@ class Nl2SqlService:
                 )
                 for data in self._asset_meta.values()
                 if data.profile_name
-                and self._is_business_select_ai_profile(
-                    data.profile_name, business_profile_names
-                )
+                and self._is_business_select_ai_profile(data.profile_name, business_profile_names)
             ]
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if not self._use_oracle_runtime():
@@ -7171,11 +7456,7 @@ class Nl2SqlService:
         object_list = profile.object_list
         raw_object_list = attributes.get("object_list")
         if not object_list and isinstance(raw_object_list, list):
-            object_list = [
-                item
-                for item in raw_object_list
-                if isinstance(item, dict)
-            ]
+            object_list = [item for item in raw_object_list if isinstance(item, dict)]
         table_names, view_names = self._split_select_ai_object_names(object_list)
         return profile.model_copy(
             update={
@@ -7195,8 +7476,7 @@ class Nl2SqlService:
         self, object_list: Sequence[dict[str, Any]]
     ) -> tuple[list[str], list[str]]:
         catalog_types = {
-            table.table_name.upper(): table.table_type.lower()
-            for table in self._catalog.tables
+            table.table_name.upper(): table.table_type.lower() for table in self._catalog.tables
         }
         tables: list[str] = []
         views: list[str] = []
@@ -7228,17 +7508,14 @@ class Nl2SqlService:
                     index_name=str(data.get("index_name") or ""),
                     table_name=str(data.get("table_name") or ""),
                     items=[
-                        SelectAiFeedbackEntry.model_validate(item)
-                        for item in data.get("items", [])
+                        SelectAiFeedbackEntry.model_validate(item) for item in data.get("items", [])
                     ],
                     total=int(data.get("total") or 0),
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
         else:
-            warnings.append(
-                "Select AI feedback 管理には NL2SQL_RUNTIME_MODE=oracle が必要です。"
-            )
+            warnings.append("Select AI feedback 管理には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return SelectAiFeedbackEntriesData(
             runtime=runtime,
             profile_name=profile_name,
@@ -7254,9 +7531,7 @@ class Nl2SqlService:
                 executed=False,
                 status="requires_oracle",
                 profile_name=request.profile_name,
-                warnings=[
-                    "Select AI feedback 削除には NL2SQL_RUNTIME_MODE=oracle が必要です。"
-                ],
+                warnings=["Select AI feedback 削除には NL2SQL_RUNTIME_MODE=oracle が必要です。"],
             )
         try:
             meta = self._oracle_adapter.delete_select_ai_feedback(
@@ -7329,9 +7604,7 @@ class Nl2SqlService:
                 sql_text=sql_text,
                 stored_feedback_type=stored_feedback_type,
                 plsql_preview=plsql_preview,
-                warnings=[
-                    "Select AI feedback 追加には NL2SQL_RUNTIME_MODE=oracle が必要です。"
-                ],
+                warnings=["Select AI feedback 追加には NL2SQL_RUNTIME_MODE=oracle が必要です。"],
             )
         try:
             meta = self._oracle_adapter.add_select_ai_feedback(
@@ -7478,9 +7751,7 @@ class Nl2SqlService:
                 detail={
                     "original_name": original_name,
                     "category": request.category,
-                    "attributes": self._redact_select_ai_context_attributes(
-                        request.attributes
-                    ),
+                    "attributes": self._redact_select_ai_context_attributes(request.attributes),
                 },
             )
             return SelectAiDbProfileMutationData(
@@ -7494,9 +7765,7 @@ class Nl2SqlService:
                 warnings=warnings,
                 engine_meta={
                     **meta,
-                    "attributes": self._redact_select_ai_context_attributes(
-                        request.attributes
-                    ),
+                    "attributes": self._redact_select_ai_context_attributes(request.attributes),
                 },
             )
         except OracleAdapterError as exc:
@@ -7510,9 +7779,17 @@ class Nl2SqlService:
                 warnings=[str(exc)],
             )
 
-    def export_select_ai_profiles_json(self) -> SelectAiProfilesExportData:
+    def export_select_ai_profiles_json(
+        self,
+        *,
+        business_profiles_only: bool = False,
+        include_archived_business_profiles: bool = True,
+    ) -> SelectAiProfilesExportData:
         return SelectAiProfilesExportData(
-            profiles=self.list_select_ai_db_profiles().profiles,
+            profiles=self.list_select_ai_db_profiles(
+                business_profiles_only=business_profiles_only,
+                include_archived_business_profiles=include_archived_business_profiles,
+            ).profiles,
             exported_at=_utc_now(),
         )
 
@@ -7605,7 +7882,7 @@ class Nl2SqlService:
             request.prompt,
             profile,
             AllowedObjects(),
-            profile.default_row_limit,
+            None,
             warnings,
         )
         return AgentTeamRunData(
@@ -7682,7 +7959,7 @@ class Nl2SqlService:
             request.prompt,
             self.get_profile(None),
             AllowedObjects(),
-            self.get_profile(None).default_row_limit,
+            None,
             warnings,
         )
         return AgentTeamRunData(
@@ -7884,8 +8161,8 @@ class Nl2SqlService:
             task_name=task_name,
             team_name=team_name,
             allowed_tables=self.profile_allowed_object_names(profile),
-            row_limit=profile.default_row_limit,
-            description=profile.description,
+            row_limit=None,
+            description="",
         )
 
     def _cleanup_profile_target(self, profile_id: str | None) -> Nl2SqlProfile:
@@ -7933,7 +8210,7 @@ class Nl2SqlService:
         use_schema: bool,
         extra_prompt: str,
     ) -> str:
-        lines = [f"profile: {profile.name}", f"description: {profile.description}"]
+        lines = [f"profile: {profile.name}"]
         glossary = self._effective_glossary(profile)
         if use_glossary and glossary:
             lines.append("glossary:")
@@ -7944,6 +8221,10 @@ class Nl2SqlService:
             lines.append("sql_rules:")
             for rule in rules[:20]:
                 lines.append(f"- {rule}")
+        additional_instructions = profile.select_ai_config.additional_instructions.strip()
+        if additional_instructions:
+            lines.append("additional_instructions:")
+            lines.append(additional_instructions)
         if use_schema:
             allowed = {name.upper() for name in self.profile_allowed_object_names(profile)}
             lines.append("schema:")
@@ -8086,7 +8367,7 @@ class Nl2SqlService:
         for term, replacement in self._effective_glossary(profile).items():
             add_match(term, 2.0)
             add_match(replacement, 1.0)
-        for token in re.split(r"[\s、。・/]+", f"{profile.name} {profile.description}"):
+        for token in re.split(r"[\s、。・/]+", f"{profile.name} {profile.category}"):
             add_match(token.strip(), 0.6)
         for example in profile.few_shot_examples:
             add_match(example.get("question", ""), 1.2)
@@ -8306,6 +8587,11 @@ class Nl2SqlService:
                 job.status = JobStatus.ERROR
                 job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
                 job.finished_at = _utc_now()
+                failure_index = _job_failure_step_index(job.steps)
+                if failure_index is not None:
+                    job.steps[failure_index] = job.steps[failure_index].model_copy(
+                        update={"status": JobStepStatus.ERROR}
+                    )
             self._persist_state()
 
     def _run_job(self, job_id: str) -> None:
@@ -8315,6 +8601,7 @@ class Nl2SqlService:
             job.status = JobStatus.RUNNING
             job.started_at = _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
+            job.steps[0] = job.steps[0].model_copy(update={"status": JobStepStatus.RUNNING})
             request = job.request
         self._persist_state()
 
@@ -8325,8 +8612,13 @@ class Nl2SqlService:
         rewritten = self.rewrite_question(request.question, profile)
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
-        stage_timings.append(
-            StageTiming(stage="prepare_context", elapsed_ms=_elapsed_ms(stage_started))
+        stage_elapsed = _elapsed_ms(stage_started)
+        stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
+        self._transition_job_steps(
+            job_id,
+            completed_stage="prepare_context",
+            elapsed_ms=stage_elapsed,
+            running_stage="generate_sql",
         )
 
         stage_started = time.monotonic()
@@ -8338,23 +8630,49 @@ class Nl2SqlService:
             row_limit=row_limit,
             select_ai_overrides=request.select_ai_overrides,
         )
-        stage_timings.append(
-            StageTiming(stage="generate_sql", elapsed_ms=_elapsed_ms(stage_started))
+        stage_elapsed = _elapsed_ms(stage_started)
+        stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
+        self._transition_job_steps(
+            job_id,
+            completed_stage="generate_sql",
+            elapsed_ms=stage_elapsed,
+            running_stage="safety_check",
         )
 
         stage_started = time.monotonic()
         analysis = self.analyze_sql(generated.generated_sql, allowed, row_limit)
-        safety, executable, results = self.execute_sql(generated.generated_sql, allowed, row_limit)
-        stage_timings.append(
-            StageTiming(stage="safety_and_execute", elapsed_ms=_elapsed_ms(stage_started))
+        stage_elapsed = _elapsed_ms(stage_started)
+        stage_timings.append(StageTiming(stage="safety_check", elapsed_ms=stage_elapsed))
+        self._transition_job_steps(
+            job_id,
+            completed_stage="safety_check",
+            completed_status=(
+                JobStepStatus.DONE if analysis.safety.is_safe else JobStepStatus.ERROR
+            ),
+            elapsed_ms=stage_elapsed,
+            running_stage="execute_sql" if analysis.safety.is_safe else None,
         )
 
-        finished = _utc_now()
+        stage_started = time.monotonic()
+        safety, executable, results = self.execute_sql(generated.generated_sql, allowed, row_limit)
+        stage_elapsed = _elapsed_ms(stage_started)
+        stage_timings.append(StageTiming(stage="execute_sql", elapsed_ms=stage_elapsed))
+        self._transition_job_steps(
+            job_id,
+            completed_stage="execute_sql",
+            completed_status=(
+                JobStepStatus.DONE
+                if safety.is_safe
+                else (JobStepStatus.SKIPPED if not analysis.safety.is_safe else JobStepStatus.ERROR)
+            ),
+            elapsed_ms=stage_elapsed,
+            running_stage="format_results",
+        )
+
+        stage_started = time.monotonic()
         timing = TimingEnvelope(
             created_at=job.created_at,
             started_at=job.started_at,
-            finished_at=finished,
-            elapsed_ms=_elapsed_ms(total_started),
             stage_timings=stage_timings,
         )
         result = Nl2SqlResult(
@@ -8366,18 +8684,39 @@ class Nl2SqlService:
             generated_sql=generated.generated_sql,
             executable_sql=executable,
             explanation=generated.explanation,
-            safety=analysis.safety,
+            safety=safety,
             recommendations=analysis.recommendations,
             repaired_sql=analysis.repaired_sql,
             optimization_hints=analysis.optimization_hints,
             results=results,
             timing=timing,
         )
+        stage_elapsed = _elapsed_ms(stage_started)
+        stage_timings.append(StageTiming(stage="format_results", elapsed_ms=stage_elapsed))
+        finished = _utc_now()
+        timing = timing.model_copy(
+            update={
+                "finished_at": finished,
+                "elapsed_ms": _elapsed_ms(total_started),
+                "stage_timings": stage_timings,
+            }
+        )
+        result = result.model_copy(update={"timing": timing})
         history_id = str(uuid.uuid4())
         with self._lock:
             job = self._jobs[job_id]
-            job.status = JobStatus.DONE if analysis.safety.is_safe else JobStatus.ERROR
-            job.error_message = None if analysis.safety.is_safe else analysis.safety.blocked_reason
+            job.steps = [
+                (
+                    step.model_copy(
+                        update={"status": JobStepStatus.DONE, "elapsed_ms": stage_elapsed}
+                    )
+                    if step.stage == "format_results"
+                    else step
+                )
+                for step in job.steps
+            ]
+            job.status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
+            job.error_message = None if safety.is_safe else safety.blocked_reason
             job.result = result
             job.finished_at = finished
             job.elapsed_ms = timing.elapsed_ms
@@ -8409,6 +8748,7 @@ class Nl2SqlService:
         allowed: AllowedObjects,
         row_limit: int | None,
         select_ai_overrides: SelectAiRequestOverrides | None = None,
+        ontology_context: Any | None = None,
     ) -> GeneratedSql:
         if not self._use_oracle_runtime() and not self._catalog.tables:
             raise ValueError(_SCHEMA_EMPTY_MESSAGE)
@@ -8432,6 +8772,7 @@ class Nl2SqlService:
                     row_limit,
                     fallback_messages,
                     select_ai_overrides,
+                    ontology_context,
                 )
             except RuntimeError as exc:
                 fallback_messages.append(f"{candidate.value}: {exc}")
@@ -8446,6 +8787,7 @@ class Nl2SqlService:
         row_limit: int | None,
         fallback_messages: list[str],
         select_ai_overrides: SelectAiRequestOverrides | None = None,
+        ontology_context: Any | None = None,
     ) -> GeneratedSql:
         # テスト/デモ用の明示的 failure trigger。実 adapter では不要。
         if f"{engine.value}_fail" in question.lower():
@@ -8454,7 +8796,7 @@ class Nl2SqlService:
         meta: dict[str, Any] = {
             "profile_id": profile.id,
             "profile_name": profile.name,
-            "row_limit": row_limit or profile.default_row_limit,
+            "row_limit": row_limit or 0,
             "allowed_tables": allowed.table_names or self.profile_allowed_object_names(profile),
         }
         learning_examples = self._learning_examples_for_generation(
@@ -8485,6 +8827,16 @@ class Nl2SqlService:
                 }
                 for example in history_examples
             ]
+        if ontology_context is not None:
+            meta.update(
+                {
+                    "ontology_context_hash": getattr(ontology_context, "context_hash", ""),
+                    "ontology_context_applied": True,
+                    "ontology_context_instruction_length": len(
+                        self._ontology_generation_context_prompt(ontology_context)
+                    ),
+                }
+            )
         if self._use_oracle_runtime() and engine in {
             Nl2SqlEngine.SELECT_AI,
             Nl2SqlEngine.SELECT_AI_AGENT,
@@ -8498,6 +8850,7 @@ class Nl2SqlService:
                     meta=dict(meta),
                     learning_examples=learning_examples,
                     select_ai_overrides=select_ai_overrides,
+                    ontology_context=ontology_context,
                 )
             except OracleAdapterError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
@@ -8512,10 +8865,11 @@ class Nl2SqlService:
                     question=effective_question,
                     profile=profile,
                     allowed=allowed,
-                    row_limit=row_limit or profile.default_row_limit,
+                    row_limit=row_limit,
                     fallback_messages=fallback_messages,
                     meta=dict(meta),
                     learning_examples=learning_examples,
+                    ontology_context=ontology_context,
                 )
             except EnterpriseAiDirectError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
@@ -8547,16 +8901,25 @@ class Nl2SqlService:
         question: str,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
-        row_limit: int,
+        row_limit: int | None,
         fallback_messages: list[str],
         meta: dict[str, Any],
         learning_examples: list[LearningExample],
+        ontology_context: Any | None = None,
     ) -> GeneratedSql:
         context = self._enterprise_ai_schema_context(
             profile=profile,
             allowed=allowed,
             learning_examples=learning_examples,
         )
+        if ontology_context is not None:
+            context = "\n".join(
+                [
+                    context,
+                    "ontology_generation_context:",
+                    self._ontology_generation_context_prompt(ontology_context),
+                ]
+            )
         system_prompt = self._enterprise_ai_sql_system_prompt(row_limit)
         raw_text = self._enterprise_ai_client.generate(
             prompt=question,
@@ -8602,7 +8965,6 @@ class Nl2SqlService:
         }
         lines = [
             f"profile: {profile.name}",
-            f"description: {profile.description}",
             "glossary:",
         ]
         if use_glossary:
@@ -8610,8 +8972,14 @@ class Nl2SqlService:
                 f"- {term}: {definition}"
                 for term, definition in self._effective_glossary(profile).items()
             )
-        lines.append("sql_rules:")
-        lines.extend(f"- {rule}" for rule in self._effective_sql_rules(profile))
+        rules = self._effective_sql_rules(profile)
+        if rules:
+            lines.append("sql_rules:")
+            lines.extend(f"- {rule}" for rule in rules)
+        additional_instructions = profile.select_ai_config.additional_instructions.strip()
+        if additional_instructions:
+            lines.append("additional_instructions:")
+            lines.append(additional_instructions)
         lines.append("schema:")
         for table in self._catalog.tables:
             if allowed_tables and table.table_name not in allowed_tables:
@@ -8633,13 +9001,18 @@ class Nl2SqlService:
             lines.append(learning_context)
         return "\n".join(line for line in lines if line.strip())
 
-    def _enterprise_ai_sql_system_prompt(self, row_limit: int) -> str:
+    def _enterprise_ai_sql_system_prompt(self, row_limit: int | None) -> str:
+        row_limit_instruction = (
+            f"必要に応じて FETCH FIRST {row_limit} ROWS ONLY を使ってください。"
+            if row_limit
+            else ""
+        )
         return (
             "あなたは Oracle Database 26ai 向け NL2SQL エンジンです。"
             "与えられた schema/context の表と列だけを使用してください。"
             "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"
             "必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
-            f"必要に応じて FETCH FIRST {row_limit} ROWS ONLY を使ってください。"
+            f"{row_limit_instruction}"
             '出力は JSON のみ: {"sql":"...", "explanation":"..."}。'
             "説明は日本語で簡潔にしてください。"
         )
@@ -8682,15 +9055,37 @@ class Nl2SqlService:
         meta: dict[str, Any],
         learning_examples: list[LearningExample],
         select_ai_overrides: SelectAiRequestOverrides | None = None,
+        ontology_context: Any | None = None,
     ) -> GeneratedSql:
         runtime_question = self._augment_question_with_learning_examples(
             question,
             learning_examples,
         )
-        runtime_question = self._append_rules_to_question(runtime_question, profile)
+        ontology_instructions = (
+            self._ontology_generation_context_prompt(ontology_context)
+            if ontology_context is not None
+            else ""
+        )
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
-            attributes = self._select_ai_generate_attributes(profile, select_ai_overrides)
+            effective_overrides = select_ai_overrides
+            if ontology_instructions:
+                merged_instructions = "\n\n".join(
+                    part
+                    for part in [
+                        select_ai_overrides.additional_instructions
+                        if select_ai_overrides is not None
+                        else "",
+                        "## 確認済み Ontology コンテキスト",
+                        ontology_instructions,
+                    ]
+                    if part.strip()
+                )
+                effective_overrides = SelectAiRequestOverrides(
+                    role=select_ai_overrides.role if select_ai_overrides is not None else "",
+                    additional_instructions=merged_instructions,
+                )
+            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             if attributes:
                 sql = self._oracle_adapter.generate_select_ai_sql(
                     profile_name=profile_name,
@@ -8719,6 +9114,14 @@ class Nl2SqlService:
         else:
             team_name = self._select_ai_runtime_team_name(profile)
             tool_name = self._select_ai_agent_asset_names(profile)["tool"]
+            if ontology_instructions:
+                runtime_question = "\n\n".join(
+                    [
+                        runtime_question,
+                        "確認済み Ontology コンテキスト:",
+                        ontology_instructions,
+                    ]
+                )
             sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(
                 team_name=team_name, question=runtime_question, tool_name=tool_name
             )
@@ -8739,6 +9142,74 @@ class Nl2SqlService:
             engine_meta=meta,
             fallback_reason="; ".join(fallback_messages),
         )
+
+    def _ontology_generation_context_prompt(self, context: Any) -> str:
+        """確認済み Ontology context を SQL 生成器向けの短い制約文へ変換する。"""
+
+        if context is None:
+            return ""
+        lines = [
+            f"context_hash: {getattr(context, 'context_hash', '')}",
+            f"ontology_revision_id: {getattr(context, 'ontology_revision_id', '')}",
+            f"profile_view_id: {getattr(context, 'profile_view_id', '')}",
+            f"intent_version: {getattr(context, 'intent_version', '')}",
+            f"question_effective: {getattr(context, 'question_effective', '')}",
+        ]
+        allowed_objects = list(getattr(context, "allowed_object_names", []) or [])
+        if allowed_objects:
+            lines.append("allowed_objects:")
+            lines.extend(f"- {value}" for value in allowed_objects[:80])
+        allowed_columns = dict(getattr(context, "allowed_column_names", {}) or {})
+        if allowed_columns:
+            lines.append("allowed_columns:")
+            for object_name, columns in sorted(allowed_columns.items())[:80]:
+                lines.append(f"- {object_name}: {', '.join(columns[:80])}")
+        metric_definitions = list(getattr(context, "metric_definitions", []) or [])
+        if metric_definitions:
+            lines.append("metrics:")
+            for metric in metric_definitions[:40]:
+                name = getattr(metric, "metric_node_id", "")
+                expression = getattr(metric, "expression_sql", "")
+                aggregation = getattr(getattr(metric, "aggregation", ""), "value", "")
+                lines.append(f"- {name}: aggregation={aggregation} expression={expression}")
+        filters = list(getattr(context, "filter_summaries_ja", []) or [])
+        if filters:
+            lines.append("filters:")
+            lines.extend(f"- {value}" for value in filters[:40])
+        time_range = str(getattr(context, "time_range_summary_ja", "") or "").strip()
+        if time_range:
+            lines.append(f"time_range: {time_range}")
+        granularity = str(getattr(context, "granularity", "") or "").strip()
+        if granularity:
+            lines.append(f"granularity: {granularity}")
+        joins = list(getattr(context, "join_condition_summaries", []) or [])
+        if joins:
+            lines.append("approved_join_conditions:")
+            lines.extend(f"- {value}" for value in joins[:80])
+        sorts = list(getattr(context, "sort_summaries_ja", []) or [])
+        if sorts:
+            lines.append("sorts:")
+            lines.extend(f"- {value}" for value in sorts[:20])
+        limit = getattr(context, "limit", None)
+        if limit:
+            lines.append(f"limit: {limit}")
+        warnings = list(getattr(context, "warnings_ja", []) or [])
+        if warnings:
+            lines.append("warnings:")
+            lines.extend(f"- {value}" for value in warnings[:20])
+        mermaid_er = str(getattr(context, "mermaid_er", "") or "").strip()
+        if mermaid_er:
+            lines.append("er_diagram(mermaid):")
+            lines.append("```mermaid")
+            lines.append(mermaid_er)
+            lines.append("```")
+        lines.append("rules:")
+        lines.append(
+            "- 上記 allowed_objects / allowed_columns / approved_join_conditions だけを使う。"
+        )
+        lines.append("- 未承認の JOIN、未確認の指標、未確認の filter を追加しない。")
+        lines.append("- SQL は Oracle SELECT または WITH 1 statement のみ。")
+        return "\n".join(lines)
 
     def _use_oracle_runtime(self) -> bool:
         return get_settings().nl2sql_runtime_mode.strip().lower() == "oracle"
@@ -8862,18 +9333,39 @@ class Nl2SqlService:
     def _resolve_allowed_objects(
         self, profile_id: str | None, requested: AllowedObjects
     ) -> AllowedObjects:
-        if requested.table_names:
-            return requested
         profile = self.get_profile(profile_id)
+        profile_names = self.profile_allowed_object_names(profile)
+        if not profile_names:
+            profile_names = [table.table_name for table in self._catalog.tables]
+        profile_scope = {_normalize_identifier(name) for name in profile_names}
+        requested_names = self._dedupe_object_names(requested.table_names)
+        resolved_names = (
+            [name for name in requested_names if name in profile_scope]
+            if requested_names
+            else profile_names
+        )
+        resolved_scope = {_normalize_identifier(name) for name in resolved_names}
+        resolved_columns = {
+            table_name: list(columns)
+            for table_name, columns in requested.columns.items()
+            if _normalize_identifier(table_name) in resolved_scope
+        }
         return AllowedObjects(
-            table_names=self.profile_allowed_object_names(profile),
-            columns=requested.columns,
+            table_names=resolved_names,
+            columns=resolved_columns,
+            enforce_table_scope=True,
         )
 
-    def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int:
-        if requested:
-            return requested
-        return self.get_profile(profile_id).default_row_limit
+    def resolve_allowed_objects(
+        self, profile_id: str | None, requested: AllowedObjects
+    ) -> AllowedObjects:
+        """Profile view を越えない request scope を公開 API 用に解決する。"""
+
+        return self._resolve_allowed_objects(profile_id, requested)
+
+    def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int | None:
+        del profile_id
+        return requested
 
     def _choose_table(
         self, question: str, profile: Nl2SqlProfile, allowed: AllowedObjects
@@ -8912,7 +9404,7 @@ class Nl2SqlService:
         # Safe: deterministic SQL from schema catalog metadata.
         return f"SELECT {column_sql} FROM {table_name}"  # nosec B608
 
-    def _mock_execute(self, sql: str, row_limit: int) -> QueryResults:
+    def _mock_execute(self, sql: str, row_limit: int | None) -> QueryResults:
         referenced = _extract_referenced_tables(sql)
         table_name = referenced[0] if referenced else ""
         table = next(
@@ -8933,7 +9425,7 @@ class Nl2SqlService:
                 columns[2]: (index + 1) * 1000 if len(columns) > 2 else "",
                 columns[3]: "2026-06-21" if len(columns) > 3 else "",
             }
-            for index in range(min(row_limit, 5))
+            for index in range(min(row_limit or 5, 5))
         ]
         return QueryResults(columns=columns, rows=rows, total=len(rows))
 
@@ -8943,7 +9435,7 @@ class Nl2SqlService:
         sql: str,
         safety: SafetyReport,
         allowed: AllowedObjects,
-        row_limit: int,
+        row_limit: int | None,
         referenced_tables: list[str],
         referenced_columns: list[str],
         has_wildcard: bool,
@@ -9001,7 +9493,7 @@ class Nl2SqlService:
         sql: str,
         error_code: str,
         allowed: AllowedObjects,
-        row_limit: int,
+        row_limit: int | None,
         referenced_tables: list[str],
     ) -> str:
         stripped = sql.strip().rstrip(";")
@@ -9129,7 +9621,9 @@ class Nl2SqlService:
         columns = [column.column_name for column in table.columns[:6]] if table else []
         return ", ".join(columns) or "*"
 
-    def _optimization_hints(self, *, safety: SafetyReport, sql: str, row_limit: int) -> list[str]:
+    def _optimization_hints(
+        self, *, safety: SafetyReport, sql: str, row_limit: int | None
+    ) -> list[str]:
         if not safety.is_select_only:
             return ["参照系 SQL に修正してから最適化を確認してください。"]
         hints: list[str] = []
@@ -9138,9 +9632,7 @@ class Nl2SqlService:
             hints.append("大量データの表では WHERE 条件を追加すると応答時間が安定します。")
         if " join " in normalized:
             hints.append("JOIN 条件に主キー・外部キー列を使っているか確認してください。")
-        if " order by " in normalized and "fetch first" not in normalized:
-            hints.append("ORDER BY と行数制限を組み合わせると結果確認が速くなります。")
-        if row_limit > 1000:
+        if row_limit and row_limit > 1000:
             hints.append("画面確認用途では row limit を 1000 件以下にすると扱いやすくなります。")
         if not hints:
             hints.append(
@@ -9182,14 +9674,15 @@ class Nl2SqlService:
         recommendations = ["実行前に生成 SQL と対象表を確認してください。"]
         if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
             recommendations.append(
-                "Oracle では LIMIT 句を FETCH FIRST n ROWS ONLY に置き換えて実行します。"
+                "Oracle では LIMIT 句を使えないため、必要なら "
+                "FETCH FIRST n ROWS ONLY に修正してください。"
             )
         if sql.strip().endswith(";") and ";" not in sql.strip().rstrip(";"):
             recommendations.append("API 実行前に末尾セミコロンを除去します。")
         if not safety.referenced_tables:
             recommendations.append("FROM/JOIN の対象表が検出できませんでした。")
         if repaired_sql:
-            recommendations.append("実行時には行数制限付き SQL を使用します。")
+            recommendations.append("実行時には修復候補 SQL を使用します。")
         return recommendations
 
     def _build_default_catalog(self) -> SchemaCatalog:

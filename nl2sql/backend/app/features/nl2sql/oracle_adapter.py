@@ -6,6 +6,7 @@ adapter のまま動き、`NL2SQL_RUNTIME_MODE=oracle` のときだけ runtime i
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import re
@@ -17,7 +18,17 @@ from typing import Any
 
 from app.settings import Settings
 
-from .models import CsvImportColumn, QueryResults, SchemaCatalog, SchemaColumn, SchemaTable
+from .models import (
+    CsvImportColumn,
+    ExplainPlanData,
+    ExplainPlanOperation,
+    QueryResults,
+    SchemaCatalog,
+    SchemaColumn,
+    SchemaConstraintDetail,
+    SchemaTable,
+    SchemaViewDependency,
+)
 
 
 class OracleAdapterError(RuntimeError):
@@ -396,8 +407,10 @@ class OracleNl2SqlAdapter:
             conn.close()
 
     def fetch_catalog(self) -> SchemaCatalog:
-        sql = """
+        owner_filter, owner_binds = self._schema_owner_filter("c.owner")
+        sql = f"""
             SELECT
+                c.owner,
                 c.table_name,
                 NVL(tc.comments, c.table_name) AS table_comment,
                 c.column_name,
@@ -405,30 +418,43 @@ class OracleNl2SqlAdapter:
                 c.data_type,
                 c.nullable,
                 c.column_id,
-                t.num_rows
-            FROM user_tab_columns c
-            LEFT JOIN user_tables t ON t.table_name = c.table_name
-            LEFT JOIN user_tab_comments tc ON tc.table_name = c.table_name
-            LEFT JOIN user_col_comments cc
-              ON cc.table_name = c.table_name AND cc.column_name = c.column_name
-            ORDER BY c.table_name, c.column_id
+                t.num_rows,
+                NVL(o.object_type, 'TABLE') AS object_type
+            FROM all_tab_columns c
+            LEFT JOIN all_tables t ON t.owner = c.owner AND t.table_name = c.table_name
+            LEFT JOIN all_objects o
+              ON o.owner = c.owner
+             AND o.object_name = c.table_name
+             AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+            LEFT JOIN all_tab_comments tc ON tc.owner = c.owner AND tc.table_name = c.table_name
+            LEFT JOIN all_col_comments cc
+              ON cc.owner = c.owner
+             AND cc.table_name = c.table_name
+             AND cc.column_name = c.column_name
+            WHERE {owner_filter}
+            ORDER BY c.owner, c.table_name, c.column_id
         """
         tables: dict[str, SchemaTable] = {}
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql)
+            cursor.execute(sql, owner_binds)
             for row in cursor:
-                table_name = str(row[0])
-                table_comment = str(row[1] or table_name)
-                column_name = str(row[2])
-                column_comment = str(row[3] or column_name)
-                data_type = str(row[4])
-                nullable = str(row[5]).upper() == "Y"
-                row_count = int(row[7]) if row[7] is not None else None
+                owner = str(row[0] or "APP")
+                table_name = str(row[1])
+                table_comment = str(row[2] or table_name)
+                column_name = str(row[3])
+                column_comment = str(row[4] or column_name)
+                data_type = str(row[5])
+                nullable = str(row[6]).upper() == "Y"
+                row_count = int(row[8]) if row[8] is not None else None
+                table_type = str(row[9]).lower() if len(row) > 9 and row[9] else "table"
+                table_key = f"{owner.upper()}.{table_name.upper()}"
                 table = tables.setdefault(
-                    table_name,
+                    table_key,
                     SchemaTable(
                         table_name=table_name,
                         logical_name=table_comment,
+                        owner=owner,
+                        table_type=table_type,
                         comment=table_comment,
                         row_count=row_count,
                     ),
@@ -442,33 +468,147 @@ class OracleNl2SqlAdapter:
                     )
                 )
             self._load_constraints(cursor, tables)
+            view_dependencies = self._load_view_dependencies(cursor)
             self._load_sample_values(cursor, tables)
-        return SchemaCatalog(
-            refreshed_at=datetime.now(UTC).isoformat(), tables=list(tables.values())
+        catalog = SchemaCatalog(
+            refreshed_at=datetime.now(UTC).isoformat(),
+            tables=list(tables.values()),
+            view_dependencies=view_dependencies,
         )
+        catalog.schema_fingerprint = self._schema_fingerprint(catalog)
+        return catalog
+
+    def _schema_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
+        owners = [
+            owner.strip().upper()
+            for owner in self.settings.nl2sql_schema_owner_allowlist
+            if owner.strip()
+        ]
+        if not owners and self.settings.oracle_user.strip():
+            owners = [self.settings.oracle_user.strip().upper()]
+        if not owners:
+            return f"{column_sql} = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')", {}
+        binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(set(owners)))}
+        placeholders = ", ".join(f":{name}" for name in binds)
+        return f"{column_sql} IN ({placeholders})", binds
 
     def _load_constraints(self, cursor: Any, tables: dict[str, SchemaTable]) -> None:
-        cursor.execute("""
+        owner_filter, owner_binds = self._schema_owner_filter("uc.owner")
+        cursor.execute(f"""
             SELECT
                 uc.table_name,
                 uc.constraint_name,
                 uc.constraint_type,
-                LISTAGG(ucc.column_name, ', ') WITHIN GROUP (ORDER BY ucc.position) AS columns
-            FROM user_constraints uc
-            LEFT JOIN user_cons_columns ucc
-              ON ucc.constraint_name = uc.constraint_name
+                LISTAGG(ucc.column_name, ', ') WITHIN GROUP (ORDER BY ucc.position) AS columns,
+                uc.owner AS owner_name,
+                ruc.owner AS referenced_owner,
+                ruc.table_name AS referenced_table,
+                LISTAGG(rucc.column_name, ', ') WITHIN GROUP (ORDER BY rucc.position)
+                    AS referenced_columns,
+                uc.delete_rule,
+                uc.status,
+                uc.deferrable
+            FROM all_constraints uc
+            LEFT JOIN all_cons_columns ucc
+              ON ucc.owner = uc.owner
+             AND ucc.constraint_name = uc.constraint_name
              AND ucc.table_name = uc.table_name
-            WHERE uc.constraint_type IN ('P', 'R', 'U', 'C')
-            GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type
+            LEFT JOIN all_constraints ruc
+              ON ruc.owner = uc.r_owner
+             AND ruc.constraint_name = uc.r_constraint_name
+            LEFT JOIN all_cons_columns rucc
+              ON rucc.owner = ruc.owner
+             AND rucc.constraint_name = ruc.constraint_name
+             AND rucc.table_name = ruc.table_name
+             AND rucc.position = ucc.position
+            WHERE {owner_filter}
+              AND uc.constraint_type IN ('P', 'R', 'U', 'C')
+            GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type,
+                     uc.owner, ruc.owner, ruc.table_name,
+                     uc.delete_rule, uc.status, uc.deferrable
             ORDER BY uc.table_name, uc.constraint_name
-            """)
-        for table_name, constraint_name, constraint_type, columns in cursor:
-            table = tables.get(str(table_name))
+            """, owner_binds)
+        for row in cursor:
+            table_name, constraint_name, constraint_type, columns = row[:4]
+            owner = str(row[4]) if len(row) > 4 and row[4] else "APP"
+            table = tables.get(f"{owner.upper()}.{str(table_name).upper()}")
             if not table:
                 continue
             column_text = str(columns or "").strip()
             suffix = f"({column_text})" if column_text else ""
             table.constraints.append(f"{constraint_name} {constraint_type}{suffix}")
+            referenced_owner = str(row[5]) if len(row) > 5 and row[5] else None
+            referenced_table = str(row[6]) if len(row) > 6 and row[6] else None
+            referenced_columns_text = str(row[7] or "") if len(row) > 7 else ""
+            table.constraint_details.append(
+                SchemaConstraintDetail(
+                    constraint_name=str(constraint_name),
+                    constraint_type=str(constraint_type),
+                    owner=owner,
+                    table_name=str(table_name),
+                    columns=[value.strip() for value in column_text.split(",") if value.strip()],
+                    referenced_owner=referenced_owner,
+                    referenced_table=referenced_table,
+                    referenced_columns=[
+                        value.strip()
+                        for value in referenced_columns_text.split(",")
+                        if value.strip()
+                    ],
+                    delete_rule=str(row[8]) if len(row) > 8 and row[8] else "NO ACTION",
+                    status=str(row[9]) if len(row) > 9 and row[9] else "ENABLED",
+                    deferrable=(str(row[10]) if len(row) > 10 and row[10] else "NOT DEFERRABLE"),
+                )
+            )
+
+    def _load_view_dependencies(self, cursor: Any) -> list[SchemaViewDependency]:
+        owner_filter, owner_binds = self._schema_owner_filter("d.owner")
+        cursor.execute(f"""
+            SELECT
+                d.owner AS owner_name,
+                d.name AS view_name,
+                d.referenced_owner,
+                d.referenced_name,
+                d.referenced_type
+            FROM all_dependencies d
+            WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')
+              AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+              AND {owner_filter}
+            ORDER BY d.name, d.referenced_owner, d.referenced_name
+            """, owner_binds)
+        return [
+            SchemaViewDependency(
+                owner=str(owner),
+                view_name=str(view_name),
+                referenced_owner=str(referenced_owner),
+                referenced_name=str(referenced_name),
+                referenced_type=str(referenced_type),
+            )
+            for owner, view_name, referenced_owner, referenced_name, referenced_type in cursor
+        ]
+
+    def _schema_fingerprint(self, catalog: SchemaCatalog) -> str:
+        payload = {
+            "tables": [
+                {
+                    "owner": table.owner.upper(),
+                    "name": table.table_name.upper(),
+                    "type": table.table_type.upper(),
+                    "columns": [
+                        (column.column_name.upper(), column.data_type.upper(), column.nullable)
+                        for column in table.columns
+                    ],
+                    "constraints": [
+                        detail.model_dump(mode="json") for detail in table.constraint_details
+                    ],
+                }
+                for table in catalog.tables
+            ],
+            "view_dependencies": [
+                dependency.model_dump(mode="json") for dependency in catalog.view_dependencies
+            ],
+        }
+        normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
     def _load_sample_values(self, cursor: Any, tables: dict[str, SchemaTable]) -> None:
         sample_rows = max(self.settings.nl2sql_schema_sample_rows, 0)
@@ -476,7 +616,11 @@ class OracleNl2SqlAdapter:
         if sample_rows == 0 or sample_columns == 0:
             return
         for table in tables.values():
-            quoted_table = _quote_identifier(table.table_name)
+            quoted_table = (
+                f"{_quote_identifier(table.owner)}.{_quote_identifier(table.table_name)}"
+                if table.owner
+                else _quote_identifier(table.table_name)
+            )
             for column in table.columns[:sample_columns]:
                 quoted_column = _quote_identifier(column.column_name)
                 try:
@@ -565,16 +709,85 @@ class OracleNl2SqlAdapter:
             raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
         return samples, warnings
 
-    def execute_select(self, sql: str, max_rows: int) -> QueryResults:
+    def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
             columns = [description[0] for description in cursor.description or []]
             rows: list[dict[str, Any]] = []
-            for row in cursor.fetchmany(max_rows):
+            fetched_rows = cursor.fetchmany(max_rows) if max_rows else cursor.fetchall()
+            for row in fetched_rows:
                 rows.append(
                     {columns[index]: _coerce_result_value(value) for index, value in enumerate(row)}
                 )
         return QueryResults(columns=columns, rows=rows, total=len(rows))
+
+    def explain_select(self, sql: str) -> ExplainPlanData:
+        """Oracle PLAN_TABLE から cost/cardinality と full scan を要約する。"""
+
+        statement_id = f"NL2SQL_{hashlib.sha256(sql.encode()).hexdigest()[:20].upper()}"
+        normalized = sql.strip().rstrip(";")
+        try:
+            with self.connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM PLAN_TABLE WHERE statement_id = :statement_id",
+                    {"statement_id": statement_id},
+                )
+                # EXPLAIN PLAN は DDL のため bind 変数を受け付けない。statement_id は
+                # SHA-256 由来の英数字だけに限定し、SQL 本体は sqlglot の read-only
+                # gate 通過後だけ渡される。
+                cursor.execute(  # nosec B608
+                    f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {normalized}",
+                )
+                cursor.execute(
+                    """
+                    SELECT operation, options, object_owner, object_name,
+                           cost, cardinality, bytes
+                    FROM plan_table
+                    WHERE statement_id = :statement_id
+                    ORDER BY id
+                    """,
+                    {"statement_id": statement_id},
+                )
+                operations = [
+                    ExplainPlanOperation(
+                        operation=str(row[0] or ""),
+                        options=str(row[1] or ""),
+                        owner=str(row[2] or ""),
+                        object_name=str(row[3] or ""),
+                        cost=int(row[4]) if row[4] is not None else None,
+                        cardinality=int(row[5]) if row[5] is not None else None,
+                        bytes=int(row[6]) if row[6] is not None else None,
+                    )
+                    for row in cursor
+                ]
+                cursor.execute(
+                    "DELETE FROM PLAN_TABLE WHERE statement_id = :statement_id",
+                    {"statement_id": statement_id},
+                )
+                conn.commit()
+        except Exception as exc:
+            return ExplainPlanData(
+                available=False,
+                warning=f"Oracle EXPLAIN PLAN を利用できません: {exc}",
+            )
+        root = operations[0] if operations else None
+        full_scans = sorted(
+            {
+                operation.object_name
+                for operation in operations
+                if operation.operation.upper() == "TABLE ACCESS"
+                and "FULL" in operation.options.upper()
+                and operation.object_name
+            }
+        )
+        return ExplainPlanData(
+            available=bool(operations),
+            total_cost=root.cost if root else None,
+            estimated_cardinality=root.cardinality if root else None,
+            full_table_scans=full_scans,
+            operations=operations,
+            warning="" if operations else "PLAN_TABLE に実行計画が生成されませんでした。",
+        )
 
     def list_db_admin_objects(self, object_type: str) -> list[dict[str, Any]]:
         """List user tables or views for the DB admin console."""
@@ -859,9 +1072,7 @@ class OracleNl2SqlAdapter:
                 """,
                 {"table_name": safe_table},
             )
-            table_columns = [
-                (str(row[0] or ""), str(row[1] or "")) for row in cursor.fetchall()
-            ]
+            table_columns = [(str(row[0] or ""), str(row[1] or "")) for row in cursor.fetchall()]
             if not table_columns:
                 raise OracleAdapterError(f"{safe_table}: テーブルが見つからないか列がありません。")
             csv_by_upper: dict[str, CsvImportColumn] = {}
@@ -1142,9 +1353,7 @@ class OracleNl2SqlAdapter:
                 )
                 conn.commit()
             except Exception as exc:
-                raise OracleAdapterError(
-                    f"Select AI feedback の削除に失敗しました: {exc}"
-                ) from exc
+                raise OracleAdapterError(f"Select AI feedback の削除に失敗しました: {exc}") from exc
         return {
             "runtime": "oracle",
             "package": "DBMS_CLOUD_AI",
@@ -1189,9 +1398,7 @@ class OracleNl2SqlAdapter:
                 )
                 conn.commit()
             except Exception as exc:
-                raise OracleAdapterError(
-                    f"Select AI feedback の追加に失敗しました: {exc}"
-                ) from exc
+                raise OracleAdapterError(f"Select AI feedback の追加に失敗しました: {exc}") from exc
         return {
             "runtime": "oracle",
             "package": "DBMS_CLOUD_AI",
@@ -1827,7 +2034,7 @@ class OracleNl2SqlAdapter:
         *,
         profile_name: str,
         allowed_tables: list[str],
-        row_limit: int,
+        row_limit: int | None,
         description: str = "",
     ) -> dict[str, Any]:
         """Create or replace an Oracle Select AI profile."""
@@ -1878,7 +2085,7 @@ class OracleNl2SqlAdapter:
         task_name: str,
         team_name: str,
         allowed_tables: list[str],
-        row_limit: int,
+        row_limit: int | None,
         description: str = "",
     ) -> dict[str, Any]:
         """Create or replace Oracle Select AI Agent profile/tool/agent/task/team assets."""
@@ -2173,7 +2380,7 @@ class OracleNl2SqlAdapter:
         return conversation_id
 
     def _select_ai_profile_attributes(
-        self, *, allowed_tables: list[str], row_limit: int, description: str
+        self, *, allowed_tables: list[str], row_limit: int | None, description: str
     ) -> dict[str, Any]:
         del row_limit, description
         attributes: dict[str, Any] = {

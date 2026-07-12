@@ -100,7 +100,7 @@ export function SelectAiFeedbackAddPanel({
             <DatabaseZap size={18} aria-hidden="true" />
             {t("nl2sql.selectAiFeedbackAdd.title")}
           </CardTitle>
-          <p className="text-sm text-slate-600">{t("nl2sql.selectAiFeedbackAdd.description")}</p>
+          <p className="text-sm text-muted">{t("nl2sql.selectAiFeedbackAdd.description")}</p>
         </div>
         {addData && (
           <div className="flex flex-wrap justify-end gap-2">
@@ -111,39 +111,39 @@ export function SelectAiFeedbackAddPanel({
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-[12rem_1fr]">
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("nl2sql.selectAiFeedbackAdd.type")}</span>
             <select
               value={feedbackType}
               onChange={(event) => updateFeedbackType(event.currentTarget.value as SelectAiFeedbackAddType)}
               disabled={submitting}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
             >
               <option value="positive">{t("nl2sql.selectAiFeedbackAdd.positive")}</option>
               <option value="negative">{t("nl2sql.selectAiFeedbackAdd.negative")}</option>
             </select>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("nl2sql.selectAiFeedbackAdd.response")}</span>
             <textarea
               value={effectiveResponse}
               onChange={(event) => setResponse(event.currentTarget.value)}
               readOnly={responseReadOnly}
               rows={5}
-              className={`min-h-32 rounded-md border border-slate-300 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200 ${
-                responseReadOnly ? "bg-slate-50 text-slate-700" : "bg-white text-slate-950"
+              className={`min-h-32 rounded-md border border-border px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 ${
+                responseReadOnly ? "bg-background text-foreground" : "bg-card text-foreground"
               }`}
               placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
             />
           </label>
         </div>
-        <label className="grid gap-1 text-sm font-medium text-slate-800">
+        <label className="grid gap-1 text-sm font-medium text-foreground">
           <span>{t("nl2sql.selectAiFeedbackAdd.content")}</span>
           <textarea
             value={feedbackContent}
             onChange={(event) => setFeedbackContent(event.currentTarget.value)}
             rows={3}
-            className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+            className="min-h-24 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
         </label>
@@ -151,7 +151,7 @@ export function SelectAiFeedbackAddPanel({
           {message && (
             <p
               role={messageTone === "error" ? "alert" : "status"}
-              className={`text-sm ${messageTone === "error" ? "text-red-700" : "text-emerald-700"}`}
+              className={`text-sm ${messageTone === "error" ? "text-danger" : "text-success"}`}
             >
               {message}
             </p>
@@ -169,13 +169,13 @@ export function SelectAiFeedbackAddPanel({
           </Button>
         </div>
         {addData?.plsql_preview && (
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("nl2sql.selectAiFeedbackAdd.usedSql")}</span>
             <textarea
               value={addData.plsql_preview}
               readOnly
               rows={7}
-              className="min-h-44 rounded-md border border-slate-300 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-50 outline-none"
+              className="min-h-44 rounded-md border border-border bg-code px-3 py-2 font-mono text-xs leading-5 text-code-fg outline-none"
             />
           </label>
         )}

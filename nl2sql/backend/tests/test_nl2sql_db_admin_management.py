@@ -325,6 +325,54 @@ def test_select_ai_db_profiles_filter_also_applies_to_asset_metadata_fallback() 
     assert [profile.name for profile in data.profiles] == ["FINANCE_SELECT_AI"]
 
 
+def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> None:
+    service = _OracleRuntimeService(_FakeMixedSelectAiProfileAdapter())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="finance_filter",
+            name="財務プロファイル",
+            description="export JSON の照合対象。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+            select_ai_config={"profile_name": "FINANCE_SELECT_AI"},
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="archived_filter",
+            name="アーカイブプロファイル",
+            description="archived の export filter を確認する。",
+            allowed_tables=["INVOICES"],
+            glossary={},
+            sql_rules=[],
+            default_row_limit=100,
+            few_shot_examples=[],
+            select_ai_config={"profile_name": "ARCHIVED_SELECT_AI"},
+            archived=True,
+        )
+    )
+
+    exported = service.export_select_ai_profiles_json(
+        business_profiles_only=True,
+        include_archived_business_profiles=True,
+    )
+
+    assert [profile.name for profile in exported.profiles] == [
+        "FINANCE_SELECT_AI",
+        "ARCHIVED_SELECT_AI",
+    ]
+
+    active_only = service.export_select_ai_profiles_json(
+        business_profiles_only=True,
+        include_archived_business_profiles=False,
+    )
+
+    assert [profile.name for profile in active_only.profiles] == ["FINANCE_SELECT_AI"]
+
+
 def test_statement_policy_view_ddl_and_data_dml() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     view_ok = service.execute_db_admin_statements(
@@ -532,8 +580,7 @@ def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
     )
     assert annotation_ai.source == "oci_enterprise_ai"
     assert annotation_ai.sql == (
-        "ALTER TABLE EMPLOYEE MODIFY "
-        "(EMPLOYEE_NAME ANNOTATIONS (UI_Display '社員名'));"
+        "ALTER TABLE EMPLOYEE MODIFY " "(EMPLOYEE_NAME ANNOTATIONS (UI_Display '社員名'));"
     )
 
 
@@ -590,8 +637,7 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
         MetadataSqlGenerateRequest(
             targets=[{"object_name": "DEPARTMENT", "object_type": "table"}],
             structure_text=(
-                "OBJECT: DEPARTMENT\nTYPE: table\n"
-                "COMMENT: 部署情報を管理するテーブル"
+                "OBJECT: DEPARTMENT\nTYPE: table\n" "COMMENT: 部署情報を管理するテーブル"
             ),
         )
     )
@@ -624,9 +670,7 @@ def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None
         )
     )
 
-    assert result.sql.index('ALTER TABLE "A_TABLE"') < result.sql.index(
-        'ALTER TABLE "B_TABLE"'
-    )
+    assert result.sql.index('ALTER TABLE "A_TABLE"') < result.sql.index('ALTER TABLE "B_TABLE"')
     assert "O''Brien" in result.sql
     assert "ADD IF NOT EXISTS UI_Display" in result.sql
     assert 'MODIFY ("V_ID"' not in result.sql
@@ -776,7 +820,7 @@ def test_preview_data_exports_xlsx() -> None:
     assert workbook["data"].max_row >= 1
     assert (
         workbook["query"]["A2"].value
-        == 'SELECT * FROM "INVOICES" WHERE STATUS = \'A\' FETCH FIRST 10 ROWS ONLY'
+        == "SELECT * FROM \"INVOICES\" WHERE STATUS = 'A' FETCH FIRST 10 ROWS ONLY"
     )
 
 
@@ -912,8 +956,7 @@ def test_flexible_date_value_parses_common_formats() -> None:
 
 def test_select_ai_object_list_normalizes_nested_oracle_profile_attributes() -> None:
     oracle_object_list_json = (
-        '[{"OWNER": "APP", "NAME": "PAYMENTS"}, '
-        '{"owner": "APP", "name": "INVOICES"}]'
+        '[{"OWNER": "APP", "NAME": "PAYMENTS"}, ' '{"owner": "APP", "name": "INVOICES"}]'
     )
     object_list = _normalize_select_ai_object_list(
         {"PROFILE_ATTRIBUTES": {"OBJECT_LIST": oracle_object_list_json}}

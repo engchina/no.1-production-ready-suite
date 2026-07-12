@@ -1,7 +1,5 @@
 import { useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  ChevronLeft,
-  ChevronRight,
   Code2,
   Download,
   FileSpreadsheet,
@@ -13,7 +11,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  DEFAULT_PAGE_SIZE,
+  DataTable,
+  EmptyState,
+  Pagination,
+  StatusBadge,
+  usePagination,
+} from "@engchina/production-ready-ui";
 
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -69,9 +79,9 @@ export async function readTextFileSmart(file: File): Promise<string> {
 
 export function PageMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-slate-900">{value}</p>
+    <div className="rounded-md border border-border bg-background p-4">
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className="mt-1 text-2xl font-semibold text-foreground">{value}</p>
     </div>
   );
 }
@@ -89,16 +99,16 @@ export function WorkSection({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-red-200 bg-red-50/70 text-red-950 marker:text-red-700"
-      : "border-slate-200 bg-white text-slate-900 marker:text-slate-500";
+      ? "border-danger/30 bg-danger-bg/70 text-danger marker:text-danger"
+      : "border-border bg-card text-foreground marker:text-muted";
 
   return (
     <details className={`rounded-md border ${toneClass}`}>
-      <summary className="cursor-pointer px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-200">
+      <summary className="cursor-pointer px-4 py-3 focus:outline-none focus:ring-2 focus:ring-ring/40">
         <span className="font-semibold">{title}</span>
-        <span className="mt-1 block text-sm font-normal text-slate-600">{description}</span>
+        <span className="mt-1 block text-sm font-normal text-muted">{description}</span>
       </summary>
-      <div className="border-t border-current/10 bg-white p-3">{children}</div>
+      <div className="border-t border-current/10 bg-card p-3">{children}</div>
     </details>
   );
 }
@@ -126,7 +136,7 @@ export function ManagementPanelShell({
       role="tabpanel"
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
-      className={`grid gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      className={`grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm ${className}`}
       data-testid="management-panel-shell"
     >
       {children}
@@ -150,11 +160,11 @@ export function ManagementPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-slate-950">
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-foreground">
           <Icon size={18} aria-hidden="true" />
           {title}
         </h2>
-        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
@@ -178,7 +188,7 @@ export function StepIndicator({
         <li
           key={label}
           className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            index <= activeIndex ? "border-sky-200 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-500"
+            index <= activeIndex ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-card text-muted"
           }`}
         >
           {index + 1}. {label}
@@ -216,44 +226,38 @@ export function ManagementTabs<TView extends string>({
     focusManagementTabElement(`${idPrefix}-tab-${nextView.id}`);
   };
 
+  // 下線タブ(管理コンソールの定石)へ統一。DbObjectManagementTabs / 詳細タブと同一様式。
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="overflow-x-auto p-1.5">
-        <div className="flex max-w-full min-w-max gap-1 rounded-md bg-slate-100/80 p-1" role="tablist" aria-label={ariaLabel}>
-          {tabs.map((view, index) => {
-            const Icon = view.icon;
-            const selected = activeView === view.id;
-            return (
-              <button
-                key={view.id}
-                id={`${idPrefix}-tab-${view.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`${idPrefix}-panel-${view.id}`}
-                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-4 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-sky-200 ${
-                  selected
-                    ? "border-sky-200 bg-white text-sky-950 shadow-sm ring-1 ring-sky-100"
-                    : "border-transparent text-slate-600 hover:bg-white/80 hover:text-slate-950"
-                }`}
-                onClick={() => onViewChange(view.id)}
-                onKeyDown={(event) => handleKeyDown(event, index)}
-              >
-                <span
-                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                    selected
-                      ? "bg-sky-100 text-sky-700"
-                      : "bg-transparent text-slate-400 group-hover:bg-slate-100 group-hover:text-slate-600"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <Icon size={16} />
-                </span>
-                <span>{view.label}</span>
-              </button>
-            );
-          })}
-        </div>
+    <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={ariaLabel}>
+      <div className="flex min-w-max gap-1">
+        {tabs.map((view, index) => {
+          const Icon = view.icon;
+          const selected = activeView === view.id;
+          return (
+            <button
+              key={view.id}
+              id={`${idPrefix}-tab-${view.id}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`${idPrefix}-panel-${view.id}`}
+              className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
+                selected
+                  ? "border-primary bg-card text-primary"
+                  : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
+              }`}
+              onClick={() => onViewChange(view.id)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
+            >
+              <Icon
+                size={15}
+                aria-hidden="true"
+                className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
+              />
+              <span>{view.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -288,31 +292,31 @@ export function ExecutionConfirmationField({
   const isDanger = tone === "danger";
   const containerClass = [
     "grid gap-2 rounded-md border p-3",
-    isDanger ? "border-red-200 bg-red-50/70" : "border-slate-200 bg-slate-50",
+    isDanger ? "border-danger/30 bg-danger-bg/70" : "border-border bg-background",
   ].join(" ");
   const inputClass = [
-    "h-11 w-full rounded-md border bg-white px-3 py-2 text-sm outline-none transition-colors placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500",
+    "h-11 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
     isDanger
-      ? "border-red-200 focus:border-red-600 focus:ring-2 focus:ring-red-200"
-      : "border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-200",
+      ? "border-danger/30 focus:border-danger focus:ring-2 focus:ring-danger/40"
+      : "border-border focus:border-primary focus:ring-2 focus:ring-ring/40",
   ].join(" ");
   const statusClass = [
     "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
     confirmed
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      ? "border-success/30 bg-success-bg text-success"
       : value.trim()
-        ? "border-red-200 bg-red-50 text-red-800"
-        : "border-slate-200 bg-white text-slate-600",
+        ? "border-danger/30 bg-danger-bg text-danger"
+        : "border-border bg-card text-muted",
   ].join(" ");
 
   return (
     <div className={containerClass} data-testid="execution-confirmation-field">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <label htmlFor={id} className={`text-sm font-semibold ${isDanger ? "text-red-950" : "text-slate-900"}`}>
+        <label htmlFor={id} className={`text-sm font-semibold ${isDanger ? "text-danger" : "text-foreground"}`}>
           {t("dbAdmin.confirmation.label")}
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full break-all rounded-md bg-white px-2 py-1 font-mono text-xs text-slate-700">
+          <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-mono text-xs text-foreground">
             {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
           </span>
           <span className={statusClass} aria-live="polite">
@@ -335,93 +339,40 @@ export function ExecutionConfirmationField({
           spellCheck={false}
         />
       </div>
-      <p id={helperId} className={`text-xs leading-5 ${isDanger ? "text-red-800" : "text-slate-600"}`}>
+      <p id={helperId} className={`text-xs leading-5 ${isDanger ? "text-danger" : "text-muted"}`}>
         {helper}
       </p>
     </div>
   );
 }
 
-const QUERY_RESULTS_PAGE_SIZE = 10;
-
 export function QueryResultsTable({ results }: { results: QueryResults }) {
-  const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(results.rows.length / QUERY_RESULTS_PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const start = (currentPage - 1) * QUERY_RESULTS_PAGE_SIZE;
-  const rows = results.rows.slice(start, start + QUERY_RESULTS_PAGE_SIZE);
-
-  useEffect(() => {
-    setPage(1);
-  }, [results]);
+  const { page, setPage, totalPages, pageItems, range } = usePagination(results.rows, DEFAULT_PAGE_SIZE);
 
   return (
     <div className="grid gap-2">
-      <div className="overflow-auto rounded-md border border-slate-200 bg-white" data-testid="query-results-table">
-        <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-          <thead className="bg-slate-50 text-slate-600">
-            <tr>
-              {results.columns.map((column) => (
-                <th key={column} className="px-3 py-2 font-semibold">{column}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-slate-800">
-            {rows.map((row, index) => (
-              <tr key={start + index}>
-                {results.columns.map((column) => (
-                  <td key={column} className="max-w-56 break-words px-3 py-2">
-                    {String(row[column] ?? "")}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            {results.rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-slate-500" colSpan={Math.max(results.columns.length, 1)}>
-                  {t("queryResults.emptyRows")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {results.rows.length > QUERY_RESULTS_PAGE_SIZE && (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600" data-testid="query-results-pagination">
-          <span>
-            {t("queryResults.pageSummary", {
-              start: start + 1,
-              end: Math.min(start + QUERY_RESULTS_PAGE_SIZE, results.rows.length),
-              total: results.rows.length,
-            })}
-          </span>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-            >
-              <ChevronLeft size={15} aria-hidden="true" />
-              <span>{t("queryResults.prev")}</span>
-            </Button>
-            <span className="inline-flex min-h-9 items-center rounded-md border border-slate-200 px-3 text-slate-700">
-              {t("queryResults.page", { page: currentPage, total: totalPages })}
-            </span>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-            >
-              <span>{t("queryResults.next")}</span>
-              <ChevronRight size={15} aria-hidden="true" />
-            </Button>
-          </div>
-        </div>
-      )}
+      <DataTable
+        testId="query-results-table"
+        columns={results.columns.map((column) => ({
+          key: column,
+          header: column,
+          className: "max-w-56",
+          render: (row: Record<string, unknown>) => String(row[column] ?? ""),
+        }))}
+        rows={pageItems}
+        getRowKey={(_, index) => (range.start === 0 ? 0 : range.start - 1) + index}
+        empty={t("queryResults.emptyRows")}
+      />
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        summary={t("queryResults.pageSummary", { start: range.start, end: range.end, total: range.total })}
+        pageIndicator={t("queryResults.page", { page, total: totalPages })}
+        prevLabel={t("queryResults.prev")}
+        nextLabel={t("queryResults.next")}
+        testId="query-results-pagination"
+      />
     </div>
   );
 }
@@ -516,17 +467,17 @@ function parseDbAdminError(message: string) {
 function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
   const error = parseDbAdminError(statement.error_message);
   return (
-    <div className="mt-3 grid gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-red-950" role="alert">
+    <div className="mt-3 grid gap-3 rounded-md border border-danger/30 bg-danger-bg p-3 text-danger" role="alert">
       <div className="grid gap-1">
-        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.summary")}</p>
+        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.summary")}</p>
         <p className="break-words text-sm font-semibold">{error.summary}</p>
       </div>
       <div className="grid gap-1">
-        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.cause")}</p>
+        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.cause")}</p>
         <p className="text-sm leading-6">{error.cause}</p>
       </div>
       <div className="grid gap-1">
-        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.nextAction")}</p>
+        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.nextAction")}</p>
         <ul className="grid gap-1 text-sm leading-6">
           {error.actions.map((action) => (
             <li key={action} className="flex gap-2">
@@ -536,17 +487,17 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
           ))}
         </ul>
       </div>
-      <details className="rounded-md border border-red-200 bg-white/70">
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-red-200">
+      <details className="rounded-md border border-danger/30 bg-card/70">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-danger/40">
           {t("dbAdmin.result.error.detail")}
         </summary>
-        <div className="grid gap-2 border-t border-red-100 p-3">
+        <div className="grid gap-2 border-t border-danger/20 p-3">
           {error.helpUrl && (
-            <a className="text-sm font-semibold text-red-800 underline" href={error.helpUrl} target="_blank" rel="noreferrer">
+            <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
               {t("dbAdmin.result.error.help")}
             </a>
           )}
-          <code className="block break-words text-xs leading-5 text-red-900">{statement.error_message}</code>
+          <code className="block break-words text-xs leading-5 text-danger">{statement.error_message}</code>
         </div>
       </details>
     </div>
@@ -556,7 +507,7 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
 export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData }) {
   const summary = resultSummary(result);
   return (
-    <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+    <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant={summary.variant} label={summary.label} />
         <StatusBadge variant="neutral" label={runtimeLabel(result.runtime)} />
@@ -564,22 +515,22 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
         {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
       {result.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
           {warning}
         </p>
       ))}
       {result.select_result && <QueryResultsTable results={result.select_result} />}
       <div className="grid gap-2">
         {result.statements.map((statement) => (
-          <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-white p-3">
+          <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-card p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-2">
                 <StatusBadge variant="neutral" label={statement.statement_type} />
                 <StatusBadge variant={statusVariant(statement.status)} label={statusLabel(statement.status)} />
               </div>
-              <span className="text-xs text-slate-500">{statement.elapsed_ms}ms</span>
+              <span className="text-xs text-muted">{statement.elapsed_ms}ms</span>
             </div>
-            <code className="mt-2 block break-words text-xs text-slate-700">{statement.sql}</code>
+            <code className="mt-2 block break-words text-xs text-foreground">{statement.sql}</code>
             {statement.error_message && <DbAdminStatementError statement={statement} />}
           </div>
         ))}
@@ -639,33 +590,33 @@ export function FileInputControl({
   const clearIsDisabled = clearDisabled ?? !hasFile;
 
   return (
-    <div className={`grid min-w-0 gap-1 text-sm font-medium text-slate-800 ${className}`} data-testid={dataTestId}>
+    <div className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`} data-testid={dataTestId}>
       <span>{label}</span>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
         <label
           htmlFor={inputId}
-          className={`group flex h-11 min-w-0 items-center gap-2 rounded-md border bg-white px-3 py-1 text-left transition-colors focus-within:ring-2 focus-within:ring-sky-200 ${
+          className={`group flex h-11 min-w-0 items-center gap-2 rounded-md border bg-card px-3 py-1 text-left transition-colors focus-within:ring-2 focus-within:ring-ring/40 ${
             disabled
-              ? "cursor-not-allowed border-slate-200 opacity-60"
-              : "cursor-pointer border-slate-300 hover:border-sky-300 hover:bg-sky-50/40"
+              ? "cursor-not-allowed border-border opacity-60"
+              : "cursor-pointer border-border hover:border-primary/40 hover:bg-primary/10"
           }`}
         >
           <span
             className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-              hasFile ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-500 group-hover:text-sky-700"
+              hasFile ? "bg-primary/10 text-primary" : "bg-muted/30 text-muted group-hover:text-primary"
             }`}
             aria-hidden="true"
           >
             <Icon size={16} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold text-slate-900">
+            <span className="block truncate text-sm font-semibold text-foreground">
               {hasFile ? selectedText ?? filename : pickText}
             </span>
           </span>
           <span
             className={`hidden max-w-56 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:inline-block ${
-              hasFile ? "border-sky-200 bg-sky-50 text-sky-800" : "border-slate-200 bg-slate-50 text-slate-600"
+              hasFile ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-background text-muted"
             }`}
           >
             {hasFile ? replaceText ?? pickText : emptyText}
@@ -732,7 +683,7 @@ export function SelectionListPanel({
   return (
     <section className="grid min-w-0 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         <StatusBadge
           variant={selectedItems.length > 0 ? "info" : "neutral"}
           label={selectedCountLabel}
@@ -742,7 +693,7 @@ export function SelectionListPanel({
         role="group"
         aria-label={ariaLabel}
         data-testid={dataTestId}
-        className="grid h-[28rem] overflow-y-auto rounded-md border border-slate-200 bg-white"
+        className="grid h-[28rem] overflow-y-auto rounded-md border border-border bg-card"
       >
         {items.length === 0 ? (
           <div className="grid min-h-full place-items-center p-4">
@@ -757,17 +708,17 @@ export function SelectionListPanel({
                   key={name}
                   className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md border p-3 text-sm transition-colors ${
                     selected
-                      ? "border-sky-200 bg-sky-50 text-sky-950"
-                      : "border-slate-200 text-slate-800 hover:border-sky-200 hover:bg-sky-50/50"
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "border-border text-foreground hover:border-primary/30 hover:bg-primary/10"
                   }`}
                 >
                   <input
                     type="checkbox"
                     checked={selected}
                     onChange={() => onToggle(name)}
-                    className="h-4 w-4 shrink-0 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                    className="h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
                   />
-                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-slate-900">
+                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-foreground">
                     {name}
                   </span>
                 </label>
@@ -882,11 +833,11 @@ export function StatementRunnerCard({
   const header = executeOnly ? (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
           <Code2 size={18} aria-hidden="true" />
           {title}
         </h2>
-        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       </div>
       <Button
         type="button"
@@ -937,13 +888,13 @@ export function StatementRunnerCard({
       {executeOnly && header}
       {progressNode}
       {message && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        <p className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger" role="alert">
           {message}
         </p>
       )}
       {templates && templates.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-slate-500">{t("dbAdmin.runner.templates")}</span>
+          <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
           {templates.map((template) => (
             <Button
               key={template.label}
@@ -957,14 +908,14 @@ export function StatementRunnerCard({
           ))}
         </div>
       )}
-      <label className="grid gap-1 text-sm font-medium text-slate-800">
+      <label className="grid gap-1 text-sm font-medium text-foreground">
         <span>{t("dbAdmin.runner.sqlLabel")}</span>
         <textarea
           value={sql}
           onChange={(event) => setSql(event.currentTarget.value)}
           rows={9}
           placeholder={placeholder}
-          className="min-h-52 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+          className="min-h-52 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 focus:border-primary focus:ring-2 focus:ring-ring/40"
         />
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -994,8 +945,8 @@ export function StatementRunnerCard({
       </div>
       <div className="grid gap-3">
         {executeOnly ? (
-          <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-            <legend className="px-1 text-sm font-semibold text-slate-900">
+          <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+            <legend className="px-1 text-sm font-semibold text-foreground">
               {confirmationTitle ?? t("dbAdmin.runner.confirmation")}
             </legend>
             {confirmationField}
@@ -1051,19 +1002,19 @@ export function ObjectListPanel({
 
   return (
     <div className="grid content-start gap-3">
-      <label className="grid gap-1 text-sm font-medium text-slate-800">
+      <label className="grid gap-1 text-sm font-medium text-foreground">
         <span>{t("dbAdmin.search.label")}</span>
         <span className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+            className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
             placeholder={t("dbAdmin.search.placeholder")}
           />
         </span>
       </label>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-muted">
         {t("dbAdmin.search.resultCount", { filtered: filtered.length, total: items.length })}
       </p>
       {filtered.length === 0 ? (
@@ -1077,14 +1028,14 @@ export function ObjectListPanel({
               role="listitem"
               aria-current={item.name === selectedName ? "true" : undefined}
               onClick={() => onSelect(item)}
-              className={`min-h-16 cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-sky-200 ${
+              className={`min-h-16 cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-ring/40 ${
                 item.name === selectedName
-                  ? "border-sky-400 bg-sky-50"
-                  : "border-slate-200 bg-white hover:bg-slate-50"
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-card hover:bg-background"
               }`}
             >
-              <span className="break-all font-mono text-xs font-semibold text-sky-800">{item.name}</span>
-              <span className="mt-1 block text-xs text-slate-600">
+              <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
+              <span className="mt-1 block text-xs text-muted">
                 {item.comment.trim() || "-"}
                 {item.row_count != null && ` / ${t("dbAdmin.list.rows", { count: item.row_count })}`}
               </span>
@@ -1138,7 +1089,7 @@ export function ObjectDetailPanel({
     <section className="grid min-w-0 content-start gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="break-all font-mono text-sm font-semibold text-slate-900">{detail.name}</p>
+          <p className="break-all font-mono text-sm font-semibold text-foreground">{detail.name}</p>
           <StatusBadge variant="neutral" label={detail.object_type} />
           <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
           {detail.row_count != null && (
@@ -1147,16 +1098,16 @@ export function ObjectDetailPanel({
         </div>
         {actions}
       </div>
-      {detail.comment && <p className="text-sm text-slate-700">{detail.comment}</p>}
+      {detail.comment && <p className="text-sm text-foreground">{detail.comment}</p>}
       {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
           {warning}
         </p>
       ))}
       <div>
-        <p className="mb-1 text-sm font-semibold text-slate-900">{t("dbAdmin.detail.columns")}</p>
-        <div data-testid="db-admin-detail-columns" className="min-w-0 max-w-full overflow-x-auto rounded-md border border-slate-200">
-          <table className="w-full min-w-[42rem] table-fixed divide-y divide-slate-200 text-sm">
+        <p className="mb-1 text-sm font-semibold text-foreground">{t("dbAdmin.detail.columns")}</p>
+        <div data-testid="db-admin-detail-columns" className="min-w-0 max-w-full overflow-x-auto rounded-md border border-border">
+          <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
               <col className="w-[18%]" />
               <col className="w-[12%]" />
@@ -1164,7 +1115,7 @@ export function ObjectDetailPanel({
               <col className="w-[10%]" />
               <col />
             </colgroup>
-            <thead className="bg-slate-50">
+            <thead className="bg-background">
               <tr>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
@@ -1173,14 +1124,14 @@ export function ObjectDetailPanel({
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border/70">
               {detail.columns.map((column) => (
                 <tr key={column.column_name}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
                   <td className="px-3 py-2">{column.logical_name}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-mono text-xs text-slate-600">
+                  <td className="break-words px-3 py-2 font-mono text-xs text-muted">
                     {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
                   </td>
                 </tr>
@@ -1189,12 +1140,12 @@ export function ObjectDetailPanel({
           </table>
         </div>
       </div>
-      <details className="rounded-md border border-slate-200 bg-slate-50">
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-900 marker:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-200">
+      <details className="rounded-md border border-border bg-background">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-foreground marker:text-muted focus:outline-none focus:ring-2 focus:ring-ring/40">
           {t("dbAdmin.detail.ddl")}
-          <span className="ml-2 text-xs font-normal text-slate-500">{t("dbAdmin.detail.ddlHint")}</span>
+          <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
         </summary>
-        <div className="grid gap-2 border-t border-slate-200 bg-white p-3">
+        <div className="grid gap-2 border-t border-border bg-card p-3">
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
               {copied ? t("dbAdmin.detail.copied") : t("dbAdmin.detail.copy")}
@@ -1210,7 +1161,7 @@ export function ObjectDetailPanel({
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </div>
-          <pre className="max-h-72 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </div>

@@ -49,9 +49,7 @@ class FakeEnterpriseAiClient:
         return "fake-enterprise-ai"
 
     def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
-        self.calls.append(
-            {"prompt": prompt, "context": context, "system_prompt": system_prompt}
-        )
+        self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         if not self.responses:
             return ""
         response = self.responses.pop(0)
@@ -88,6 +86,9 @@ class FakeOracleGenerator:
         del team_name, tool_name
         self.questions.append(question)
         return "SELECT * FROM INVOICES", "conversation-1"
+
+    def search_feedback_vector_index(self, **_kwargs: Any) -> list[dict[str, Any]]:
+        return []
 
 
 def _workbook_bytes(workbook: Any) -> bytes:
@@ -317,7 +318,7 @@ def test_profile_select_ai_attributes_use_tables_and_views_object_list() -> None
     assert attributes["embedding_model"] == "cohere.embed-v4.0"
     assert attributes["role"] == "財務 SQL アシスタント"
     instructions = attributes["additional_instructions"]
-    assert "## 業務説明" in instructions
+    assert "## 業務説明" not in instructions
     assert "## プロファイル追加指示\n金額は円単位で表示する。" in instructions
     object_list = attributes["object_list"]
     assert [item["name"] for item in object_list] == ["INVOICES", "V_INVOICE_SUMMARY"]
@@ -564,13 +565,17 @@ def test_profile_learning_material_imports_csv_and_exports_xlsx() -> None:
         mode="merge",
     )
     assert imported_rules.imported_rules == 1
-    assert "日付条件は TRUNC を使う" in imported_rules.profile.sql_rules
+    assert imported_rules.profile.sql_rules == []
+    assert (
+        "日付条件は TRUNC を使う" in imported_rules.profile.select_ai_config.additional_instructions
+    )
 
     filename, workbook_bytes = service.export_profile_learning_material_xlsx("default")
     assert filename.endswith("_learning_material.xlsx")
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True)
-    assert {"terms", "rules", "few_shot"}.issubset(set(workbook.sheetnames))
+    assert {"terms", "few_shot"}.issubset(set(workbook.sheetnames))
+    assert "rules" not in workbook.sheetnames
 
 
 def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace() -> None:
@@ -614,7 +619,9 @@ def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace()
     assert merged.skipped_count == 1
     assert merged.profile.glossary["既存"] == "OLD.VALUE"
     assert merged.profile.glossary["粗利"] == "INVOICES.PROFIT"
-    assert merged.profile.sql_rules == ["既存ルール", "日付条件は TRUNC を使う"]
+    assert merged.profile.sql_rules == []
+    assert "既存ルール" in merged.profile.select_ai_config.additional_instructions
+    assert "日付条件は TRUNC を使う" in merged.profile.select_ai_config.additional_instructions
     assert merged.profile.few_shot_examples == [
         {"question": "既存質問", "sql": "SELECT 1 FROM DUAL"},
         {"question": "粗利を見たい", "sql": "SELECT PROFIT FROM INVOICES"},
@@ -671,13 +678,16 @@ def test_global_learning_material_imports_exports_and_applies_all_rules() -> Non
 
     profile = service.get_profile("osaka")
     assert cast(Any, service)._effective_glossary(profile)["売上"] == "PROFILE.SALES"
+    # グローバルルールは _legacy_learning_material.rules として保存され、全 profile の
+    # SQL 生成へ注入される（HEAD 挙動へ復元）。
     assert cast(Any, service)._effective_sql_rules(profile) == [
         "共通ルール",
         "大阪ルール",
         "東京ルール",
-        "profile 固有ルール",
     ]
     assert "東京ルール" in cast(Any, service)._append_rules_to_question("質問", profile)
+    # profile 固有 sql_rules は create_profile 時に追加指示へ吸収される（別機能・不変）。
+    assert "profile 固有ルール" in profile.select_ai_config.additional_instructions
 
     terms_filename, terms_bytes = service.export_legacy_terms_xlsx()
     rules_filename, rules_bytes = service.export_legacy_rules_xlsx()
@@ -694,9 +704,7 @@ def test_global_rule_xlsx_preserves_newlines_blank_lines_and_indentation() -> No
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
     multiline_rule = (
-        "SELECT customer_name\n\n"
-        "    FROM customers\n"
-        "    WHERE customer_status = 'ACTIVE'"
+        "SELECT customer_name\n\n" "    FROM customers\n" "    WHERE customer_status = 'ACTIVE'"
     )
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.Workbook()
@@ -746,7 +754,7 @@ def test_legacy_rule_entries_snapshot_migrates_to_global_rules() -> None:
     assert "rule_entries" not in material
 
 
-def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
+def test_oracle_runtime_does_not_append_rules_to_select_ai_questions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
@@ -768,6 +776,7 @@ def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
         filename="rules.csv",
         content="CATEGORY,RULE\n共通,共通ルール\nOSAKA,大阪ルール\nTOKYO,東京ルール\n".encode(),
     )
+    cast(Any, service)._embedding_client = FakeEmbeddingClient()
     fake_oracle = FakeOracleGenerator()
     cast(Any, service)._oracle_adapter = fake_oracle
     monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
@@ -789,13 +798,27 @@ def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
 
     assert len(fake_oracle.questions) == 2
     for question in fake_oracle.questions:
-        assert "=== Rules ===" in question
+        # Oracle SELECT AI ではルールは question へ追記せず additional_instructions 属性で渡す。
+        assert "=== Rules ===" not in question
         assert "売上=INVOICES.TOTAL_AMOUNT" in question
         assert "請求金額=INVOICES.TAX_AMOUNT" in question
-        assert "共通ルール" in question
-        assert "大阪ルール" in question
-        assert "東京ルール" in question
-        assert "profile 固有ルール" in question
+        assert "共通ルール" not in question
+        assert "大阪ルール" not in question
+        assert "東京ルール" not in question
+        assert "profile 固有ルール" not in question
+    profile = service.get_profile("rules")
+    instructions = profile.select_ai_config.additional_instructions
+    # グローバルルールはグローバル保存に残り profile へは吸収しない。
+    assert "共通ルール" not in instructions
+    assert "大阪ルール" not in instructions
+    assert "東京ルール" not in instructions
+    # profile 固有 sql_rules は create_profile 時に追加指示へ吸収される（別機能・不変）。
+    assert "profile 固有ルール" in instructions
+    # グローバルルールは build_select_ai_additional_instructions 経由で LLM へ届く。
+    built = cast(Any, service).build_select_ai_additional_instructions(profile)
+    assert "共通ルール" in built
+    assert "大阪ルール" in built
+    assert "東京ルール" in built
 
 
 def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> None:
@@ -825,10 +848,6 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
         filename="terms.csv",
         content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
     )
-    service.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\nグローバルルール\n".encode(),
-    )
     service.create_profile(
         Nl2SqlProfile(
             id="billing-direct",
@@ -837,6 +856,10 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
             glossary={"請求金額": "INVOICES.TAX_AMOUNT"},
             sql_rules=["プロファイル固有ルール"],
         )
+    )
+    service.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\nグローバルルール\n".encode(),
     )
     fake = FakeEnterpriseAiClient(
         '{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES","explanation":"売上を取得します。"}'
@@ -856,8 +879,9 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
     assert "請求金額=INVOICES.TAX_AMOUNT" in fake.calls[0]["prompt"]
     assert "- 売上: INVOICES.TOTAL_AMOUNT" in fake.calls[0]["context"]
     assert "- 請求金額: INVOICES.TAX_AMOUNT" in fake.calls[0]["context"]
-    assert "- グローバルルール" in fake.calls[0]["context"]
-    assert "- プロファイル固有ルール" in fake.calls[0]["context"]
+    assert "additional_instructions:" in fake.calls[0]["context"]
+    assert "グローバルルール" in fake.calls[0]["context"]
+    assert "プロファイル固有ルール" in fake.calls[0]["context"]
 
 
 async def test_db_profile_drop_endpoint_rejects_legacy_execute_and_runs_with_confirmation(
@@ -1019,10 +1043,6 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
         filename="terms.csv",
         content="TERM,DEFINITION\n請求表,INVOICES\n".encode(),
     )
-    service.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\n金額列には業務名を使う\n".encode(),
-    )
     service.create_profile(
         Nl2SqlProfile(
             id="billing",
@@ -1031,6 +1051,10 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
             allowed_tables=["INVOICES"],
             glossary={"請求金額": "INVOICES.TOTAL_AMOUNT"},
         )
+    )
+    service.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\n金額列には業務名を使う\n".encode(),
     )
     fake = FakeEnterpriseAiClient(
         '{"question":"請求金額を一覧で確認したい",'
@@ -1054,7 +1078,9 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     assert "profile: 請求管理" in fake.calls[0]["context"]
     assert "- 請求表: INVOICES" in fake.calls[0]["context"]
     assert "- 請求金額: INVOICES.TOTAL_AMOUNT" in fake.calls[0]["context"]
-    assert "- 金額列には業務名を使う" in fake.calls[0]["context"]
+    # import_legacy_rules されたルールはグローバル保存に入り sql_rules: へ注入される。
+    assert "sql_rules:" in fake.calls[0]["context"]
+    assert "金額列には業務名を使う" in fake.calls[0]["context"]
     assert "logical_structure" in fake.calls[0]["system_prompt"]
 
     deterministic = service.reverse_sql(

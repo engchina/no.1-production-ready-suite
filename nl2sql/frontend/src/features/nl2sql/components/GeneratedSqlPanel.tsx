@@ -41,16 +41,16 @@ export function GeneratedSqlPanel({
               variant={result.safety.is_safe ? "success" : "danger"}
               label={result.safety.is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
             />
-            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700">
+            <span className="rounded-md bg-muted/30 px-2 py-1 text-xs text-foreground">
               {engineLabel(result.engine)}
             </span>
             {mode === "preview" && (
-              <span className="rounded-md bg-sky-50 px-2 py-1 text-xs text-sky-900">
+              <span className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">
                 {t("nl2sql.sql.preview")}
               </span>
             )}
             {result.fallback_reason && (
-              <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900">
+              <span className="rounded-md bg-warning-bg px-2 py-1 text-xs text-warning">
                 {t("nl2sql.result.fallback")}
               </span>
             )}
@@ -77,12 +77,12 @@ export function GeneratedSqlPanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <pre className="max-h-72 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-4 text-sm leading-6 text-slate-50">
+        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg">
           <code>{displayedSql}</code>
         </pre>
-        <div className="grid gap-3 text-sm text-slate-700 md:grid-cols-2">
+        <div className="grid gap-3 text-sm text-foreground md:grid-cols-2">
           <p>{result.explanation}</p>
-          <dl className="grid gap-1 rounded-md bg-slate-50 p-3">
+          <dl className="grid gap-1 rounded-md bg-background p-3">
             <div className="flex justify-between gap-3">
               <dt>{t("nl2sql.result.rewritten")}</dt>
               <dd className="text-right">{result.rewritten_question}</dd>
@@ -100,12 +100,12 @@ export function GeneratedSqlPanel({
         {(recommendations.length > 0 || optimizationHints.length > 0) && (
           <div className="grid gap-3 md:grid-cols-2">
             {recommendations.length > 0 && (
-              <section className="rounded-md border border-slate-200 bg-white p-3">
-                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <ShieldCheck size={15} className="text-sky-700" aria-hidden="true" />
+              <section className="rounded-md border border-border bg-card p-3">
+                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <ShieldCheck size={15} className="text-primary" aria-hidden="true" />
                   {t("nl2sql.analysis.recommendations")}
                 </h3>
-                <ul className="grid gap-1 text-sm text-slate-700">
+                <ul className="grid gap-1 text-sm text-foreground">
                   {recommendations.map((item) => (
                     <li key={item}>{item}</li>
                   ))}
@@ -113,12 +113,12 @@ export function GeneratedSqlPanel({
               </section>
             )}
             {optimizationHints.length > 0 && (
-              <section className="rounded-md border border-slate-200 bg-white p-3">
-                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <Lightbulb size={15} className="text-amber-700" aria-hidden="true" />
+              <section className="rounded-md border border-border bg-card p-3">
+                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Lightbulb size={15} className="text-warning" aria-hidden="true" />
                   {t("nl2sql.analysis.optimization")}
                 </h3>
-                <ul className="grid gap-1 text-sm text-slate-700">
+                <ul className="grid gap-1 text-sm text-foreground">
                   {optimizationHints.map((item) => (
                     <li key={item}>{item}</li>
                   ))}
@@ -128,18 +128,18 @@ export function GeneratedSqlPanel({
           </div>
         )}
         {showRepairedSql && (
-          <section className="grid gap-2 rounded-md border border-sky-200 bg-sky-50 p-3">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <Wrench size={15} className="text-sky-700" aria-hidden="true" />
+          <section className="grid gap-2 rounded-md border border-primary/30 bg-primary/10 p-3">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Wrench size={15} className="text-primary" aria-hidden="true" />
               {t("nl2sql.analysis.repairedSql")}
             </h3>
-            <pre className="max-h-56 overflow-auto rounded-md border border-sky-100 bg-white p-3 text-sm leading-6 text-slate-900">
+            <pre className="max-h-56 overflow-auto rounded-md border border-primary/20 bg-card p-3 text-sm leading-6 text-foreground">
               <code>{result.repaired_sql}</code>
             </pre>
           </section>
         )}
         {(result.safety.blocked_reason || result.safety.warnings.length > 0) && (
-          <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          <div className="grid gap-2 rounded-md border border-warning/30 bg-warning-bg p-3 text-sm text-warning">
             {result.safety.blocked_reason && <p>{result.safety.blocked_reason}</p>}
             {result.safety.warnings.map((warning) => (
               <p key={warning}>{warning}</p>

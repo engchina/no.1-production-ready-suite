@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -9,7 +9,6 @@ import {
   DbObjectDetailPanel,
   DbObjectGrid,
   DbObjectManagementPanelShell,
-  DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectStatusBar,
   DbObjectStepIndicator,
@@ -19,7 +18,6 @@ import {
   type DbObjectFilter,
   type DbObjectSortKey,
   type DbObjectSortState,
-  type DbObjectTab,
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import type {
@@ -97,21 +95,21 @@ function ViewJoinWherePanel({
 
       {detail ? (
         <section
-          className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3"
+          className="grid gap-3 rounded-md border border-border bg-background p-3"
           data-testid="view-join-where-selected-view"
         >
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="info" label={detail.name} />
           </div>
-          <p className="text-sm text-slate-600">{t("viewMgmt.joinWhere.selectedHint")}</p>
+          <p className="text-sm text-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
         </section>
       ) : (
         <EmptyState title={t("viewMgmt.joinWhere.emptyTitle")} hint={t("viewMgmt.joinWhere.empty")} />
       )}
 
       <fieldset className="grid gap-2">
-        <legend className="text-sm font-semibold text-slate-800">
+        <legend className="text-sm font-semibold text-foreground">
           {t("viewMgmt.joinWhere.profileLabel")}
         </legend>
         <div
@@ -127,8 +125,8 @@ function ViewJoinWherePanel({
                 className={[
                   "flex min-h-24 cursor-pointer gap-3 rounded-md border p-3 text-left transition-colors",
                   selected
-                    ? "border-blue-300 bg-blue-50 text-blue-950"
-                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border bg-card text-foreground hover:border-border",
                 ].join(" ")}
               >
                 <input
@@ -137,13 +135,13 @@ function ViewJoinWherePanel({
                   value={option}
                   checked={selected}
                   onChange={() => onProfileChange(option)}
-                  className="mt-1 h-4 w-4 flex-none accent-blue-600"
+                  className="mt-1 h-4 w-4 flex-none accent-primary"
                 />
                 <span className="grid min-w-0 gap-1">
                   <span className="text-sm font-semibold">
                     {joinWherePromptProfileLabel(option)}
                   </span>
-                  <span className="text-xs leading-5 text-slate-600">
+                  <span className="text-xs leading-5 text-muted">
                     {joinWherePromptProfileDescription(option)}
                   </span>
                 </span>
@@ -154,7 +152,7 @@ function ViewJoinWherePanel({
       </fieldset>
 
       {result && (
-        <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
+        <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
             <StatusBadge
@@ -163,36 +161,36 @@ function ViewJoinWherePanel({
             />
           </div>
           {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
               {warning}
             </p>
           ))}
           <div className="grid gap-3 lg:grid-cols-2">
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <label className="grid gap-1 text-sm font-medium text-foreground">
               <span>{t("viewMgmt.joinWhere.join")}</span>
               <textarea
                 readOnly
                 value={result.join_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-800 outline-none"
+                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
               />
             </label>
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <label className="grid gap-1 text-sm font-medium text-foreground">
               <span>{t("viewMgmt.joinWhere.where")}</span>
               <textarea
                 readOnly
                 value={result.where_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-800 outline-none"
+                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
               />
             </label>
           </div>
           {result.structure_markdown ? (
-            <details className="rounded-md border border-slate-200 bg-white p-3">
-              <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+            <details className="rounded-md border border-border bg-card p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-foreground">
                 {t("viewMgmt.joinWhere.structureResult")}
               </summary>
-              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-50">
+              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 font-mono text-xs leading-5 text-code-fg">
                 {result.structure_markdown}
               </pre>
             </details>
@@ -311,8 +309,10 @@ export function ViewManagementPage() {
         reason: "ui-view-management-drop",
       });
       if (result.executed) {
+        const dropped = dropTargetName;
         setDropTargetName("");
         setDropConfirmation("");
+        toast.success(t("viewMgmt.drop.success", { name: dropped }));
         await load(true);
       }
     } catch (err) {
@@ -339,12 +339,6 @@ export function ViewManagementPage() {
       setLoading("");
     }
   };
-
-  const tabs: Array<DbObjectTab<ActiveView>> = [
-    { id: "list", label: t("viewMgmt.list.title"), icon: Eye },
-    { id: "create", label: t("viewMgmt.create.title"), icon: Code2 },
-    { id: "joinWhere", label: t("viewMgmt.joinWhere.title"), icon: Sparkles },
-  ];
 
   const taskContent =
     activeView === "create" ? (
@@ -385,18 +379,17 @@ export function ViewManagementPage() {
       <PageHeader title={t("nav.viewManagement")} subtitle={t("viewMgmt.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
         {message && (
-          <div
-            className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between"
-            role="alert"
+          <Banner
+            severity="danger"
+            action={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("viewMgmt.action.refresh")}</span>
+              </Button>
+            }
           >
-            <span>
-              {message} {t("viewMgmt.error.retryHint")}
-            </span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("viewMgmt.action.refresh")}</span>
-            </Button>
-          </div>
+            {message} {t("viewMgmt.error.retryHint")}
+          </Banner>
         )}
 
         <DbObjectStatusBar
@@ -416,23 +409,30 @@ export function ViewManagementPage() {
           onSchemaRefresh={() => void load(true)}
         />
 
-        <DbObjectManagementTabs
-          idPrefix={VIEW_MANAGEMENT_ID}
-          tabs={tabs}
-          activeView={activeView}
-          ariaLabel={t("viewMgmt.tabs.label")}
-          onViewChange={setActiveView}
-        />
-
         {activeView === "list" ? (
-          <DbObjectManagementPanelShell
-            id="view-management-panel-list"
-            labelledBy="view-management-tab-list"
-            idPrefix={VIEW_MANAGEMENT_ID}
-            ariaLabel={t("viewMgmt.workspace.label")}
-            splitId="view-management-list"
-            preferredWidePane="right"
-          >
+          <>
+            <div
+              className="flex flex-wrap items-center justify-end gap-2"
+              data-testid="view-management-actions"
+              aria-label={t("viewMgmt.tabs.label")}
+            >
+              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("create")}>
+                <Code2 size={15} aria-hidden="true" />
+                <span>{t("viewMgmt.create.title")}</span>
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("joinWhere")}>
+                <Sparkles size={15} aria-hidden="true" />
+                <span>{t("viewMgmt.joinWhere.title")}</span>
+              </Button>
+            </div>
+            <DbObjectManagementPanelShell
+              id="view-management-panel-list"
+              role="region"
+              idPrefix={VIEW_MANAGEMENT_ID}
+              ariaLabel={t("viewMgmt.workspace.label")}
+              splitId="view-management-list"
+              preferredWidePane="right"
+            >
             <DbObjectGrid
               idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-grid-heading"
@@ -485,16 +485,25 @@ export function ViewManagementPage() {
               onTabChange={setDetailTab}
               onDrop={openDropDialog}
             />
-          </DbObjectManagementPanelShell>
+            </DbObjectManagementPanelShell>
+          </>
         ) : (
-          <DbObjectManagementPanelShell
-            id={`view-management-panel-${activeView}`}
-            labelledBy={`view-management-tab-${activeView}`}
-            idPrefix={VIEW_MANAGEMENT_ID}
-            ariaLabel={t("viewMgmt.toolbar.taskPanel")}
-          >
-            {taskContent}
-          </DbObjectManagementPanelShell>
+          <>
+            <div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView("list")}>
+                <ArrowLeft size={15} aria-hidden="true" />
+                <span>{t("viewMgmt.action.backToList")}</span>
+              </Button>
+            </div>
+            <DbObjectManagementPanelShell
+              id={`view-management-panel-${activeView}`}
+              role="region"
+              idPrefix={VIEW_MANAGEMENT_ID}
+              ariaLabel={t("viewMgmt.toolbar.taskPanel")}
+            >
+              {taskContent}
+            </DbObjectManagementPanelShell>
+          </>
         )}
       </main>
 

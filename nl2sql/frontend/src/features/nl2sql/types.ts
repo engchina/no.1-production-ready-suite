@@ -1,6 +1,13 @@
 export type Nl2SqlEngine = "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
+export type JobStepStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+export interface JobStepData {
+  stage: string;
+  status: JobStepStatus;
+  elapsed_ms?: number | null;
+}
 
 export interface StageTiming {
   stage: string;
@@ -33,11 +40,32 @@ export interface SchemaTable {
   row_count?: number | null;
   columns: SchemaColumn[];
   constraints: string[];
+  constraint_details?: Array<{
+    constraint_name: string;
+    constraint_type: "P" | "R" | "U" | "C";
+    owner?: string;
+    table_name: string;
+    columns: string[];
+    referenced_owner?: string | null;
+    referenced_table?: string | null;
+    referenced_columns: string[];
+    delete_rule?: string;
+    status?: string;
+    deferrable?: string;
+  }>;
 }
 
 export interface SchemaCatalog {
   refreshed_at: string;
+  schema_fingerprint?: string;
   tables: SchemaTable[];
+  view_dependencies?: Array<{
+    owner?: string;
+    view_name: string;
+    referenced_owner?: string;
+    referenced_name: string;
+    referenced_type?: string;
+  }>;
 }
 
 export interface AllowedObjects {
@@ -83,12 +111,12 @@ export interface Nl2SqlProfile {
 export interface ProfileUpsertPayload {
   name: string;
   category?: string;
-  description: string;
+  description?: string;
   allowed_tables: string[];
   allowed_views: string[];
   glossary: Record<string, string>;
   sql_rules: string[];
-  default_row_limit: number;
+  default_row_limit?: number;
   safety_policy: string;
   few_shot_examples: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
@@ -190,13 +218,6 @@ export interface ClassifierModelsData {
   models: ClassifierModelInfo[];
 }
 
-export interface ClassifierModelImportData {
-  imported: boolean;
-  active_version: string;
-  model?: ClassifierModelInfo | null;
-  warnings: string[];
-}
-
 export interface ClassifierModelActivateData {
   active_version: string;
   model?: ClassifierModelInfo | null;
@@ -295,6 +316,7 @@ export interface JobCreateData {
   job_id: string;
   status: JobStatus;
   created_at: string;
+  steps: JobStepData[];
 }
 
 export interface JobData {
@@ -307,6 +329,7 @@ export interface JobData {
   result?: Nl2SqlResult | null;
   error_message?: string | null;
   timing?: TimingEnvelope | null;
+  steps: JobStepData[];
 }
 
 export interface HistoryItem {

@@ -31,22 +31,19 @@ export function previewToGeneratedSqlPanelData(preview: PreviewData): GeneratedS
 export function previewExecutePayload(
   sql: string,
   profileId: string | null,
-  allowedObjects: AllowedObjects,
-  rowLimit: number
+  allowedObjects: AllowedObjects
 ) {
-  return sqlExecutePayload(sql, profileId, allowedObjects, rowLimit);
+  return sqlExecutePayload(sql, profileId, allowedObjects);
 }
 
 export function sqlExecutePayload(
   sql: string,
   profileId: string | null,
-  allowedObjects: AllowedObjects,
-  rowLimit: number
+  allowedObjects: AllowedObjects
 ) {
   return {
     sql: sql.trim(),
     profile_id: profileId,
     allowed_objects: allowedObjects,
-    row_limit: rowLimit,
   };
 }

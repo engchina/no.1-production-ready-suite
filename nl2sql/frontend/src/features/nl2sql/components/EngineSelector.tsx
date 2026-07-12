@@ -45,7 +45,7 @@ export function EngineSelector({
 }) {
   return (
     <fieldset className="space-y-3">
-      <legend className="text-sm font-semibold text-slate-900">{t("nl2sql.engine.label")}</legend>
+      <legend className="text-sm font-semibold text-foreground">{t("nl2sql.engine.label")}</legend>
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         {ENGINE_OPTIONS.map((option) => {
           const selected = option.value === value;

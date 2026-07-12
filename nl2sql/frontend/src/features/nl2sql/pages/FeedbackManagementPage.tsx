@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Code2, DatabaseZap, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
   DbObjectManagementPanelShell,
@@ -13,23 +13,34 @@ import {
   DbObjectPanelHeader,
   type DbObjectTab,
 } from "../components/DbObjectManagementShared";
+import { engineLabel } from "../labels";
+import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import type {
+  FeedbackData,
+  FeedbackEntriesData,
+  FeedbackIndexData,
+  FeedbackRating,
+  FeedbackSearchConfigData,
+  FeedbackVectorEntry,
+  HistoryData,
+  HistoryItem,
   SelectAiDbProfile,
   SelectAiDbProfilesData,
   SelectAiFeedbackEntriesData,
   SelectAiFeedbackEntry,
   SelectAiFeedbackMutationData,
 } from "../types";
+import { formatElapsed } from "../useOperationTimer";
 
-type FeedbackManagementView = "entries" | "vectorIndex";
+type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
 type MessageTone = "success" | "error";
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "entries", label: t("feedbackManagement.tabs.entries"), icon: MessageSquareText },
   { id: "vectorIndex", label: t("feedbackManagement.tabs.vectorIndex"), icon: DatabaseZap },
+  { id: "appFeedback", label: t("feedbackManagement.tabs.appFeedback"), icon: MessageSquareText },
+  { id: "similarityIndex", label: t("feedbackManagement.tabs.similarityIndex"), icon: DatabaseZap },
 ];
-const BUSINESS_SELECT_AI_DB_PROFILES_URL =
-  "/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true";
 
 function formatAttributes(entry: SelectAiFeedbackEntry) {
   if (entry.raw_attributes) return entry.raw_attributes;
@@ -38,6 +49,13 @@ function formatAttributes(entry: SelectAiFeedbackEntry) {
 
 function profileOptionLabel(profile: SelectAiDbProfile) {
   return profile.owner ? `${profile.name} (${profile.owner})` : profile.name;
+}
+
+function feedbackLabel(item: HistoryItem) {
+  if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
+  if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
+  if (item.feedback_rating === "needs_review") return t("nl2sql.feedback.review");
+  return t("feedbackManagement.appFeedback.unrated");
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -57,21 +75,88 @@ export function FeedbackManagementPage() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.9);
   const [matchLimit, setMatchLimit] = useState(3);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState("");
+  const [feedbackRating, setFeedbackRating] = useState<FeedbackRating>("needs_review");
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackFilter, setFeedbackFilter] = useState<"all" | FeedbackRating | "unrated">("all");
+  const [feedbackSearch, setFeedbackSearch] = useState("");
+  const [feedbackIndex, setFeedbackIndex] = useState<FeedbackIndexData | null>(null);
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntriesData | null>(null);
+  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<MessageTone>("success");
 
   const profiles = dbProfiles?.profiles ?? [];
-  const feedbackItems = feedback?.items ?? [];
-  const selectedFeedback = useMemo(
-    () => feedbackItems[selectedIndex] ?? feedbackItems[0] ?? null,
-    [feedbackItems, selectedIndex]
+  const selectAiFeedbackItems = feedback?.items ?? [];
+  const selectedSelectAiFeedback = useMemo(
+    () => selectAiFeedbackItems[selectedIndex] ?? selectAiFeedbackItems[0] ?? null,
+    [selectAiFeedbackItems, selectedIndex]
+  );
+  const appFeedbackItems = useMemo(() => {
+    const q = feedbackSearch.trim().toLowerCase();
+    return history
+      .filter((item) => {
+        if (feedbackFilter === "unrated" && item.feedback_rating) return false;
+        if (feedbackFilter !== "all" && feedbackFilter !== "unrated" && item.feedback_rating !== feedbackFilter) {
+          return false;
+        }
+        if (!q) return true;
+        return (
+          item.question.toLowerCase().includes(q) ||
+          item.generated_sql.toLowerCase().includes(q) ||
+          item.feedback_comment.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 20);
+  }, [feedbackFilter, feedbackSearch, history]);
+  const selectedAppFeedback = useMemo(
+    () => history.find((item) => item.id === selectedFeedbackId) ?? history[0] ?? null,
+    [history, selectedFeedbackId]
   );
 
   const fetchSelectAiFeedback = (name: string) =>
     apiGet<SelectAiFeedbackEntriesData>(
       `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(name)}&limit=50`
     );
+
+  const load = async () => {
+    setLoading("load");
+    setMessage("");
+    try {
+      const [dbProfileData, historyData, indexData, entriesData, configData] = await Promise.all([
+        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
+        apiGet<HistoryData>("/api/nl2sql/history"),
+        apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
+        apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
+        apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
+      ]);
+      const hasCurrentProfile = dbProfileData.profiles.some((profile) => profile.name === profileName);
+      const nextProfile = !profileName
+        ? dbProfileData.profiles[0]?.name || ""
+        : hasCurrentProfile
+          ? profileName
+          : "";
+      const feedbackData = nextProfile ? await fetchSelectAiFeedback(nextProfile) : null;
+      setDbProfiles(dbProfileData);
+      setProfileName(nextProfile);
+      setFeedback(feedbackData);
+      setSelectedIndex(0);
+      setHistory(historyData.items);
+      setFeedbackIndex(indexData);
+      setFeedbackEntries(entriesData);
+      setFeedbackConfig(configData);
+      setSelectedFeedbackId((current) =>
+        historyData.items.some((item) => item.id === current) ? current : historyData.items[0]?.id || ""
+      );
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
+    } finally {
+      setLoading("");
+    }
+  };
 
   const refreshSelectAiFeedback = async (name = profileName) => {
     const trimmed = name.trim();
@@ -89,37 +174,13 @@ export function FeedbackManagementPage() {
     }
   };
 
-  const load = async () => {
-    setLoading("load");
-    setMessage("");
-    try {
-      const dbProfileData = await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL);
-      const hasCurrentProfile = dbProfileData.profiles.some((profile) => profile.name === profileName);
-      const nextProfile = !profileName
-        ? dbProfileData.profiles[0]?.name || ""
-        : hasCurrentProfile
-          ? profileName
-          : "";
-      const feedbackData = nextProfile ? await fetchSelectAiFeedback(nextProfile) : null;
-      setDbProfiles(dbProfileData);
-      setProfileName(nextProfile);
-      setFeedback(feedbackData);
-      setSelectedIndex(0);
-    } catch (err) {
-      setMessageTone("error");
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
-    } finally {
-      setLoading("");
-    }
-  };
-
   const changeProfile = (nextProfile: string) => {
     setProfileName(nextProfile);
     void refreshSelectAiFeedback(nextProfile);
   };
 
   const deleteSelectedFeedback = async () => {
-    if (!selectedFeedback || !profileName.trim()) return;
+    if (!selectedSelectAiFeedback || !profileName.trim()) return;
     const ok = await confirm({
       title: t("feedbackManagement.deleteConfirmTitle"),
       description: t("feedbackManagement.deleteConfirmDescription"),
@@ -133,7 +194,7 @@ export function FeedbackManagementPage() {
     try {
       const data = await apiPost<SelectAiFeedbackMutationData>("/api/nl2sql/select-ai/feedback/delete", {
         profile_name: profileName,
-        sql_text: selectedFeedback.sql_text,
+        sql_text: selectedSelectAiFeedback.sql_text,
       });
       setMessageTone(data.executed ? "success" : "error");
       setMessage(data.warnings.join(" ") || t("feedbackManagement.deleted"));
@@ -169,9 +230,119 @@ export function FeedbackManagementPage() {
     }
   };
 
+  const saveAppFeedback = async () => {
+    if (!selectedAppFeedback) return;
+    setLoading("app-feedback");
+    setMessage("");
+    try {
+      await apiPost<FeedbackData>("/api/nl2sql/feedback", {
+        history_id: selectedAppFeedback.id,
+        rating: feedbackRating,
+        comment: feedbackComment.trim(),
+      });
+      await load();
+      setMessageTone("success");
+      setMessage(t("feedbackManagement.appFeedback.saved"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const rebuildFeedbackIndex = async () => {
+    const ok = await confirm({
+      title: t("feedbackManagement.similarityIndex.rebuildConfirmTitle"),
+      description: t("feedbackManagement.similarityIndex.rebuildConfirmDescription"),
+      confirmLabel: t("feedbackManagement.similarityIndex.rebuild"),
+      tone: "info",
+    });
+    if (!ok) return;
+    setLoading("feedback-index");
+    setMessage("");
+    try {
+      setFeedbackIndex(await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/rebuild", {}));
+      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackIndex"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const clearFeedbackIndex = async () => {
+    const ok = await confirm({
+      title: t("feedbackManagement.similarityIndex.clearConfirmTitle"),
+      description: t("feedbackManagement.similarityIndex.clearConfirmDescription"),
+      confirmLabel: t("feedbackManagement.similarityIndex.clear"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+    setLoading("feedback-index-clear");
+    setMessage("");
+    try {
+      setFeedbackIndex(await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/clear", {}));
+      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackIndex"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const saveFeedbackConfig = async () => {
+    if (!feedbackConfig) return;
+    setLoading("feedback-config");
+    setMessage("");
+    try {
+      setFeedbackConfig(await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig));
+      setMessageTone("success");
+      setMessage(t("feedbackManagement.similarityIndex.configSaved"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackConfig"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const deleteFeedbackEntry = async (historyId: string) => {
+    setLoading(`feedback-entry-${historyId}`);
+    setMessage("");
+    try {
+      setFeedbackEntries(
+        await apiPost<FeedbackEntriesData>("/api/nl2sql/feedback-entries/delete", {
+          history_ids: [historyId],
+        })
+      );
+      setHistory((current) => current.filter((item) => item.id !== historyId));
+      setMessageTone("success");
+      setMessage(t("feedbackManagement.similarityIndex.entryDeleted"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackEntries"));
+    } finally {
+      setLoading("");
+    }
+  };
+
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!selectedAppFeedback) {
+      setFeedbackRating("needs_review");
+      setFeedbackComment("");
+      return;
+    }
+    setFeedbackRating(selectedAppFeedback.feedback_rating ?? "needs_review");
+    setFeedbackComment(selectedAppFeedback.feedback_comment ?? "");
+  }, [selectedAppFeedback]);
 
   const profileSelect = (
     <ProfileSelect
@@ -190,7 +361,7 @@ export function FeedbackManagementPage() {
         actions={
           <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load()}>
             <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("learning.action.refresh")}</span>
+            <span>{t("feedbackManagement.action.reload")}</span>
           </Button>
         }
       />
@@ -198,15 +369,16 @@ export function FeedbackManagementPage() {
       <main className="grid gap-4 p-4 lg:p-8">
         <DbObjectManagementStatusBar
           ariaLabel={t("feedbackManagement.status.aria")}
-          metricColumnsClass="sm:grid-cols-3"
+          metricColumnsClass="sm:grid-cols-4"
           metrics={[
             {
               label: t("feedbackManagement.metric.entries"),
-              value: String(feedback?.total ?? feedbackItems.length),
+              value: String(feedback?.total ?? selectAiFeedbackItems.length),
               emphasis: true,
               testId: "feedback-management-entry-count",
             },
-            { label: t("feedbackManagement.metric.runtime"), value: feedback?.runtime ?? dbProfiles?.runtime ?? "-" },
+            { label: t("feedbackManagement.metric.appFeedback"), value: String(history.length) },
+            { label: t("feedbackManagement.metric.indexed"), value: String(feedbackEntries?.indexed_count ?? 0) },
             { label: t("feedbackManagement.metric.profile"), value: profileName || "-" },
           ]}
           actions={
@@ -225,16 +397,7 @@ export function FeedbackManagementPage() {
         />
 
         {message && (
-          <div
-            role={messageTone === "error" ? "alert" : "status"}
-            className={`rounded-md border px-4 py-3 text-sm ${
-              messageTone === "error"
-                ? "border-red-200 bg-red-50 text-red-800"
-                : "border-emerald-200 bg-emerald-50 text-emerald-800"
-            }`}
-          >
-            {message}
-          </div>
+          <Banner severity={messageTone === "error" ? "danger" : "success"}>{message}</Banner>
         )}
 
         <DbObjectManagementTabs
@@ -277,9 +440,9 @@ export function FeedbackManagementPage() {
                 }
               />
               <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
-              <div className="overflow-x-auto rounded-md border border-slate-200">
-                <table className="min-w-[860px] w-full table-fixed divide-y divide-slate-200 text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase tracking-normal text-slate-500">
+              <div className="overflow-x-auto rounded-md border border-border">
+                <table className="min-w-[860px] w-full table-fixed divide-y divide-border text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-background text-xs font-semibold uppercase tracking-normal text-muted">
                     <tr>
                       <th scope="col" className="w-[28%] px-3 py-2">
                         {t("feedbackManagement.entries.content")}
@@ -295,8 +458,8 @@ export function FeedbackManagementPage() {
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {feedbackItems.map((entry, index) => (
+                  <tbody className="divide-y divide-border/70 bg-card">
+                    {selectAiFeedbackItems.map((entry, index) => (
                       <FeedbackEntryRow
                         key={`${entry.sql_id}-${index}`}
                         entry={entry}
@@ -304,7 +467,7 @@ export function FeedbackManagementPage() {
                         onSelect={() => setSelectedIndex(index)}
                       />
                     ))}
-                    {feedbackItems.length === 0 && (
+                    {selectAiFeedbackItems.length === 0 && (
                       <tr>
                         <td colSpan={4} className="px-3 py-8">
                           <EmptyState
@@ -319,7 +482,7 @@ export function FeedbackManagementPage() {
               </div>
             </section>
 
-            <section className="grid min-w-0 gap-4 rounded-md border border-slate-200 bg-slate-50 p-4">
+            <section className="grid min-w-0 gap-4 rounded-md border border-border bg-background p-4">
               <DbObjectPanelHeader
                 title={t("feedbackManagement.entries.selectedSql")}
                 icon={Code2}
@@ -329,7 +492,7 @@ export function FeedbackManagementPage() {
                     variant="danger"
                     size="sm"
                     loading={loading === "delete"}
-                    disabled={!selectedFeedback}
+                    disabled={!selectedSelectAiFeedback}
                     onClick={() => void deleteSelectedFeedback()}
                   >
                     <Trash2 size={15} aria-hidden="true" />
@@ -338,16 +501,16 @@ export function FeedbackManagementPage() {
                 }
               />
               <div className="flex flex-wrap gap-2">
-                <StatusBadge variant="neutral" label={selectedFeedback?.sql_id || "-"} />
+                <StatusBadge variant="neutral" label={selectedSelectAiFeedback?.sql_id || "-"} />
                 {feedback?.index_name && <StatusBadge variant="info" label={feedback.index_name} />}
                 {feedback?.table_name && <StatusBadge variant="neutral" label={feedback.table_name} />}
               </div>
               <textarea
                 aria-label={t("feedbackManagement.entries.selectedSql")}
-                value={selectedFeedback?.sql_text ?? ""}
+                value={selectedSelectAiFeedback?.sql_text ?? ""}
                 readOnly
                 rows={16}
-                className="min-h-80 rounded-md border border-slate-300 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-50 outline-none"
+                className="min-h-80 rounded-md border border-border bg-code px-3 py-2 font-mono text-xs leading-5 text-code-fg outline-none"
               />
             </section>
           </DbObjectManagementPanelShell>
@@ -405,6 +568,303 @@ export function FeedbackManagementPage() {
             </div>
           </DbObjectManagementPanelShell>
         )}
+
+        {activeView === "appFeedback" && (
+          <DbObjectManagementPanelShell
+            id="feedback-management-panel-appFeedback"
+            labelledBy="feedback-management-tab-appFeedback"
+            ariaLabel={t("feedbackManagement.workspace.appFeedback")}
+            idPrefix="feedback-management-app-feedback"
+            splitId="feedback-management-app-feedback-split"
+            preferredWidePane="right"
+          >
+            <section className="grid min-w-0 content-start gap-4">
+              <DbObjectPanelHeader
+                title={t("feedbackManagement.appFeedback.title")}
+                description={t("feedbackManagement.appFeedback.hint")}
+                icon={MessageSquareText}
+              />
+              {history.length > 0 && selectedAppFeedback ? (
+                <>
+                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                    <span>{t("feedbackManagement.appFeedback.history")}</span>
+                    <select
+                      aria-label={t("feedbackManagement.appFeedback.history")}
+                      value={selectedAppFeedback.id}
+                      onChange={(event) => setSelectedFeedbackId(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    >
+                      {history.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.question}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                    <span>{t("feedbackManagement.appFeedback.rating")}</span>
+                    <select
+                      aria-label={t("feedbackManagement.appFeedback.rating")}
+                      value={feedbackRating}
+                      onChange={(event) => setFeedbackRating(event.currentTarget.value as FeedbackRating)}
+                      className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    >
+                      <option value="good">{t("nl2sql.feedback.good")}</option>
+                      <option value="needs_review">{t("nl2sql.feedback.review")}</option>
+                      <option value="bad">{t("nl2sql.feedback.bad")}</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                    <span>{t("nl2sql.feedback.comment")}</span>
+                    <textarea
+                      value={feedbackComment}
+                      onChange={(event) => setFeedbackComment(event.currentTarget.value)}
+                      rows={4}
+                      className="min-h-28 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      placeholder={t("nl2sql.feedback.commentPlaceholder")}
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    loading={loading === "app-feedback"}
+                    disabled={loading === "app-feedback"}
+                    onClick={() => void saveAppFeedback()}
+                  >
+                    <Save size={15} aria-hidden="true" />
+                    <span>{t("feedbackManagement.appFeedback.save")}</span>
+                  </Button>
+                </>
+              ) : (
+                <EmptyState
+                  title={t("feedbackManagement.appFeedback.emptyTitle")}
+                  hint={t("feedbackManagement.appFeedback.emptyHint")}
+                />
+              )}
+            </section>
+
+            <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4">
+              <DbObjectPanelHeader title={t("feedbackManagement.appFeedback.historyList")} icon={MessageSquareText} />
+              <div className="grid gap-3 md:grid-cols-[1fr_12rem]">
+                <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.search")}</span>
+                  <input
+                    value={feedbackSearch}
+                    onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
+                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.filter")}</span>
+                  <select
+                    aria-label={t("feedbackManagement.appFeedback.filter")}
+                    value={feedbackFilter}
+                    onChange={(event) =>
+                      setFeedbackFilter(event.currentTarget.value as "all" | FeedbackRating | "unrated")
+                    }
+                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  >
+                    <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
+                    <option value="good">{t("nl2sql.feedback.good")}</option>
+                    <option value="needs_review">{t("nl2sql.feedback.review")}</option>
+                    <option value="bad">{t("nl2sql.feedback.bad")}</option>
+                    <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-2">
+                {appFeedbackItems.length > 0 ? (
+                  appFeedbackItems.map((item) => (
+                    <FeedbackHistoryRow
+                      key={item.id}
+                      item={item}
+                      selected={selectedAppFeedback?.id === item.id}
+                      onSelect={() => setSelectedFeedbackId(item.id)}
+                    />
+                  ))
+                ) : (
+                  <EmptyState
+                    title={t("feedbackManagement.appFeedback.noMatchesTitle")}
+                    hint={t("feedbackManagement.appFeedback.noMatchesHint")}
+                  />
+                )}
+              </div>
+            </section>
+          </DbObjectManagementPanelShell>
+        )}
+
+        {activeView === "similarityIndex" && (
+          <DbObjectManagementPanelShell
+            id="feedback-management-panel-similarityIndex"
+            labelledBy="feedback-management-tab-similarityIndex"
+            ariaLabel={t("feedbackManagement.workspace.similarityIndex")}
+            idPrefix="feedback-management-similarity-index"
+          >
+            <DbObjectPanelHeader
+              title={t("feedbackManagement.similarityIndex.title")}
+              description={t("feedbackManagement.similarityIndex.hint")}
+              icon={DatabaseZap}
+            />
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)]">
+              <section className="grid content-start gap-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <CompactFact
+                    label={t("feedbackManagement.similarityIndex.indexed")}
+                    value={String(feedbackIndex?.indexed_count ?? 0)}
+                  />
+                  <CompactFact
+                    label={t("feedbackManagement.similarityIndex.indexable")}
+                    value={String(feedbackIndex?.indexable_count ?? 0)}
+                  />
+                  <CompactFact
+                    label={t("feedbackManagement.similarityIndex.dimension")}
+                    value={String(feedbackIndex?.vector_dimension ?? 1536)}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <CompactFact
+                    label={t("feedbackManagement.similarityIndex.embeddingModel")}
+                    value={feedbackIndex?.embedding_model || "-"}
+                  />
+                  <CompactFact
+                    label={t("feedbackManagement.similarityIndex.embeddingConfigured")}
+                    value={
+                      feedbackIndex?.embedding_configured
+                        ? t("feedbackManagement.similarityIndex.configured")
+                        : t("feedbackManagement.similarityIndex.notConfigured")
+                    }
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge variant="neutral" label={feedbackIndex?.status ?? "empty"} />
+                  <StatusBadge variant="neutral" label={feedbackIndex?.vector_backend ?? "oracle_26ai"} />
+                  <StatusBadge variant="neutral" label={feedbackIndex?.runtime ?? "deterministic"} />
+                  <StatusBadge
+                    variant="neutral"
+                    label={t("feedbackManagement.similarityIndex.entryTotal", { count: feedbackEntries?.total ?? 0 })}
+                  />
+                </div>
+                <section className="grid gap-3 rounded-md border border-border bg-background p-3">
+                  <p className="text-sm font-semibold text-foreground">
+                    {t("feedbackManagement.similarityIndex.configTitle")}
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                    <label className="grid gap-1 text-sm font-medium text-foreground">
+                      <span>{t("feedbackManagement.similarityIndex.threshold")}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={feedbackConfig?.similarity_threshold ?? 0}
+                        onChange={(event) => {
+                          const nextThreshold = Number(event.currentTarget.value) || 0;
+                          setFeedbackConfig((current) => ({
+                            similarity_threshold: nextThreshold,
+                            match_limit: current?.match_limit ?? 3,
+                          }));
+                        }}
+                        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm font-medium text-foreground">
+                      <span>{t("feedbackManagement.similarityIndex.matchLimit")}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={feedbackConfig?.match_limit ?? 3}
+                        onChange={(event) => {
+                          const nextMatchLimit = Number(event.currentTarget.value) || 1;
+                          setFeedbackConfig((current) => ({
+                            similarity_threshold: current?.similarity_threshold ?? 0,
+                            match_limit: nextMatchLimit,
+                          }));
+                        }}
+                        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      />
+                    </label>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={loading === "feedback-config"}
+                    disabled={!feedbackConfig}
+                    onClick={() => void saveFeedbackConfig()}
+                  >
+                    <Save size={15} aria-hidden="true" />
+                    <span>{t("feedbackManagement.similarityIndex.saveConfig")}</span>
+                  </Button>
+                </section>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    loading={loading === "feedback-index"}
+                    onClick={() => void rebuildFeedbackIndex()}
+                  >
+                    <RefreshCw size={15} aria-hidden="true" />
+                    <span>{t("feedbackManagement.similarityIndex.rebuild")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    loading={loading === "feedback-index-clear"}
+                    onClick={() => void clearFeedbackIndex()}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                    <span>{t("feedbackManagement.similarityIndex.clear")}</span>
+                  </Button>
+                </div>
+              </section>
+
+              <section className="grid content-start gap-3">
+                <FeedbackWarnings warnings={feedbackIndex?.warnings ?? []} />
+                <section className="grid gap-2 rounded-md border border-border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-foreground">
+                      {t("feedbackManagement.similarityIndex.entries")}
+                    </p>
+                    <StatusBadge
+                      variant="neutral"
+                      label={t("feedbackManagement.similarityIndex.indexedTotal", {
+                        count: feedbackEntries?.indexed_count ?? 0,
+                      })}
+                    />
+                  </div>
+                  {(feedbackEntries?.items ?? []).slice(0, 5).map((entry) => (
+                    <FeedbackVectorEntryRow
+                      key={entry.history_id}
+                      entry={entry}
+                      deleting={loading === `feedback-entry-${entry.history_id}`}
+                      onDelete={() => void deleteFeedbackEntry(entry.history_id)}
+                    />
+                  ))}
+                  {(!feedbackEntries || feedbackEntries.items.length === 0) && (
+                    <EmptyState
+                      title={t("feedbackManagement.similarityIndex.entriesEmptyTitle")}
+                      hint={t("feedbackManagement.similarityIndex.entriesEmptyHint")}
+                    />
+                  )}
+                </section>
+                <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.similarityIndex.ddl")}</span>
+                  <textarea
+                    aria-label={t("feedbackManagement.similarityIndex.ddl")}
+                    readOnly
+                    value={feedbackIndex?.ddl.join("\n") ?? ""}
+                    rows={6}
+                    className="min-h-40 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
+                  />
+                </label>
+              </section>
+            </div>
+          </DbObjectManagementPanelShell>
+        )}
       </main>
     </>
   );
@@ -422,13 +882,13 @@ function ProfileSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800 sm:min-w-72">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:min-w-72">
       <span>{t("feedbackManagement.profile")}</span>
       <select
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>
@@ -445,7 +905,7 @@ function FeedbackWarnings({ warnings }: { warnings: string[] }) {
   return (
     <div className="grid gap-2">
       {warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
           {warning}
         </p>
       ))}
@@ -463,14 +923,14 @@ function FeedbackEntryRow({
   onSelect: () => void;
 }) {
   return (
-    <tr className={selected ? "bg-sky-50" : "hover:bg-slate-50"} onClick={onSelect}>
+    <tr className={selected ? "bg-primary/10" : "hover:bg-background"} onClick={onSelect}>
       <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words text-slate-800">{entry.content || "-"}</p>
+        <p className="line-clamp-3 break-words text-foreground">{entry.content || "-"}</p>
       </td>
       <td className="px-3 py-2 align-top">
         <button
           type="button"
-          className="text-left font-mono text-xs font-semibold text-sky-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-sky-200"
+          className="text-left font-mono text-xs font-semibold text-primary underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-ring/40"
           aria-label={t("feedbackManagement.entries.show", { id: entry.sql_id || "-" })}
           onClick={(event) => {
             event.stopPropagation();
@@ -481,14 +941,84 @@ function FeedbackEntryRow({
         </button>
       </td>
       <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-slate-800">{entry.sql_text || "-"}</p>
+        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-foreground">{entry.sql_text || "-"}</p>
       </td>
       <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-slate-600">
+        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-muted">
           {formatAttributes(entry)}
         </p>
       </td>
     </tr>
+  );
+}
+
+function FeedbackHistoryRow({
+  item,
+  selected,
+  onSelect,
+}: {
+  item: HistoryItem;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="feedback-history-row"
+      className={`grid gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-ring/40 ${
+        selected ? "border-primary/40 bg-primary/10" : "border-border bg-card hover:bg-background"
+      }`}
+      onClick={onSelect}
+    >
+      <span className="flex flex-wrap items-start justify-between gap-2">
+        <span className="font-semibold text-foreground">{item.question}</span>
+        <span className="flex flex-wrap gap-2">
+          <StatusBadge variant="neutral" label={engineLabel(item.engine)} />
+          <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
+          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+        </span>
+      </span>
+      {item.feedback_comment && (
+        <span className="rounded-md border border-primary/20 bg-primary/10 px-3 py-2 text-foreground">
+          {item.feedback_comment}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function FeedbackVectorEntryRow({
+  entry,
+  deleting,
+  onDelete,
+}: {
+  entry: FeedbackVectorEntry;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <section className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="break-words font-medium text-foreground">{entry.question}</p>
+          <p className="mt-1 break-all font-mono text-xs text-muted">{entry.generated_sql}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge variant={entry.indexed ? "success" : "neutral"} label={entry.indexed ? "indexed" : "pending"} />
+          <StatusBadge
+            variant={entry.feedback_rating ? "info" : "neutral"}
+            label={entry.feedback_rating ?? t("feedbackManagement.appFeedback.unrated")}
+          />
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted">{entry.profile_name || entry.profile_id || "-"}</span>
+        <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
+          <Trash2 size={15} aria-hidden="true" />
+          <span>{t("feedbackManagement.similarityIndex.deleteEntry")}</span>
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -508,7 +1038,7 @@ function SliderNumberField({
   onChange: (value: number) => void;
 }) {
   return (
-    <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm font-medium text-slate-800">
+    <fieldset className="grid gap-3 rounded-md border border-border bg-background p-4 text-sm font-medium text-foreground">
       <legend className="px-1">{label}</legend>
       <input
         type="range"
@@ -518,7 +1048,7 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="w-full accent-sky-700"
+        className="w-full accent-primary"
       />
       <input
         type="number"
@@ -528,8 +1058,17 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
       />
     </fieldset>
+  );
+}
+
+function CompactFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-card p-3">
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
+    </div>
   );
 }

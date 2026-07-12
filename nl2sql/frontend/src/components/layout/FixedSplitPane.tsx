@@ -17,6 +17,7 @@ import {
   adjustFixedSplitFraction,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
+  fixedSplitStateForPreferredWidePane,
   fixedSplitStateForRatio,
   fixedSplitStorageKey,
   fixedSplitValueText,
@@ -40,13 +41,14 @@ interface FixedSplitPaneProps {
   rightClassName?: string;
 }
 
-function readStoredState(splitId: string): FixedSplitPaneState {
-  if (typeof window === "undefined") return fixedSplitStateForRatio("equal");
+function readStoredState(splitId: string, preferredWidePane: FixedSplitWidePane): FixedSplitPaneState {
+  const fallbackState = fixedSplitStateForPreferredWidePane(preferredWidePane);
+  if (typeof window === "undefined") return fallbackState;
   try {
     const value = window.localStorage.getItem(fixedSplitStorageKey(splitId));
-    return parseFixedSplitStorageValue(value);
+    return parseFixedSplitStorageValue(value, fallbackState);
   } catch {
-    return fixedSplitStateForRatio("equal");
+    return fallbackState;
   }
 }
 
@@ -58,6 +60,7 @@ function valueText(ratio: FixedSplitRatio) {
 
 export function FixedSplitPane({
   splitId,
+  preferredWidePane,
   left,
   right,
   className,
@@ -71,12 +74,14 @@ export function FixedSplitPane({
   const cleanupDragRef = useRef<(() => void) | null>(null);
   const previousBodyCursorRef = useRef("");
   const previousBodyUserSelectRef = useRef("");
-  const [splitState, setSplitState] = useState<FixedSplitPaneState>(() => readStoredState(splitId));
+  const [splitState, setSplitState] = useState<FixedSplitPaneState>(() =>
+    readStoredState(splitId, preferredWidePane)
+  );
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
-    setSplitState(readStoredState(splitId));
-  }, [splitId]);
+    setSplitState(readStoredState(splitId, preferredWidePane));
+  }, [preferredWidePane, splitId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

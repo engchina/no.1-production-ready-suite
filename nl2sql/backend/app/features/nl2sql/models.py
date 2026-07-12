@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .ontology_models import OntologySqlGenerationContext
+
 
 class Nl2SqlEngine(StrEnum):
     """NL2SQL 実行エンジン。"""
@@ -28,6 +30,16 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     DONE = "done"
     ERROR = "error"
+
+
+class JobStepStatus(StrEnum):
+    """非同期ジョブ内の処理段階。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+    SKIPPED = "skipped"
 
 
 class FeedbackRating(StrEnum):
@@ -54,6 +66,14 @@ class StageTiming(BaseModel):
     elapsed_ms: int
 
 
+class JobStepData(BaseModel):
+    """UI へ公開する非同期ジョブの段階別進捗。"""
+
+    stage: str
+    status: JobStepStatus = JobStepStatus.PENDING
+    elapsed_ms: int | None = None
+
+
 class TimingEnvelope(BaseModel):
     """同期/非同期レスポンス共通の時間情報。"""
 
@@ -75,6 +95,32 @@ class SchemaColumn(BaseModel):
     sample_values: list[str] = Field(default_factory=list)
 
 
+class SchemaConstraintDetail(BaseModel):
+    """順序を保った Oracle constraint metadata。"""
+
+    constraint_name: str
+    constraint_type: Literal["P", "R", "U", "C"]
+    owner: str = "APP"
+    table_name: str
+    columns: list[str] = Field(default_factory=list)
+    referenced_owner: str | None = None
+    referenced_table: str | None = None
+    referenced_columns: list[str] = Field(default_factory=list)
+    delete_rule: str = "NO ACTION"
+    status: str = "ENABLED"
+    deferrable: str = "NOT DEFERRABLE"
+
+
+class SchemaViewDependency(BaseModel):
+    """Oracle view から参照 object への lineage。"""
+
+    owner: str = "APP"
+    view_name: str
+    referenced_owner: str = "APP"
+    referenced_name: str
+    referenced_type: str = "TABLE"
+
+
 class SchemaTable(BaseModel):
     """Oracle table metadata for NL2SQL object restriction."""
 
@@ -86,6 +132,7 @@ class SchemaTable(BaseModel):
     row_count: int | None = None
     columns: list[SchemaColumn] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
+    constraint_details: list[SchemaConstraintDetail] = Field(default_factory=list)
 
 
 class SchemaCatalog(BaseModel):
@@ -93,6 +140,8 @@ class SchemaCatalog(BaseModel):
 
     refreshed_at: str
     tables: list[SchemaTable]
+    schema_fingerprint: str = ""
+    view_dependencies: list[SchemaViewDependency] = Field(default_factory=list)
 
 
 class AllowedObjects(BaseModel):
@@ -100,6 +149,7 @@ class AllowedObjects(BaseModel):
 
     table_names: list[str] = Field(default_factory=list)
     columns: dict[str, list[str]] = Field(default_factory=dict)
+    enforce_table_scope: bool = False
 
 
 class ProfileSelectAiConfig(BaseModel):
@@ -186,7 +236,7 @@ class ProfileLearningMaterialImportData(BaseModel):
 
 
 class LegacyLearningMaterialData(BaseModel):
-    """全 profile で共有するグローバル用語・ルール."""
+    """全 profile で共有するグローバル用語と旧 rules 互換データ."""
 
     glossary: dict[str, str] = Field(default_factory=dict)
     rules: list[str] = Field(default_factory=list)
@@ -227,6 +277,29 @@ class QueryResults(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     total: int
+
+
+class ExplainPlanOperation(BaseModel):
+    """Oracle PLAN_TABLE の安全な要約行。"""
+
+    operation: str
+    options: str = ""
+    owner: str = ""
+    object_name: str = ""
+    cost: int | None = None
+    cardinality: int | None = None
+    bytes: int | None = None
+
+
+class ExplainPlanData(BaseModel):
+    """意味 gate と独立した性能 check。利用不可でも実行許可は変更しない。"""
+
+    available: bool = False
+    total_cost: int | None = None
+    estimated_cardinality: int | None = None
+    full_table_scans: list[str] = Field(default_factory=list)
+    operations: list[ExplainPlanOperation] = Field(default_factory=list)
+    warning: str = ""
 
 
 class DbAdminObjectSummary(BaseModel):
@@ -482,9 +555,7 @@ def _validate_select_ai_request_overrides(
     engine: Nl2SqlEngine, overrides: SelectAiRequestOverrides | None
 ) -> None:
     if overrides is not None and overrides.has_values() and engine != Nl2SqlEngine.SELECT_AI:
-        raise ValueError(
-            "select_ai_overrides は engine=select_ai の場合のみ指定できます。"
-        )
+        raise ValueError("select_ai_overrides は engine=select_ai の場合のみ指定できます。")
 
 
 class PreviewRequest(BaseModel):
@@ -496,6 +567,7 @@ class PreviewRequest(BaseModel):
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
+    ontology_context: OntologySqlGenerationContext | None = None
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> PreviewRequest:
@@ -556,6 +628,7 @@ class JobCreateData(BaseModel):
     job_id: str
     status: JobStatus
     created_at: str
+    steps: list[JobStepData] = Field(default_factory=list)
 
 
 class JobData(BaseModel):
@@ -570,6 +643,7 @@ class JobData(BaseModel):
     result: Nl2SqlResult | None = None
     error_message: str | None = None
     timing: TimingEnvelope | None = None
+    steps: list[JobStepData] = Field(default_factory=list)
 
 
 class HistoryItem(BaseModel):
@@ -590,6 +664,8 @@ class HistoryItem(BaseModel):
     result_row_count: int = 0
     result_columns: list[str] = Field(default_factory=list)
     feedback_comment: str = ""
+    session_id: str = ""
+    ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class HistoryData(BaseModel):
@@ -1005,6 +1081,8 @@ class AssetCleanupRequest(AdminExecutionConfirmation):
     engines: list[Nl2SqlEngine] = Field(
         default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
     )
+
+
 class SelectAiDbProfile(BaseModel):
     """Oracle DBMS_CLOUD_AI profile metadata."""
 

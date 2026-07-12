@@ -401,9 +401,28 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expectNoHorizontalOverflow(page);
 });
 
-test("旧 NL2SQL 接続診断ルートはエンジン運用に集約される", async ({ page }) => {
-  await page.goto("/settings/nl2sql-connection");
-  await expect(page).toHaveURL(/\/engine-operations$/);
-  await expect(page.getByRole("heading", { name: "エンジン運用" })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+test("外観設定でダーク/ライト/自動テーマを切り替えられる", async ({ page }) => {
+  await page.goto("/settings/appearance");
+  await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
+  const html = page.locator("html");
+  const bgVar = () =>
+    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--background").trim());
+
+  // 既定はライト。
+  await expect(html).not.toHaveClass(/dark/);
+  expect(await bgVar()).toBe("#f7f8fa");
+
+  const toggle = page.getByTestId("appearance-theme-toggle");
+  await toggle.getByRole("button", { name: "ダーク" }).click();
+  await expect(html).toHaveClass(/dark/);
+  expect(await bgVar()).toBe("#0f1420");
+  await expect(toggle.getByRole("button", { name: "ダーク" })).toHaveAttribute("aria-pressed", "true");
+
+  // 再読込しても永続化される。
+  await page.reload();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+
+  await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "ライト" }).click();
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+  expect(await bgVar()).toBe("#f7f8fa");
 });

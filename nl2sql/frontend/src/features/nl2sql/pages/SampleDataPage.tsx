@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
-import { Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPost } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
@@ -76,8 +76,8 @@ function SampleStatusBar({
 
 function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null }) {
   return (
-    <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-      <p className="font-semibold text-slate-900">{t("dataTools.sample.objects")}</p>
+    <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
+      <p className="font-semibold text-foreground">{t("dataTools.sample.objects")}</p>
       <div className="flex flex-wrap gap-2">
         {(sampleInfo?.objects ?? []).map((objectName) => (
           <StatusBadge
@@ -95,10 +95,10 @@ function SampleSqlPreview({ sql }: { sql: string }) {
   return (
     <section className="grid gap-2">
       <div>
-        <p className="font-semibold text-slate-900">{t("dataTools.sample.sqlPreview")}</p>
-        <p className="mt-1 text-sm text-slate-600">{t("dataTools.sample.sqlPreviewHint")}</p>
+        <p className="font-semibold text-foreground">{t("dataTools.sample.sqlPreview")}</p>
+        <p className="mt-1 text-sm text-muted">{t("dataTools.sample.sqlPreviewHint")}</p>
       </div>
-      <pre className="max-h-80 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
         <code>{sql || "-"}</code>
       </pre>
     </section>
@@ -189,16 +189,17 @@ export function SampleDataPage() {
       <PageHeader title={t("sampleData.title")} subtitle={t("sampleData.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
         {message && (
-          <div
-            className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between"
-            role="alert"
+          <Banner
+            severity="danger"
+            action={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("dataTools.sample.refresh")}</span>
+              </Button>
+            }
           >
-            <span>{message}</span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("dataTools.sample.refresh")}</span>
-            </Button>
-          </div>
+            {message}
+          </Banner>
         )}
 
         <SampleStatusBar sampleInfo={sampleInfo} loading={loading} onRefresh={() => void load()} />
@@ -234,12 +235,12 @@ export function SampleDataPage() {
             />
 
             {!isDeleteAction && (
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
+              <label className="grid gap-1 text-sm font-medium text-foreground">
                 <span>{t("dataTools.sample.step")}</span>
                 <select
                   value={sampleStep}
                   onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
-                  className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                 >
                   {SAMPLE_STEPS.map((step) => (
                     <option key={step} value={step}>

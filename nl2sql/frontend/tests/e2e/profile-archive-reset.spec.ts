@@ -41,6 +41,7 @@ function profile(id: string, name: string, archived = false) {
 }
 
 async function mockProfileManagement(page: Page) {
+  let deleteRequests = 0;
   let profiles = [
     profile("accounting", "経理プロファイル"),
     profile("sales", "営業プロファイル"),
@@ -64,121 +65,204 @@ async function mockProfileManagement(page: Page) {
       ],
     })
   );
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
+  );
   await page.route("**/api/nl2sql/db-admin/views", (route) =>
     fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
+  );
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?include_detail=true&business_profiles_only=true&include_archived_business_profiles=true",
+    (route) => fulfillJson(route, { runtime: "deterministic", profiles: [], warnings: [] })
   );
   await page.route("**/api/nl2sql/select-ai/db-profiles?include_detail=true", (route) =>
     fulfillJson(route, { runtime: "deterministic", profiles: [], warnings: [] })
   );
-  await page.route("**/api/nl2sql/profiles**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    if (route.request().method() === "GET" && path.endsWith("/profiles")) {
+  // 編集画面マウント時の ontology 系 GET を高速 mock(未 mock だと dev proxy の
+  // 失敗待ちが発生し、負荷時に flake の原因になる)
+  await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) => fulfillJson(route, {}));
+  await page.route("**/api/nl2sql/profiles/*/ontology-proposals", (route) =>
+    fulfillJson(route, { proposals: [] })
+  );
+  await page.route("**/api/nl2sql/ontology/revisions", (route) =>
+    fulfillJson(route, { revisions: [], active_revision_id: "" })
+  );
+  await page.route("**/api/nl2sql/profiles", async (route) => {
+    if (route.request().method() === "GET") {
       await fulfillJson(route, profiles);
-      return;
-    }
-    const archiveMatch = path.match(/\/profiles\/([^/]+)\/archive$/);
-    if (archiveMatch) {
-      const id = archiveMatch[1];
-      profiles = profiles.map((item) => (item.id === id ? { ...item, archived: true } : item));
-      await fulfillJson(route, profiles.find((item) => item.id === id));
-      return;
-    }
-    const restoreMatch = path.match(/\/profiles\/([^/]+)\/restore$/);
-    if (restoreMatch) {
-      const id = restoreMatch[1];
-      profiles = profiles.map((item) => (item.id === id ? { ...item, archived: false } : item));
-      await fulfillJson(route, profiles.find((item) => item.id === id));
       return;
     }
     await route.fallback();
   });
+  await page.route("**/api/nl2sql/profiles/*", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.fallback();
+      return;
+    }
+    deleteRequests += 1;
+    const url = new URL(route.request().url());
+    const profileId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    const target = profiles.find((item) => item.id === profileId);
+    if (!target) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+      });
+      return;
+    }
+    profiles = profiles.filter((item) => item.id !== profileId);
+    await fulfillJson(route, target);
+  });
+  return { deleteRequests: () => deleteRequests };
 }
 
-test("リセットは現在の表示に留まり初期値を復元する", async ({ page }) => {
+test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻れる", async ({ page }) => {
   await mockProfileManagement(page);
   await page.goto("/profiles");
 
-  const listTab = page.getByRole("tab", { name: "一覧と詳細" });
-  const createTab = page.getByRole("tab", { name: "新規作成" });
-  const name = page.getByLabel("名称");
+  const listPanel = page.locator("#profile-management-panel-list");
 
-  await expect(listTab).toHaveAttribute("aria-selected", "true");
-  await name.fill("変更中の名称");
-  await page.getByRole("button", { name: "リセット" }).click();
-  await expect(name).toHaveValue("経理プロファイル");
-  await expect(listTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "一覧", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "新規作成/編集" })).toHaveCount(0);
+  await expect(page.getByTestId("fixed-split-pane-profile-management-list")).toHaveCount(0);
+  await expect(listPanel.getByRole("heading", { name: "プロファイル" })).toBeVisible();
+  await expect(listPanel.getByRole("heading", { name: /プロファイル編集/ })).toHaveCount(0);
 
-  await createTab.click();
-  await name.fill("保存前の新規プロファイル");
-  await page.getByRole("button", { name: "リセット" }).click();
-  await expect(name).toHaveValue("");
-  await expect(createTab).toHaveAttribute("aria-selected", "true");
+  const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
+  await salesRow.getByRole("button", { name: "編集", exact: true }).click();
+  await expect(page).toHaveURL(/\/profiles\?profile=sales$/);
+  await expect(
+    page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
+  ).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await expect(page).not.toHaveURL(/profile=/);
+  await expect(listPanel.getByRole("heading", { name: "プロファイル" })).toBeVisible();
+  await page.getByRole("button", { name: /^経理プロファイル/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
+  ).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("経理プロファイル");
 });
 
-test("アーカイブ済み Profile を同一一覧から復元できる", async ({ page }) => {
+test("URL 深リンクでエディタを直接開ける", async ({ page }) => {
+  await mockProfileManagement(page);
+
+  await page.goto("/profiles?profile=sales");
+  await expect(
+    page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
+  ).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
+
+  await page.goto("/profiles?profile=new");
+  await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("");
+
+  await page.goto("/profiles?profile=missing");
+  await expect(
+    page.locator("#profile-management-panel-list").getByRole("heading", { name: "プロファイル" })
+  ).toBeVisible();
+  await expect(page).not.toHaveURL(/profile=/);
+});
+
+test("未保存の変更があるときは一覧に戻る前に確認する", async ({ page }) => {
+  await mockProfileManagement(page);
+  await page.goto("/profiles?profile=sales");
+  await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
+
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.locator("#profile-management-panel-list")).toBeVisible();
+
+  await page
+    .getByRole("row")
+    .filter({ hasText: "営業プロファイル" })
+    .getByRole("button", { name: "編集", exact: true })
+    .click();
+  await page.getByLabel("名称").fill("営業プロファイル改");
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+  await expect(dialog.getByText("保存されていない変更があります。一覧に戻ると破棄されます。")).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル改");
+
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "変更を破棄しますか" })
+    .getByRole("button", { name: "破棄して戻る", exact: true })
+    .click();
+  await expect(page.locator("#profile-management-panel-list")).toBeVisible();
+  await expect(page).not.toHaveURL(/profile=/);
+});
+
+test("リセットとアーカイブ関連 UI は表示しない", async ({ page }) => {
   await mockProfileManagement(page);
   await page.goto("/profiles");
 
-  const archiveButton = page.getByRole("button", { name: "アーカイブ", exact: true });
-  await archiveButton.click();
-  const dialog = page.getByRole("alertdialog", { name: "プロファイルのアーカイブ" });
-  await expect(dialog).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
+  const main = page.locator("main");
+  await expect(main.getByRole("button", { name: "リセット", exact: true })).toHaveCount(0);
+  await expect(main.getByRole("button", { name: "アーカイブ", exact: true })).toHaveCount(0);
+  await expect(main.getByRole("button", { name: "使用中", exact: true })).toHaveCount(0);
+  await expect(main.getByRole("button", { name: "アーカイブ済み", exact: true })).toHaveCount(0);
+  await expect(main.getByText("旧プロファイル")).toHaveCount(0);
 
-  await archiveButton.click();
-  await dialog.getByRole("button", { name: "アーカイブ", exact: true }).click();
-  await expect(page.getByText("プロファイルをアーカイブしました。")).toBeVisible();
-
-  const archivedFilter = page.getByRole("button", { name: "アーカイブ済み", exact: true });
-  await archivedFilter.click();
-  await expect(archivedFilter).toHaveAttribute("aria-pressed", "true");
-
-  const archivedRow = page.getByRole("row").filter({ hasText: "経理プロファイル" });
-  await archivedRow.getByRole("button", { name: "詳細" }).click();
-  await expect(page.getByLabel("名称")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "復元" }).click();
-  await expect(page.getByRole("button", { name: "使用中" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("名称")).toHaveValue("経理プロファイル");
-  await expect(page.getByText("プロファイルを復元しました。")).toBeVisible();
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("");
+  await expect(main.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(main.getByRole("button", { name: "リセット", exact: true })).toHaveCount(0);
+  await expect(main.getByRole("button", { name: "アーカイブ", exact: true })).toHaveCount(0);
 
   const viewport = await page.evaluate(() => ({ body: document.body.scrollWidth, window: window.innerWidth }));
   expect(viewport.body).toBeLessThanOrEqual(viewport.window);
 });
 
-test("アーカイブ一覧の読込中と空状態を表示する", async ({ page }) => {
-  await mockProfileManagement(page);
-  await page.route("**/api/nl2sql/profiles?include_archived=true", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    await fulfillJson(route, [profile("accounting", "経理プロファイル")]);
-  });
-
+test("一覧と編集画面からプロファイルを確認付きで削除できる", async ({ page }) => {
+  const api = await mockProfileManagement(page);
   await page.goto("/profiles");
-  await expect(page.getByTestId("profile-list-skeleton")).toBeVisible();
-  await page.getByRole("button", { name: "アーカイブ済み", exact: true }).click();
-  await expect(page.getByText("アーカイブ済みのプロファイルはありません")).toBeVisible();
-});
 
-test("復元 API 失敗時に再試行方法を表示する", async ({ page }) => {
-  await mockProfileManagement(page);
-  await page.route("**/api/nl2sql/profiles/legacy/restore", async (route) => {
-    await route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "復元サービスを利用できません。再読込後に再試行してください。" }),
-    });
-  });
+  const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
+  await salesRow.getByRole("button", { name: "削除", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
+  await expect(dialog.getByText("プロファイルを削除しますか")).toBeVisible();
+  await expect(dialog.getByText("「営業プロファイル」を業務プロファイル一覧から完全に削除します。")).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  expect(api.deleteRequests()).toBe(0);
+  await expect(page.getByText("営業プロファイル")).toBeVisible();
 
-  await page.goto("/profiles");
-  await page.getByRole("button", { name: "アーカイブ済み", exact: true }).click();
-  const archivedRow = page.getByRole("row").filter({ hasText: "旧プロファイル" });
-  await archivedRow.getByRole("button", { name: "詳細" }).click();
-  await page.getByRole("button", { name: "復元" }).click();
+  await salesRow.getByRole("button", { name: "削除", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
+    .getByRole("button", { name: "削除", exact: true })
+    .click();
+  expect(api.deleteRequests()).toBe(1);
+  await expect(page.getByText("「営業プロファイル」を削除しました。")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "営業プロファイル" })).toHaveCount(0);
+
+  const accountingRow = page.getByRole("row").filter({ hasText: "経理プロファイル" });
+  await accountingRow.getByRole("button", { name: "編集", exact: true }).click();
   await expect(
-    page.getByText("復元サービスを利用できません。再読込後に再試行してください。")
+    page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "復元" })).toBeEnabled();
+  await page.getByRole("button", { name: "削除", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
+    .getByRole("button", { name: "削除", exact: true })
+    .click();
+  expect(api.deleteRequests()).toBe(2);
+  await expect(
+    page.locator("#profile-management-panel-list").getByRole("heading", { name: "プロファイル" })
+  ).toBeVisible();
+  await expect(page.getByText("「経理プロファイル」を削除しました。")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "経理プロファイル" })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  const bodyWidth = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
 });

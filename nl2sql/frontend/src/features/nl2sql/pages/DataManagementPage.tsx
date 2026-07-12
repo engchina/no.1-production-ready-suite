@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Table2, Upload } from "lucide-react";
+import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPost } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -29,6 +29,7 @@ import {
   buildMultiInsertTemplate,
   buildUpdateTemplate,
 } from "../sqlTemplates";
+import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import type {
   DbAdminCsvUploadData,
   DbAdminDataPreviewData,
@@ -45,12 +46,23 @@ import type {
 type ActiveView = "preview" | "csv" | "sql" | "synthetic";
 type CsvStep = "file" | "execute";
 type CsvMode = "insert" | "truncate_insert";
+type PreviewObjectKind = "table" | "view";
+type PreviewObjectKindFilter = "all" | PreviewObjectKind;
+type PreviewObjectRowFilter = "all" | "with_rows" | "empty_rows" | "unknown_rows";
 
 const DATA_MANAGEMENT_ID = "data-management";
 
 interface PreviewObject {
   name: string;
-  kind: "TABLE" | "VIEW";
+  kind: PreviewObjectKind;
+  owner: string;
+  rowCount?: number | null;
+  comment: string;
+}
+
+function resolveBusinessSelectAiProfileName(current: string, profiles: SelectAiDbProfile[]) {
+  if (current && profiles.some((profile) => profile.name === current)) return current;
+  return profiles[0]?.name ?? "";
 }
 
 export function DataManagementPage() {
@@ -60,6 +72,9 @@ export function DataManagementPage() {
   const [dbAdminViews, setDbAdminViews] = useState<DbAdminObjectsData | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("preview");
   const [previewObject, setPreviewObject] = useState("");
+  const [previewObjectSearch, setPreviewObjectSearch] = useState("");
+  const [previewObjectKindFilter, setPreviewObjectKindFilter] = useState<PreviewObjectKindFilter>("all");
+  const [previewObjectRowFilter, setPreviewObjectRowFilter] = useState<PreviewObjectRowFilter>("all");
   const [previewLimit, setPreviewLimit] = useState(100);
   const [previewWhere, setPreviewWhere] = useState("");
   const [preview, setPreview] = useState<DbAdminDataPreviewData | null>(null);
@@ -88,10 +103,33 @@ export function DataManagementPage() {
   const [message, setMessage] = useState("");
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
-    const tables = (dbAdminTables?.items ?? []).map((item) => ({ name: item.name, kind: "TABLE" as const }));
-    const views = (dbAdminViews?.items ?? []).map((item) => ({ name: item.name, kind: "VIEW" as const }));
+    const tables = (dbAdminTables?.items ?? []).map((item) => ({
+      name: item.name,
+      kind: "table" as const,
+      owner: item.owner,
+      rowCount: item.row_count,
+      comment: item.comment,
+    }));
+    const views = (dbAdminViews?.items ?? []).map((item) => ({
+      name: item.name,
+      kind: "view" as const,
+      owner: item.owner,
+      rowCount: item.row_count,
+      comment: item.comment,
+    }));
     return [...tables, ...views];
   }, [dbAdminTables, dbAdminViews]);
+
+  const filteredPreviewObjects = useMemo(
+    () =>
+      filterPreviewObjects(
+        previewObjects,
+        previewObjectSearch,
+        previewObjectKindFilter,
+        previewObjectRowFilter
+      ),
+    [previewObjects, previewObjectKindFilter, previewObjectRowFilter, previewObjectSearch]
+  );
 
   const selectedSyntheticProfile = useMemo(
     () => selectAiDbProfiles?.profiles.find((profile) => profile.name === syntheticProfileName) ?? null,
@@ -104,21 +142,43 @@ export function DataManagementPage() {
     syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed
   );
 
+  const clearSyntheticProfileTargets = () => {
+    setSyntheticAvailableTables([]);
+    setSyntheticSelectedTables([]);
+    setSyntheticResultTable("");
+    setSyntheticData(null);
+    setSyntheticDataStatus(null);
+    setSyntheticDataResults(null);
+  };
+
+  const changeSyntheticProfileName = (value: string) => {
+    if (value === syntheticProfileName) return;
+    setSyntheticProfileName(value);
+    clearSyntheticProfileTargets();
+  };
+
   const load = async (refreshSchema = false) => {
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
       const [catalogData, profileData, adminTables, adminViews] = await Promise.all([
         refreshSchema ? apiPost<SchemaCatalog>("/api/schema/refresh") : apiGet<SchemaCatalog>("/api/schema/catalog"),
-        apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles"),
+        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
         apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
         apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
       ]);
+      const nextSyntheticProfileName = resolveBusinessSelectAiProfileName(
+        syntheticProfileName,
+        profileData.profiles
+      );
       setCatalog(catalogData);
       setSelectAiDbProfiles(profileData);
       setDbAdminTables(adminTables);
       setDbAdminViews(adminViews);
-      setSyntheticProfileName((current) => current || profileData.profiles[0]?.name || "");
+      setSyntheticProfileName(nextSyntheticProfileName);
+      if (syntheticProfileName && syntheticProfileName !== nextSyntheticProfileName) {
+        clearSyntheticProfileTargets();
+      }
       setPreviewObject((current) => current || adminTables.items[0]?.name || adminViews.items[0]?.name || "");
       setCsvTable((current) => current || adminTables.items[0]?.name || "");
     } catch (err) {
@@ -326,13 +386,17 @@ export function DataManagementPage() {
       <PageHeader title={t("nav.dataManagement")} subtitle={t("dataMgmt.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
         {message && (
-          <div className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between" role="alert">
-            <span>{message} {t("tableMgmt.error.retryHint")}</span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
-            </Button>
-          </div>
+          <Banner
+            severity="danger"
+            action={
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.action.refresh")}</span>
+              </Button>
+            }
+          >
+            {message} {t("tableMgmt.error.retryHint")}
+          </Banner>
         )}
 
         <DataStatusBar
@@ -370,7 +434,11 @@ export function DataManagementPage() {
           >
             <PreviewControlsPanel
               previewObjects={previewObjects}
+              filteredPreviewObjects={filteredPreviewObjects}
               previewObject={previewObject}
+              previewObjectSearch={previewObjectSearch}
+              previewObjectKindFilter={previewObjectKindFilter}
+              previewObjectRowFilter={previewObjectRowFilter}
               previewLimit={previewLimit}
               previewWhere={previewWhere}
               loading={loading}
@@ -378,6 +446,9 @@ export function DataManagementPage() {
                 setPreviewObject(value);
                 setPreview(null);
               }}
+              onPreviewObjectSearchChange={setPreviewObjectSearch}
+              onPreviewObjectKindFilterChange={setPreviewObjectKindFilter}
+              onPreviewObjectRowFilterChange={setPreviewObjectRowFilter}
               onPreviewLimitChange={setPreviewLimit}
               onPreviewWhereChange={setPreviewWhere}
               onShowPreview={() => void showPreview()}
@@ -454,7 +525,7 @@ export function DataManagementPage() {
               framed={false}
               onExecuted={() => load(true)}
             />
-            <p className="px-1 text-xs text-slate-500">{t("dataMgmt.sql.note")}</p>
+            <p className="px-1 text-xs text-muted">{t("dataMgmt.sql.note")}</p>
           </DbObjectManagementPanelShell>
         )}
 
@@ -485,15 +556,7 @@ export function DataManagementPage() {
               syntheticResultLimit={syntheticResultLimit}
               loading={loading}
               onRefreshTables={() => void refreshSyntheticTables()}
-              onSyntheticProfileNameChange={(value) => {
-                setSyntheticProfileName(value);
-                setSyntheticAvailableTables([]);
-                setSyntheticSelectedTables([]);
-                setSyntheticResultTable("");
-                setSyntheticData(null);
-                setSyntheticDataStatus(null);
-                setSyntheticDataResults(null);
-              }}
+              onSyntheticProfileNameChange={changeSyntheticProfileName}
               onSyntheticTableToggle={(tableName, selected) => {
                 const nextTables = selected
                   ? uniqueStrings([...syntheticSelectedTables, tableName])
@@ -582,25 +645,47 @@ function DataStatusBar({
 
 function PreviewControlsPanel({
   previewObjects,
+  filteredPreviewObjects,
   previewObject,
+  previewObjectSearch,
+  previewObjectKindFilter,
+  previewObjectRowFilter,
   previewLimit,
   previewWhere,
   loading,
   onPreviewObjectChange,
+  onPreviewObjectSearchChange,
+  onPreviewObjectKindFilterChange,
+  onPreviewObjectRowFilterChange,
   onPreviewLimitChange,
   onPreviewWhereChange,
   onShowPreview,
 }: {
   previewObjects: PreviewObject[];
+  filteredPreviewObjects: PreviewObject[];
   previewObject: string;
+  previewObjectSearch: string;
+  previewObjectKindFilter: PreviewObjectKindFilter;
+  previewObjectRowFilter: PreviewObjectRowFilter;
   previewLimit: number;
   previewWhere: string;
   loading: string;
   onPreviewObjectChange: (value: string) => void;
+  onPreviewObjectSearchChange: (value: string) => void;
+  onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
+  onPreviewObjectRowFilterChange: (value: PreviewObjectRowFilter) => void;
   onPreviewLimitChange: (value: number) => void;
   onPreviewWhereChange: (value: string) => void;
   onShowPreview: () => void;
 }) {
+  const tableCount = previewObjects.filter((item) => item.kind === "table").length;
+  const viewCount = previewObjects.filter((item) => item.kind === "view").length;
+  const selectedObject = previewObjects.find((item) => item.name === previewObject) ?? null;
+  const hasActiveFilter =
+    Boolean(previewObjectSearch.trim()) ||
+    previewObjectKindFilter !== "all" ||
+    previewObjectRowFilter !== "all";
+
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="data-preview-controls-heading">
       <DbObjectPanelHeader
@@ -610,7 +695,9 @@ function PreviewControlsPanel({
         description={t("dataMgmt.preview.controlsHint")}
         action={
           <>
-            <StatusBadge variant="info" label={t("dataMgmt.preview.objectCount", { count: previewObjects.length })} />
+            <StatusBadge variant="info" label={t("dataMgmt.preview.objectTotalCount", { count: previewObjects.length })} />
+            <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectTableCount", { count: tableCount })} />
+            <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectViewCount", { count: viewCount })} />
             <Button
               type="button"
               variant="primary"
@@ -626,24 +713,75 @@ function PreviewControlsPanel({
         }
       />
 
-      <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
-            <span>{t("dataMgmt.preview.object")}</span>
-            <select
-              value={previewObject}
-              onChange={(event) => onPreviewObjectChange(event.currentTarget.value)}
-              className="min-h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-            >
-              {previewObjects.length === 0 && <option value="">{t("metadataSql.targets.emptyTitle")}</option>}
-              {previewObjects.map((item) => (
-                <option key={`${item.kind}-${item.name}`} value={item.name}>
-                  {item.name} ({item.kind})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+        <div className="grid gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="grid min-w-0 flex-1 gap-1 text-sm font-medium text-foreground">
+              <span>{t("dataMgmt.preview.search")}</span>
+              <span className="relative block min-w-0">
+                <Search
+                  size={16}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={previewObjectSearch}
+                  onChange={(event) => onPreviewObjectSearchChange(event.currentTarget.value)}
+                  placeholder={t("dataMgmt.preview.searchPlaceholder")}
+                  className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card py-2 pl-9 pr-3 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                />
+              </span>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
+              <span>{t("dataMgmt.preview.kindFilter")}</span>
+              <select
+                value={previewObjectKindFilter}
+                onChange={(event) => onPreviewObjectKindFilterChange(event.currentTarget.value as PreviewObjectKindFilter)}
+                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+              >
+                <option value="all">{t("dataMgmt.preview.kindFilterAll")}</option>
+                <option value="table">{t("dataMgmt.preview.kindFilterTable")}</option>
+                <option value="view">{t("dataMgmt.preview.kindFilterView")}</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
+              <span>{t("dataMgmt.preview.rowFilter")}</span>
+              <select
+                value={previewObjectRowFilter}
+                onChange={(event) => onPreviewObjectRowFilterChange(event.currentTarget.value as PreviewObjectRowFilter)}
+                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+              >
+                <option value="all">{t("dataMgmt.preview.rowFilterAll")}</option>
+                <option value="with_rows">{t("dataMgmt.preview.rowFilterWithRows")}</option>
+                <option value="empty_rows">{t("dataMgmt.preview.rowFilterEmptyRows")}</option>
+                <option value="unknown_rows">{t("dataMgmt.preview.rowFilterUnknownRows")}</option>
+              </select>
+            </label>
+          </div>
+          <p className="text-xs text-muted" aria-live="polite">
+            {t("dataMgmt.preview.filteredObjectCount", {
+              filtered: filteredPreviewObjects.length,
+              total: previewObjects.length,
+            })}
+          </p>
+          <PreviewObjectList
+            objects={filteredPreviewObjects}
+            selectedObject={previewObject}
+            hasActiveFilter={hasActiveFilter}
+            onSelect={onPreviewObjectChange}
+          />
+        </div>
+
+        <div className="grid gap-3 border-t border-border pt-3">
+          {selectedObject && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-card px-3 py-2 text-sm text-foreground">
+              <span className="font-medium text-foreground">{t("dataMgmt.preview.selectedObject")}</span>
+              <span className="break-all font-mono text-xs font-semibold text-primary">{selectedObject.name}</span>
+              <StatusBadge variant="neutral" label={previewObjectKindLabel(selectedObject.kind)} />
+            </div>
+          )}
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("dataMgmt.preview.limit")}</span>
             <input
               type="number"
@@ -653,23 +791,130 @@ function PreviewControlsPanel({
               onChange={(event) =>
                 onPreviewLimitChange(Math.min(10000, Math.max(1, Number(event.currentTarget.value) || 1)))
               }
-              className="min-h-11 rounded-md border border-slate-300 px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className="min-h-11 rounded-md border border-border px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-medium text-foreground">
+            <span>{t("dataMgmt.preview.where")}</span>
+            <textarea
+              value={previewWhere}
+              onChange={(event) => onPreviewWhereChange(event.currentTarget.value)}
+              rows={4}
+              placeholder={t("dataMgmt.preview.wherePlaceholder")}
+              className="min-h-28 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 focus:border-primary focus:ring-2 focus:ring-ring/40"
             />
           </label>
         </div>
-        <label className="grid gap-1 text-sm font-medium text-slate-800">
-          <span>{t("dataMgmt.preview.where")}</span>
-          <textarea
-            value={previewWhere}
-            onChange={(event) => onPreviewWhereChange(event.currentTarget.value)}
-            rows={4}
-            placeholder={t("dataMgmt.preview.wherePlaceholder")}
-            className="min-h-28 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-          />
-        </label>
       </div>
     </section>
   );
+}
+
+function PreviewObjectList({
+  objects,
+  selectedObject,
+  hasActiveFilter,
+  onSelect,
+}: {
+  objects: PreviewObject[];
+  selectedObject: string;
+  hasActiveFilter: boolean;
+  onSelect: (value: string) => void;
+}) {
+  if (objects.length === 0) {
+    return (
+      <div className="rounded-md border border-border bg-card p-4">
+        <EmptyState
+          title={hasActiveFilter ? t("dataMgmt.preview.noObjectsTitle") : t("dataMgmt.preview.emptyObjectsTitle")}
+          hint={hasActiveFilter ? t("dataMgmt.preview.noObjectsHint") : t("dataMgmt.preview.emptyObjectsHint")}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-card" data-testid="data-preview-object-list">
+      <div
+        className="hidden grid-cols-[minmax(0,1.5fr)_5.75rem_5.75rem_minmax(4.5rem,0.75fr)] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
+        aria-hidden="true"
+      >
+        <span>{t("dataMgmt.preview.objectName")}</span>
+        <span>{t("dataMgmt.preview.objectKind")}</span>
+        <span>{t("dataMgmt.preview.objectRows")}</span>
+        <span>{t("dataMgmt.preview.objectOwner")}</span>
+      </div>
+      <div className="max-h-80 overflow-auto" role="list" aria-label={t("dataMgmt.preview.object")}>
+        {objects.map((item) => {
+          const selected = item.name === selectedObject;
+          return (
+            <button
+              key={`${item.kind}-${item.name}`}
+              type="button"
+              aria-current={selected ? "true" : undefined}
+              aria-label={t("dataMgmt.preview.selectObject", { name: item.name })}
+              className={[
+                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring/40",
+                "md:grid-cols-[minmax(0,1.5fr)_5.75rem_5.75rem_minmax(4.5rem,0.75fr)] md:items-center md:py-2",
+                selected ? "bg-primary/10" : "bg-card",
+              ].join(" ")}
+              onClick={() => onSelect(item.name)}
+            >
+              <span className="min-w-0">
+                <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
+                {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
+              </span>
+              <span className="flex items-center gap-2 md:block">
+                <span className="text-xs font-medium text-muted md:hidden">{t("dataMgmt.preview.objectKind")}</span>
+                <StatusBadge variant={item.kind === "view" ? "info" : "neutral"} label={previewObjectKindLabel(item.kind)} />
+              </span>
+              <span className="flex items-center gap-2 font-mono text-xs text-foreground md:block">
+                <span className="font-sans font-medium text-muted md:hidden">{t("dataMgmt.preview.objectRows")}</span>
+                {previewObjectRowCountLabel(item.rowCount)}
+              </span>
+              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted md:block">
+                <span className="font-sans font-medium text-muted md:hidden">{t("dataMgmt.preview.objectOwner")}</span>
+                <span className="break-all">{item.owner || "-"}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function filterPreviewObjects(
+  objects: PreviewObject[],
+  search: string,
+  kindFilter: PreviewObjectKindFilter,
+  rowFilter: PreviewObjectRowFilter
+) {
+  const q = search.trim().toLowerCase();
+  return objects.filter((item) => {
+    if (kindFilter !== "all" && item.kind !== kindFilter) return false;
+    if (!previewObjectMatchesRowFilter(item, rowFilter)) return false;
+    if (!q) return true;
+    return [item.name, item.comment, item.owner, previewObjectKindLabel(item.kind)]
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
+  });
+}
+
+function previewObjectMatchesRowFilter(item: PreviewObject, filter: PreviewObjectRowFilter) {
+  if (filter === "all") return true;
+  if (filter === "with_rows") return typeof item.rowCount === "number" && item.rowCount > 0;
+  if (filter === "empty_rows") return item.rowCount === 0;
+  return item.rowCount == null;
+}
+
+function previewObjectKindLabel(kind: PreviewObjectKind) {
+  return kind === "view" ? t("dataMgmt.preview.kindFilterView") : t("dataMgmt.preview.kindFilterTable");
+}
+
+function previewObjectRowCountLabel(rowCount?: number | null) {
+  if (rowCount == null) return t("dataMgmt.preview.rowUnknown");
+  return t("dbAdmin.list.rows", { count: rowCount });
 }
 
 function PreviewResultsPanel({
@@ -682,7 +927,7 @@ function PreviewResultsPanel({
   onDownload: () => void;
 }) {
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="data-preview-results-heading">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="data-preview-results-heading">
       <DbObjectPanelHeader
         headingId="data-preview-results-heading"
         icon={FileSpreadsheet}
@@ -707,10 +952,10 @@ function PreviewResultsPanel({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <StatusBadge variant="neutral" label={preview.runtime} />
             <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
-            <span className="break-all font-mono text-xs text-slate-500">{preview.sql}</span>
+            <span className="break-all font-mono text-xs text-muted">{preview.sql}</span>
           </div>
           {preview.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
               {warning}
             </p>
           ))}
@@ -791,12 +1036,12 @@ function CsvUploadWorkspace({
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-slate-800">
+        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
           <span>{t("dataMgmt.csv.table")}</span>
           <select
             value={table}
             onChange={(event) => onTableChange(event.currentTarget.value)}
-            className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+            className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
           >
             {tables.length === 0 && <option value="">{t("tableMgmt.list.emptyTitle")}</option>}
             {tables.map((item) => (
@@ -804,12 +1049,12 @@ function CsvUploadWorkspace({
             ))}
           </select>
         </label>
-        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-slate-800">
+        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
           <span>{t("dataMgmt.csv.mode")}</span>
           <select
             value={mode}
             onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-            className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+            className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
           >
             <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
             <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
@@ -832,8 +1077,8 @@ function CsvUploadWorkspace({
         onClear={onFileClear}
       />
 
-      <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-        <legend className="px-1 text-sm font-semibold text-slate-900">{t("dataMgmt.csv.executeTitle")}</legend>
+      <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+        <legend className="px-1 text-sm font-semibold text-foreground">{t("dataMgmt.csv.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
           onChange={onConfirmationChange}
@@ -846,7 +1091,7 @@ function CsvUploadWorkspace({
       </fieldset>
 
       {result && (
-        <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
+        <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
             <StatusBadge variant="neutral" label={result.runtime} />
@@ -863,34 +1108,34 @@ function CsvUploadWorkspace({
             )}
           </div>
           {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
               {warning}
             </p>
           ))}
-          <p className="text-slate-700">
+          <p className="text-foreground">
             {t("dataMgmt.csv.matched")}: <span className="font-mono text-xs">{result.matched_columns.join(", ") || "-"}</span>
           </p>
           {result.unmatched_csv_columns.length > 0 && (
-            <p className="text-slate-700">
+            <p className="text-foreground">
               {t("dataMgmt.csv.unmatched")}: <span className="font-mono text-xs">{result.unmatched_csv_columns.join(", ")}</span>
             </p>
           )}
           {result.row_errors.length > 0 && (
             <div className="grid gap-1">
-              <p className="font-semibold text-slate-900">{t("dataMgmt.csv.rowErrors")}</p>
+              <p className="font-semibold text-foreground">{t("dataMgmt.csv.rowErrors")}</p>
               {result.row_errors.map((error) => (
-                <p key={error} className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                <p key={error} className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-danger">
                   {error}
                 </p>
               ))}
             </div>
           )}
           {result.hint && (
-            <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-900">{result.hint}</p>
+            <p className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-primary">{result.hint}</p>
           )}
           {result.sample_rows.length > 0 && (
             <div className="grid gap-1">
-              <p className="font-semibold text-slate-900">{t("dataMgmt.csv.preview")}</p>
+              <p className="font-semibold text-foreground">{t("dataMgmt.csv.preview")}</p>
               <QueryResultsTable
                 results={{
                   columns: Object.keys(result.sample_rows[0] ?? {}),
@@ -902,7 +1147,7 @@ function CsvUploadWorkspace({
           )}
         </section>
       )}
-      {!fileReady && <p className="text-xs text-slate-500">{t("dataMgmt.csv.noFile")}</p>}
+      {!fileReady && <p className="text-xs text-muted">{t("dataMgmt.csv.noFile")}</p>}
     </div>
   );
 }
@@ -1010,7 +1255,7 @@ function SyntheticWorkspace({
         dataTestId="data-synthetic-steps"
       />
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" aria-labelledby="synthetic-target-heading">
+      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-target-heading">
         <DbObjectPanelHeader
           headingId="synthetic-target-heading"
           icon={Database}
@@ -1033,12 +1278,12 @@ function SyntheticWorkspace({
         />
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.profile")}</span>
             <select
               value={syntheticProfileName}
               onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
-              className="h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              className="h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             >
               {(selectAiDbProfiles?.profiles ?? []).length === 0 && (
                 <option value="">{t("dataTools.syntheticData.noProfiles")}</option>
@@ -1050,7 +1295,7 @@ function SyntheticWorkspace({
               ))}
             </select>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.rowsPerTable")}</span>
             <input
               type="number"
@@ -1058,7 +1303,7 @@ function SyntheticWorkspace({
               max={100}
               value={syntheticRows}
               onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              className="h-11 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           </label>
         </div>
@@ -1073,7 +1318,7 @@ function SyntheticWorkspace({
           {selectAiDbProfiles?.warnings.map((warning) => (
             <span
               key={warning}
-              className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900"
+              className="rounded-md border border-warning/30 bg-warning-bg px-2 py-1 text-xs text-warning"
             >
               {warning}
             </span>
@@ -1081,22 +1326,22 @@ function SyntheticWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-2">
-          <div className="text-sm font-medium text-slate-800">{t("dataTools.syntheticData.tables")}</div>
+          <div className="text-sm font-medium text-foreground">{t("dataTools.syntheticData.tables")}</div>
           {syntheticAvailableTables.length > 0 ? (
-            <div className="max-h-56 overflow-auto rounded-md border border-slate-200 bg-white" role="group" aria-label={t("dataTools.syntheticData.tables")}>
-              <div className="grid divide-y divide-slate-100">
+            <div className="max-h-56 overflow-auto rounded-md border border-border bg-card" role="group" aria-label={t("dataTools.syntheticData.tables")}>
+              <div className="grid divide-y divide-border/70">
                 {syntheticAvailableTables.map((tableName) => {
                   const selected = syntheticSelectedTables.includes(tableName);
                   return (
                     <label
                       key={tableName}
-                      className="flex min-h-11 min-w-0 items-center gap-3 px-3 py-2 text-sm text-slate-800 hover:bg-slate-50"
+                      className="flex min-h-11 min-w-0 items-center gap-3 px-3 py-2 text-sm text-foreground hover:bg-background"
                     >
                       <input
                         type="checkbox"
                         checked={selected}
                         onChange={(event) => onSyntheticTableToggle(tableName, event.currentTarget.checked)}
-                        className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-200"
+                        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
                         aria-label={t("dataTools.syntheticData.tableOption", { name: tableName })}
                       />
                       <span className="min-w-0 break-all font-mono text-xs">{tableName}</span>
@@ -1114,19 +1359,19 @@ function SyntheticWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.prompt")}</span>
             <textarea
               value={syntheticPrompt}
               onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
               rows={5}
               placeholder={t("dataTools.syntheticData.promptPlaceholder")}
-              className="min-h-40 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              className="min-h-40 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           </label>
-          <fieldset className="grid content-start gap-3 rounded-md border border-slate-200 bg-white p-3">
-            <legend className="px-1 text-sm font-semibold text-slate-900">{t("dataTools.syntheticData.options")}</legend>
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <fieldset className="grid content-start gap-3 rounded-md border border-border bg-card p-3">
+            <legend className="px-1 text-sm font-semibold text-foreground">{t("dataTools.syntheticData.options")}</legend>
+            <label className="grid gap-1 text-sm font-medium text-foreground">
               <span>{t("dataTools.syntheticData.sampleRows")}</span>
               <input
                 type="number"
@@ -1134,23 +1379,23 @@ function SyntheticWorkspace({
                 max={100}
                 value={syntheticSampleRows}
                 onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
-                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
               />
             </label>
-            <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800">
+            <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
               <input
                 type="checkbox"
                 checked={syntheticUseComments}
                 onChange={(event) => onSyntheticUseCommentsChange(event.currentTarget.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-200"
+                className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
               />
               <span>{t("dataTools.syntheticData.useComments")}</span>
             </label>
           </fieldset>
         </div>
 
-        <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-          <legend className="px-1 text-sm font-semibold text-slate-900">{t("dataTools.syntheticData.executeTitle")}</legend>
+        <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">{t("dataTools.syntheticData.executeTitle")}</legend>
           <ExecutionConfirmationField
             value={syntheticConfirmation}
             onChange={onSyntheticConfirmationChange}
@@ -1163,7 +1408,7 @@ function SyntheticWorkspace({
         </fieldset>
       </section>
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" aria-labelledby="synthetic-status-heading">
+      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-status-heading">
         <DbObjectPanelHeader
           headingId="synthetic-status-heading"
           icon={RefreshCw}
@@ -1185,25 +1430,25 @@ function SyntheticWorkspace({
           }
         />
 
-        <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+        <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
           <span>{t("dataTools.syntheticData.operationId")}</span>
           <input
             value={operationId || "-"}
             readOnly
-            className="h-11 rounded-md border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900"
+            className="h-11 rounded-md border border-border bg-card px-3 font-mono text-sm text-foreground"
           />
         </label>
 
         {syntheticData ? (
-          <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm" aria-label={t("dataTools.syntheticData.operationResult")}>
+          <div className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" aria-label={t("dataTools.syntheticData.operationResult")}>
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant={syntheticData.executed ? "success" : "neutral"} label={syntheticData.status} />
               <StatusBadge variant="neutral" label={syntheticData.runtime} />
               {operationId && <StatusBadge variant="info" label={operationId} />}
             </div>
-            <p className="text-slate-700">{syntheticData.message || "-"}</p>
+            <p className="text-foreground">{syntheticData.message || "-"}</p>
             {syntheticData.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
                 {warning}
               </p>
             ))}
@@ -1213,19 +1458,19 @@ function SyntheticWorkspace({
         )}
 
         {syntheticDataStatus && (
-          <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm" aria-label={t("dataTools.syntheticData.statusResult")}>
+          <div className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" aria-label={t("dataTools.syntheticData.statusResult")}>
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant="info" label={syntheticDataStatus.status} />
               <StatusBadge variant="neutral" label={syntheticDataStatus.runtime} />
             </div>
-            <p className="text-slate-700">{syntheticDataStatus.message || "-"}</p>
+            <p className="text-foreground">{syntheticDataStatus.message || "-"}</p>
             {syntheticDataStatus.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
                 {warning}
               </p>
             ))}
             {Object.keys(syntheticDataStatus.result).length > 0 && (
-              <pre className="max-h-52 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+              <pre className="max-h-52 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
                 <code>{JSON.stringify(syntheticDataStatus.result, null, 2)}</code>
               </pre>
             )}
@@ -1233,7 +1478,7 @@ function SyntheticWorkspace({
         )}
       </section>
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" aria-labelledby="synthetic-results-heading">
+      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
           headingId="synthetic-results-heading"
           icon={Eye}
@@ -1256,13 +1501,13 @@ function SyntheticWorkspace({
         />
 
         <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.resultTable")}</span>
             <select
               data-testid="synthetic-result-table-select"
               value={hasValidResultTable ? syntheticResultTable : ""}
               onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
-              className="h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              className="h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             >
               {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
               {resultTableOptions.map((tableName) => (
@@ -1272,7 +1517,7 @@ function SyntheticWorkspace({
               ))}
             </select>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.resultLimit")}</span>
             <input
               type="number"
@@ -1280,7 +1525,7 @@ function SyntheticWorkspace({
               max={10000}
               value={syntheticResultLimit}
               onChange={(event) => onSyntheticResultLimitChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              className="h-11 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           </label>
         </div>
@@ -1292,7 +1537,7 @@ function SyntheticWorkspace({
               <StatusBadge variant="info" label={syntheticDataResults.table_name} />
             </div>
             {syntheticDataResults.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
                 {warning}
               </p>
             ))}

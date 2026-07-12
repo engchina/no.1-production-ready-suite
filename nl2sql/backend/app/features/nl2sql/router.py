@@ -123,8 +123,8 @@ from .models import (
     SyntheticDataOperationStatusData,
     SyntheticDataResultsData,
 )
-from .service import enforce_row_limit, nl2sql_service
 from .service import is_select_only as _is_select_only
+from .service import nl2sql_service
 
 router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
 
@@ -150,12 +150,15 @@ async def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
     local skeleton は deterministic mock result を返す。
     実運用では Oracle 実行 adapter へ差し替える。
     """
-    row_limit = req.row_limit or nl2sql_service.get_profile(req.profile_id).default_row_limit
-    safety, _executable, results = nl2sql_service.execute_sql(
-        sql=enforce_row_limit(req.sql, row_limit),
-        allowed=req.allowed_objects,
-        row_limit=row_limit,
-    )
+    try:
+        allowed = nl2sql_service.resolve_allowed_objects(req.profile_id, req.allowed_objects)
+        safety, _executable, results = nl2sql_service.execute_sql(
+            sql=req.sql,
+            allowed=allowed,
+            row_limit=req.row_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not safety.is_safe:
         raise HTTPException(status_code=400, detail=safety.blocked_reason)
     return ApiResponse(data=results)
@@ -164,7 +167,10 @@ async def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 async def create_job(req: JobCreateRequest) -> ApiResponse[JobCreateData]:
     """NL2SQL 検索 job を開始する。"""
-    return ApiResponse(data=nl2sql_service.start_job(req))
+    try:
+        return ApiResponse(data=nl2sql_service.start_job(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
@@ -179,9 +185,7 @@ async def get_job(job_id: str) -> ApiResponse[JobData]:
 @router.get("/profiles", response_model=ApiResponse[list[Nl2SqlProfile]])
 async def list_profiles(include_archived: bool = False) -> ApiResponse[list[Nl2SqlProfile]]:
     """NL2SQL profile 一覧。"""
-    return ApiResponse(
-        data=nl2sql_service.list_profiles(include_archived=include_archived)
-    )
+    return ApiResponse(data=nl2sql_service.list_profiles(include_archived=include_archived))
 
 
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
@@ -205,6 +209,17 @@ async def update_profile(profile_id: str, req: ProfileUpsertRequest) -> ApiRespo
     return ApiResponse(data=updated)
 
 
+@router.delete("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
+async def delete_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+    """NL2SQL profile を物理削除する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.delete_profile(profile_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
+
+
 @router.post(
     "/profiles/{profile_id}/learning-material/import",
     response_model=ApiResponse[ProfileLearningMaterialImportData],
@@ -214,7 +229,7 @@ async def import_profile_learning_material(
     file: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "merge",
 ) -> ApiResponse[ProfileLearningMaterialImportData]:
-    """旧版 terms/rules/few-shot CSV/XLSX を profile learning material へ取り込む。"""
+    """旧版 terms/rules/few-shot CSV/XLSX を取り込む。rules は追加指示へ吸収する。"""
     content = await file.read()
     try:
         return ApiResponse(
@@ -252,7 +267,7 @@ async def export_profile_learning_material(profile_id: str) -> Response:
     response_model=ApiResponse[LegacyLearningMaterialData],
 )
 async def get_legacy_learning_material() -> ApiResponse[LegacyLearningMaterialData]:
-    """旧版 terms.xlsx / rules.xlsx 互換の用語・ルールを返す。"""
+    """旧版 terms.xlsx / rules.xlsx 互換データ（グローバル用語集・グローバルルール）を返す。"""
     return ApiResponse(data=nl2sql_service.get_legacy_learning_material())
 
 
@@ -279,7 +294,7 @@ async def import_legacy_terms(
 async def import_legacy_rules(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[LegacyLearningMaterialData]:
-    """旧版 rules.xlsx 互換のルールを取り込む。"""
+    """旧版 rules.xlsx 互換のグローバルルールを取り込む。"""
     return ApiResponse(
         data=nl2sql_service.import_legacy_rules(
             filename=file.filename or "rules.xlsx",
@@ -301,7 +316,7 @@ async def export_legacy_terms() -> Response:
 
 @router.get("/legacy-learning-material/rules/export.xlsx")
 async def export_legacy_rules() -> Response:
-    """旧版 rules.xlsx 互換のルールを Excel workbook として出力する。"""
+    """旧版 rules.xlsx 互換のグローバルルールを Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_legacy_rules_xlsx()
     return Response(
         content=content,
@@ -483,9 +498,17 @@ async def patch_select_ai_db_profile(
     "/select-ai/profiles/export.json",
     response_model=ApiResponse[SelectAiProfilesExportData],
 )
-async def export_select_ai_profiles_json() -> ApiResponse[SelectAiProfilesExportData]:
+async def export_select_ai_profiles_json(
+    business_profiles_only: bool = False,
+    include_archived_business_profiles: bool = True,
+) -> ApiResponse[SelectAiProfilesExportData]:
     """Oracle DBMS_CLOUD_AI profile definitions を JSON として返す。"""
-    return ApiResponse(data=nl2sql_service.export_select_ai_profiles_json())
+    return ApiResponse(
+        data=nl2sql_service.export_select_ai_profiles_json(
+            business_profiles_only=business_profiles_only,
+            include_archived_business_profiles=include_archived_business_profiles,
+        )
+    )
 
 
 @router.post(
@@ -800,7 +823,7 @@ async def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
         data=nl2sql_service.analyze_sql(
             req.sql,
             req.allowed_objects,
-            req.row_limit or nl2sql_service.get_profile(None).default_row_limit,
+            req.row_limit,
             use_llm=req.use_llm,
         )
     )
@@ -812,7 +835,7 @@ async def repair(req: RepairRequest) -> ApiResponse[RepairData]:
     return ApiResponse(
         data=nl2sql_service.repair_oracle_error(
             req,
-            req.row_limit or nl2sql_service.get_profile(None).default_row_limit,
+            req.row_limit,
         )
     )
 

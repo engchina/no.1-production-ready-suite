@@ -623,9 +623,7 @@ def _supporting_features(
             StepResult(
                 name="support_comment_sql_generation",
                 ok=len(comment_statements) == len(comment_items),
-                message=(
-                    f"statements={len(comment_statements)}; warnings=0"
-                ),
+                message=(f"statements={len(comment_statements)}; warnings=0"),
             )
         )
     except Exception as exc:
@@ -737,9 +735,7 @@ def _seed_demo_learning() -> StepResult:
 
 def _feedback_index_smoke(*, include_bad: bool) -> StepResult:
     try:
-        data = nl2sql_service.rebuild_feedback_index(
-            FeedbackIndexRequest(include_bad=include_bad)
-        )
+        data = nl2sql_service.rebuild_feedback_index(FeedbackIndexRequest(include_bad=include_bad))
     except Exception as exc:
         return StepResult(name="feedback_index_rebuild", ok=False, message=str(exc))
     ok = (

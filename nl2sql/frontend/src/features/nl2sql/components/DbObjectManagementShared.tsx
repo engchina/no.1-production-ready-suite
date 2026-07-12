@@ -1,6 +1,7 @@
 import { Children, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
+  Check,
   Code2,
   Download,
   RefreshCw,
@@ -108,7 +109,7 @@ export function rowCountLabel(rowCount?: number | null) {
 }
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-slate-100 ${className}`} aria-hidden="true" />;
+  return <div className={`animate-pulse rounded-md bg-muted/30 ${className}`} aria-hidden="true" />;
 }
 
 export function DbObjectManagementPanelShell({
@@ -119,15 +120,19 @@ export function DbObjectManagementPanelShell({
   className = "",
   splitId,
   preferredWidePane = "right",
+  role = "tabpanel",
   children,
 }: {
   id: string;
-  labelledBy: string;
+  /** タブ連携時のみ指定。list+actions 等タブ非連携では省略し role="region" を使う。 */
+  labelledBy?: string;
   ariaLabel?: string;
   idPrefix: string;
   className?: string;
   splitId?: string;
   preferredWidePane?: FixedSplitWidePane;
+  /** タブ配下は "tabpanel"(既定)、タブ非連携の独立領域は "region"。 */
+  role?: "tabpanel" | "region";
   children: ReactNode;
 }) {
   const panelChildren = Children.toArray(children);
@@ -136,10 +141,10 @@ export function DbObjectManagementPanelShell({
   return (
     <section
       id={id}
-      role="tabpanel"
+      role={role}
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
-      className={`grid gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      className={`grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm ${className}`}
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
@@ -173,11 +178,11 @@ export function DbObjectPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-slate-950">
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-foreground">
           <Icon size={18} aria-hidden="true" />
           {title}
         </h2>
-        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
@@ -196,19 +201,19 @@ export function DbManagementSearchField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
       <span>{label}</span>
       <span className="relative">
         <Search
           size={16}
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
           aria-hidden="true"
         />
         <input
           type="search"
           value={value}
           onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+          className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
           placeholder={placeholder}
         />
       </span>
@@ -227,18 +232,56 @@ export function DbObjectStepIndicator({
   ariaLabel: string;
   dataTestId?: string;
 }) {
+  // 水平ステッパー(Material/Ant 標準): 丸番号(完了は ✓) + 連結線 + 丸の下に中央ラベル。
+  // 状態は色 + アイコン/番号で伝達(color-not-only)。等幅分配 + ラベル折返しで 375px でも横溢れなし。
   return (
-    <ol className="grid gap-2 md:grid-cols-2" aria-label={ariaLabel} data-testid={dataTestId}>
-      {steps.map((label, index) => (
-        <li
-          key={label}
-          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            index <= activeIndex ? "border-sky-200 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-500"
-          }`}
-        >
-          {index + 1}. {label}
-        </li>
-      ))}
+    <ol className="flex items-start" aria-label={ariaLabel} data-testid={dataTestId}>
+      {steps.map((label, index) => {
+        const complete = index < activeIndex;
+        const current = index === activeIndex;
+        const isFirst = index === 0;
+        const isLast = index === steps.length - 1;
+        return (
+          <li
+            key={label}
+            className="flex flex-1 flex-col items-center gap-2"
+            aria-current={current ? "step" : undefined}
+          >
+            <div className="flex w-full items-center">
+              <span
+                aria-hidden="true"
+                className={`h-0.5 flex-1 rounded-full ${
+                  isFirst ? "opacity-0" : index <= activeIndex ? "bg-primary" : "bg-border"
+                }`}
+              />
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors ${
+                  complete
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : current
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-card text-muted"
+                }`}
+              >
+                {complete ? <Check size={16} aria-hidden="true" /> : <span className="tnum">{index + 1}</span>}
+              </span>
+              <span
+                aria-hidden="true"
+                className={`h-0.5 flex-1 rounded-full ${
+                  isLast ? "opacity-0" : index < activeIndex ? "bg-primary" : "bg-border"
+                }`}
+              />
+            </div>
+            <span
+              className={`px-1 text-center text-xs font-medium leading-snug ${
+                complete || current ? "text-foreground" : "text-muted"
+              }`}
+            >
+              {label}
+            </span>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -266,10 +309,10 @@ function DbObjectDetailSkeleton({ idPrefix }: { idPrefix: string }) {
 
 export function DbObjectStatusMetricItem({ label, value, testId, emphasis = false }: DbObjectStatusMetric) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+    <div className="rounded-md border border-border bg-background px-3 py-2">
+      <dt className="text-xs font-medium text-muted">{label}</dt>
       <dd
-        className={`mt-1 font-semibold text-slate-950 ${emphasis ? "text-lg" : ""}`}
+        className={`mt-1 font-semibold text-foreground ${emphasis ? "text-lg" : ""}`}
         data-testid={testId}
       >
         {value}
@@ -290,7 +333,7 @@ export function DbObjectManagementStatusBar({
   metricColumnsClass?: string;
 }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm" aria-label={ariaLabel}>
+    <section className="rounded-md border border-border bg-card px-4 py-3 shadow-sm" aria-label={ariaLabel}>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <dl className={`grid gap-3 ${metricColumnsClass} xl:flex xl:flex-wrap xl:items-center`}>
           {metrics.map((metric) => (
@@ -365,12 +408,12 @@ function SortButton({
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-slate-700 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-sky-700" : "text-slate-400"} aria-hidden="true" />
+      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
     </button>
   );
 }
@@ -419,7 +462,7 @@ export function DbObjectGrid({
         action={<StatusBadge variant="info" label={labels.count} />}
       />
 
-      <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
         <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
           <DbManagementSearchField
             label={t("dbAdmin.search.label")}
@@ -427,12 +470,12 @@ export function DbObjectGrid({
             value={search}
             onChange={onSearchChange}
           />
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{labels.filter}</span>
             <select
               value={filter}
               onChange={(event) => onFilterChange(event.currentTarget.value as DbObjectFilter)}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
             >
               <option value="all">{labels.filterAll}</option>
               <option value="with_rows">{labels.filterWithRows}</option>
@@ -450,16 +493,16 @@ export function DbObjectGrid({
           hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+        <div className="overflow-hidden rounded-md border border-border bg-card">
           <div className="max-h-[42rem] overflow-auto" data-testid="db-admin-object-list">
-            <table className="w-full min-w-[28rem] table-fixed divide-y divide-slate-200 text-left text-sm" data-testid={`${idPrefix}-grid`}>
+            <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
               <colgroup>
                 <col className="w-[9.5rem]" />
                 <col className="w-[4.25rem]" />
                 <col className="w-[4.25rem]" />
                 <col className="w-[10rem]" />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-600">
+              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2">
                     <SortButton label={labels.objectName} sortKey="name" sort={sort} onToggle={onSortChange} />
@@ -473,24 +516,24 @@ export function DbObjectGrid({
                   <th className="whitespace-nowrap px-3 py-2 text-right">{labels.actions}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border/70">
                 {items.map((item) => {
                   const selected = item.name === selectedName;
                   return (
-                    <tr key={item.name} className={selected ? "bg-sky-50" : "hover:bg-slate-50"}>
+                    <tr key={item.name} className={selected ? "bg-primary/10" : "hover:bg-background"}>
                       <td className="px-3 py-2 align-top">
                         <button
                           type="button"
                           aria-label={labels.showObject(item.name)}
                           aria-current={selected ? "true" : undefined}
-                          className="break-all font-mono text-xs font-semibold text-sky-800 hover:text-sky-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                          className="break-all font-mono text-xs font-semibold text-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
                           onClick={() => onSelect(item.name)}
                         >
                           {item.name}
                         </button>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-700">{rowCountLabel(item.row_count)}</td>
-                      <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-600 lg:table-cell">{item.owner || "-"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
+                      <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-muted lg:table-cell">{item.owner || "-"}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-right align-top">
                         <div className="flex flex-nowrap justify-end gap-2">
                           <Button type="button" variant="secondary" size="sm" className="min-w-14 whitespace-nowrap" onClick={() => onSelect(item.name)}>
@@ -550,7 +593,7 @@ export function DbObjectDetailPanel({
 
   if (!detail) {
     return (
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4">
         <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />
       </section>
     );
@@ -585,18 +628,18 @@ export function DbObjectDetailPanel({
   };
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby={headingId}>
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby={headingId}>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id={headingId} className="break-all font-mono text-base font-semibold text-slate-950">
+            <h2 id={headingId} className="break-all font-mono text-base font-semibold text-foreground">
               {detail.name}
             </h2>
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
             {detail.row_count != null && <StatusBadge variant="info" label={rowCountLabel(detail.row_count)} />}
           </div>
-          {detail.comment && <p className="mt-2 text-sm leading-6 text-slate-700">{detail.comment}</p>}
+          {detail.comment && <p className="mt-2 text-sm leading-6 text-foreground">{detail.comment}</p>}
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
           {onExport && labels.export && labels.exportAria && (
@@ -620,12 +663,12 @@ export function DbObjectDetailPanel({
       </div>
 
       {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
           {warning}
         </p>
       ))}
 
-      <div className="overflow-x-auto border-b border-slate-200" role="tablist" aria-label={labels.tabsLabel}>
+      <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={labels.tabsLabel}>
         <div className="flex min-w-max gap-1">
           {detailTabs.map((item, index) => {
             const Icon = item.icon;
@@ -638,10 +681,10 @@ export function DbObjectDetailPanel({
                 role="tab"
                 aria-selected={selected}
                 aria-controls={`${idPrefix}-detail-panel-${item.id}`}
-                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-sky-50 focus-visible:shadow-[inset_0_-3px_0_0_rgb(2_132_199)] ${
+                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
                   selected
-                    ? "border-sky-700 bg-white text-sky-900"
-                    : "border-transparent text-slate-600 hover:border-slate-300 hover:bg-white hover:text-slate-950"
+                    ? "border-primary bg-card text-primary"
+                    : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
                 }`}
                 onClick={() => onTabChange(item.id)}
                 onKeyDown={(event) => handleDetailTabKeyDown(event, index)}
@@ -649,7 +692,7 @@ export function DbObjectDetailPanel({
                 <Icon
                   size={15}
                   aria-hidden="true"
-                  className={selected ? "text-sky-700" : "text-slate-400 group-hover:text-slate-600"}
+                  className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
                 />
                 <span>{item.label}</span>
               </button>
@@ -664,9 +707,9 @@ export function DbObjectDetailPanel({
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-columns`}
           data-testid="db-admin-detail-columns"
-          className="min-w-0 max-w-full overflow-x-auto rounded-md border border-slate-200 bg-white"
+          className="min-w-0 max-w-full overflow-x-auto rounded-md border border-border bg-card"
         >
-          <table className="w-full min-w-[42rem] table-fixed divide-y divide-slate-200 text-sm">
+          <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
               <col className="w-[18%]" />
               <col className="w-[12%]" />
@@ -674,7 +717,7 @@ export function DbObjectDetailPanel({
               <col className="w-[10%]" />
               <col />
             </colgroup>
-            <thead className="bg-slate-50">
+            <thead className="bg-background">
               <tr>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
@@ -683,14 +726,14 @@ export function DbObjectDetailPanel({
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border/70">
               {detail.columns.map((column) => (
                 <tr key={column.column_name}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
                   <td className="px-3 py-2">{column.logical_name}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-mono text-xs text-slate-600">
+                  <td className="break-words px-3 py-2 font-mono text-xs text-muted">
                     {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
                   </td>
                 </tr>
@@ -703,7 +746,7 @@ export function DbObjectDetailPanel({
           id={`${idPrefix}-detail-panel-ddl`}
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-ddl`}
-          className="grid gap-3 rounded-md border border-slate-200 bg-white p-3"
+          className="grid gap-3 rounded-md border border-border bg-card p-3"
         >
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
@@ -720,7 +763,7 @@ export function DbObjectDetailPanel({
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </div>
-          <pre className="max-h-96 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+          <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </section>
@@ -757,42 +800,39 @@ export function DbObjectManagementTabs<T extends string>({
     focusDbObjectTabElement(`${idPrefix}-tab-${nextView.id}`);
   };
 
+  // 下線タブ(管理コンソールの定石)。詳細タブ(列情報/DDL)と同一様式に統一し、
+  // セグメント型ピルの過剰装飾を排する。role/aria/キーボード操作の意味論は不変。
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="overflow-x-auto p-1.5">
-        <div className="flex max-w-full min-w-max gap-1 rounded-md bg-slate-100/80 p-1" role="tablist" aria-label={ariaLabel}>
-          {tabs.map((tab, index) => {
-            const Icon = tab.icon;
-            const selected = activeView === tab.id;
-            return (
-              <button
-                key={tab.id}
-                id={`${idPrefix}-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`${idPrefix}-panel-${tab.id}`}
-                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-4 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-sky-200 ${
-                  selected
-                    ? "border-sky-200 bg-white text-sky-950 shadow-sm ring-1 ring-sky-100"
-                    : "border-transparent text-slate-600 hover:bg-white/80 hover:text-slate-950"
-                }`}
-                onClick={() => onViewChange(tab.id)}
-                onKeyDown={(event) => handleKeyDown(event, index)}
-              >
-                <span
-                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                    selected ? "bg-sky-100 text-sky-700" : "bg-transparent text-slate-400 group-hover:bg-slate-100 group-hover:text-slate-600"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <Icon size={16} />
-                </span>
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
+    <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={ariaLabel}>
+      <div className="flex min-w-max gap-1">
+        {tabs.map((tab, index) => {
+          const Icon = tab.icon;
+          const selected = activeView === tab.id;
+          return (
+            <button
+              key={tab.id}
+              id={`${idPrefix}-tab-${tab.id}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`${idPrefix}-panel-${tab.id}`}
+              className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
+                selected
+                  ? "border-primary bg-card text-primary"
+                  : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
+              }`}
+              onClick={() => onViewChange(tab.id)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
+            >
+              <Icon
+                size={15}
+                aria-hidden="true"
+                className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
+              />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -817,19 +857,19 @@ export function DropDbObjectDialog({
 }) {
   const canExecute = confirmation.trim() === objectName;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-3 sm:items-center" role="presentation">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="presentation">
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="drop-db-object-dialog-title"
-        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-red-200 bg-white shadow-xl"
+        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-danger/30 bg-card shadow-xl"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-red-100 bg-red-50 px-4 py-3">
+        <div className="flex items-start justify-between gap-3 border-b border-danger/20 bg-danger-bg px-4 py-3">
           <div>
-            <h2 id="drop-db-object-dialog-title" className="text-base font-semibold text-red-950">
+            <h2 id="drop-db-object-dialog-title" className="text-base font-semibold text-danger">
               {labels.title}
             </h2>
-            <p className="mt-1 text-sm text-red-800">{labels.subtitle}</p>
+            <p className="mt-1 text-sm text-danger">{labels.subtitle}</p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             <X size={15} aria-hidden="true" />
@@ -837,12 +877,12 @@ export function DropDbObjectDialog({
           </Button>
         </div>
         <div className="grid gap-4 p-4">
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
-            <p className="text-xs font-semibold text-red-800">{labels.target}</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-red-950">{objectName}</p>
+          <div className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2">
+            <p className="text-xs font-semibold text-danger">{labels.target}</p>
+            <p className="mt-1 break-all font-mono text-sm font-semibold text-danger">{objectName}</p>
           </div>
-          <fieldset className="grid gap-3 rounded-md border border-red-200 bg-red-50/70 p-3">
-            <legend className="px-1 text-sm font-semibold text-red-950">{labels.executeTitle}</legend>
+          <fieldset className="grid gap-3 rounded-md border border-danger/30 bg-danger-bg/70 p-3">
+            <legend className="px-1 text-sm font-semibold text-danger">{labels.executeTitle}</legend>
             <ExecutionConfirmationField
               value={confirmation}
               onChange={onConfirmationChange}

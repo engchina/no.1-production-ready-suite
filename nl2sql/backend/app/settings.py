@@ -127,6 +127,7 @@ class Settings(BaseServiceSettings):
     nl2sql_select_ai_provider: str = "oci"
     nl2sql_select_ai_credential_name: str = ""
     nl2sql_select_ai_model: str = ""
+    nl2sql_schema_owner_allowlist: list[str] = Field(default_factory=list)
     nl2sql_schema_sample_rows: int = 3
     nl2sql_schema_sample_columns_per_table: int = 6
     oracle_db_test_timeout_seconds: float = 15.0

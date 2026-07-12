@@ -5,9 +5,14 @@ export interface ApiEnvelope<T> {
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as ApiEnvelope<T>;
+  const payload = (await response.json()) as ApiEnvelope<T> & { error_messages?: unknown };
   if (!response.ok) {
+    // 共通例外ハンドラは ApiResponse { error_messages: [...] } 形式で返す
+    const errorMessages = payload.error_messages;
     const message =
+      (Array.isArray(errorMessages) && errorMessages.length > 0
+        ? errorMessages.map(String).join(" ")
+        : "") ||
       payload.error ||
       (typeof payload === "object" && payload !== null && "detail" in payload
         ? String((payload as { detail?: unknown }).detail)
@@ -36,6 +41,14 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
     method: "PATCH",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return parseJson<T>(response);
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
   });
   return parseJson<T>(response);
 }

@@ -67,6 +67,10 @@ export function fixedSplitStateForRatio(ratio: FixedSplitRatio): FixedSplitPaneS
   };
 }
 
+export function fixedSplitStateForPreferredWidePane(preferredWidePane: FixedSplitWidePane): FixedSplitPaneState {
+  return fixedSplitStateForRatio(preferredWidePane === "left" ? "leftWide" : "rightWide");
+}
+
 export function fixedSplitStateForFraction(leftFraction: number): FixedSplitPaneState {
   const clampedFraction = clampFixedSplitFraction(leftFraction);
   return {
@@ -96,19 +100,22 @@ function parseStorageObject(value: FixedSplitStorageValue): FixedSplitPaneState 
   return null;
 }
 
-export function parseFixedSplitStorageValue(value: string | null): FixedSplitPaneState {
+export function parseFixedSplitStorageValue(
+  value: string | null,
+  fallbackState: FixedSplitPaneState = fixedSplitStateForRatio("equal")
+): FixedSplitPaneState {
   if (isFixedSplitRatio(value)) return fixedSplitStateForRatio(value);
-  if (value === null) return fixedSplitStateForRatio("equal");
+  if (value === null) return fallbackState;
 
   try {
     const parsed = JSON.parse(value) as unknown;
     if (parsed && typeof parsed === "object") {
-      return parseStorageObject(parsed as FixedSplitStorageValue) ?? fixedSplitStateForRatio("equal");
+      return parseStorageObject(parsed as FixedSplitStorageValue) ?? fallbackState;
     }
   } catch {
     // 旧版以外の壊れた storage は既定値に戻す。
   }
-  return fixedSplitStateForRatio("equal");
+  return fallbackState;
 }
 
 export function serializeFixedSplitState(state: FixedSplitPaneState) {
