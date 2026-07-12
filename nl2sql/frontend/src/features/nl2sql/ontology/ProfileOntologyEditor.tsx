@@ -9,6 +9,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  EmptyState,
   StatusBadge,
   cn,
 } from "@engchina/production-ready-ui";
@@ -36,6 +37,7 @@ export interface ProfileOntologyEditorLabels {
   relationListTitle: string;
   relationListDescription: string;
   graphEmpty: string;
+  graphUnavailableTitle: string;
   graphUnavailable: string;
   graphLayoutNoticeTitle: string;
   graphLayoutNotice: string;
@@ -76,8 +78,9 @@ export const DEFAULT_PROFILE_ONTOLOGY_EDITOR_LABELS: ProfileOntologyEditorLabels
   relationListDescription:
     "グラフと同じ関係を一覧で確認できます。複合 Join 条件は列順を保持します。",
   graphEmpty: "表示できる表またはビューがありません。対象オブジェクトを選択して保存してください。",
+  graphUnavailableTitle: "物理・業務モデルはまだ表示できません",
   graphUnavailable:
-    "プロファイルを保存すると、公開 Ontology から Profile 範囲の関係グラフを表示します。",
+    "上の「AI 構築 → 承認 → Ontology を公開」を完了すると、この Profile が許可した表・ビューと承認済みの関係が、関係グラフとしてここに表示されます。",
   graphLayoutNoticeTitle: "レイアウト変更について",
   graphLayoutNotice:
     "ノードのドラッグは表示位置だけを変更します。関係や Join 条件は変更されません。",
@@ -432,11 +435,20 @@ export function ProfileOntologyEditor({
 
   if (graph === null) {
     return (
-      <section className={cn("space-y-4", className)} aria-label={labels.graphTitle}>
+      <section
+        className={cn(
+          "space-y-4 rounded-md border border-border bg-card p-4 shadow-sm",
+          className
+        )}
+        aria-label={labels.graphTitle}
+        data-testid="profile-ontology-empty"
+      >
+        <header className="space-y-1">
+          <h2 className="text-base font-semibold text-foreground">{labels.graphTitle}</h2>
+          <p className="text-sm leading-6 text-muted">{labels.graphDescription}</p>
+        </header>
         {unresolvedBanner}
-        <Banner severity="info" title={labels.graphTitle}>
-          {labels.graphUnavailable}
-        </Banner>
+        <EmptyState title={labels.graphUnavailableTitle} hint={labels.graphUnavailable} />
       </section>
     );
   }

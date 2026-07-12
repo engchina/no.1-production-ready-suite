@@ -532,7 +532,7 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
         </p>
       ))}
       {result.select_result && <QueryResultsTable results={result.select_result} />}
-      <div className="grid gap-2">
+      <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
         {result.statements.map((statement) => (
           <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-card p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

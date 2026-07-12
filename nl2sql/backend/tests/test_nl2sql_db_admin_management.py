@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import re
 from datetime import datetime
 from typing import Any, cast
 
@@ -580,7 +581,8 @@ def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
     )
     assert annotation_ai.source == "oci_enterprise_ai"
     assert annotation_ai.sql == (
-        "ALTER TABLE EMPLOYEE MODIFY " "(EMPLOYEE_NAME ANNOTATIONS (UI_Display '社員名'));"
+        "ALTER TABLE EMPLOYEE MODIFY "
+        "(EMPLOYEE_NAME ANNOTATIONS (ADD IF NOT EXISTS UI_Display '社員名'));"
     )
 
 
@@ -603,7 +605,7 @@ def test_annotation_generation_ports_reference_prompt_and_filters_sample_annotat
     )
 
     assert result.source == "oci_enterprise_ai"
-    assert result.sql == "ALTER TABLE T1 ANNOTATIONS (UI_Display 'T, One');"
+    assert result.sql == "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'T, One');"
     assert "COMMENT: は入力メタデータ" in enterprise_ai.calls[0]["prompt"]
     assert "sample_header / sample_data を生成しない" in enterprise_ai.calls[0]["prompt"]
     assert "未引用の COMMENT は禁止" in enterprise_ai.calls[0]["system_prompt"]
@@ -646,6 +648,31 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
     assert "ADD IF NOT EXISTS UI_Display" in result.sql
     assert "ADD IF NOT EXISTS COMMENT" not in result.sql
     assert any("ORA-11548" in warning for warning in result.warnings)
+
+
+def test_multi_annotation_generation_makes_every_add_idempotent() -> None:
+    # ADD IF NOT EXISTS が後続 annotation に伝播せず素の ADD になる ORA-11560 を防ぐ。
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "ALTER TABLE EMPLOYEE MODIFY (EMPLOYEE_ID ANNOTATIONS "
+        "(ADD IF NOT EXISTS UI_Display '従業員ID', data_type 'NUMBER', nullable 'N'));"
+    )
+
+    result = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "EMPLOYEE", "object_type": "table"}],
+            structure_text=(
+                "OBJECT: EMPLOYEE\nTYPE: table\nCOMMENT: 従業員\n"
+                "- EMPLOYEE_ID: NUMBER NULLABLE=N COMMENT=従業員ID"
+            ),
+        )
+    )
+
+    assert result.sql.count("ADD IF NOT EXISTS") == 3
+    assert "data_type 'NUMBER'" in result.sql
+    assert "ANNOTATIONS (ADD IF NOT EXISTS UI_Display" in result.sql
+    # 素の ADD(IF NOT EXISTS 無し)が残っていないこと。
+    assert re.search(r"(?<!EXISTS )\bdata_type\b", result.sql) is None
 
 
 def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None:

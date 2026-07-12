@@ -3,7 +3,6 @@ import {
   ArrowDownUp,
   ArrowLeft,
   Bot,
-  Database,
   FileJson,
   Plus,
   RefreshCw,
@@ -47,7 +46,6 @@ import type {
 } from "../types";
 
 type ActiveView = "list" | "editor";
-type AssetRefreshKind = "select_ai" | "select_ai_agent";
 type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
 
@@ -239,15 +237,6 @@ function SortButton({
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
     </button>
   );
-}
-
-function profileAttributesSql(profileName: string, description = "") {
-  const escapedName = profileName.replace(/'/g, "''");
-  const escapedDescription = description.replace(/'/g, "''");
-  return [
-    `BEGIN DBMS_CLOUD_AI.DROP_PROFILE(profile_name => '${escapedName}'); EXCEPTION WHEN OTHERS THEN NULL; END;`,
-    `BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(profile_name => '${escapedName}', attributes => :attrs, description => '${escapedDescription}'); END;`,
-  ].join("\n");
 }
 
 function updateSelectAiConfig(
@@ -544,52 +533,6 @@ function SelectAiConfigFields({
   );
 }
 
-function defaultOracleProfileName(profile: Nl2SqlProfile | null) {
-  return profile ? `NL2SQL_${profile.id.toUpperCase()}_PROFILE` : "";
-}
-
-function CreateProfileSqlPreview({
-  selectedProfile,
-  form,
-}: {
-  selectedProfile: Nl2SqlProfile | null;
-  form: ProfileFormState;
-}) {
-  const configuredName = form.selectAiConfig.profile_name.trim();
-  const profileName = configuredName || defaultOracleProfileName(selectedProfile);
-  const sql = profileName ? profileAttributesSql(profileName) : "";
-
-  return (
-    <section
-      className="grid gap-3 rounded-md border border-border bg-background p-3"
-      aria-labelledby="profile-create-sql-preview-heading"
-      data-testid="profile-create-profile-sql-preview"
-    >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h3 id="profile-create-sql-preview-heading" className="text-sm font-semibold text-foreground">
-            {t("profiles.oracle.sql")}
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-muted">{t("profiles.oracle.sqlHint")}</p>
-        </div>
-        <StatusBadge
-          variant={profileName ? "neutral" : "info"}
-          label={profileName || t("profiles.oracle.sqlPendingBadge")}
-        />
-      </div>
-      {sql ? (
-        <pre className="max-w-full overflow-auto rounded-md border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground">
-          <code>{sql}</code>
-        </pre>
-      ) : (
-        <div className="rounded-md border border-dashed border-border bg-card p-4 text-sm leading-6 text-muted">
-          {t("profiles.oracle.sqlPending")}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function ProfileEditor({
   selectedProfile,
   form,
@@ -599,9 +542,8 @@ function ProfileEditor({
   saving,
   oraclePreview,
   oracleConfirmation,
-  oracleLoading,
+  rebuildAgentAssets,
   assetRefreshResults,
-  assetRefreshLoading,
   deleting,
   onObjectFilterChange,
   onFormChange,
@@ -609,9 +551,8 @@ function ProfileEditor({
   onToggleView,
   onSave,
   onDelete,
-  onOracleExecute,
   onOracleConfirmationChange,
-  onAssetRefresh,
+  onRebuildAgentAssetsChange,
   onBack,
 }: {
   selectedProfile: Nl2SqlProfile | null;
@@ -622,9 +563,8 @@ function ProfileEditor({
   saving: boolean;
   oraclePreview: SelectAiDbProfileMutationData | null;
   oracleConfirmation: string;
-  oracleLoading: boolean;
+  rebuildAgentAssets: boolean;
   assetRefreshResults: AssetRefreshData[];
-  assetRefreshLoading: string;
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
   onFormChange: (updater: (current: ProfileFormState) => ProfileFormState) => void;
@@ -632,9 +572,8 @@ function ProfileEditor({
   onToggleView: (name: string) => void;
   onSave: () => void;
   onDelete: () => void;
-  onOracleExecute: () => void;
   onOracleConfirmationChange: (value: string) => void;
-  onAssetRefresh: (kind: AssetRefreshKind) => void;
+  onRebuildAgentAssetsChange: (value: boolean) => void;
   onBack: () => void;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
@@ -656,21 +595,12 @@ function ProfileEditor({
         }
         description={t("profiles.editor.hint")}
         action={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" variant="primary" size="sm" loading={saving} onClick={onSave}>
-              <Save size={15} aria-hidden="true" />
-              <span>{t("profiles.action.save")}</span>
+          selectedProfile ? (
+            <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
+              <Trash2 size={15} aria-hidden="true" />
+              <span>{t("profiles.action.delete")}</span>
             </Button>
-            {selectedProfile && (
-              <>
-                <span className="hidden h-6 border-l border-border sm:block" aria-hidden="true" />
-                <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
-                  <Trash2 size={15} aria-hidden="true" />
-                  <span>{t("profiles.action.delete")}</span>
-                </Button>
-              </>
-            )}
-          </div>
+          ) : undefined
         }
       />
 
@@ -796,62 +726,23 @@ function ProfileEditor({
             {t("profiles.oracle.previewEmpty")}
           </div>
         )}
-        <ExecutionConfirmationField
-          value={oracleConfirmation}
-          onChange={onOracleConfirmationChange}
-          confirmed={oracleConfirmed}
-          placeholder="ADMIN_EXECUTE"
-          expectedLabel="ADMIN_EXECUTE"
-          helper={t("profiles.oracle.executeHint")}
-          actions={
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={oracleLoading}
-              disabled={!selectedProfile || !oracleConfirmed}
-              onClick={onOracleExecute}
-            >
-              <Database size={15} aria-hidden="true" />
-              <span>{t("profiles.action.executeOracle")}</span>
-            </Button>
-          }
-        />
 
         <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="profile-engine-assets-heading">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h4 id="profile-engine-assets-heading" className="text-sm font-semibold text-foreground">
-                {t("profiles.oracle.assets.title")}
-              </h4>
-              <p className="mt-1 text-sm text-muted">{t("profiles.oracle.assets.hint")}</p>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={assetRefreshLoading === "asset-refresh-select_ai"}
-                disabled={!selectedProfile}
-                onClick={() => onAssetRefresh("select_ai")}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("profiles.oracle.assets.refreshSelectAi")}</span>
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={assetRefreshLoading === "asset-refresh-select_ai_agent"}
-                disabled={!selectedProfile}
-                onClick={() => onAssetRefresh("select_ai_agent")}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("profiles.oracle.assets.refreshAgent")}</span>
-              </Button>
-            </div>
+          <div>
+            <h4 id="profile-engine-assets-heading" className="text-sm font-semibold text-foreground">
+              {t("profiles.oracle.assets.title")}
+            </h4>
+            <p className="mt-1 text-sm text-muted">{t("profiles.oracle.assets.hint")}</p>
           </div>
+          <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card p-3 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={rebuildAgentAssets}
+              onChange={(event) => onRebuildAgentAssetsChange(event.currentTarget.checked)}
+              className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+            />
+            <span>{t("profiles.oracle.assets.refreshAgent")}</span>
+          </label>
           {assetRefreshResults.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
               {assetRefreshResults.map((result) => (
@@ -862,7 +753,27 @@ function ProfileEditor({
         </section>
       </section>
 
-      <CreateProfileSqlPreview selectedProfile={selectedProfile} form={form} />
+      <ExecutionConfirmationField
+        value={oracleConfirmation}
+        onChange={onOracleConfirmationChange}
+        confirmed={oracleConfirmed}
+        placeholder="ADMIN_EXECUTE"
+        expectedLabel="ADMIN_EXECUTE"
+        helper={t("profiles.oracle.executeHint")}
+        actions={
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            loading={saving}
+            disabled={!oracleConfirmed || saving}
+            onClick={onSave}
+          >
+            <Save size={15} aria-hidden="true" />
+            <span>{t("profiles.action.save")}</span>
+          </Button>
+        }
+      />
     </section>
   );
 }
@@ -943,6 +854,7 @@ export function ProfileManagementPage() {
   const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
   const [oraclePreview, setOraclePreview] = useState<SelectAiDbProfileMutationData | null>(null);
   const [oracleConfirmation, setOracleConfirmation] = useState("");
+  const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
   const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
@@ -1129,6 +1041,23 @@ export function ProfileManagementPage() {
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
       }
+      // 保存と同時に Oracle DBMS_CLOUD_AI profile を再構築する(ADMIN_EXECUTE ゲート通過済み)。
+      const oracle = await apiPost<SelectAiDbProfileMutationData>(
+        `/api/nl2sql/profiles/${saved.id}/select-ai-profile`,
+        { confirmation: oracleConfirmation, reason: "ui-profile-management-select-ai-upsert" }
+      );
+      setOraclePreview(oracle);
+      // チェック時のみ Select AI Agent アセット(tool/agent/task/team)も作り直す。
+      if (rebuildAgentAssets) {
+        const asset = await apiPost<AssetRefreshData>(
+          `/api/nl2sql/select-ai-agent/assets/refresh?profile_id=${encodeURIComponent(saved.id)}`
+        );
+        setAssetRefreshResults((current) => [
+          asset,
+          ...current.filter((item) => item.engine !== asset.engine),
+        ]);
+      }
+      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
       setMessage(t("profiles.message.saved"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.save"));
@@ -1166,52 +1095,6 @@ export function ProfileManagementPage() {
     }
   };
 
-  const executeOracleProfile = async () => {
-    const profile = selectedProfile;
-    if (!profile) return;
-    setLoading("oracle-preview");
-    setMessage("");
-    try {
-      const result = await apiPost<SelectAiDbProfileMutationData>(`/api/nl2sql/profiles/${profile.id}/select-ai-profile`, {
-        confirmation: oracleConfirmation,
-        reason: "ui-profile-management-select-ai-upsert",
-      });
-      setOraclePreview(result);
-      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
-      setMessage(result.executed ? t("profiles.message.oracleSaved") : result.warnings.join(" ") || t("profiles.error.oracle"));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
-    } finally {
-      setLoading("");
-    }
-  };
-
-  const refreshEngineAssets = async (kind: AssetRefreshKind) => {
-    const profile = selectedProfile;
-    if (!profile) return;
-    const loadingKey = `asset-refresh-${kind}`;
-    setLoading(loadingKey);
-    setMessage("");
-    try {
-      const path =
-        kind === "select_ai"
-          ? "/api/nl2sql/select-ai/profiles/refresh"
-          : "/api/nl2sql/select-ai-agent/assets/refresh";
-      const result = await apiPost<AssetRefreshData>(
-        `${path}?profile_id=${encodeURIComponent(profile.id)}`
-      );
-      setAssetRefreshResults((current) => [
-        result,
-        ...current.filter((item) => item.engine !== result.engine),
-      ]);
-      setMessage(t("profiles.message.assetRefreshed", { engine: engineLabel(result.engine) }));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.assetRefresh"));
-    } finally {
-      setLoading("");
-    }
-  };
-
   const toggleSort = (key: SortKey) => {
     setProfileSort((current) => ({
       key,
@@ -1229,9 +1112,8 @@ export function ProfileManagementPage() {
       saving={loading === "save"}
       oraclePreview={oraclePreview}
       oracleConfirmation={oracleConfirmation}
-      oracleLoading={loading === "oracle-preview"}
+      rebuildAgentAssets={rebuildAgentAssets}
       assetRefreshResults={assetRefreshResults}
-      assetRefreshLoading={loading}
       deleting={selectedProfile ? loading === `delete-profile-${selectedProfile.id}` : false}
       onObjectFilterChange={setObjectFilter}
       onFormChange={setForm}
@@ -1241,9 +1123,8 @@ export function ProfileManagementPage() {
       onDelete={() => {
         if (selectedProfile) void deleteProfile(selectedProfile);
       }}
-      onOracleExecute={() => void executeOracleProfile()}
       onOracleConfirmationChange={setOracleConfirmation}
-      onAssetRefresh={(kind) => void refreshEngineAssets(kind)}
+      onRebuildAgentAssetsChange={setRebuildAgentAssets}
       onBack={() => void backToList()}
     />
   );

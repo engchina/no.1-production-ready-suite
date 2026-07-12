@@ -726,6 +726,41 @@ def _without_sample_annotations(statement: str) -> str:
     return filtered
 
 
+_ANNOTATION_ADD_OPERATION_RE = re.compile(
+    r"^\s*add(?!\s+(?:if\s+not\s+exists|or\s+replace)\b)\s+",
+    flags=re.IGNORECASE,
+)
+_ANNOTATION_ANY_OPERATION_RE = re.compile(
+    r"^\s*(?:add(?:\s+(?:if\s+not\s+exists|or\s+replace))?|drop(?:\s+if\s+exists)?|replace)\s+",
+    flags=re.IGNORECASE,
+)
+
+
+def _normalize_annotation_add_operations(statement: str) -> str:
+    """ANNOTATIONS 句の各 annotation を再実行可能(冪等)にする。
+
+    Oracle の annotations_clause では操作句(ADD 等)が後続 annotation へ伝播しない。
+    ``ANNOTATIONS (ADD IF NOT EXISTS UI_Display '...', data_type 'NUMBER')`` の
+    data_type は操作句省略で既定の素の ADD になり、既存 annotation では
+    ORA-11560 になる。素の ADD / 操作句省略をすべて ``ADD IF NOT EXISTS`` へ
+    正規化する(DROP / REPLACE / ADD OR REPLACE は変更しない)。
+    """
+    normalized = statement
+    for start, end, content in reversed(_annotation_clause_contents(statement)):
+        rewritten: list[str] = []
+        for item in _split_annotation_items(content):
+            if _ANNOTATION_ADD_OPERATION_RE.match(item):
+                rewritten.append(
+                    _ANNOTATION_ADD_OPERATION_RE.sub("ADD IF NOT EXISTS ", item, count=1)
+                )
+            elif _ANNOTATION_ANY_OPERATION_RE.match(item):
+                rewritten.append(item)
+            else:
+                rewritten.append(f"ADD IF NOT EXISTS {item.strip()}")
+        normalized = normalized[:start] + ", ".join(rewritten) + normalized[end:]
+    return normalized
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -4527,7 +4562,8 @@ class Nl2SqlService:
                     "参考例:\n"
                     "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Table 1');\n"
                     "ALTER TABLE T1 MODIFY (ID ANNOTATIONS "
-                    "(ADD IF NOT EXISTS UI_Display 'ID', data_type 'NUMBER', nullable 'N'));\n"
+                    "(ADD IF NOT EXISTS UI_Display 'ID', ADD IF NOT EXISTS data_type 'NUMBER', "
+                    "ADD IF NOT EXISTS nullable 'N'));\n"
                     "ALTER VIEW SALES_V ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Sales View');"
                 ),
                 context=self._metadata_generation_context(request),
@@ -4749,6 +4785,8 @@ class Nl2SqlService:
                 if policy == "annotation_sql":
                     raise ValueError(policy_error)
                 continue
+            if policy == "annotation_sql":
+                candidate = _normalize_annotation_add_operations(candidate)
             statements.append(candidate.rstrip(";") + ";")
         if not statements:
             raise ValueError("許可された metadata SQL が生成されませんでした。")
@@ -4967,7 +5005,8 @@ class Nl2SqlService:
                 annotation_value=annotation_value,
                 sql=(
                     f"ALTER {ddl_kind} {_quote_identifier(table.table_name)} "
-                    f"ANNOTATIONS ({annotation_name} {_quote_sql_string(annotation_value)});"
+                    f"ANNOTATIONS (ADD IF NOT EXISTS {annotation_name} "
+                    f"{_quote_sql_string(annotation_value)});"
                 ),
             )
         if object_type == "column":
@@ -4986,7 +5025,8 @@ class Nl2SqlService:
                 sql=(
                     f"ALTER TABLE {_quote_identifier(table.table_name)} "
                     f"MODIFY {_quote_identifier(column.column_name)} "
-                    f"ANNOTATIONS ({annotation_name} {_quote_sql_string(annotation_value)});"
+                    f"ANNOTATIONS (ADD IF NOT EXISTS {annotation_name} "
+                    f"{_quote_sql_string(annotation_value)});"
                 ),
             )
         raise ValueError(f"{item.object_name}: object_type は table/view/column のみ指定できます。")
@@ -6381,6 +6421,9 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
+        if request.policy == "annotation_sql":
+            # 素の ADD を ADD IF NOT EXISTS へ正規化し、再実行時の ORA-11560 を防ぐ。
+            statements = [_normalize_annotation_add_operations(stmt) for stmt in statements]
         statement_types = [_admin_statement_type(statement) for statement in statements]
         policy_errors = [
             _db_admin_policy_error(statement, request.policy) for statement in statements

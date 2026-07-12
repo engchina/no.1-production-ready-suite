@@ -680,6 +680,20 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     }
     return fulfillJson(route, profiles[0]);
   });
+  // 保存時に一体化された Oracle 反映(業務 profile → DBMS_CLOUD_AI profile)。
+  await page.route("**/api/nl2sql/profiles/*/select-ai-profile", (route) =>
+    fulfillJson(route, {
+      runtime: "oracle",
+      executed: true,
+      status: "saved",
+      profile_name: "NL2SQL_DEFAULT_PROFILE",
+      original_name: "",
+      ddl: ["BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(profile_name => :name, attributes => :attrs); END;"],
+      profile: null,
+      warnings: [],
+      engine_meta: {},
+    })
+  );
   await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [historyItem] }));
   await page.route("**/api/nl2sql/feedback", (route) => {
     state.feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
@@ -3348,7 +3362,9 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const importConfirmationBox = await importPanel.getByLabel("実行確認語").boundingBox();
   expect(importExecuteButtonBox).not.toBeNull();
   expect(importConfirmationBox).not.toBeNull();
-  expect(importExecuteButtonBox!.y).toBeLessThan(importConfirmationBox!.y);
+  // 取込を実行ボタンは確認ゲート(ExecutionConfirmationField)の actions スロット、
+  // すなわち実行確認語 input の下に置く(CSV/Sample 取込パネルと統一)。
+  expect(importExecuteButtonBox!.y).toBeGreaterThan(importConfirmationBox!.y);
   await expect(importPanel.getByRole("button", { name: "確認語に表名を入れる" })).toHaveCount(0);
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
@@ -3548,15 +3564,14 @@ test("legacy model-learning URL opens profile learning and preserves asset refre
   await expect(page.getByLabel("few-shot 例")).toBeVisible();
   await expect(page.getByRole("link", { name: /モデル学習/ })).toHaveCount(0);
   await page.getByLabel("few-shot 例").fill("粗利を見たい => SELECT PROFIT FROM INVOICES");
+  // ADMIN_EXECUTE ゲート + Agent アセット再構築チェックを付けて保存 1 クリックに集約。
+  await page.getByRole("checkbox", { name: /Select AI Agent アセット/ }).check();
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("プロファイルを保存しました。")).toBeVisible();
   expect(api.profilePatchPayload?.few_shot_examples).toEqual([
     { question: "粗利を見たい", sql: "SELECT PROFIT FROM INVOICES" },
   ]);
-
-  await page.getByRole("button", { name: "Select AI Profile 更新" }).click();
-  await expect(page.getByText("NL2SQL_DEFAULT_SELECT_AI")).toBeVisible();
-  await page.getByRole("button", { name: "Agent assets 更新" }).click();
   await expect(page.getByText("NL2SQL_DEFAULT_AGENT_PROFILE")).toBeVisible();
   await expectNoHorizontalScroll(page);
 

@@ -91,7 +91,7 @@ export function GlobalRulesPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.globalRules")} subtitle={t("globalRules.subtitle")} />
+      <PageHeader title={t("globalRules.title")} subtitle={t("globalRules.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
         <DbObjectManagementStatusBar
           ariaLabel={t("globalRules.status.label")}

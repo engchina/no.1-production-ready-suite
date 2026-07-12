@@ -197,6 +197,8 @@ export function OntologyBuildPage() {
                 tableUsage: t("profiles.ontology.usage"),
                 cardinality: t("profiles.ontology.cardinality"),
                 allowedPath: t("profiles.ontology.allowedPath"),
+                graphUnavailableTitle: t("profiles.ontology.emptyTitle"),
+                graphUnavailable: t("profiles.ontology.emptyHint"),
               }}
             />
           </>
