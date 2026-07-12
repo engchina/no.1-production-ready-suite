@@ -259,21 +259,21 @@ export function SampleDataPage() {
               expectedLabel={expectedConfirmation}
               helper={t("dataTools.sample.confirmationHelper", { phrase: expectedConfirmation })}
               tone={isDeleteAction ? "danger" : "neutral"}
+              actions={
+                <Button
+                  type="button"
+                  variant={isDeleteAction ? "danger" : "primary"}
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
+                  disabled={!confirmationMatched}
+                  onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
+                >
+                  {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}
+                  <span>{actionTitle}</span>
+                </Button>
+              }
             />
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button
-                type="button"
-                variant={isDeleteAction ? "danger" : "primary"}
-                size="sm"
-                loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
-                disabled={!confirmationMatched}
-                onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
-              >
-                {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}
-                <span>{actionTitle}</span>
-              </Button>
-            </div>
           </section>
 
           <section className="grid min-w-0 content-start gap-4">

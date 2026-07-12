@@ -97,20 +97,6 @@ function ImportWizard({
         icon={Upload}
         title={t("dataTools.dbAdmin.importTitle")}
         description={t("tableMgmt.import.note")}
-        action={
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading}
-            disabled={!canExecute}
-            onClick={onExecute}
-          >
-            <Upload size={15} aria-hidden="true" />
-            <span>{t("dataTools.dbAdmin.import")}</span>
-          </Button>
-        }
       />
 
       <DbObjectStepIndicator
@@ -209,6 +195,20 @@ function ImportWizard({
           placeholder="ADMIN_EXECUTE"
           expectedLabel="ADMIN_EXECUTE"
           helper={t("tableMgmt.importWizard.executeHint")}
+          actions={
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loading}
+              disabled={!canExecute}
+              onClick={onExecute}
+            >
+              <Upload size={15} aria-hidden="true" />
+              <span>{t("dataTools.dbAdmin.import")}</span>
+            </Button>
+          }
         />
       </fieldset>
     </div>

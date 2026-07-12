@@ -1012,20 +1012,6 @@ function CsvUploadWorkspace({
         icon={Upload}
         title={t("dataMgmt.csv.title")}
         description={t("dataMgmt.section.csvHint")}
-        action={
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading}
-            disabled={!canUpload}
-            onClick={onUpload}
-          >
-            <Upload size={15} aria-hidden="true" />
-            <span>{t("dataMgmt.csv.upload")}</span>
-          </Button>
-        }
       />
 
       <DbObjectStepIndicator
@@ -1087,6 +1073,20 @@ function CsvUploadWorkspace({
           expectedLabel="ADMIN_EXECUTE"
           helper={t("dataMgmt.csv.executeHint")}
           tone="danger"
+          actions={
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loading}
+              disabled={!canUpload}
+              onClick={onUpload}
+            >
+              <Upload size={15} aria-hidden="true" />
+              <span>{t("dataMgmt.csv.upload")}</span>
+            </Button>
+          }
         />
       </fieldset>
 
@@ -1228,20 +1228,6 @@ function SyntheticWorkspace({
         icon={Database}
         title={t("dataTools.synthetic.title")}
         description={t("dataMgmt.section.syntheticHint")}
-        action={
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading === "synthetic-data"}
-            disabled={!canGenerateSyntheticData}
-            onClick={onGenerateSyntheticData}
-          >
-            <Database size={15} aria-hidden="true" />
-            <span>{t("dataTools.syntheticData.generate")}</span>
-          </Button>
-        }
       />
 
       <DbObjectStepIndicator
@@ -1404,6 +1390,20 @@ function SyntheticWorkspace({
             expectedLabel="ADMIN_EXECUTE"
             helper={t("dbAdmin.confirmation.adminHelper")}
             tone="danger"
+            actions={
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                className="w-full sm:w-auto"
+                loading={loading === "synthetic-data"}
+                disabled={!canGenerateSyntheticData}
+                onClick={onGenerateSyntheticData}
+              >
+                <Database size={15} aria-hidden="true" />
+                <span>{t("dataTools.syntheticData.generate")}</span>
+              </Button>
+            }
           />
         </fieldset>
       </section>

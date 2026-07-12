@@ -891,16 +891,18 @@ export function DropDbObjectDialog({
               expectedLabel={objectName}
               helper={labels.executeHint}
               tone="danger"
+              actions={
+                <>
+                  <Button type="button" variant="danger" size="sm" loading={loading} disabled={!canExecute} onClick={onExecute}>
+                    <Trash2 size={15} aria-hidden="true" />
+                    <span>{labels.run}</span>
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+                    <span>{labels.cancel}</span>
+                  </Button>
+                </>
+              }
             />
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button type="button" variant="danger" size="sm" loading={loading} disabled={!canExecute} onClick={onExecute}>
-                <Trash2 size={15} aria-hidden="true" />
-                <span>{labels.run}</span>
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={onClose}>
-                <span>{labels.cancel}</span>
-              </Button>
-            </div>
           </fieldset>
         </div>
       </section>

@@ -272,6 +272,7 @@ export function ExecutionConfirmationField({
   helper,
   tone = "neutral",
   disabled = false,
+  actions,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -281,6 +282,8 @@ export function ExecutionConfirmationField({
   helper: string;
   tone?: "neutral" | "danger";
   disabled?: boolean;
+  /** 確認語入力の直下に描画する実行/キャンセル等のアクションバー。primary/danger → secondary の順で渡す。 */
+  actions?: ReactNode;
 }) {
   const id = useId();
   const helperId = `${id}-helper`;
@@ -342,6 +345,15 @@ export function ExecutionConfirmationField({
       <p id={helperId} className={`text-xs leading-5 ${isDanger ? "text-danger" : "text-muted"}`}>
         {helper}
       </p>
+      {actions && (
+        <div
+          className={`flex flex-col gap-2 border-t pt-3 sm:flex-row sm:flex-wrap sm:items-center ${
+            isDanger ? "border-danger/20" : "border-border"
+          }`}
+        >
+          {actions}
+        </div>
+      )}
     </div>
   );
 }
@@ -831,45 +843,33 @@ export function StatementRunnerCard({
   const progressNode = progress?.({ hasSql: Boolean(sql.trim()), isConfirmed, canRun });
 
   const header = executeOnly ? (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0">
-        <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-          <Code2 size={18} aria-hidden="true" />
-          {title}
-        </h2>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
-      </div>
-      <Button
-        type="button"
-        variant="danger"
-        size="sm"
-        className="w-full sm:w-auto"
-        loading={loading}
-        disabled={!canRun}
-        onClick={() => void run()}
-      >
-        <Play size={15} aria-hidden="true" />
-        <span>{t("dbAdmin.runner.run")}</span>
-      </Button>
-    </div>
-  ) : (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <CardTitle className="flex items-center gap-2">
+    <div className="min-w-0">
+      <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
         <Code2 size={18} aria-hidden="true" />
         {title}
-      </CardTitle>
-      <Button
-        type="button"
-        variant="danger"
-        size="sm"
-        loading={loading}
-        disabled={!canRun}
-        onClick={() => void run()}
-      >
-        <Play size={15} aria-hidden="true" />
-        <span>{t("dbAdmin.runner.run")}</span>
-      </Button>
+      </h2>
+      {description && <p className="mt-1 text-sm text-muted">{description}</p>}
     </div>
+  ) : (
+    <CardTitle className="flex items-center gap-2">
+      <Code2 size={18} aria-hidden="true" />
+      {title}
+    </CardTitle>
+  );
+
+  const runButton = (
+    <Button
+      type="button"
+      variant="danger"
+      size="sm"
+      className="w-full sm:w-auto"
+      loading={loading}
+      disabled={!canRun}
+      onClick={() => void run()}
+    >
+      <Play size={15} aria-hidden="true" />
+      <span>{t("dbAdmin.runner.run")}</span>
+    </Button>
   );
 
   const confirmationField = (
@@ -880,6 +880,7 @@ export function StatementRunnerCard({
       placeholder="ADMIN_EXECUTE"
       expectedLabel="ADMIN_EXECUTE"
       helper={t("dbAdmin.confirmation.adminHelper")}
+      actions={runButton}
     />
   );
 

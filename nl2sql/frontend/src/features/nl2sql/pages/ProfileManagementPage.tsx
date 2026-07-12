@@ -785,24 +785,9 @@ function ProfileEditor({
       <SelectAiConfigFields form={form} setForm={onFormChange} />
 
       <section className="grid gap-3 rounded-md border border-border bg-card p-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.oraclePreview")}</h3>
-            <p className="mt-1 text-sm text-muted">{t("profiles.oracle.hint")}</p>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              loading={oracleLoading}
-              disabled={!selectedProfile || !oracleConfirmed}
-              onClick={onOracleExecute}
-            >
-              <Database size={15} aria-hidden="true" />
-              <span>{t("profiles.action.executeOracle")}</span>
-            </Button>
-          </div>
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.oraclePreview")}</h3>
+          <p className="mt-1 text-sm text-muted">{t("profiles.oracle.hint")}</p>
         </div>
         {oraclePreview ? (
           <OracleMutationResult result={oraclePreview} />
@@ -818,6 +803,20 @@ function ProfileEditor({
           placeholder="ADMIN_EXECUTE"
           expectedLabel="ADMIN_EXECUTE"
           helper={t("profiles.oracle.executeHint")}
+          actions={
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={oracleLoading}
+              disabled={!selectedProfile || !oracleConfirmed}
+              onClick={onOracleExecute}
+            >
+              <Database size={15} aria-hidden="true" />
+              <span>{t("profiles.action.executeOracle")}</span>
+            </Button>
+          }
         />
 
         <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="profile-engine-assets-heading">
