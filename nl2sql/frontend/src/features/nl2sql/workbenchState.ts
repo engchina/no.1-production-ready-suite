@@ -83,9 +83,12 @@ export function insertTextAtRange(source: string, insertText: string, start: num
 /**
  * スキーマ参照からの挿入で、各項目を改行区切りにするための前置文字列を返す。
  * 挿入位置が先頭（start<=0）または直前がすでに改行のときは付けない（先頭空行・二重改行を防ぐ）。
+ * 直前が全角コロン「：」のとき（穴埋めテンプレートの「ラベル：」直後）はインラインで埋める。
  */
 export function leadingNewlinePrefix(source: string, start: number): string {
-  return start > 0 && source[start - 1] !== "\n" ? "\n" : "";
+  if (start <= 0) return "";
+  const prev = source[start - 1];
+  return prev === "\n" || prev === "：" ? "" : "\n";
 }
 
 /**

@@ -250,6 +250,8 @@ test("schema insert prepends a newline only when not at start / not after a newl
   assert.equal(leadingNewlinePrefix("既存\"請求\"", 2), "\n");
   // 直前がすでに改行なら二重改行にしない
   assert.equal(leadingNewlinePrefix("既存\n", 3), "");
+  // 直前が全角コロン（穴埋めテンプレートの「ラベル：」直後）はインラインで埋める
+  assert.equal(leadingNewlinePrefix("対象テーブル：", 7), "");
 });
 
 test("elapsed time helpers format live and final timings", () => {

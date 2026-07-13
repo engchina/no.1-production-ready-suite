@@ -25,6 +25,7 @@ import { isJobInFlight } from "./jobPersistence";
 import { engineLabel } from "./labels";
 import { previewExecutePayload, previewToGeneratedSqlPanelData, sqlExecutePayload } from "./previewState";
 import { prefillFromSearchParams } from "./queryPrefillState";
+import { QUESTION_TEMPLATES } from "./questionTemplates";
 import type {
   GeneratedSqlPanelData,
   HistoryData,
@@ -758,19 +759,50 @@ export function Nl2SqlWorkbench() {
 
                   {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
-                    <label className="grid gap-2 text-sm font-medium text-foreground">
-                      <span>{t("nl2sql.question.label")}</span>
-                      <textarea
-                        ref={questionTextareaRef}
-                        value={question}
-                        onChange={(event) => setQuestion(event.currentTarget.value)}
-                        onFocus={() => setActiveEditor("natural")}
-                        disabled={active}
-                        rows={5}
-                        className="field-sizing-content min-h-36 max-h-[16.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                        placeholder={t("nl2sql.question.placeholder")}
-                      />
-                    </label>
+                    <div className="grid gap-2">
+                      {/* SQL 一括実行(StatementRunnerCard)とスタイル・挙動を統一したテンプレート行(全置換) */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
+                        {QUESTION_TEMPLATES.map((template) => (
+                          <Button
+                            key={template.labelKey}
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={active}
+                            onClick={() => {
+                              setQuestion(template.body);
+                              setActiveEditor("natural");
+                              const el = questionTextareaRef.current;
+                              if (el) {
+                                requestAnimationFrame(() => {
+                                  el.focus({ preventScroll: true });
+                                  // 1 行目「対象テーブル：」の直後にカーソルを置き、すぐ記入できるようにする
+                                  const firstLineEnd = template.body.indexOf("\n");
+                                  const caret = firstLineEnd === -1 ? template.body.length : firstLineEnd;
+                                  el.setSelectionRange(caret, caret);
+                                });
+                              }
+                            }}
+                          >
+                            {t(template.labelKey)}
+                          </Button>
+                        ))}
+                      </div>
+                      <label className="grid gap-2 text-sm font-medium text-foreground">
+                        <span>{t("nl2sql.question.label")}</span>
+                        <textarea
+                          ref={questionTextareaRef}
+                          value={question}
+                          onChange={(event) => setQuestion(event.currentTarget.value)}
+                          onFocus={() => setActiveEditor("natural")}
+                          disabled={active}
+                          rows={5}
+                          className="field-sizing-content min-h-36 max-h-[16.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                          placeholder={t("nl2sql.question.placeholder")}
+                        />
+                      </label>
+                    </div>
                     <div className="rounded-md border border-border bg-background p-3">
                       <SchemaReferencePanel
                         catalog={catalog}
