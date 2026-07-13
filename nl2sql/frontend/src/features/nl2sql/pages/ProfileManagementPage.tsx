@@ -68,8 +68,8 @@ interface ProfileFormState {
 
 const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   profile_name: "",
-  region: "",
-  model: "",
+  region: "us-chicago-1",
+  model: "xai.grok-4.3",
   embedding_model: "cohere.embed-v4.0",
   max_tokens: 32000,
   enforce_object_list: true,

@@ -66,6 +66,37 @@ export function buildSchemaSqlIdentifierText(table: SchemaTable, column: SchemaC
   return `${quoteSqlIdentifier(table.table_name)}.${quoteSqlIdentifier(column.column_name)}`;
 }
 
+/** 表名の挿入テキスト（論理名・検索クエリ向け）。 */
+export function buildTableInsertText(table: SchemaTable) {
+  return `"${table.logical_name}"`;
+}
+
+/** 表名の挿入テキスト（物理名・SQL 向け）。 */
+export function buildTableSqlIdentifierText(table: SchemaTable) {
+  return quoteSqlIdentifier(table.table_name);
+}
+
 export function insertTextAtRange(source: string, insertText: string, start: number, end: number) {
   return `${source.slice(0, start)}${insertText}${source.slice(end)}`;
+}
+
+/**
+ * スキーマ参照からの挿入で、各項目を改行区切りにするための前置文字列を返す。
+ * 挿入位置が先頭（start<=0）または直前がすでに改行のときは付けない（先頭空行・二重改行を防ぐ）。
+ */
+export function leadingNewlinePrefix(source: string, start: number): string {
+  return start > 0 && source[start - 1] !== "\n" ? "\n" : "";
+}
+
+/**
+ * オブジェクト識別子を正規化する（backend `_normalize_identifier` 相当）。
+ * `owner.name` の最終要素を取り、ダブルクオートを除去して大文字化する。
+ * 例: `EMPLOYEE` / `APP.EMPLOYEE` / `"EMPLOYEE"` / `app."Employee"` → すべて `EMPLOYEE`。
+ */
+export function normalizeObjectIdentifier(value: string): string {
+  const parts = value
+    .trim()
+    .split(".")
+    .map((part) => part.trim().replaceAll('"', ""));
+  return (parts[parts.length - 1] ?? "").toUpperCase();
 }

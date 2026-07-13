@@ -206,6 +206,9 @@ _JoinWherePromptProfile = Literal["join_where_strict", "sql_structure"]
 
 _SAMPLE_PROFILE_ID = "sql_assist_sample"
 _SAMPLE_CONFIRMATION = "SQL_ASSIST_SAMPLE"
+# 推薦信頼度の平滑化定数。strength = s/(s+K) で、確かな 2 ヒット(≒score 3)が
+# strength≈0.5 になるよう K=3 とする（散在していた除数 6 を置換する唯一の定数）。
+_RECOMMEND_CONFIDENCE_SMOOTHING = 3.0
 _SAMPLE_OBJECTS = [
     "DEPARTMENT",
     "EMPLOYEE",
@@ -3469,7 +3472,7 @@ class Nl2SqlService:
                 return self._recommendation_from_profile(
                     profile=profile,
                     question=request.question,
-                    score=best.score,
+                    confidence=round(best.score, 3),  # predict_proba をそのまま信頼度に
                     matched_terms=best.matched_terms,
                     candidates=mapped_candidates,
                 ).model_copy(
@@ -3490,33 +3493,40 @@ class Nl2SqlService:
             return self._recommendation_from_profile(
                 profile=profile,
                 question=request.question,
-                score=0.0,
+                confidence=0.0,
                 matched_terms=[],
                 candidates=[],
             )
 
-        scored: list[tuple[float, Nl2SqlProfile, list[str]]] = []
+        # (raw=順序用 tiebreak 込み, real=実マッチ由来, profile, matched_terms)
+        scored: list[tuple[float, float, Nl2SqlProfile, list[str]]] = []
         for profile in profiles:
-            score, matched_terms = self._score_profile_for_question(profile, request.question)
+            raw, matched_terms = self._score_profile_for_question(profile, request.question)
             if profile.id == request.current_profile_id:
-                score += 0.2
-            scored.append((score, profile, matched_terms))
+                raw += 0.2  # 順序のみの tiebreak（信頼度には混入させない）
+            # 実マッチ由来スコア: 一致語が無ければ +0.5/+0.2 の見かけ倒しを排して 0。
+            real = raw if matched_terms else 0.0
+            scored.append((raw, real, profile, matched_terms))
+        # 並び順は従来どおり raw（tiebreak 込み）で決める → 順位アサーション不変。
         scored.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_profile, best_terms = scored[0]
+        _, _, best_profile, best_terms = scored[0]
+        confidence = self._relative_confidence([real for _, real, _, _ in scored])
+        total_real = sum(real for _, real, _, _ in scored) or 1.0
         candidates = [
             ProfileRecommendationCandidate(
                 profile_id=profile.id,
                 profile_name=profile.name,
-                score=round(score, 3),
+                # 0..1 の相対シェア（「スコア X%」が常に 0-100% に収まる）。
+                score=round(real / total_real, 3),
                 matched_terms=terms[:8],
                 allowed_tables=self.profile_allowed_object_names(profile),
             )
-            for score, profile, terms in scored[:3]
+            for _, real, profile, terms in scored[:3]
         ]
         return self._recommendation_from_profile(
             profile=best_profile,
             question=request.question,
-            score=best_score,
+            confidence=confidence,
             matched_terms=best_terms,
             candidates=candidates,
         )
@@ -8367,16 +8377,32 @@ class Nl2SqlService:
             f"{question}"
         )
 
+    def _relative_confidence(self, real_scores: list[float]) -> float:
+        """実マッチ由来スコアから相対信頼度（0..1）を算出する。
+
+        分離度（2 位との差）× 証拠量（絶対的なマッチ量）の積で、独走かつ十分な
+        根拠があるときだけ高くなる。実マッチが皆無なら 0.0 を返し、`+0.5`/`+0.2`
+        の見かけ倒し加点が信頼度へ混入しないようにする。
+        """
+        positives = sorted((s for s in real_scores if s > 0.0), reverse=True)
+        if not positives:
+            return 0.0
+        s1 = positives[0]
+        s2 = positives[1] if len(positives) > 1 else 0.0
+        dominance = s1 / (s1 + s2)  # 0.5(拮抗)..1.0(独走)
+        strength = s1 / (s1 + _RECOMMEND_CONFIDENCE_SMOOTHING)  # 0..1(証拠量)
+        return round(dominance * strength, 3)
+
     def _recommendation_from_profile(
         self,
         *,
         profile: Nl2SqlProfile,
         question: str,
-        score: float,
+        confidence: float,
         matched_terms: list[str],
         candidates: list[ProfileRecommendationCandidate],
     ) -> ProfileRecommendationData:
-        confidence = min(round(score / 6, 3), 1.0)
+        confidence = round(confidence, 3)
         allowed_tables = self.profile_allowed_object_names(profile) or [
             table.table_name for table in self._catalog.tables
         ]

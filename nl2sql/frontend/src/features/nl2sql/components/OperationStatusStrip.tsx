@@ -3,13 +3,14 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
+  Database,
   Loader2,
   Route,
   TriangleAlert,
   X,
 } from "lucide-react";
 
-import { StatusBadge } from "@engchina/production-ready-ui";
+import { Button, StatusBadge } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { formatElapsed } from "../useOperationTimer";
@@ -82,9 +83,16 @@ function StepIcon({ status, index }: { status: JobStepStatus; index: number }) {
 export function OperationStatusStrip({
   job,
   elapsedSeconds,
+  catalogEmpty = false,
+  importingSample = false,
+  onImportSample,
 }: {
   job: JobData | null;
   elapsedSeconds: number;
+  /** schema catalog が空（サンプル未投入）か。空 catalog 由来の失敗をアクション化する。 */
+  catalogEmpty?: boolean;
+  importingSample?: boolean;
+  onImportSample?: () => void;
 }) {
   if (!job) return null;
 
@@ -224,9 +232,24 @@ export function OperationStatusStrip({
       </ol>
 
       {job.error_message && (
-        <p className="mx-4 mb-4 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
-          {job.error_message}
-        </p>
+        <div className="mx-4 mb-4 grid gap-3 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
+          <p>{job.error_message}</p>
+          {job.status === "error" && catalogEmpty && onImportSample && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                loading={importingSample}
+                onClick={onImportSample}
+              >
+                <Database size={15} aria-hidden="true" />
+                <span>{t("nl2sql.sample.import")}</span>
+              </Button>
+              <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
+            </div>
+          )}
+        </div>
       )}
     </section>
   );

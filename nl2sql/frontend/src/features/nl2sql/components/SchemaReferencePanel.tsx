@@ -1,53 +1,77 @@
-import { ChevronDown, ChevronRight, Search, Table2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle, Skeleton } from "@engchina/production-ready-ui";
+import { Button, Skeleton } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
-import { DbObjectPanelHeader } from "./DbObjectManagementShared";
 import {
   buildSchemaInsertText,
   buildSchemaSqlIdentifierText,
-  type SchemaSelection,
+  buildTableInsertText,
+  buildTableSqlIdentifierText,
+  normalizeObjectIdentifier,
 } from "../workbenchState";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
 
 type SchemaInsertMode = "logical" | "physical";
 
-function hasColumn(selection: SchemaSelection, tableName: string, columnName: string) {
-  return selection.columns[tableName]?.includes(columnName) ?? false;
-}
-
+/**
+ * 検索クエリ/SQL への挿入補助に特化した compact なスキーマピッカー。
+ * 業界のスキーマブラウザ慣行に合わせ、1 行密度のツリー + 行クリック=挿入 +
+ * 詳細（型・サンプル・コメント）は tooltip、検索時は一致テーブルを自動展開する。
+ */
 export function SchemaReferencePanel({
   catalog,
   loading,
-  selection,
   disabled,
   insertMode = "logical",
-  framed = true,
-  onToggleTable,
-  onToggleColumn,
+  allowedTableNames = null,
+  listMaxHeightClass = "max-h-72",
+  onRefreshSchema,
+  refreshing = false,
   onInsert,
 }: {
   catalog: SchemaCatalog | null;
   loading: boolean;
-  selection: SchemaSelection;
   disabled?: boolean;
   insertMode?: SchemaInsertMode;
-  framed?: boolean;
-  onToggleTable: (tableName: string) => void;
-  onToggleColumn: (tableName: string, columnName: string) => void;
+  /** 非 null のとき、この表名集合（正規化比較）に絞り込む。null は全表表示。 */
+  allowedTableNames?: string[] | null;
+  /** リスト領域の最大高さ Tailwind クラス。 */
+  listMaxHeightClass?: string;
+  /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh）。 */
+  onRefreshSchema?: () => void;
+  refreshing?: boolean;
   onInsert: (text: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // アコーディオン: 同時に展開できる表は 1 つだけ（外側スクロール量を抑える）。
+  const [expandedTable, setExpandedTable] = useState<string | null>(null);
+
+  const allowedSet = useMemo(
+    () =>
+      allowedTableNames
+        ? new Set(allowedTableNames.map(normalizeObjectIdentifier))
+        : null,
+    [allowedTableNames]
+  );
+
+  const catalogEmpty = (catalog?.tables.length ?? 0) === 0;
+  const searching = query.trim().length > 0;
+
+  const scopedTables = useMemo(() => {
+    if (!catalog) return [];
+    if (!allowedSet) return catalog.tables;
+    return catalog.tables.filter((table) =>
+      allowedSet.has(normalizeObjectIdentifier(table.table_name))
+    );
+  }, [catalog, allowedSet]);
 
   const filteredTables = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!catalog) return [];
-    if (!normalized) return catalog.tables;
-    return catalog.tables.filter((table) => {
+    if (!normalized) return scopedTables;
+    return scopedTables.filter((table) => {
       return (
         table.table_name.toLowerCase().includes(normalized) ||
         table.logical_name.toLowerCase().includes(normalized) ||
@@ -58,177 +82,161 @@ export function SchemaReferencePanel({
         )
       );
     });
-  }, [catalog, query]);
+  }, [scopedTables, query]);
 
   const toggleExpanded = (tableName: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(tableName)) {
-        next.delete(tableName);
-      } else {
-        next.add(tableName);
-      }
-      return next;
-    });
+    setExpandedTable((current) => (current === tableName ? null : tableName));
   };
 
-  const content = (
-    <>
-        <label className="grid min-w-0 max-w-full gap-1 text-sm font-medium text-foreground">
-          <span>{t("nl2sql.schema.search")}</span>
-          <span className="relative min-w-0 max-w-full">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-              aria-hidden="true"
-            />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
-              className="min-h-11 min-w-0 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-              placeholder={t("nl2sql.schema.searchPlaceholder")}
-              disabled={disabled}
-            />
-          </span>
-        </label>
-
-        {loading && (
-          <div className="grid min-w-0 gap-2">
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-          </div>
-        )}
-
-        {!loading && filteredTables.length === 0 && (
-          <p className="min-w-0 rounded-md border border-dashed border-border p-4 text-sm text-muted [overflow-wrap:anywhere]">
-            {t("nl2sql.schema.empty")}
-          </p>
-        )}
-
-        <div className="grid min-w-0 max-w-full max-h-[38rem] gap-3 overflow-x-hidden overflow-y-auto pr-1">
-          {filteredTables.map((table) => (
-            <SchemaTableItem
-              key={table.table_name}
-              table={table}
-              expanded={expanded.has(table.table_name)}
-              selected={selection.tableNames.includes(table.table_name)}
-              selection={selection}
-              disabled={disabled}
-              onToggleExpanded={toggleExpanded}
-              onToggleTable={onToggleTable}
-              onToggleColumn={onToggleColumn}
-              insertMode={insertMode}
-              onInsert={onInsert}
-            />
-          ))}
-        </div>
-    </>
-  );
-
-  if (!framed) {
-    return (
-      <section
-        className="grid min-w-0 max-w-full content-start gap-4 overflow-hidden"
-        aria-labelledby="nl2sql-schema-heading"
-        data-testid="nl2sql-schema-reference"
-      >
-        <DbObjectPanelHeader
-          headingId="nl2sql-schema-heading"
-          icon={Table2}
-          title={t("nl2sql.schema.title")}
-          description={t("nl2sql.schema.description")}
-        />
-        <div className="min-w-0 max-w-full space-y-4">{content}</div>
-      </section>
-    );
-  }
-
   return (
-    <Card className="h-full min-w-0 max-w-full overflow-hidden" data-testid="nl2sql-schema-reference">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Table2 size={17} aria-hidden="true" />
-          {t("nl2sql.schema.title")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="min-w-0 max-w-full space-y-4">{content}</CardContent>
-    </Card>
+    <section
+      className="grid min-w-0 max-w-full content-start gap-2 overflow-hidden"
+      aria-label={t("nl2sql.schema.title")}
+      data-testid="nl2sql-schema-reference"
+    >
+      <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+        <Table2 size={15} className="shrink-0" aria-hidden="true" />
+        <span>{t("nl2sql.schema.title")}</span>
+        <span className="min-w-0 truncate text-xs font-normal text-muted">
+          {t("nl2sql.schema.insertHint")}
+        </span>
+      </p>
+
+      <span className="relative min-w-0 max-w-full">
+        <Search
+          size={15}
+          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+          aria-hidden="true"
+        />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          className="min-h-9 min-w-0 w-full rounded-md border border-border bg-card py-1.5 pl-8 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+          placeholder={t("nl2sql.schema.searchPlaceholder")}
+          aria-label={t("nl2sql.schema.search")}
+          disabled={disabled}
+        />
+      </span>
+
+      {loading && (
+        <div className="grid min-w-0 gap-1.5">
+          <Skeleton className="h-9" />
+          <Skeleton className="h-9" />
+          <Skeleton className="h-9" />
+        </div>
+      )}
+
+      {!loading && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
+        <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-muted">
+          <p className="[overflow-wrap:anywhere]">{t("nl2sql.schema.emptyCatalog")}</p>
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={refreshing}
+              disabled={disabled}
+              onClick={onRefreshSchema}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("nl2sql.schema.refresh")}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!loading && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
+        <p className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-muted [overflow-wrap:anywhere]">
+          {t("nl2sql.schema.empty")}
+        </p>
+      )}
+
+      <div
+        className={`grid min-w-0 max-w-full ${listMaxHeightClass} content-start gap-1 overflow-x-hidden overflow-y-auto pr-1`}
+      >
+        {filteredTables.map((table) => (
+          <SchemaTableItem
+            key={table.table_name}
+            table={table}
+            expanded={searching || expandedTable === table.table_name}
+            disabled={disabled}
+            onToggleExpanded={toggleExpanded}
+            insertMode={insertMode}
+            onInsert={onInsert}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
 function SchemaTableItem({
   table,
   expanded,
-  selected,
-  selection,
   disabled,
   insertMode,
   onToggleExpanded,
-  onToggleTable,
-  onToggleColumn,
   onInsert,
 }: {
   table: SchemaTable;
   expanded: boolean;
-  selected: boolean;
-  selection: SchemaSelection;
   disabled?: boolean;
   insertMode: SchemaInsertMode;
   onToggleExpanded: (tableName: string) => void;
-  onToggleTable: (tableName: string) => void;
-  onToggleColumn: (tableName: string, columnName: string) => void;
   onInsert: (text: string) => void;
 }) {
+  const tableInsertText =
+    insertMode === "physical" ? buildTableSqlIdentifierText(table) : buildTableInsertText(table);
   return (
     <article
       className="min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-card"
       data-testid="nl2sql-schema-table-item"
     >
-      <div className="flex min-w-0 items-start gap-2 p-3">
+      <div className="flex min-h-9 w-full min-w-0 items-stretch">
+        {/* chevron=展開/折りたたみ、表名クリック=挿入（列行と同じ「クリック=挿入」で一貫）。 */}
         <button
           type="button"
-          className="mt-0.5 flex min-h-10 min-w-10 items-center justify-center rounded-md text-foreground hover:bg-muted/30 focus:outline-none focus:ring-2 focus:ring-ring/40"
+          className="flex shrink-0 items-center px-2 text-muted hover:bg-muted/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           aria-expanded={expanded}
           aria-label={t("nl2sql.schema.toggleTable", { name: table.logical_name })}
           onClick={() => onToggleExpanded(table.table_name)}
         >
-          {expanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+          {expanded ? (
+            <ChevronDown size={15} aria-hidden="true" />
+          ) : (
+            <ChevronRight size={15} aria-hidden="true" />
+          )}
         </button>
-        <label className="flex min-h-10 min-w-0 flex-1 cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={selected}
-            disabled={disabled}
-            onChange={() => onToggleTable(table.table_name)}
-            className="mt-2 h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-          />
-          <span className="grid min-w-0 gap-1">
-            <span className="min-w-0 font-semibold text-foreground [overflow-wrap:anywhere]">
-              {table.logical_name}
-            </span>
-            <span className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted">
-              <span className="min-w-0 max-w-full font-mono [overflow-wrap:anywhere]">{table.table_name}</span>
-              <span>{t("schema.table.rows", { count: formatSchemaCount(table.row_count) })}</span>
-              <span>{t("schema.table.constraints", { count: table.constraints.length })}</span>
-            </span>
-            {table.comment && (
-              <span className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">{table.comment}</span>
-            )}
+        <button
+          type="button"
+          disabled={disabled}
+          title={table.comment || table.table_name}
+          onClick={() => onInsert(tableInsertText)}
+          className="group flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2.5 text-left hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+        >
+          <span className="min-w-0 truncate text-sm font-medium text-foreground">
+            {table.logical_name}
           </span>
-        </label>
+          <span className="min-w-0 truncate font-mono text-xs text-muted">{table.table_name}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted">
+            {t("schema.table.rows", { count: formatSchemaCount(table.row_count) })}
+            <Plus
+              size={14}
+              className="text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
+              aria-hidden="true"
+            />
+          </span>
+        </button>
       </div>
       {expanded && (
-        <ul className="grid min-w-0 gap-1 border-t border-border p-2">
+        <ul className="grid min-w-0 content-start gap-0.5 border-t border-border p-1">
           {table.columns.map((column) => (
             <SchemaColumnItem
               key={column.column_name}
               table={table}
               column={column}
-              selected={hasColumn(selection, table.table_name, column.column_name)}
               disabled={disabled}
               insertMode={insertMode}
-              onToggleColumn={onToggleColumn}
               onInsert={onInsert}
             />
           ))}
@@ -238,21 +246,28 @@ function SchemaTableItem({
   );
 }
 
+function columnTooltip(table: SchemaTable, column: SchemaColumn): string {
+  const lines = [
+    `${table.table_name}.${column.column_name} · ${column.data_type}${column.nullable ? "" : " · NOT NULL"}`,
+  ];
+  if (column.comment) lines.push(column.comment);
+  if (column.sample_values.length > 0) {
+    lines.push(`${t("schema.col.sample")}: ${formatSampleValues(column.sample_values)}`);
+  }
+  return lines.join("\n");
+}
+
 function SchemaColumnItem({
   table,
   column,
-  selected,
   disabled,
   insertMode,
-  onToggleColumn,
   onInsert,
 }: {
   table: SchemaTable;
   column: SchemaColumn;
-  selected: boolean;
   disabled?: boolean;
   insertMode: SchemaInsertMode;
-  onToggleColumn: (tableName: string, columnName: string) => void;
   onInsert: (text: string) => void;
 }) {
   const insertText =
@@ -260,39 +275,24 @@ function SchemaColumnItem({
       ? buildSchemaSqlIdentifierText(table, column)
       : buildSchemaInsertText(table, column);
   return (
-    <li className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 hover:bg-background">
-      <input
-        type="checkbox"
-        checked={selected}
-        disabled={disabled}
-        onChange={() => onToggleColumn(table.table_name, column.column_name)}
-        aria-label={t("nl2sql.schema.toggleColumn", { name: column.logical_name })}
-        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-      />
+    <li className="min-w-0">
       <button
         type="button"
         disabled={disabled}
-        title={`${table.table_name}.${column.column_name}`}
+        title={columnTooltip(table, column)}
         onClick={() => onInsert(insertText)}
-        className="grid min-h-10 min-w-0 max-w-full rounded-md px-2 py-1 text-left focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50"
+        className="group flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
       >
-        <span className="min-w-0 text-sm font-medium text-foreground [overflow-wrap:anywhere]">
-          {column.logical_name}
-        </span>
-        <span className="min-w-0 font-mono text-xs text-muted [overflow-wrap:anywhere]">
+        <span className="min-w-0 truncate text-sm text-foreground">{column.logical_name}</span>
+        <span className="min-w-0 truncate font-mono text-xs text-muted">
           {column.column_name} · {column.data_type}
         </span>
-        {column.sample_values.length > 0 && (
-          <span className="min-w-0 truncate text-xs text-muted" title={column.sample_values.join(", ")}>
-            {t("schema.col.sample")}: {formatSampleValues(column.sample_values)}
-          </span>
-        )}
+        <Plus
+          size={14}
+          className="ml-auto shrink-0 text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
+          aria-hidden="true"
+        />
       </button>
-      {!column.nullable && (
-        <span className="rounded bg-muted/30 px-1.5 py-1 text-[11px] font-medium text-foreground">
-          NOT NULL
-        </span>
-      )}
     </li>
   );
 }

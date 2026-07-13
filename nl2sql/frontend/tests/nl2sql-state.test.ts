@@ -47,8 +47,12 @@ import type { HistoryItem, PreviewData, SchemaColumn, SchemaTable } from "../src
 import {
   buildSchemaInsertText,
   buildSchemaSqlIdentifierText,
+  buildTableInsertText,
+  buildTableSqlIdentifierText,
   emptySelection,
   insertTextAtRange,
+  leadingNewlinePrefix,
+  normalizeObjectIdentifier,
   toAllowedObjects,
   toSchemaSelection,
   toggleColumnSelection,
@@ -93,6 +97,11 @@ class MemoryStorage implements ActiveJobStorage {
 
 test("schema insertion uses denpyo-style logical table and column names", () => {
   assert.equal(buildSchemaInsertText(invoiceTable, invoiceColumn), "\"請求\".\"請求金額\"");
+});
+
+test("table insertion builds logical and physical table identifiers", () => {
+  assert.equal(buildTableInsertText(invoiceTable), "\"請求\"");
+  assert.equal(buildTableSqlIdentifierText(invoiceTable), "\"INVOICES\"");
 });
 
 test("fixed split pane stores ratio per page split id", () => {
@@ -222,6 +231,25 @@ test("question insertion replaces selected text at the cursor range", () => {
     insertTextAtRange("未入金の金額を見たい", "\"請求\".\"請求金額\"", 4, 6),
     "未入金の\"請求\".\"請求金額\"を見たい"
   );
+});
+
+test("object identifier normalization strips owner and quotes and uppercases", () => {
+  assert.equal(normalizeObjectIdentifier("EMPLOYEE"), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier("employee"), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier("APP.EMPLOYEE"), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier('"EMPLOYEE"'), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier('app."Employee"'), "EMPLOYEE");
+});
+
+test("schema insert prepends a newline only when not at start / not after a newline", () => {
+  // 先頭挿入は改行なし（先頭空行を防ぐ）
+  assert.equal(leadingNewlinePrefix("", 0), "");
+  assert.equal(leadingNewlinePrefix("既存の質問", 0), "");
+  // 途中/末尾は各項目を改行区切りにするため改行を前置
+  assert.equal(leadingNewlinePrefix("既存の質問", 5), "\n");
+  assert.equal(leadingNewlinePrefix("既存\"請求\"", 2), "\n");
+  // 直前がすでに改行なら二重改行にしない
+  assert.equal(leadingNewlinePrefix("既存\n", 3), "");
 });
 
 test("elapsed time helpers format live and final timings", () => {

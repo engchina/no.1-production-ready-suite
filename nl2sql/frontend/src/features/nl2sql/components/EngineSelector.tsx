@@ -7,19 +7,14 @@ import type { Nl2SqlEngine } from "../types";
 
 const ENGINE_OPTIONS: Array<{ value: Nl2SqlEngine; label: string; description: string }> = [
   {
-    value: "auto",
-    label: t("nl2sql.engine.auto"),
-    description: t("nl2sql.engine.auto.desc"),
+    value: "select_ai",
+    label: t("nl2sql.engine.selectAi"),
+    description: t("nl2sql.engine.selectAi.desc"),
   },
   {
     value: "select_ai_agent",
     label: t("nl2sql.engine.agent"),
     description: t("nl2sql.engine.agent.desc"),
-  },
-  {
-    value: "select_ai",
-    label: t("nl2sql.engine.selectAi"),
-    description: t("nl2sql.engine.selectAi.desc"),
   },
   {
     value: "enterprise_ai_direct",
@@ -46,7 +41,7 @@ export function EngineSelector({
   return (
     <fieldset className="space-y-3">
       <legend className="text-sm font-semibold text-foreground">{t("nl2sql.engine.label")}</legend>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
         {ENGINE_OPTIONS.map((option) => {
           const selected = option.value === value;
           return (

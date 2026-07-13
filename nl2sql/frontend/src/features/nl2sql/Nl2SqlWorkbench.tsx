@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, ChevronDown, Code2, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
+import { BookOpenText, ChevronDown, Code2, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
   Banner,
   Button,
   PageHeader,
+  toast,
 } from "@engchina/production-ready-ui";
 
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
@@ -35,7 +35,6 @@ import type {
   Nl2SqlResult,
   PreviewData,
   ProfileRecommendationData,
-  ProfileRecommendationCandidate,
   QueryResults,
   RewriteData,
   SchemaCatalog,
@@ -66,10 +65,9 @@ import {
 import {
   emptySelection,
   insertTextAtRange,
+  leadingNewlinePrefix,
   toAllowedObjects,
   toSchemaSelection,
-  toggleColumnSelection,
-  toggleTableSelection,
   type SchemaSelection,
 } from "./workbenchState";
 
@@ -95,7 +93,7 @@ export function Nl2SqlWorkbench() {
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [engine, setEngine] = useState<Nl2SqlEngine>("auto");
+  const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
   const [activeEditor, setActiveEditor] = useState<ActiveEditor>("natural");
   const [profileId, setProfileId] = useState("default");
   const [question, setQuestion] = useState("");
@@ -107,7 +105,6 @@ export function Nl2SqlWorkbench() {
   const [previewExecutionResults, setPreviewExecutionResults] = useState<QueryResults | null>(null);
   const [sqlExecutionResults, setSqlExecutionResults] = useState<QueryResults | null>(null);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
-  const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
@@ -121,8 +118,8 @@ export function Nl2SqlWorkbench() {
     message?: string;
   } | null>(null);
   const [ontologyExecutionResults, setOntologyExecutionResults] = useState<QueryResults | null>(null);
-  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(true);
-  const [rewriteUseSchema, setRewriteUseSchema] = useState(true);
+  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
+  const [rewriteUseSchema, setRewriteUseSchema] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
   const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
@@ -133,14 +130,19 @@ export function Nl2SqlWorkbench() {
   const [previewExecuteLoading, setPreviewExecuteLoading] = useState(false);
   const [sqlExecuteLoading, setSqlExecuteLoading] = useState(false);
   const [error, setError] = useState("");
+  const [importingSample, setImportingSample] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sqlTextareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const loadCatalog = useCallback(async () => {
+  // refresh=true のときは catalog を実データソースから再取得する（oracle モードは Oracle を再クエリ）。
+  const loadCatalog = useCallback(async (refresh = false) => {
     setLoadingCatalog(true);
     try {
       const [catalogData, profilesData, historyData] = await Promise.all([
-        apiGet<SchemaCatalog>("/api/schema/catalog"),
+        refresh
+          ? apiPost<SchemaCatalog>("/api/schema/refresh", {})
+          : apiGet<SchemaCatalog>("/api/schema/catalog"),
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<HistoryData>("/api/nl2sql/history"),
       ]);
@@ -165,9 +167,9 @@ export function Nl2SqlWorkbench() {
     setResult(data);
   }, []);
 
-  const handleJobError = useCallback((message: string) => {
-    setError(message);
-  }, []);
+  // job エラーは OperationStatusStrip（job.error_message）へ一本化して表示する。
+  // ページ共通 Banner（catalog/preview/execute 用）には流さず、重複表示を避ける。
+  const handleJobError = useCallback(() => {}, []);
 
   const { job, jobStartedAt, pollJob, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
     onResult: handleJobResult,
@@ -188,8 +190,13 @@ export function Nl2SqlWorkbench() {
       additional_instructions: additionalInstructions,
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
-  const selectedProfileName =
-    profiles.find((profile) => profile.id === profileId)?.name || t("nl2sql.workspace.profileUnavailable");
+  const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
+  const selectedProfileName = selectedProfile?.name || t("nl2sql.workspace.profileUnavailable");
+  const profileAllowedTableNames = useMemo(() => {
+    if (!selectedProfile) return null;
+    const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
+    return names.length > 0 ? names : null;
+  }, [selectedProfile]);
 
   useEffect(() => {
     void loadCatalog();
@@ -210,7 +217,6 @@ export function Nl2SqlWorkbench() {
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      setRecommendationLoading(true);
       void apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
         question: trimmed,
         current_profile_id: profileId || null,
@@ -220,9 +226,6 @@ export function Nl2SqlWorkbench() {
         })
         .catch(() => {
           if (!cancelled) setRecommendation(null);
-        })
-        .finally(() => {
-          if (!cancelled) setRecommendationLoading(false);
         });
     }, 500);
     return () => {
@@ -264,34 +267,35 @@ export function Nl2SqlWorkbench() {
   const insertSchemaText = (text: string) => {
     const el = activeEditor === "sql" ? sqlTextareaRef.current : questionTextareaRef.current;
     if (!el) {
+      // ref 未取得（フォーカス外）のときは末尾へ追記。各項目を改行区切りにする。
       if (activeEditor === "sql") {
-        setSqlText((current) => `${current}${text}`);
+        setSqlText((current) => `${current}${leadingNewlinePrefix(current, current.length)}${text}`);
       } else {
-        setQuestion((current) => `${current}${text}`);
+        setQuestion((current) => `${current}${leadingNewlinePrefix(current, current.length)}${text}`);
       }
       return;
     }
     const source = activeEditor === "sql" ? sqlText : question;
     const start = el.selectionStart ?? source.length;
     const end = el.selectionEnd ?? source.length;
-    const nextValue = insertTextAtRange(source, text, start, end);
+    // 各項目を改行区切りにする（先頭・直前が改行のときは付けない）。
+    const prefixed = `${leadingNewlinePrefix(source, start)}${text}`;
+    const nextValue = insertTextAtRange(source, prefixed, start, end);
     if (activeEditor === "sql") {
       setSqlText(nextValue);
     } else {
       setQuestion(nextValue);
     }
     requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(start + text.length, start + text.length);
+      // preventScroll: 挿入クリックのたびにページが textarea まで飛ばないようにする。
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(start + prefixed.length, start + prefixed.length);
+      // textarea 内部だけ、いま挿入した行へ追従スクロールする。
+      // ponytail: 折返し行は無視した近似。挿入項目は 1 行想定で実用十分。
+      const caretLine = nextValue.slice(0, start + prefixed.length).split("\n").length;
+      const lineHeight = 24; // leading-6
+      el.scrollTop = Math.max(0, caretLine * lineHeight - el.clientHeight + lineHeight);
     });
-  };
-
-  const toggleTable = (tableName: string) => {
-    setSelection((current) => toggleTableSelection(current, tableName));
-  };
-
-  const toggleColumn = (tableName: string, columnName: string) => {
-    setSelection((current) => toggleColumnSelection(current, tableName, columnName));
   };
 
   const applyRecommendation = () => {
@@ -300,10 +304,52 @@ export function Nl2SqlWorkbench() {
     setSelection(toSchemaSelection(recommendation.recommended_allowed_objects));
   };
 
-  const applyRecommendationCandidate = (candidate: ProfileRecommendationCandidate) => {
-    setProfileId(candidate.profile_id);
-    setSelection(toSchemaSelection({ table_names: candidate.allowed_tables, columns: {} }));
-  };
+  // 質問から業務プロファイルを自動判定（学習済み分類器 → 決定論フォールバック）して選択する。
+  const detectProfile = useCallback(async () => {
+    const trimmed = question.trim();
+    if (!trimmed || active) return;
+    setDetecting(true);
+    try {
+      const data = await apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
+        question: trimmed,
+        current_profile_id: profileId || null,
+      });
+      setRecommendation(data);
+      setProfileId(data.recommended_profile_id);
+      setSelection(toSchemaSelection(data.recommended_allowed_objects));
+      const sourceLabel =
+        data.recommendation_source === "classifier"
+          ? t("nl2sql.recommend.sourceClassifier")
+          : t("nl2sql.recommend.sourceDeterministic");
+      toast.success(
+        t("nl2sql.recommend.autoDetectApplied", {
+          name: data.recommended_profile_name,
+          source: sourceLabel,
+          confidence: Math.round(data.confidence * 100),
+        })
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("nl2sql.recommend.autoDetectFailed"));
+    } finally {
+      setDetecting(false);
+    }
+  }, [active, profileId, question]);
+
+  // schema catalog が空（サンプル未投入）のとき、エラーからワンクリックで投入して解消する。
+  const importSampleData = useCallback(async () => {
+    setImportingSample(true);
+    try {
+      await apiPost("/api/nl2sql/sample-data/import", { step: "all", confirmation: "SQL_ASSIST_SAMPLE" });
+      toast.success(t("nl2sql.sample.importSuccess"));
+      setError("");
+      clearTrackedJob();
+      await loadCatalog();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("nl2sql.sample.importFailed"));
+    } finally {
+      setImportingSample(false);
+    }
+  }, [clearTrackedJob, loadCatalog]);
 
   const previewSql = async () => {
     const trimmed = question.trim();
@@ -571,7 +617,7 @@ export function Nl2SqlWorkbench() {
               size="sm"
               loading={loadingCatalog}
               disabled={active}
-              onClick={() => void loadCatalog()}
+              onClick={() => void loadCatalog(true)}
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("nl2sql.action.refresh")}</span>
@@ -584,53 +630,7 @@ export function Nl2SqlWorkbench() {
           aria-label={t("nl2sql.workspace.label")}
           data-testid="nl2sql-workspace-shell"
         >
-          <FixedSplitPane
-            splitId="nl2sql-workbench"
-            preferredWidePane="right"
-            left={
-              ontologySession ? (
-                <QueryOntologyFlow
-                  session={ontologySession}
-                  pendingPatch={ontologyPatch}
-                  versionConflict={ontologyVersionConflict}
-                  onApplyIntentPatch={applyOntologyPatch}
-                  onConfirmIntent={confirmOntologyIntent}
-                  onConfirmSql={confirmOntologySql}
-                  onExecute={executeOntologySql}
-                  onCreateProposal={async (request) => {
-                    await createOntologyImprovementProposal(ontologySession.id, request);
-                    await reloadOntologySession();
-                  }}
-                  onReload={reloadOntologySession}
-                  labels={{
-                    businessTab: t("nl2sql.ontology.tab.business"),
-                    intentTab: t("nl2sql.ontology.tab.intent"),
-                    sqlTab: t("nl2sql.ontology.tab.sql"),
-                    validationTab: t("nl2sql.ontology.tab.diff"),
-                    applyPatch: t("nl2sql.session.applyPatch"),
-                    confirmIntent: t("nl2sql.session.generateSql"),
-                    confirmSql: t("nl2sql.session.confirmSql"),
-                    execute: t("nl2sql.session.execute"),
-                    proposal: t("nl2sql.session.propose"),
-                    rawSql: t("nl2sql.session.sqlDetails"),
-                  }}
-                />
-              ) : (
-                <SchemaReferencePanel
-                  catalog={catalog}
-                  loading={loadingCatalog}
-                  selection={selection}
-                  disabled={active}
-                  insertMode={activeEditor === "sql" ? "physical" : "logical"}
-                  framed={false}
-                  onToggleTable={toggleTable}
-                  onToggleColumn={toggleColumn}
-                  onInsert={insertSchemaText}
-                />
-              )
-            }
-            right={
-              <section className="grid min-w-0 content-start gap-4" aria-labelledby="nl2sql-query-heading">
+          <section className="grid min-w-0 content-start gap-4" aria-labelledby="nl2sql-query-heading">
                 <DbObjectPanelHeader
                   headingId="nl2sql-query-heading"
                   icon={Sparkles}
@@ -692,36 +692,99 @@ export function Nl2SqlWorkbench() {
               )}
 
               <div className="grid gap-4">
-                <label className="grid gap-1 text-sm font-medium text-foreground">
-                  <span>{t("nl2sql.profile.label")}</span>
-                  <select
-                    value={profileId}
-                    onChange={(event) => setProfileId(event.currentTarget.value)}
-                    disabled={active}
-                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
+                <div className="grid gap-1">
+                  <label
+                    htmlFor="nl2sql-profile-select"
+                    className="text-sm font-medium text-foreground"
                   >
-                    {profiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    {t("nl2sql.profile.label")}
+                  </label>
+                  <div className="flex flex-wrap items-stretch gap-2">
+                    <select
+                      id="nl2sql-profile-select"
+                      value={profileId}
+                      onChange={(event) => setProfileId(event.currentTarget.value)}
+                      disabled={active}
+                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    >
+                      {profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="shrink-0"
+                      loading={detecting}
+                      disabled={!question.trim() || active}
+                      onClick={() => void detectProfile()}
+                    >
+                      <Wand2 size={16} aria-hidden="true" />
+                      <span>{t("nl2sql.recommend.autoDetect")}</span>
+                    </Button>
+                  </div>
+                </div>
+                {recommendation &&
+                  recommendation.confidence >= 0.3 &&
+                  recommendation.recommended_profile_id !== profileId && (
+                    <div
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm"
+                      data-testid="nl2sql-recommend-hint"
+                    >
+                      <span className="flex min-w-0 items-center gap-2 text-foreground">
+                        <Sparkles size={15} className="shrink-0 text-primary" aria-hidden="true" />
+                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                          {t("nl2sql.recommend.switchHint", {
+                            name: recommendation.recommended_profile_name,
+                            confidence: Math.round(recommendation.confidence * 100),
+                          })}
+                        </span>
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={active}
+                        onClick={applyRecommendation}
+                      >
+                        {t("nl2sql.recommend.switchApply")}
+                      </Button>
+                    </div>
+                  )}
               </div>
 
-                  <label className="grid gap-2 text-sm font-medium text-foreground">
-                    <span>{t("nl2sql.question.label")}</span>
-                    <textarea
-                      ref={questionTextareaRef}
-                      value={question}
-                      onChange={(event) => setQuestion(event.currentTarget.value)}
-                      onFocus={() => setActiveEditor("natural")}
-                      disabled={active}
-                      rows={5}
-                      className="min-h-36 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                      placeholder={t("nl2sql.question.placeholder")}
-                    />
-                  </label>
+                  {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
+                    <label className="grid gap-2 text-sm font-medium text-foreground">
+                      <span>{t("nl2sql.question.label")}</span>
+                      <textarea
+                        ref={questionTextareaRef}
+                        value={question}
+                        onChange={(event) => setQuestion(event.currentTarget.value)}
+                        onFocus={() => setActiveEditor("natural")}
+                        disabled={active}
+                        rows={5}
+                        className="field-sizing-content min-h-36 max-h-[16.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                        placeholder={t("nl2sql.question.placeholder")}
+                      />
+                    </label>
+                    <div className="rounded-md border border-border bg-background p-3">
+                      <SchemaReferencePanel
+                        catalog={catalog}
+                        loading={loadingCatalog}
+                        disabled={active}
+                        insertMode={activeEditor === "sql" ? "physical" : "logical"}
+                        allowedTableNames={profileAllowedTableNames}
+                        listMaxHeightClass="max-h-[30rem]"
+                        onRefreshSchema={() => void loadCatalog(true)}
+                        refreshing={loadingCatalog}
+                        onInsert={insertSchemaText}
+                      />
+                    </div>
+                  </div>
 
                   <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -802,106 +865,6 @@ export function Nl2SqlWorkbench() {
                     )}
                   </section>
 
-                  {(recommendation || recommendationLoading) && (
-                    <div className="grid gap-3 rounded-md border border-primary/30 bg-primary/10 p-3 text-sm text-foreground">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="flex items-start gap-2">
-                          <Sparkles size={16} className="mt-0.5 text-primary" aria-hidden="true" />
-                          <div>
-                            <p className="font-semibold text-foreground">
-                              {recommendationLoading
-                                ? t("nl2sql.recommend.loading")
-                                : t("nl2sql.recommend.title")}
-                            </p>
-                            {recommendation && (
-                              <p className="mt-1 text-foreground">
-                                {t("nl2sql.recommend.profile", {
-                                  name: recommendation.recommended_profile_name,
-                                  confidence: Math.round(recommendation.confidence * 100),
-                                })}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          disabled={!recommendation || active}
-                          onClick={applyRecommendation}
-                        >
-                          {t("nl2sql.recommend.apply")}
-                        </Button>
-                      </div>
-                      {recommendation && (
-                        <div className="grid gap-2">
-                          <p>{recommendation.reason}</p>
-                          <dl className="grid gap-1 rounded-md bg-card/70 p-2">
-                            <div className="flex flex-wrap justify-between gap-2">
-                              <dt className="font-medium">{t("nl2sql.recommend.rewritten")}</dt>
-                              <dd className="text-right">{recommendation.rewritten_question}</dd>
-                            </div>
-                            <div className="flex flex-wrap justify-between gap-2">
-                              <dt className="font-medium">{t("nl2sql.recommend.tables")}</dt>
-                              <dd className="font-mono text-xs">
-                                {recommendation.recommended_allowed_objects.table_names.join(", ") || "-"}
-                              </dd>
-                            </div>
-                          </dl>
-                          {recommendation.candidates.length > 0 && (
-                            <section className="grid gap-2">
-                              <p className="text-xs font-semibold uppercase tracking-normal text-muted">
-                                {t("nl2sql.recommend.candidates")}
-                              </p>
-                              <div className="grid gap-2">
-                                {recommendation.candidates.map((candidate) => (
-                                  <div
-                                    key={candidate.profile_id}
-                                    className="grid gap-2 rounded-md border border-primary/20 bg-card/80 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
-                                  >
-                                    <div className="min-w-0 space-y-1">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <p className="font-semibold text-foreground">{candidate.profile_name}</p>
-                                        <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                                          {t("nl2sql.recommend.candidateScore", {
-                                            score: Math.round(candidate.score * 100),
-                                          })}
-                                        </span>
-                                      </div>
-                                      <dl className="grid gap-1 text-xs text-muted">
-                                        <div className="grid gap-1 sm:grid-cols-[5rem_1fr]">
-                                          <dt className="font-medium">{t("nl2sql.recommend.matchedTerms")}</dt>
-                                          <dd className="break-words">
-                                            {candidate.matched_terms.join(", ") || "-"}
-                                          </dd>
-                                        </div>
-                                        <div className="grid gap-1 sm:grid-cols-[5rem_1fr]">
-                                          <dt className="font-medium">{t("nl2sql.recommend.allowedTables")}</dt>
-                                          <dd className="break-words font-mono">
-                                            {candidate.allowed_tables.join(", ") || "-"}
-                                          </dd>
-                                        </div>
-                                      </dl>
-                                    </div>
-                                    <Button
-                                      type="button"
-                                      variant="secondary"
-                                      size="sm"
-                                      disabled={active}
-                                      onClick={() => applyRecommendationCandidate(candidate)}
-                                    >
-                                      {t("nl2sql.recommend.applyCandidate")}
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            </section>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   {(similarHistory.length > 0 || similarHistoryLoading) && (
                     <div className="grid gap-3 rounded-md border border-border bg-card p-3 text-sm text-foreground">
                       <div className="flex items-center gap-2">
@@ -953,6 +916,9 @@ export function Nl2SqlWorkbench() {
                           setPreviewExecutionResults(null);
                           setSqlExecutionResults(null);
                           setRewriteData(null);
+                          setRewriteUseGlossary(false);
+                          setRewriteUseSchema(false);
+                          setRewriteExtraPrompt("");
                           clearTrackedJob();
                           setActiveEditor("natural");
                           setSelectAiRoleOverride("");
@@ -1084,21 +1050,68 @@ export function Nl2SqlWorkbench() {
                 </details>
                 </div>
               </section>
-            }
-          />
         </section>
 
-        <OperationStatusStrip job={job} elapsedSeconds={elapsedSeconds} />
+        {ontologySession && (
+          <QueryOntologyFlow
+            session={ontologySession}
+            pendingPatch={ontologyPatch}
+            versionConflict={ontologyVersionConflict}
+            onApplyIntentPatch={applyOntologyPatch}
+            onConfirmIntent={confirmOntologyIntent}
+            onConfirmSql={confirmOntologySql}
+            onExecute={executeOntologySql}
+            onCreateProposal={async (request) => {
+              await createOntologyImprovementProposal(ontologySession.id, request);
+              await reloadOntologySession();
+            }}
+            onReload={reloadOntologySession}
+            labels={{
+              businessTab: t("nl2sql.ontology.tab.business"),
+              intentTab: t("nl2sql.ontology.tab.intent"),
+              sqlTab: t("nl2sql.ontology.tab.sql"),
+              validationTab: t("nl2sql.ontology.tab.diff"),
+              applyPatch: t("nl2sql.session.applyPatch"),
+              confirmIntent: t("nl2sql.session.generateSql"),
+              confirmSql: t("nl2sql.session.confirmSql"),
+              execute: t("nl2sql.session.execute"),
+              proposal: t("nl2sql.session.propose"),
+              rawSql: t("nl2sql.session.sqlDetails"),
+            }}
+          />
+        )}
+
+        <OperationStatusStrip
+          job={job}
+          elapsedSeconds={elapsedSeconds}
+          catalogEmpty={catalog !== null && catalog.tables.length === 0}
+          importingSample={importingSample}
+          onImportSample={importSampleData}
+        />
         <Nl2SqlResultTable results={ontologyExecutionResults} />
 
         {error && (
           <Banner
             severity="danger"
             action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("nl2sql.action.refresh")}</span>
-              </Button>
+              (catalog?.tables.length ?? 0) === 0 ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  loading={importingSample}
+                  disabled={active}
+                  onClick={() => void importSampleData()}
+                >
+                  <Database size={15} aria-hidden="true" />
+                  <span>{t("nl2sql.sample.import")}</span>
+                </Button>
+              ) : (
+                <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("nl2sql.action.refresh")}</span>
+                </Button>
+              )
             }
           >
             {error} {t("nl2sql.error.retryHint")}
