@@ -204,7 +204,6 @@ function ViewJoinWherePanel({
 
 export function ViewManagementPage() {
   const [views, setViews] = useState<DbAdminObjectsData | null>(null);
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [selectedViewName, setSelectedViewName] = useState("");
   const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
@@ -263,12 +262,13 @@ export function ViewManagementPage() {
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      const [viewData, catalogData] = await Promise.all([
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
-        refreshSchema ? apiPost<SchemaCatalog>("/api/schema/refresh") : apiGet<SchemaCatalog>("/api/schema/catalog"),
-      ]);
+      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+      if (refreshSchema) {
+        await apiPost<SchemaCatalog>("/api/schema/refresh");
+      }
+      const viewData = await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views");
       setViews(viewData);
-      setCatalog(catalogData);
       const nextSelected =
         viewData.items.find((item) => item.name === selectedViewName)?.name || viewData.items[0]?.name || "";
       setSelectedViewName(nextSelected);
@@ -423,7 +423,7 @@ export function ViewManagementPage() {
         <DbObjectStatusBar
           count={views?.items.length ?? 0}
           runtime={views?.runtime ?? "deterministic"}
-          refreshedAt={catalog?.refreshed_at ?? ""}
+          refreshedAt={views?.refreshed_at ?? ""}
           loading={loading}
           labels={{
             ariaLabel: t("viewMgmt.toolbar.status"),
@@ -501,7 +501,6 @@ export function ViewManagementPage() {
               idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-detail-heading"
               detail={detail}
-              catalog={catalog}
               loading={loading.startsWith("detail-") || (loading === "load" && !detail)}
               tab={detailTab}
               labels={{

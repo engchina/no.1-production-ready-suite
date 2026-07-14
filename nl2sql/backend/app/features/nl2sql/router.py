@@ -973,14 +973,17 @@ async def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
 
 @router.get("/db-admin/tables/{table_name}", response_model=ApiResponse[DbAdminObjectDetail])
 async def db_admin_table_detail(
-    table_name: str, include_ddl: bool = True
+    table_name: str, include_ddl: bool = True, exact_count: bool = False
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin table 詳細/DDL を返す。
 
     include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
+    exact_count=false は num_rows 統計、true のみ COUNT(*) で正確件数を取得。
     """
     return ApiResponse(
-        data=nl2sql_service.get_db_admin_object(table_name, "table", include_ddl=include_ddl)
+        data=nl2sql_service.get_db_admin_object(
+            table_name, "table", include_ddl=include_ddl, exact_count=exact_count
+        )
     )
 
 
@@ -992,14 +995,17 @@ async def db_admin_views() -> ApiResponse[DbAdminObjectsData]:
 
 @router.get("/db-admin/views/{view_name}", response_model=ApiResponse[DbAdminObjectDetail])
 async def db_admin_view_detail(
-    view_name: str, include_ddl: bool = True
+    view_name: str, include_ddl: bool = True, exact_count: bool = False
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin view 詳細/DDL を返す。
 
     include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
+    exact_count=false は num_rows 統計、true のみ COUNT(*) で正確件数を取得(view は通常 None)。
     """
     return ApiResponse(
-        data=nl2sql_service.get_db_admin_object(view_name, "view", include_ddl=include_ddl)
+        data=nl2sql_service.get_db_admin_object(
+            view_name, "view", include_ddl=include_ddl, exact_count=exact_count
+        )
     )
 
 

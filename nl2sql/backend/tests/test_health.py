@@ -32,7 +32,11 @@ from app.features.nl2sql.models import (
     SimilarHistoryRequest,
     SyntheticCase,
 )
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter, _extract_select_statement
+from app.features.nl2sql.oracle_adapter import (
+    OracleAdapterError,
+    OracleNl2SqlAdapter,
+    _extract_select_statement,
+)
 from app.features.nl2sql.router import is_select_only
 from app.features.nl2sql.service import GeneratedSql, Nl2SqlService, _extract_referenced_tables
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
@@ -74,6 +78,9 @@ class _FakeOracleDb:
         self.create_team_calls = 0
         self.synthetic_function_signature_failures = 0
         self.synthetic_procedure_calls = 0
+        self.latest_load_operation_id = 777
+        self.synthetic_status_missing = False
+        self.synthetic_status_rows: list[tuple[object, ...]] = []
 
     def connection(self) -> "_FakeOracleConnection":
         return _FakeOracleConnection(self)
@@ -167,6 +174,18 @@ class _FakeOracleCursor:
                 self._row = ("operation-001",)
             else:
                 self.db.synthetic_procedure_calls += 1
+        elif "MAX(ID) FROM USER_LOAD_OPERATIONS" in normalized_sql:
+            self._row = (self.db.latest_load_operation_id,)
+        elif "SYNTHETIC_DATA$" in normalized_sql and "_STATUS" in normalized_sql:
+            if self.db.synthetic_status_missing:
+                raise RuntimeError("ORA-00942: table or view does not exist")
+            self.description = [
+                ("NAME",),
+                ("ROWS_LOADED",),
+                ("STATUS",),
+                ("ERROR_MESSAGE",),
+            ]
+            self._rows = self.db.synthetic_status_rows
         elif "DBMS_CLOUD_AI_AGENT.RUN_TEAM" in normalized_sql:
             self.db.run_team_calls += 1
             if self.db.run_team_profile_loss:
@@ -2228,7 +2247,9 @@ def test_oracle_adapter_generate_synthetic_data_falls_back_to_procedure_signatur
     )
 
     assert meta["mode"] == "procedure"
-    assert meta["operation_id"] == ""
+    # DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA は戻り値なしのため、
+    # USER_LOAD_OPERATIONS.MAX(ID) から operation id を補填する。
+    assert meta["operation_id"] == "777"
     assert fake_db.synthetic_procedure_calls == 1
     assert any(
         params
@@ -2236,6 +2257,41 @@ def test_oracle_adapter_generate_synthetic_data_falls_back_to_procedure_signatur
         and params.get("object_name") == "NL2SQL_SMOKE_TABLE"
         for params in fake_db.executed_params
     )
+
+
+def test_oracle_adapter_synthetic_data_operation_status_reads_status_table() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.synthetic_status_rows = [
+        ("EMPLOYEE", 100, "COMPLETED", None),
+        ("DEPARTMENT", 5, "COMPLETED", None),
+    ]
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    result = adapter.synthetic_data_operation_status(operation_id="777")
+
+    assert result["status"] == "completed"
+    assert result["result"]["operations"][0]["name"] == "EMPLOYEE"
+    assert any(
+        'SYNTHETIC_DATA$777_STATUS' in " ".join(sql.split()) for sql in fake_db.executed
+    )
+
+
+def test_oracle_adapter_synthetic_data_operation_status_surfaces_error() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.synthetic_status_rows = [("EMPLOYEE", 0, "FAILED", "ORA-20003: boom")]
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    result = adapter.synthetic_data_operation_status(operation_id="777")
+
+    assert result["status"] == "failed"
+    assert "ORA-20003" in result["message"]
+
+
+def test_oracle_adapter_synthetic_data_operation_status_rejects_non_numeric_id() -> None:
+    adapter = _FakeRuntimeOracleAdapter(_FakeOracleDb())
+
+    with pytest.raises(OracleAdapterError):
+        adapter.synthetic_data_operation_status(operation_id="1 OR 1=1")
 
 
 def test_service_refresh_agent_cleans_previous_versioned_team() -> None:

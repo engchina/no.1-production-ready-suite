@@ -6065,6 +6065,7 @@ class Nl2SqlService:
                         DbAdminObjectSummary.model_validate(item)
                         for item in self._oracle_adapter.list_db_admin_objects("table")
                     ],
+                    refreshed_at=self._catalog.refreshed_at,
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
@@ -6081,6 +6082,7 @@ class Nl2SqlService:
                 for table in self._catalog.tables
                 if table.table_type.lower() != "view"
             ],
+            refreshed_at=self._catalog.refreshed_at,
             warnings=warnings,
         )
 
@@ -6094,6 +6096,7 @@ class Nl2SqlService:
                         DbAdminObjectSummary.model_validate(item)
                         for item in self._oracle_adapter.list_db_admin_objects("view")
                     ],
+                    refreshed_at=self._catalog.refreshed_at,
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
@@ -6110,6 +6113,7 @@ class Nl2SqlService:
                 for table in self._catalog.tables
                 if table.table_type.lower() == "view"
             ],
+            refreshed_at=self._catalog.refreshed_at,
             warnings=warnings,
         )
 
@@ -6119,8 +6123,14 @@ class Nl2SqlService:
         論理名を「オントロジーの業務日本語名」ソースに分離するための lookup。
         comment(生カラムコメント)とは別系統にする。
         """
-        # ponytail: オントロジー nodes の全走査を detail 取得ごとに実行。管理画面の
-        # 低頻度用途なので許容。遅ければ (revision_id, object) キャッシュに上げる。
+        return self._ontology_business_name_index().get(object_name.upper(), {})
+
+    def _ontology_business_name_index(self) -> dict[str, dict[str, str]]:
+        """object(大文字) -> {column(大文字) -> business_name_ja} の索引。
+
+        detail 取得ごとの全ノード走査を避けるため、ontology revision 単位で一度だけ
+        構築してメモ化する(revision 変化時のみ再構築)。
+        """
         try:
             # ontology_router が nl2sql_service を import するため遅延 import で循環回避
             from app.features.nl2sql.ontology_models import OntologyNodeKind
@@ -6129,18 +6139,30 @@ class Nl2SqlService:
             ontology = ontology_runtime.current_ontology()
         except Exception:
             return {}
-        target = object_name.upper()
-        names: dict[str, str] = {}
+        revision_id = getattr(getattr(ontology, "revision", None), "id", "") or ""
+        cached: tuple[str, dict[str, dict[str, str]]] | None = getattr(
+            self, "_ontology_name_index_cache", None
+        )
+        if revision_id and cached is not None and cached[0] == revision_id:
+            return cached[1]
+        index: dict[str, dict[str, str]] = {}
         for node in ontology.nodes:
             if node.kind != OntologyNodeKind.COLUMN:
                 continue
             parts = node.technical_name.upper().split(".")  # "OWNER.OBJECT.COLUMN"
-            if len(parts) >= 2 and parts[-2] == target:
-                names[parts[-1]] = node.business_name_ja
-        return names
+            if len(parts) >= 2:
+                index.setdefault(parts[-2], {})[parts[-1]] = node.business_name_ja
+        if revision_id:
+            self._ontology_name_index_cache = (revision_id, index)
+        return index
 
     def get_db_admin_object(
-        self, object_name: str, object_type: str, *, include_ddl: bool = True
+        self,
+        object_name: str,
+        object_type: str,
+        *,
+        include_ddl: bool = True,
+        exact_count: bool = False,
     ) -> DbAdminObjectDetail:
         normalized_type = "view" if object_type.lower() == "view" else "table"
         if self._use_oracle_runtime():
@@ -6150,6 +6172,7 @@ class Nl2SqlService:
                         object_name=object_name,
                         object_type=normalized_type,
                         include_ddl=include_ddl,
+                        exact_count=exact_count,
                     )
                 )
             except OracleAdapterError as exc:
@@ -6161,19 +6184,34 @@ class Nl2SqlService:
             detail = self._catalog_object_detail(
                 object_name, normalized_type, include_ddl=include_ddl
             )
-        # 論理名(logical_name)はオントロジー業務名のみを正とし、無ければ空にする。
-        # 生カラムコメントを論理名へ流用せず、comment 列との重複表示を避ける(Option B)。
+        # 一覧と同じ in-memory catalog を「1オブジェクト分」の付帯情報ソースにする:
+        # - logical_name: オントロジー業務名のみ正、無ければ空(生コメントは流用しない Option B)
+        # - sample_values: catalog の該当テーブル列から補完(Oracle 追加クエリなし。詳細を自己完結化)
+        # - row_count: exact_count 時のみ COUNT(*)、他は num_rows 統計(一覧と意味を統一)
         names = self._ontology_business_names(object_name)
-        detail = detail.model_copy(
-            update={
-                "columns": [
-                    col.model_copy(
-                        update={"logical_name": names.get(col.column_name.upper(), "")}
-                    )
-                    for col in detail.columns
-                ]
+        catalog_table = self._find_catalog_table(object_name)
+        samples: dict[str, list[str]] = {}
+        if catalog_table is not None:
+            samples = {
+                column.column_name.upper(): column.sample_values
+                for column in catalog_table.columns
             }
-        )
+        updates: dict[str, Any] = {
+            "columns": [
+                col.model_copy(
+                    update={
+                        "logical_name": names.get(col.column_name.upper(), ""),
+                        "sample_values": samples.get(
+                            col.column_name.upper(), col.sample_values
+                        ),
+                    }
+                )
+                for col in detail.columns
+            ]
+        }
+        if not exact_count and catalog_table is not None:
+            updates["row_count"] = catalog_table.row_count
+        detail = detail.model_copy(update=updates)
         return detail
 
     def drop_db_admin_table(self, request: DbAdminDropTableRequest) -> DbAdminExecuteData:

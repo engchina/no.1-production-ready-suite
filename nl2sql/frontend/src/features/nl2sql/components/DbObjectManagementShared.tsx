@@ -1,4 +1,4 @@
-import { Children, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Children, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Check,
@@ -18,7 +18,7 @@ import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
-import type { DbAdminObjectDetail, DbAdminObjectSummary, SchemaCatalog } from "../types";
+import type { DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
 export type DbObjectDetailTab = "columns" | "ddl";
@@ -58,6 +58,8 @@ export interface DbObjectDetailLabels {
   ddl: string;
   export?: string;
   exportAria?: string;
+  exactCount?: string;
+  exactCountAria?: string;
   drop: string;
 }
 
@@ -561,33 +563,30 @@ export function DbObjectDetailPanel({
   idPrefix,
   headingId,
   detail,
-  catalog,
   loading,
   exporting = false,
+  countingRows = false,
   tab,
   labels,
   onTabChange,
   onExport,
+  onExactCount,
   onDrop,
 }: {
   idPrefix: string;
   headingId: string;
   detail: DbAdminObjectDetail | null;
-  catalog: SchemaCatalog | null;
   loading: boolean;
   exporting?: boolean;
+  countingRows?: boolean;
   tab: DbObjectDetailTab;
   labels: DbObjectDetailLabels;
   onTabChange: (tab: DbObjectDetailTab) => void;
   onExport?: (name: string) => void;
+  onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const sampleByColumn = useMemo(() => {
-    if (!detail || !catalog) return new Map<string, string>();
-    const table = catalog.tables.find((item) => item.table_name.toUpperCase() === detail.name.toUpperCase());
-    return new Map((table?.columns ?? []).map((column) => [column.column_name.toUpperCase(), column.sample_values.join(", ")]));
-  }, [detail, catalog]);
 
   if (loading) return <DbObjectDetailSkeleton idPrefix={idPrefix} />;
 
@@ -638,6 +637,18 @@ export function DbObjectDetailPanel({
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
             {detail.row_count != null && <StatusBadge variant="info" label={rowCountLabel(detail.row_count)} />}
+            {onExactCount && labels.exactCount && detail.object_type === "table" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                loading={countingRows}
+                aria-label={labels.exactCountAria ?? labels.exactCount}
+                onClick={() => onExactCount(detail.name)}
+              >
+                {labels.exactCount}
+              </Button>
+            )}
           </div>
           {detail.comment && <p className="mt-2 text-sm leading-6 text-foreground">{detail.comment}</p>}
         </div>
@@ -737,7 +748,7 @@ export function DbObjectDetailPanel({
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
                   <td className="break-words px-3 py-2 font-mono text-xs text-muted">
-                    {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
+                    {column.sample_values.join(", ") || "-"}
                   </td>
                 </tr>
               ))}

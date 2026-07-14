@@ -33,6 +33,7 @@ from app.features.nl2sql.models import (
 )
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
+    OracleNl2SqlAdapter,
     _flexible_date_value,
     _normalize_select_ai_object_list,
 )
@@ -1020,6 +1021,49 @@ def test_get_db_admin_object_skips_ddl_when_include_ddl_false() -> None:
     assert without_ddl.row_count == with_ddl.row_count
 
 
+def _catalog_with_samples() -> SchemaCatalog:
+    return SchemaCatalog(
+        refreshed_at="2026-07-11T09:30:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="ORDERS",
+                logical_name="注文",
+                owner="APP",
+                row_count=4200,
+                columns=[
+                    SchemaColumn(
+                        column_name="STATUS",
+                        logical_name="状態",
+                        data_type="VARCHAR2(20)",
+                        nullable=False,
+                        comment="注文状態",
+                        sample_values=["NEW", "PAID", "SHIPPED"],
+                    ),
+                ],
+            )
+        ],
+    )
+
+
+def test_get_db_admin_object_merges_sample_values_and_num_rows() -> None:
+    """詳細は catalog から該当テーブルの sample_values を補完し、行数は num_rows 統計を使う。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _catalog_with_samples()
+
+    detail = service.get_db_admin_object("ORDERS", "table")
+    assert detail.row_count == 4200  # num_rows 統計(COUNT(*) を撃たない)
+    assert detail.columns[0].sample_values == ["NEW", "PAID", "SHIPPED"]
+
+
+def test_list_db_admin_tables_includes_refreshed_at() -> None:
+    """一覧応答に catalog の refreshed_at を載せる(ヘッダ用途を catalog 全取得なしで賄う)。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _catalog_with_samples()
+
+    listed = service.list_db_admin_tables()
+    assert listed.refreshed_at == "2026-07-11T09:30:00+00:00"
+
+
 def test_upload_csv_validates_confirmation_and_matches_catalog_columns() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
@@ -1104,6 +1148,63 @@ def test_select_ai_object_list_normalizes_nested_oracle_profile_attributes() -> 
 
     assert [item["name"] for item in object_list] == ["PAYMENTS", "INVOICES"]
     assert object_list[0]["owner"] == "APP"
+
+
+class _FakeLob:
+    """oracledb LOB を模した read() 対応の値。"""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def read(self) -> str:
+        return self._text
+
+
+class _FakeAttributesCursor:
+    """USER_CLOUD_AI_PROFILE_ATTRIBUTES 相当の属性行を返す fake cursor。"""
+
+    def __init__(self, rows: list[tuple[str, object]]) -> None:
+        self._rows = rows
+
+    def execute(self, sql: str, binds: dict[str, object]) -> None:
+        assert "USER_CLOUD_AI_PROFILE_ATTRIBUTES" in sql
+        assert binds["profile_name"] == "HR_PROFILE"
+
+    def fetchall(self) -> list[tuple[str, object]]:
+        return self._rows
+
+
+def test_fetch_cloud_ai_profile_attributes_builds_object_list_from_lob_rows() -> None:
+    # 属性ビューは 1 属性 = 1 行、object_list 値は JSON 文字列(LOB)で入る。
+    rows: list[tuple[str, object]] = [
+        ("provider", "oci"),
+        (
+            "object_list",
+            _FakeLob(
+                '[{"owner":"ADMIN","name":"DEPARTMENT"},'
+                '{"owner":"ADMIN","name":"EMPLOYEE"},'
+                '{"owner":"ADMIN","name":"PROJECT"}]'
+            ),
+        ),
+    ]
+    attributes = OracleNl2SqlAdapter._fetch_cloud_ai_profile_attributes(
+        _FakeAttributesCursor(rows), "HR_PROFILE"
+    )
+    assert attributes["provider"] == "oci"
+    object_list = _normalize_select_ai_object_list(attributes)
+    assert [item["name"] for item in object_list] == ["DEPARTMENT", "EMPLOYEE", "PROJECT"]
+    assert object_list[0]["owner"] == "ADMIN"
+
+
+def test_fetch_cloud_ai_profile_attributes_degrades_on_missing_view() -> None:
+    class _RaisingCursor:
+        def execute(self, sql: str, binds: dict[str, object]) -> None:
+            raise RuntimeError("ORA-00942: table or view does not exist")
+
+    assert (
+        OracleNl2SqlAdapter._fetch_cloud_ai_profile_attributes(_RaisingCursor(), "HR_PROFILE")
+        == {}
+    )
 
 
 def test_analyze_error_uses_enterprise_ai_and_falls_back() -> None:

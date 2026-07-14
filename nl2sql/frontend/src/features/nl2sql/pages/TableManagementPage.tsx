@@ -217,10 +217,10 @@ function ImportWizard({
 
 export function TableManagementPage() {
   const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [selectedTableName, setSelectedTableName] = useState("");
   const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
+  const [exactCountDone, setExactCountDone] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [tableSearch, setTableSearch] = useState("");
   const [tableFilter, setTableFilter] = useState<DbObjectFilter>("all");
@@ -244,6 +244,7 @@ export function TableManagementPage() {
     setSelectedTableName(name);
     setDetail(null);
     setDetailTab("columns");
+    setExactCountDone(false);
     try {
       setDetail(
         await apiGet<DbAdminObjectDetail>(
@@ -276,19 +277,39 @@ export function TableManagementPage() {
     })();
   };
 
+  // 行数バッジは既定で num_rows 統計(一覧と統一・高速)。正確な件数は明示操作で COUNT(*)。
+  const handleExactCount = async (name: string) => {
+    setLoading("count");
+    try {
+      const full = await apiGet<DbAdminObjectDetail>(
+        `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=0&exact_count=1`,
+      );
+      setDetail((current) =>
+        current && current.name === name ? { ...current, row_count: full.row_count } : current,
+      );
+      setExactCountDone(true);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("tableMgmt.error.exactCount"));
+    } finally {
+      setLoading("");
+    }
+  };
+
   const load = async (refreshSchema = false) => {
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      const [tableData, catalogData] = await Promise.all([
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
-        refreshSchema ? apiPost<SchemaCatalog>("/api/schema/refresh") : apiGet<SchemaCatalog>("/api/schema/catalog"),
-      ]);
+      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+      if (refreshSchema) {
+        await apiPost<SchemaCatalog>("/api/schema/refresh");
+      }
+      const tableData = await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables");
       setTables(tableData);
-      setCatalog(catalogData);
       const nextSelected =
         tableData.items.find((item) => item.name === selectedTableName)?.name || tableData.items[0]?.name || "";
       setSelectedTableName(nextSelected);
+      setExactCountDone(false);
       if (nextSelected) {
         setDetail(
           await apiGet<DbAdminObjectDetail>(
@@ -508,7 +529,7 @@ export function TableManagementPage() {
         <DbObjectStatusBar
           count={tables?.items.length ?? 0}
           runtime={tables?.runtime ?? "deterministic"}
-          refreshedAt={catalog?.refreshed_at ?? ""}
+          refreshedAt={tables?.refreshed_at ?? ""}
           loading={loading}
           labels={{
             ariaLabel: t("tableMgmt.toolbar.status"),
@@ -586,9 +607,9 @@ export function TableManagementPage() {
               idPrefix="table-management"
               headingId="table-detail-heading"
               detail={detail}
-              catalog={catalog}
               loading={loading.startsWith("detail-") || (loading === "load" && !detail)}
               exporting={loading === "table-export"}
+              countingRows={loading === "count"}
               tab={detailTab}
               labels={{
                 tabsLabel: t("tableMgmt.detailTabs.label"),
@@ -596,10 +617,13 @@ export function TableManagementPage() {
                 ddl: t("tableMgmt.detailTabs.ddl"),
                 export: t("tableMgmt.export"),
                 exportAria: t("tableMgmt.exportColumns"),
+                exactCount: t("tableMgmt.exactCount"),
+                exactCountAria: t("tableMgmt.exactCountAria"),
                 drop: t("tableMgmt.grid.drop"),
               }}
               onTabChange={handleDetailTabChange}
               onExport={(name) => void downloadColumnsXlsx(name)}
+              onExactCount={exactCountDone ? undefined : (name) => void handleExactCount(name)}
               onDrop={openDropDialog}
             />
             </DbObjectManagementPanelShell>

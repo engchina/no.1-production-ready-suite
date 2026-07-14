@@ -828,12 +828,19 @@ class OracleNl2SqlAdapter:
         ]
 
     def get_db_admin_object_detail(
-        self, *, object_name: str, object_type: str, include_ddl: bool = True
+        self,
+        *,
+        object_name: str,
+        object_type: str,
+        include_ddl: bool = True,
+        exact_count: bool = False,
     ) -> dict[str, Any]:
         """Return columns and DBMS_METADATA DDL for a table/view.
 
         include_ddl=False のときは重い DBMS_METADATA.GET_DDL を実行せず ddl="" を返す
         (列一覧の初期表示を高速化。DDL は DDL タブ表示時に別途取得する)。
+        exact_count=False のときは全表スキャンの COUNT(*) を実行せず row_count=None を返す
+        (件数は呼び出し側が num_rows 統計で補完。正確件数は exact_count=True 時のみ)。
         """
         safe_name = _strict_sql_name(object_name)
         normalized_type = "VIEW" if object_type.lower() == "view" else "TABLE"
@@ -881,7 +888,7 @@ class OracleNl2SqlAdapter:
             )
             row = cursor.fetchone()
             comment = _coerce_text(row[0]) if row and row[0] else ""
-            if normalized_type == "TABLE":
+            if normalized_type == "TABLE" and exact_count:
                 try:
                     cursor.execute(
                         f"SELECT COUNT(*) FROM {_quote_identifier(safe_name)}"  # nosec B608
@@ -1239,58 +1246,93 @@ class OracleNl2SqlAdapter:
         )
 
     def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
-        """Fetch one DBMS_CLOUD_AI profile detail with best-effort attribute decoding."""
+        """Fetch one DBMS_CLOUD_AI profile detail with best-effort attribute decoding.
+
+        Autonomous DB の ``USER_CLOUD_AI_PROFILES`` は ``ATTRIBUTES``/``OWNER``/``CREATED``
+        列を持たない環境がある(それらを select すると ORA-00904)。存在が保証される
+        ``PROFILE_NAME``/``STATUS`` のみを主ビューから読み、属性・object_list は 1 属性 = 1 行の
+        ``USER_CLOUD_AI_PROFILE_ATTRIBUTES`` から best-effort で組み立てる。
+        """
         safe_name = profile_name.strip()
         if not safe_name:
             raise OracleAdapterError("profile_name が空です。")
         candidates = [
             """
-            SELECT PROFILE_NAME, NVL(STATUS, 'UNKNOWN'), OWNER, CREATED, ATTRIBUTES, DESCRIPTION
+            SELECT PROFILE_NAME, NVL(STATUS, 'UNKNOWN')
             FROM USER_CLOUD_AI_PROFILES
             WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
             """,
             """
-            SELECT PROFILE_NAME, 'UNKNOWN', USER, NULL, ATTRIBUTES, NULL
-            FROM USER_CLOUD_AI_PROFILES
-            WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
-            """,
-            """
-            SELECT PROFILE_NAME, 'UNKNOWN', USER, NULL, NULL, NULL
+            SELECT PROFILE_NAME, 'UNKNOWN'
             FROM USER_CLOUD_AI_PROFILES
             WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
             """,
         ]
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
+            row: Any = None
             for sql in candidates:
                 try:
                     cursor.execute(sql, {"profile_name": safe_name})
                     row = cursor.fetchone()
-                    if not row:
-                        raise OracleAdapterError(f"{profile_name}: profile が見つかりません。")
-                    attributes_text = _coerce_text(row[4]) if len(row) > 4 else ""
-                    try:
-                        attributes = json.loads(attributes_text) if attributes_text else {}
-                    except json.JSONDecodeError:
-                        attributes = {"raw": attributes_text}
-                    object_list = _normalize_select_ai_object_list(attributes)
-                    return {
-                        "name": str(row[0] or safe_name),
-                        "status": str(row[1] or "unknown").lower(),
-                        "owner": str(row[2] or ""),
-                        "created_at": _coerce_text(row[3]) if len(row) > 3 else "",
-                        "attributes": attributes,
-                        "description": _coerce_text(row[5]) if len(row) > 5 else "",
-                        "object_list": object_list,
-                    }
-                except OracleAdapterError:
-                    raise
-                except Exception as exc:
+                    break
+                except Exception as exc:  # noqa: BLE001 - 環境差の列欠落を吸収
                     errors.append(str(exc))
                     continue
-        raise OracleAdapterError(
-            "Oracle Select AI profile 詳細を取得できませんでした: " + "; ".join(errors)
-        )
+            else:
+                raise OracleAdapterError(
+                    "Oracle Select AI profile 詳細を取得できませんでした: " + "; ".join(errors)
+                )
+            if not row:
+                raise OracleAdapterError(f"{profile_name}: profile が見つかりません。")
+
+            attributes = self._fetch_cloud_ai_profile_attributes(cursor, safe_name)
+            object_list = _normalize_select_ai_object_list(attributes)
+            owner = ""
+            if object_list:
+                owner = str(object_list[0].get("owner") or "")
+            if not owner:
+                owner = self.settings.oracle_user.strip().upper()
+            return {
+                "name": str(row[0] or safe_name),
+                "status": str(row[1] or "unknown").lower(),
+                "owner": owner,
+                "created_at": str(attributes.get("created") or ""),
+                "attributes": attributes,
+                "description": str(attributes.get("description") or ""),
+                "object_list": object_list,
+            }
+
+    @staticmethod
+    def _fetch_cloud_ai_profile_attributes(cursor: Any, profile_name: str) -> dict[str, Any]:
+        """``USER_CLOUD_AI_PROFILE_ATTRIBUTES`` を 1 属性 = 1 行で読み dict へ復元する。
+
+        値は LOB のことがあるため ``_coerce_text`` で文字列化し、JSON として解釈できれば
+        構造化して格納する(``object_list`` など)。参照失敗時は空 dict で縮退する。
+        """
+        try:
+            cursor.execute(
+                """
+                SELECT ATTRIBUTE_NAME, ATTRIBUTE_VALUE
+                FROM USER_CLOUD_AI_PROFILE_ATTRIBUTES
+                WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
+                """,
+                {"profile_name": profile_name},
+            )
+            rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+        except Exception:  # noqa: BLE001 - ビュー未提供環境では attributes 無しで縮退
+            return {}
+        attributes: dict[str, Any] = {}
+        for attr_row in rows:
+            name = str(attr_row[0] or "").strip()
+            if not name:
+                continue
+            text = _coerce_text(attr_row[1]) if len(attr_row) > 1 else ""
+            try:
+                attributes[name] = json.loads(text) if text else text
+            except json.JSONDecodeError:
+                attributes[name] = text
+        return attributes
 
     def list_select_ai_feedback_entries(
         self, *, profile_name: str, limit: int = 50
@@ -1789,6 +1831,8 @@ class OracleNl2SqlAdapter:
                     row = cursor.fetchone()
                     conn.commit()
                     operation_id = _coerce_text(row[0] if row else "").strip()
+                    if not operation_id:
+                        operation_id = self._latest_load_operation_id(cursor)
                     return {
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
@@ -1813,7 +1857,7 @@ class OracleNl2SqlAdapter:
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
                         "mode": "procedure",
-                        "operation_id": "",
+                        "operation_id": self._latest_load_operation_id(cursor),
                         "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
                         "object_list": safe_objects,
                         "row_count": int(row_count),
@@ -1831,42 +1875,70 @@ class OracleNl2SqlAdapter:
             + "; ".join(errors)
         )
 
+    def _latest_load_operation_id(self, cursor: Any) -> str:
+        # GENERATE_SYNTHETIC_DATA は戻り値のない同期プロシージャのため、同一 session の直後に
+        # USER_LOAD_OPERATIONS.MAX(ID) を引いて operation id を得る。
+        # ponytail: 直近 1 件を返すだけ。並行実行時は取り違えの可能性あり(単一管理者運用前提)。
+        try:
+            cursor.execute("SELECT MAX(ID) FROM USER_LOAD_OPERATIONS")
+            row = cursor.fetchone()
+        except Exception:
+            return ""
+        return _coerce_text(row[0] if row else "").strip()
+
     def synthetic_data_operation_status(self, *, operation_id: str) -> dict[str, Any]:
-        safe_operation_id = operation_id.strip()
-        if not safe_operation_id:
+        safe = operation_id.strip()
+        if not safe:
             raise OracleAdapterError("operation_id が空です。")
-        candidates = [
-            """
-            SELECT STATUS, ERROR_MESSAGE, RESULT
-            FROM USER_CLOUD_AI_OPERATIONS
-            WHERE OPERATION_ID = :operation_id
-            """,
-            """
-            SELECT STATUS, NULL, NULL
-            FROM USER_CLOUD_AI_OPERATIONS
-            WHERE OPERATION_ID = :operation_id
-            """,
-        ]
-        errors: list[str] = []
-        with self.connection() as conn, conn.cursor() as cursor:
-            for sql in candidates:
-                try:
-                    cursor.execute(sql, {"operation_id": safe_operation_id})
-                    row = cursor.fetchone()
-                    if not row:
-                        return {"runtime": "oracle", "status": "not_found", "message": ""}
-                    return {
-                        "runtime": "oracle",
-                        "status": str(row[0] or "unknown").lower(),
-                        "message": _coerce_text(row[1]) if len(row) > 1 else "",
-                        "result": {"raw": _coerce_text(row[2])} if len(row) > 2 and row[2] else {},
-                    }
-                except Exception as exc:
-                    errors.append(str(exc))
-                    continue
-        raise OracleAdapterError(
-            "synthetic data operation status を取得できませんでした: " + "; ".join(errors)
+        if not safe.isdigit():
+            # 動的テーブル名に埋め込むため digits 限定(識別子はバインド不可・injection 防止)
+            raise OracleAdapterError("operation_id が不正です。")
+        table = f'"SYNTHETIC_DATA${safe}_STATUS"'
+        sql = (
+            f"SELECT NAME, ROWS_LOADED, STATUS, ERROR_MESSAGE "
+            f"FROM {table} FETCH FIRST 200 ROWS ONLY"
         )
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(sql)
+                rows = cursor.fetchall() or []
+            except Exception as exc:
+                # status テーブル未生成(ORA-00942)等 → not_found で安全に縮退
+                return {
+                    "runtime": "oracle",
+                    "status": "not_found",
+                    "message": _coerce_text(str(exc)),
+                    "result": {},
+                }
+        if not rows:
+            return {"runtime": "oracle", "status": "not_found", "message": "", "result": {}}
+        entries = [
+            {
+                "name": _coerce_text(row[0]),
+                "rows_loaded": _coerce_result_value(row[1]),
+                "status": _coerce_text(row[2]),
+                "error_message": _coerce_text(row[3]) if len(row) > 3 else "",
+            }
+            for row in rows
+        ]
+        statuses = [entry["status"].upper() for entry in entries if entry["status"]]
+        if any(status in {"FAILED", "ERROR"} for status in statuses):
+            overall = "failed"
+        elif statuses and all(status in {"COMPLETED", "SUCCEEDED"} for status in statuses):
+            overall = "completed"
+        elif statuses:
+            overall = statuses[-1].lower()
+        else:
+            overall = "unknown"
+        message = next(
+            (entry["error_message"] for entry in entries if entry["error_message"]), ""
+        )
+        return {
+            "runtime": "oracle",
+            "status": overall,
+            "message": message,
+            "result": {"operations": entries},
+        }
 
     def rebuild_feedback_vector_index(
         self,

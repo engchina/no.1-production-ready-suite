@@ -329,6 +329,7 @@ class DbAdminObjectsData(BaseModel):
 
     runtime: str = "deterministic"
     items: list[DbAdminObjectSummary] = Field(default_factory=list)
+    refreshed_at: str = ""
     warnings: list[str] = Field(default_factory=list)
 
 

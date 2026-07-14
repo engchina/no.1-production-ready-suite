@@ -729,6 +729,7 @@ export interface DbAdminObjectDetail extends DbAdminObjectSummary {
 export interface DbAdminObjectsData {
   runtime: string;
   items: DbAdminObjectSummary[];
+  refreshed_at: string;
   warnings: string[];
 }
 
