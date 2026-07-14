@@ -972,9 +972,16 @@ async def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
 
 
 @router.get("/db-admin/tables/{table_name}", response_model=ApiResponse[DbAdminObjectDetail])
-async def db_admin_table_detail(table_name: str) -> ApiResponse[DbAdminObjectDetail]:
-    """DB admin table 詳細/DDL を返す。"""
-    return ApiResponse(data=nl2sql_service.get_db_admin_object(table_name, "table"))
+async def db_admin_table_detail(
+    table_name: str, include_ddl: bool = True
+) -> ApiResponse[DbAdminObjectDetail]:
+    """DB admin table 詳細/DDL を返す。
+
+    include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
+    """
+    return ApiResponse(
+        data=nl2sql_service.get_db_admin_object(table_name, "table", include_ddl=include_ddl)
+    )
 
 
 @router.get("/db-admin/views", response_model=ApiResponse[DbAdminObjectsData])
@@ -984,9 +991,16 @@ async def db_admin_views() -> ApiResponse[DbAdminObjectsData]:
 
 
 @router.get("/db-admin/views/{view_name}", response_model=ApiResponse[DbAdminObjectDetail])
-async def db_admin_view_detail(view_name: str) -> ApiResponse[DbAdminObjectDetail]:
-    """DB admin view 詳細/DDL を返す。"""
-    return ApiResponse(data=nl2sql_service.get_db_admin_object(view_name, "view"))
+async def db_admin_view_detail(
+    view_name: str, include_ddl: bool = True
+) -> ApiResponse[DbAdminObjectDetail]:
+    """DB admin view 詳細/DDL を返す。
+
+    include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
+    """
+    return ApiResponse(
+        data=nl2sql_service.get_db_admin_object(view_name, "view", include_ddl=include_ddl)
+    )
 
 
 @router.post("/db-admin/drop-table", response_model=ApiResponse[DbAdminExecuteData])

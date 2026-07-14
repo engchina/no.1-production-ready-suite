@@ -30,7 +30,7 @@ import {
 } from "../src/lib/fixed-split-pane.ts";
 import {
   previewExecutePayload,
-  previewToGeneratedSqlPanelData,
+  previewToJob,
   sqlExecutePayload,
 } from "../src/features/nl2sql/previewState.ts";
 import {
@@ -252,6 +252,17 @@ test("schema insert prepends a newline only when not at start / not after a newl
   assert.equal(leadingNewlinePrefix("既存\n", 3), "");
   // 直前が全角コロン（穴埋めテンプレートの「ラベル：」直後）はインラインで埋める
   assert.equal(leadingNewlinePrefix("対象テーブル：", 7), "");
+  // 直前が等号・比較演算子ならインライン
+  assert.equal(leadingNewlinePrefix("部署=", 3), "");
+  assert.equal(leadingNewlinePrefix("売上>", 3), "");
+  // 直前が開き括弧・カンマならインライン
+  assert.equal(leadingNewlinePrefix("IN(", 3), "");
+  assert.equal(leadingNewlinePrefix("A,", 2), "");
+  // 直前が空白（半角/全角）ならインライン
+  assert.equal(leadingNewlinePrefix("部署 ", 3), "");
+  assert.equal(leadingNewlinePrefix("部署　", 3), "");
+  // 上記以外（閉じ引用符・和字）は改行を前置
+  assert.equal(leadingNewlinePrefix('既存"請求"', 6), "\n");
 });
 
 test("elapsed time helpers format live and final timings", () => {
@@ -313,7 +324,7 @@ test("job status helpers identify in-flight and terminal states", () => {
   assert.equal(isJobTerminal("running"), false);
 });
 
-test("preview response maps to generated SQL panel data", () => {
+test("preview response maps to a synthetic timeline job", () => {
   const preview: PreviewData = {
     sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     is_safe: true,
@@ -331,27 +342,32 @@ test("preview response maps to generated SQL panel data", () => {
     timing: null,
   };
 
-  assert.deepEqual(previewToGeneratedSqlPanelData(preview), {
-    engine: "select_ai",
-    engine_meta: { profile_name: "P" },
-    fallback_reason: "",
-    generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-    explanation: "preview ready",
-    safety: {
-      is_safe: true,
-      is_select_only: true,
-      row_limit_applied: 0,
-      blocked_reason: "",
-      warnings: [],
-      referenced_tables: [],
-      referenced_columns: [],
-    },
-    recommendations: ["SELECT-only です。"],
-    repaired_sql: "",
-    optimization_hints: [],
-    rewritten_question: "請求金額を一覧で見る",
-  });
+  const job = previewToJob(preview, "請求金額を一覧で見たい");
+
+  // 生成〜安全確認は完了、実行・整形はプレビュー時点では未実行(skipped)。
+  assert.equal(job.job_id, "preview");
+  assert.equal(job.status, "done");
+  assert.deepEqual(
+    job.steps.map((s) => [s.stage, s.status]),
+    [
+      ["prepare_context", "done"],
+      ["generate_sql", "done"],
+      ["safety_check", "done"],
+      ["execute_sql", "skipped"],
+      ["format_results", "skipped"],
+    ]
+  );
+  // タイムライン `generate_sql` ステップが参照する result の主要フィールド。
+  assert.equal(job.result?.original_question, "請求金額を一覧で見たい");
+  assert.equal(job.result?.generated_sql, "SELECT TOTAL_AMOUNT FROM INVOICES");
+  assert.equal(job.result?.explanation, "preview ready");
+  assert.equal(job.result?.rewritten_question, "請求金額を一覧で見る");
+  assert.deepEqual(job.result?.recommendations, ["SELECT-only です。"]);
+  // safety 未指定時は preview からフォールバックを合成する。
+  assert.equal(job.result?.safety.is_safe, true);
+  assert.equal(job.result?.safety.is_select_only, true);
+  // まだ実行していないため結果は空。
+  assert.deepEqual(job.result?.results, { columns: [], rows: [], total: 0 });
 });
 
 test("preview execute payload preserves selected allowed objects", () => {

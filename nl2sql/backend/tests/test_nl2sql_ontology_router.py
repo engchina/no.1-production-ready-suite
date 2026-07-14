@@ -508,6 +508,52 @@ def test_rehydrated_revision_is_parent_for_drift_and_preserves_orphan_mapping(
     assert migrated_view.draft_schema_fingerprint == ""
 
 
+def test_sync_reuses_registered_revision_instead_of_conflict(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """self._ontology が旧版へ巻き戻っても、既登録の drift revision を再登録せず採用する。
+
+    revision id は (fingerprint, version) の決定論ハッシュのため、現在 revision が旧版 V を
+    指したまま再 sync すると evolve は既登録の V+1 と同じ id を生成する。修正前は
+    register_revision が REVISION_ALREADY_EXISTS(409)を投げ、AI 構築 job が
+    「オントロジー構築に失敗しました」で落ちていた。
+    """
+
+    api, _store, legacy = runtime
+    previous = api.current_ontology()
+
+    # schema drift を発生させ、版 V+1 の revision を登録する。
+    source_table = legacy.catalog.tables[0]
+    legacy.catalog = legacy.catalog.model_copy(
+        update={
+            "tables": [
+                source_table.model_copy(
+                    update={
+                        "columns": [
+                            column
+                            for column in source_table.columns
+                            if column.column_name != "AMOUNT"
+                        ]
+                    }
+                )
+            ]
+        },
+        deep=True,
+    )
+    drifted = api.current_ontology()
+    assert drifted.revision.version == previous.revision.version + 1
+
+    # 現在 revision を旧版 V へ巻き戻す(復元直後などに起きうる状態 divergence を再現)。
+    api._ontology = api._ontologies[previous.revision.id]
+
+    # 再 sync しても 409 を投げず、既登録の V+1 revision を採用する(冪等)。
+    resynced = api.current_ontology()
+    assert resynced.revision.id == drifted.revision.id
+    assert resynced.revision.version == drifted.revision.version
+    # 自己修復: 現在 revision が V+1 に戻っている。
+    assert api._ontology.revision.id == drifted.revision.id
+
+
 def test_request_scope_is_intersection_and_unknown_profile_never_falls_back(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:

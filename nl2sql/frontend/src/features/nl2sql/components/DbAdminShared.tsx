@@ -509,7 +509,7 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
               {t("dbAdmin.result.error.help")}
             </a>
           )}
-          <code className="block break-words text-xs leading-5 text-danger">{statement.error_message}</code>
+          <code className="block break-words text-sm leading-6 text-danger">{statement.error_message}</code>
         </div>
       </details>
     </div>
@@ -916,7 +916,7 @@ export function StatementRunnerCard({
           onChange={(event) => setSql(event.currentTarget.value)}
           rows={9}
           placeholder={placeholder}
-          className="min-h-52 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 focus:border-primary focus:ring-2 focus:ring-ring/40"
+          className="min-h-52 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
         />
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1162,7 +1162,7 @@ export function ObjectDetailPanel({
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </div>
-          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </div>

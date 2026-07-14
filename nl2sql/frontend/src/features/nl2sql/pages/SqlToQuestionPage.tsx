@@ -3,7 +3,7 @@ import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } 
 
 import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
-import { Banner } from "@/components/ui/banner";
+import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost } from "@/lib/api";
@@ -119,31 +119,27 @@ export function SqlToQuestionPage() {
         ? t("sqlToQuestion.workflow.ready")
         : t("sqlToQuestion.workflow.waiting");
   const actionBusy = analyzeLoading || Boolean(reverseMode);
-  const stepIndex = reverse ? 2 : structureText ? 1 : 0;
+  const stepIndex = reverse ? 3 : structureText ? 1 : 0;
 
   return (
     <>
       <PageHeader title={t("nav.sqlToQuestion")} subtitle={t("sqlToQuestion.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {loadError && (
-          <Banner
-            severity="danger"
-            action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={loading}
-                onClick={() => void loadReferenceData()}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("sqlToQuestion.action.reload")}</span>
-              </Button>
-            }
-          >
-            {loadError}
-          </Banner>
-        )}
+        <PageNotice
+          notice={loadError ? { tone: "danger", message: loadError } : null}
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={loading}
+              onClick={() => void loadReferenceData()}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("sqlToQuestion.action.reload")}</span>
+            </Button>
+          }
+        />
 
         <DbObjectManagementStatusBar
           ariaLabel={t("sqlToQuestion.status.aria")}

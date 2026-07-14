@@ -13,8 +13,17 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { Banner, Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import {
+  Button,
+  DEFAULT_PAGE_SIZE,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  StatusBadge,
+  usePagination,
+} from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -43,7 +52,6 @@ type HistoryDetailTab = "overview" | "sql";
 function feedbackLabel(item: HistoryItem) {
   if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
   if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
-  if (item.feedback_rating === "needs_review") return t("nl2sql.feedback.review");
   return t("history.feedback.none");
 }
 
@@ -144,6 +152,7 @@ function HistoryGrid({
   onSelect: (item: HistoryItem, moveFocus: boolean) => void;
   onClearFilters: () => void;
 }) {
+  const { page, setPage, totalPages, pageItems, range } = usePagination(items, DEFAULT_PAGE_SIZE);
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="history-grid-heading">
       <DbObjectPanelHeader
@@ -171,7 +180,6 @@ function HistoryGrid({
               ["unrated", t("history.feedback.none")],
               ["good", t("nl2sql.feedback.good")],
               ["bad", t("nl2sql.feedback.bad")],
-              ["needs_review", t("nl2sql.feedback.review")],
             ]}
           />
           <HistoryFilterSelect
@@ -223,7 +231,7 @@ function HistoryGrid({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
-                {items.map((item) => {
+                {pageItems.map((item) => {
                   const selected = item.id === selectedId;
                   return (
                     <tr key={item.id} className={selected ? "bg-primary/10" : "hover:bg-background"} data-testid="history-row">
@@ -263,6 +271,17 @@ function HistoryGrid({
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            summary={t("history.pagination.range", { start: range.start, end: range.end, total: range.total })}
+            pageIndicator={t("history.pagination.page", { page, total: totalPages })}
+            prevLabel={t("history.pagination.prev")}
+            nextLabel={t("history.pagination.next")}
+            ariaLabel={t("history.pagination.label")}
+            testId="history-pagination"
+          />
         </div>
       )}
     </section>
@@ -415,7 +434,7 @@ function HistoryDetailPanel({
       ) : (
         <section id="history-detail-panel-sql" role="tabpanel" aria-labelledby="history-detail-tab-sql" className="grid gap-3">
           <h3 className="text-sm font-semibold text-foreground">{t("history.sql")}</h3>
-          <pre className="max-h-[32rem] overflow-auto rounded-md border border-border bg-code p-4 font-mono text-xs leading-5 text-code-fg">
+          <pre className="max-h-[32rem] overflow-auto rounded-md border border-border bg-code p-4 font-mono text-sm leading-6 text-code-fg">
             <code>{item.executable_sql || item.generated_sql || "—"}</code>
           </pre>
         </section>
@@ -519,19 +538,15 @@ export function HistoryPage() {
     <>
       <PageHeader title={t("nav.history")} subtitle={t("history.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("history.action.refresh")}</span>
-              </Button>
-            }
-          >
-            {message} {t("history.error.retryHint")}
-          </Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
+          action={
+            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("history.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         <DbObjectManagementStatusBar
           ariaLabel={t("history.status.label")}

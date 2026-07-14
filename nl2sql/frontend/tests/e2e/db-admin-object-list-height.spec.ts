@@ -440,6 +440,53 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   expect(scroll.pageHorizontal).toBe(false);
 });
 
+test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初回表示で後追い取得する", async ({
+  page,
+}) => {
+  const detailUrls: string[] = [];
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(route, { refreshed_at: "2026-06-21T10:00:00.000Z", tables: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: [
+        { name: "TABLE_01", owner: "APP", object_type: "table", row_count: 10, comment: "" },
+      ],
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/db-admin/tables/*", (route) => {
+    const url = route.request().url();
+    detailUrls.push(url);
+    // 重い GET_DDL を伴う DDL は include_ddl=1 のときだけ返す(バックエンドの挙動を模す)。
+    const withDdl = url.includes("include_ddl=1");
+    return fulfillJson(route, {
+      name: "TABLE_01",
+      owner: "APP",
+      object_type: "table",
+      row_count: 10,
+      comment: "",
+      columns: [],
+      ddl: withDdl ? 'CREATE TABLE "TABLE_01" ("ID" NUMBER)' : "",
+      warnings: [],
+    });
+  });
+
+  await page.goto("/table-management");
+
+  // 列タブ(既定)の初期表示は DDL 抜きで取得している。
+  await expect(page.getByRole("heading", { name: "TABLE_01" })).toBeVisible();
+  expect(detailUrls.length).toBeGreaterThan(0);
+  expect(detailUrls.every((url) => url.includes("include_ddl=0"))).toBe(true);
+  expect(detailUrls.some((url) => url.includes("include_ddl=1"))).toBe(false);
+
+  // DDL タブを開くと include_ddl=1 で後追い取得し、DDL が表示される。
+  await page.getByRole("tab", { name: "DDL" }).click();
+  await expect(page.getByText('CREATE TABLE "TABLE_01" ("ID" NUMBER)')).toBeVisible();
+  expect(detailUrls.some((url) => url.includes("include_ddl=1"))).toBe(true);
+});
+
 test("Excel/CSV 取込フォームはファイル選択と取込方法の高さを揃える", async ({ page }) => {
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");

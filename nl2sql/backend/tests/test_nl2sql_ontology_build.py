@@ -580,30 +580,41 @@ def test_batch_accept_creates_single_draft_for_all_proposals(
     assert published.revision.status.value == "published"
 
 
-def test_rerun_does_not_duplicate_pending_proposals(
+def test_rerun_clears_previous_proposals(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    """AI 構築を繰り返しても、レビュー待ちの同一提案は重複登録されない。"""
+    """AI 構築を再実行すると、前回のレビュー一覧(承認/却下/レビュー待ち)は一掃され、
+    今回の候補だけが残る。SUPERSEDED は再起動後も一覧に復活しない。"""
 
-    runtime, _store, legacy = harness
+    runtime, store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
     first = _wait_for_job(
         service, service.start("sales", business_text="受注は顧客に紐づく。").id
     )
-    count_after_first = len(runtime.list_profile_proposals("sales"))
+    first_proposals = runtime.list_profile_proposals("sales")
+    count_after_first = len(first_proposals)
     assert count_after_first == len(first.proposal_ids)
+    first_ids = {proposal.id for proposal in first_proposals}
+    # 1 件は承認、1 件は却下しておき、それらも次回実行で一掃されることを確認する。
+    runtime.accept_proposal(first.proposal_ids[0])
+    runtime.reject_proposal(first.proposal_ids[1])
 
     second = _wait_for_job(
         service, service.start("sales", business_text="受注は顧客に紐づく。").id
     )
     assert second.status == OntologyBuildStatus.SUCCEEDED
-    assert second.proposal_ids == []
-    assert len(runtime.list_profile_proposals("sales")) == count_after_first
-    registration = next(
-        step
-        for step in second.steps
-        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
-    )
-    assert "再利用" in registration.detail_ja
+    # 今回分は新規に登録される(空ではない)。
+    assert second.proposal_ids
+    after_second = runtime.list_profile_proposals("sales")
+    # 前回の提案(承認/却下含む)は一覧から消え、今回の候補だけが残る。
+    assert len(after_second) == count_after_first
+    assert {proposal.id for proposal in after_second} == set(second.proposal_ids)
+    assert first_ids.isdisjoint({proposal.id for proposal in after_second})
+
+    # 再起動(同じ store)でも SUPERSEDED は一覧に復活しない。
+    restarted = OntologyApiRuntime(legacy_service=legacy, store=store)
+    restored_ids = {proposal.id for proposal in restarted.list_profile_proposals("sales")}
+    assert restored_ids == set(second.proposal_ids)
+    assert first_ids.isdisjoint(restored_ids)

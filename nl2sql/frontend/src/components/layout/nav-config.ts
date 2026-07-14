@@ -3,6 +3,7 @@ import {
   BookOpen,
   BrainCircuit,
   Cloud,
+  Code2,
   Database,
   Eye,
   FileSpreadsheet,
@@ -43,6 +44,12 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.use",
     items: [
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles },
+      {
+        href: APP_ROUTES.directSql,
+        labelKey: "nav.directSql",
+        sidebarLabelKey: "nav.directSql.sidebar",
+        icon: Code2,
+      },
       { href: APP_ROUTES.sqlAnalysis, labelKey: "nav.sqlAnalysis", icon: ShieldCheck },
       { href: APP_ROUTES.sqlToQuestion, labelKey: "nav.sqlToQuestion", icon: ArrowRightLeft },
       { href: APP_ROUTES.history, labelKey: "nav.history", icon: History },

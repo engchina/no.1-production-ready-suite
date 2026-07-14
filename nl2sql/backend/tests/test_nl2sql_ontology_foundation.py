@@ -17,7 +17,7 @@ from app.features.nl2sql.models import (
     SchemaTable,
     SchemaViewDependency,
 )
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
+from app.features.nl2sql.oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.sql_semantics import parse_oracle_sql
 from app.features.nl2sql.store import MemoryNl2SqlStore
@@ -260,3 +260,25 @@ def test_query_session_history_keeps_trace_and_is_idempotent() -> None:
     assert history[0].session_id == "session-1"
     assert history[0].ontology_trace_summary == trace
     assert history[0].result_columns == ["COUNT"]
+
+
+def test_connection_wraps_connect_failure_as_oracle_adapter_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """oracledb.connect() の生の失敗を OracleAdapterError へ統一変換する。
+
+    接続確立の失敗が素通りすると list_select_ai_db_profiles 等の
+    `except OracleAdapterError` で捕まらず 500 になる回帰の防止。
+    """
+
+    class _FailingOracledb:
+        def connect(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("ORA-12541: TNS:no listener")
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "_load_oracledb", lambda: _FailingOracledb())
+    monkeypatch.setattr(adapter, "_init_client", lambda _oracledb: None)
+    monkeypatch.setattr(adapter, "is_configured", lambda: True)
+
+    with pytest.raises(OracleAdapterError, match="Oracle 接続に失敗しました"), adapter.connection():
+        pass

@@ -980,6 +980,27 @@ async def test_asset_refresh_feedback_and_evaluation() -> None:
     assert eval_resp.json()["data"]["total_cases"] == 1
 
 
+def test_feedback_rating_has_no_needs_review() -> None:
+    assert {member.value for member in FeedbackRating} == {"good", "bad"}
+
+
+def test_history_item_drops_legacy_needs_review_rating() -> None:
+    # 廃止済み評価を持つ旧 snapshot は None(未評価)へ縮退し、復元でエラーにならない。
+    item = HistoryItem.model_validate(
+        {
+            "id": "h1",
+            "question": "社員一覧",
+            "engine": Nl2SqlEngine.SELECT_AI,
+            "generated_sql": "SELECT 1 FROM DUAL",
+            "created_at": "2026-07-14T00:00:00Z",
+            "feedback_rating": "needs_review",
+        }
+    )
+    assert item.feedback_rating is None
+    good = HistoryItem.model_validate({**item.model_dump(), "feedback_rating": "good"})
+    assert good.feedback_rating is FeedbackRating.GOOD
+
+
 async def test_profile_crud_create_update_archive_delete() -> None:
     payload = {
         "name": "請求分析",
@@ -1721,6 +1742,33 @@ def test_oracle_adapter_apply_comment_statements_strips_semicolon() -> None:
         'COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS \'税込請求金額\''
     )
     assert fake_db.commits == 1
+
+
+def test_similar_history_returns_only_good_feedback() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    for suffix, rating in (
+        ("good", FeedbackRating.GOOD),
+        ("bad", FeedbackRating.BAD),
+        ("none", None),
+    ):
+        service._history.append(
+            HistoryItem(
+                id=f"hist-{suffix}",
+                question="請求金額を確認したい",
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+                generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+                created_at="2026-06-21T10:00:00+00:00",
+                feedback_rating=rating,
+                profile_id="default",
+                profile_name="既定プロファイル",
+            )
+        )
+
+    items = service.similar_history(
+        SimilarHistoryRequest(question="請求金額をもう一度確認したい", profile_id="default")
+    ).items
+
+    assert [entry.item.id for entry in items] == ["hist-good"]
 
 
 def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table() -> None:

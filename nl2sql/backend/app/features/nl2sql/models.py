@@ -47,7 +47,6 @@ class FeedbackRating(StrEnum):
 
     GOOD = "good"
     BAD = "bad"
-    NEEDS_REVIEW = "needs_review"
 
 
 class SampleDataStep(StrEnum):
@@ -666,6 +665,19 @@ class HistoryItem(BaseModel):
     feedback_comment: str = ""
     session_id: str = ""
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_legacy_feedback_rating(cls, value: Any) -> Any:
+        """廃止済み評価(旧 needs_review 等)を持つ snapshot は None(未評価)へ縮退する。"""
+        if not isinstance(value, dict):
+            return value
+        rating = value.get("feedback_rating")
+        if rating is not None and rating not in tuple(FeedbackRating):
+            migrated = dict(value)
+            migrated["feedback_rating"] = None
+            return migrated
+        return value
 
 
 class HistoryData(BaseModel):

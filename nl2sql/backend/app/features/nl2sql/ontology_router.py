@@ -1618,6 +1618,17 @@ class OntologyApiRuntime:
             self._strict_profile(profile_id)
             return self.sessions.list_proposals_by_profile(profile_id)
 
+    def supersede_profile_proposals(self, profile_id: str) -> None:
+        """当該 profile の既存提案を一掃(SUPERSEDED)し、永続化して durable 化する。
+
+        新規 AI 構築の実行ごとにレビュー一覧をリセットするために呼ぶ。"""
+
+        with self._lock:
+            self._ensure_store()
+            self._strict_profile(profile_id)
+            for proposal in self.sessions.supersede_proposals_by_profile(profile_id):
+                self._persist_proposal(proposal)
+
     def create_build_proposal(
         self,
         *,
@@ -1803,6 +1814,13 @@ class OntologyApiRuntime:
             ontology = evolve_schema_ontology(catalog, self._ontology)
             if ontology.revision.id == self._ontology.revision.id:
                 return self._ontology
+            # 決定論採番のため「同一 id == 同一物理内容」。過去実行の復元や再評価で同じ
+            # revision に到達しても再登録は no-op なので、既登録なら 409 にせず採用する
+            # （既存 revision は published/draft の状態と承認済み業務定義を保持する）。
+            existing = self._ontologies.get(ontology.revision.id)
+            if existing is not None:
+                self._ontology = existing
+                return existing
         self.sessions.register_revision(
             ontology.revision,
             nodes=ontology.nodes,

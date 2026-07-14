@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
-import { Banner, Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -88,7 +89,7 @@ function ViewJoinWherePanel({
 
       <DbObjectStepIndicator
         steps={[t("viewMgmt.joinWhere.stepSelect"), t("viewMgmt.joinWhere.stepExtract")]}
-        activeIndex={result ? 1 : detail ? 0 : -1}
+        activeIndex={result ? 2 : detail ? 0 : -1}
         ariaLabel={t("viewMgmt.joinWhere.steps")}
         dataTestId="view-join-where-steps"
       />
@@ -172,7 +173,7 @@ function ViewJoinWherePanel({
                 readOnly
                 value={result.join_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
+                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none"
               />
             </label>
             <label className="grid gap-1 text-sm font-medium text-foreground">
@@ -181,7 +182,7 @@ function ViewJoinWherePanel({
                 readOnly
                 value={result.where_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
+                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none"
               />
             </label>
           </div>
@@ -190,7 +191,7 @@ function ViewJoinWherePanel({
               <summary className="cursor-pointer text-sm font-semibold text-foreground">
                 {t("viewMgmt.joinWhere.structureResult")}
               </summary>
-              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 font-mono text-xs leading-5 text-code-fg">
+              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg">
                 {result.structure_markdown}
               </pre>
             </details>
@@ -227,12 +228,35 @@ export function ViewManagementPage() {
     setDetailTab("columns");
     setJoinWhere(null);
     try {
-      setDetail(await apiGet<DbAdminObjectDetail>(`/api/nl2sql/db-admin/views/${encodeURIComponent(name)}`));
+      setDetail(
+        await apiGet<DbAdminObjectDetail>(
+          `/api/nl2sql/db-admin/views/${encodeURIComponent(name)}?include_ddl=0`,
+        ),
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("viewMgmt.error.load"));
     } finally {
       setLoading("");
     }
+  };
+
+  // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
+  const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
+    setDetailTab(nextTab);
+    if (nextTab !== "ddl" || !detail || detail.ddl) return;
+    const name = detail.name;
+    void (async () => {
+      try {
+        const full = await apiGet<DbAdminObjectDetail>(
+          `/api/nl2sql/db-admin/views/${encodeURIComponent(name)}?include_ddl=1`,
+        );
+        setDetail((current) =>
+          current && current.name === name ? { ...current, ddl: full.ddl } : current,
+        );
+      } catch {
+        // DDL 取得失敗時は既存の "-" 表示のまま
+      }
+    })();
   };
 
   const load = async (refreshSchema = false) => {
@@ -250,7 +274,11 @@ export function ViewManagementPage() {
       setSelectedViewName(nextSelected);
       setJoinWhere(null);
       if (nextSelected) {
-        setDetail(await apiGet<DbAdminObjectDetail>(`/api/nl2sql/db-admin/views/${encodeURIComponent(nextSelected)}`));
+        setDetail(
+          await apiGet<DbAdminObjectDetail>(
+            `/api/nl2sql/db-admin/views/${encodeURIComponent(nextSelected)}?include_ddl=0`,
+          ),
+        );
       } else {
         setDetail(null);
       }
@@ -378,19 +406,19 @@ export function ViewManagementPage() {
     <>
       <PageHeader title={t("nav.viewManagement")} subtitle={t("viewMgmt.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("viewMgmt.action.refresh")}</span>
-              </Button>
-            }
-          >
-            {message} {t("viewMgmt.error.retryHint")}
-          </Banner>
-        )}
+        <PageNotice
+          notice={
+            message
+              ? { tone: "danger", message: `${message} ${t("viewMgmt.error.retryHint")}` }
+              : null
+          }
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("viewMgmt.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         <DbObjectStatusBar
           count={views?.items.length ?? 0}
@@ -482,7 +510,7 @@ export function ViewManagementPage() {
                 ddl: t("viewMgmt.detailTabs.ddl"),
                 drop: t("viewMgmt.grid.drop"),
               }}
-              onTabChange={setDetailTab}
+              onTabChange={handleDetailTabChange}
               onDrop={openDropDialog}
             />
             </DbObjectManagementPanelShell>

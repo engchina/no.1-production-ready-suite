@@ -6,6 +6,7 @@ import importlib
 import io
 import re
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -891,20 +892,132 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
     assert filename == "invoices_columns.xlsx"
     assert workbook.sheetnames == ["columns"]
     sheet = workbook["columns"]
-    assert [sheet.cell(row=1, column=index).value for index in range(1, 6)] == [
+    assert [sheet.cell(row=1, column=index).value for index in range(1, 7)] == [
         "物理名",
         "論理名",
+        "コメント",
         "型",
         "NULL 可",
         "サンプル",
     ]
-    assert [sheet.cell(row=2, column=index).value for index in range(1, 6)] == [
+    # 論理名はオントロジー業務名のみを正とするため、未構築時は空(表示は "-")
+    assert [sheet.cell(row=2, column=index).value for index in range(1, 7)] == [
         "CUSTOMER_NAME",
+        "-",
         "取引先名",
         "VARCHAR2(120)",
         "NO",
         "青山商事",
     ]
+
+
+def _invoices_catalog(*, column_logical: str, column_comment: str) -> SchemaCatalog:
+    return SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                owner="APP",
+                columns=[
+                    SchemaColumn(
+                        column_name="CUSTOMER_NAME",
+                        logical_name=column_logical,
+                        data_type="VARCHAR2(120)",
+                        nullable=False,
+                        comment=column_comment,
+                    ),
+                ],
+            )
+        ],
+    )
+
+
+def test_get_db_admin_object_uses_ontology_business_name_for_logical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """論理名はオントロジー業務名、コメントは生カラムコメント(別ソース)になる。"""
+    from app.features.nl2sql import ontology_router
+    from app.features.nl2sql.ontology_catalog import build_schema_ontology
+
+    # オントロジー側で業務名をキュレーション(コメントとは別文字列)
+    ontology = build_schema_ontology(
+        _invoices_catalog(column_logical="得意先名称", column_comment="取引先名")
+    )
+
+    class _StubRuntime:
+        def current_ontology(self) -> Any:
+            return ontology
+
+    monkeypatch.setattr(ontology_router, "ontology_runtime", _StubRuntime())
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # detail 側の logical_name は生コメント由来(サービスがオントロジー業務名で上書き)
+    service._catalog = _invoices_catalog(column_logical="取引先名", column_comment="取引先名")
+
+    detail = service.get_db_admin_object("INVOICES", "table")
+    column = detail.columns[0]
+    assert column.logical_name == "得意先名称"  # オントロジー業務名で上書き
+    assert column.comment == "取引先名"  # 生カラムコメントは保持
+
+
+def test_get_db_admin_object_blanks_logical_when_ontology_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """オントロジー取得に失敗しても例外を出さず、論理名は空にする(コメントを流用しない)。"""
+    from app.features.nl2sql import ontology_router
+
+    class _BrokenRuntime:
+        def current_ontology(self) -> Any:
+            raise RuntimeError("ontology unavailable")
+
+    monkeypatch.setattr(ontology_router, "ontology_runtime", _BrokenRuntime())
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _invoices_catalog(column_logical="取引先名", column_comment="取引先名")
+
+    detail = service.get_db_admin_object("INVOICES", "table")
+    column = detail.columns[0]
+    assert column.logical_name == ""  # 業務名未設定なら論理名は空
+    assert column.comment == "取引先名"  # 生カラムコメントは保持
+
+
+def test_get_db_admin_object_blanks_logical_when_no_ontology_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """オントロジーは在るが該当カラムに業務名が無い場合も論理名は空にする。"""
+    from app.features.nl2sql import ontology_router
+
+    class _EmptyRuntime:
+        def current_ontology(self) -> Any:
+            return SimpleNamespace(nodes=[])
+
+    monkeypatch.setattr(ontology_router, "ontology_runtime", _EmptyRuntime())
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _invoices_catalog(column_logical="取引先名", column_comment="取引先名")
+
+    detail = service.get_db_admin_object("INVOICES", "table")
+    column = detail.columns[0]
+    assert column.logical_name == ""
+    assert column.comment == "取引先名"
+
+
+def test_get_db_admin_object_skips_ddl_when_include_ddl_false() -> None:
+    """include_ddl=False で重い DDL 生成を省略し ddl="" を返す(列・行数は保持)。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _invoices_catalog(column_logical="取引先名", column_comment="取引先名")
+
+    with_ddl = service.get_db_admin_object("INVOICES", "table")
+    assert with_ddl.ddl != ""  # 既定は DDL 込み(後方互換)
+
+    without_ddl = service.get_db_admin_object("INVOICES", "table", include_ddl=False)
+    assert without_ddl.ddl == ""  # DDL 省略
+    # 列・行数など DDL 以外は従来どおり
+    assert [c.column_name for c in without_ddl.columns] == [
+        c.column_name for c in with_ddl.columns
+    ]
+    assert without_ddl.row_count == with_ddl.row_count
 
 
 def test_upload_csv_validates_confirmation_and_matches_catalog_columns() -> None:

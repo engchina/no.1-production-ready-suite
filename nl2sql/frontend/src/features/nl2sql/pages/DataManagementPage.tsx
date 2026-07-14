@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
 
-import { Banner, Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -385,19 +386,15 @@ export function DataManagementPage() {
     <>
       <PageHeader title={t("nav.dataManagement")} subtitle={t("dataMgmt.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("tableMgmt.action.refresh")}</span>
-              </Button>
-            }
-          >
-            {message} {t("tableMgmt.error.retryHint")}
-          </Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` } : null}
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("tableMgmt.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         <DataStatusBar
           tableCount={dbAdminTables?.items.length ?? catalog?.tables.length ?? 0}
@@ -801,7 +798,7 @@ function PreviewControlsPanel({
               onChange={(event) => onPreviewWhereChange(event.currentTarget.value)}
               rows={4}
               placeholder={t("dataMgmt.preview.wherePlaceholder")}
-              className="min-h-28 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 focus:border-primary focus:ring-2 focus:ring-ring/40"
+              className="min-h-28 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
             />
           </label>
         </div>
@@ -1217,7 +1214,7 @@ function SyntheticWorkspace({
   onCheckSyntheticDataStatus: () => void;
   onLoadSyntheticDataResults: () => void;
 }) {
-  const activeStep = syntheticDataResults ? 2 : syntheticData || syntheticDataStatus ? 1 : 0;
+  const activeStep = syntheticDataResults ? 3 : syntheticData || syntheticDataStatus ? 1 : 0;
   const operationId = syntheticData?.operation_id.trim() ?? "";
   const resultTableOptions = syntheticAvailableTables;
   const hasValidResultTable = resultTableOptions.includes(syntheticResultTable);
@@ -1470,7 +1467,7 @@ function SyntheticWorkspace({
               </p>
             ))}
             {Object.keys(syntheticDataStatus.result).length > 0 && (
-              <pre className="max-h-52 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+              <pre className="max-h-52 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
                 <code>{JSON.stringify(syntheticDataStatus.result, null, 2)}</code>
               </pre>
             )}

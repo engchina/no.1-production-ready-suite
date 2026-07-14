@@ -121,7 +121,7 @@ export function SqlAnalysisPage() {
       ? t("nl2sql.safety.safe")
       : t("nl2sql.safety.blocked")
     : t("sqlAnalysis.safety.unverified");
-  const stepIndex = repair ? 2 : execution ? 1 : 0;
+  const stepIndex = repair ? 3 : execution ? 1 : 0;
 
   return (
     <>
@@ -197,32 +197,35 @@ export function SqlAnalysisPage() {
                 <span>{t("sqlAnalysis.useLlm")}</span>
               </label>
 
-              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="lg"
-                  className="w-full whitespace-nowrap sm:w-auto"
-                  loading={analysisLoading}
-                  disabled={!analysisSql.trim() || executeLoading}
-                  onClick={() => void analyzeSql()}
-                >
-                  <ShieldCheck size={16} aria-hidden="true" />
-                  <span>{t("sqlAnalysis.action.analyze")}</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="lg"
-                  className="w-full whitespace-nowrap sm:w-auto"
-                  loading={executeLoading}
-                  disabled={analysisLoading || !analysis?.safety.is_safe || !analysis.executable_sql}
-                  onClick={() => void executeAnalyzedSql()}
-                >
-                  <Play size={16} aria-hidden="true" />
-                  <span>{t("sqlAnalysis.action.execute")}</span>
-                </Button>
-                <FormStatus tone="danger" message={analysisError || executeError} className="sm:ml-auto" />
+              <div className="grid gap-2 border-t border-border pt-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="lg"
+                    className="w-full whitespace-nowrap sm:w-auto"
+                    loading={analysisLoading}
+                    disabled={!analysisSql.trim() || executeLoading}
+                    onClick={() => void analyzeSql()}
+                  >
+                    <ShieldCheck size={16} aria-hidden="true" />
+                    <span>{t("sqlAnalysis.action.analyze")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="w-full whitespace-nowrap sm:w-auto"
+                    loading={executeLoading}
+                    disabled={analysisLoading || !analysis?.safety.is_safe || !analysis.executable_sql}
+                    onClick={() => void executeAnalyzedSql()}
+                  >
+                    <Play size={16} aria-hidden="true" />
+                    <span>{t("sqlAnalysis.action.execute")}</span>
+                  </Button>
+                </div>
+                <FormStatus tone="danger" message={analysisError} className="w-full" />
+                <FormStatus tone="danger" message={executeError} className="w-full" />
               </div>
               </section>
             }
@@ -315,20 +318,22 @@ export function SqlAnalysisPage() {
                 />
               </label>
 
-              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="lg"
-                  className="w-full whitespace-nowrap sm:w-auto"
-                  loading={repairLoading}
-                  disabled={!repairSql.trim() || !repairErrorMessage.trim()}
-                  onClick={() => void repairOracleError()}
-                >
-                  <Wrench size={16} aria-hidden="true" />
-                  <span>{t("sqlAnalysis.action.repair")}</span>
-                </Button>
-                <FormStatus tone="danger" message={repairActionError} className="sm:ml-auto" />
+              <div className="grid gap-2 border-t border-border pt-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="lg"
+                    className="w-full whitespace-nowrap sm:w-auto"
+                    loading={repairLoading}
+                    disabled={!repairSql.trim() || !repairErrorMessage.trim()}
+                    onClick={() => void repairOracleError()}
+                  >
+                    <Wrench size={16} aria-hidden="true" />
+                    <span>{t("sqlAnalysis.action.repair")}</span>
+                  </Button>
+                </div>
+                <FormStatus tone="danger" message={repairActionError} className="w-full" />
               </div>
               </section>
             }
@@ -495,7 +500,7 @@ function SqlSnippet({ label, sql }: { label: string; sql: string }) {
   return (
     <div className="min-w-0">
       <p className="mb-1 text-xs font-medium text-muted">{label}</p>
-      <pre className="max-w-full overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+      <pre className="max-w-full overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
         <code>{sql || "-"}</code>
       </pre>
     </div>

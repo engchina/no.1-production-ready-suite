@@ -430,7 +430,7 @@ function IntentPatchPreview({
                 <p className="mt-2 leading-6 text-foreground">{operation.label || operation.reason_ja}</p>
               ) : null}
               {operation.value !== undefined ? (
-                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 text-xs text-foreground">
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 text-sm leading-6 text-foreground">
                   {JSON.stringify(operation.value, null, 2)}
                 </pre>
               ) : null}

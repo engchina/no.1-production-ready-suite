@@ -14,6 +14,7 @@ export const APP_ROUTES = {
   globalRules: "/global-rules",
   sqlAnalysis: "/sql-analysis",
   sqlToQuestion: "/sql-to-question",
+  directSql: "/direct-sql",
   feedbackManagement: "/feedback-management",
   learning: "/learning",
   questionLearning: "/question-learning",

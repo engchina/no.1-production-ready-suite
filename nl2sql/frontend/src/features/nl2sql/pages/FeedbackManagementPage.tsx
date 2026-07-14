@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Code2, DatabaseZap, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
 
-import { Banner, Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -54,7 +55,6 @@ function profileOptionLabel(profile: SelectAiDbProfile) {
 function feedbackLabel(item: HistoryItem) {
   if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
   if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
-  if (item.feedback_rating === "needs_review") return t("nl2sql.feedback.review");
   return t("feedbackManagement.appFeedback.unrated");
 }
 
@@ -77,7 +77,7 @@ export function FeedbackManagementPage() {
   const [matchLimit, setMatchLimit] = useState(3);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedFeedbackId, setSelectedFeedbackId] = useState("");
-  const [feedbackRating, setFeedbackRating] = useState<FeedbackRating>("needs_review");
+  const [feedbackRating, setFeedbackRating] = useState<FeedbackRating>("good");
   const [feedbackComment, setFeedbackComment] = useState("");
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | FeedbackRating | "unrated">("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
@@ -336,11 +336,11 @@ export function FeedbackManagementPage() {
 
   useEffect(() => {
     if (!selectedAppFeedback) {
-      setFeedbackRating("needs_review");
+      setFeedbackRating("good");
       setFeedbackComment("");
       return;
     }
-    setFeedbackRating(selectedAppFeedback.feedback_rating ?? "needs_review");
+    setFeedbackRating(selectedAppFeedback.feedback_rating ?? "good");
     setFeedbackComment(selectedAppFeedback.feedback_comment ?? "");
   }, [selectedAppFeedback]);
 
@@ -396,9 +396,9 @@ export function FeedbackManagementPage() {
           }
         />
 
-        {message && (
-          <Banner severity={messageTone === "error" ? "danger" : "success"}>{message}</Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: messageTone === "error" ? "danger" : "success", message } : null}
+        />
 
         <DbObjectManagementTabs
           idPrefix="feedback-management"
@@ -429,6 +429,7 @@ export function FeedbackManagementPage() {
                       type="button"
                       variant="secondary"
                       size="sm"
+                      className="min-h-11"
                       loading={loading === "feedback"}
                       disabled={!profileName.trim()}
                       onClick={() => void refreshSelectAiFeedback()}
@@ -510,7 +511,7 @@ export function FeedbackManagementPage() {
                 value={selectedSelectAiFeedback?.sql_text ?? ""}
                 readOnly
                 rows={16}
-                className="min-h-80 rounded-md border border-border bg-code px-3 py-2 font-mono text-xs leading-5 text-code-fg outline-none"
+                className="min-h-80 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
               />
             </section>
           </DbObjectManagementPanelShell>
@@ -610,7 +611,6 @@ export function FeedbackManagementPage() {
                       className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
-                      <option value="needs_review">{t("nl2sql.feedback.review")}</option>
                       <option value="bad">{t("nl2sql.feedback.bad")}</option>
                     </select>
                   </label>
@@ -667,7 +667,6 @@ export function FeedbackManagementPage() {
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
                     <option value="good">{t("nl2sql.feedback.good")}</option>
-                    <option value="needs_review">{t("nl2sql.feedback.review")}</option>
                     <option value="bad">{t("nl2sql.feedback.bad")}</option>
                     <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
                   </select>
@@ -858,7 +857,7 @@ export function FeedbackManagementPage() {
                     readOnly
                     value={feedbackIndex?.ddl.join("\n") ?? ""}
                     rows={6}
-                    className="min-h-40 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none"
+                    className="min-h-40 rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none"
                   />
                 </label>
               </section>

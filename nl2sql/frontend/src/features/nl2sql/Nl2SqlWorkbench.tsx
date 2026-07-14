@@ -1,36 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, ChevronDown, Code2, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
+import { BookOpenText, ChevronDown, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  Banner,
   Button,
   PageHeader,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
-import { SqlFileInput } from "./components/DbAdminShared";
 import { DbObjectManagementStatusBar, DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
-import { FeedbackPanel } from "./components/FeedbackPanel";
-import { GeneratedSqlPanel } from "./components/GeneratedSqlPanel";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
-import { engineLabel } from "./labels";
-import { previewExecutePayload, previewToGeneratedSqlPanelData, sqlExecutePayload } from "./previewState";
+import { previewExecutePayload, previewToJob } from "./previewState";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
 import type {
-  GeneratedSqlPanelData,
   HistoryData,
   HistoryItem,
   JobCreateData,
+  JobData,
   Nl2SqlEngine,
   Nl2SqlProfile,
   Nl2SqlResult,
@@ -72,8 +68,6 @@ import {
   type SchemaSelection,
 } from "./workbenchState";
 
-type ActiveEditor = "natural" | "sql";
-
 function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null) {
   if (!result) return null;
   return history.find((item) => item.generated_sql === result.generated_sql) ?? null;
@@ -95,21 +89,16 @@ export function Nl2SqlWorkbench() {
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
-  const [activeEditor, setActiveEditor] = useState<ActiveEditor>("natural");
   const [profileId, setProfileId] = useState("default");
   const [question, setQuestion] = useState("");
-  const [sqlText, setSqlText] = useState("");
-  const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
-  const [previewResult, setPreviewResult] = useState<GeneratedSqlPanelData | null>(null);
+  const [previewJob, setPreviewJob] = useState<JobData | null>(null);
   const [previewExecutionResults, setPreviewExecutionResults] = useState<QueryResults | null>(null);
-  const [sqlExecutionResults, setSqlExecutionResults] = useState<QueryResults | null>(null);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
-  const [rewriteLoading, setRewriteLoading] = useState(false);
   const [ontologySession, setOntologySession] = useState<QuerySession | null>(null);
   const [ontologyLoading, setOntologyLoading] = useState(false);
   const [ontologyPatch, setOntologyPatch] = useState<GraphPatch | null>(null);
@@ -123,18 +112,17 @@ export function Nl2SqlWorkbench() {
   const [rewriteUseSchema, setRewriteUseSchema] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
+  const [similarHistoryOpen, setSimilarHistoryOpen] = useState(false);
   const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
   const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useState("");
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewExecuteLoading, setPreviewExecuteLoading] = useState(false);
-  const [sqlExecuteLoading, setSqlExecuteLoading] = useState(false);
   const [error, setError] = useState("");
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const sqlTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // refresh=true のときは catalog を実データソースから再取得する（oracle モードは Oracle を再クエリ）。
   const loadCatalog = useCallback(async (refresh = false) => {
@@ -163,7 +151,7 @@ export function Nl2SqlWorkbench() {
   }, []);
 
   const handleJobResult = useCallback((data: Nl2SqlResult) => {
-    setPreviewResult(null);
+    setPreviewJob(null);
     setPreviewExecutionResults(null);
     setResult(data);
   }, []);
@@ -178,7 +166,7 @@ export function Nl2SqlWorkbench() {
     onHistoryRefresh: refreshHistory,
   });
   const jobActive = isJobInFlight(job?.status) || submitting;
-  const active = jobActive || previewLoading || previewExecuteLoading || sqlExecuteLoading || ontologyLoading;
+  const active = jobActive || previewLoading || previewExecuteLoading || ontologyLoading;
   const elapsedSeconds = useOperationTimer(jobActive, jobStartedAt);
   const latestHistory = useMemo(() => lastMatchingHistory(history, result), [history, result]);
   const selectAiOverrides = useMemo(() => {
@@ -192,7 +180,6 @@ export function Nl2SqlWorkbench() {
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
-  const selectedProfileName = selectedProfile?.name || t("nl2sql.workspace.profileUnavailable");
   const profileAllowedTableNames = useMemo(() => {
     if (!selectedProfile) return null;
     const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
@@ -266,27 +253,19 @@ export function Nl2SqlWorkbench() {
   }, [active, profileId, question]);
 
   const insertSchemaText = (text: string) => {
-    const el = activeEditor === "sql" ? sqlTextareaRef.current : questionTextareaRef.current;
+    const el = questionTextareaRef.current;
     if (!el) {
       // ref 未取得（フォーカス外）のときは末尾へ追記。各項目を改行区切りにする。
-      if (activeEditor === "sql") {
-        setSqlText((current) => `${current}${leadingNewlinePrefix(current, current.length)}${text}`);
-      } else {
-        setQuestion((current) => `${current}${leadingNewlinePrefix(current, current.length)}${text}`);
-      }
+      setQuestion((current) => `${current}${leadingNewlinePrefix(current, current.length)}${text}`);
       return;
     }
-    const source = activeEditor === "sql" ? sqlText : question;
+    const source = question;
     const start = el.selectionStart ?? source.length;
     const end = el.selectionEnd ?? source.length;
     // 各項目を改行区切りにする（先頭・直前が改行のときは付けない）。
     const prefixed = `${leadingNewlinePrefix(source, start)}${text}`;
     const nextValue = insertTextAtRange(source, prefixed, start, end);
-    if (activeEditor === "sql") {
-      setSqlText(nextValue);
-    } else {
-      setQuestion(nextValue);
-    }
+    setQuestion(nextValue);
     requestAnimationFrame(() => {
       // preventScroll: 挿入クリックのたびにページが textarea まで飛ばないようにする。
       el.focus({ preventScroll: true });
@@ -359,7 +338,6 @@ export function Nl2SqlWorkbench() {
     setError("");
     clearTrackedJob();
     setResult(null);
-    setSqlExecutionResults(null);
     try {
       const data = await apiPost<PreviewData>("/api/nl2sql/preview", {
         question: trimmed,
@@ -368,90 +346,46 @@ export function Nl2SqlWorkbench() {
         allowed_objects: toAllowedObjects(selection),
         select_ai_overrides: selectAiOverrides,
       });
-      setPreviewResult(previewToGeneratedSqlPanelData(data));
+      setPreviewJob(previewToJob(data, trimmed));
       setPreviewExecutionResults(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("nl2sql.error.previewFailed"));
-      setPreviewResult(null);
+      setPreviewJob(null);
     } finally {
       setPreviewLoading(false);
     }
   };
 
   const executePreviewSql = async () => {
+    const previewResult = previewJob?.result;
     const sql = previewResult?.executable_sql || previewResult?.generated_sql || "";
     if (!sql.trim() || active) return;
     setPreviewExecuteLoading(true);
     setError("");
-    setSqlExecutionResults(null);
     try {
       const data = await apiPost<QueryResults>("/api/nl2sql/execute", {
         ...previewExecutePayload(sql, profileId || null, toAllowedObjects(selection)),
       });
       setPreviewExecutionResults(data);
+      // タイムライン上でも実行済みを示す: execute/format を done に、結果を result へ反映。
+      setPreviewJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              result: prev.result ? { ...prev.result, results: data } : prev.result,
+              steps: prev.steps.map((step) =>
+                step.stage === "execute_sql" || step.stage === "format_results"
+                  ? { ...step, status: "done" }
+                  : step
+              ),
+            }
+          : prev
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : t("nl2sql.error.executePreviewFailed"));
       setPreviewExecutionResults(null);
     } finally {
       setPreviewExecuteLoading(false);
-    }
-  };
-
-  const executeSqlText = async () => {
-    const trimmed = sqlText.trim();
-    if (!trimmed || active) return;
-    setSqlExecuteLoading(true);
-    setError("");
-    setResult(null);
-    setPreviewResult(null);
-    setPreviewExecutionResults(null);
-    setSqlExecutionResults(null);
-    try {
-      const data = await apiPost<QueryResults>("/api/nl2sql/execute", {
-        ...sqlExecutePayload(trimmed, profileId || null, toAllowedObjects(selection)),
-      });
-      setSqlExecutionResults(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.executeSqlFailed"));
-      setSqlExecutionResults(null);
-    } finally {
-      setSqlExecuteLoading(false);
-    }
-  };
-
-  const rewriteQuestion = async () => {
-    const trimmed = question.trim();
-    if (!trimmed || active) return;
-    setRewriteLoading(true);
-    setError("");
-    try {
-      const data = await apiPost<RewriteData>("/api/nl2sql/rewrite", {
-        question: trimmed,
-        profile_id: profileId || null,
-        use_glossary: rewriteUseGlossary,
-        use_schema: rewriteUseSchema,
-        extra_prompt: rewriteExtraPrompt,
-      });
-      setRewriteData(data);
-      if (ontologySession) {
-        setOntologyPatch({
-          base_version: currentIntentVersionForSession(ontologySession),
-          summary_ja: "提案された質問を現在のセッションへ適用",
-          operations: [
-            {
-              op: "replace",
-              path: "/question_effective",
-              value: data.rewritten_question,
-              reason_ja: "質問の最適化案（適用前）",
-            },
-          ],
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.rewriteFailed"));
-      setRewriteData(null);
-    } finally {
-      setRewriteLoading(false);
     }
   };
 
@@ -568,13 +502,25 @@ export function Nl2SqlWorkbench() {
     setSubmitting(true);
     setError("");
     setResult(null);
-    setPreviewResult(null);
+    setPreviewJob(null);
     setPreviewExecutionResults(null);
-    setSqlExecutionResults(null);
     const startedAt = Date.now();
     try {
+      // チェックが ON のときだけ質問を書き換えてから検索する（入力欄は変えず job にだけ反映）。
+      let effectiveQuestion = trimmed;
+      if (rewriteUseGlossary || rewriteUseSchema) {
+        const rewrite = await apiPost<RewriteData>("/api/nl2sql/rewrite", {
+          question: trimmed,
+          profile_id: profileId || null,
+          use_glossary: rewriteUseGlossary,
+          use_schema: rewriteUseSchema,
+          extra_prompt: rewriteExtraPrompt,
+        });
+        setRewriteData(rewrite);
+        effectiveQuestion = rewrite.rewritten_question.trim() || trimmed;
+      }
       const data = await apiPost<JobCreateData>("/api/nl2sql/jobs", {
-        question: trimmed,
+        question: effectiveQuestion,
         engine,
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
@@ -607,10 +553,8 @@ export function Nl2SqlWorkbench() {
               label: t("nl2sql.workspace.selectedTables"),
               value: t("nl2sql.workspace.tableCount", { count: selection.tableNames.length }),
             },
-            { label: t("nl2sql.profile.label"), value: selectedProfileName },
-            { label: t("nl2sql.engine.label"), value: engineLabel(engine) },
           ]}
-          metricColumnsClass="sm:grid-cols-2 lg:grid-cols-4"
+          metricColumnsClass="sm:grid-cols-2"
           actions={
             <Button
               type="button"
@@ -623,6 +567,32 @@ export function Nl2SqlWorkbench() {
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("nl2sql.action.refresh")}</span>
             </Button>
+          }
+        />
+
+        <PageNotice
+          notice={error ? { tone: "danger", message: `${error} ${t("nl2sql.error.retryHint")}` } : null}
+          action={
+            error ? (
+              (catalog?.tables.length ?? 0) === 0 ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  loading={importingSample}
+                  disabled={active}
+                  onClick={() => void importSampleData()}
+                >
+                  <Database size={15} aria-hidden="true" />
+                  <span>{t("nl2sql.sample.import")}</span>
+                </Button>
+              ) : (
+                <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("nl2sql.action.refresh")}</span>
+                </Button>
+              )
+            ) : undefined
           }
         />
 
@@ -718,7 +688,7 @@ export function Nl2SqlWorkbench() {
                       type="button"
                       variant="secondary"
                       size="md"
-                      className="shrink-0"
+                      className="min-h-11 shrink-0"
                       loading={detecting}
                       disabled={!question.trim() || active}
                       onClick={() => void detectProfile()}
@@ -772,7 +742,6 @@ export function Nl2SqlWorkbench() {
                             disabled={active}
                             onClick={() => {
                               setQuestion(template.body);
-                              setActiveEditor("natural");
                               const el = questionTextareaRef.current;
                               if (el) {
                                 requestAnimationFrame(() => {
@@ -795,10 +764,9 @@ export function Nl2SqlWorkbench() {
                           ref={questionTextareaRef}
                           value={question}
                           onChange={(event) => setQuestion(event.currentTarget.value)}
-                          onFocus={() => setActiveEditor("natural")}
-                          disabled={active}
+                            disabled={active}
                           rows={5}
-                          className="field-sizing-content min-h-36 max-h-[16.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                          className="field-sizing-content min-h-36 max-h-[19.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                       </label>
@@ -808,7 +776,7 @@ export function Nl2SqlWorkbench() {
                         catalog={catalog}
                         loading={loadingCatalog}
                         disabled={active}
-                        insertMode={activeEditor === "sql" ? "physical" : "logical"}
+                        insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"
                         onRefreshSchema={() => void loadCatalog(true)}
@@ -819,19 +787,9 @@ export function Nl2SqlWorkbench() {
                   </div>
 
                   <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="grid gap-1">
                       <p className="font-semibold text-foreground">{t("nl2sql.rewrite.title")}</p>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        loading={rewriteLoading}
-                        disabled={!question.trim() || active}
-                        onClick={() => void rewriteQuestion()}
-                      >
-                        <Sparkles size={15} aria-hidden="true" />
-                        <span>{t("nl2sql.rewrite.action")}</span>
-                      </Button>
+                      <p className="text-xs leading-5 text-muted">{t("nl2sql.rewrite.hint")}</p>
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-foreground">
@@ -853,15 +811,6 @@ export function Nl2SqlWorkbench() {
                         <span>{t("nl2sql.rewrite.useSchema")}</span>
                       </label>
                     </div>
-                    <label className="grid gap-1 font-medium text-foreground">
-                      <span>{t("nl2sql.rewrite.extraPrompt")}</span>
-                      <input
-                        value={rewriteExtraPrompt}
-                        onChange={(event) => setRewriteExtraPrompt(event.currentTarget.value)}
-                        disabled={active}
-                        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
-                      />
-                    </label>
                     {rewriteData && (
                       <div className="grid gap-3 rounded-md border border-primary/30 bg-card p-3">
                         <dl className="grid gap-2 text-sm">
@@ -898,34 +847,51 @@ export function Nl2SqlWorkbench() {
                   </section>
 
                   {(similarHistory.length > 0 || similarHistoryLoading) && (
-                    <div className="grid gap-3 rounded-md border border-border bg-card p-3 text-sm text-foreground">
-                      <div className="flex items-center gap-2">
-                        <BookOpenText size={16} className="text-foreground" aria-hidden="true" />
-                        <p className="font-semibold text-foreground">
+                    <section className="overflow-hidden rounded-md border border-border bg-card">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="md"
+                        className="min-h-11 w-full justify-between rounded-none px-4 text-left"
+                        aria-expanded={similarHistoryOpen}
+                        aria-controls="nl2sql-similar-history"
+                        onClick={() => setSimilarHistoryOpen((current) => !current)}
+                      >
+                        <span className="flex items-center gap-2">
+                          <BookOpenText size={16} className="text-foreground" aria-hidden="true" />
                           {similarHistoryLoading
                             ? t("nl2sql.similar.loading")
                             : t("nl2sql.similar.title")}
-                        </p>
-                      </div>
-                      {similarHistory.slice(0, 2).map((entry) => (
-                        <article key={entry.item.id} className="grid gap-2 rounded-md bg-background p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div>
-                              <p className="font-medium text-foreground">{entry.item.question}</p>
-                              <p className="mt-1 text-xs text-muted">{entry.reason}</p>
-                            </div>
-                            <span className="rounded-md bg-card px-2 py-1 text-xs font-medium text-foreground">
-                              {t("nl2sql.similar.score", {
-                                score: Math.round(entry.score * 100),
-                              })}
-                            </span>
-                          </div>
-                          <pre className="max-h-28 overflow-auto rounded-md border border-border bg-card p-2 text-xs leading-5 text-foreground">
-                            <code>{entry.item.executable_sql || entry.item.generated_sql}</code>
-                          </pre>
-                        </article>
-                      ))}
-                    </div>
+                        </span>
+                        <ChevronDown
+                          size={16}
+                          className={similarHistoryOpen ? "rotate-180 transition-transform" : "transition-transform"}
+                          aria-hidden="true"
+                        />
+                      </Button>
+                      {similarHistoryOpen && (
+                        <div id="nl2sql-similar-history" className="grid gap-3 border-t border-border p-3 text-sm text-foreground">
+                          {similarHistory.slice(0, 2).map((entry) => (
+                            <article key={entry.item.id} className="grid gap-2 rounded-md bg-background p-3">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-medium text-foreground">{entry.item.question}</p>
+                                  <p className="mt-1 text-xs text-muted">{entry.reason}</p>
+                                </div>
+                                <span className="rounded-md bg-card px-2 py-1 text-xs font-medium text-foreground">
+                                  {t("nl2sql.similar.score", {
+                                    score: Math.round(entry.score * 100),
+                                  })}
+                                </span>
+                              </div>
+                              <pre className="max-h-28 overflow-auto rounded-md border border-border bg-card p-2 text-sm leading-6 text-foreground">
+                                <code>{entry.item.executable_sql || entry.item.generated_sql}</code>
+                              </pre>
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </section>
                   )}
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -942,17 +908,14 @@ export function Nl2SqlWorkbench() {
                         onClick={() => {
                           setSelection(emptySelection());
                           setQuestion("");
-                          setSqlText("");
                           setResult(null);
-                          setPreviewResult(null);
+                          setPreviewJob(null);
                           setPreviewExecutionResults(null);
-                          setSqlExecutionResults(null);
                           setRewriteData(null);
                           setRewriteUseGlossary(false);
                           setRewriteUseSchema(false);
                           setRewriteExtraPrompt("");
                           clearTrackedJob();
-                          setActiveEditor("natural");
                           setSelectAiRoleOverride("");
                           setSelectAiInstructionsOverride("");
                           setSelectAiAdvancedOpen(false);
@@ -1002,84 +965,6 @@ export function Nl2SqlWorkbench() {
                     </div>
                   </div>
 
-                <details
-                  className="group overflow-hidden rounded-md border border-border bg-card"
-                  data-testid="nl2sql-direct-sql"
-                  onToggle={(event) => setActiveEditor(event.currentTarget.open ? "sql" : "natural")}
-                >
-                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 bg-background px-4 py-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Code2 size={16} className="shrink-0 text-foreground" aria-hidden="true" />
-                      <span>{t("nl2sql.sqlRunner.disclosure")}</span>
-                    </span>
-                    <ChevronDown
-                      size={16}
-                      className="shrink-0 text-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
-                      aria-hidden="true"
-                    />
-                  </summary>
-                <section className="grid gap-4 border-t border-border p-4">
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-background p-3 text-sm text-foreground">
-                    <Code2 size={16} className="mt-0.5 text-foreground" aria-hidden="true" />
-                    <p>{t("nl2sql.sqlRunner.description")}</p>
-                  </div>
-                  <label className="grid gap-2 text-sm font-medium text-foreground">
-                    <span>{t("nl2sql.sqlRunner.label")}</span>
-                    <textarea
-                      aria-label={t("nl2sql.sqlRunner.label")}
-                      ref={sqlTextareaRef}
-                      value={sqlText}
-                      onChange={(event) => setSqlText(event.currentTarget.value)}
-                      onFocus={() => setActiveEditor("sql")}
-                      disabled={active}
-                      rows={9}
-                      className="min-h-56 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                      placeholder={t("nl2sql.sqlRunner.placeholder")}
-                    />
-                  </label>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                      <SqlFileInput
-                        resetSignal={sqlFileResetSignal}
-                        disabled={active}
-                        onLoad={(text) => {
-                          setSqlText(text);
-                          setSqlExecutionResults(null);
-                          setError("");
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        className="min-h-11 sm:self-end"
-                        disabled={!sqlText || active}
-                        onClick={() => {
-                          setSqlText("");
-                          setSqlExecutionResults(null);
-                          setError("");
-                          setSqlFileResetSignal((value) => value + 1);
-                        }}
-                      >
-                        <X size={15} aria-hidden="true" />
-                        <span>{t("nl2sql.action.clearSql")}</span>
-                      </Button>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="md"
-                      loading={sqlExecuteLoading}
-                      disabled={!sqlText.trim() || active}
-                      onClick={() => void executeSqlText()}
-                    >
-                      <Play size={16} aria-hidden="true" />
-                      <span>{t("nl2sql.action.executeSql")}</span>
-                    </Button>
-                  </div>
-                  <Nl2SqlResultTable results={sqlExecutionResults} />
-                </section>
-                </details>
                 </div>
               </section>
         </section>
@@ -1114,55 +999,27 @@ export function Nl2SqlWorkbench() {
         )}
 
         <OperationStatusStrip
-          job={job}
+          job={job ?? previewJob}
           elapsedSeconds={elapsedSeconds}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
           importingSample={importingSample}
           onImportSample={importSampleData}
+          onPreviewExecute={
+            !job && previewJob && !previewExecutionResults
+              ? () => void executePreviewSql()
+              : undefined
+          }
+          previewExecuteLoading={previewExecuteLoading}
         />
         <Nl2SqlResultTable results={ontologyExecutionResults} />
 
-        {error && (
-          <Banner
-            severity="danger"
-            action={
-              (catalog?.tables.length ?? 0) === 0 ? (
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  loading={importingSample}
-                  disabled={active}
-                  onClick={() => void importSampleData()}
-                >
-                  <Database size={15} aria-hidden="true" />
-                  <span>{t("nl2sql.sample.import")}</span>
-                </Button>
-              ) : (
-                <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
-                  <RefreshCw size={15} aria-hidden="true" />
-                  <span>{t("nl2sql.action.refresh")}</span>
-                </Button>
-              )
-            }
-          >
-            {error} {t("nl2sql.error.retryHint")}
-          </Banner>
-        )}
-
-        <GeneratedSqlPanel
-          result={result ?? previewResult}
-          mode={result ? "result" : previewResult ? "preview" : "result"}
-          executeLoading={previewExecuteLoading}
-          onExecute={previewResult ? () => void executePreviewSql() : undefined}
-        />
         <Nl2SqlResultTable results={result?.results ?? previewExecutionResults} />
-        <FeedbackPanel result={result} history={latestHistory} onSaved={refreshHistory} />
         <SelectAiFeedbackAddPanel
-          result={result ?? previewResult}
+          result={result ?? previewJob?.result ?? null}
           history={latestHistory}
           selectedProfileId={profileId}
           questionText={question}
+          onSaved={refreshHistory}
         />
       </div>
     </>

@@ -1,6 +1,6 @@
 import type { HistoryItem } from "./types";
 
-export type HistoryFeedbackFilter = "all" | "unrated" | "good" | "bad" | "needs_review";
+export type HistoryFeedbackFilter = "all" | "unrated" | "good" | "bad";
 export type HistorySafetyFilter = "all" | "safe" | "blocked";
 export type HistorySortKey = "question" | "created_at";
 export type HistorySortDirection = "asc" | "desc";

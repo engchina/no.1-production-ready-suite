@@ -7,7 +7,6 @@ import {
 
 import {
   Button,
-  Banner,
   EmptyState,
   PageHeader,
   Pagination,
@@ -16,6 +15,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -123,7 +123,7 @@ export function GlossaryRulesPage() {
           onRefresh={() => void load(true)}
         />
 
-        {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
+        <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell
           id="glossary-rules-panel-globalTerms"

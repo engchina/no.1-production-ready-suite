@@ -151,6 +151,7 @@ export function SchemaReferencePanel({
         </p>
       )}
 
+      {!loading && (
       <div
         className={`grid min-w-0 max-w-full ${listMaxHeightClass} content-start gap-1 overflow-x-hidden overflow-y-auto pr-1`}
       >
@@ -166,6 +167,7 @@ export function SchemaReferencePanel({
           />
         ))}
       </div>
+      )}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ClipboardCopy,
@@ -9,8 +9,9 @@ import {
   X,
 } from "lucide-react";
 
-import { Banner, Button, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { t } from "@/lib/i18n";
 import { FileInputControl } from "../components/DbAdminShared";
 import {
@@ -79,9 +80,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
   const [proposals, setProposals] = useState<OntologyProposal[]>([]);
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
-  const [message, setMessage] = useState<{ tone: "success" | "danger"; text: string } | null>(
-    null
-  );
+  const { notice, showNotice, clearNotice } = usePageNotice();
   const [busy, setBusy] = useState("");
   // 承認/却下は行単位の busy(他の行の操作をブロックしない)
   const [reviewBusyIds, setReviewBusyIds] = useState<ReadonlySet<string>>(new Set());
@@ -92,6 +91,23 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const timelineRef = useRef<HTMLOListElement | null>(null);
 
   const jobRunning = job !== null && (job.status === "queued" || job.status === "running");
+
+  // 最新の構築実行(session)分の提案だけをレビュー対象にする。
+  // 過去 run に残った submitted 提案を「すべて承認」へ混ぜない(混在防止)。
+  // created_at は ISO8601 なので辞書順比較で時系列順になる(Date 変換不要・決定論)。
+  const latestSessionId = useMemo(() => {
+    let latest: OntologyProposal | null = null;
+    for (const p of proposals) {
+      if (!latest || (p.created_at ?? "") > (latest.created_at ?? "")) latest = p;
+    }
+    return latest?.session_id ?? null;
+  }, [proposals]);
+
+  const runProposals = useMemo(
+    () =>
+      latestSessionId ? proposals.filter((p) => p.session_id === latestSessionId) : proposals,
+    [proposals, latestSessionId]
+  );
 
   const refreshProposals = useCallback(async (targetProfileId: string) => {
     try {
@@ -127,7 +143,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     setJob(null);
     setProposals([]);
     setDraftRevision(null);
-    setMessage(null);
+    clearNotice();
     setMermaid("");
     setBusinessText("");
     setQaFile(null);
@@ -148,7 +164,12 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           if (next.status === "succeeded" || next.status === "failed") {
             void refreshProposals(profileId);
             if (next.status === "succeeded") {
-              setMessage({ tone: "success", text: t("profiles.ontologyBuild.jobSucceeded") });
+              toast.success(t("profiles.ontologyBuild.jobSucceeded"));
+            } else if (next.error_message_ja) {
+              showNotice(
+                "danger",
+                `${next.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
+              );
             }
           }
         })
@@ -181,7 +202,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
 
   const startBuild = async () => {
     setBusy("start");
-    setMessage(null);
+    clearNotice();
     try {
       const started = await startOntologyBuild(profileId, {
         businessText,
@@ -192,10 +213,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
       });
       setJob(started);
     } catch (err) {
-      setMessage({
-        tone: "danger",
-        text: err instanceof Error ? err.message : t("profiles.ontologyBuild.error.start"),
-      });
+      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.start"));
     } finally {
       setBusy("");
     }
@@ -203,7 +221,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
 
   const review = async (proposal: OntologyProposal, action: "accept" | "reject") => {
     setReviewBusyIds((current) => new Set([...current, proposal.id]));
-    setMessage(null);
+    clearNotice();
     try {
       const result =
         action === "accept"
@@ -217,10 +235,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
         current.map((item) => (item.id === proposal.id ? result.proposal : item))
       );
     } catch (err) {
-      setMessage({
-        tone: "danger",
-        text: err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"),
-      });
+      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"));
     } finally {
       setReviewBusyIds((current) => {
         const next = new Set(current);
@@ -233,39 +248,31 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const acceptAll = async (pending: OntologyProposal[]) => {
     const ids = pending.map((proposal) => proposal.id);
     setBusy("accept-all");
-    setReviewBusyIds(new Set(ids));
-    setMessage(null);
+    clearNotice();
     try {
       const result = await acceptOntologyProposalsBatch(ids);
       if (result.draft?.revision) setDraftRevision(result.draft.revision);
       const byId = new Map(result.proposals.map((proposal) => [proposal.id, proposal]));
       setProposals((current) => current.map((item) => byId.get(item.id) ?? item));
     } catch (err) {
-      setMessage({
-        tone: "danger",
-        text: err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"),
-      });
+      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"));
     } finally {
       setBusy("");
-      setReviewBusyIds(new Set());
     }
   };
 
   const publish = async () => {
     if (!draftRevision) return;
     setBusy("publish");
-    setMessage(null);
+    clearNotice();
     try {
       await publishOntologyRevision(draftRevision.id, draftRevision.etag);
       setDraftRevision(null);
-      setMessage({ tone: "success", text: t("profiles.ontologyBuild.published") });
+      toast.success(t("profiles.ontologyBuild.published"));
       setMermaid("");
       onPublished?.();
     } catch (err) {
-      setMessage({
-        tone: "danger",
-        text: err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"),
-      });
+      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"));
     } finally {
       setBusy("");
     }
@@ -277,10 +284,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
       const data = await fetchProfileOntologyMermaid(profileId);
       setMermaid(data.mermaid);
     } catch (err) {
-      setMessage({
-        tone: "danger",
-        text: err instanceof Error ? err.message : t("profiles.ontologyBuild.error.mermaid"),
-      });
+      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.mermaid"));
     } finally {
       setBusy("");
     }
@@ -380,19 +384,16 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
         </Button>
       </div>
 
-      {message ? (
-        <Banner severity={message.tone === "success" ? "success" : "danger"}>
-          {message.text}
-        </Banner>
-      ) : null}
+      <PageNotice notice={notice} />
 
       {!job && busy === "start" ? (
+        // スピナーは「AI 構築を実行」ボタン内の loading 表示に一本化する
+        // (ここに Loader2 を置くと二重スピナーになるため、テキストのみ表示)。
         <div
-          className="flex items-center gap-2 rounded-md border border-border bg-background p-3 text-sm text-foreground"
+          className="rounded-md border border-border bg-background p-3 text-sm text-foreground"
           role="status"
           data-testid="ontology-build-submitting"
         >
-          <Loader2 size={15} className="shrink-0 animate-spin text-primary" aria-hidden="true" />
           {t("profiles.ontologyBuild.submitting")}
         </div>
       ) : null}
@@ -475,13 +476,11 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
               </ol>
             </div>
           ) : null}
-          {job.status === "failed" && job.error_message_ja ? (
-            <Banner severity="danger" title={t("profiles.ontologyBuild.jobFailedTitle")}>
-              {job.error_message_ja}
-            </Banner>
-          ) : null}
           {job.warnings_ja.length > 0 ? (
-            <details className="rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning">
+            <details
+              open={job.status === "failed"}
+              className="rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
+            >
               <summary className="cursor-pointer font-semibold">
                 {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
               </summary>
@@ -512,7 +511,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             </p>
           </div>
           {(() => {
-            const pending = proposals.filter((proposal) => proposal.status === "submitted");
+            const pending = runProposals.filter((proposal) => proposal.status === "submitted");
             if (pending.length < 2) return null;
             return (
               <Button
@@ -529,14 +528,14 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             );
           })()}
         </div>
-        {proposals.length === 0 ? (
+        {runProposals.length === 0 ? (
           <p className="rounded-md border border-dashed border-border bg-background p-4 text-sm text-muted">
             {t("profiles.ontologyBuild.proposalsEmpty")}
           </p>
         ) : (
           // 約 5 件分の高さで固定し、それ以上は内側スクロール(件数でセクションが伸びない)
           <ul className="grid max-h-96 gap-2 overflow-y-auto pr-1" data-testid="ontology-proposal-list">
-            {proposals.map((proposal) => {
+            {runProposals.map((proposal) => {
               const title = proposal.title_ja || proposal.summary || proposal.id;
               const reviewed = proposal.status === "accepted" || proposal.status === "rejected";
               return (
@@ -571,7 +570,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
                         variant="primary"
                         size="sm"
                         loading={reviewBusyIds.has(proposal.id)}
-                        disabled={reviewBusyIds.has(proposal.id)}
+                        disabled={reviewBusyIds.has(proposal.id) || busy === "accept-all"}
                         aria-label={t("profiles.ontologyBuild.acceptAria", { title })}
                         onClick={() => void review(proposal, "accept")}
                       >
@@ -583,7 +582,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
                         variant="danger"
                         size="sm"
                         loading={reviewBusyIds.has(proposal.id)}
-                        disabled={reviewBusyIds.has(proposal.id)}
+                        disabled={reviewBusyIds.has(proposal.id) || busy === "accept-all"}
                         aria-label={t("profiles.ontologyBuild.rejectAria", { title })}
                         onClick={() => void review(proposal, "reject")}
                       >
@@ -656,7 +655,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           </div>
           {mermaid ? (
             <pre
-              className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-5 text-code-fg"
+              className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg"
               data-testid="ontology-build-mermaid"
             >
               <code>{mermaid}</code>

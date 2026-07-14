@@ -504,6 +504,26 @@ test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重
   ).toBe(true);
 });
 
+test("名称未入力で保存すると名称欄直下に FieldError が出る", async ({ page }) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles");
+
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+
+  // ADMIN_EXECUTE ゲートを満たして保存ボタンを有効化するが、名称は空のまま保存する。
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  // spec §2 error-placement: 該当欄の直下に role=alert で表示される。
+  const fieldError = page.getByRole("alert").filter({ hasText: "名称を入力してください。" });
+  await expect(fieldError).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveAttribute("aria-invalid", "true");
+
+  // 入力し直すとエラーは消える。
+  await page.getByLabel("名称").fill("新プロファイル");
+  await expect(fieldError).toHaveCount(0);
+});
+
 test("業務プロファイルはcatalogが空でもDB管理テーブル一覧から対象テーブルを選択できる", async ({ page }) => {
   let savedPayload: Record<string, unknown> | null = null;
   await mockProfileApi(page, {

@@ -15,13 +15,13 @@ import {
 } from "lucide-react";
 
 import {
-  Banner,
   Button,
   EmptyState,
   PageHeader,
   StatusBadge,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -444,7 +444,9 @@ export function EvaluationPage() {
     <>
       <PageHeader title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && <MessageBanner message={message} tone={messageTone} />}
+        <PageNotice
+          notice={message ? { tone: messageTone === "error" ? "danger" : messageTone, message } : null}
+        />
 
         <DbObjectManagementStatusBar
           ariaLabel={t("evaluation.status.label")}
@@ -753,18 +755,21 @@ export function EvaluationPage() {
                       className={`${textareaClass} min-h-56`}
                     />
                   </label>
-                  <div className="flex flex-wrap gap-2">
-                    <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={reverseUseGlossary}
-                        onChange={(event) => setReverseUseGlossary(event.currentTarget.checked)}
-                        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-                      />
-                      <span>{t("sqlToQuestion.useGlossary")}</span>
-                    </label>
+                  <label className="flex min-h-11 w-fit items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={reverseUseGlossary}
+                      onChange={(event) => setReverseUseGlossary(event.currentTarget.checked)}
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                    />
+                    <span>{t("sqlToQuestion.useGlossary")}</span>
+                  </label>
+                  {/* 主アクションバー: spec §4(border-t で区切り、size 統一)。SqlToQuestionPage と統一。 */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
                     <Button
                       type="button"
+                      variant="primary"
+                      size="lg"
                       loading={reverseLoading}
                       disabled={!reverseSql.trim()}
                       onClick={() => void reverseExplain()}
@@ -783,11 +788,6 @@ export function EvaluationPage() {
       </main>
     </>
   );
-}
-
-function MessageBanner({ message, tone }: { message: string; tone: MessageTone }) {
-  const severity = tone === "error" ? "danger" : tone === "success" ? "success" : "info";
-  return <Banner severity={severity}>{message}</Banner>;
 }
 
 function EvaluationSetList({
@@ -986,7 +986,7 @@ function EvaluationCasesTable({
               {cases.map((item) => (
                 <tr key={`${item.question}-${item.expected_sql}`}>
                   <td className="break-words px-3 py-2 font-medium text-foreground">{item.question}</td>
-                  <td className="break-words px-3 py-2 font-mono text-xs leading-5 text-foreground">{item.expected_sql}</td>
+                  <td className="break-words px-3 py-2 font-mono text-sm leading-6 text-foreground">{item.expected_sql}</td>
                 </tr>
               ))}
             </tbody>
@@ -1051,7 +1051,7 @@ function EvaluationRunHistory({
                 readOnly
                 value={record.report}
                 rows={5}
-                className="min-h-28 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground"
+                className="min-h-28 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground"
               />
             </label>
             <div className="flex flex-wrap gap-2">
@@ -1206,7 +1206,7 @@ function CompareResult({
           readOnly
           value={compareReport}
           rows={8}
-          className="min-h-48 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground"
+          className="min-h-48 rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 text-foreground"
         />
       </label>
     </section>
@@ -1509,7 +1509,7 @@ function SqlSnippet({ label, sql }: { label: string; sql: string }) {
   return (
     <div>
       <p className="mb-1 text-xs font-medium text-muted">{label}</p>
-      <pre className="max-h-44 overflow-auto rounded-md bg-code p-3 text-xs leading-5 text-code-fg">
+      <pre className="max-h-44 overflow-auto rounded-md bg-code p-3 text-sm leading-6 text-code-fg">
         <code>{sql || "-"}</code>
       </pre>
     </div>

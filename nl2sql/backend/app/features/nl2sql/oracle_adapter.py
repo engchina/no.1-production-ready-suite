@@ -400,7 +400,12 @@ class OracleNl2SqlAdapter:
         self._init_client(oracledb)
         if not self.is_configured():
             raise OracleAdapterError("Oracle 接続情報が不足しています。")
-        conn = oracledb.connect(**_oracle_connect_kwargs(self.settings))
+        try:
+            conn = oracledb.connect(**_oracle_connect_kwargs(self.settings))
+        except OracleAdapterError:
+            raise
+        except Exception as exc:  # oracledb.DatabaseError/OperationalError 等を統一契約に変換
+            raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
         try:
             yield conn
         finally:
@@ -822,8 +827,14 @@ class OracleNl2SqlAdapter:
             for row in rows
         ]
 
-    def get_db_admin_object_detail(self, *, object_name: str, object_type: str) -> dict[str, Any]:
-        """Return columns and DBMS_METADATA DDL for a table/view."""
+    def get_db_admin_object_detail(
+        self, *, object_name: str, object_type: str, include_ddl: bool = True
+    ) -> dict[str, Any]:
+        """Return columns and DBMS_METADATA DDL for a table/view.
+
+        include_ddl=False のときは重い DBMS_METADATA.GET_DDL を実行せず ddl="" を返す
+        (列一覧の初期表示を高速化。DDL は DDL タブ表示時に別途取得する)。
+        """
         safe_name = _strict_sql_name(object_name)
         normalized_type = "VIEW" if object_type.lower() == "view" else "TABLE"
         columns: list[SchemaColumn] = []
@@ -879,35 +890,36 @@ class OracleNl2SqlAdapter:
                     row_count = int(row[0] or 0) if row else None
                 except Exception as exc:
                     warnings.append(f"row count の取得に失敗しました: {exc}")
-            ddl_type = normalized_type
-            if normalized_type == "VIEW":
-                # MView/実体 TABLE を VIEW として GET_DDL すると ORA-31603 になるため
-                # user_objects で実種別を判定する
-                with suppress(Exception):
+            if include_ddl:
+                ddl_type = normalized_type
+                if normalized_type == "VIEW":
+                    # MView/実体 TABLE を VIEW として GET_DDL すると ORA-31603 になるため
+                    # user_objects で実種別を判定する
+                    with suppress(Exception):
+                        cursor.execute(
+                            """
+                            SELECT object_type FROM user_objects
+                            WHERE object_name = :object_name
+                            ORDER BY CASE object_type
+                              WHEN 'MATERIALIZED VIEW' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
+                            """,
+                            {"object_name": safe_name},
+                        )
+                        row = cursor.fetchone()
+                        actual = str(row[0] or "").upper() if row else ""
+                        if actual == "MATERIALIZED VIEW":
+                            ddl_type = "MATERIALIZED_VIEW"
+                        elif actual == "TABLE":
+                            ddl_type = "TABLE"
+                try:
                     cursor.execute(
-                        """
-                        SELECT object_type FROM user_objects
-                        WHERE object_name = :object_name
-                        ORDER BY CASE object_type
-                          WHEN 'MATERIALIZED VIEW' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
-                        """,
-                        {"object_name": safe_name},
+                        "SELECT DBMS_METADATA.GET_DDL(:object_type, :object_name) FROM DUAL",
+                        {"object_type": ddl_type, "object_name": safe_name},
                     )
                     row = cursor.fetchone()
-                    actual = str(row[0] or "").upper() if row else ""
-                    if actual == "MATERIALIZED VIEW":
-                        ddl_type = "MATERIALIZED_VIEW"
-                    elif actual == "TABLE":
-                        ddl_type = "TABLE"
-            try:
-                cursor.execute(
-                    "SELECT DBMS_METADATA.GET_DDL(:object_type, :object_name) FROM DUAL",
-                    {"object_type": ddl_type, "object_name": safe_name},
-                )
-                row = cursor.fetchone()
-                ddl = _coerce_text(row[0]) if row and row[0] else ""
-            except Exception as exc:
-                warnings.append(f"DBMS_METADATA.GET_DDL に失敗しました: {exc}")
+                    ddl = _coerce_text(row[0]) if row and row[0] else ""
+                except Exception as exc:
+                    warnings.append(f"DBMS_METADATA.GET_DDL に失敗しました: {exc}")
         if ddl:
             ddl = ddl.rstrip()
             if not ddl.endswith(";"):

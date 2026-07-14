@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { DatabaseZap, Send } from "lucide-react";
+import { DatabaseZap, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, StatusBadge } from "@engchina/production-ready-ui";
 
+import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import type {
@@ -10,10 +11,10 @@ import type {
   HistoryItem,
   Nl2SqlResult,
   SelectAiFeedbackAddData,
-  SelectAiFeedbackAddType,
 } from "../types";
 
 type MessageTone = "success" | "error";
+type Rating = "good" | "bad";
 type SelectAiFeedbackSource = (GeneratedSqlPanelData | Nl2SqlResult) & { original_question?: string };
 
 export function SelectAiFeedbackAddPanel({
@@ -21,16 +22,17 @@ export function SelectAiFeedbackAddPanel({
   history,
   selectedProfileId,
   questionText,
+  onSaved,
 }: {
   result: SelectAiFeedbackSource | null;
   history: HistoryItem | null;
   selectedProfileId: string;
   questionText?: string;
+  onSaved: () => void | Promise<void>;
 }) {
-  const [feedbackType, setFeedbackType] = useState<SelectAiFeedbackAddType>("positive");
   const [response, setResponse] = useState("");
   const [feedbackContent, setFeedbackContent] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [savingRating, setSavingRating] = useState<Rating | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<MessageTone>("success");
   const [addData, setAddData] = useState<SelectAiFeedbackAddData | null>(null);
@@ -43,52 +45,74 @@ export function SelectAiFeedbackAddPanel({
   const profileId = history?.profile_id || selectedProfileId || "default";
 
   useEffect(() => {
-    setFeedbackType("positive");
     setResponse(generatedSql);
-    setFeedbackContent("");
+    setFeedbackContent(history?.feedback_comment ?? "");
     setMessage("");
     setAddData(null);
-  }, [generatedSql, result?.original_question]);
+  }, [generatedSql, result?.original_question, history?.feedback_comment, history?.id]);
 
   if (!result) return null;
 
-  const responseReadOnly = feedbackType === "positive";
-  const effectiveResponse = responseReadOnly ? generatedSql : response;
-  const canSubmit = Boolean(question.trim() && effectiveResponse.trim() && !submitting);
+  const submit = async (rating: Rating) => {
+    const feedbackType = rating === "good" ? "positive" : "negative";
+    const trimmedContent = feedbackContent.trim();
+    // 良い=生成SQLを正しいものとして送る。違う=利用者が編集した修正SQLを送る。
+    const effectiveResponse = rating === "good" ? generatedSql : response.trim();
 
-  const updateFeedbackType = (nextType: SelectAiFeedbackAddType) => {
-    setFeedbackType(nextType);
-    if (nextType === "positive") setResponse(generatedSql);
-    if (nextType === "negative" && !response.trim()) setResponse(generatedSql);
-    setMessage("");
-  };
-
-  const submit = async () => {
     if (!question.trim()) return;
-    if (!effectiveResponse.trim()) {
-      setMessageTone("error");
-      setMessage(t("nl2sql.selectAiFeedbackAdd.requiresResponse"));
-      return;
+    if (rating === "bad") {
+      if (!effectiveResponse) {
+        setMessageTone("error");
+        setMessage(t("nl2sql.selectAiFeedbackAdd.requiresResponse"));
+        return;
+      }
+      if (!trimmedContent) {
+        setMessageTone("error");
+        setMessage(t("nl2sql.selectAiFeedbackAdd.requiresContent"));
+        return;
+      }
     }
-    setSubmitting(true);
+
+    setSavingRating(rating);
     setMessage("");
+    const warnings: string[] = [];
+    let allOk = true;
     try {
-      const data = await apiPost<SelectAiFeedbackAddData>("/api/nl2sql/select-ai/feedback/add", {
-        profile_id: profileId,
-        question,
-        feedback_type: feedbackType,
-        response: effectiveResponse,
-        feedback_content: feedbackContent.trim(),
-        generated_sql: generatedSql,
-      });
-      setAddData(data);
-      setMessageTone(data.executed ? "success" : "error");
-      setMessage(data.warnings.join(" ") || t("nl2sql.selectAiFeedbackAdd.saved"));
-    } catch (err) {
-      setMessageTone("error");
-      setMessage(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
+      // 1) DBMS_CLOUD_AI feedback（バックエンドは常に NEGATIVE 登録）
+      try {
+        const data = await apiPost<SelectAiFeedbackAddData>("/api/nl2sql/select-ai/feedback/add", {
+          profile_id: profileId,
+          question,
+          feedback_type: feedbackType,
+          response: effectiveResponse,
+          feedback_content: trimmedContent,
+          generated_sql: generatedSql,
+        });
+        setAddData(data);
+        if (!data.executed) allOk = false;
+        warnings.push(...data.warnings);
+      } catch (err) {
+        allOk = false;
+        warnings.push(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
+      }
+      // 2) 結果フィードバック保存（履歴がある場合のみ。良い→good / 違う→bad）
+      if (history) {
+        try {
+          await apiPost("/api/nl2sql/feedback", {
+            history_id: history.id,
+            rating,
+            comment: trimmedContent,
+          });
+        } catch (err) {
+          allOk = false;
+          warnings.push(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
+        }
+      }
+      await onSaved();
+      setMessageTone(allOk ? "success" : "error");
+      setMessage(warnings.join(" ") || t("nl2sql.selectAiFeedbackAdd.saved"));
     } finally {
-      setSubmitting(false);
+      setSavingRating(null);
     }
   };
 
@@ -110,33 +134,16 @@ export function SelectAiFeedbackAddPanel({
         )}
       </CardHeader>
       <CardContent className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-[12rem_1fr]">
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("nl2sql.selectAiFeedbackAdd.type")}</span>
-            <select
-              value={feedbackType}
-              onChange={(event) => updateFeedbackType(event.currentTarget.value as SelectAiFeedbackAddType)}
-              disabled={submitting}
-              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-            >
-              <option value="positive">{t("nl2sql.selectAiFeedbackAdd.positive")}</option>
-              <option value="negative">{t("nl2sql.selectAiFeedbackAdd.negative")}</option>
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("nl2sql.selectAiFeedbackAdd.response")}</span>
-            <textarea
-              value={effectiveResponse}
-              onChange={(event) => setResponse(event.currentTarget.value)}
-              readOnly={responseReadOnly}
-              rows={5}
-              className={`min-h-32 rounded-md border border-border px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 ${
-                responseReadOnly ? "bg-background text-foreground" : "bg-card text-foreground"
-              }`}
-              placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
-            />
-          </label>
-        </div>
+        <label className="grid gap-1 text-sm font-medium text-foreground">
+          <span>{t("nl2sql.selectAiFeedbackAdd.response")}</span>
+          <textarea
+            value={response}
+            onChange={(event) => setResponse(event.currentTarget.value)}
+            rows={5}
+            className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+            placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
+          />
+        </label>
         <label className="grid gap-1 text-sm font-medium text-foreground">
           <span>{t("nl2sql.selectAiFeedbackAdd.content")}</span>
           <textarea
@@ -147,25 +154,33 @@ export function SelectAiFeedbackAddPanel({
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
         </label>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {message && (
-            <p
-              role={messageTone === "error" ? "alert" : "status"}
-              className={`text-sm ${messageTone === "error" ? "text-danger" : "text-success"}`}
-            >
-              {message}
-            </p>
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <FormStatus
+            tone={messageTone === "error" ? "danger" : "success"}
+            message={message}
+            className="mr-auto"
+          />
           <Button
             type="button"
-            variant="primary"
+            variant={history?.feedback_rating === "good" ? "primary" : "secondary"}
             size="sm"
-            loading={submitting}
-            disabled={!canSubmit}
-            onClick={() => void submit()}
+            loading={savingRating === "good"}
+            disabled={savingRating !== null}
+            onClick={() => void submit("good")}
           >
-            <Send size={15} aria-hidden="true" />
-            <span>{t("nl2sql.selectAiFeedbackAdd.send")}</span>
+            <ThumbsUp size={15} aria-hidden="true" />
+            <span>{t("nl2sql.feedback.good")}</span>
+          </Button>
+          <Button
+            type="button"
+            variant={history?.feedback_rating === "bad" ? "primary" : "secondary"}
+            size="sm"
+            loading={savingRating === "bad"}
+            disabled={savingRating !== null}
+            onClick={() => void submit("bad")}
+          >
+            <ThumbsDown size={15} aria-hidden="true" />
+            <span>{t("nl2sql.feedback.bad")}</span>
           </Button>
         </div>
         {addData?.plsql_preview && (
@@ -175,7 +190,7 @@ export function SelectAiFeedbackAddPanel({
               value={addData.plsql_preview}
               readOnly
               rows={7}
-              className="min-h-44 rounded-md border border-border bg-code px-3 py-2 font-mono text-xs leading-5 text-code-fg outline-none"
+              className="min-h-44 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
             />
           </label>
         )}

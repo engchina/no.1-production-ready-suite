@@ -709,18 +709,20 @@ export function DbObjectDetailPanel({
           data-testid="db-admin-detail-columns"
           className="min-w-0 max-w-full overflow-x-auto rounded-md border border-border bg-card"
         >
-          <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-sm">
+          <table className="w-full min-w-[52rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
               <col className="w-[18%]" />
-              <col className="w-[12%]" />
-              <col className="w-[16%]" />
-              <col className="w-[10%]" />
+              <col className="w-[18%]" />
+              <col className="w-[22%]" />
+              <col className="w-[14%]" />
+              <col className="w-[8%]" />
               <col />
             </colgroup>
             <thead className="bg-background">
               <tr>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
+                <th className="px-3 py-2 text-left">{t("dbAdmin.col.comment")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
                 <th className="px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
@@ -730,7 +732,8 @@ export function DbObjectDetailPanel({
               {detail.columns.map((column) => (
                 <tr key={column.column_name}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
-                  <td className="px-3 py-2">{column.logical_name}</td>
+                  <td className="break-words px-3 py-2">{(column.logical_name ?? "").trim() || "-"}</td>
+                  <td className="break-words px-3 py-2 text-muted">{(column.comment ?? "").trim() || "-"}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
                   <td className="break-words px-3 py-2 font-mono text-xs text-muted">
@@ -763,7 +766,7 @@ export function DbObjectDetailPanel({
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </div>
-          <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+          <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </section>

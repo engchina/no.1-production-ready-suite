@@ -62,7 +62,7 @@ const historyItems = [
   },
 ];
 
-async function mockHistory(page: Page, items = historyItems) {
+async function mockHistory(page: Page, items: readonly Record<string, unknown>[] = historyItems) {
   await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items }));
 }
 
@@ -152,6 +152,44 @@ test("実行履歴は検索結果なしと条件クリアを案内する", async
   await expect(page.getByText("条件に一致する履歴がありません")).toBeVisible();
   await page.getByRole("button", { name: "条件をクリア" }).click();
   await expect(page.getByTestId("history-grid").locator("tbody tr")).toHaveCount(3);
+});
+
+test("実行履歴の評価フィルタに要確認は表示しない", async ({ page }) => {
+  await mockHistory(page);
+  await page.goto("/history");
+
+  const options = page.getByLabel("評価フィルタ").locator("option");
+  await expect(options).toHaveText(["すべて", "未評価", "良い", "違う"]);
+  await expect(options.filter({ hasText: "要確認" })).toHaveCount(0);
+});
+
+test("実行履歴一覧は 10 件ごとにページ送りする", async ({ page }) => {
+  const manyItems = Array.from({ length: 12 }, (_, index) => ({
+    id: `history-${index}`,
+    question: `質問 ${String(index).padStart(2, "0")}`,
+    engine: "select_ai",
+    generated_sql: "SELECT 1 FROM DUAL",
+    executable_sql: "SELECT 1 FROM DUAL",
+    created_at: `2026-06-${String(28 - index).padStart(2, "0")}T10:00:00.000Z`,
+    elapsed_ms: 100,
+    feedback_rating: null,
+    profile_id: "default",
+    profile_name: "既定プロファイル",
+    rewritten_question: "",
+    safety_is_safe: true,
+    result_row_count: 1,
+    result_columns: ["N"],
+    feedback_comment: "",
+  }));
+  await mockHistory(page, manyItems);
+  await page.goto("/history");
+
+  const rows = page.getByTestId("history-grid").locator("tbody tr");
+  await expect(rows).toHaveCount(10);
+  await expect(page.getByTestId("history-pagination")).toBeVisible();
+
+  await page.getByTestId("history-pagination").getByRole("button", { name: "次へ" }).click();
+  await expect(rows).toHaveCount(2);
 });
 
 test("実行履歴は読込失敗を既存データなしでも再試行できる", async ({ page }) => {

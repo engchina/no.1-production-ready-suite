@@ -14,7 +14,6 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import {
-  Banner,
   Button,
   EmptyState,
   PageHeader,
@@ -23,6 +22,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -303,21 +303,17 @@ export function QuestionClassifierModelsPage() {
     <>
       <PageHeader title={t("nav.questionClassifierModels")} subtitle={t("qcm.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity={messageTone === "success" ? "success" : "danger"}
-            action={
-              messageTone === "error" ? (
-                <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                  <RefreshCw size={15} aria-hidden="true" />
-                  <span>{t("learning.action.refresh")}</span>
-                </Button>
-              ) : undefined
-            }
-          >
-            {message}
-          </Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: messageTone === "success" ? "success" : "danger", message } : null}
+          action={
+            message && messageTone === "error" ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("learning.action.refresh")}</span>
+              </Button>
+            ) : undefined
+          }
+        />
 
         <DbObjectManagementStatusBar
           ariaLabel={t("qcm.status.aria")}
@@ -875,7 +871,7 @@ function ModelTrainPanel({
       />
       <DbObjectStepIndicator
         steps={[t("qcm.train.stepData"), t("qcm.train.stepEmbedding"), t("qcm.train.stepFit")]}
-        activeIndex={status?.ready ? 2 : canTrain ? 1 : 0}
+        activeIndex={status?.ready ? 3 : canTrain ? 1 : 0}
         ariaLabel={t("qcm.train.steps")}
         dataTestId="qcm-train-steps"
       />
@@ -1178,7 +1174,7 @@ function SimilarHistoryRow({ entry, onRerun }: { entry: SimilarHistoryItem; onRe
         </div>
         <StatusBadge variant="info" label={t("learning.similar.score", { score: Math.round(entry.score * 100) })} />
       </div>
-      <pre className="max-h-32 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+      <pre className="max-h-32 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
         <code>{entry.item.executable_sql || entry.item.generated_sql}</code>
       </pre>
       <Button type="button" variant="secondary" size="sm" onClick={onRerun}>

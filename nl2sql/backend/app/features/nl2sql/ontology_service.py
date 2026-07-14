@@ -32,6 +32,7 @@ from .ontology_models import (
     OntologyProposal,
     OntologyProposalKind,
     OntologyProposalPayload,
+    OntologyProposalStatus,
     OntologyReviewStatus,
     OntologyRevision,
     OntologyRevisionStatus,
@@ -1131,10 +1132,29 @@ class OntologyQuerySessionService:
                     _copy_model(proposal)
                     for proposal in self._proposals.values()
                     if proposal.profile_id == profile_id
+                    and proposal.status != OntologyProposalStatus.SUPERSEDED
                 ),
                 key=lambda proposal: (proposal.created_at, proposal.id),
                 reverse=True,
             )
+
+    def supersede_proposals_by_profile(self, profile_id: str) -> list[OntologyProposal]:
+        """当該 profile の全提案を SUPERSEDED にし、変更分のコピーを返す。
+
+        新規 AI 構築のたびにレビュー一覧をリセットするための一括処理。永続化は
+        呼び出し側(runtime)が返却した各提案を upsert して durable 化する。
+        """
+
+        with self._lock:
+            changed: list[OntologyProposal] = []
+            for proposal in self._proposals.values():
+                if (
+                    proposal.profile_id == profile_id
+                    and proposal.status != OntologyProposalStatus.SUPERSEDED
+                ):
+                    proposal.status = OntologyProposalStatus.SUPERSEDED
+                    changed.append(_copy_model(proposal))
+            return changed
 
     def update_proposal(self, proposal: OntologyProposal) -> OntologyProposal:
         with self._lock:

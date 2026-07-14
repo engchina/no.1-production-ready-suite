@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
-  Banner,
   Button,
   PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -171,7 +171,7 @@ function ImportWizard({
                 {warning}
               </p>
             ))}
-            <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground">
+            <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
               <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
             </pre>
             {result.sample_rows.length > 0 && (
@@ -245,12 +245,35 @@ export function TableManagementPage() {
     setDetail(null);
     setDetailTab("columns");
     try {
-      setDetail(await apiGet<DbAdminObjectDetail>(`/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}`));
+      setDetail(
+        await apiGet<DbAdminObjectDetail>(
+          `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=0`,
+        ),
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.load"));
     } finally {
       setLoading("");
     }
+  };
+
+  // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
+  const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
+    setDetailTab(nextTab);
+    if (nextTab !== "ddl" || !detail || detail.ddl) return;
+    const name = detail.name;
+    void (async () => {
+      try {
+        const full = await apiGet<DbAdminObjectDetail>(
+          `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=1`,
+        );
+        setDetail((current) =>
+          current && current.name === name ? { ...current, ddl: full.ddl } : current,
+        );
+      } catch {
+        // DDL 取得失敗時は既存の "-" 表示のまま
+      }
+    })();
   };
 
   const load = async (refreshSchema = false) => {
@@ -267,7 +290,11 @@ export function TableManagementPage() {
         tableData.items.find((item) => item.name === selectedTableName)?.name || tableData.items[0]?.name || "";
       setSelectedTableName(nextSelected);
       if (nextSelected) {
-        setDetail(await apiGet<DbAdminObjectDetail>(`/api/nl2sql/db-admin/tables/${encodeURIComponent(nextSelected)}`));
+        setDetail(
+          await apiGet<DbAdminObjectDetail>(
+            `/api/nl2sql/db-admin/tables/${encodeURIComponent(nextSelected)}?include_ddl=0`,
+          ),
+        );
       } else {
         setDetail(null);
       }
@@ -464,19 +491,19 @@ export function TableManagementPage() {
         subtitle={t("tableMgmt.subtitle")}
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("tableMgmt.action.refresh")}</span>
-              </Button>
-            }
-          >
-            {message} {t("tableMgmt.error.retryHint")}
-          </Banner>
-        )}
+        <PageNotice
+          notice={
+            message
+              ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` }
+              : null
+          }
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("tableMgmt.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         <DbObjectStatusBar
           count={tables?.items.length ?? 0}
@@ -571,7 +598,7 @@ export function TableManagementPage() {
                 exportAria: t("tableMgmt.exportColumns"),
                 drop: t("tableMgmt.grid.drop"),
               }}
-              onTabChange={setDetailTab}
+              onTabChange={handleDetailTabChange}
               onExport={(name) => void downloadColumnsXlsx(name)}
               onDrop={openDropDialog}
             />

@@ -1013,29 +1013,20 @@ class OntologyBuildService:
             f"候補 {len(drafts)} 件を登録中…",
         )
         proposal_ids: list[str] = []
-        # 過去の実行で登録済みのレビュー待ち提案と同一内容は再登録しない
-        # (AI 構築を繰り返してもレビュー一覧が重複で膨らまないようにする)。
-        seen_payload_keys: set[str] = set()
+        # 新規 AI 構築のたびにレビュー一覧をリセットする(前回の承認/却下/レビュー待ちを
+        # 一掃してから今回の候補だけを登録する)。取得失敗は登録処理を止めない。
         try:
-            for existing in self._runtime.list_profile_proposals(job.profile_id):
-                if existing.status.value != "submitted":
-                    continue
-                seen_payload_keys.add(
-                    _proposal_payload_key(
-                        existing.kind.value, dict(existing.proposal_payload.values)
-                    )
-                )
-        except Exception:  # pragma: no cover - 一覧取得の失敗は dedup を諦めるだけ
-            logger.warning("ontology_build_existing_proposals_unavailable", exc_info=True)
-        reused = 0
+            self._runtime.supersede_profile_proposals(job.profile_id)
+        except Exception:  # pragma: no cover - 一掃失敗は登録処理を止めない
+            logger.warning("ontology_build_supersede_failed", exc_info=True)
+        # 同一 run 内で複数ステップが同じ候補を出した場合の dedup。provenance の
+        # timestamp は揺れるため、安定 ID(node/edge)と kind で同一性を判定する。
+        seen_payload_keys: set[str] = set()
         for draft in drafts:
-            # 複数ステップ・複数実行が同じ候補を出した場合の dedup。provenance の
-            # timestamp は揺れるため、安定 ID(node/edge)と kind で同一性を判定する。
             payload_key = _proposal_payload_key(
                 draft.kind.value, dict(draft.payload.values)
             )
             if payload_key in seen_payload_keys:
-                reused += 1
                 continue
             seen_payload_keys.add(payload_key)
             proposal = self._runtime.create_build_proposal(
@@ -1054,8 +1045,6 @@ class OntologyBuildService:
                 f"{len(proposal_ids)} 件登録済み(候補 {len(drafts)} 件)",
             )
         registered_note = f"提案 {len(proposal_ids)} 件を登録しました。"
-        if reused:
-            registered_note += f"(レビュー待ちの既存提案 {reused} 件は再利用)"
         self._set_step(
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   ArrowDownUp,
   ArrowLeft,
   Bot,
@@ -17,8 +18,10 @@ import {
   EmptyState,
   PageHeader,
   StatusBadge,
+  toast,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
@@ -540,6 +543,7 @@ function ProfileEditor({
   viewNames,
   objectFilter,
   saving,
+  nameError,
   oraclePreview,
   oracleConfirmation,
   rebuildAgentAssets,
@@ -547,6 +551,7 @@ function ProfileEditor({
   deleting,
   onObjectFilterChange,
   onFormChange,
+  onNameErrorClear,
   onToggleTable,
   onToggleView,
   onSave,
@@ -561,6 +566,7 @@ function ProfileEditor({
   viewNames: string[];
   objectFilter: string;
   saving: boolean;
+  nameError: boolean;
   oraclePreview: SelectAiDbProfileMutationData | null;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
@@ -568,6 +574,7 @@ function ProfileEditor({
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
   onFormChange: (updater: (current: ProfileFormState) => ProfileFormState) => void;
+  onNameErrorClear: () => void;
   onToggleTable: (name: string) => void;
   onToggleView: (name: string) => void;
   onSave: () => void;
@@ -614,9 +621,22 @@ function ProfileEditor({
               onChange={(event) => {
                 const value = event.currentTarget.value;
                 onFormChange((current) => ({ ...current, name: value }));
+                if (nameError) onNameErrorClear();
               }}
+              aria-invalid={nameError}
+              aria-describedby={nameError ? "profile-name-error" : undefined}
               className={inputClass}
             />
+            {nameError && (
+              <p
+                id="profile-name-error"
+                role="alert"
+                className="flex items-center gap-1.5 text-xs font-normal text-danger"
+              >
+                <AlertCircle size={14} aria-hidden="true" />
+                <span>{t("profiles.error.nameRequired")}</span>
+              </p>
+            )}
           </label>
           <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("profiles.field.category")}</span>
@@ -792,12 +812,12 @@ function OracleMutationResult({ result }: { result: SelectAiDbProfileMutationDat
         </p>
       ))}
       {result.ddl.length > 0 && (
-        <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground">
+        <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
           <code>{result.ddl.join("\n")}</code>
         </pre>
       )}
       {result.profile && (
-        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-5 text-code-fg">
+        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg">
           <code>{JSON.stringify(result.profile.attributes ?? {}, null, 2)}</code>
         </pre>
       )}
@@ -857,7 +877,9 @@ export function ProfileManagementPage() {
   const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
   const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
   const [loading, setLoading] = useState("");
+  // message は初回ロード失敗の常設 Banner 専用。保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
+  const [nameError, setNameError] = useState(false);
 
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
@@ -1026,11 +1048,11 @@ export function ProfileManagementPage() {
 
   const save = async () => {
     if (!form.name.trim()) {
-      setMessage(t("profiles.error.nameRequired"));
+      setNameError(true);
       return;
     }
+    setNameError(false);
     setLoading("save");
-    setMessage("");
     try {
       const payload = formToPayload(form);
       const saved = selectedProfile
@@ -1058,9 +1080,9 @@ export function ProfileManagementPage() {
         ]);
       }
       applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
-      setMessage(t("profiles.message.saved"));
+      toast.success(t("profiles.message.saved"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.save"));
+      toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
     } finally {
       setLoading("");
     }
@@ -1077,7 +1099,6 @@ export function ProfileManagementPage() {
     if (!ok) return;
 
     setLoading(`delete-profile-${profile.id}`);
-    setMessage("");
     try {
       const deleted = await apiDelete<Nl2SqlProfile>(
         `/api/nl2sql/profiles/${encodeURIComponent(profile.id)}`
@@ -1087,9 +1108,9 @@ export function ProfileManagementPage() {
       if (profileParam) {
         setSearchParams({}, { replace: true });
       }
-      setMessage(t("profiles.message.deleted", { name: deleted.name }));
+      toast.success(t("profiles.message.deleted", { name: deleted.name }));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.delete"));
+      toast.error(err instanceof Error ? err.message : t("profiles.error.delete"));
     } finally {
       setLoading("");
     }
@@ -1110,6 +1131,7 @@ export function ProfileManagementPage() {
       viewNames={filteredViewNames}
       objectFilter={objectFilter}
       saving={loading === "save"}
+      nameError={nameError}
       oraclePreview={oraclePreview}
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
@@ -1119,6 +1141,7 @@ export function ProfileManagementPage() {
       onFormChange={setForm}
       onToggleTable={(name) => toggleObject("table", name)}
       onToggleView={(name) => toggleObject("view", name)}
+      onNameErrorClear={() => setNameError(false)}
       onSave={() => void save()}
       onDelete={() => {
         if (selectedProfile) void deleteProfile(selectedProfile);
@@ -1137,11 +1160,15 @@ export function ProfileManagementPage() {
       />
 
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <div className="flex flex-col gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between" role="status">
-            <span>{message}</span>
-          </div>
-        )}
+        <PageNotice
+          notice={message ? { tone: "danger", message: `${message} ${t("profiles.error.retryHint")}` } : null}
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("profiles.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         {activeView === "list" ? (
           <>

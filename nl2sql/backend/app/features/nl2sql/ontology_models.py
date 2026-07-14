@@ -554,6 +554,9 @@ class OntologyProposalStatus(StrEnum):
     SUBMITTED = "submitted"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+    # 新規 AI 構築の実行時に、前回のレビュー一覧を一掃するための終端状態。
+    # レビュー一覧(list_proposals_by_profile)からは除外され UI には現れない。
+    SUPERSEDED = "superseded"
 
 
 class OntologyProposalKind(StrEnum):

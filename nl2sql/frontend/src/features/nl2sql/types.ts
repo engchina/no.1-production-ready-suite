@@ -339,7 +339,7 @@ export interface HistoryItem {
   generated_sql: string;
   created_at: string;
   elapsed_ms?: number | null;
-  feedback_rating?: "good" | "bad" | "needs_review" | null;
+  feedback_rating?: "good" | "bad" | null;
   profile_id: string;
   profile_name: string;
   rewritten_question: string;
@@ -354,7 +354,7 @@ export interface HistoryData {
   items: HistoryItem[];
 }
 
-export type FeedbackRating = "good" | "bad" | "needs_review";
+export type FeedbackRating = "good" | "bad";
 
 export interface FeedbackData {
   history_id: string;

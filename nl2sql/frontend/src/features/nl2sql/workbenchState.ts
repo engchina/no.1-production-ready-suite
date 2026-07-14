@@ -81,14 +81,18 @@ export function insertTextAtRange(source: string, insertText: string, start: num
 }
 
 /**
- * スキーマ参照からの挿入で、各項目を改行区切りにするための前置文字列を返す。
- * 挿入位置が先頭（start<=0）または直前がすでに改行のときは付けない（先頭空行・二重改行を防ぐ）。
- * 直前が全角コロン「：」のとき（穴埋めテンプレートの「ラベル：」直後）はインラインで埋める。
+ * スキーマ参照からの挿入で各項目を改行区切りにするための前置文字列を返す。
+ * 直前に文字が無い（先頭 start<=0）、または直前が「値がこれから続く」ことを示す文字
+ * （等号・比較演算子・開き括弧・カンマ・空白・改行・コロン）のときは改行しない。
+ * それ以外は各項目を改行で区切るため "\n" を前置する。
+ * ※ \s は半角/全角スペース・タブ・改行を含むため、空白系と二重改行防止を一括でカバーする。
  */
+const INLINE_PREV_CHARS = /[：:＝=＜<＞>（(［[「、，,\s]/;
+
 export function leadingNewlinePrefix(source: string, start: number): string {
   if (start <= 0) return "";
   const prev = source[start - 1];
-  return prev === "\n" || prev === "：" ? "" : "\n";
+  return INLINE_PREV_CHARS.test(prev) ? "" : "\n";
 }
 
 /**

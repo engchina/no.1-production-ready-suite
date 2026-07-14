@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
-import { Banner, Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -98,7 +99,7 @@ function SampleSqlPreview({ sql }: { sql: string }) {
         <p className="font-semibold text-foreground">{t("dataTools.sample.sqlPreview")}</p>
         <p className="mt-1 text-sm text-muted">{t("dataTools.sample.sqlPreviewHint")}</p>
       </div>
-      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
         <code>{sql || "-"}</code>
       </pre>
     </section>
@@ -188,19 +189,15 @@ export function SampleDataPage() {
     <>
       <PageHeader title={t("sampleData.title")} subtitle={t("sampleData.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("dataTools.sample.refresh")}</span>
-              </Button>
-            }
-          >
-            {message}
-          </Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: "danger", message } : null}
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("dataTools.sample.refresh")}</span>
+            </Button>
+          }
+        />
 
         <SampleStatusBar sampleInfo={sampleInfo} loading={loading} onRefresh={() => void load()} />
 

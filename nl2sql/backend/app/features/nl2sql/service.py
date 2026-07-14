@@ -6113,20 +6113,68 @@ class Nl2SqlService:
             warnings=warnings,
         )
 
-    def get_db_admin_object(self, object_name: str, object_type: str) -> DbAdminObjectDetail:
+    def _ontology_business_names(self, object_name: str) -> dict[str, str]:
+        """物理列名(大文字) -> business_name_ja。未構築/失敗時は空 dict。
+
+        論理名を「オントロジーの業務日本語名」ソースに分離するための lookup。
+        comment(生カラムコメント)とは別系統にする。
+        """
+        # ponytail: オントロジー nodes の全走査を detail 取得ごとに実行。管理画面の
+        # 低頻度用途なので許容。遅ければ (revision_id, object) キャッシュに上げる。
+        try:
+            # ontology_router が nl2sql_service を import するため遅延 import で循環回避
+            from app.features.nl2sql.ontology_models import OntologyNodeKind
+            from app.features.nl2sql.ontology_router import ontology_runtime
+
+            ontology = ontology_runtime.current_ontology()
+        except Exception:
+            return {}
+        target = object_name.upper()
+        names: dict[str, str] = {}
+        for node in ontology.nodes:
+            if node.kind != OntologyNodeKind.COLUMN:
+                continue
+            parts = node.technical_name.upper().split(".")  # "OWNER.OBJECT.COLUMN"
+            if len(parts) >= 2 and parts[-2] == target:
+                names[parts[-1]] = node.business_name_ja
+        return names
+
+    def get_db_admin_object(
+        self, object_name: str, object_type: str, *, include_ddl: bool = True
+    ) -> DbAdminObjectDetail:
         normalized_type = "view" if object_type.lower() == "view" else "table"
         if self._use_oracle_runtime():
             try:
-                return DbAdminObjectDetail.model_validate(
+                detail = DbAdminObjectDetail.model_validate(
                     self._oracle_adapter.get_db_admin_object_detail(
                         object_name=object_name,
                         object_type=normalized_type,
+                        include_ddl=include_ddl,
                     )
                 )
             except OracleAdapterError as exc:
-                fallback = self._catalog_object_detail(object_name, normalized_type)
-                return fallback.model_copy(update={"warnings": [str(exc)]})
-        return self._catalog_object_detail(object_name, normalized_type)
+                fallback = self._catalog_object_detail(
+                    object_name, normalized_type, include_ddl=include_ddl
+                )
+                detail = fallback.model_copy(update={"warnings": [str(exc)]})
+        else:
+            detail = self._catalog_object_detail(
+                object_name, normalized_type, include_ddl=include_ddl
+            )
+        # 論理名(logical_name)はオントロジー業務名のみを正とし、無ければ空にする。
+        # 生カラムコメントを論理名へ流用せず、comment 列との重複表示を避ける(Option B)。
+        names = self._ontology_business_names(object_name)
+        detail = detail.model_copy(
+            update={
+                "columns": [
+                    col.model_copy(
+                        update={"logical_name": names.get(col.column_name.upper(), "")}
+                    )
+                    for col in detail.columns
+                ]
+            }
+        )
+        return detail
 
     def drop_db_admin_table(self, request: DbAdminDropTableRequest) -> DbAdminExecuteData:
         table_name = self._sanitize_import_table_name(request.table_name)
@@ -6390,7 +6438,7 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         columns_sheet = workbook.active
         columns_sheet.title = "columns"
-        headers = ["物理名", "論理名", "型", "NULL 可", "サンプル"]
+        headers = ["物理名", "論理名", "コメント", "型", "NULL 可", "サンプル"]
         columns_sheet.append(headers)
         for cell in columns_sheet[1]:
             cell.font = styles.Font(bold=True)
@@ -6404,13 +6452,21 @@ class Nl2SqlService:
             columns_sheet.append(
                 [
                     column.column_name,
-                    column.logical_name,
+                    column.logical_name or "-",
+                    column.comment or "-",
                     column.data_type,
                     "YES" if column.nullable else "NO",
                     sample_text or "-",
                 ]
             )
-        for column_letter, width in {"A": 28, "B": 32, "C": 22, "D": 12, "E": 48}.items():
+        for column_letter, width in {
+            "A": 28,
+            "B": 32,
+            "C": 40,
+            "D": 22,
+            "E": 12,
+            "F": 48,
+        }.items():
             columns_sheet.column_dimensions[column_letter].width = width
         buffer = io.BytesIO()
         workbook.save(buffer)
@@ -6976,13 +7032,25 @@ class Nl2SqlService:
             prompt_profile=prompt_profile,
         )
 
-    def _catalog_object_detail(self, object_name: str, object_type: str) -> DbAdminObjectDetail:
+    def _catalog_object_detail(
+        self, object_name: str, object_type: str, *, include_ddl: bool = True
+    ) -> DbAdminObjectDetail:
         table = self._find_catalog_table(object_name)
         if table is None:
             return DbAdminObjectDetail(
                 name=_normalize_identifier(object_name),
                 object_type=object_type,
                 warnings=[f"{object_name}: catalog に存在しません。"],
+            )
+        if not include_ddl:
+            return DbAdminObjectDetail(
+                name=table.table_name,
+                owner=table.owner,
+                object_type=object_type,
+                row_count=table.row_count,
+                comment=table.comment,
+                columns=table.columns,
+                ddl="",
             )
         column_defs = ", ".join(
             f"{_quote_identifier(column.column_name)} {column.data_type}"
@@ -8534,7 +8602,9 @@ class Nl2SqlService:
                     profile_id=str(row.get("profile_id") or ""),
                     profile_name=str(row.get("profile_id") or ""),
                 )
-            if item.feedback_rating == FeedbackRating.BAD and not include_bad:
+            # GOOD 評価が付いた履歴だけを検索・few-shot 対象にする
+            # (評価なし・BAD は除外)。include_bad は影響しない。
+            if item.feedback_rating != FeedbackRating.GOOD:
                 continue
             if not item.safety_is_safe:
                 continue
@@ -8568,7 +8638,9 @@ class Nl2SqlService:
             return []
         scored: list[SimilarHistoryItem] = []
         for item in history:
-            if item.feedback_rating == FeedbackRating.BAD and not include_bad:
+            # GOOD 評価が付いた履歴だけを検索・few-shot 対象にする
+            # (評価なし・BAD は除外)。include_bad は影響しない。
+            if item.feedback_rating != FeedbackRating.GOOD:
                 continue
             if not item.safety_is_safe:
                 continue
@@ -8591,8 +8663,6 @@ class Nl2SqlService:
                 base_score += 0.15
             if item.feedback_rating == FeedbackRating.GOOD:
                 base_score += 0.25
-            elif item.feedback_rating == FeedbackRating.NEEDS_REVIEW:
-                base_score += 0.05
             score = round(min(base_score, 1.0), 3)
             visible_terms = self._visible_similarity_terms(question, item, overlap)
             reason_terms = "、".join(visible_terms[:4] or overlap[:4])

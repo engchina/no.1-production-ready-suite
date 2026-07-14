@@ -19,6 +19,7 @@ import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
 import { DataManagementPage } from "@/features/nl2sql/pages/DataManagementPage";
+import { DirectSqlPage } from "@/features/nl2sql/pages/DirectSqlPage";
 import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
 import { FeedbackManagementPage } from "@/features/nl2sql/pages/FeedbackManagementPage";
 import { GlossaryRulesPage } from "@/features/nl2sql/pages/GlossaryRulesPage";
@@ -38,9 +39,22 @@ import { DatabaseSettingsPage as Nl2SqlDatabaseSettingsPage } from "@/features/n
 import { SqlAnalysisPage } from "@/features/nl2sql/pages/SqlAnalysisPage";
 import { SqlToQuestionPage } from "@/features/nl2sql/pages/SqlToQuestionPage";
 
+/**
+ * ナビ切替で state を破棄したくない「AI 活用」4画面。常時マウントし表示のみ切替する。
+ * module 直下で JSX を一度だけ生成し、同一 instance を維持する(再マウント=state破棄を防ぐ)。
+ */
+const KEEP_ALIVE_PAGES = [
+  { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
+  { path: APP_ROUTES.sqlAnalysis, element: <SqlAnalysisPage /> },
+  { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
+  { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
+];
+const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.path));
+
 export function App() {
   return (
     <AppLayout>
+      <KeepAlivePages />
       <Routes>
         <Route path={APP_ROUTES.dashboard} element={<Navigate to={APP_ROUTES.query} replace />} />
         <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
@@ -52,13 +66,14 @@ export function App() {
         {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
         <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
         <Route path="/data-tools" element={<Navigate to={APP_ROUTES.dataManagement} replace />} />
-        <Route path={APP_ROUTES.query} element={<Nl2SqlWorkbench />} />
+        {/* 実体は KeepAlivePages で常時マウント。ここでは route match だけ成立させ警告を防ぐ。 */}
+        {KEEP_ALIVE_PAGES.map((page) => (
+          <Route key={page.path} path={page.path} element={null} />
+        ))}
         <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
         <Route path={APP_ROUTES.ontologyBuild} element={<OntologyBuildPage />} />
         <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />
         <Route path={APP_ROUTES.globalRules} element={<GlobalRulesPage />} />
-        <Route path={APP_ROUTES.sqlAnalysis} element={<SqlAnalysisPage />} />
-        <Route path={APP_ROUTES.sqlToQuestion} element={<SqlToQuestionPage />} />
         <Route path={APP_ROUTES.feedbackManagement} element={<FeedbackManagementPage />} />
         <Route path={APP_ROUTES.learning} element={<Navigate to={APP_ROUTES.feedbackManagement} replace />} />
         <Route
@@ -87,6 +102,26 @@ export function App() {
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
       </Routes>
     </AppLayout>
+  );
+}
+
+/**
+ * 4画面を lazy-mount(初回訪問時のみ mount)し、以後は unmount せず `display` で表示を切替える。
+ * 未訪問ページは描画しないので初回ロードでの eager fetch を避けられる。
+ */
+function KeepAlivePages() {
+  const { pathname } = useLocation();
+  const mounted = useRef(new Set<string>());
+  if (KEEP_ALIVE_PATHS.has(pathname)) mounted.current.add(pathname);
+
+  return (
+    <>
+      {KEEP_ALIVE_PAGES.filter((page) => mounted.current.has(page.path)).map((page) => (
+        <div key={page.path} style={{ display: page.path === pathname ? undefined : "none" }}>
+          {page.element}
+        </div>
+      ))}
+    </>
   );
 }
 

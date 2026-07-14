@@ -10,13 +10,13 @@ import {
 } from "lucide-react";
 
 import {
-  Banner,
   Button,
   EmptyState,
   PageHeader,
   StatusBadge,
 } from "@engchina/production-ready-ui";
 
+import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -256,19 +256,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         )}
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        {message && (
-          <Banner
-            severity="danger"
-            action={
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("tableMgmt.action.refresh")}</span>
-              </Button>
-            }
-          >
-            {message} {t("metadataSql.error.retryHint")}
-          </Banner>
-        )}
+        <PageNotice
+          notice={message ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` } : null}
+          action={
+            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("tableMgmt.action.refresh")}</span>
+            </Button>
+          }
+        />
 
         <DbObjectStatusBar
           count={allTargets.length}
@@ -655,7 +651,7 @@ function MetadataTextarea({ label, value, rows }: { label: string; value: string
         readOnly
         value={value}
         rows={rows}
-        className="rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground"
+        className="rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 text-foreground"
       />
     </label>
   );
