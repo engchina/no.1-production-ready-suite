@@ -6,9 +6,14 @@ services:
     env_file:
       - backend/.env.example
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DEBUG: ${DEBUG:-true}
       CORS_ORIGINS: '["http://localhost:3001","http://127.0.0.1:3001"]'
       NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-deterministic}
-      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-memory}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_ONTOLOGY_WORKER_MODE: ${NL2SQL_ONTOLOGY_WORKER_MODE:-inprocess}
+    volumes:
+      - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
     ports:
       - "8000:8000"
     healthcheck:
@@ -16,6 +21,21 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+
+  ontology-worker:
+    profiles: ["ontology"]
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+    command: ["python", "-m", "app.features.nl2sql.ontology_worker"]
+    env_file:
+      - backend/.env.example
+    environment:
+      NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-oracle}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_ONTOLOGY_WORKER_MODE: external
+    volumes:
+      - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
 
   frontend:
     build:
@@ -26,3 +46,6 @@ services:
         condition: service_healthy
     ports:
       - "3001:80"
+
+volumes:
+  ontology-source-data:

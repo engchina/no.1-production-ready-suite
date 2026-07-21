@@ -5,6 +5,10 @@
 
 ## プロジェクト概要
 
+> **製品名と固有 namespace は `Production Ready NL2SQL` / `NL2SQL` を正とする。**
+> 新規 DB object、cookie、storage key、context、UI の製品ラベルへ汎用 `RAG` prefix を使用しない。
+> `GraphRAG`、`RAGAS`、`RAGFlow` など技術・製品の固有名詞はこの置換対象外とする。
+
 **A production-ready RAG reference implementation covering data ingestion, chunking, indexing, hybrid retrieval, reranking, evaluation, observability, guardrails, and deployment best practices.**
 
 本プロジェクトは特定業務ドメインに固定せず、RAG システムを本番品質で構築するための参照実装を目標とする。

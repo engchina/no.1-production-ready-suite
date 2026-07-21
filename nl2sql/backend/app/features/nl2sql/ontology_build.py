@@ -5,17 +5,19 @@ profile view スコープ外の owner/object/column を参照する候補は pro
 warnings に落とす。生成物は既存 PROPOSALS(承認フロー)にのみ登録され、
 accept → draft → publish の既存ゲートを通過するまで SQL 生成には使われない。
 
-job は in-memory(threading)。成果物 = proposal は store に永続化されるため、
-再起動時は job だけが消え、レビュー待ちの提案は残る。
+job と実行入力は Oracle store に永続化する。local は thread、production は独立 worker が
+同じ処理を実行し、成果物は proposal の承認ゲートを通る。
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,12 +44,18 @@ from app.features.nl2sql.ontology_models import (
     OntologyProvenance,
     OntologyRelationshipCandidate,
     OntologyReviewStatus,
+    OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceProgress,
+    OntologySourceStatus,
     ProfileOntologyView,
     QaPair,
     utc_now,
 )
-from app.features.nl2sql.ontology_store import stable_ontology_id
+from app.features.nl2sql.ontology_observability import record_job, record_source_extraction
+from app.features.nl2sql.ontology_sources import OntologySourceStorage, extract_ontology_source
+from app.features.nl2sql.ontology_store import canonical_json, stable_ontology_id
+from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -74,17 +82,13 @@ def _header_index(headers: list[str], candidates: tuple[str, ...]) -> int | None
     return None
 
 
-def _rows_from_content(
-    filename: str, content: bytes, warnings: list[str]
-) -> list[list[str]]:
+def _rows_from_content(filename: str, content: bytes, warnings: list[str]) -> list[list[str]]:
     suffix = Path(filename).suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
         try:
             import openpyxl  # type: ignore[import-untyped]
 
-            workbook = openpyxl.load_workbook(
-                io.BytesIO(content), read_only=True, data_only=True
-            )
+            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         except Exception as exc:
             warnings.append(f"XLSX の読込に失敗しました: {exc}")
             return []
@@ -250,12 +254,18 @@ class _ConversionResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def _provenance(job_id: str, inferred_by: str, evidence_ja: str) -> OntologyProvenance:
+def _provenance(
+    job_id: str,
+    inferred_by: str,
+    evidence_ja: str,
+    source_evidence: list[Any] | None = None,
+) -> OntologyProvenance:
     return OntologyProvenance(
         source_kind=OntologySourceKind.INFERRED,
         source_id=f"ontology_build:{job_id}",
         source_detail=evidence_ja,
         inferred_by=inferred_by,
+        evidence=list(source_evidence or []),
     )
 
 
@@ -362,9 +372,7 @@ def _convert_relationship(
         if qa_sql_texts is not None:
             left_column = str(left.metadata.get("column_name", "")).upper()
             right_column = str(right.metadata.get("column_name", "")).upper()
-            if not any(
-                left_column in sql and right_column in sql for sql in qa_sql_texts
-            ):
+            if not any(left_column in sql and right_column in sql for sql in qa_sql_texts):
                 result.warnings.append(
                     f"関係候補 {candidate.relationship_name_ja} の Join 列が Q/A の SQL に "
                     "現れないため提案化しません。"
@@ -502,15 +510,14 @@ def convert_extraction_to_proposals(
     job_id: str,
     inferred_by: str,
     qa_sql_texts: list[str] | None = None,
+    source_evidence: list[Any] | None = None,
 ) -> tuple[list[ProposalDraft], list[str]]:
     """検証済み LLM 出力を承認フロー用の proposal 下書きへ決定論変換する。"""
 
     resolver = _ScopeResolver(ontology, view)
     revision_id = ontology.revision.id
     result = _ConversionResult(warnings=list(extraction.warnings_ja))
-    normalized_qa = (
-        [sql.upper() for sql in qa_sql_texts] if qa_sql_texts is not None else None
-    )
+    normalized_qa = [sql.upper() for sql in qa_sql_texts] if qa_sql_texts is not None else None
 
     # 同義語は entity 候補の aliases に合流させる(対象 object が同じもの)。
     alias_by_object: dict[str, list[str]] = {}
@@ -534,23 +541,21 @@ def convert_extraction_to_proposals(
             description_ja=synonym.evidence_ja,
             aliases=synonym.aliases,
             physical_mappings=[target_column.physical_mappings[0].model_copy(deep=True)],
-            provenance=_provenance(job_id, inferred_by, synonym.evidence_ja),
+            provenance=_provenance(job_id, inferred_by, synonym.evidence_ja, source_evidence),
             review_status=OntologyReviewStatus.PROPOSED,
         )
         term_edge = _maps_to_edge(
             term_node,
             target_column,
             revision_id=revision_id,
-            provenance=_provenance(job_id, inferred_by, synonym.evidence_ja),
+            provenance=_provenance(job_id, inferred_by, synonym.evidence_ja, source_evidence),
         )
         result.drafts.append(
             ProposalDraft(
                 kind=OntologyProposalKind.ALIAS,
                 title_ja=f"同義語の提案: {synonym.target}",
                 description_ja=synonym.evidence_ja or "、".join(synonym.aliases),
-                payload=_upserts_payload(
-                    OntologyProposalKind.ALIAS, [term_node], [term_edge]
-                ),
+                payload=_upserts_payload(OntologyProposalKind.ALIAS, [term_node], [term_edge]),
             )
         )
 
@@ -561,10 +566,8 @@ def convert_extraction_to_proposals(
                 f"命名候補 {candidate.object_name} を profile 範囲内に解決できません。"
             )
             continue
-        provenance = _provenance(job_id, inferred_by, candidate.description_ja)
-        aliases = [
-            *dict.fromkeys([*candidate.aliases, *alias_by_object.pop(object_node.id, [])])
-        ]
+        provenance = _provenance(job_id, inferred_by, candidate.description_ja, source_evidence)
+        aliases = [*dict.fromkeys([*candidate.aliases, *alias_by_object.pop(object_node.id, [])])]
         business = _business_entity_node(
             object_node,
             revision_id=revision_id,
@@ -575,9 +578,7 @@ def convert_extraction_to_proposals(
             provenance=provenance,
             synthetic=False,
         )
-        edge = _maps_to_edge(
-            business, object_node, revision_id=revision_id, provenance=provenance
-        )
+        edge = _maps_to_edge(business, object_node, revision_id=revision_id, provenance=provenance)
         result.drafts.append(
             ProposalDraft(
                 kind=OntologyProposalKind.MAPPING,
@@ -595,7 +596,7 @@ def convert_extraction_to_proposals(
         )
         if object_node is None:
             continue
-        provenance = _provenance(job_id, inferred_by, "同義語の提案")
+        provenance = _provenance(job_id, inferred_by, "同義語の提案", source_evidence)
         business = _business_entity_node(
             object_node,
             revision_id=revision_id,
@@ -606,9 +607,7 @@ def convert_extraction_to_proposals(
             provenance=provenance,
             synthetic=False,
         )
-        edge = _maps_to_edge(
-            business, object_node, revision_id=revision_id, provenance=provenance
-        )
+        edge = _maps_to_edge(business, object_node, revision_id=revision_id, provenance=provenance)
         result.drafts.append(
             ProposalDraft(
                 kind=OntologyProposalKind.ALIAS,
@@ -623,7 +622,7 @@ def convert_extraction_to_proposals(
             relationship,
             resolver,
             revision_id=revision_id,
-            provenance=_provenance(job_id, inferred_by, relationship.evidence_ja),
+            provenance=_provenance(job_id, inferred_by, relationship.evidence_ja, source_evidence),
             qa_sql_texts=normalized_qa,
             result=result,
         )
@@ -633,7 +632,7 @@ def convert_extraction_to_proposals(
             metric,
             resolver,
             revision_id=revision_id,
-            provenance=_provenance(job_id, inferred_by, metric.evidence_ja),
+            provenance=_provenance(job_id, inferred_by, metric.evidence_ja, source_evidence),
             result=result,
         )
 
@@ -687,6 +686,7 @@ def parse_extraction(raw: str) -> OntologyBuildExtraction:
 # --- job service ------------------------------------------------------------------------------
 
 _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
+    OntologyBuildStepName.SOURCE_EXTRACTION: "資料の抽出",
     OntologyBuildStepName.SCHEMA_CONTEXT: "スキーマ情報の準備",
     OntologyBuildStepName.SCHEMA_NAMING: "業務エンティティ命名",
     OntologyBuildStepName.QA_EXTRACTION: "Q/A からの抽出",
@@ -694,14 +694,23 @@ _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.PROPOSAL_REGISTRATION: "提案の登録",
 }
 _MAX_JOB_EVENTS = 100
+# 完了(succeeded/failed)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
+_MAX_FINISHED_JOBS = 20
 
 
 class OntologyBuildService:
-    """AI オントロジー構築 job(threading + ポーリング。nl2sql の既存 job パターン踏襲)。"""
+    """永続 job。local は thread、production は独立 worker から同じ run を呼ぶ。"""
 
-    def __init__(self, runtime: Any) -> None:
+    def __init__(
+        self,
+        runtime: Any,
+        *,
+        source_storage: OntologySourceStorage | None = None,
+    ) -> None:
         self._runtime = runtime
+        self._source_storage = source_storage or OntologySourceStorage()
         self._jobs: dict[str, OntologyBuildJob] = {}
+        self._inputs: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def start(
@@ -714,17 +723,46 @@ class OntologyBuildService:
         run_qa_extraction: bool = True,
         run_text_extraction: bool = True,
         initial_warnings: list[str] | None = None,
+        source_documents: list[OntologySourceDocument] | None = None,
+        idempotency_key: str | None = None,
     ) -> OntologyBuildJob:
         # 未知 profile を非同期 error に隠さない。重いオントロジー同期は worker 側の
         # 「スキーマ情報の準備」ステップで行い、POST は即時に job を返す。
         self._runtime.ensure_profile(profile_id)
         pairs = qa_pairs or []
-        steps = [OntologyBuildStep(name=OntologyBuildStepName.SCHEMA_CONTEXT)]
+        sources = source_documents or []
+        request_hash = hashlib.sha256(
+            canonical_json(
+                {
+                    "profile_id": profile_id,
+                    "business_text": business_text,
+                    "qa_pairs": pairs,
+                    "source_sha256": [source.sha256 for source in sources],
+                    "run_schema_naming": run_schema_naming,
+                    "run_qa_extraction": run_qa_extraction,
+                    "run_text_extraction": run_text_extraction,
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        if idempotency_key:
+            existing = self._runtime.store.get_idempotency("build_ontology", idempotency_key)
+            if existing is not None:
+                if existing.get("request_hash") != request_hash:
+                    raise ValueError(
+                        "同じ Idempotency-Key が別の構築リクエストに使用されています。"
+                    )
+                restored = self.get(str(existing.get("resource_id") or ""))
+                if restored is not None:
+                    return restored
+        steps: list[OntologyBuildStep] = []
+        if sources:
+            steps.append(OntologyBuildStep(name=OntologyBuildStepName.SOURCE_EXTRACTION))
+        steps.append(OntologyBuildStep(name=OntologyBuildStepName.SCHEMA_CONTEXT))
         if run_schema_naming:
             steps.append(OntologyBuildStep(name=OntologyBuildStepName.SCHEMA_NAMING))
-        if run_qa_extraction and pairs:
+        if run_qa_extraction and (pairs or sources):
             steps.append(OntologyBuildStep(name=OntologyBuildStepName.QA_EXTRACTION))
-        if run_text_extraction and business_text.strip():
+        if run_text_extraction and (business_text.strip() or sources):
             steps.append(OntologyBuildStep(name=OntologyBuildStepName.TEXT_EXTRACTION))
         steps.append(OntologyBuildStep(name=OntologyBuildStepName.PROPOSAL_REGISTRATION))
         job = OntologyBuildJob(
@@ -733,34 +771,184 @@ class OntologyBuildService:
             steps=steps,
             # POST 応答に最初のフィードバックを含める(worker 開始を待たない)
             events=[
-                OntologyBuildEvent(
-                    message_ja="構築リクエストを受け付けました。処理を開始します。"
-                )
+                OntologyBuildEvent(message_ja="構築リクエストを受け付けました。処理を開始します。")
             ],
             warnings_ja=list(initial_warnings or []),
+            source_document_ids=[source.id for source in sources],
+            sources=[
+                OntologySourceProgress(
+                    source_document_id=source.id,
+                    filename=source.filename,
+                    status=source.status,
+                )
+                for source in sources
+            ],
         )
+        for source in sources:
+            self._save_source_document(source)
         with self._lock:
+            self._prune_finished_jobs_locked()
             self._jobs[job.id] = job
-        thread = threading.Thread(
-            target=self._run_safely,
-            args=(job.id, business_text, pairs),
-            daemon=True,
-        )
-        thread.start()
+            self._inputs[job.id] = {
+                "business_text": business_text,
+                "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
+            }
+        self._persist_job(job)
+        if idempotency_key:
+            self._runtime.store.save_idempotency(
+                {
+                    "operation": "build_ontology",
+                    "idempotency_key": idempotency_key,
+                    "request_hash": request_hash,
+                    "resource_id": job.id,
+                    "status": "accepted",
+                }
+            )
+        if get_settings().nl2sql_ontology_worker_mode == "inprocess":
+            thread = threading.Thread(
+                target=self._run_safely,
+                args=(job.id, business_text, pairs),
+                daemon=True,
+            )
+            thread.start()
         return job.model_copy(deep=True)
 
     def get(self, job_id: str) -> OntologyBuildJob | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return job.model_copy(deep=True) if job is not None else None
+            if job is not None:
+                return job.model_copy(deep=True)
+        document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        if document is None or document.get("job_type") != "build":
+            return None
+        restored = OntologyBuildJob.model_validate(document["payload"])
+        with self._lock:
+            self._jobs[job_id] = restored
+            input_payload = document.get("input_payload")
+            if isinstance(input_payload, dict):
+                self._inputs[job_id] = dict(input_payload)
+        return restored.model_copy(deep=True)
+
+    def run_persisted(self, job_id: str) -> OntologyBuildJob:
+        """独立 worker から、Oracle に保存した入力だけで job を再開する。"""
+
+        job = self.get(job_id)
+        if job is None:
+            raise RuntimeError("Ontology build job が見つかりません。")
+        with self._lock:
+            payload = dict(self._inputs.get(job_id, {}))
+        if not payload:
+            document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+            raw_payload = document.get("input_payload") if document is not None else None
+            payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+        business_text = str(payload.get("business_text") or "")
+        qa_pairs = [QaPair.model_validate(item) for item in payload.get("qa_pairs", [])]
+        self._run_safely(job_id, business_text, qa_pairs)
+        result = self.get(job_id)
+        if result is None:
+            raise RuntimeError("Ontology build job の実行結果を取得できません。")
+        return result
 
     # --- internal ---------------------------------------------------------------------------
 
+    def _prune_finished_jobs_locked(self) -> None:
+        """lock 保持中に呼ぶ。完了 job が上限を超えたら古い順に破棄する(queued/running は保護)。"""
+        finished = [
+            job
+            for job in self._jobs.values()
+            if job.status in {OntologyBuildStatus.SUCCEEDED, OntologyBuildStatus.FAILED}
+        ]
+        overflow = len(finished) - _MAX_FINISHED_JOBS
+        if overflow <= 0:
+            return
+        finished.sort(key=lambda job: (job.finished_at or job.created_at, job.id))
+        for job in finished[:overflow]:
+            del self._jobs[job.id]
+
     def _update(self, job_id: str, mutate: Any) -> None:
+        updated: OntologyBuildJob | None = None
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
                 mutate(job)
+                updated = job.model_copy(deep=True)
+        if updated is not None:
+            self._persist_job(updated)
+
+    def _persist_job(self, job: OntologyBuildJob) -> None:
+        current = self._runtime.store.get_document("jobs", {"job_id": job.id})
+        with self._lock:
+            input_payload = self._inputs.get(job.id)
+        if input_payload is None and current is not None:
+            current_input = current.get("input_payload")
+            input_payload = dict(current_input) if isinstance(current_input, dict) else {}
+        self._runtime.store.save_document(
+            "jobs",
+            {
+                "job_id": job.id,
+                "job_type": "build",
+                "profile_id": job.profile_id,
+                "status": job.status.value,
+                "payload": job.model_dump(mode="json"),
+                "input_payload": input_payload or {},
+                **(
+                    {
+                        "claimed_by": current.get("claimed_by"),
+                        "claimed_at": time.time(),
+                    }
+                    if current is not None and current.get("claimed_by")
+                    else {}
+                ),
+            },
+            expected_etag=str(current["etag"]) if current is not None else None,
+        )
+
+    def _save_source_document(self, source: OntologySourceDocument) -> None:
+        current = self._runtime.store.get_document(
+            "source_documents", {"source_document_id": source.id}
+        )
+        self._runtime.store.save_document(
+            "source_documents",
+            {
+                "source_document_id": source.id,
+                "profile_id": source.profile_id,
+                "status": source.status.value,
+                "sha256": source.sha256,
+                "payload": source.model_dump(mode="json"),
+            },
+            expected_etag=str(current["etag"]) if current is not None else None,
+        )
+
+    def _get_source_document(self, source_id: str) -> OntologySourceDocument:
+        document = self._runtime.store.get_document(
+            "source_documents", {"source_document_id": source_id}
+        )
+        if document is None:
+            raise RuntimeError(f"Ontology source document が見つかりません: {source_id}")
+        return OntologySourceDocument.model_validate(document["payload"])
+
+    def _update_source_document(
+        self,
+        source: OntologySourceDocument,
+        **updates: Any,
+    ) -> OntologySourceDocument:
+        updated = source.model_copy(update={**updates, "updated_at": utc_now()}, deep=True)
+        self._save_source_document(updated)
+        return updated
+
+    def _update_source_progress(
+        self,
+        job_id: str,
+        source_id: str,
+        **updates: Any,
+    ) -> None:
+        def mutate(job: OntologyBuildJob) -> None:
+            for index, progress in enumerate(job.sources):
+                if progress.source_document_id == source_id:
+                    job.sources[index] = progress.model_copy(update=updates, deep=True)
+                    break
+
+        self._update(job_id, mutate)
 
     def _set_step(
         self,
@@ -813,6 +1001,7 @@ class OntologyBuildService:
                 job.finished_at = utc_now()
 
             self._update(job_id, mutate)
+            record_job(job_type="build", status="failed", error_code="unexpected")
 
     def _fail(self, job_id: str, message_ja: str, *, skip_pending_steps: bool = True) -> None:
         def mutate(job: OntologyBuildJob) -> None:
@@ -830,6 +1019,7 @@ class OntologyBuildService:
 
         self._update(job_id, mutate)
         self._emit(job_id, message_ja)
+        record_job(job_type="build", status="failed", error_code="build_failed")
 
     def _run(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
         def start_job(job: OntologyBuildJob) -> None:
@@ -844,6 +1034,116 @@ class OntologyBuildService:
 
         client = getattr(self._runtime.legacy_service, "_enterprise_ai_client", None)
         configured = getattr(client, "is_configured", None)
+        source_evidence: list[Any] = []
+        if job.source_document_ids:
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.SOURCE_EXTRACTION,
+                OntologyBuildStepStatus.RUNNING,
+                f"資料 {len(job.source_document_ids)} 件を抽出中…",
+            )
+            extracted_texts: list[str] = []
+            extracted_pairs: list[QaPair] = []
+            seen_hashes: set[str] = set()
+            for source_id in job.source_document_ids:
+                source = self._get_source_document(source_id)
+                if source.sha256 in seen_hashes:
+                    warning = f"{source.filename}: 同一内容の資料は 1 回だけ利用します。"
+                    self._update_source_progress(
+                        job_id,
+                        source.id,
+                        status=OntologySourceStatus.EXTRACTED,
+                        warnings_ja=[warning],
+                    )
+                    record_source_extraction(
+                        file_format=Path(source.filename).suffix, status="duplicate"
+                    )
+                    continue
+                seen_hashes.add(source.sha256)
+                self._update_source_progress(
+                    job_id, source.id, status=OntologySourceStatus.EXTRACTING
+                )
+                source = self._update_source_document(
+                    source, status=OntologySourceStatus.EXTRACTING
+                )
+                try:
+                    image_runner = None
+                    generate_image = getattr(client, "generate_from_image", None)
+                    if callable(configured) and configured() and callable(generate_image):
+
+                        def image_runner(
+                            image: bytes,
+                            page: int,
+                            _generate_image: Any = generate_image,
+                        ) -> str:
+                            return str(
+                                _generate_image(
+                                    image,
+                                    f"この資料の {page} ページ目を日本語で正確に"
+                                    "文字起こししてください。",
+                                    mime_type="image/jpeg",
+                                )
+                            )
+
+                    extracted = extract_ontology_source(
+                        source,
+                        self._source_storage.load(source),
+                        vlm_page_runner=image_runner,
+                    )
+                    extracted_texts.append(extracted.business_text)
+                    extracted_pairs.extend(extracted.qa_pairs)
+                    source_evidence.extend(
+                        chunk.evidence(source) for chunk in extracted.chunks[:100]
+                    )
+                    source = self._update_source_document(
+                        source,
+                        status=OntologySourceStatus.EXTRACTED,
+                        extracted_chunk_count=len(extracted.chunks),
+                        warnings_ja=extracted.warnings_ja,
+                    )
+                    self._update_source_progress(
+                        job_id,
+                        source.id,
+                        status=OntologySourceStatus.EXTRACTED,
+                        extracted_chunk_count=len(extracted.chunks),
+                        warnings_ja=extracted.warnings_ja,
+                    )
+                    record_source_extraction(
+                        file_format=Path(source.filename).suffix, status="extracted"
+                    )
+                except Exception as exc:
+                    source = self._update_source_document(
+                        source,
+                        status=OntologySourceStatus.FAILED,
+                        error_message_ja=str(exc),
+                    )
+                    self._update_source_progress(
+                        job_id,
+                        source.id,
+                        status=OntologySourceStatus.FAILED,
+                        error_message_ja=str(exc),
+                    )
+                    record_source_extraction(
+                        file_format=Path(source.filename).suffix, status="failed"
+                    )
+            business_text = "\n\n".join(
+                item for item in [business_text.strip(), *extracted_texts] if item.strip()
+            )
+            qa_by_key = {(item.question, item.sql): item for item in [*qa_pairs, *extracted_pairs]}
+            qa_pairs = list(qa_by_key.values())
+            current_job = self.get(job_id)
+            current_sources = current_job.sources if current_job is not None else []
+            failed_sources = sum(
+                source.status == OntologySourceStatus.FAILED for source in current_sources
+            )
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.SOURCE_EXTRACTION,
+                OntologyBuildStepStatus.SUCCEEDED,
+                f"資料 {len(job.source_document_ids)} 件、証拠 {len(source_evidence)} 件"
+                + (f"、失敗 {failed_sources} 件" if failed_sources else ""),
+            )
+            self._emit(job_id, "資料の抽出と証拠位置の記録が完了しました。")
         if client is None or not callable(configured) or not configured():
             self._fail(
                 job_id,
@@ -916,43 +1216,59 @@ class OntologyBuildService:
                 )
             )
         if OntologyBuildStepName.QA_EXTRACTION in step_names:
-            qa_context = json.dumps(
-                {
-                    "schema_context": json.loads(schema_context),
-                    "qa_pairs": [pair.model_dump(mode="json") for pair in qa_pairs],
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            llm_steps.append(
-                (
+            if not qa_pairs:
+                self._set_step(
+                    job_id,
                     OntologyBuildStepName.QA_EXTRACTION,
-                    "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
-                    "(relationships)と業務指標(metrics)を抽出してください。"
-                    "SQL に現れない関係を推測しないでください。",
-                    qa_context,
-                    qa_sql_texts,
+                    OntologyBuildStepStatus.SKIPPED,
+                    "有効な Q/A 行がないためスキップしました。",
                 )
-            )
+            else:
+                qa_context = json.dumps(
+                    {
+                        "schema_context": json.loads(schema_context),
+                        "qa_pairs": [pair.model_dump(mode="json") for pair in qa_pairs],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                llm_steps.append(
+                    (
+                        OntologyBuildStepName.QA_EXTRACTION,
+                        "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
+                        "(relationships)と業務指標(metrics)を抽出してください。"
+                        "SQL に現れない関係を推測しないでください。",
+                        qa_context,
+                        qa_sql_texts,
+                    )
+                )
         if OntologyBuildStepName.TEXT_EXTRACTION in step_names:
-            text_context = json.dumps(
-                {
-                    "schema_context": json.loads(schema_context),
-                    "business_text": business_text,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            llm_steps.append(
-                (
+            if not business_text.strip():
+                self._set_step(
+                    job_id,
                     OntologyBuildStepName.TEXT_EXTRACTION,
-                    "business_text の業務説明から、関係候補(relationships)・同義語(synonyms)・"
-                    "業務指標(metrics)を抽出してください。schema_context に対応づかない内容は "
-                    "warnings_ja に残してください。",
-                    text_context,
-                    None,
+                    OntologyBuildStepStatus.SKIPPED,
+                    "抽出できる業務説明がないためスキップしました。",
                 )
-            )
+            else:
+                text_context = json.dumps(
+                    {
+                        "schema_context": json.loads(schema_context),
+                        "business_text": business_text,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                llm_steps.append(
+                    (
+                        OntologyBuildStepName.TEXT_EXTRACTION,
+                        "business_text の業務説明から、関係候補(relationships)・同義語(synonyms)・"
+                        "業務指標(metrics)を抽出してください。schema_context に対応づかない内容は "
+                        "warnings_ja に残してください。",
+                        text_context,
+                        None,
+                    )
+                )
 
         for index, (name, prompt, context, cross_check) in enumerate(llm_steps, start=1):
             label = _STEP_LABELS_JA[name]
@@ -972,9 +1288,7 @@ class OntologyBuildService:
                     context=context,
                     system_prompt=_EXTRACTION_SYSTEM_PROMPT,
                 )
-                self._set_step(
-                    job_id, name, OntologyBuildStepStatus.RUNNING, "応答を検証中…"
-                )
+                self._set_step(job_id, name, OntologyBuildStepStatus.RUNNING, "応答を検証中…")
                 self._emit(job_id, f"{label}: 応答を受信しました。検証しています。")
                 extraction = parse_extraction(raw)
                 step_drafts, step_warnings = convert_extraction_to_proposals(
@@ -984,6 +1298,7 @@ class OntologyBuildService:
                     job_id=job_id,
                     inferred_by=inferred_by,
                     qa_sql_texts=cross_check,
+                    source_evidence=source_evidence,
                 )
                 drafts.extend(step_drafts)
                 warnings.extend(step_warnings)
@@ -1023,9 +1338,7 @@ class OntologyBuildService:
         # timestamp は揺れるため、安定 ID(node/edge)と kind で同一性を判定する。
         seen_payload_keys: set[str] = set()
         for draft in drafts:
-            payload_key = _proposal_payload_key(
-                draft.kind.value, dict(draft.payload.values)
-            )
+            payload_key = _proposal_payload_key(draft.kind.value, dict(draft.payload.values))
             if payload_key in seen_payload_keys:
                 continue
             seen_payload_keys.add(payload_key)
@@ -1064,6 +1377,17 @@ class OntologyBuildService:
             job.finished_at = utc_now()
 
         self._update(job_id, finish)
+        finished_job = self.get(job_id)
+        record_job(
+            job_type="build",
+            status=(
+                "succeeded"
+                if finished_job is not None
+                and finished_job.status == OntologyBuildStatus.SUCCEEDED
+                else "failed"
+            ),
+            error_code="none" if finished_job is not None else "result_missing",
+        )
         self._emit(
             job_id,
             f"構築が完了しました(提案 {len(proposal_ids)} 件、警告 {len(warnings)} 件)。",

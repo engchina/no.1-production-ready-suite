@@ -8,6 +8,7 @@ import { Toaster } from "@engchina/production-ready-ui";
 import { App } from "./App";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { initTheme } from "@/lib/theme";
+import { AuthProvider } from "@/features/security/AuthProvider";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
 
@@ -25,10 +26,12 @@ createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <ConfirmProvider>
-          <App />
-          <Toaster dismissLabel="閉じる" />
-        </ConfirmProvider>
+        <AuthProvider>
+          <ConfirmProvider>
+            <App />
+            <Toaster dismissLabel="閉じる" />
+          </ConfirmProvider>
+        </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>

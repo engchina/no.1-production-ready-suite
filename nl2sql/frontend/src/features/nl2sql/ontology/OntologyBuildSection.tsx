@@ -17,8 +17,10 @@ import { FileInputControl } from "../components/DbAdminShared";
 import {
   acceptOntologyProposal,
   acceptOntologyProposalsBatch,
+  ApiError,
   fetchProfileOntologyMermaid,
   getOntologyBuildJob,
+  getOntologyPublishJob,
   listOntologyRevisions,
   listProfileOntologyProposals,
   publishOntologyRevision,
@@ -29,10 +31,13 @@ import type {
   OntologyBuildJob,
   OntologyBuildStep,
   OntologyProposal,
+  OntologyPublishJob,
   OntologyRevision,
 } from "./types";
 
 const POLL_INTERVAL_MS = 1000;
+// 状態取得が連続で失敗したらポーリングを止めてエラー表示する(404 は即終端)
+const MAX_POLL_FAILURES = 5;
 const textareaClass =
   "min-h-24 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
 
@@ -74,12 +79,14 @@ export interface OntologyBuildSectionProps {
 export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useState("");
   const [qaFile, setQaFile] = useState<File | null>(null);
+  const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [runNaming, setRunNaming] = useState(true);
   const [runQa, setRunQa] = useState(true);
   const [runText, setRunText] = useState(true);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
   const [proposals, setProposals] = useState<OntologyProposal[]>([]);
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
+  const [publishJob, setPublishJob] = useState<OntologyPublishJob | null>(null);
   const { notice, showNotice, clearNotice } = usePageNotice();
   const [busy, setBusy] = useState("");
   // 承認/却下は行単位の busy(他の行の操作をブロックしない)
@@ -89,8 +96,18 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   // 実行中ステップの経過秒を更新するための現在時刻(ポーリングと同じ周期で更新)
   const [nowTick, setNowTick] = useState(() => Date.now());
   const timelineRef = useRef<HTMLOListElement | null>(null);
+  // プロファイル切替後に in-flight 応答が旧プロファイルの状態を上書きしないためのガード
+  const profileIdRef = useRef(profileId);
+  const pollInFlightRef = useRef(false);
+  const pollFailureCountRef = useRef(0);
+  // 終端(完了/失敗)通知を job ごとに一度だけ出す
+  const terminalHandledRef = useRef<string | null>(null);
 
   const jobRunning = job !== null && (job.status === "queued" || job.status === "running");
+  const publishRunning =
+    publishJob !== null &&
+    ["queued", "materializing", "validating"].includes(publishJob.status);
+  const jobId = job?.id ?? null;
 
   // 最新の構築実行(session)分の提案だけをレビュー対象にする。
   // 過去 run に残った submitted 提案を「すべて承認」へ混ぜない(混在防止)。
@@ -111,7 +128,8 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
 
   const refreshProposals = useCallback(async (targetProfileId: string) => {
     try {
-      setProposals(await listProfileOntologyProposals(targetProfileId));
+      const next = await listProfileOntologyProposals(targetProfileId);
+      if (profileIdRef.current === targetProfileId) setProposals(next);
     } catch {
       // 一覧取得の失敗は致命的ではない(次の操作で再取得する)
     }
@@ -140,13 +158,16 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   }, []);
 
   useEffect(() => {
+    profileIdRef.current = profileId;
     setJob(null);
     setProposals([]);
     setDraftRevision(null);
+    setPublishJob(null);
     clearNotice();
     setMermaid("");
     setBusinessText("");
     setQaFile(null);
+    setSourceFiles([]);
     if (profileId) {
       void refreshProposals(profileId);
       void detectPendingDraft();
@@ -154,17 +175,31 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   }, [detectPendingDraft, profileId, refreshProposals]);
 
   // job ポーリング(1s)。完了で停止し、提案一覧を更新する。
+  // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
   useEffect(() => {
-    if (!jobRunning || !job || !profileId) return;
+    if (!jobRunning || !jobId || !profileId) return;
+    pollFailureCountRef.current = 0;
+    let cancelled = false;
     const timer = window.setInterval(() => {
       setNowTick(Date.now());
-      void getOntologyBuildJob(job.id)
+      if (pollInFlightRef.current) return; // 応答遅延時に GET を重ねない
+      pollInFlightRef.current = true;
+      getOntologyBuildJob(jobId)
         .then((next) => {
+          if (cancelled) return; // 古い応答で新しい状態を上書きしない
+          pollFailureCountRef.current = 0;
           setJob(next);
-          if (next.status === "succeeded" || next.status === "failed") {
+          const terminal = next.status === "succeeded" || next.status === "failed";
+          if (terminal && terminalHandledRef.current !== jobId) {
+            terminalHandledRef.current = jobId;
             void refreshProposals(profileId);
             if (next.status === "succeeded") {
-              toast.success(t("profiles.ontologyBuild.jobSucceeded"));
+              const count = next.proposal_ids.length;
+              toast.success(
+                count === 0
+                  ? t("profiles.ontologyBuild.jobSucceededEmpty")
+                  : t("profiles.ontologyBuild.jobSucceeded", { count })
+              );
             } else if (next.error_message_ja) {
               showNotice(
                 "danger",
@@ -173,12 +208,71 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             }
           }
         })
-        .catch(() => {
-          // 一時的な取得失敗は次のポーリングで回復する
+        .catch((err) => {
+          if (cancelled) return;
+          // 永続 job 自体が削除・期限切れになった 404 は即終端する
+          const notFound = err instanceof ApiError && err.status === 404;
+          pollFailureCountRef.current += 1;
+          if (notFound || pollFailureCountRef.current >= MAX_POLL_FAILURES) {
+            setJob(null); // jobRunning=false → cleanup で interval 停止、実行ボタン復帰
+            showNotice(
+              "danger",
+              t(
+                notFound
+                  ? "profiles.ontologyBuild.error.jobLost"
+                  : "profiles.ontologyBuild.error.pollFailed"
+              )
+            );
+            // 提案は永続化済みなので job が消えても一覧は取得できる
+            void refreshProposals(profileId);
+          }
+          // それ以外の一時的な失敗は次のポーリングで回復を試みる
+        })
+        .finally(() => {
+          pollInFlightRef.current = false;
         });
     }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [job, jobRunning, profileId, refreshProposals]);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [jobRunning, jobId, profileId, refreshProposals, showNotice]);
+
+  useEffect(() => {
+    if (!publishRunning || !publishJob) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void getOntologyPublishJob(publishJob.id)
+        .then((next) => {
+          if (cancelled) return;
+          setPublishJob(next);
+          if (next.status === "succeeded") {
+            setDraftRevision(null);
+            setMermaid("");
+            toast.success(t("profiles.ontologyBuild.published"));
+            onPublished?.();
+          } else if (next.status === "failed") {
+            showNotice(
+              "danger",
+              next.error_message_ja || t("profiles.ontologyBuild.error.publish")
+            );
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            showNotice(
+              "danger",
+              err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish")
+            );
+            setPublishJob(null);
+          }
+        });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [onPublished, publishJob, publishRunning, showNotice]);
 
   // アクティビティタイムラインは新着イベントで末尾へ自動スクロールする
   const eventCount = job?.events?.length ?? 0;
@@ -201,19 +295,32 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   }
 
   const startBuild = async () => {
+    const targetProfileId = profileId;
     setBusy("start");
     clearNotice();
     try {
-      const started = await startOntologyBuild(profileId, {
+      const started = await startOntologyBuild(targetProfileId, {
         businessText,
         qaFile,
+        sourceFiles,
         runSchemaNaming: runNaming,
         runQaExtraction: runQa,
         runTextExtraction: runText,
       });
-      setJob(started);
+      // プロファイル切替後に旧プロファイルの job を表示しない
+      if (profileIdRef.current === targetProfileId) setJob(started);
     } catch (err) {
-      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.start"));
+      if (profileIdRef.current !== targetProfileId) return;
+      const timedOut =
+        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      showNotice(
+        "danger",
+        timedOut
+          ? t("profiles.ontologyBuild.error.startTimeout")
+          : err instanceof Error
+            ? err.message
+            : t("profiles.ontologyBuild.error.start")
+      );
     } finally {
       setBusy("");
     }
@@ -266,11 +373,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     setBusy("publish");
     clearNotice();
     try {
-      await publishOntologyRevision(draftRevision.id, draftRevision.etag);
-      setDraftRevision(null);
-      toast.success(t("profiles.ontologyBuild.published"));
-      setMermaid("");
-      onPublished?.();
+      setPublishJob(await publishOntologyRevision(draftRevision.id, draftRevision.etag));
     } catch (err) {
       showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"));
     } finally {
@@ -319,7 +422,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
       <SectionHeading />
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <label className="grid gap-1 text-sm font-medium text-foreground">
+        <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-foreground">
           <span>{t("profiles.ontologyBuild.businessText")}</span>
           <textarea
             className={textareaClass}
@@ -330,6 +433,65 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           />
         </label>
         <div className="grid content-start gap-3">
+          <div
+            className="grid gap-2 rounded-md border border-border bg-background p-3"
+            data-testid="ontology-build-source-panel"
+          >
+            <label className="grid gap-1 text-sm font-medium text-foreground">
+              <span>{t("profiles.ontologyBuild.sourceFiles")}</span>
+              <span className="text-xs font-normal leading-5 text-muted">
+                {t("profiles.ontologyBuild.sourceFilesHint")}
+              </span>
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xlsm"
+                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-primary/10 file:px-3 file:py-1 file:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                data-testid="ontology-build-source-files"
+                onChange={(event) => {
+                  const picked = Array.from(event.currentTarget.files ?? []);
+                  setSourceFiles((current) => {
+                    const byKey = new Map(
+                      [...current, ...picked].map((file) => [
+                        `${file.name}:${file.size}:${file.lastModified}`,
+                        file,
+                      ])
+                    );
+                    return [...byKey.values()];
+                  });
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            {sourceFiles.length > 0 ? (
+              <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
+                {sourceFiles.map((file) => (
+                  <li
+                    key={`${file.name}:${file.size}:${file.lastModified}`}
+                    className="flex min-w-0 items-center gap-2 rounded-md bg-card px-3 py-1.5 text-sm"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-foreground">{file.name}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-muted">
+                      {Math.max(1, Math.ceil(file.size / 1024))} KB
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t("profiles.ontologyBuild.sourceFileRemove", {
+                        name: file.name,
+                      })}
+                      onClick={() =>
+                        setSourceFiles((current) => current.filter((item) => item !== file))
+                      }
+                    >
+                      <X size={15} aria-hidden="true" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           <FileInputControl
             label={t("profiles.ontologyBuild.qaFile")}
             accept=".csv,.tsv,.xlsx,.xlsm"
@@ -493,6 +655,33 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
               </ul>
             </details>
           ) : null}
+          {(job.sources?.length ?? 0) > 0 ? (
+            <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>
+              {(job.sources ?? []).map((source) => (
+                <li
+                  key={source.source_document_id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
+                >
+                  <span className="min-w-0 break-all text-foreground">{source.filename}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-xs tabular-nums text-muted">
+                      {source.extracted_chunk_count ?? 0} chunks
+                    </span>
+                    <StatusBadge
+                      variant={
+                        source.status === "failed"
+                          ? "danger"
+                          : source.status === "extracted"
+                            ? "success"
+                            : "info"
+                      }
+                      label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 
@@ -608,12 +797,41 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
               variant="primary"
               size="sm"
               loading={busy === "publish"}
-              disabled={busy !== "" && busy !== "publish"}
+              disabled={publishRunning || (busy !== "" && busy !== "publish")}
               onClick={() => void publish()}
             >
               <Sparkles size={15} aria-hidden="true" />
               <span>{t("profiles.ontologyBuild.publish")}</span>
             </Button>
+          </div>
+        ) : null}
+        {publishJob ? (
+          <div
+            className="grid gap-2 rounded-md border border-border bg-background p-3"
+            role="status"
+            aria-live="polite"
+            data-testid="ontology-publish-status"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-foreground">
+                {t("profiles.ontologyBuild.publishProgress")}
+              </span>
+              <StatusBadge
+                variant={
+                  publishJob.status === "failed"
+                    ? "danger"
+                    : publishJob.status === "succeeded"
+                      ? "success"
+                      : "info"
+                }
+                label={t(`profiles.ontologyBuild.publishStatus.${publishJob.status}`)}
+              />
+            </div>
+            {publishJob.rdf_graph_name ? (
+              <code className="break-all text-xs text-muted">
+                {publishJob.rdf_graph_name} / {publishJob.inferred_graph_name}
+              </code>
+            ) : null}
           </div>
         ) : null}
       </section>

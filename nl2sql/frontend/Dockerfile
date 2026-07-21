@@ -16,5 +16,7 @@ COPY ${APP_DIR}/frontend/ ./
 RUN npm run build
 
 FROM nginx:1.27-alpine
+ARG APP_DIR=no.1-production-ready-nl2sql
 COPY --from=build /app/no.1-production-ready-nl2sql/frontend/dist /usr/share/nginx/html
+COPY ${APP_DIR}/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

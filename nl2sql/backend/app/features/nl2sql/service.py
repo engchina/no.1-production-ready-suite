@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import copy
 import csv
 import hashlib
 import importlib
@@ -18,6 +20,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -29,6 +32,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
+from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
 from .embedding_client import (
@@ -40,6 +44,20 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectClient,
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
+)
+from .incremental_observability import (
+    SCHEMA_CHANGED_OBJECTS,
+    observe_schema_refresh,
+    record_token_lag,
+)
+from .incremental_store import (
+    PROFILE_NAMESPACE,
+    SCHEMA_NAMESPACE,
+    IncrementalNl2SqlRepository,
+    IncrementalVersionConflict,
+    MemoryIncrementalNl2SqlRepository,
+    OracleIncrementalNl2SqlRepository,
+    VersionedTtlCache,
 )
 from .models import (
     AgentConversationCreateData,
@@ -61,17 +79,21 @@ from .models import (
     AssetCleanupData,
     AssetCleanupRequest,
     AssetRefreshData,
+    ClassifierFeedbackImportData,
+    ClassifierFeedbackImportRequest,
+    ClassifierFeedbackImportResult,
     ClassifierImportData,
-    ClassifierModelActivateData,
     ClassifierModelImportData,
     ClassifierModelInfo,
-    ClassifierModelsData,
     ClassifierPredictionCandidate,
     ClassifierPredictionData,
     ClassifierPredictRequest,
     ClassifierStatusData,
+    ClassifierTrainingCandidate,
+    ClassifierTrainingCandidatesData,
     ClassifierTrainingDataData,
     ClassifierTrainingExample,
+    ClassifierTrainingExampleUpdateRequest,
     ClassifierTrainRequest,
     CommentApplyData,
     CommentApplyItem,
@@ -120,11 +142,14 @@ from .models import (
     EvaluationSetsData,
     EvaluationSetUpsertRequest,
     ExplainPlanData,
+    FeedbackClearData,
     FeedbackData,
     FeedbackEntriesData,
     FeedbackIndexData,
     FeedbackIndexRequest,
+    FeedbackListData,
     FeedbackRating,
+    FeedbackRecord,
     FeedbackSearchConfigData,
     FeedbackSearchConfigRequest,
     FeedbackVectorEntry,
@@ -144,6 +169,7 @@ from .models import (
     Nl2SqlEngine,
     Nl2SqlProfile,
     Nl2SqlResult,
+    PersistenceStatusData,
     PreviewData,
     PreviewRequest,
     ProfileLearningMaterialImportData,
@@ -152,6 +178,7 @@ from .models import (
     ProfileRecommendationRequest,
     ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
+    ProfileSummaryPage,
     QueryResults,
     RepairData,
     RepairRequest,
@@ -165,7 +192,14 @@ from .models import (
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
+    SchemaCatalogHead,
     SchemaColumn,
+    SchemaObjectDetail,
+    SchemaObjectPage,
+    SchemaOwnersData,
+    SchemaOwnerSummary,
+    SchemaRefreshJob,
+    SchemaRefreshJobStatus,
     SchemaTable,
     SelectAiAgentAsset,
     SelectAiAgentAssetsData,
@@ -196,11 +230,26 @@ from .models import (
     SyntheticDataResultsData,
     TimingEnvelope,
 )
+from .object_identity import parse_object_identity, qualified_object_name
 from .oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 
 logger = logging.getLogger(__name__)
+
+
+class Nl2SqlPersistenceUnavailable(RuntimeError):
+    """共有状態を安全に読み書きできない場合の公開用例外。"""
+
+    public_message = (
+        "業務データを永続化するデータベースを利用できません。"
+        "データベース設定と起動状態を確認してから再試行してください。"
+    )
+
+    def __init__(self, reason_code: str = "persistence_unavailable") -> None:
+        super().__init__(self.public_message)
+        self.reason_code = reason_code
+
 
 _JoinWherePromptProfile = Literal["join_where_strict", "sql_structure"]
 
@@ -827,15 +876,29 @@ def is_select_only(sql: str) -> bool:
     return head.startswith("select") or head.startswith("with")
 
 
-def _extract_referenced_tables(sql: str) -> list[str]:
-    seen: set[str] = set()
-    tables: list[str] = []
+def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str]:
+    semantic = parse_oracle_sql(sql)
+    if semantic.graph is not None:
+        seen: set[str] = set()
+        tables: list[str] = []
+        for table in semantic.graph.tables:
+            if table.is_cte:
+                continue
+            owner = table.owner.upper() or current_owner.upper()
+            name = table.name.upper()
+            normalized = qualified_object_name(owner, name) if owner else name
+            if normalized not in seen:
+                seen.add(normalized)
+                tables.append(normalized)
+        return tables
+    fallback_seen: set[str] = set()
+    fallback_tables: list[str] = []
     for match in _FROM_JOIN_TABLE.finditer(sql):
         normalized = _normalize_identifier(match.group(1))
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            tables.append(normalized)
-    return tables
+        if normalized and normalized not in fallback_seen:
+            fallback_seen.add(normalized)
+            fallback_tables.append(normalized)
+    return fallback_tables
 
 
 def _alias_to_table(sql: str) -> dict[str, str]:
@@ -961,11 +1024,25 @@ def _extract_referenced_columns(sql: str, referenced_tables: list[str]) -> tuple
     return columns, wildcard
 
 
-def _table_allowed(referenced_tables: list[str], allowed: AllowedObjects) -> bool:
+def _scope_object_name(value: str, *, current_owner: str) -> str:
+    return parse_object_identity(value, default_owner=current_owner).qualified_name
+
+
+def _table_allowed(
+    referenced_tables: list[str],
+    allowed: AllowedObjects,
+    *,
+    current_owner: str,
+) -> bool:
     if not allowed.table_names:
         return not allowed.enforce_table_scope or not referenced_tables
-    allowed_set = {_normalize_identifier(table) for table in allowed.table_names}
-    return all(table in allowed_set for table in referenced_tables)
+    allowed_set = {
+        _scope_object_name(table, current_owner=current_owner) for table in allowed.table_names
+    }
+    return all(
+        _scope_object_name(table, current_owner=current_owner) in allowed_set
+        for table in referenced_tables
+    )
 
 
 def _column_allowed(
@@ -973,9 +1050,13 @@ def _column_allowed(
     has_wildcard: bool,
     referenced_tables: list[str],
     allowed: AllowedObjects,
+    *,
+    current_owner: str,
 ) -> bool:
     restrictions = {
-        _normalize_identifier(table): {_normalize_identifier(column) for column in columns}
+        _scope_object_name(table, current_owner=current_owner): {
+            _normalize_identifier(column) for column in columns
+        }
         for table, columns in allowed.columns.items()
         if columns
     }
@@ -988,7 +1069,7 @@ def _column_allowed(
         return False
     for column_ref in referenced_columns:
         if "." in column_ref:
-            table, column = column_ref.split(".", 1)
+            table, column = column_ref.rsplit(".", 1)
             if table in restrictions and column not in restrictions[table]:
                 return False
             continue
@@ -1048,6 +1129,7 @@ class LearningExample:
 class StoredJob:
     job_id: str
     request: JobCreateRequest
+    actor_user_id: str = ""
     status: JobStatus = JobStatus.PENDING
     created_at: str = field(default_factory=_utc_now)
     started_at: str | None = None
@@ -1153,12 +1235,61 @@ class Nl2SqlService:
 
     def __init__(self, store: Nl2SqlStore | None = None) -> None:
         settings = get_settings()
+        self._deepsec_enabled = settings.oracle_deepsec_enabled
         self._lock = threading.RLock()
         self._catalog = self._build_default_catalog()
         self._oracle_adapter = OracleNl2SqlAdapter(settings)
         self._embedding_client: FeedbackEmbeddingClient = OciGenAiEmbeddingClient(settings)
         self._enterprise_ai_client: EnterpriseAiDirectClient = OciEnterpriseAiDirectClient(settings)
-        self._store = store or self._build_store(settings)
+        self._store: Nl2SqlStore
+        self._incremental_repository: IncrementalNl2SqlRepository | None = None
+        if (
+            store is None
+            and settings.nl2sql_persistence_mode.strip().lower() == "oracle"
+            and settings.nl2sql_state_backend.strip().lower() == "incremental"
+        ):
+            # Repository construction is deliberately zero-I/O. Oracle is touched only by
+            # readiness or a data request, so module import time is independent of data size.
+            self._incremental_repository = OracleIncrementalNl2SqlRepository(
+                connection_factory=self._oracle_adapter.connection
+            )
+            self._store = MemoryNl2SqlStore()
+        else:
+            self._store = store or self._build_store(settings)
+        self._persistence_mode = (
+            "oracle" if self._incremental_repository is not None else self._store.mode
+        )
+        self._profile_cache = VersionedTtlCache(
+            max_entries=settings.nl2sql_profile_cache_max_entries,
+            ttl_seconds=settings.nl2sql_cache_ttl_seconds,
+            name="profile",
+        )
+        self._schema_cache = VersionedTtlCache(
+            max_entries=settings.nl2sql_schema_object_cache_max_entries,
+            ttl_seconds=settings.nl2sql_cache_ttl_seconds,
+            name="schema",
+        )
+        self._cache_token_checked_at = {
+            PROFILE_NAMESPACE: 0.0,
+            SCHEMA_NAMESPACE: 0.0,
+        }
+        self._cache_token_poll_seconds = max(0.1, settings.nl2sql_cache_ttl_seconds)
+        self._profile_change_token = 0
+        self._schema_change_token = 0
+        self._incremental_hashes: dict[tuple[str, str], str] = {}
+        self._schema_refresh_lock = threading.Lock()
+        self._schema_refresh_worker_id = f"api:{uuid.uuid4()}"
+        self._refresh_job_repository: IncrementalNl2SqlRepository = (
+            self._incremental_repository
+            if self._incremental_repository is not None
+            else MemoryIncrementalNl2SqlRepository(seed_default=False)
+        )
+        self._persistence_ready = False
+        self._persistence_writable = False
+        self._snapshot_loaded = False
+        self._persistence_reason_code: str | None = "not_checked"
+        self._persistence_checked_at = _utc_now()
+        self._last_persisted_snapshot: dict[str, Any] | None = None
         self._profiles: dict[str, Nl2SqlProfile] = {
             "default": Nl2SqlProfile(
                 id="default",
@@ -1182,12 +1313,21 @@ class Nl2SqlService:
         self._feedback_match_limit = 3
         self._classifier_examples: list[ClassifierTrainingExample] = []
         self._classifier_artifact: dict[str, Any] | None = None
-        self._classifier_model_registry: dict[str, dict[str, Any]] = {}
         self._asset_meta: dict[Nl2SqlEngine, AssetRefreshData] = {}
         self._admin_audit: list[dict[str, Any]] = []
         self._legacy_learning_material = LegacyLearningMaterialData()
-        self._load_snapshot()
-        self._persist_state()
+        self._ontology_name_index_cache: tuple[
+            str, dict[str, dict[str, str]]
+        ] | None = None
+        if self._incremental_repository is not None:
+            self._persistence_ready = True
+            self._persistence_writable = True
+            self._persistence_reason_code = None
+            self._persistence_checked_at = _utc_now()
+        elif self._load_snapshot():
+            # load が成功した場合だけ初期/正規化済み snapshot を保存する。DB 障害時に
+            # process-local の既定値で既存 row を上書きしない。
+            self._persist_state(raise_on_error=False)
 
     def _build_store(self, settings: Any) -> Nl2SqlStore:
         mode = settings.nl2sql_persistence_mode.strip().lower()
@@ -1195,75 +1335,116 @@ class Nl2SqlService:
             return OracleJsonNl2SqlStore(
                 connection_factory=self._oracle_adapter.connection,
                 table_name=settings.nl2sql_oracle_state_table,
+                migration_mirror_enabled=settings.nl2sql_migration_mirror_enabled,
             )
-        if mode not in {"memory", "in_memory", "deterministic"}:
-            logger.warning("Unsupported NL2SQL persistence mode %s; using memory.", mode)
-        return MemoryNl2SqlStore()
+        if mode == "memory":
+            return MemoryNl2SqlStore()
+        raise ValueError(
+            "NL2SQL_PERSISTENCE_MODE は oracle または明示的な memory のみ指定できます。"
+        )
 
-    def _load_snapshot(self) -> None:
+    @property
+    def uses_incremental_store(self) -> bool:
+        return self._incremental_repository is not None
+
+    def check_incremental_store(self) -> tuple[bool, str]:
+        """Readiness 用の bounded migration check（業務 row は読み込まない）。"""
+
+        if self._incremental_repository is None:
+            return True, "legacy_snapshot"
+        return self._incremental_repository.check()
+
+    def _load_snapshot(self, *, raise_on_error: bool = False) -> bool:
         try:
             snapshot = self._store.load_snapshot()
         except Exception as exc:  # pragma: no cover - live store defensive boundary
-            logger.warning("NL2SQL store snapshot load failed: %s", exc)
-            return
-        if not snapshot:
-            return
-        try:
-            catalog = SchemaCatalog.model_validate(snapshot.get("catalog", self._catalog))
-            profile_items = (
-                snapshot["profiles"]
-                if "profiles" in snapshot
-                else [profile.model_dump(mode="json") for profile in self._profiles.values()]
+            logger.exception(
+                "nl2sql_snapshot_load_failed",
+                extra={"store_mode": self._store.mode, "exception_type": type(exc).__name__},
             )
-            profiles = [Nl2SqlProfile.model_validate(item) for item in profile_items]
-            jobs = {
-                item["job_id"]: self._job_from_snapshot(item)
-                for item in snapshot.get("jobs", [])
-                if item.get("job_id")
-            }
-            history = [HistoryItem.model_validate(item) for item in snapshot.get("history", [])]
-            compare_records = [
-                CompareRecord.model_validate(item) for item in snapshot.get("compare_records", [])
-            ]
-            evaluation_sets = [
-                EvaluationSet.model_validate(item) for item in snapshot.get("evaluation_sets", [])
-            ]
-            evaluation_runs = [
-                EvaluationRunRecord.model_validate(item)
-                for item in snapshot.get("evaluation_runs", [])
-            ]
-            asset_meta = {
-                Nl2SqlEngine(engine): AssetRefreshData.model_validate(data)
-                for engine, data in snapshot.get("asset_meta", {}).items()
-            }
-            feedback_indexed_ids = {str(item) for item in snapshot.get("feedback_indexed_ids", [])}
-            feedback_config = snapshot.get("feedback_search_config", {})
-            classifier_examples = [
-                ClassifierTrainingExample.model_validate(item)
-                for item in snapshot.get("classifier_examples", [])
-            ]
-            classifier_artifact = snapshot.get("classifier_artifact")
-            if classifier_artifact is not None and not isinstance(classifier_artifact, dict):
-                classifier_artifact = None
-            classifier_model_registry = {
-                str(version): dict(data)
-                for version, data in snapshot.get("classifier_model_registry", {}).items()
-                if isinstance(data, dict)
-            }
-            admin_audit = [
-                dict(item) for item in snapshot.get("admin_audit", []) if isinstance(item, dict)
-            ]
-            legacy_learning_material = LegacyLearningMaterialData.model_validate(
-                snapshot.get("legacy_learning_material", {})
+            self._mark_persistence_unavailable("snapshot_load_failed")
+            if raise_on_error:
+                raise Nl2SqlPersistenceUnavailable("snapshot_load_failed") from exc
+            return False
+        if snapshot:
+            try:
+                self._restore_snapshot(snapshot, recover_interrupted_jobs=True)
+            except Exception as exc:
+                logger.exception(
+                    "nl2sql_snapshot_restore_failed",
+                    extra={
+                        "store_mode": self._store.mode,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                self._mark_persistence_unavailable("snapshot_invalid")
+                if raise_on_error:
+                    raise Nl2SqlPersistenceUnavailable("snapshot_invalid") from exc
+                return False
+        with self._lock:
+            self._snapshot_loaded = True
+            self._persistence_ready = True
+            self._persistence_writable = True
+            self._persistence_reason_code = None
+            self._persistence_checked_at = _utc_now()
+            self._last_persisted_snapshot = (
+                copy.deepcopy(self._snapshot_locked()) if snapshot else None
             )
-        except Exception as exc:
-            logger.warning("NL2SQL store snapshot restore failed: %s", exc)
-            return
+        return True
+
+    def _restore_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        recover_interrupted_jobs: bool,
+    ) -> None:
+        catalog = SchemaCatalog.model_validate(snapshot.get("catalog", self._catalog))
+        profile_items = (
+            snapshot["profiles"]
+            if "profiles" in snapshot
+            else [profile.model_dump(mode="json") for profile in self._profiles.values()]
+        )
+        profiles = [Nl2SqlProfile.model_validate(item) for item in profile_items]
+        jobs = {
+            item["job_id"]: self._job_from_snapshot(item)
+            for item in snapshot.get("jobs", [])
+            if item.get("job_id")
+        }
+        history = [HistoryItem.model_validate(item) for item in snapshot.get("history", [])]
+        compare_records = [
+            CompareRecord.model_validate(item) for item in snapshot.get("compare_records", [])
+        ]
+        evaluation_sets = [
+            EvaluationSet.model_validate(item) for item in snapshot.get("evaluation_sets", [])
+        ]
+        evaluation_runs = [
+            EvaluationRunRecord.model_validate(item) for item in snapshot.get("evaluation_runs", [])
+        ]
+        asset_meta = {
+            Nl2SqlEngine(engine): AssetRefreshData.model_validate(data)
+            for engine, data in snapshot.get("asset_meta", {}).items()
+        }
+        feedback_indexed_ids = {str(item) for item in snapshot.get("feedback_indexed_ids", [])}
+        feedback_config = snapshot.get("feedback_search_config", {})
+        classifier_examples = [
+            ClassifierTrainingExample.model_validate(item)
+            for item in snapshot.get("classifier_examples", [])
+        ]
+        classifier_artifact = snapshot.get("classifier_artifact")
+        if classifier_artifact is not None and not isinstance(classifier_artifact, dict):
+            classifier_artifact = None
+        admin_audit = [
+            dict(item) for item in snapshot.get("admin_audit", []) if isinstance(item, dict)
+        ]
+        legacy_learning_material = LegacyLearningMaterialData.model_validate(
+            snapshot.get("legacy_learning_material", {})
+        )
         with self._lock:
             self._catalog = catalog
             self._profiles = {profile.id: profile for profile in profiles}
             self._jobs = jobs
-            self._recover_interrupted_jobs()
+            if recover_interrupted_jobs:
+                self._recover_interrupted_jobs()
             self._history = history
             self._compare_records = compare_records
             self._evaluation_sets = evaluation_sets
@@ -1280,10 +1461,104 @@ class Nl2SqlService:
             self._feedback_match_limit = int(feedback_config.get("match_limit", 3))
             self._classifier_examples = classifier_examples
             self._classifier_artifact = classifier_artifact
-            self._classifier_model_registry = classifier_model_registry
             self._asset_meta = asset_meta
             self._admin_audit = admin_audit[-200:]
             self._legacy_learning_material = legacy_learning_material
+
+    def _mark_persistence_unavailable(self, reason_code: str) -> None:
+        with self._lock:
+            self._persistence_ready = False
+            self._persistence_writable = False
+            self._persistence_reason_code = reason_code
+            self._persistence_checked_at = _utc_now()
+
+    def ensure_persistence_available(self) -> None:
+        """共有状態 API を開放できるか確認する。"""
+        with self._lock:
+            if self._persistence_ready and self._persistence_writable:
+                return
+            reason_code = self._persistence_reason_code or "persistence_unavailable"
+        raise Nl2SqlPersistenceUnavailable(reason_code)
+
+    def persistence_status(self) -> PersistenceStatusData:
+        """secret や Oracle 例外を含まない永続化状態を返す。"""
+        with self._lock:
+            mode = "oracle" if self._persistence_mode == "oracle" else "memory"
+            return PersistenceStatusData(
+                mode=mode,
+                ready=self._persistence_ready,
+                durable=mode == "oracle",
+                writable=self._persistence_writable,
+                snapshot_loaded=self._snapshot_loaded,
+                reason_code=self._persistence_reason_code,
+                checked_at=self._persistence_checked_at,
+                state_backend=(
+                    "incremental" if self._incremental_repository is not None else "legacy_snapshot"
+                ),
+            )
+
+    def recover_persistence(self) -> PersistenceStatusData:
+        """Oracle 復旧後に接続/migration を再確認して API を再開する。"""
+        if self._incremental_repository is not None:
+            try:
+                ready, reason = self._incremental_repository.check()
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_store_unreachable")
+                raise Nl2SqlPersistenceUnavailable("incremental_store_unreachable") from exc
+            if not ready:
+                self._mark_persistence_unavailable("incremental_migration_required")
+                raise Nl2SqlPersistenceUnavailable("incremental_migration_required")
+            with self._lock:
+                self._profile_cache.clear()
+                self._schema_cache.clear()
+                self._cache_token_checked_at = {
+                    PROFILE_NAMESPACE: 0.0,
+                    SCHEMA_NAMESPACE: 0.0,
+                }
+                self._persistence_ready = True
+                self._persistence_writable = True
+                self._persistence_reason_code = None
+                self._persistence_checked_at = _utc_now()
+            logger.info("nl2sql_incremental_store_recovered", extra={"detail": reason})
+            return self.persistence_status()
+        ready, _reason = self._store.check()
+        if not ready:
+            self._mark_persistence_unavailable("legacy_store_unreachable")
+            raise Nl2SqlPersistenceUnavailable("legacy_store_unreachable")
+        # 障害中に process-local の既定値へ退避した可能性があるため、API を
+        # 再開する前に durable snapshot を必ず再読込する。
+        self._load_snapshot(raise_on_error=True)
+        return self.persistence_status()
+
+    def reset_after_system_schema_change(self) -> None:
+        """Schema epoch 変更後に DB 由来 cache と process-local mirror を破棄する。"""
+
+        with self._lock:
+            self._profile_cache.clear()
+            self._schema_cache.clear()
+            self._cache_token_checked_at = {
+                PROFILE_NAMESPACE: 0.0,
+                SCHEMA_NAMESPACE: 0.0,
+            }
+            self._profile_change_token = 0
+            self._schema_change_token = 0
+            self._catalog = self._build_default_catalog()
+            self._jobs.clear()
+            self._history.clear()
+            self._compare_records.clear()
+            self._evaluation_sets.clear()
+            self._evaluation_runs.clear()
+            self._feedback.clear()
+            self._feedback_indexed_ids.clear()
+            self._classifier_examples.clear()
+            self._classifier_artifact = None
+            self._incremental_hashes.clear()
+            self._persistence_ready = False
+            self._persistence_writable = False
+            self._snapshot_loaded = False
+            self._persistence_reason_code = "schema_epoch_changed"
+            self._persistence_checked_at = _utc_now()
+            self._ontology_name_index_cache = None
 
     def _merge_additional_instruction_lines(
         self,
@@ -1340,13 +1615,204 @@ class Nl2SqlService:
                         update={"status": JobStepStatus.ERROR}
                     )
 
-    def _persist_state(self) -> None:
+    def _persist_state(
+        self,
+        *,
+        raise_on_error: bool = True,
+        collections: tuple[str, ...] | None = None,
+    ) -> None:
+        if self._incremental_repository is not None:
+            try:
+                self._persist_incremental_documents(collections=collections)
+            except Exception as exc:
+                logger.exception(
+                    "nl2sql_incremental_save_failed",
+                    extra={"exception_type": type(exc).__name__},
+                )
+                self._mark_persistence_unavailable("incremental_save_failed")
+                if raise_on_error:
+                    raise Nl2SqlPersistenceUnavailable("incremental_save_failed") from exc
+            return
         with self._lock:
+            if not self._persistence_ready or not self._persistence_writable:
+                error = Nl2SqlPersistenceUnavailable(
+                    self._persistence_reason_code or "persistence_unavailable"
+                )
+                if raise_on_error:
+                    raise error
+                return
             snapshot = self._snapshot_locked()
+            previous_snapshot = copy.deepcopy(self._last_persisted_snapshot)
+            try:
+                # RLock を保持して snapshot/save/rollback を 1 transaction として扱う。
+                self._store.save_snapshot(snapshot)
+            except Exception as exc:  # pragma: no cover - live store defensive boundary
+                logger.exception(
+                    "nl2sql_snapshot_save_failed",
+                    extra={
+                        "store_mode": self._store.mode,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                if previous_snapshot is not None:
+                    self._restore_snapshot(
+                        previous_snapshot,
+                        recover_interrupted_jobs=False,
+                    )
+                self._mark_persistence_unavailable("snapshot_save_failed")
+                error = Nl2SqlPersistenceUnavailable("snapshot_save_failed")
+                if raise_on_error:
+                    raise error from exc
+                return
+            self._last_persisted_snapshot = copy.deepcopy(snapshot)
+            self._persistence_ready = True
+            self._persistence_writable = True
+            self._persistence_reason_code = None
+            self._persistence_checked_at = _utc_now()
+
+    def _persist_incremental_documents(self, *, collections: tuple[str, ...] | None) -> None:
+        """Legacy orchestration state を entity 単位に差分保存する移行 bridge。
+
+        Profile と schema は専用 repository path を使う。残る legacy service の mutation
+        はこの bridge で同一 payload の再書込みを避け、単一巨大 CLOB へ戻さない。
+        """
+
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        identities = {
+            "jobs": "job_id",
+            "history": "id",
+            "compare_records": "id",
+            "evaluation_sets": "id",
+            "evaluation_runs": "id",
+            "classifier_examples": "id",
+            "admin_audit": "id",
+        }
+        selected = set(collections or (*identities, "singletons"))
+        with self._lock:
+            payloads: dict[str, list[dict[str, Any]]] = {}
+            if "jobs" in selected:
+                payloads["jobs"] = [self._job_to_snapshot(job) for job in self._jobs.values()]
+            if "history" in selected:
+                payloads["history"] = [item.model_dump(mode="json") for item in self._history]
+            if "compare_records" in selected:
+                payloads["compare_records"] = [
+                    item.model_dump(mode="json") for item in self._compare_records
+                ]
+            if "evaluation_sets" in selected:
+                payloads["evaluation_sets"] = [
+                    item.model_dump(mode="json") for item in self._evaluation_sets
+                ]
+            if "evaluation_runs" in selected:
+                payloads["evaluation_runs"] = [
+                    item.model_dump(mode="json") for item in self._evaluation_runs
+                ]
+            if "classifier_examples" in selected:
+                payloads["classifier_examples"] = [
+                    item.model_dump(mode="json") for item in self._classifier_examples
+                ]
+            if "admin_audit" in selected:
+                payloads["admin_audit"] = copy.deepcopy(self._admin_audit)
+            singleton_payloads: dict[str, Any] = {}
+            if "singletons" in selected:
+                singleton_payloads = {
+                    "feedback_indexed_ids": sorted(self._feedback_indexed_ids),
+                    "feedback_search_config": {
+                        "similarity_threshold": self._feedback_similarity_threshold,
+                        "match_limit": self._feedback_match_limit,
+                    },
+                    "classifier_artifact": copy.deepcopy(self._classifier_artifact),
+                    "asset_meta": {
+                        engine.value: data.model_dump(mode="json")
+                        for engine, data in self._asset_meta.items()
+                    },
+                    "legacy_learning_material": self._legacy_learning_material.model_dump(
+                        mode="json"
+                    ),
+                }
+        for collection, identity_field in identities.items():
+            if collection not in selected:
+                continue
+            for index, raw in enumerate(payloads[collection]):
+                if not isinstance(raw, dict):
+                    continue
+                entity_id = str(raw.get(identity_field) or f"runtime-{index}")
+                digest = hashlib.sha256(
+                    json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                key = (collection, entity_id)
+                if self._incremental_hashes.get(key) == digest:
+                    continue
+                repository.put_document(
+                    collection,
+                    entity_id,
+                    raw,
+                    profile_id=str(raw.get("profile_id") or ""),
+                    status=self._document_status(collection, raw),
+                )
+                self._incremental_hashes[key] = digest
+        if "singletons" in selected:
+            for entity_id, value in singleton_payloads.items():
+                raw = {"value": value}
+                digest = hashlib.sha256(
+                    json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                key = ("singletons", entity_id)
+                if self._incremental_hashes.get(key) == digest:
+                    continue
+                repository.put_document("singletons", entity_id, raw)
+                self._incremental_hashes[key] = digest
+        with self._lock:
+            self._persistence_ready = True
+            self._persistence_writable = True
+            self._persistence_reason_code = None
+            self._persistence_checked_at = _utc_now()
+
+    def _persist_entities(
+        self,
+        documents: list[tuple[str, str, dict[str, Any]]],
+    ) -> None:
+        """変更された aggregate だけを永続化する高頻度 mutation path。"""
+
+        repository = self._incremental_repository
+        if repository is None:
+            self._persist_state()
+            return
         try:
-            self._store.save_snapshot(snapshot)
-        except Exception as exc:  # pragma: no cover - live store defensive boundary
-            logger.warning("NL2SQL store snapshot save failed: %s", exc)
+            for collection, entity_id, payload in documents:
+                digest = hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ).encode()
+                ).hexdigest()
+                key = (collection, entity_id)
+                if self._incremental_hashes.get(key) == digest:
+                    continue
+                repository.put_document(
+                    collection,
+                    entity_id,
+                    payload,
+                    profile_id=str(payload.get("profile_id") or ""),
+                    status=self._document_status(collection, payload),
+                )
+                self._incremental_hashes[key] = digest
+        except Exception as exc:
+            self._mark_persistence_unavailable("incremental_save_failed")
+            raise Nl2SqlPersistenceUnavailable("incremental_save_failed") from exc
+
+    def _document_status(self, collection: str, payload: dict[str, Any]) -> str:
+        if collection == "history":
+            return str(payload.get("feedback_rating") or "unrated")
+        return str(payload.get("status") or "")
+
+    def _persist_job(self, job_id: str) -> None:
+        with self._lock:
+            payload = self._job_to_snapshot(self._jobs[job_id])
+        self._persist_entities([("jobs", job_id, payload)])
 
     def _snapshot_locked(self) -> dict[str, Any]:
         return {
@@ -1367,7 +1833,6 @@ class Nl2SqlService:
                 item.model_dump(mode="json") for item in self._classifier_examples
             ],
             "classifier_artifact": self._classifier_artifact,
-            "classifier_model_registry": self._classifier_model_registry,
             "asset_meta": {
                 engine.value: data.model_dump(mode="json")
                 for engine, data in self._asset_meta.items()
@@ -1381,6 +1846,7 @@ class Nl2SqlService:
         return {
             "job_id": job.job_id,
             "request": job.request.model_dump(mode="json"),
+            "actor_user_id": job.actor_user_id,
             "status": job.status.value,
             "created_at": job.created_at,
             "started_at": job.started_at,
@@ -1399,6 +1865,7 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
+            actor_user_id=str(data.get("actor_user_id") or ""),
             status=status,
             created_at=str(data.get("created_at") or _utc_now()),
             started_at=data.get("started_at"),
@@ -1416,16 +1883,453 @@ class Nl2SqlService:
         )
 
     def get_catalog(self) -> SchemaCatalog:
+        if self._incremental_repository is not None:
+            cached = self._schema_cache.get("catalog")
+            self._refresh_cache_token(
+                SCHEMA_NAMESPACE,
+                allow_cached_on_failure=isinstance(cached, SchemaCatalog),
+            )
+            cached = self._schema_cache.get("catalog")
+            if isinstance(cached, SchemaCatalog):
+                return cached
+            try:
+                catalog = self._incremental_repository.load_catalog()
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_catalog_load_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_catalog_load_failed") from exc
+            with self._lock:
+                self._catalog = catalog
+            self._schema_cache.put("catalog", catalog)
+            return catalog
         return self._catalog
 
     def refresh_catalog(self) -> SchemaCatalog:
+        if self._incremental_repository is not None:
+            job = self.start_schema_refresh_job(dispatch=False)
+            # Legacy synchronous API remains available only as a compatibility path.
+            self._run_schema_refresh_job(job.job_id)
+            completed = self.get_schema_refresh_job(job.job_id)
+            if completed is None or completed.status != SchemaRefreshJobStatus.DONE:
+                raise Nl2SqlPersistenceUnavailable("schema_refresh_failed")
+            return self.get_catalog()
         if self._use_oracle_runtime():
-            self._catalog = self._oracle_adapter.fetch_catalog()
+            owners = self._oracle_adapter.fetch_schema_owners()
+            self._catalog = self._oracle_adapter.fetch_catalog(include_samples=False).model_copy(
+                update={
+                    "current_owner": owners.current_owner,
+                    "excluded_oracle_maintained_count": (owners.excluded_oracle_maintained_count),
+                }
+            )
             self._persist_state()
             return self._catalog
         self._catalog = self._build_default_catalog()
         self._persist_state()
         return self._catalog
+
+    def _refresh_catalog_after_admin_mutation(self) -> None:
+        """Admin DDL 後も同期 full-scan/CLOB 保存へ戻らず、同じ増分 refresh を使う。"""
+
+        if self._incremental_repository is not None:
+            self.refresh_catalog()
+            return
+        self._catalog = self._oracle_adapter.fetch_catalog(include_samples=False)
+        self._persist_state()
+
+    def get_schema_owners(self) -> SchemaOwnersData:
+        """当前数据库用户可访问的非 Oracle 维护 schema。"""
+
+        if self._use_oracle_runtime():
+            return self._oracle_adapter.fetch_schema_owners()
+        catalog = self.get_catalog()
+        current_owner = (
+            catalog.current_owner.strip().upper()
+            or get_settings().oracle_user.strip().upper()
+            or "APP"
+        )
+        counts: dict[str, dict[str, int]] = {}
+        for table in catalog.tables:
+            owner = table.owner.strip().upper() or current_owner
+            bucket = counts.setdefault(owner, {"table": 0, "view": 0})
+            if table.table_type.lower() in {"view", "materialized view"}:
+                bucket["view"] += 1
+            else:
+                bucket["table"] += 1
+        owners = [
+            SchemaOwnerSummary(
+                owner=owner,
+                is_current=owner == current_owner,
+                table_count=values["table"],
+                view_count=values["view"],
+            )
+            for owner, values in sorted(counts.items())
+        ]
+        return SchemaOwnersData(
+            current_owner=current_owner,
+            owners=owners,
+            excluded_oracle_maintained_count=catalog.excluded_oracle_maintained_count,
+        )
+
+    def get_catalog_head(self) -> SchemaCatalogHead:
+        repository = self._incremental_repository
+        if repository is None:
+            catalog = self.get_catalog()
+            return SchemaCatalogHead(
+                catalog_version=1 if catalog.tables else 0,
+                schema_fingerprint=catalog.schema_fingerprint,
+                refreshed_at=catalog.refreshed_at,
+                object_count=len(catalog.tables),
+                column_count=sum(len(table.columns) for table in catalog.tables),
+                etag=catalog.schema_fingerprint,
+            )
+        cached = self._schema_cache.get("head")
+        self._refresh_cache_token(
+            SCHEMA_NAMESPACE,
+            allow_cached_on_failure=isinstance(cached, SchemaCatalogHead),
+        )
+        cached = self._schema_cache.get("head")
+        if isinstance(cached, SchemaCatalogHead):
+            return cached
+        try:
+            head = repository.get_catalog_head()
+        except Exception as exc:
+            self._mark_persistence_unavailable("incremental_catalog_head_failed")
+            raise Nl2SqlPersistenceUnavailable("incremental_catalog_head_failed") from exc
+        self._schema_cache.put("head", head)
+        return head
+
+    def search_schema_objects(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        query: str,
+        owner: str,
+        object_type: str,
+        profile_id: str | None,
+    ) -> SchemaObjectPage:
+        allowed_names: set[str] | None = None
+        if profile_id:
+            profile = self.get_profile(profile_id)
+            allowed_names = {
+                value.replace('"', "").strip().upper()
+                for value in self.profile_allowed_object_names(profile)
+            }
+        repository = self._incremental_repository
+        if repository is None:
+            memory = MemoryIncrementalNl2SqlRepository(seed_default=False)
+            catalog = self.get_catalog()
+            manifest = {
+                (table.owner.upper(), table.table_name.upper()): catalog.refreshed_at
+                for table in catalog.tables
+            }
+            memory.apply_schema_refresh(
+                catalog=catalog,
+                manifest=manifest,
+                changed_keys=set(manifest),
+                deleted_keys=set(),
+            )
+            return memory.search_schema_objects(
+                cursor=cursor,
+                limit=limit,
+                query=query,
+                owner=owner,
+                object_type=object_type,
+                allowed_names=allowed_names,
+            )
+        try:
+            return repository.search_schema_objects(
+                cursor=cursor,
+                limit=limit,
+                query=query,
+                owner=owner,
+                object_type=object_type,
+                allowed_names=allowed_names,
+            )
+        except Exception as exc:
+            self._mark_persistence_unavailable("incremental_schema_search_failed")
+            raise Nl2SqlPersistenceUnavailable("incremental_schema_search_failed") from exc
+
+    def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
+        cache_key = f"{owner.upper()}.{object_name.upper()}"
+        cached = self._schema_cache.get(cache_key)
+        if self._incremental_repository is not None:
+            self._refresh_cache_token(
+                SCHEMA_NAMESPACE,
+                allow_cached_on_failure=isinstance(cached, SchemaObjectDetail),
+            )
+            cached = self._schema_cache.get(cache_key)
+        if isinstance(cached, SchemaObjectDetail):
+            return cached
+        detail: SchemaObjectDetail | None
+        repository = self._incremental_repository
+        if repository is None:
+            page = self.search_schema_objects(
+                cursor=None,
+                limit=2,
+                query=object_name,
+                owner=owner,
+                object_type="",
+                profile_id=None,
+            )
+            if not page.items:
+                return None
+            table = next(
+                (
+                    item
+                    for item in self.get_catalog().tables
+                    if item.owner.upper() == owner.upper()
+                    and item.table_name.upper() == object_name.upper()
+                ),
+                None,
+            )
+            if table is None:
+                return None
+            detail = SchemaObjectDetail(table=table, catalog_version=page.catalog_version)
+        else:
+            try:
+                detail = repository.get_schema_object(owner, object_name)
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_schema_detail_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_schema_detail_failed") from exc
+        if detail is not None and self._use_oracle_runtime():
+            sample_limit = max(get_settings().nl2sql_schema_sample_rows, 0)
+            if sample_limit:
+                try:
+                    samples, _warnings = self._oracle_adapter.fetch_metadata_sample_values(
+                        [
+                            {
+                                "owner": detail.table.owner,
+                                "object_name": detail.table.table_name,
+                                "columns": [column.column_name for column in detail.table.columns],
+                            }
+                        ],
+                        sample_limit,
+                    )
+                    object_samples = samples.get(self._catalog_qualified_name(detail.table), {})
+                    detail = detail.model_copy(
+                        update={
+                            "table": detail.table.model_copy(
+                                update={
+                                    "columns": [
+                                        column.model_copy(
+                                            update={
+                                                "sample_values": object_samples.get(
+                                                    column.column_name.upper(), []
+                                                )
+                                            }
+                                        )
+                                        for column in detail.table.columns
+                                    ]
+                                }
+                            )
+                        }
+                    )
+                except OracleAdapterError:
+                    # 詳細 metadata は返し、サンプル取得失敗で object detail 全体を落とさない。
+                    pass
+        if detail is not None:
+            self._schema_cache.put(cache_key, detail)
+        return detail
+
+    def start_schema_refresh_job(self, *, dispatch: bool = True) -> SchemaRefreshJob:
+        repository = self._refresh_job_repository
+        job = SchemaRefreshJob(job_id=str(uuid.uuid4()), created_at=_utc_now())
+        try:
+            repository.save_refresh_job(job)
+        except Exception as exc:
+            self._mark_persistence_unavailable("schema_refresh_submit_failed")
+            raise Nl2SqlPersistenceUnavailable("schema_refresh_submit_failed") from exc
+        if dispatch and get_settings().nl2sql_schema_refresh_worker_enabled:
+            thread = threading.Thread(
+                target=self._run_schema_refresh_job,
+                args=(job.job_id,),
+                daemon=True,
+                name=f"schema-refresh-{job.job_id[:8]}",
+            )
+            thread.start()
+        return job
+
+    def get_schema_refresh_job(self, job_id: str) -> SchemaRefreshJob | None:
+        repository = self._refresh_job_repository
+        try:
+            return repository.get_refresh_job(job_id)
+        except Exception as exc:
+            self._mark_persistence_unavailable("schema_refresh_job_load_failed")
+            raise Nl2SqlPersistenceUnavailable("schema_refresh_job_load_failed") from exc
+
+    def run_next_schema_refresh_job(self) -> bool:
+        """外部 worker 用。pending または lease 切れ job を 1 件だけ処理する。"""
+
+        return self._run_schema_refresh_job(None)
+
+    @staticmethod
+    def _heartbeat_schema_refresh_job(
+        repository: IncrementalNl2SqlRepository,
+        job: SchemaRefreshJob,
+    ) -> SchemaRefreshJob:
+        """長い metadata phase の境界で lease を更新し、誤った二重回収を防ぐ。"""
+
+        now = datetime.now(UTC)
+        lease_seconds = max(30.0, get_settings().nl2sql_schema_refresh_lease_seconds)
+        renewed = job.model_copy(
+            update={
+                "heartbeat_at": now.isoformat(),
+                "lease_expires_at": datetime.fromtimestamp(
+                    now.timestamp() + lease_seconds, UTC
+                ).isoformat(),
+            }
+        )
+        return repository.save_refresh_job(renewed)
+
+    def _run_schema_refresh_job(self, job_id: str | None) -> bool:
+        repository = self._refresh_job_repository
+        if not self._schema_refresh_lock.acquire(blocking=False):
+            return False
+        claimed_job_id = job_id or ""
+        try:
+            refresh_observation = observe_schema_refresh()
+            refresh_state = refresh_observation.__enter__()
+            job = repository.claim_refresh_job(
+                worker_id=self._schema_refresh_worker_id,
+                lease_seconds=get_settings().nl2sql_schema_refresh_lease_seconds,
+                job_id=job_id,
+            )
+            if job is None:
+                return False
+            claimed_job_id = job.job_id
+            stored_manifest = repository.schema_manifest()
+            if self._use_oracle_runtime():
+                incoming_manifest = self._oracle_adapter.fetch_schema_manifest()
+            else:
+                deterministic = self._build_default_catalog()
+                incoming_manifest = {
+                    (table.owner.upper(), table.table_name.upper()): "deterministic-v1"
+                    for table in deterministic.tables
+                }
+            job = self._heartbeat_schema_refresh_job(repository, job)
+            incoming_keys = set(incoming_manifest)
+            changed_keys = {
+                key
+                for key, last_ddl_at in incoming_manifest.items()
+                if stored_manifest.get(key) != last_ddl_at
+            }
+            deleted_keys = set(stored_manifest) - incoming_keys
+            SCHEMA_CHANGED_OBJECTS.observe(len(changed_keys))
+            if not changed_keys and not deleted_keys:
+                head = repository.get_catalog_head()
+            else:
+                current_catalog = repository.load_catalog()
+                if self._use_oracle_runtime():
+                    changed_catalog = self._oracle_adapter.fetch_catalog_objects(changed_keys)
+                else:
+                    changed_catalog = self._build_default_catalog()
+                job = self._heartbeat_schema_refresh_job(repository, job)
+                changed_or_deleted_keys = changed_keys | deleted_keys
+                dependency_by_key = {
+                    (
+                        dependency.owner.upper(),
+                        dependency.view_name.upper(),
+                        dependency.referenced_owner.upper(),
+                        dependency.referenced_name.upper(),
+                    ): dependency
+                    for dependency in current_catalog.view_dependencies
+                    if (
+                        dependency.owner.upper(),
+                        dependency.view_name.upper(),
+                    )
+                    not in changed_or_deleted_keys
+                    and (
+                        dependency.referenced_owner.upper(),
+                        dependency.referenced_name.upper(),
+                    )
+                    not in deleted_keys
+                }
+                for dependency in changed_catalog.view_dependencies:
+                    dependency_by_key[
+                        (
+                            dependency.owner.upper(),
+                            dependency.view_name.upper(),
+                            dependency.referenced_owner.upper(),
+                            dependency.referenced_name.upper(),
+                        )
+                    ] = dependency
+                table_by_key = {
+                    (table.owner.upper(), table.table_name.upper()): table
+                    for table in current_catalog.tables
+                    if (table.owner.upper(), table.table_name.upper()) not in deleted_keys
+                }
+                for table in changed_catalog.tables:
+                    key = (table.owner.upper(), table.table_name.upper())
+                    if key in incoming_keys:
+                        table_by_key[key] = table
+                merged = SchemaCatalog(
+                    refreshed_at=_utc_now(),
+                    tables=list(table_by_key.values()),
+                    view_dependencies=list(dependency_by_key.values()),
+                )
+                if self._use_oracle_runtime():
+                    merged.schema_fingerprint = self._oracle_adapter.catalog_fingerprint(merged)
+                else:
+                    merged.schema_fingerprint = hashlib.sha256(
+                        json.dumps(
+                            merged.model_dump(mode="json"),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest()
+                head = repository.apply_schema_refresh(
+                    catalog=merged,
+                    manifest=incoming_manifest,
+                    changed_keys=changed_keys,
+                    deleted_keys=deleted_keys,
+                )
+                self._schema_cache.clear()
+                if self._incremental_repository is None:
+                    with self._lock:
+                        self._catalog = merged
+            repository.save_refresh_job(
+                job.model_copy(
+                    update={
+                        "status": SchemaRefreshJobStatus.DONE,
+                        "finished_at": _utc_now(),
+                        "heartbeat_at": _utc_now(),
+                        "lease_expires_at": None,
+                        "scanned_objects": len(incoming_manifest),
+                        "changed_objects": len(changed_keys),
+                        "deleted_objects": len(deleted_keys),
+                        "catalog_version": head.catalog_version,
+                    }
+                )
+            )
+            refresh_state["status"] = "done"
+            return True
+        except Exception as exc:
+            logger.exception(
+                "schema_refresh_job_failed",
+                extra={
+                    "job_id": claimed_job_id,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            failed = repository.get_refresh_job(claimed_job_id) if claimed_job_id else None
+            if failed is not None:
+                repository.save_refresh_job(
+                    failed.model_copy(
+                        update={
+                            "status": SchemaRefreshJobStatus.ERROR,
+                            "finished_at": _utc_now(),
+                            "heartbeat_at": _utc_now(),
+                            "lease_expires_at": None,
+                            "error_code": "schema_refresh_failed",
+                        }
+                    )
+                )
+            return False
+        finally:
+            observation = locals().get("refresh_observation")
+            if observation is not None:
+                observation.__exit__(None, None, None)
+            self._schema_refresh_lock.release()
 
     def sample_data_info(self) -> SampleDataInfo:
         sql = self._sample_sql_sections()
@@ -1474,7 +2378,7 @@ class Nl2SqlService:
             self._ensure_sample_profile()
             results = self._statement_results(statements, status="applied_to_local_state")
             executed = True
-            self._persist_state()
+            self._persist_local_catalog()
         return SampleDataMutationData(
             operation="import",
             step=step,
@@ -1527,7 +2431,7 @@ class Nl2SqlService:
             self._remove_sample_from_state()
             results = self._statement_results(statements, status="applied_to_local_state")
             executed = True
-            self._persist_state()
+            self._persist_local_catalog()
         return SampleDataMutationData(
             operation="delete",
             step=SampleDataStep.ALL,
@@ -1600,12 +2504,20 @@ class Nl2SqlService:
             ],
         )
         profile = self._profiles.get(_SAMPLE_PROFILE_ID)
-        if profile is not None:
+        if self._incremental_repository is not None:
+            current = self._incremental_repository.get_profile(_SAMPLE_PROFILE_ID)
+            if current is not None:
+                archived = self._incremental_repository.save_profile(
+                    current.model_copy(update={"archived": True}),
+                    expected_etag=current.etag,
+                )
+                self._profile_cache.discard(_SAMPLE_PROFILE_ID)
+                self._profile_cache.put(_SAMPLE_PROFILE_ID, archived)
+        elif profile is not None:
             self._profiles[_SAMPLE_PROFILE_ID] = profile.model_copy(update={"archived": True})
-        self._persist_state()
 
     def _ensure_sample_profile(self) -> None:
-        self._profiles[_SAMPLE_PROFILE_ID] = Nl2SqlProfile(
+        profile = Nl2SqlProfile(
             id=_SAMPLE_PROFILE_ID,
             name="SQL Assist サンプル",
             description="DEPARTMENT / EMPLOYEE / PROJECT の明示 import sample profile。",
@@ -1619,6 +2531,42 @@ class Nl2SqlService:
             ),
             archived=False,
         )
+        if self._incremental_repository is not None:
+            current = self._incremental_repository.get_profile(_SAMPLE_PROFILE_ID)
+            stored = self._incremental_repository.save_profile(
+                profile,
+                expected_etag=current.etag if current is not None else None,
+            )
+            self._profile_cache.discard(_SAMPLE_PROFILE_ID)
+            self._profile_cache.put(_SAMPLE_PROFILE_ID, stored)
+            return
+        self._profiles[_SAMPLE_PROFILE_ID] = profile
+
+    def _persist_local_catalog(self) -> None:
+        repository = self._incremental_repository
+        if repository is None:
+            self._persist_state()
+            return
+        manifest = {
+            (table.owner.upper(), table.table_name.upper()): self._catalog.refreshed_at
+            for table in self._catalog.tables
+        }
+        current_manifest = repository.schema_manifest()
+        if not self._catalog.schema_fingerprint:
+            self._catalog.schema_fingerprint = hashlib.sha256(
+                json.dumps(
+                    self._catalog.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+        repository.apply_schema_refresh(
+            catalog=self._catalog,
+            manifest=manifest,
+            changed_keys=set(manifest),
+            deleted_keys=set(current_manifest) - set(manifest),
+        )
+        self._schema_cache.clear()
 
     def _sample_schema_tables(self, step: SampleDataStep) -> list[SchemaTable]:
         tables: list[SchemaTable] = []
@@ -1748,16 +2696,157 @@ class Nl2SqlService:
         return any(code in normalized for code in ("ORA-00942", "ORA-04043"))
 
     def list_profiles(self, *, include_archived: bool = False) -> list[Nl2SqlProfile]:
+        if self._incremental_repository is not None:
+            try:
+                profiles = self._incremental_repository.list_profiles(
+                    include_archived=include_archived
+                )
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_profile_list_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_profile_list_failed") from exc
+            profiles = [
+                self._profile_scope_for_read(profile, persist_migration=True)
+                for profile in profiles
+            ]
+            for profile in profiles:
+                self._profile_cache.put(profile.id, profile)
+            return profiles
         with self._lock:
             return [
-                profile
+                self._profile_scope_for_read(profile, persist_migration=True)
                 for profile in self._profiles.values()
                 if include_archived or not profile.archived
             ]
 
+    def _current_schema_owner(self) -> str:
+        catalog_current = self._catalog.current_owner.strip().upper()
+        if catalog_current:
+            return catalog_current
+        configured = get_settings().oracle_user.strip().upper()
+        catalog_owners = {table.owner.strip().upper() for table in self._catalog.tables}
+        if configured and configured in catalog_owners:
+            return configured
+        if len(catalog_owners) == 1:
+            return next(iter(catalog_owners))
+        return configured or "APP"
+
+    def _catalog_qualified_name(self, table: SchemaTable) -> str:
+        return qualified_object_name(table.owner or self._current_schema_owner(), table.table_name)
+
+    def _resolve_profile_object_name(self, value: str) -> str:
+        """旧形式を含む object 名を catalog 上の一意な限定名へ解決する。"""
+
+        raw = str(value or "").replace('"', "").strip().upper()
+        if not raw:
+            raise ValueError("空の schema object は profile に追加できません。")
+        catalog_by_name: dict[str, list[str]] = {}
+        catalog_names: set[str] = set()
+        for table in self._catalog.tables:
+            qualified = self._catalog_qualified_name(table)
+            catalog_names.add(qualified)
+            catalog_by_name.setdefault(table.table_name.upper(), []).append(qualified)
+        current_owner = self._current_schema_owner()
+        if "." in raw:
+            qualified = parse_object_identity(raw).qualified_name
+            # 既存 profile の object が後から削除/権限取消されても profile 自体は
+            # 読み出せるよう限定名を保持する。Oracle 同期・実行時に不一致を明示する。
+            return qualified
+        object_name = _normalize_identifier(raw)
+        current_qualified = qualified_object_name(current_owner, object_name)
+        matches = sorted(set(catalog_by_name.get(object_name, [])))
+        if current_qualified in matches:
+            return current_qualified
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(
+                f"{object_name}: 複数 schema に同名 object があります。"
+                f"{', '.join(matches)} のいずれかを OWNER.OBJECT 形式で指定してください。"
+            )
+        # 旧 API は catalog refresh 前にも current schema の bare name を保存できた。
+        # 互換入力は current owner に限定して保持し、Oracle profile 同期時の再読込照合で
+        # 実在/権限の最終確認を行う。
+        return current_qualified
+
+    def _canonical_profile_scope(
+        self,
+        profile: Nl2SqlProfile,
+        *,
+        migrate_legacy_empty: bool,
+    ) -> Nl2SqlProfile:
+        allowed_tables = list(profile.allowed_tables)
+        allowed_views = list(profile.allowed_views)
+        if (
+            migrate_legacy_empty
+            and profile.object_scope_version < 2
+            and not allowed_tables
+            and not allowed_views
+            and self._catalog.tables
+        ):
+            current_owner = self._current_schema_owner()
+            for table in self._catalog.tables:
+                if table.owner.upper() != current_owner:
+                    continue
+                target = allowed_views if "view" in table.table_type.lower() else allowed_tables
+                target.append(self._catalog_qualified_name(table))
+        canonical_tables = self._dedupe_object_names(allowed_tables)
+        canonical_views = self._dedupe_object_names(allowed_views)
+        scope_version = 2 if self._catalog.tables or profile.object_scope_version >= 2 else 1
+        return profile.model_copy(
+            update={
+                "allowed_tables": canonical_tables,
+                "allowed_views": canonical_views,
+                "object_scope_version": scope_version,
+            }
+        )
+
+    def _profile_scope_for_read(
+        self,
+        profile: Nl2SqlProfile,
+        *,
+        persist_migration: bool = False,
+    ) -> Nl2SqlProfile:
+        if profile.object_scope_version >= 2:
+            return profile
+        migrated = self._canonical_profile_scope(profile, migrate_legacy_empty=True)
+        legacy_empty_scope = not profile.allowed_tables and not profile.allowed_views
+        if not persist_migration or not legacy_empty_scope:
+            return migrated
+        repository = self._incremental_repository
+        if repository is not None:
+            try:
+                stored = repository.save_profile(
+                    migrated,
+                    expected_etag=profile.etag,
+                )
+                self._profile_cache.put(stored.id, stored)
+                return stored
+            except IncrementalVersionConflict:
+                latest = repository.get_profile(profile.id)
+                if latest is not None:
+                    return self._canonical_profile_scope(
+                        latest,
+                        migrate_legacy_empty=True,
+                    )
+                return migrated
+            except Exception:
+                logger.exception(
+                    "legacy_profile_scope_migration_persist_failed",
+                    extra={"profile_id": profile.id},
+                )
+                return migrated
+        with self._lock:
+            if profile.id in self._profiles:
+                self._profiles[profile.id] = migrated
+                # Legacy read migration must never turn an otherwise readable profile
+                # endpoint into an outage when persistence has already gone read-only.
+                self._persist_state(raise_on_error=False)
+        return migrated
+
     def profile_allowed_object_names(self, profile: Nl2SqlProfile) -> list[str]:
         """Profile が検索・Select AI で参照できる table/view 名を返す。"""
-        return self._dedupe_object_names([*profile.allowed_tables, *profile.allowed_views])
+        scoped = self._profile_scope_for_read(profile)
+        return self._dedupe_object_names([*scoped.allowed_tables, *scoped.allowed_views])
 
     def build_select_ai_additional_instructions(
         self,
@@ -1869,27 +2958,116 @@ class Nl2SqlService:
             attributes["additional_instructions"] = additional_instructions
         return attributes
 
+    def search_profiles(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        query: str,
+        include_archived: bool,
+    ) -> ProfileSummaryPage:
+        repository = self._incremental_repository
+        if repository is None:
+            profiles = self.list_profiles(include_archived=include_archived)
+            memory_repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+            for profile in profiles:
+                memory_repository.save_profile(profile, expected_etag=None)
+            return memory_repository.search_profiles(
+                cursor=cursor,
+                limit=limit,
+                query=query,
+                include_archived=include_archived,
+            )
+        try:
+            return repository.search_profiles(
+                cursor=cursor,
+                limit=limit,
+                query=query,
+                include_archived=include_archived,
+            )
+        except Exception as exc:
+            self._mark_persistence_unavailable("incremental_profile_search_failed")
+            raise Nl2SqlPersistenceUnavailable("incremental_profile_search_failed") from exc
+
     def create_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
-        profile = self._profile_with_sql_rules_absorbed(profile)
+        profile = self._canonical_profile_scope(
+            self._profile_with_sql_rules_absorbed(profile),
+            migrate_legacy_empty=False,
+        ).model_copy(update={"object_scope_version": 2})
+        if self._incremental_repository is not None:
+            try:
+                stored = self._incremental_repository.save_profile(profile, expected_etag=None)
+            except IncrementalVersionConflict as exc:
+                raise ValueError("同じ profile ID が既に存在します。") from exc
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_profile_save_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_profile_save_failed") from exc
+            self._profile_cache.put(stored.id, stored)
+            return stored
         with self._lock:
+            self.ensure_persistence_available()
             self._profiles[profile.id] = profile
-        self._persist_state()
+            self._persist_state()
         return profile
 
     def update_profile(
-        self, profile_id: str, patcher: Callable[[Nl2SqlProfile], Nl2SqlProfile]
+        self,
+        profile_id: str,
+        patcher: Callable[[Nl2SqlProfile], Nl2SqlProfile],
+        *,
+        expected_etag: str | None = None,
     ) -> Nl2SqlProfile:
+        if self._incremental_repository is not None:
+            current = self.get_profile(profile_id, include_archived=True)
+            if expected_etag is not None and expected_etag != current.etag:
+                raise IncrementalVersionConflict(current.etag)
+            updated = self._canonical_profile_scope(
+                self._profile_with_sql_rules_absorbed(patcher(current)),
+                migrate_legacy_empty=False,
+            ).model_copy(update={"object_scope_version": 2})
+            try:
+                stored = self._incremental_repository.save_profile(
+                    updated,
+                    expected_etag=expected_etag or current.etag,
+                )
+            except IncrementalVersionConflict:
+                raise
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_profile_save_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_profile_save_failed") from exc
+            self._profile_cache.discard(profile_id)
+            self._profile_cache.put(profile_id, stored)
+            return stored
         with self._lock:
+            self.ensure_persistence_available()
             current = self._profiles[profile_id]
-            updated = self._profile_with_sql_rules_absorbed(patcher(current))
+            updated = self._canonical_profile_scope(
+                self._profile_with_sql_rules_absorbed(patcher(current)),
+                migrate_legacy_empty=False,
+            ).model_copy(update={"object_scope_version": 2})
             self._profiles[profile_id] = updated
-        self._persist_state()
+            self._persist_state()
         return updated
 
-    def delete_profile(self, profile_id: str) -> Nl2SqlProfile:
+    def delete_profile(self, profile_id: str, *, expected_etag: str | None = None) -> Nl2SqlProfile:
+        if self._incremental_repository is not None:
+            current = self.get_profile(profile_id, include_archived=True)
+            try:
+                self._incremental_repository.delete_profile(
+                    profile_id,
+                    expected_etag=expected_etag or current.etag,
+                )
+            except IncrementalVersionConflict:
+                raise
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_profile_delete_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_profile_delete_failed") from exc
+            self._profile_cache.discard(profile_id)
+            return current
         with self._lock:
+            self.ensure_persistence_available()
             deleted = self._profiles.pop(profile_id)
-        self._persist_state()
+            self._persist_state()
         return deleted
 
     def import_profile_learning_material(
@@ -1980,7 +3158,7 @@ class Nl2SqlService:
             self._legacy_learning_material = self._legacy_learning_material.model_copy(
                 update={"glossary": glossary}
             )
-        self._persist_state()
+        self._persist_state(collections=("singletons",))
         return self.get_legacy_learning_material()
 
     def import_legacy_rules(self, *, filename: str, content: bytes) -> LegacyLearningMaterialData:
@@ -1990,7 +3168,7 @@ class Nl2SqlService:
             self._legacy_learning_material = self._legacy_learning_material.model_copy(
                 update={"rules": rules}
             )
-        self._persist_state()
+        self._persist_state(collections=("singletons",))
         return self.get_legacy_learning_material()
 
     def export_legacy_terms_xlsx(self) -> tuple[str, bytes]:
@@ -2025,13 +3203,78 @@ class Nl2SqlService:
     def restore_profile(self, profile_id: str) -> Nl2SqlProfile:
         return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": False}))
 
-    def get_profile(self, profile_id: str | None) -> Nl2SqlProfile:
+    def get_profile(
+        self, profile_id: str | None, *, include_archived: bool = False
+    ) -> Nl2SqlProfile:
+        if self._incremental_repository is not None:
+            resolved_id = profile_id or "default"
+            cached = self._profile_cache.get(resolved_id)
+            self._refresh_cache_token(
+                PROFILE_NAMESPACE,
+                allow_cached_on_failure=isinstance(cached, Nl2SqlProfile),
+            )
+            cached = self._profile_cache.get(resolved_id)
+            if isinstance(cached, Nl2SqlProfile):
+                if cached.archived and not include_archived:
+                    raise ValueError("指定された profile が見つからないか、利用できません。")
+                return self._profile_scope_for_read(cached, persist_migration=True)
+            try:
+                profile = self._incremental_repository.get_profile(resolved_id)
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_profile_load_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_profile_load_failed") from exc
+            if profile is None or (profile.archived and not include_archived):
+                raise ValueError("指定された profile が見つからないか、利用できません。")
+            profile = self._profile_scope_for_read(profile, persist_migration=True)
+            self._profile_cache.put(resolved_id, profile)
+            return profile
         with self._lock:
             resolved_id = profile_id or "default"
             profile = self._profiles.get(resolved_id)
-            if profile is None or profile.archived:
+            if profile is None or (profile.archived and not include_archived):
                 raise ValueError("指定された profile が見つからないか、利用できません。")
-            return profile
+            return self._profile_scope_for_read(profile, persist_migration=True)
+
+    def _refresh_cache_token(
+        self,
+        namespace: str,
+        *,
+        allow_cached_on_failure: bool,
+    ) -> None:
+        """5 秒ごとの token poll で別 instance の更新を bounded cache へ反映する。"""
+
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            checked_at = self._cache_token_checked_at.get(namespace, 0.0)
+            if now - checked_at < self._cache_token_poll_seconds:
+                return
+        try:
+            token = repository.get_change_token(namespace)
+        except Exception as exc:
+            if allow_cached_on_failure:
+                return
+            self._mark_persistence_unavailable("incremental_change_token_failed")
+            raise Nl2SqlPersistenceUnavailable("incremental_change_token_failed") from exc
+        with self._lock:
+            previous = (
+                self._profile_change_token
+                if namespace == PROFILE_NAMESPACE
+                else self._schema_change_token
+            )
+            if previous and token != previous:
+                if namespace == PROFILE_NAMESPACE:
+                    self._profile_cache.clear()
+                else:
+                    self._schema_cache.clear()
+            if namespace == PROFILE_NAMESPACE:
+                self._profile_change_token = token
+            else:
+                self._schema_change_token = token
+            record_token_lag(namespace, abs(token - previous) if previous else 0)
+            self._cache_token_checked_at[namespace] = now
 
     def _transition_job_steps(
         self,
@@ -2077,18 +3320,30 @@ class Nl2SqlService:
                         ]
                     }
                 )
-        self._persist_state()
+        self._persist_job(job_id)
 
-    def start_job(self, request: JobCreateRequest) -> JobCreateData:
+    def start_job(
+        self,
+        request: JobCreateRequest,
+        *,
+        actor_user_id: str = "",
+    ) -> JobCreateData:
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
         self.get_profile(request.profile_id)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         job_id = str(uuid.uuid4())
-        job = StoredJob(job_id=job_id, request=request, steps=_new_job_steps())
+        if self._deepsec_enabled and not actor_user_id:
+            raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
+        job = StoredJob(
+            job_id=job_id,
+            request=request,
+            actor_user_id=actor_user_id,
+            steps=_new_job_steps(),
+        )
         with self._lock:
             self._jobs[job_id] = job
-        self._persist_state()
+        self._persist_job(job_id)
         response = JobCreateData(
             job_id=job_id,
             status=job.status,
@@ -2102,8 +3357,19 @@ class Nl2SqlService:
     def get_job(self, job_id: str) -> JobData | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            if not job:
-                return None
+        if job is None and self._incremental_repository is not None:
+            try:
+                document = self._incremental_repository.get_document("jobs", job_id)
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_job_load_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_job_load_failed") from exc
+            if document is not None:
+                job = self._job_from_snapshot(document)
+                with self._lock:
+                    self._jobs[job_id] = job
+        if job is None:
+            return None
+        with self._lock:
             return JobData(
                 job_id=job.job_id,
                 status=job.status,
@@ -2213,25 +3479,40 @@ class Nl2SqlService:
     ) -> AnalyzeData:
         semantic = parse_oracle_sql(sql)
         graph = semantic.graph
-        referenced = (
-            [table.name.upper() for table in graph.tables if not table.is_cte] if graph else []
-        )
-        alias_to_table = (
-            {
-                table.alias.upper(): table.name.upper()
-                for table in graph.tables
-                if table.alias and not table.is_cte
-            }
-            if graph
-            else {}
-        )
+        current_owner = self._current_schema_owner()
+        referenced = []
+        alias_to_table: dict[str, str] = {}
+        table_name_candidates: dict[str, list[str]] = {}
+        if graph:
+            for table_ref in graph.tables:
+                if table_ref.is_cte:
+                    continue
+                qualified = qualified_object_name(
+                    table_ref.owner.upper() or current_owner,
+                    table_ref.name.upper(),
+                )
+                if qualified not in referenced:
+                    referenced.append(qualified)
+                table_name_candidates.setdefault(table_ref.name.upper(), []).append(qualified)
+                if table_ref.alias:
+                    alias_to_table[table_ref.alias.upper()] = qualified
+            for name, candidates in table_name_candidates.items():
+                unique = sorted(set(candidates))
+                if len(unique) == 1:
+                    alias_to_table[name] = unique[0]
         referenced_columns: list[str] = []
         if graph:
             for column in graph.columns:
-                table = alias_to_table.get(column.table.upper(), column.table.upper())
-                if not table and len(set(referenced)) == 1:
-                    table = referenced[0]
-                value = f"{table}.{column.name.upper()}" if table else column.name.upper()
+                if column.owner and column.table:
+                    table_name = qualified_object_name(column.owner, column.table)
+                else:
+                    table_name = alias_to_table.get(
+                        column.table.upper(),
+                        column.table.upper(),
+                    )
+                if not table_name and len(set(referenced)) == 1:
+                    table_name = referenced[0]
+                value = f"{table_name}.{column.name.upper()}" if table_name else column.name.upper()
                 if value and value not in referenced_columns:
                     referenced_columns.append(value)
         has_wildcard = bool(
@@ -2246,9 +3527,15 @@ class Nl2SqlService:
             blocked_reason = (
                 "SELECT/WITH 以外、複数 statement、または危険語を含む SQL は実行できません。"
             )
-        if not _table_allowed(referenced, allowed):
+        if not _table_allowed(referenced, allowed, current_owner=current_owner):
             blocked_reason = "許可されていない表を参照しています。"
-        if not _column_allowed(referenced_columns, has_wildcard, referenced, allowed):
+        if not _column_allowed(
+            referenced_columns,
+            has_wildcard,
+            referenced,
+            allowed,
+            current_owner=current_owner,
+        ):
             blocked_reason = "許可されていない列を参照しています。"
         if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
             warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
@@ -2356,7 +3643,130 @@ class Nl2SqlService:
             executable_sql=executable_sql,
         )
 
+    def _decode_page_cursor(self, cursor: str | None) -> int:
+        if not cursor:
+            return 0
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            return max(0, int(base64.urlsafe_b64decode(padded).decode("ascii")))
+        except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+            raise ValueError("cursor が不正です。") from exc
+
+    def _encode_page_cursor(self, offset: int) -> str:
+        return base64.urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
+
+    def _history_page(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+    ) -> tuple[list[HistoryItem], str, int]:
+        repository = self._incremental_repository
+        if repository is not None:
+            try:
+                documents, next_cursor, total = repository.list_documents_page(
+                    "history",
+                    cursor=cursor,
+                    limit=limit,
+                    profile_id=profile_id,
+                    status=status,
+                    query=query,
+                )
+            except Exception as exc:
+                self._mark_persistence_unavailable("incremental_history_load_failed")
+                raise Nl2SqlPersistenceUnavailable("incremental_history_load_failed") from exc
+            return (
+                [HistoryItem.model_validate(document) for document in documents],
+                next_cursor or "",
+                total,
+            )
+        offset = self._decode_page_cursor(cursor)
+        query_key = query.casefold().strip()
+        with self._lock:
+            items = [
+                item
+                for item in reversed(self._history)
+                if (not profile_id or item.profile_id == profile_id)
+                and (
+                    not status
+                    or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
+                )
+                and (
+                    not query_key
+                    or query_key
+                    in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
+                )
+            ]
+        total = len(items)
+        selected = items[offset : offset + limit]
+        next_offset = offset + len(selected)
+        return (
+            [item.model_copy(deep=True) for item in selected],
+            self._encode_page_cursor(next_offset) if next_offset < total else "",
+            total,
+        )
+
+    def _history_snapshot(self, *, status: str = "") -> list[HistoryItem]:
+        if self._incremental_repository is None:
+            with self._lock:
+                return [
+                    item.model_copy(deep=True)
+                    for item in reversed(self._history)
+                    if not status
+                    or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
+                ]
+        items: list[HistoryItem] = []
+        cursor = ""
+        while True:
+            page, cursor, _total = self._history_page(
+                cursor=cursor or None,
+                limit=500,
+                status=status,
+            )
+            items.extend(page)
+            if not cursor:
+                return items
+
+    def _history_by_id(self, history_id: str) -> HistoryItem | None:
+        repository = self._incremental_repository
+        if repository is not None:
+            document = repository.get_document("history", history_id)
+            return HistoryItem.model_validate(document) if document else None
+        with self._lock:
+            item = next((entry for entry in self._history if entry.id == history_id), None)
+            return item.model_copy(deep=True) if item else None
+
+    def _load_classifier_state(self) -> None:
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        documents: list[dict[str, Any]] = []
+        cursor = ""
+        while True:
+            page, cursor_value, _total = repository.list_documents_page(
+                "classifier_examples",
+                cursor=cursor or None,
+                limit=500,
+            )
+            documents.extend(page)
+            cursor = cursor_value or ""
+            if not cursor:
+                break
+        artifact_document = repository.get_document("singletons", "classifier_artifact")
+        examples = [ClassifierTrainingExample.model_validate(item) for item in documents]
+        artifact_value = artifact_document.get("value") if artifact_document else None
+        artifact = dict(artifact_value) if isinstance(artifact_value, dict) else None
+        with self._lock:
+            self._classifier_examples = examples
+            self._classifier_artifact = artifact
+
     def list_history(self) -> HistoryData:
+        if self._incremental_repository is not None:
+            items, _cursor, _total = self._history_page(cursor=None, limit=50)
+            return HistoryData(items=items)
         with self._lock:
             return HistoryData(items=list(reversed(self._history[-50:])))
 
@@ -2383,9 +3793,7 @@ class Nl2SqlService:
             )
             if existing is not None:
                 return existing.model_copy(deep=True)
-            profile = self._profiles.get(profile_id)
-            if profile is None or profile.archived:
-                raise ValueError("指定された profile は存在しないか、アーカイブされています。")
+            profile = self.get_profile(profile_id)
             item = HistoryItem(
                 id=str(uuid.uuid4()),
                 question=question,
@@ -2404,24 +3812,181 @@ class Nl2SqlService:
                 ontology_trace_summary=dict(ontology_trace_summary),
             )
             self._history.append(item)
-        self._persist_state()
+        self._persist_entities([("history", item.id, item.model_dump(mode="json"))])
         return item.model_copy(deep=True)
 
     def save_feedback(
         self, history_id: str, rating: FeedbackRating, comment: str = ""
     ) -> FeedbackData:
+        current = self._history_by_id(history_id)
+        if current is None:
+            raise KeyError(history_id)
+        updated = current.model_copy(
+            update={
+                "feedback_rating": rating,
+                "feedback_comment": comment.strip(),
+                "feedback_updated_at": _utc_now(),
+            }
+        )
         with self._lock:
             self._feedback[history_id] = rating
-            self._history = [
-                (
-                    item.model_copy(update={"feedback_rating": rating, "feedback_comment": comment})
-                    if item.id == history_id
-                    else item
+            self._history = [updated if item.id == history_id else item for item in self._history]
+        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
+        return FeedbackData(
+            history_id=history_id,
+            rating=rating,
+            saved=True,
+            comment=updated.feedback_comment,
+        )
+
+    def clear_feedback(self, history_id: str) -> FeedbackClearData:
+        current = self._history_by_id(history_id)
+        if current is None:
+            raise KeyError(history_id)
+        updated = current.model_copy(
+            update={
+                "feedback_rating": None,
+                "feedback_comment": "",
+                "feedback_updated_at": _utc_now(),
+            }
+        )
+        with self._lock:
+            self._feedback.pop(history_id, None)
+            self._history = [updated if item.id == history_id else item for item in self._history]
+        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
+        return FeedbackClearData(history_id=history_id)
+
+    def list_feedback(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        rating: str,
+        profile_id: str,
+        query: str,
+    ) -> FeedbackListData:
+        self._load_classifier_state()
+        status = rating if rating in {"good", "bad", "unrated"} else ""
+        items, next_cursor, total = self._history_page(
+            cursor=cursor,
+            limit=limit,
+            profile_id=profile_id,
+            status=status,
+            query=query,
+        )
+        records: list[FeedbackRecord] = []
+        for item in items:
+            candidate = self._classifier_candidate_from_history(item)
+            records.append(
+                FeedbackRecord(
+                    **item.model_dump(mode="json"),
+                    training_status=candidate.status if candidate else "",
+                    training_example_id=candidate.training_example_id if candidate else "",
                 )
-                for item in self._history
-            ]
-        self._persist_state()
-        return FeedbackData(history_id=history_id, rating=rating, saved=True, comment=comment)
+            )
+        return FeedbackListData(
+            items=records,
+            total=total,
+            next_cursor=next_cursor,
+        )
+
+    def _normalize_classifier_question(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value)
+        return " ".join(normalized.split()).casefold()
+
+    def _classifier_candidate_from_history(
+        self, history: HistoryItem
+    ) -> ClassifierTrainingCandidate | None:
+        with self._lock:
+            examples = list(self._classifier_examples)
+        linked = next(
+            (item for item in examples if item.source_history_id == history.id),
+            None,
+        )
+        if linked is not None:
+            source_matches = (
+                history.feedback_rating == FeedbackRating.GOOD
+                and bool(history.profile_id)
+                and linked.profile_id == history.profile_id
+                and self._normalize_classifier_question(linked.text)
+                == self._normalize_classifier_question(history.question)
+            )
+            return ClassifierTrainingCandidate(
+                history_id=history.id,
+                question=history.question,
+                profile_id=history.profile_id,
+                profile_name=history.profile_name,
+                feedback_rating=history.feedback_rating,
+                feedback_comment=history.feedback_comment,
+                created_at=history.feedback_updated_at or history.created_at,
+                status="added" if source_matches else "source_changed",
+                eligible=False,
+                training_example_id=linked.id,
+            )
+        if history.feedback_rating != FeedbackRating.GOOD:
+            return None
+        profile = next(
+            (
+                item
+                for item in self.list_profiles(include_archived=False)
+                if item.id == history.profile_id
+            ),
+            None,
+        )
+        if profile is None:
+            return ClassifierTrainingCandidate(
+                history_id=history.id,
+                question=history.question,
+                profile_id=history.profile_id,
+                profile_name=history.profile_name,
+                feedback_rating=history.feedback_rating,
+                feedback_comment=history.feedback_comment,
+                created_at=history.feedback_updated_at or history.created_at,
+                status="profile_missing",
+            )
+        normalized_question = self._normalize_classifier_question(history.question)
+        matching = [
+            item
+            for item in examples
+            if self._normalize_classifier_question(item.text) == normalized_question
+        ]
+        if any(item.profile_id == profile.id for item in matching):
+            covered = next(item for item in matching if item.profile_id == profile.id)
+            return ClassifierTrainingCandidate(
+                history_id=history.id,
+                question=history.question,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                feedback_rating=history.feedback_rating,
+                feedback_comment=history.feedback_comment,
+                created_at=history.feedback_updated_at or history.created_at,
+                status="already_covered",
+                training_example_id=covered.id,
+            )
+        conflicts = sorted({item.profile_id for item in matching if item.profile_id})
+        if conflicts:
+            return ClassifierTrainingCandidate(
+                history_id=history.id,
+                question=history.question,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                feedback_rating=history.feedback_rating,
+                feedback_comment=history.feedback_comment,
+                created_at=history.feedback_updated_at or history.created_at,
+                status="conflict",
+                conflict_profile_ids=conflicts,
+            )
+        return ClassifierTrainingCandidate(
+            history_id=history.id,
+            question=history.question,
+            profile_id=profile.id,
+            profile_name=profile.name,
+            feedback_rating=history.feedback_rating,
+            feedback_comment=history.feedback_comment,
+            created_at=history.feedback_updated_at or history.created_at,
+            status="pending",
+            eligible=True,
+        )
 
     def seed_demo_learning_data(self) -> DemoLearningData:
         """Legacy endpoint kept without inserting fixed business data."""
@@ -2454,7 +4019,7 @@ class Nl2SqlService:
             current_indexed = len(self._feedback_indexed_ids)
         if not self._use_oracle_runtime():
             warnings.append(
-                "Feedback vector index の clear 実行には " "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                "Feedback vector index の clear 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
             )
         else:
             try:
@@ -2466,7 +4031,7 @@ class Nl2SqlService:
                 with self._lock:
                     self._feedback_indexed_ids = set()
                 executed = True
-                self._persist_state()
+                self._persist_state(collections=("singletons",))
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
         embedding_configured = self._embedding_client.is_configured()
@@ -2502,6 +4067,7 @@ class Nl2SqlService:
         return SimilarHistoryData(items=filtered[:limit])
 
     def list_feedback_entries(self) -> FeedbackEntriesData:
+        history = self._history_snapshot()
         with self._lock:
             items = [
                 FeedbackVectorEntry(
@@ -2515,7 +4081,7 @@ class Nl2SqlService:
                     indexed=item.id in self._feedback_indexed_ids,
                     created_at=item.created_at,
                 )
-                for item in reversed(self._history)
+                for item in history
             ]
             indexed_count = sum(1 for item in items if item.indexed)
         return FeedbackEntriesData(items=items, total=len(items), indexed_count=indexed_count)
@@ -2529,7 +4095,13 @@ class Nl2SqlService:
             for item_id in ids:
                 self._feedback.pop(item_id, None)
             self._feedback_indexed_ids.difference_update(ids)
-        self._persist_state()
+        if self._incremental_repository is not None:
+            for item_id in ids:
+                self._incremental_repository.delete_document("history", item_id)
+                self._incremental_hashes.pop(("history", item_id), None)
+            self._persist_state(collections=("singletons",))
+        else:
+            self._persist_state()
         return self.list_feedback_entries()
 
     def feedback_search_config(self) -> FeedbackSearchConfigData:
@@ -2545,23 +4117,38 @@ class Nl2SqlService:
         with self._lock:
             self._feedback_similarity_threshold = request.similarity_threshold
             self._feedback_match_limit = request.match_limit
-        self._persist_state()
+        self._persist_state(collections=("singletons",))
         return self.feedback_search_config()
 
     def classifier_status(self) -> ClassifierStatusData:
+        self._load_classifier_state()
         with self._lock:
             artifact = dict(self._classifier_artifact or {})
             examples = list(self._classifier_examples)
-        categories = sorted({item.category for item in examples})
+        categories = sorted({self._classifier_training_label(item) for item in examples})
         ready = bool(artifact.get("model_base64") and artifact.get("categories"))
+        current_fingerprint = self._classifier_training_fingerprint(examples)
+        trained_fingerprint = str(artifact.get("training_data_fingerprint") or "")
+        stale = bool(ready and trained_fingerprint != current_fingerprint)
+        trained_example_count = int(
+            artifact.get("metrics", {}).get("training_examples", 0)
+            if isinstance(artifact.get("metrics"), dict)
+            else 0
+        )
+        pending_change_count = max(1, abs(len(examples) - trained_example_count)) if stale else 0
         warnings: list[str] = []
         if not examples:
             warnings.append("分類器の training data が未登録です。")
         if not ready:
             warnings.append("LogisticRegression classifier は未学習です。")
+        if stale:
+            warnings.append(
+                "Training data に未学習の変更があります。現在のモデルは継続利用中です。"
+            )
         return ClassifierStatusData(
             ready=ready,
             trained=ready,
+            stale=stale,
             classifier_version=str(artifact.get("version") or ""),
             updated_at=str(artifact.get("updated_at") or ""),
             example_count=len(examples),
@@ -2576,6 +4163,8 @@ class Nl2SqlService:
             persistence_mode=self._store.mode,
             recommendation_source="classifier" if ready else "deterministic",
             metrics=dict(artifact.get("metrics") or {}),
+            trained_example_count=trained_example_count,
+            pending_change_count=pending_change_count,
             warnings=warnings,
         )
 
@@ -2587,29 +4176,75 @@ class Nl2SqlService:
         replace: bool = False,
         profile_id: str | None = None,
     ) -> ClassifierImportData:
+        self._load_classifier_state()
         warnings: list[str] = []
         parsed, skipped = self._parse_classifier_training_file(filename, content, warnings)
-        examples = [
-            ClassifierTrainingExample(
-                id=str(uuid.uuid4()),
-                category=category,
-                text=text,
-                profile_id=profile_id or self._profile_id_for_classifier_category(category),
-                source=filename,
+        now = _utc_now()
+        examples: list[ClassifierTrainingExample] = []
+        with self._lock:
+            comparison_examples = [] if replace else list(self._classifier_examples)
+        for category, text, row_profile_id in parsed:
+            resolved = self._exact_profile_for_classifier_label(
+                profile_id or row_profile_id or category
             )
-            for category, text in parsed
-        ]
+            if resolved is None:
+                skipped += 1
+                warnings.append(
+                    f"{category or row_profile_id} に対応する Profile を一意に解決できないため"
+                    "除外しました。"
+                )
+                continue
+            normalized_question = self._normalize_classifier_question(text)
+            matching = [
+                item
+                for item in [*comparison_examples, *examples]
+                if self._normalize_classifier_question(item.text) == normalized_question
+            ]
+            if any(item.profile_id == resolved.id for item in matching):
+                skipped += 1
+                warnings.append(
+                    f"{text} は同じ Profile の training data に既に存在するため除外しました。"
+                )
+                continue
+            if any(item.profile_id and item.profile_id != resolved.id for item in matching):
+                skipped += 1
+                warnings.append(f"{text} は別の Profile に対応済みのため競合として除外しました。")
+                continue
+            examples.append(
+                ClassifierTrainingExample(
+                    id=str(uuid.uuid4()),
+                    category=category or resolved.category or resolved.name,
+                    text=text,
+                    profile_id=resolved.id,
+                    profile_name=resolved.name,
+                    source=filename,
+                    source_type="file",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        old_ids: set[str] = set()
         with self._lock:
             if replace:
+                old_ids = {item.id for item in self._classifier_examples}
                 self._classifier_examples = examples
-                self._classifier_artifact = None
             else:
                 self._classifier_examples.extend(examples)
-                if examples:
-                    self._classifier_artifact = None
             total_examples = len(self._classifier_examples)
             all_categories = sorted({item.category for item in self._classifier_examples})
-        self._persist_state()
+        if replace and self._incremental_repository is not None:
+            for example_id in old_ids - {item.id for item in examples}:
+                self._incremental_repository.delete_document("classifier_examples", example_id)
+                self._incremental_hashes.pop(("classifier_examples", example_id), None)
+        if examples:
+            self._persist_entities(
+                [
+                    ("classifier_examples", item.id, item.model_dump(mode="json"))
+                    for item in examples
+                ]
+            )
+        elif replace:
+            self._persist_state(collections=("classifier_examples",))
         return ClassifierImportData(
             imported_count=len(examples),
             skipped_count=skipped,
@@ -2620,6 +4255,7 @@ class Nl2SqlService:
         )
 
     def classifier_training_data(self) -> ClassifierTrainingDataData:
+        self._load_classifier_state()
         with self._lock:
             examples = list(self._classifier_examples)
         categories = sorted({item.category for item in examples})
@@ -2631,38 +4267,291 @@ class Nl2SqlService:
             examples=examples,
         )
 
+    def classifier_training_candidates(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        status: str,
+        profile_id: str,
+        query: str,
+        history_id: str = "",
+    ) -> ClassifierTrainingCandidatesData:
+        self._load_classifier_state()
+        candidates = [
+            candidate
+            for history in self._history_snapshot()
+            if (candidate := self._classifier_candidate_from_history(history)) is not None
+        ]
+        candidates.sort(key=lambda item: (item.created_at, item.history_id), reverse=True)
+        pending_count = sum(item.status == "pending" for item in candidates)
+        added_count = sum(item.status in {"added", "already_covered"} for item in candidates)
+        attention_count = sum(
+            item.status in {"conflict", "profile_missing", "source_changed"} for item in candidates
+        )
+        query_key = query.casefold().strip()
+        filtered = [
+            item
+            for item in candidates
+            if (not status or status == "all" or item.status == status)
+            and (not profile_id or item.profile_id == profile_id)
+            and (not history_id or item.history_id == history_id)
+            and (
+                not query_key
+                or query_key
+                in f"{item.question} {item.profile_name} {item.feedback_comment}".casefold()
+            )
+        ]
+        offset = self._decode_page_cursor(cursor)
+        selected = filtered[offset : offset + limit]
+        next_offset = offset + len(selected)
+        return ClassifierTrainingCandidatesData(
+            items=selected,
+            total=len(filtered),
+            next_cursor=(
+                self._encode_page_cursor(next_offset) if next_offset < len(filtered) else ""
+            ),
+            pending_count=pending_count,
+            added_count=added_count,
+            attention_count=attention_count,
+        )
+
+    def import_classifier_feedback_examples(
+        self, request: ClassifierFeedbackImportRequest
+    ) -> ClassifierFeedbackImportData:
+        self._load_classifier_state()
+        imported: list[ClassifierTrainingExample] = []
+        results: list[ClassifierFeedbackImportResult] = []
+        for selection in request.items:
+            history = self._history_by_id(selection.history_id)
+            if history is None:
+                results.append(
+                    ClassifierFeedbackImportResult(
+                        history_id=selection.history_id,
+                        status="not_found",
+                        message="対象の SQL 履歴が見つかりません。",
+                    )
+                )
+                continue
+            if history.feedback_rating != FeedbackRating.GOOD:
+                results.append(
+                    ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="source_changed",
+                        profile_id=history.profile_id,
+                        message="good feedback ではないため training data に追加できません。",
+                    )
+                )
+                continue
+            target_profile_id = selection.profile_id.strip() or history.profile_id
+            profile = self._exact_profile_for_classifier_label(target_profile_id)
+            if profile is None:
+                results.append(
+                    ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="profile_missing",
+                        profile_id=target_profile_id,
+                        message="指定された Profile が存在しないか archived です。",
+                    )
+                )
+                continue
+            normalized_question = self._normalize_classifier_question(history.question)
+            with self._lock:
+                linked = next(
+                    (
+                        item
+                        for item in self._classifier_examples
+                        if item.source_history_id == history.id
+                    ),
+                    None,
+                )
+                matching = [
+                    item
+                    for item in self._classifier_examples
+                    if self._normalize_classifier_question(item.text) == normalized_question
+                ]
+                if linked is not None:
+                    result = ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="added",
+                        training_example_id=linked.id,
+                        profile_id=linked.profile_id,
+                        message="この feedback は既に training data に追加済みです。",
+                    )
+                elif any(item.profile_id == profile.id for item in matching):
+                    existing = next(item for item in matching if item.profile_id == profile.id)
+                    result = ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="already_covered",
+                        training_example_id=existing.id,
+                        profile_id=existing.profile_id,
+                        message="同じ質問と Profile の training data が既に存在します。",
+                    )
+                elif any(item.profile_id and item.profile_id != profile.id for item in matching):
+                    result = ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="conflict",
+                        profile_id=profile.id,
+                        message="同じ質問が別の Profile に対応付けられています。",
+                    )
+                else:
+                    now = _utc_now()
+                    example = ClassifierTrainingExample(
+                        id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"nl2sql-feedback:{history.id}")),
+                        category=profile.category or profile.name,
+                        text=history.question.strip(),
+                        profile_id=profile.id,
+                        profile_name=profile.name,
+                        source="feedback",
+                        source_type="feedback",
+                        source_history_id=history.id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    self._classifier_examples.append(example)
+                    imported.append(example)
+                    result = ClassifierFeedbackImportResult(
+                        history_id=history.id,
+                        status="added",
+                        training_example_id=example.id,
+                        profile_id=profile.id,
+                        message="training data に追加しました。",
+                    )
+            results.append(result)
+        if imported:
+            self._persist_entities(
+                [
+                    ("classifier_examples", item.id, item.model_dump(mode="json"))
+                    for item in imported
+                ]
+            )
+        status_data = self.classifier_status()
+        return ClassifierFeedbackImportData(
+            imported_count=len(imported),
+            skipped_count=len(results) - len(imported),
+            total_examples=status_data.example_count,
+            stale=status_data.stale,
+            results=results,
+        )
+
+    def update_classifier_training_example(
+        self,
+        example_id: str,
+        request: ClassifierTrainingExampleUpdateRequest,
+    ) -> ClassifierTrainingExample:
+        self._load_classifier_state()
+        profile = self._exact_profile_for_classifier_label(request.profile_id)
+        if profile is None:
+            raise ValueError("指定された Profile が存在しないか archived です。")
+        normalized_question = self._normalize_classifier_question(request.text)
+        with self._lock:
+            current = next(
+                (item for item in self._classifier_examples if item.id == example_id),
+                None,
+            )
+            if current is None:
+                raise KeyError(example_id)
+            conflict = next(
+                (
+                    item
+                    for item in self._classifier_examples
+                    if item.id != example_id
+                    and self._normalize_classifier_question(item.text) == normalized_question
+                    and item.profile_id != profile.id
+                ),
+                None,
+            )
+            if conflict is not None:
+                raise ValueError("同じ質問が別の Profile に対応付けられています。")
+            updated = current.model_copy(
+                update={
+                    "category": profile.category or profile.name,
+                    "text": request.text.strip(),
+                    "profile_id": profile.id,
+                    "profile_name": profile.name,
+                    "updated_at": _utc_now(),
+                }
+            )
+            self._classifier_examples = [
+                updated if item.id == example_id else item for item in self._classifier_examples
+            ]
+        self._persist_entities(
+            [("classifier_examples", updated.id, updated.model_dump(mode="json"))]
+        )
+        return updated
+
+    def delete_classifier_training_example(self, example_id: str) -> ClassifierTrainingDataData:
+        self._load_classifier_state()
+        with self._lock:
+            if not any(item.id == example_id for item in self._classifier_examples):
+                raise KeyError(example_id)
+            self._classifier_examples = [
+                item for item in self._classifier_examples if item.id != example_id
+            ]
+        if self._incremental_repository is not None:
+            self._incremental_repository.delete_document("classifier_examples", example_id)
+            self._incremental_hashes.pop(("classifier_examples", example_id), None)
+        else:
+            self._persist_state(collections=("classifier_examples",))
+        return self.classifier_training_data()
+
+    def _classifier_training_label(self, example: ClassifierTrainingExample) -> str:
+        return example.profile_id or example.category
+
+    def _classifier_training_fingerprint(
+        self, examples: Sequence[ClassifierTrainingExample]
+    ) -> str:
+        rows = sorted(
+            (
+                item.id,
+                self._normalize_classifier_question(item.text),
+                self._classifier_training_label(item),
+            )
+            for item in examples
+        )
+        return hashlib.sha256(
+            json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def _replace_classifier_artifact(self, artifact: dict[str, Any]) -> None:
+        """唯一の classifier artifact を永続化と一体で置き換える。"""
+        with self._lock:
+            previous_artifact = copy.deepcopy(self._classifier_artifact)
+            self._classifier_artifact = artifact
+            try:
+                self._persist_state(collections=("singletons",))
+            except Exception:
+                self._classifier_artifact = previous_artifact
+                raise
+
     def train_classifier(self, request: ClassifierTrainRequest) -> ClassifierStatusData:
+        self._load_classifier_state()
         with self._lock:
             examples = list(self._classifier_examples)
         warnings: list[str] = []
         if not examples:
-            return ClassifierStatusData(
-                ready=False,
-                trained=False,
-                example_count=0,
-                category_count=0,
-                persistence_mode=self._store.mode,
-                warnings=["分類器の training data が未登録です。"],
+            return self.classifier_status().model_copy(
+                update={"warnings": ["分類器の training data が未登録です。"]}
             )
 
         counts: dict[str, int] = {}
         for item in examples:
-            counts[item.category] = counts.get(item.category, 0) + 1
+            label = self._classifier_training_label(item)
+            counts[label] = counts.get(label, 0) + 1
         eligible = [
             item
             for item in examples
-            if counts.get(item.category, 0) >= request.min_examples_per_category
+            if counts.get(self._classifier_training_label(item), 0)
+            >= request.min_examples_per_category
         ]
-        categories = sorted({item.category for item in eligible})
+        categories = sorted({self._classifier_training_label(item) for item in eligible})
         if len(categories) < 2:
-            return ClassifierStatusData(
-                ready=False,
-                trained=False,
-                example_count=len(examples),
-                category_count=len(categories),
-                categories=categories,
-                persistence_mode=self._store.mode,
-                warnings=["LogisticRegression には 2 category 以上の training data が必要です。"],
+            return self.classifier_status().model_copy(
+                update={
+                    "warnings": [
+                        "LogisticRegression には 2 category 以上の training data が必要です。"
+                    ]
+                }
             )
 
         try:
@@ -2673,20 +4562,14 @@ class Nl2SqlService:
             linear_model = importlib.import_module("sklearn.linear_model")
             joblib = importlib.import_module("joblib")
             model = linear_model.LogisticRegression(max_iter=1000, random_state=42)
-            labels = [item.category for item in eligible]
+            labels = [self._classifier_training_label(item) for item in eligible]
             model.fit(vectors, labels)
             score = float(model.score(vectors, labels))
             buffer = io.BytesIO()
             joblib.dump(model, buffer)
         except Exception as exc:
-            return ClassifierStatusData(
-                ready=False,
-                trained=False,
-                example_count=len(examples),
-                category_count=len(categories),
-                categories=categories,
-                persistence_mode=self._store.mode,
-                warnings=[f"分類器の学習に失敗しました: {exc}"],
+            return self.classifier_status().model_copy(
+                update={"warnings": [f"分類器の学習に失敗しました: {exc}"]}
             )
 
         now = _utc_now()
@@ -2697,65 +4580,18 @@ class Nl2SqlService:
             "categories": categories,
             "embedding_model": embedding_model,
             "vector_dimension": 1536,
+            "training_data_fingerprint": self._classifier_training_fingerprint(examples),
             "metrics": {
                 "training_examples": len(eligible),
                 "category_count": len(categories),
                 "training_accuracy": round(score, 4),
             },
         }
-        with self._lock:
-            self._classifier_artifact = artifact
-            self._classifier_model_registry[str(artifact["version"])] = dict(artifact)
-        self._persist_state()
+        self._replace_classifier_artifact(artifact)
         return self.classifier_status().model_copy(update={"warnings": warnings})
 
-    def list_classifier_models(self) -> ClassifierModelsData:
-        with self._lock:
-            active = dict(self._classifier_artifact or {})
-            registry = {
-                str(version): dict(data)
-                for version, data in self._classifier_model_registry.items()
-            }
-            if active.get("version"):
-                registry[str(active["version"])] = active
-        active_version = str(active.get("version") or "")
-        models = [
-            self._classifier_model_info(version, artifact, active_version=active_version)
-            for version, artifact in registry.items()
-        ]
-        models.sort(key=lambda item: item.updated_at, reverse=True)
-        return ClassifierModelsData(active_version=active_version, models=models)
-
-    def activate_classifier_model(self, version: str) -> ClassifierModelActivateData:
-        with self._lock:
-            artifact = self._classifier_model_registry.get(version)
-            if artifact is None and self._classifier_artifact:
-                current_version = str(self._classifier_artifact.get("version") or "")
-                if current_version == version:
-                    artifact = dict(self._classifier_artifact)
-            if artifact is None:
-                return ClassifierModelActivateData(
-                    active_version=str((self._classifier_artifact or {}).get("version") or ""),
-                    warnings=[f"{version}: classifier model が見つかりません。"],
-                )
-            self._classifier_artifact = dict(artifact)
-            self._classifier_model_registry[version] = dict(artifact)
-        self._persist_state()
-        return ClassifierModelActivateData(
-            active_version=version,
-            model=self._classifier_model_info(version, artifact, active_version=version),
-        )
-
-    def delete_classifier_model(self, version: str) -> ClassifierModelsData:
-        with self._lock:
-            self._classifier_model_registry.pop(version, None)
-            if self._classifier_artifact and self._classifier_artifact.get("version") == version:
-                self._classifier_artifact = None
-        self._persist_state()
-        return self.list_classifier_models()
-
     def import_classifier_model_artifact(
-        self, *, filename: str, content: bytes, activate: bool = True
+        self, *, filename: str, content: bytes
     ) -> ClassifierModelImportData:
         warnings: list[str] = []
         suffix = Path(filename).suffix.lower()
@@ -2804,42 +4640,46 @@ class Nl2SqlService:
                 active_version=str((self._classifier_artifact or {}).get("version") or ""),
                 warnings=[f"classifier model artifact の import に失敗しました: {exc}"],
             )
-        with self._lock:
-            self._classifier_model_registry[version] = artifact
-            if activate:
-                self._classifier_artifact = artifact
-        self._persist_state()
-        active_version = (
-            version if activate else str((self._classifier_artifact or {}).get("version") or "")
-        )
+        self._replace_classifier_artifact(artifact)
         return ClassifierModelImportData(
             imported=True,
-            active_version=active_version,
-            model=self._classifier_model_info(version, artifact, active_version=active_version),
+            active_version=version,
+            model=self._classifier_model_info(version, artifact, active_version=version),
             warnings=warnings,
         )
 
     def export_classifier_training_data_xlsx(self) -> tuple[str, bytes]:
+        self._load_classifier_state()
         with self._lock:
             examples = list(self._classifier_examples)
         openpyxl = importlib.import_module("openpyxl")
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "training_data"
-        sheet.append(["CATEGORY", "TEXT", "PROFILE_ID", "SOURCE"])
+        sheet.append(
+            [
+                "CATEGORY",
+                "TEXT",
+                "PROFILE_ID",
+                "SOURCE",
+                "SOURCE_TYPE",
+                "SOURCE_HISTORY_ID",
+            ]
+        )
         for item in examples:
-            sheet.append([item.category, item.text, item.profile_id, item.source])
+            sheet.append(
+                [
+                    item.category,
+                    item.text,
+                    item.profile_id,
+                    item.source,
+                    item.source_type,
+                    item.source_history_id,
+                ]
+            )
         buffer = io.BytesIO()
         workbook.save(buffer)
         return "nl2sql_classifier_training_data.xlsx", buffer.getvalue()
-
-    def export_classifier_training_data_jsonl(self) -> tuple[str, bytes]:
-        with self._lock:
-            lines = [
-                json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
-                for item in self._classifier_examples
-            ]
-        return "nl2sql_classifier_training_data.jsonl", ("\n".join(lines) + "\n").encode("utf-8")
 
     def _classifier_model_info(
         self, version: str, artifact: dict[str, Any], *, active_version: str
@@ -2870,6 +4710,7 @@ class Nl2SqlService:
     def _classifier_prediction(
         self, question: str, top_k: int
     ) -> tuple[ClassifierPredictionData | None, list[str]]:
+        self._load_classifier_state()
         with self._lock:
             artifact = dict(self._classifier_artifact or {})
         if not artifact.get("model_base64"):
@@ -2916,7 +4757,7 @@ class Nl2SqlService:
 
     def _parse_classifier_training_file(
         self, filename: str, content: bytes, warnings: list[str]
-    ) -> tuple[list[tuple[str, str]], int]:
+    ) -> tuple[list[tuple[str, str, str]], int]:
         suffix = Path(filename).suffix.lower()
         if suffix in {".xlsx", ".xlsm"}:
             return self._parse_classifier_training_xlsx(content, warnings)
@@ -2928,29 +4769,30 @@ class Nl2SqlService:
 
     def _parse_classifier_training_csv(
         self, text: str, warnings: list[str]
-    ) -> tuple[list[tuple[str, str]], int]:
+    ) -> tuple[list[tuple[str, str, str]], int]:
         reader = csv.DictReader(io.StringIO(text))
         if not reader.fieldnames:
             warnings.append("CSV header が見つかりません。")
             return [], 0
-        category_key, text_key = self._classifier_header_keys(reader.fieldnames)
-        if not category_key or not text_key:
-            warnings.append("CSV は CATEGORY と TEXT/QUESTION 列が必要です。")
+        category_key, text_key, profile_key = self._classifier_header_keys(reader.fieldnames)
+        if (not category_key and not profile_key) or not text_key:
+            warnings.append("CSV は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
             return [], 0
-        rows: list[tuple[str, str]] = []
+        rows: list[tuple[str, str, str]] = []
         skipped = 0
         for row in reader:
-            category = str(row.get(category_key) or "").strip()
+            category = str(row.get(category_key) or "").strip() if category_key else ""
             value = str(row.get(text_key) or "").strip()
-            if not category or not value:
+            row_profile_id = str(row.get(profile_key) or "").strip() if profile_key else ""
+            if (not category and not row_profile_id) or not value:
                 skipped += 1
                 continue
-            rows.append((category, value))
+            rows.append((category, value, row_profile_id))
         return rows, skipped
 
     def _parse_classifier_training_xlsx(
         self, content: bytes, warnings: list[str]
-    ) -> tuple[list[tuple[str, str]], int]:
+    ) -> tuple[list[tuple[str, str, str]], int]:
         try:
             openpyxl = importlib.import_module("openpyxl")
             workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -2960,26 +4802,34 @@ class Nl2SqlService:
         sheet = workbook.active
         rows_iter = sheet.iter_rows(values_only=True)
         headers = [str(value or "").strip() for value in next(rows_iter, [])]
-        category_key, text_key = self._classifier_header_keys(headers)
-        if not category_key or not text_key:
-            warnings.append("XLSX は CATEGORY と TEXT/QUESTION 列が必要です。")
+        category_key, text_key, profile_key = self._classifier_header_keys(headers)
+        if (not category_key and not profile_key) or not text_key:
+            warnings.append("XLSX は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
             return [], 0
-        category_index = headers.index(category_key)
+        category_index = headers.index(category_key) if category_key else None
         text_index = headers.index(text_key)
-        rows: list[tuple[str, str]] = []
+        profile_index = headers.index(profile_key) if profile_key else None
+        rows: list[tuple[str, str, str]] = []
         skipped = 0
         for raw_row in rows_iter:
             category = (
-                str(raw_row[category_index] or "").strip() if len(raw_row) > category_index else ""
+                str(raw_row[category_index] or "").strip()
+                if category_index is not None and len(raw_row) > category_index
+                else ""
             )
             value = str(raw_row[text_index] or "").strip() if len(raw_row) > text_index else ""
-            if not category or not value:
+            row_profile_id = (
+                str(raw_row[profile_index] or "").strip()
+                if profile_index is not None and len(raw_row) > profile_index
+                else ""
+            )
+            if (not category and not row_profile_id) or not value:
                 skipped += 1
                 continue
-            rows.append((category, value))
+            rows.append((category, value, row_profile_id))
         return rows, skipped
 
-    def _classifier_header_keys(self, headers: Sequence[str]) -> tuple[str, str]:
+    def _classifier_header_keys(self, headers: Sequence[str]) -> tuple[str, str, str]:
         normalized = {self._normalize_training_header(header): header for header in headers}
         category = (
             normalized.get("CATEGORY") or normalized.get("PROFILE") or normalized.get("LABEL")
@@ -2990,7 +4840,8 @@ class Nl2SqlService:
             or normalized.get("PROMPT")
             or normalized.get("UTTERANCE")
         )
-        return category or "", text or ""
+        profile_id = normalized.get("PROFILE_ID") or normalized.get("PROFILEID")
+        return category or "", text or "", profile_id or ""
 
     def _normalize_training_header(self, value: str) -> str:
         return re.sub(r"[^A-Z0-9]+", "_", value.strip().upper()).strip("_")
@@ -3292,15 +5143,33 @@ class Nl2SqlService:
         return [round(value / norm, 8) for value in vector]
 
     def _profile_id_for_classifier_category(self, category: str) -> str:
-        profile = self._profile_for_classifier_category(category)
+        profile = self._exact_profile_for_classifier_label(category)
         return profile.id if profile else ""
 
+    def _exact_profile_for_classifier_label(self, label: str) -> Nl2SqlProfile | None:
+        normalized = label.strip().casefold()
+        if normalized in {"標準業務プロファイル", "default profile"}:
+            normalized = "default"
+        profiles = self.list_profiles(include_archived=False)
+        direct = [
+            profile
+            for profile in profiles
+            if normalized in {profile.id.casefold(), profile.name.casefold()}
+        ]
+        if len(direct) == 1:
+            return direct[0]
+        category_matches = [
+            profile
+            for profile in profiles
+            if profile.category and normalized == profile.category.casefold()
+        ]
+        return category_matches[0] if len(category_matches) == 1 else None
+
     def _profile_for_classifier_category(self, category: str) -> Nl2SqlProfile | None:
-        normalized = category.strip().lower()
+        exact = self._exact_profile_for_classifier_label(category)
+        if exact is not None:
+            return exact
         profiles = self.list_profiles()
-        for profile in profiles:
-            if normalized in {profile.id.lower(), profile.name.lower()}:
-                return profile
         scored = [
             (
                 len(
@@ -3314,7 +5183,7 @@ class Nl2SqlService:
         scored.sort(key=lambda item: item[0], reverse=True)
         if scored and scored[0][0] > 0:
             return scored[0][1]
-        return profiles[0] if profiles else None
+        return None
 
     def _feedback_index_data(self, *, operation: str, include_bad: bool) -> FeedbackIndexData:
         started = time.monotonic()
@@ -3364,7 +5233,7 @@ class Nl2SqlService:
                         self._feedback_indexed_ids = {item.id for item in indexable}
                         indexed_count = len(self._feedback_indexed_ids)
                     executed = True
-                    self._persist_state()
+                    self._persist_state(collections=("singletons",))
                 except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
                     warnings.append(str(exc))
         settings = get_settings()
@@ -3708,7 +5577,7 @@ class Nl2SqlService:
         with self._lock:
             self._evaluation_runs.append(record)
             self._evaluation_runs = self._evaluation_runs[-100:]
-        self._persist_state()
+        self._persist_entities([("evaluation_runs", record.id, record.model_dump(mode="json"))])
 
     def _evaluation_report_text(
         self,
@@ -3750,7 +5619,9 @@ class Nl2SqlService:
         )
         with self._lock:
             self._evaluation_sets.append(evaluation_set)
-        self._persist_state()
+        self._persist_entities(
+            [("evaluation_sets", evaluation_set.id, evaluation_set.model_dump(mode="json"))]
+        )
         return evaluation_set
 
     def update_evaluation_set(
@@ -3773,7 +5644,7 @@ class Nl2SqlService:
             self._evaluation_sets = [
                 updated if item.id == evaluation_set_id else item for item in self._evaluation_sets
             ]
-        self._persist_state()
+        self._persist_entities([("evaluation_sets", updated.id, updated.model_dump(mode="json"))])
         return updated
 
     def archive_evaluation_set(self, evaluation_set_id: str) -> EvaluationSet:
@@ -3788,7 +5659,7 @@ class Nl2SqlService:
             self._evaluation_sets = [
                 archived if item.id == evaluation_set_id else item for item in self._evaluation_sets
             ]
-        self._persist_state()
+        self._persist_entities([("evaluation_sets", archived.id, archived.model_dump(mode="json"))])
         return archived
 
     def _evaluation_set_from_request(
@@ -3953,7 +5824,7 @@ class Nl2SqlService:
         with self._lock:
             self._compare_records.append(record)
             self._compare_records = self._compare_records[-50:]
-        self._persist_state()
+        self._persist_entities([("compare_records", record.id, record.model_dump(mode="json"))])
 
     def _compare_report_text(self, data: CompareData) -> str:
         lines = [
@@ -4305,7 +6176,7 @@ class Nl2SqlService:
 
     def _deterministic_comment_suggestions(self, max_items: int) -> list[CommentSuggestion]:
         suggestions: list[CommentSuggestion] = []
-        for table in self._catalog.tables:
+        for table in self._management_catalog_tables():
             suggestions.append(
                 CommentSuggestion(
                     object_name=table.table_name,
@@ -4326,7 +6197,7 @@ class Nl2SqlService:
 
     def _comment_generation_context(self, max_items: int) -> str:
         lines = [f"max_items: {max_items}", "schema:"]
-        for table in self._catalog.tables:
+        for table in self._management_catalog_tables():
             lines.append(
                 f"- {table.table_type} {table.table_name}: logical={table.logical_name} "
                 f"comment={table.comment} rows={table.row_count}"
@@ -4384,7 +6255,7 @@ class Nl2SqlService:
 
     def suggest_annotations(self) -> AnnotationSuggestionData:
         suggestions: list[AnnotationSuggestion] = []
-        for table in self._catalog.tables:
+        for table in self._management_catalog_tables():
             table_value = table.comment or table.logical_name or table.table_name
             suggestions.append(
                 AnnotationSuggestion(
@@ -4851,8 +6722,8 @@ class Nl2SqlService:
                         detail={"statement_count": len(statements)},
                     )
                     try:
-                        self._catalog = self._oracle_adapter.fetch_catalog()
-                    except OracleAdapterError as exc:
+                        self._refresh_catalog_after_admin_mutation()
+                    except (Nl2SqlPersistenceUnavailable, OracleAdapterError) as exc:
                         warnings.append(f"COMMENT 適用後の catalog refresh に失敗しました: {exc}")
                 except OracleAdapterError as exc:
                     warnings.append(str(exc))
@@ -5054,11 +6925,29 @@ class Nl2SqlService:
         return parts[0], parts[1]
 
     def _find_catalog_table(self, table_name: str) -> SchemaTable | None:
-        normalized = _normalize_identifier(table_name)
+        current_owner = self._current_schema_owner()
+        raw = table_name.replace('"', "").strip()
+        if "." in raw:
+            identity = parse_object_identity(raw)
+            if identity.owner != current_owner:
+                return None
+            normalized = identity.object_name
+        else:
+            normalized = _normalize_identifier(raw)
         return next(
-            (table for table in self._catalog.tables if table.table_name == normalized),
+            (
+                table
+                for table in self._catalog.tables
+                if table.owner.upper() == current_owner and table.table_name == normalized
+            ),
             None,
         )
+
+    def _management_catalog_tables(self) -> list[SchemaTable]:
+        """DDL/COMMENT/ANNOTATION 管理画面から見せるのは current schema のみ。"""
+
+        current_owner = self._current_schema_owner()
+        return [table for table in self._catalog.tables if table.owner.upper() == current_owner]
 
     def _synthetic_unsupported_columns(self, table: SchemaTable) -> list[SchemaColumn]:
         return [
@@ -5078,7 +6967,8 @@ class Nl2SqlService:
         profile = self.get_profile(profile_id)
         cases: list[SyntheticCase] = []
         for table in self._catalog.tables:
-            if profile.allowed_tables and table.table_name not in profile.allowed_tables:
+            qualified_name = self._catalog_qualified_name(table)
+            if profile.allowed_tables and qualified_name not in profile.allowed_tables:
                 continue
             amount_column = next(
                 (column for column in table.columns if "AMOUNT" in column.column_name),
@@ -5088,7 +6978,9 @@ class Nl2SqlService:
                 SyntheticCase(
                     question=f"{table.logical_name} の {amount_column.logical_name} を確認したい",
                     # Safe: synthetic example SQL is generated for evaluation display, not executed.
-                    expected_sql=f"SELECT {amount_column.column_name} FROM {table.table_name}",  # nosec B608
+                    expected_sql=(
+                        f"SELECT {amount_column.column_name} FROM {qualified_name}"  # nosec B608
+                    ),
                     profile_id=profile.id,
                 )
             )
@@ -5616,8 +7508,7 @@ class Nl2SqlService:
                     '{"engine":"enterprise_ai_direct","question":"登録済みの表から主要な列を一覧したい"}'
                 ),
                 expected=(
-                    "engine=enterprise_ai_direct, provider=enterprise_ai_direct, "
-                    "SQL が返ること。"
+                    "engine=enterprise_ai_direct, provider=enterprise_ai_direct, SQL が返ること。"
                 ),
                 next_action=next_action(
                     ["enterprise_ai_direct"],
@@ -5634,8 +7525,7 @@ class Nl2SqlService:
                 endpoint="/api/nl2sql/feedback-index/rebuild",
                 request_hint='{"execute":true}',
                 expected=(
-                    "executed=true, VECTOR(1536, FLOAT32) index が Oracle 26ai に"
-                    "作成されること。"
+                    "executed=true, VECTOR(1536, FLOAT32) index が Oracle 26ai に作成されること。"
                 ),
                 next_action=next_action(
                     ["oracle_adb", "feedback_embedding"],
@@ -6193,17 +8083,14 @@ class Nl2SqlService:
         samples: dict[str, list[str]] = {}
         if catalog_table is not None:
             samples = {
-                column.column_name.upper(): column.sample_values
-                for column in catalog_table.columns
+                column.column_name.upper(): column.sample_values for column in catalog_table.columns
             }
         updates: dict[str, Any] = {
             "columns": [
                 col.model_copy(
                     update={
                         "logical_name": names.get(col.column_name.upper(), ""),
-                        "sample_values": samples.get(
-                            col.column_name.upper(), col.sample_values
-                        ),
+                        "sample_values": samples.get(col.column_name.upper(), col.sample_values),
                     }
                 )
                 for col in detail.columns
@@ -6216,7 +8103,7 @@ class Nl2SqlService:
 
     def drop_db_admin_table(self, request: DbAdminDropTableRequest) -> DbAdminExecuteData:
         table_name = self._sanitize_import_table_name(request.table_name)
-        sql = f"DROP TABLE {_quote_identifier(table_name)}" f"{' PURGE' if request.purge else ''}"
+        sql = f"DROP TABLE {_quote_identifier(table_name)}{' PURGE' if request.purge else ''}"
         confirmation_error = self._admin_confirmation_error(
             confirmation=request.confirmation,
             target=table_name,
@@ -6352,9 +8239,8 @@ class Nl2SqlService:
             )
             if ok:
                 try:
-                    self._catalog = self._oracle_adapter.fetch_catalog()
-                    self._persist_state()
-                except OracleAdapterError as exc:
+                    self._refresh_catalog_after_admin_mutation()
+                except (Nl2SqlPersistenceUnavailable, OracleAdapterError) as exc:
                     warnings.append(f"Admin SQL 後の schema refresh に失敗しました: {exc}")
             return DbAdminExecuteData(
                 executed=ok,
@@ -6440,9 +8326,8 @@ class Nl2SqlService:
                 detail={"mode": mode, "row_count": len(rows), "filename": request.filename},
             )
             try:
-                self._catalog = self._oracle_adapter.fetch_catalog()
-                self._persist_state()
-            except OracleAdapterError as exc:
+                self._refresh_catalog_after_admin_mutation()
+            except (Nl2SqlPersistenceUnavailable, OracleAdapterError) as exc:
                 warnings.append(f"import 後の schema refresh に失敗しました: {exc}")
         else:
             warnings.append("Tabular import 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
@@ -6628,9 +8513,8 @@ class Nl2SqlService:
         )
         if committed:
             try:
-                self._catalog = self._oracle_adapter.fetch_catalog()
-                self._persist_state()
-            except OracleAdapterError as exc:
+                self._refresh_catalog_after_admin_mutation()
+            except (Nl2SqlPersistenceUnavailable, OracleAdapterError) as exc:
                 warnings.append(f"実行後の schema refresh に失敗しました: {exc}")
         if 0 < success_count < len(statement_results):
             warnings.append(f"部分的に成功しました({success_count}/{len(statement_results)} 件)。")
@@ -6790,9 +8674,8 @@ class Nl2SqlService:
                 )
                 if success_count > 0:
                     try:
-                        self._catalog = self._oracle_adapter.fetch_catalog()
-                        self._persist_state()
-                    except OracleAdapterError as exc:
+                        self._refresh_catalog_after_admin_mutation()
+                    except (Nl2SqlPersistenceUnavailable, OracleAdapterError) as exc:
                         warnings.append(f"upload 後の schema refresh に失敗しました: {exc}")
         else:
             warnings.append("CSV アップロード実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
@@ -7172,15 +9055,15 @@ class Nl2SqlService:
                 }
             )
             self._admin_audit = self._admin_audit[-200:]
-        self._persist_state()
+        self._persist_state(collections=("admin_audit",))
 
     def refresh_select_ai_profile(self, profile_id: str | None) -> AssetRefreshData:
         profile = self.get_profile(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         attributes = self.build_select_ai_profile_attributes(profile)
+        expected_scope = self._select_ai_object_scope_set(attributes.get("object_list"))
+        actual_scope = set(expected_scope)
         warning = ""
-        refreshed = True
-        status = "ready"
         engine_meta: dict[str, Any] = {
             "allowed_tables": profile.allowed_tables,
             "allowed_views": profile.allowed_views,
@@ -7200,32 +9083,29 @@ class Nl2SqlService:
                         oracle_meta["attributes"]
                     )
                 engine_meta.update(oracle_meta)
+                detail = self._enrich_select_ai_db_profile(
+                    SelectAiDbProfile.model_validate(
+                        self._oracle_adapter.get_select_ai_profile_detail(profile_name=profile_name)
+                    )
+                )
+                actual_scope = self._select_ai_object_scope_set(detail.object_list)
             except OracleAdapterError as exc:
-                refreshed = False
-                status = "error"
                 warning = str(exc)
-        data = AssetRefreshData(
-            engine=Nl2SqlEngine.SELECT_AI,
-            refreshed=refreshed,
-            status=status,
-            refreshed_at=_utc_now(),
+                actual_scope = set()
+        data = self._record_select_ai_scope_state(
             profile_name=profile_name,
+            expected_scope=expected_scope,
+            actual_scope=actual_scope,
             warning=warning,
-            asset_names={"profile": profile_name},
-            engine_meta=engine_meta,
         )
-        with self._lock:
-            self._asset_meta[Nl2SqlEngine.SELECT_AI] = data
-        self._persist_state()
-        return data
+        return data.model_copy(update={"engine_meta": {**engine_meta, **data.engine_meta}})
 
     def upsert_profile_select_ai_profile(
         self,
         profile_id: str,
         request: ProfileSelectAiProfileRequest,
     ) -> SelectAiDbProfileMutationData:
-        with self._lock:
-            profile = self._profiles[profile_id]
+        profile = self.get_profile(profile_id)
         attributes = self.build_select_ai_profile_attributes(profile)
         if request.attributes_override:
             attributes = {**attributes, **request.attributes_override}
@@ -7366,6 +9246,30 @@ class Nl2SqlService:
             "runtime": "deterministic",
         }
         if self._use_oracle_runtime():
+            profile_sync = self.refresh_select_ai_profile(profile.id)
+            engine_meta["select_ai_profile_sync"] = profile_sync.model_dump(mode="json")
+            if not profile_sync.refreshed:
+                data = AssetRefreshData(
+                    engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                    refreshed=False,
+                    status="error",
+                    refreshed_at=_utc_now(),
+                    profile_name=profile_name,
+                    team_name=team_name,
+                    warning=profile_sync.warning,
+                    asset_names={
+                        "profile": profile_name,
+                        "tool": tool_name,
+                        "agent": agent_name,
+                        "task": task_name,
+                        "team": team_name,
+                    },
+                    engine_meta=engine_meta,
+                )
+                with self._lock:
+                    self._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = data
+                self._persist_state(collections=("singletons",))
+                return data
             try:
                 previous_warning = self._cleanup_previous_select_ai_agent_team(
                     profile_name=profile_name,
@@ -7429,7 +9333,7 @@ class Nl2SqlService:
         )
         with self._lock:
             self._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = data
-        self._persist_state()
+        self._persist_state(collections=("singletons",))
         return data
 
     def _cleanup_previous_select_ai_agent_team(
@@ -7513,7 +9417,7 @@ class Nl2SqlService:
                 reason=reason,
                 detail={"engines": [engine.value for engine in engines], "profile_id": profile_id},
             )
-        self._persist_state()
+        self._persist_state(collections=("singletons",))
         return cleaned
 
     def list_select_ai_db_profiles(
@@ -7635,20 +9539,127 @@ class Nl2SqlService:
         self, object_list: Sequence[dict[str, Any]]
     ) -> tuple[list[str], list[str]]:
         catalog_types = {
-            table.table_name.upper(): table.table_type.lower() for table in self._catalog.tables
+            self._catalog_qualified_name(table): table.table_type.lower()
+            for table in self._catalog.tables
         }
         tables: list[str] = []
         views: list[str] = []
         for item in object_list:
-            name = _normalize_identifier(str(item.get("name") or ""))
+            raw_name = str(item.get("name") or "").strip()
+            if not raw_name:
+                continue
+            identity = parse_object_identity(
+                raw_name,
+                default_owner=str(item.get("owner") or self._current_schema_owner()),
+            )
+            qualified = identity.qualified_name
+            object_type = catalog_types.get(qualified, "")
+            if "view" in object_type or identity.object_name.startswith("V_"):
+                views.append(qualified)
+            else:
+                tables.append(qualified)
+        return self._dedupe_object_names(tables), self._dedupe_object_names(views)
+
+    def _select_ai_object_scope_set(self, value: Any) -> set[str]:
+        if not isinstance(value, list):
+            return set()
+        scope: set[str] = set()
+        for item in value:
+            if isinstance(item, str):
+                scope.add(self._resolve_profile_object_name(item))
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("object_name") or "").strip()
             if not name:
                 continue
-            object_type = catalog_types.get(name, "")
-            if "view" in object_type or name.startswith("V_"):
-                views.append(name)
-            else:
-                tables.append(name)
-        return self._dedupe_object_names(tables), self._dedupe_object_names(views)
+            identity = parse_object_identity(
+                name,
+                default_owner=str(item.get("owner") or self._current_schema_owner()),
+            )
+            scope.add(identity.qualified_name)
+        return scope
+
+    def _record_select_ai_scope_state(
+        self,
+        *,
+        profile_name: str,
+        expected_scope: set[str],
+        actual_scope: set[str],
+        warning: str = "",
+    ) -> AssetRefreshData:
+        synchronized = not warning and expected_scope == actual_scope
+        if not warning and not synchronized:
+            warning = (
+                "Oracle Profile の object_list 再読込結果が要求 scope と一致しません。"
+                f" missing={sorted(expected_scope - actual_scope) or '-'}"
+                f" unexpected={sorted(actual_scope - expected_scope) or '-'}"
+            )
+        with self._lock:
+            previous = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
+            previous_states = (
+                previous.engine_meta.get("profile_scope_states", {}) if previous is not None else {}
+            )
+            profile_scope_states = {
+                str(key): dict(value)
+                for key, value in (
+                    previous_states.items() if isinstance(previous_states, dict) else []
+                )
+                if isinstance(value, dict)
+            }
+            refreshed_at = _utc_now()
+            profile_scope_states[profile_name.upper()] = {
+                "refreshed": synchronized,
+                "status": "ready" if synchronized else "error",
+                "warning": warning,
+                "refreshed_at": refreshed_at,
+                "expected_object_scope": sorted(expected_scope),
+                "actual_object_scope": sorted(actual_scope),
+            }
+            data = AssetRefreshData(
+                engine=Nl2SqlEngine.SELECT_AI,
+                refreshed=synchronized,
+                status="ready" if synchronized else "error",
+                refreshed_at=refreshed_at,
+                profile_name=profile_name,
+                warning=warning,
+                asset_names={"profile": profile_name},
+                engine_meta={
+                    "expected_object_scope": sorted(expected_scope),
+                    "actual_object_scope": sorted(actual_scope),
+                    "profile_scope_states": profile_scope_states,
+                },
+            )
+            self._asset_meta[Nl2SqlEngine.SELECT_AI] = data
+        self._persist_state(collections=("singletons",))
+        return data
+
+    def _assert_select_ai_scope_ready(self, profile: Nl2SqlProfile) -> None:
+        profile_name = self._select_ai_profile_name(profile)
+        scope_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
+        if scope_meta is None:
+            return
+        raw_states = scope_meta.engine_meta.get("profile_scope_states", {})
+        profile_state = (
+            raw_states.get(profile_name.upper()) if isinstance(raw_states, dict) else None
+        )
+        if isinstance(profile_state, dict):
+            if (
+                not bool(profile_state.get("refreshed"))
+                or str(profile_state.get("status") or "") != "ready"
+            ):
+                raise OracleAdapterError(
+                    "Oracle Select AI Profile の object scope が未同期です。"
+                    "Profile を再同期してから実行してください。"
+                )
+            return
+        if scope_meta.profile_name == profile_name and (
+            not scope_meta.refreshed or scope_meta.status != "ready"
+        ):
+            raise OracleAdapterError(
+                "Oracle Select AI Profile の object scope が未同期です。"
+                "Profile を再同期してから実行してください。"
+            )
 
     def list_select_ai_feedback_entries(
         self, profile_name: str, limit: int = 50
@@ -7890,8 +9901,7 @@ class Nl2SqlService:
                 original_name=original_name,
                 ddl=ddl,
                 warnings=[
-                    "DBMS_CLOUD_AI profile の作成/更新には "
-                    "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                    "DBMS_CLOUD_AI profile の作成/更新には NL2SQL_RUNTIME_MODE=oracle が必要です。"
                 ],
             )
         try:
@@ -7901,7 +9911,39 @@ class Nl2SqlService:
                 description=request.description,
                 original_name=original_name,
             )
-            detail = self.get_select_ai_db_profile(profile_name).profile
+            detail = self._enrich_select_ai_db_profile(
+                SelectAiDbProfile.model_validate(
+                    self._oracle_adapter.get_select_ai_profile_detail(profile_name=profile_name)
+                )
+            )
+            expected_scope = self._select_ai_object_scope_set(request.attributes.get("object_list"))
+            actual_scope = self._select_ai_object_scope_set(detail.object_list)
+            if expected_scope != actual_scope:
+                asset_error = self._record_select_ai_scope_state(
+                    profile_name=profile_name,
+                    expected_scope=expected_scope,
+                    actual_scope=actual_scope,
+                )
+                return SelectAiDbProfileMutationData(
+                    runtime="oracle",
+                    executed=False,
+                    status="scope_mismatch",
+                    profile_name=profile_name,
+                    original_name=original_name,
+                    ddl=ddl,
+                    profile=detail,
+                    warnings=[asset_error.warning],
+                    engine_meta={
+                        **meta,
+                        "expected_object_scope": sorted(expected_scope),
+                        "actual_object_scope": sorted(actual_scope),
+                    },
+                )
+            self._record_select_ai_scope_state(
+                profile_name=profile_name,
+                expected_scope=expected_scope,
+                actual_scope=actual_scope,
+            )
             self._record_admin_audit(
                 operation="select_ai_profile_upsert",
                 target=profile_name,
@@ -7928,6 +9970,13 @@ class Nl2SqlService:
                 },
             )
         except OracleAdapterError as exc:
+            expected_scope = self._select_ai_object_scope_set(request.attributes.get("object_list"))
+            self._record_select_ai_scope_state(
+                profile_name=profile_name,
+                expected_scope=expected_scope,
+                actual_scope=set(),
+                warning=str(exc),
+            )
             return SelectAiDbProfileMutationData(
                 runtime="oracle",
                 executed=False,
@@ -8021,6 +10070,7 @@ class Nl2SqlService:
         warnings: list[str] = []
         if self._use_oracle_runtime():
             try:
+                self._assert_select_ai_scope_ready(profile)
                 sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(
                     team_name=team_name,
                     question=request.prompt,
@@ -8094,8 +10144,18 @@ class Nl2SqlService:
 
     def run_select_ai_agent_tool(self, request: AgentToolRunRequest) -> AgentTeamRunData:
         warnings: list[str] = []
+        profile = next(
+            (
+                candidate
+                for candidate in self.list_profiles()
+                if self._select_ai_agent_asset_names(candidate)["tool"].upper()
+                == request.tool_name.strip().upper()
+            ),
+            self.get_profile(None),
+        )
         if self._use_oracle_runtime():
             try:
+                self._assert_select_ai_scope_ready(profile)
                 sql, conversation_id = self._oracle_adapter.run_select_ai_agent_tool(
                     tool_name=request.tool_name,
                     question=request.prompt,
@@ -8116,7 +10176,7 @@ class Nl2SqlService:
         generated = self._generate_sql(
             Nl2SqlEngine.SELECT_AI_AGENT,
             request.prompt,
-            self.get_profile(None),
+            profile,
             AllowedObjects(),
             None,
             warnings,
@@ -8327,10 +10387,10 @@ class Nl2SqlService:
     def _cleanup_profile_target(self, profile_id: str | None) -> Nl2SqlProfile:
         if not profile_id:
             return self.get_profile(None)
-        with self._lock:
-            existing = self._profiles.get(profile_id)
-        if existing:
-            return existing
+        try:
+            return self.get_profile(profile_id)
+        except ValueError:
+            pass
         return Nl2SqlProfile(
             id=profile_id,
             name=profile_id,
@@ -8571,8 +10631,7 @@ class Nl2SqlService:
         profile_id: str | None,
         include_bad: bool,
     ) -> list[SimilarHistoryItem]:
-        with self._lock:
-            history = list(self._history)
+        history = self._history_snapshot()
         vector_ranked = self._rank_oracle_vector_history(
             question=question,
             profile_id=profile_id,
@@ -8725,7 +10784,7 @@ class Nl2SqlService:
     ) -> list[str]:
         compared = f"{item.question} {item.rewritten_question} {item.generated_sql}".upper()
         candidates: list[str] = []
-        for profile in self._profiles.values():
+        for profile in self.list_profiles():
             glossary = self._effective_glossary(profile)
             candidates.extend(glossary.keys())
             candidates.extend(glossary.values())
@@ -8757,7 +10816,10 @@ class Nl2SqlService:
 
     def _run_job_safely(self, job_id: str) -> None:
         try:
-            self._run_job(job_id)
+            with self._lock:
+                actor_user_id = self._jobs[job_id].actor_user_id
+            with actor_scope(actor_user_id):
+                self._run_job(job_id)
         except Exception as exc:  # pragma: no cover - defensive boundary
             with self._lock:
                 job = self._jobs[job_id]
@@ -8769,7 +10831,7 @@ class Nl2SqlService:
                     job.steps[failure_index] = job.steps[failure_index].model_copy(
                         update={"status": JobStepStatus.ERROR}
                     )
-            self._persist_state()
+            self._persist_job(job_id)
 
     def _run_job(self, job_id: str) -> None:
         total_started = time.monotonic()
@@ -8780,7 +10842,7 @@ class Nl2SqlService:
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
             job.steps[0] = job.steps[0].model_copy(update={"status": JobStepStatus.RUNNING})
             request = job.request
-        self._persist_state()
+        self._persist_job(job_id)
 
         stage_timings: list[StageTiming] = []
         profile = self.get_profile(request.profile_id)
@@ -8898,24 +10960,28 @@ class Nl2SqlService:
             job.finished_at = finished
             job.elapsed_ms = timing.elapsed_ms
             job.timing = timing
-            self._history.append(
-                HistoryItem(
-                    id=history_id,
-                    question=request.question,
-                    engine=result.engine,
-                    generated_sql=result.generated_sql,
-                    created_at=finished,
-                    elapsed_ms=timing.elapsed_ms,
-                    profile_id=profile.id,
-                    profile_name=profile.name,
-                    rewritten_question=rewritten,
-                    executable_sql=result.executable_sql,
-                    safety_is_safe=result.safety.is_safe,
-                    result_row_count=result.results.total,
-                    result_columns=result.results.columns,
-                )
+            history_item = HistoryItem(
+                id=history_id,
+                question=request.question,
+                engine=result.engine,
+                generated_sql=result.generated_sql,
+                created_at=finished,
+                elapsed_ms=timing.elapsed_ms,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                rewritten_question=rewritten,
+                executable_sql=result.executable_sql,
+                safety_is_safe=result.safety.is_safe,
+                result_row_count=result.results.total,
+                result_columns=result.results.columns,
             )
-        self._persist_state()
+            self._history.append(history_item)
+        self._persist_entities(
+            [
+                ("jobs", job_id, self._job_to_snapshot(job)),
+                ("history", history_item.id, history_item.model_dump(mode="json")),
+            ]
+        )
 
     def _generate_with_fallback(
         self,
@@ -9051,7 +11117,7 @@ class Nl2SqlService:
             except EnterpriseAiDirectError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
 
-        sql = self._compose_select_sql(table.table_name, columns)
+        sql = self._compose_select_sql(self._catalog_qualified_name(table), columns)
         if engine == Nl2SqlEngine.SELECT_AI:
             meta.update({"select_ai_profile": self._select_ai_profile_name(profile)})
         elif engine == Nl2SqlEngine.SELECT_AI_AGENT:
@@ -9132,11 +11198,13 @@ class Nl2SqlService:
         use_glossary: bool = True,
     ) -> str:
         allowed_tables = {
-            _normalize_identifier(table)
+            self._resolve_profile_object_name(table)
             for table in (allowed.table_names or self.profile_allowed_object_names(profile))
         }
         allowed_columns = {
-            _normalize_identifier(table): {_normalize_identifier(column) for column in columns}
+            self._resolve_profile_object_name(table): {
+                _normalize_identifier(column) for column in columns
+            }
             for table, columns in allowed.columns.items()
             if columns
         }
@@ -9159,12 +11227,13 @@ class Nl2SqlService:
             lines.append(additional_instructions)
         lines.append("schema:")
         for table in self._catalog.tables:
-            if allowed_tables and table.table_name not in allowed_tables:
+            qualified_name = self._catalog_qualified_name(table)
+            if allowed_tables and qualified_name not in allowed_tables:
                 continue
             lines.append(
-                f"- table {table.table_name} logical={table.logical_name} comment={table.comment}"
+                f"- table {qualified_name} logical={table.logical_name} comment={table.comment}"
             )
-            table_allowed_columns = allowed_columns.get(table.table_name, set())
+            table_allowed_columns = allowed_columns.get(qualified_name, set())
             for column in table.columns:
                 if table_allowed_columns and column.column_name not in table_allowed_columns:
                     continue
@@ -9187,6 +11256,7 @@ class Nl2SqlService:
         return (
             "あなたは Oracle Database 26ai 向け NL2SQL エンジンです。"
             "与えられた schema/context の表と列だけを使用してください。"
+            "FROM/JOIN の物理 object は必ず OWNER.OBJECT で修飾してください。"
             "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"
             "必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
             f"{row_limit_instruction}"
@@ -9234,6 +11304,18 @@ class Nl2SqlService:
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
     ) -> GeneratedSql:
+        self._assert_select_ai_scope_ready(profile)
+        asset_meta = self._asset_meta.get(engine)
+        expected_profile_name = self._select_ai_profile_name(profile)
+        if (
+            asset_meta is not None
+            and asset_meta.profile_name == expected_profile_name
+            and (not asset_meta.refreshed or asset_meta.status != "ready")
+        ):
+            raise OracleAdapterError(
+                "Oracle Select AI asset の object scope が未同期です。"
+                "Profile を再同期してから実行してください。"
+            )
         runtime_question = self._augment_question_with_learning_examples(
             question,
             learning_examples,
@@ -9433,8 +11515,7 @@ class Nl2SqlService:
         return f"{prefix}_{profile.id.upper()}_PROFILE"
 
     def _business_select_ai_profile_names(self, *, include_archived: bool) -> set[str]:
-        with self._lock:
-            profiles = list(self._profiles.values())
+        profiles = self.list_profiles(include_archived=include_archived)
         names: set[str] = set()
         for profile in profiles:
             if profile.archived and not include_archived:
@@ -9484,27 +11565,24 @@ class Nl2SqlService:
         seen: set[str] = set()
         objects: list[str] = []
         for name in names:
-            normalized = _normalize_identifier(name)
-            if not normalized or normalized in seen:
+            if not str(name or "").strip():
+                continue
+            normalized = self._resolve_profile_object_name(str(name))
+            if normalized in seen:
                 continue
             seen.add(normalized)
             objects.append(normalized)
         return objects
 
     def _select_ai_object_list(self, object_names: Sequence[str]) -> list[dict[str, str]]:
-        owner = get_settings().oracle_user.strip().upper()
         objects: list[dict[str, str]] = []
         for object_name in object_names:
-            normalized = _normalize_identifier(object_name)
-            if not normalized:
+            if not str(object_name or "").strip():
                 continue
-            if "." in normalized:
-                object_owner, name = normalized.split(".", 1)
-                objects.append({"owner": object_owner, "name": name})
-            elif owner:
-                objects.append({"owner": owner, "name": normalized})
-            else:
-                objects.append({"name": normalized})
+            identity = parse_object_identity(
+                self._resolve_profile_object_name(str(object_name)),
+            )
+            objects.append({"owner": identity.owner, "name": identity.object_name})
         return objects
 
     def _resolve_allowed_objects(
@@ -9512,21 +11590,21 @@ class Nl2SqlService:
     ) -> AllowedObjects:
         profile = self.get_profile(profile_id)
         profile_names = self.profile_allowed_object_names(profile)
-        if not profile_names:
-            profile_names = [table.table_name for table in self._catalog.tables]
-        profile_scope = {_normalize_identifier(name) for name in profile_names}
+        profile_scope = set(profile_names)
         requested_names = self._dedupe_object_names(requested.table_names)
         resolved_names = (
             [name for name in requested_names if name in profile_scope]
             if requested_names
             else profile_names
         )
-        resolved_scope = {_normalize_identifier(name) for name in resolved_names}
-        resolved_columns = {
-            table_name: list(columns)
-            for table_name, columns in requested.columns.items()
-            if _normalize_identifier(table_name) in resolved_scope
-        }
+        resolved_scope = set(resolved_names)
+        resolved_columns: dict[str, list[str]] = {}
+        for table_name, columns in requested.columns.items():
+            canonical = self._resolve_profile_object_name(table_name)
+            if canonical in resolved_scope:
+                resolved_columns[canonical] = [
+                    _normalize_identifier(column) for column in columns if column.strip()
+                ]
         return AllowedObjects(
             table_names=resolved_names,
             columns=resolved_columns,
@@ -9548,18 +11626,16 @@ class Nl2SqlService:
         self, question: str, profile: Nl2SqlProfile, allowed: AllowedObjects
     ) -> SchemaTable:
         allowed_names = {
-            _normalize_identifier(name)
+            self._resolve_profile_object_name(name)
             for name in (allowed.table_names or self.profile_allowed_object_names(profile))
         }
         candidates = [
             table
             for table in self._catalog.tables
-            if not allowed_names or table.table_name in allowed_names
+            if self._catalog_qualified_name(table) in allowed_names
         ]
         if not candidates:
-            candidates = self._catalog.tables
-        if not candidates:
-            raise ValueError(_SCHEMA_EMPTY_MESSAGE)
+            raise ValueError("Profile に問い合わせ可能な schema object がありません。")
         question_upper = question.upper()
         for table in candidates:
             if table.table_name in question_upper or table.logical_name in question:
@@ -9567,8 +11643,12 @@ class Nl2SqlService:
         return candidates[0]
 
     def _choose_columns(self, table: SchemaTable, allowed: AllowedObjects) -> list[SchemaColumn]:
+        qualified_name = self._catalog_qualified_name(table)
         allowed_columns = {
-            _normalize_identifier(name) for name in allowed.columns.get(table.table_name, [])
+            _normalize_identifier(name)
+            for name in (
+                allowed.columns.get(qualified_name, []) or allowed.columns.get(table.table_name, [])
+            )
         }
         if allowed_columns:
             selected = [column for column in table.columns if column.column_name in allowed_columns]
@@ -9582,10 +11662,14 @@ class Nl2SqlService:
         return f"SELECT {column_sql} FROM {table_name}"  # nosec B608
 
     def _mock_execute(self, sql: str, row_limit: int | None) -> QueryResults:
-        referenced = _extract_referenced_tables(sql)
+        referenced = _extract_referenced_tables(sql, current_owner=self._current_schema_owner())
         table_name = referenced[0] if referenced else ""
         table = next(
-            (candidate for candidate in self._catalog.tables if candidate.table_name == table_name),
+            (
+                candidate
+                for candidate in self._catalog.tables
+                if self._catalog_qualified_name(candidate) == table_name
+            ),
             None,
         )
         if table is None:
@@ -9627,7 +11711,12 @@ class Nl2SqlService:
                     return enforce_row_limit(statement, row_limit)
             return ""
 
-        if not _table_allowed(referenced_tables, allowed):
+        current_owner = self._current_schema_owner()
+        if not _table_allowed(
+            referenced_tables,
+            allowed,
+            current_owner=current_owner,
+        ):
             table_name = self._first_allowed_table(allowed)
             if not table_name:
                 return ""
@@ -9638,7 +11727,11 @@ class Nl2SqlService:
             )
 
         if has_wildcard or not _column_allowed(
-            referenced_columns, has_wildcard, referenced_tables, allowed
+            referenced_columns,
+            has_wildcard,
+            referenced_tables,
+            allowed,
+            current_owner=current_owner,
         ):
             table_name = (
                 referenced_tables[0] if referenced_tables else self._first_allowed_table(allowed)
@@ -9730,8 +11823,7 @@ class Nl2SqlService:
             "ORA-00911": "SQL に無効な文字が含まれている可能性があります。",
             "ORA-00918": "結合時に列名が曖昧になっている可能性があります。",
             "ORA-00933": (
-                "Oracle 構文に合わない句、末尾セミコロン、LIMIT 句が"
-                "含まれている可能性があります。"
+                "Oracle 構文に合わない句、末尾セミコロン、LIMIT 句が含まれている可能性があります。"
             ),
             "ORA-00942": (
                 "参照表または view が存在しない、または権限が不足している可能性があります。"
@@ -9771,13 +11863,13 @@ class Nl2SqlService:
 
     def _first_allowed_table(self, allowed: AllowedObjects) -> str:
         if allowed.table_names:
-            return _normalize_identifier(allowed.table_names[0])
-        return self._catalog.tables[0].table_name if self._catalog.tables else ""
+            return self._resolve_profile_object_name(allowed.table_names[0])
+        return self._catalog_qualified_name(self._catalog.tables[0]) if self._catalog.tables else ""
 
     def _allowed_select_list(self, table_name: str, allowed: AllowedObjects) -> str:
-        normalized_table = _normalize_identifier(table_name)
+        normalized_table = self._resolve_profile_object_name(table_name)
         restricted_columns = {
-            _normalize_identifier(candidate_table): columns
+            self._resolve_profile_object_name(candidate_table): columns
             for candidate_table, columns in allowed.columns.items()
         }
         allowed_columns = [
@@ -9791,7 +11883,7 @@ class Nl2SqlService:
             (
                 candidate
                 for candidate in self._catalog.tables
-                if candidate.table_name == normalized_table
+                if self._catalog_qualified_name(candidate) == normalized_table
             ),
             None,
         )

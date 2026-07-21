@@ -1,9 +1,13 @@
 import type {
   GraphPatch,
   OntologyBuildJob,
+  OntologyContextSearchResult,
+  OntologyGraph,
   OntologyImprovementProposalRequest,
   OntologyProposal,
   OntologyProposalReviewData,
+  OntologyProfileRecommendation,
+  OntologyPublishJob,
   OntologyRevision,
   QuerySession,
   QuerySessionCreateRequest,
@@ -11,6 +15,7 @@ import type {
   QuerySessionGenerateSqlRequest,
   QuerySessionSqlConfirmationRequest,
 } from "./types";
+import { apiFetch } from "../../../lib/api.ts";
 
 interface ApiEnvelope<T> {
   data?: T;
@@ -21,6 +26,18 @@ interface ApiEnvelope<T> {
 interface RequestOptions {
   signal?: AbortSignal;
   idempotencyKey?: string;
+  ifMatch?: string;
+}
+
+// HTTP status を保持するエラー(ポーリング側で 404 = job 消失を判別するため)
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
 export class QuerySessionVersionConflictError extends Error {
@@ -105,13 +122,14 @@ async function request<T>(
     method === "POST"
       ? options.idempotencyKey ?? createIdempotencyKey(path, body)
       : undefined;
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     method,
     signal: options.signal,
     headers: {
       Accept: "application/json",
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+      ...(options.ifMatch ? { "If-Match": `"${options.ifMatch}"` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -127,7 +145,7 @@ async function request<T>(
       const { currentVersion, session } = conflictDetails(payload);
       throw new QuerySessionVersionConflictError(message, currentVersion, session);
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   if (payload.data !== undefined) return payload.data;
   return payload as T;
@@ -206,9 +224,13 @@ export function createOntologyImprovementProposal(
 
 // --- AI オントロジー構築 ---
 
+// POST はバックエンドで Q/A ファイルを同期パースするため、無応答時の固まり防止に timeout を設ける
+const ONTOLOGY_BUILD_START_TIMEOUT_MS = 30_000;
+
 export interface OntologyBuildStartInput {
   businessText: string;
   qaFile?: File | null;
+  sourceFiles?: File[];
   runSchemaNaming: boolean;
   runQaExtraction: boolean;
   runTextExtraction: boolean;
@@ -224,9 +246,21 @@ export async function startOntologyBuild(
   form.set("run_qa_extraction", String(input.runQaExtraction));
   form.set("run_text_extraction", String(input.runTextExtraction));
   if (input.qaFile) form.set("qa_file", input.qaFile, input.qaFile.name);
-  const response = await fetch(
+  for (const sourceFile of input.sourceFiles ?? []) {
+    form.append("source_files", sourceFile, sourceFile.name);
+  }
+  const idempotencyKey = createIdempotencyKey(
+    `/api/nl2sql/profiles/${profileId}/ontology-build`,
+    { filenames: (input.sourceFiles ?? []).map((file) => file.name) }
+  );
+  const response = await apiFetch(
     `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-build`,
-    { method: "POST", headers: { Accept: "application/json" }, body: form }
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Idempotency-Key": idempotencyKey },
+      body: form,
+      signal: AbortSignal.timeout(ONTOLOGY_BUILD_START_TIMEOUT_MS),
+    }
   );
   let payload: ApiEnvelope<{ job: OntologyBuildJob }>;
   try {
@@ -235,7 +269,7 @@ export async function startOntologyBuild(
     payload = {};
   }
   if (!response.ok || !payload.data) {
-    throw new Error(payloadMessage(payload, response.status));
+    throw new ApiError(payloadMessage(payload, response.status), response.status);
   }
   return payload.data.job;
 }
@@ -311,15 +345,95 @@ export function listOntologyRevisions(
   return request("/api/nl2sql/ontology/revisions", "GET", undefined, options);
 }
 
+export function createOntologyRevisionDraft(
+  revisionId: string,
+  baseEtag: string,
+  nodeUpserts: OntologyGraph["nodes"],
+  options?: RequestOptions
+): Promise<OntologyGraph> {
+  return request(
+    `/api/nl2sql/ontology/revisions/${encodeURIComponent(revisionId)}/drafts`,
+    "POST",
+    {
+      base_etag: baseEtag,
+      note: "業務モデル画面で意味定義を編集",
+      node_upserts: nodeUpserts,
+      edge_upserts: [],
+      remove_node_ids: [],
+      remove_edge_ids: [],
+    },
+    options
+  );
+}
+
 export function publishOntologyRevision(
   revisionId: string,
   etag: string,
   options?: RequestOptions
-): Promise<unknown> {
-  return request(
+): Promise<OntologyPublishJob> {
+  return request<{ job: OntologyPublishJob }>(
     `/api/nl2sql/ontology/revisions/${encodeURIComponent(revisionId)}/publish`,
     "POST",
     { etag },
+    { ...options, ifMatch: etag }
+  ).then((data) => data.job);
+}
+
+export function getOntologyPublishJob(
+  jobId: string,
+  options?: RequestOptions
+): Promise<OntologyPublishJob> {
+  return request<{ job: OntologyPublishJob }>(
+    `/api/nl2sql/ontology-publish/${encodeURIComponent(jobId)}`,
+    "GET",
+    undefined,
+    options
+  ).then((data) => data.job);
+}
+
+export function recommendOntologyProfiles(
+  question: string,
+  options?: RequestOptions
+): Promise<OntologyProfileRecommendation> {
+  return request<{ recommendation: OntologyProfileRecommendation }>(
+    "/api/nl2sql/ontology/profile-recommendations",
+    "POST",
+    { question, limit: 3 },
+    options
+  ).then((data) => data.recommendation);
+}
+
+export function confirmOntologyProfileRecommendation(
+  recommendationId: string,
+  selectedProfileId: string,
+  selectedRevisionId: string,
+  options?: RequestOptions
+): Promise<{ recommendation: OntologyProfileRecommendation; confirmation_token: string }> {
+  return request(
+    `/api/nl2sql/ontology/profile-recommendations/${encodeURIComponent(recommendationId)}/confirm`,
+    "POST",
+    {
+      selected_profile_id: selectedProfileId,
+      selected_revision_id: selectedRevisionId,
+    },
+    options
+  );
+}
+
+export function searchOntologyContext(
+  profileId: string,
+  input: { question: string; ontologyRevisionId: string; topK?: number; maxHops?: number },
+  options?: RequestOptions
+): Promise<OntologyContextSearchResult> {
+  return request(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-context/search`,
+    "POST",
+    {
+      question: input.question,
+      ontology_revision_id: input.ontologyRevisionId,
+      top_k: input.topK ?? 8,
+      max_hops: input.maxHops ?? 2,
+    },
     options
   );
 }

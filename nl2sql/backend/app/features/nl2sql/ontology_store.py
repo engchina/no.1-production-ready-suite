@@ -4,9 +4,9 @@ The production implementation persists the shared business Ontology, profile vie
 and query traces in Oracle 26ai.  Local development and CI use the in-memory
 implementation with the same optimistic-concurrency contract.
 
-DDL is deliberately opt-in: constructing :class:`OracleOntologyStore` never changes
-the database.  Operators or an application migration hook must call
-``ensure_schema()`` explicitly.
+DDL is deliberately migration-only: constructing or checking
+:class:`OracleOntologyStore` never changes the database. ``ensure_schema()`` performs
+only a bounded existence query.
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ OntologyCollection = Literal[
     "artifacts",
     "proposals",
     "idempotency",
+    "source_documents",
+    "jobs",
+    "recommendations",
 ]
 
 ONTOLOGY_COLLECTIONS: tuple[OntologyCollection, ...] = (
@@ -46,6 +49,9 @@ ONTOLOGY_COLLECTIONS: tuple[OntologyCollection, ...] = (
     "artifacts",
     "proposals",
     "idempotency",
+    "source_documents",
+    "jobs",
+    "recommendations",
 )
 
 _ID_KIND = re.compile(r"[^a-z0-9_]+")
@@ -282,9 +288,9 @@ _SPECS: dict[OntologyCollection, _CollectionSpec] = {
         },
     ),
     "profile_views": _CollectionSpec(
-        "NL2SQL_ONTOLOGY_PROFILE_VIEWS",
-        ("profile_id",),
-        {"revision_id": "REVISION_ID"},
+        "NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS",
+        ("profile_id", "revision_id"),
+        {},
     ),
     "query_sessions": _CollectionSpec(
         "NL2SQL_ONTOLOGY_QUERY_SESSIONS",
@@ -312,6 +318,7 @@ _SPECS: dict[OntologyCollection, _CollectionSpec] = {
         {
             "session_id": "SESSION_ID",
             "ontology_revision_id": "ONTOLOGY_REVISION_ID",
+            "profile_id": "PROFILE_ID",
             "status": "STATUS",
         },
     ),
@@ -321,6 +328,32 @@ _SPECS: dict[OntologyCollection, _CollectionSpec] = {
         {
             "request_hash": "REQUEST_HASH",
             "resource_id": "RESOURCE_ID",
+            "status": "STATUS",
+        },
+    ),
+    "source_documents": _CollectionSpec(
+        "NL2SQL_ONTOLOGY_SOURCE_DOCS",
+        ("source_document_id",),
+        {
+            "profile_id": "PROFILE_ID",
+            "status": "STATUS",
+            "sha256": "SHA256",
+        },
+    ),
+    "jobs": _CollectionSpec(
+        "NL2SQL_ONTOLOGY_JOBS",
+        ("job_id",),
+        {
+            "job_type": "JOB_TYPE",
+            "profile_id": "PROFILE_ID",
+            "status": "STATUS",
+        },
+    ),
+    "recommendations": _CollectionSpec(
+        "NL2SQL_ONTOLOGY_RECOMMENDATIONS",
+        ("recommendation_id",),
+        {
+            "question_hash": "QUESTION_HASH",
             "status": "STATUS",
         },
     ),
@@ -415,6 +448,7 @@ ONTOLOGY_TABLE_DDL: dict[OntologyCollection, str] = {
             PROPOSAL_ID VARCHAR2(128) PRIMARY KEY,
             SESSION_ID VARCHAR2(128) NOT NULL,
             ONTOLOGY_REVISION_ID VARCHAR2(128) NOT NULL,
+            PROFILE_ID VARCHAR2(128) DEFAULT '' NOT NULL,
             STATUS VARCHAR2(32) NOT NULL,
             VERSION_NO NUMBER(19) NOT NULL,
             ETAG VARCHAR2(64) NOT NULL,
@@ -438,6 +472,44 @@ ONTOLOGY_TABLE_DDL: dict[OntologyCollection, str] = {
             CONSTRAINT PK_NL2SQL_ONT_IDEMPOTENCY PRIMARY KEY (OPERATION, IDEMPOTENCY_KEY)
         )
     """,
+    "source_documents": """
+        CREATE TABLE NL2SQL_ONTOLOGY_SOURCE_DOCS (
+            SOURCE_DOCUMENT_ID VARCHAR2(128) PRIMARY KEY,
+            PROFILE_ID VARCHAR2(128) NOT NULL,
+            STATUS VARCHAR2(32) NOT NULL,
+            SHA256 VARCHAR2(64) NOT NULL,
+            VERSION_NO NUMBER(19) NOT NULL,
+            ETAG VARCHAR2(64) NOT NULL,
+            PAYLOAD_JSON CLOB CHECK (PAYLOAD_JSON IS JSON) NOT NULL,
+            CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+            UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+        )
+    """,
+    "jobs": """
+        CREATE TABLE NL2SQL_ONTOLOGY_JOBS (
+            JOB_ID VARCHAR2(128) PRIMARY KEY,
+            JOB_TYPE VARCHAR2(32) NOT NULL,
+            PROFILE_ID VARCHAR2(128) NOT NULL,
+            STATUS VARCHAR2(32) NOT NULL,
+            VERSION_NO NUMBER(19) NOT NULL,
+            ETAG VARCHAR2(64) NOT NULL,
+            PAYLOAD_JSON CLOB CHECK (PAYLOAD_JSON IS JSON) NOT NULL,
+            CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+            UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+        )
+    """,
+    "recommendations": """
+        CREATE TABLE NL2SQL_ONTOLOGY_RECOMMENDATIONS (
+            RECOMMENDATION_ID VARCHAR2(128) PRIMARY KEY,
+            QUESTION_HASH VARCHAR2(64) NOT NULL,
+            STATUS VARCHAR2(32) NOT NULL,
+            VERSION_NO NUMBER(19) NOT NULL,
+            ETAG VARCHAR2(64) NOT NULL,
+            PAYLOAD_JSON CLOB CHECK (PAYLOAD_JSON IS JSON) NOT NULL,
+            CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+            UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+        )
+    """,
 }
 
 ONTOLOGY_INDEX_DDL: tuple[str, ...] = (
@@ -455,6 +527,14 @@ ONTOLOGY_INDEX_DDL: tuple[str, ...] = (
     "CREATE INDEX IX_NL2SQL_ONT_PROP_SESSION ON NL2SQL_ONTOLOGY_PROPOSALS " "(SESSION_ID, STATUS)",
     "CREATE INDEX IX_NL2SQL_ONT_IDEMPOTENCY_RESOURCE ON NL2SQL_ONTOLOGY_IDEMPOTENCY "
     "(RESOURCE_ID, STATUS)",
+    "CREATE INDEX IX_NL2SQL_ONT_SOURCE_PROFILE ON NL2SQL_ONTOLOGY_SOURCE_DOCS "
+    "(PROFILE_ID, STATUS)",
+    "CREATE INDEX IX_NL2SQL_ONT_JOB_STATE ON NL2SQL_ONTOLOGY_JOBS "
+    "(JOB_TYPE, STATUS, UPDATED_AT)",
+    "CREATE INDEX IX_NL2SQL_ONT_REC_QUESTION ON NL2SQL_ONTOLOGY_RECOMMENDATIONS "
+    "(QUESTION_HASH, STATUS)",
+    "CREATE UNIQUE INDEX UX_NL2SQL_ONT_ONE_PUBLISHED ON NL2SQL_ONTOLOGY_REVISIONS "
+    "(CASE WHEN STATUS = 'published' THEN 1 END)",
 )
 
 ONTOLOGY_DDL_STATEMENTS: tuple[str, ...] = (
@@ -494,6 +574,13 @@ class OntologyStore(Protocol):
     ) -> dict[str, Any]:
         """Create or update one document and return its new version/ETag."""
 
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
+        """Save multiple documents in one storage transaction."""
+
     def search_node_embeddings(
         self,
         *,
@@ -503,6 +590,22 @@ class OntologyStore(Protocol):
         limit: int,
     ) -> list[tuple[str, float]]:
         """Search ontology node vectors inside the backing store when supported."""
+
+    def get_idempotency(self, operation: str, idempotency_key: str) -> dict[str, Any] | None: ...
+
+    def save_idempotency(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]: ...
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None: ...
+
+    def save_job(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]: ...
+
+    def save_artifact(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]: ...
 
 
 class _ConvenienceMethods:
@@ -529,6 +632,13 @@ class _ConvenienceMethods:
         *,
         expected_etag: str | None = None,
     ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def search_node_embeddings(
@@ -574,8 +684,28 @@ class _ConvenienceMethods:
     def list_edges(self, revision_id: str) -> list[dict[str, Any]]:
         return self.list_documents("edges", {"revision_id": revision_id})
 
-    def get_profile_view(self, profile_id: str) -> dict[str, Any] | None:
-        return self.get_document("profile_views", {"profile_id": profile_id})
+    def get_profile_view(
+        self, profile_id: str, revision_id: str | None = None
+    ) -> dict[str, Any] | None:
+        if revision_id is None:
+            # 1 compatibility cycle: old callers requested only the current profile view.
+            # Runtime paths always pass revision_id and therefore remain deterministic.
+            documents = self.list_documents("profile_views", {"profile_id": profile_id})
+            return (
+                max(
+                    documents,
+                    key=lambda item: (
+                        str(item.get("updated_at") or ""),
+                        str(item.get("revision_id") or ""),
+                    ),
+                )
+                if documents
+                else None
+            )
+        return self.get_document(
+            "profile_views",
+            {"profile_id": profile_id, "revision_id": revision_id},
+        )
 
     def save_profile_view(
         self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
@@ -622,6 +752,43 @@ class _ConvenienceMethods:
         self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
     ) -> dict[str, Any]:
         return self.save_document("idempotency", document, expected_etag=expected_etag)
+
+    def get_source_document(self, source_document_id: str) -> dict[str, Any] | None:
+        return self.get_document("source_documents", {"source_document_id": source_document_id})
+
+    def save_source_document(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]:
+        return self.save_document("source_documents", document, expected_etag=expected_etag)
+
+    def list_source_documents(self, profile_id: str) -> list[dict[str, Any]]:
+        return self.list_documents("source_documents", {"profile_id": profile_id})
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        return self.get_document("jobs", {"job_id": job_id})
+
+    def save_job(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]:
+        return self.save_document("jobs", document, expected_etag=expected_etag)
+
+    def list_jobs(
+        self, *, job_type: str | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        filters = {
+            key: value
+            for key, value in {"job_type": job_type, "status": status}.items()
+            if value is not None
+        }
+        return self.list_documents("jobs", filters)
+
+    def get_recommendation(self, recommendation_id: str) -> dict[str, Any] | None:
+        return self.get_document("recommendations", {"recommendation_id": recommendation_id})
+
+    def save_recommendation(
+        self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
+    ) -> dict[str, Any]:
+        return self.save_document("recommendations", document, expected_etag=expected_etag)
 
 
 def _document_identity(
@@ -718,6 +885,30 @@ class InMemoryOntologyStore(_ConvenienceMethods):
             self._documents[collection][key] = prepared
             return deserialize_json(canonical_json(prepared))
 
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            prepared_documents: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+            for document, expected_etag in documents:
+                normalized = deserialize_json(canonical_json(document))
+                key = _document_identity(collection, normalized)
+                current = self._documents[collection].get(key)
+                prepared = next_versioned_document(
+                    normalized,
+                    current=current,
+                    expected_etag=expected_etag,
+                )
+                prepared_documents.append((key, prepared))
+            for key, prepared in prepared_documents:
+                self._documents[collection][key] = prepared
+            return [
+                deserialize_json(canonical_json(prepared))
+                for _key, prepared in prepared_documents
+            ]
+
     def search_node_embeddings(
         self,
         *,
@@ -734,8 +925,7 @@ class InMemoryOntologyStore(_ConvenienceMethods):
             if left_norm == 0 or right_norm == 0:
                 return 0.0
             return float(
-                sum(a * b for a, b in zip(left, right, strict=False))
-                / (left_norm * right_norm)
+                sum(a * b for a, b in zip(left, right, strict=False)) / (left_norm * right_norm)
             )
 
         rows = self.list_documents("nodes", {"revision_id": revision_id})
@@ -764,7 +954,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         self._schema_lock = threading.RLock()
 
     def ensure_schema(self) -> None:
-        """Explicitly create missing Ontology tables and indexes."""
+        """Migration 済み schema を bounded query で確認する（DDL は実行しない）。"""
 
         if self._schema_ready:
             return
@@ -772,16 +962,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             if self._schema_ready:
                 return
             with self._connection_factory() as connection, connection.cursor() as cursor:
-                for statement in ONTOLOGY_DDL_STATEMENTS:
-                    try:
-                        cursor.execute(statement.strip())
-                    except Exception as exc:
-                        if "ORA-00955" not in str(exc).upper():
-                            rollback = getattr(connection, "rollback", None)
-                            if callable(rollback):
-                                rollback()
-                            raise
-                connection.commit()
+                cursor.execute("SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0")
             self._schema_ready = True
 
     def get_document(
@@ -856,6 +1037,42 @@ class OracleOntologyStore(_ConvenienceMethods):
                     ) from exc
                 raise
         return prepared
+
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
+        spec = _SPECS[collection]
+        prepared_documents: list[dict[str, Any]] = []
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                _set_payload_clob_input_size(cursor)
+                for document, expected_etag in documents:
+                    normalized = deserialize_json(canonical_json(document))
+                    _document_identity(collection, normalized)
+                    current = self._select_for_update(cursor, collection, normalized)
+                    prepared = next_versioned_document(
+                        normalized,
+                        current=current,
+                        expected_etag=expected_etag,
+                    )
+                    if current is None:
+                        self._insert_document(cursor, spec, prepared)
+                    else:
+                        self._update_document(cursor, spec, prepared, str(current["etag"]))
+                    prepared_documents.append(prepared)
+                connection.commit()
+            except Exception as exc:
+                rollback = getattr(connection, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                if "ORA-00001" in str(exc).upper():
+                    raise OntologyVersionConflict(
+                        "An Ontology document was concurrently created."
+                    ) from exc
+                raise
+        return prepared_documents
 
     def search_node_embeddings(
         self,

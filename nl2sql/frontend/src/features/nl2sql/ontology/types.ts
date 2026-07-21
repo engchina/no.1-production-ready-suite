@@ -28,6 +28,8 @@ export type OntologyNodeKind =
   | "property"
   | "metric"
   | "business_term"
+  | "business_rule"
+  | "enum_value"
   | "question_intent"
   | "query_plan"
   | "cte"
@@ -54,6 +56,12 @@ export interface OntologyRevision {
   etag: string;
   created_at?: string;
   published_at?: string | null;
+  reasoning_status?: "not_started" | "materializing" | "validating" | "ready" | "failed";
+  rdf_graph_name?: string;
+  inferred_graph_name?: string;
+  shacl_report_artifact_id?: string;
+  renderer_version?: string;
+  artifact_hashes?: Record<string, string>;
 }
 
 export interface OntologyPhysicalMapping {
@@ -95,9 +103,12 @@ export interface OntologyJoinCondition {
 
 export interface OntologyNode {
   id: string;
+  revision_id?: string;
   kind: OntologyNodeKind;
+  technical_name?: string;
   business_name_ja: string;
   description?: string;
+  description_ja?: string;
   physical_mapping?: OntologyPhysicalMapping | null;
   physical_mappings?: OntologyPhysicalMappingDetail[];
   aliases?: string[];
@@ -106,6 +117,64 @@ export interface OntologyNode {
   review_status?: OntologyReviewStatus;
   validation_status?: OntologyValidationStatus;
   metadata?: Record<string, OntologyJsonValue>;
+  provenance?: {
+    source_kind?: string;
+    source_id?: string;
+    source_detail?: string;
+    inferred_by?: string;
+    observed_at?: string;
+    evidence?: OntologyEvidence[];
+  };
+  business_rule_definition?: BusinessRuleDefinition | null;
+  enum_value_definition?: EnumValueDefinition | null;
+}
+
+export interface OntologyEvidence {
+  source_document_id: string;
+  source_sha256: string;
+  locator_kind: "page" | "paragraph" | "sheet_row" | "line" | "qa_row" | "schema_object";
+  locator: string;
+  excerpt_hash: string;
+  excerpt_ja?: string;
+}
+
+export interface BusinessRuleDefinition {
+  rule_kind: "constraint" | "calculation" | "classification" | "validation";
+  statement_ja: string;
+  applies_to_node_ids: string[];
+  expression?: BusinessRuleExpression | null;
+  severity: "info" | "warning" | "violation";
+  execution_mode: "shacl" | "sql_definition" | "documentation";
+}
+
+export interface BusinessRuleExpression {
+  operator:
+    | "all"
+    | "any"
+    | "not"
+    | "eq"
+    | "ne"
+    | "lt"
+    | "lte"
+    | "gt"
+    | "gte"
+    | "in"
+    | "not_in"
+    | "is_null"
+    | "not_null";
+  property_node_id?: string;
+  value?: OntologyJsonValue;
+  values?: OntologyJsonValue[];
+  children?: BusinessRuleExpression[];
+}
+
+export interface EnumValueDefinition {
+  code: string;
+  label_ja: string;
+  aliases: string[];
+  physical_literal: OntologyJsonValue;
+  data_type: "string" | "integer" | "number" | "boolean" | "date" | "datetime";
+  property_node_id: string;
 }
 
 export interface OntologyEdge {
@@ -145,6 +214,9 @@ export interface ProfileOntologyView {
   table_usage?: Record<string, string>;
   column_policies?: Record<string, string>;
   graph?: OntologyGraph;
+  activation_scenarios_ja?: string[];
+  activation_keywords?: string[];
+  scenario_version?: number;
 }
 
 export interface IntentConcept {
@@ -383,6 +455,7 @@ export interface OntologyProposalReviewData {
 // --- AI オントロジー構築(backend の OntologyBuildJob と対応) ---
 
 export type OntologyBuildStepName =
+  | "source_extraction"
   | "schema_context"
   | "schema_naming"
   | "qa_extraction"
@@ -416,11 +489,76 @@ export interface OntologyBuildJob {
   steps: OntologyBuildStep[];
   events?: OntologyBuildEvent[];
   proposal_ids: string[];
+  source_document_ids?: string[];
+  sources?: OntologySourceProgress[];
   warnings_ja: string[];
   error_message_ja?: string;
   created_at?: string;
   started_at?: string | null;
   finished_at?: string | null;
+}
+
+export interface OntologySourceProgress {
+  source_document_id: string;
+  filename: string;
+  status: "stored" | "extracting" | "extracted" | "failed";
+  extracted_chunk_count?: number;
+  warnings_ja?: string[];
+  error_message_ja?: string;
+}
+
+export interface OntologyPublishJob {
+  id: string;
+  revision_id: string;
+  status: "queued" | "materializing" | "validating" | "succeeded" | "failed";
+  rdf_graph_name?: string;
+  inferred_graph_name?: string;
+  shacl_conforms?: boolean | null;
+  shacl_report_artifact_id?: string;
+  warnings_ja?: string[];
+  error_code?: string;
+  error_message_ja?: string;
+}
+
+export interface OntologyProfileRecommendationCandidate {
+  profile_id: string;
+  profile_name: string;
+  ontology_revision_id: string;
+  score: number;
+  matched_scenarios_ja: string[];
+  matched_terms: string[];
+  reasons_ja: string[];
+}
+
+export interface OntologyProfileRecommendation {
+  id: string;
+  question_hash: string;
+  ontology_revision_id: string;
+  candidates: OntologyProfileRecommendationCandidate[];
+  selected_profile_id?: string;
+  selected_revision_id?: string;
+  confirmed_at?: string | null;
+  expires_at: string;
+}
+
+export interface OntologyContextSearchResult {
+  profile_id: string;
+  profile_view_id: string;
+  ontology_revision_id: string;
+  hits: Array<{
+    node: OntologyNode;
+    score: number;
+    matched_terms: string[];
+    sources: string[];
+    inference_source: string;
+  }>;
+  nodes: OntologyNode[];
+  edges: OntologyEdge[];
+  mermaid: string;
+  llm_markdown: string;
+  owl_turtle: string;
+  shacl_turtle: string;
+  context_hash: string;
 }
 
 export interface SqlArtifact {
@@ -510,6 +648,7 @@ export interface QuerySessionCreateRequest {
     table_names: string[];
     columns: Record<string, string[]>;
   };
+  profile_confirmation_token?: string;
 }
 
 export interface QuerySessionIntentPatchRequest extends GraphPatch {}

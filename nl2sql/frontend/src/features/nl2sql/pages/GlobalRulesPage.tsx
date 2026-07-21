@@ -12,7 +12,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet } from "@/lib/api";
+import { apiFetch, apiGet } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { FileInputControl, downloadBlob } from "../components/DbAdminShared";
@@ -77,7 +77,7 @@ export function GlobalRulesPage() {
     setBusy(true);
     setErrorText(null);
     try {
-      const response = await fetch("/api/nl2sql/legacy-learning-material/rules/export.xlsx", {
+      const response = await apiFetch("/api/nl2sql/legacy-learning-material/rules/export.xlsx", {
         headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
       });
       if (!response.ok) throw new Error(t("globalRules.error.export"));
@@ -172,7 +172,7 @@ export function GlobalRulesPage() {
 async function uploadRulesFile(file: File): Promise<LegacyLearningMaterialData> {
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch("/api/nl2sql/legacy-learning-material/rules/import", {
+  const response = await apiFetch("/api/nl2sql/legacy-learning-material/rules/import", {
     method: "POST",
     body: form,
     headers: { Accept: "application/json" },

@@ -32,6 +32,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyNodeKind,
     OntologyProposalKind,
     OntologyReviewStatus,
+    QaPair,
 )
 from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
@@ -39,10 +40,12 @@ from app.features.nl2sql.ontology_router import (
 )
 from app.features.nl2sql.ontology_service import OntologyNotFoundError
 from app.features.nl2sql.ontology_store import InMemoryOntologyStore
+from app.settings import get_settings
 
 
 class _FakeLegacyNl2SqlService:
     def __init__(self) -> None:
+        self._enterprise_ai_client: Any = None
         self.profile = Nl2SqlProfile(
             id="sales",
             name="販売分析",
@@ -169,7 +172,7 @@ _QA_SQL = (
 
 
 def _xlsx_bytes(rows: list[list[str]]) -> bytes:
-    import openpyxl
+    import openpyxl  # type: ignore[import-untyped]
 
     workbook = openpyxl.Workbook()
     sheet = workbook.active
@@ -243,9 +246,7 @@ def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
-    qa_pairs, _ = parse_qa_workbook(
-        "qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode()
-    )
+    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
     job = service.start(
         "sales",
         business_text="受注は顧客に紐づく。売上は受注金額の合計。",
@@ -261,9 +262,7 @@ def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
         OntologyBuildStepName.TEXT_EXTRACTION,
         OntologyBuildStepName.PROPOSAL_REGISTRATION,
     ]
-    assert all(
-        step.status == OntologyBuildStepStatus.SUCCEEDED for step in finished.steps
-    )
+    assert all(step.status == OntologyBuildStepStatus.SUCCEEDED for step in finished.steps)
     # 各ステップに開始・終了時刻が入り、アクティビティタイムラインが時系列で積まれる
     assert all(
         step.started_at is not None and step.finished_at is not None for step in finished.steps
@@ -296,9 +295,7 @@ def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
         proposal for proposal in proposals if proposal.kind == OntologyProposalKind.MAPPING
     )
     node_upserts = mapping.proposal_payload.values["node_upserts"]
-    assert any(
-        set(node["aliases"]) >= {"注文", "オーダー"} for node in node_upserts
-    )
+    assert any(set(node["aliases"]) >= {"注文", "オーダー"} for node in node_upserts)
 
 
 def test_build_job_fails_gracefully_without_enterprise_ai(
@@ -350,9 +347,7 @@ def test_accept_applies_upserts_accumulates_and_publishes(
     runtime, store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
-    qa_pairs, _ = parse_qa_workbook(
-        "qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode()
-    )
+    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
     job = service.start("sales", business_text="受注は顧客に紐づく。", qa_pairs=qa_pairs)
     _wait_for_job(service, job.id)
     proposals = runtime.list_profile_proposals("sales")
@@ -370,6 +365,7 @@ def test_accept_applies_upserts_accumulates_and_publishes(
 
     # 関係提案の accept → 業務ノード + 承認済み関係が draft に入る
     review = runtime.accept_proposal(relationship.id)
+    assert review.draft is not None
     draft = review.draft
     business_edges = [
         edge for edge in draft.edges if edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP
@@ -380,26 +376,20 @@ def test_accept_applies_upserts_accumulates_and_publishes(
 
     # 続けて命名提案を accept → 直前の draft に積み上がり、合成 endpoint が上書きされる
     review2 = runtime.accept_proposal(mapping.id)
+    assert review2.draft is not None
     draft2 = review2.draft
-    entity_nodes = [
-        node for node in draft2.nodes if node.kind == OntologyNodeKind.BUSINESS_ENTITY
-    ]
-    orders_entity = next(
-        node for node in entity_nodes if node.technical_name == "APP.ORDERS"
-    )
+    entity_nodes = [node for node in draft2.nodes if node.kind == OntologyNodeKind.BUSINESS_ENTITY]
+    orders_entity = next(node for node in entity_nodes if node.technical_name == "APP.ORDERS")
     assert orders_entity.business_name_ja == "受注"
     assert "オーダー" in orders_entity.aliases
     assert not orders_entity.metadata.get("synthetic_endpoint")
     # 関係提案の内容も残っている(最新 revision へ積み上げ)
-    assert any(
-        edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP for edge in draft2.edges
-    )
+    assert any(edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP for edge in draft2.edges)
 
     # 指標提案も accept → metric_definition が node metadata に入る
     review3 = runtime.accept_proposal(metric.id)
-    metric_nodes = [
-        node for node in review3.draft.nodes if node.kind == OntologyNodeKind.METRIC
-    ]
+    assert review3.draft is not None
+    metric_nodes = [node for node in review3.draft.nodes if node.kind == OntologyNodeKind.METRIC]
     assert len(metric_nodes) == 1
     assert metric_nodes[0].metadata["metric_definition"]["expression_sql"] == "SUM(AMOUNT)"
 
@@ -538,7 +528,10 @@ def test_accept_ignores_stale_drafts_from_previous_schema_generations(
 
     # 旧世代 draft(business 定義持ち)が store に残っていても、新提案の accept は成功する
     review = runtime.accept_proposal(new_proposals[0].id)
-    published_fp = runtime.profile_view("sales")[1].revision.schema_fingerprint
+    assert review.draft is not None
+    _view, published_graph = runtime.profile_view("sales")
+    assert published_graph is not None
+    published_fp = published_graph.revision.schema_fingerprint
     assert review.draft.revision.schema_fingerprint == published_fp
 
 
@@ -548,9 +541,7 @@ def test_batch_accept_creates_single_draft_for_all_proposals(
     runtime, _store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
-    qa_pairs, _ = parse_qa_workbook(
-        "qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode()
-    )
+    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
     job = service.start("sales", business_text="受注は顧客に紐づく。", qa_pairs=qa_pairs)
     finished = _wait_for_job(service, job.id)
     assert len(finished.proposal_ids) >= 3
@@ -559,20 +550,14 @@ def test_batch_accept_creates_single_draft_for_all_proposals(
 
     # すべて同じ draft revision に反映され、全提案が accepted になる
     assert {proposal.status.value for proposal in accepted} == {"accepted"}
-    assert {
-        proposal.proposal_payload.values["draft_revision_id"] for proposal in accepted
-    } == {draft.revision.id}
+    assert {proposal.proposal_payload.values["draft_revision_id"] for proposal in accepted} == {
+        draft.revision.id
+    }
     # 命名提案の業務名が合成 endpoint に上書きされない
-    entity_nodes = [
-        node for node in draft.nodes if node.kind == OntologyNodeKind.BUSINESS_ENTITY
-    ]
-    orders_entity = next(
-        node for node in entity_nodes if node.technical_name == "APP.ORDERS"
-    )
+    entity_nodes = [node for node in draft.nodes if node.kind == OntologyNodeKind.BUSINESS_ENTITY]
+    orders_entity = next(node for node in entity_nodes if node.technical_name == "APP.ORDERS")
     assert orders_entity.business_name_ja == "受注"
-    assert any(
-        edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP for edge in draft.edges
-    )
+    assert any(edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP for edge in draft.edges)
     # publish まで通る
     published = runtime.publish_ontology_revision(
         draft.revision.id, OntologyPublishRequest(etag=draft.revision.etag)
@@ -590,9 +575,7 @@ def test_rerun_clears_previous_proposals(
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
-    first = _wait_for_job(
-        service, service.start("sales", business_text="受注は顧客に紐づく。").id
-    )
+    first = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
     first_proposals = runtime.list_profile_proposals("sales")
     count_after_first = len(first_proposals)
     assert count_after_first == len(first.proposal_ids)
@@ -601,9 +584,7 @@ def test_rerun_clears_previous_proposals(
     runtime.accept_proposal(first.proposal_ids[0])
     runtime.reject_proposal(first.proposal_ids[1])
 
-    second = _wait_for_job(
-        service, service.start("sales", business_text="受注は顧客に紐づく。").id
-    )
+    second = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
     assert second.status == OntologyBuildStatus.SUCCEEDED
     # 今回分は新規に登録される(空ではない)。
     assert second.proposal_ids
@@ -618,3 +599,69 @@ def test_rerun_clears_previous_proposals(
     restored_ids = {proposal.id for proposal in restarted.list_profile_proposals("sales")}
     assert restored_ids == set(second.proposal_ids)
     assert first_ids.isdisjoint(restored_ids)
+
+
+def test_start_prunes_oldest_finished_jobs(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    from datetime import timedelta
+
+    from app.features.nl2sql.ontology_build import _MAX_FINISHED_JOBS
+    from app.features.nl2sql.ontology_models import OntologyBuildJob, utc_now
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    service = OntologyBuildService(runtime)
+
+    # 完了 job を上限 +2 件、実行中 job を 1 件直接注入する(実 job を回すと遅いため)。
+    base = utc_now()
+    for index in range(_MAX_FINISHED_JOBS + 2):
+        job = OntologyBuildJob(
+            id=f"ontology_build_old_{index:03d}",
+            profile_id="sales",
+            status=OntologyBuildStatus.SUCCEEDED,
+            finished_at=base + timedelta(seconds=index),
+        )
+        service._jobs[job.id] = job
+    running = OntologyBuildJob(
+        id="ontology_build_running",
+        profile_id="sales",
+        status=OntologyBuildStatus.RUNNING,
+    )
+    service._jobs[running.id] = running
+
+    started = service.start("sales", business_text="受注は顧客に紐づく。")
+
+    # 最古の完了 2 件だけが prune され、実行中・新規 job は保護される。
+    assert service.get("ontology_build_old_000") is None
+    assert service.get("ontology_build_old_001") is None
+    assert service.get(f"ontology_build_old_{_MAX_FINISHED_JOBS + 1:03d}") is not None
+    assert service.get(running.id) is not None
+    assert service.get(started.id) is not None
+    # worker thread の終了を待って teardown を安定させる。
+    _wait_for_job(service, started.id)
+
+
+def test_external_worker_rehydrates_persisted_build_input(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    api_service = OntologyBuildService(runtime)
+    queued = api_service.start(
+        "sales",
+        business_text="受注は顧客に紐づく。",
+        qa_pairs=[QaPair(question="顧客別売上", sql=_QA_SQL)],
+        idempotency_key="external-build-1",
+    )
+    assert queued.status == OntologyBuildStatus.QUEUED
+    persisted = store.get_job(queued.id)
+    assert persisted is not None
+    assert persisted["input_payload"]["business_text"] == "受注は顧客に紐づく。"
+
+    worker_service = OntologyBuildService(runtime)
+    finished = worker_service.run_persisted(queued.id)
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert finished.proposal_ids

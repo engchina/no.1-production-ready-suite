@@ -26,9 +26,12 @@ from .models import (
     SchemaCatalog,
     SchemaColumn,
     SchemaConstraintDetail,
+    SchemaOwnersData,
+    SchemaOwnerSummary,
     SchemaTable,
     SchemaViewDependency,
 )
+from .object_identity import parse_object_identity, qualified_object_name
 
 
 class OracleAdapterError(RuntimeError):
@@ -139,10 +142,6 @@ def _normalize_select_ai_object_list(value: Any) -> list[dict[str, Any]]:
         name = _select_ai_object_name(item)
         if not name:
             continue
-        key = name.upper()
-        if key in seen:
-            continue
-        seen.add(key)
         record = dict(item) if isinstance(item, dict) else {"name": name}
         record.setdefault("name", name)
         for owner_key in ("owner", "OWNER", "schema", "SCHEMA"):
@@ -150,6 +149,11 @@ def _normalize_select_ai_object_list(value: Any) -> list[dict[str, Any]]:
             if isinstance(owner, str) and owner.strip():
                 record.setdefault("owner", owner.strip())
                 break
+        owner = str(record.get("owner") or "").strip().upper()
+        key = f"{owner}.{name.upper()}"
+        if key in seen:
+            continue
+        seen.add(key)
         normalized.append(record)
     return normalized
 
@@ -240,17 +244,28 @@ def _select_ai_feedback_index_names(profile_name: str) -> tuple[str, str, str]:
     return safe_profile, index_name, table_name
 
 
-def _oracle_connect_kwargs(settings: Settings) -> dict[str, object]:
+def oracle_connect_kwargs(
+    settings: Settings,
+    *,
+    user: str | None = None,
+    password: str | None = None,
+) -> dict[str, object]:
     """python-oracledb connect に渡す共通 kwargs を作る。"""
     kwargs: dict[str, object] = {
-        "user": settings.oracle_user,
+        "user": user if user is not None else settings.oracle_user,
         "dsn": _oracle_connection_test_dsn(settings),
         "tcp_connect_timeout": settings.nl2sql_oracle_connect_timeout_seconds,
     }
-    if settings.oracle_password.strip():
-        kwargs["password"] = settings.oracle_password
+    resolved_password = password if password is not None else settings.oracle_password
+    if resolved_password.strip():
+        kwargs["password"] = resolved_password
     _add_wallet_kwargs(settings, kwargs)
     return kwargs
+
+
+def _oracle_connect_kwargs(settings: Settings) -> dict[str, object]:
+    """後方互換 wrapper。"""
+    return oracle_connect_kwargs(settings)
 
 
 def _oracle_connection_test_dsn(settings: Settings) -> str:
@@ -411,8 +426,42 @@ class OracleNl2SqlAdapter:
         finally:
             conn.close()
 
-    def fetch_catalog(self) -> SchemaCatalog:
+    @contextmanager
+    def user_data_connection(self) -> Iterator[Any]:
+        """認証済み actor のデータ処理にだけ共有 DeepSec END USER を使う。"""
+        if not self.settings.oracle_deepsec_enabled:
+            with self.connection() as connection:
+                yield connection
+            return
+        from app.clients.oracle_runtime import get_oracle_pool_manager
+        from app.security.request_actor import current_actor_user_id
+
+        actor_user_id = current_actor_user_id()
+        if not actor_user_id:
+            raise OracleAdapterError(
+                "DeepSec データ接続には認証済み application user が必要です。"
+            )
+        with get_oracle_pool_manager().data_connection(actor_user_id) as connection:
+            yield connection
+
+    def fetch_catalog(
+        self,
+        *,
+        include_samples: bool = True,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> SchemaCatalog:
         owner_filter, owner_binds = self._schema_owner_filter("c.owner")
+        target_filter = ""
+        target_binds: dict[str, str] = {}
+        if object_keys:
+            target_parts: list[str] = []
+            for index, (owner, object_name) in enumerate(sorted(object_keys)):
+                owner_key = f"target_owner_{index}"
+                name_key = f"target_name_{index}"
+                target_parts.append(f"(c.owner = :{owner_key} AND c.table_name = :{name_key})")
+                target_binds[owner_key] = owner.upper()
+                target_binds[name_key] = object_name.upper()
+            target_filter = " AND (" + " OR ".join(target_parts) + ")"
         sql = f"""
             SELECT
                 c.owner,
@@ -436,12 +485,12 @@ class OracleNl2SqlAdapter:
               ON cc.owner = c.owner
              AND cc.table_name = c.table_name
              AND cc.column_name = c.column_name
-            WHERE {owner_filter}
+            WHERE {owner_filter}{target_filter}
             ORDER BY c.owner, c.table_name, c.column_id
         """
         tables: dict[str, SchemaTable] = {}
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, owner_binds)
+            cursor.execute(sql, {**owner_binds, **target_binds})
             for row in cursor:
                 owner = str(row[0] or "APP")
                 table_name = str(row[1])
@@ -472,9 +521,12 @@ class OracleNl2SqlAdapter:
                         nullable=nullable,
                     )
                 )
-            self._load_constraints(cursor, tables)
-            view_dependencies = self._load_view_dependencies(cursor)
-            self._load_sample_values(cursor, tables)
+            self._load_constraints(cursor, tables, object_keys=object_keys)
+            view_dependencies = self._load_view_dependencies(cursor, object_keys=object_keys)
+            # 全 catalog refresh で全表を走査しない。sample は profile 選択時または
+            # object detail 展開時に fetch_metadata_sample_values から遅延取得する。
+            if include_samples:
+                self._load_sample_values(cursor, tables)
         catalog = SchemaCatalog(
             refreshed_at=datetime.now(UTC).isoformat(),
             tables=list(tables.values()),
@@ -483,23 +535,148 @@ class OracleNl2SqlAdapter:
         catalog.schema_fingerprint = self._schema_fingerprint(catalog)
         return catalog
 
-    def _schema_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
-        owners = [
+    def fetch_schema_owners(self) -> SchemaOwnersData:
+        """ALL_* から現在ユーザーが実際に参照できる業務 schema を列挙する。"""
+
+        allowlist = self._configured_schema_owner_allowlist()
+        sql = """
+            SELECT
+                o.owner,
+                NVL(u.oracle_maintained, 'N') AS oracle_maintained,
+                MAX(CASE WHEN o.owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')
+                         THEN 1 ELSE 0 END) AS is_current,
+                COUNT(DISTINCT CASE WHEN o.object_type = 'TABLE'
+                                    THEN o.object_name END) AS table_count,
+                COUNT(DISTINCT CASE WHEN o.object_type IN ('VIEW', 'MATERIALIZED VIEW')
+                                    THEN o.object_name END) AS view_count
+            FROM all_objects o
+            JOIN all_users u ON u.username = o.owner
+            WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+              AND o.status = 'VALID'
+            GROUP BY o.owner, NVL(u.oracle_maintained, 'N')
+            ORDER BY o.owner
+        """
+        owners: list[SchemaOwnerSummary] = []
+        excluded_maintained: set[str] = set()
+        current_owner = self.settings.oracle_user.strip().upper()
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(sql)
+            for row in cursor:
+                owner = str(row[0] or "").upper()
+                oracle_maintained = str(row[1] or "N").upper() == "Y"
+                is_current = bool(int(row[2] or 0))
+                if is_current:
+                    current_owner = owner
+                if oracle_maintained:
+                    excluded_maintained.add(owner)
+                    continue
+                if allowlist and owner not in allowlist:
+                    continue
+                owners.append(
+                    SchemaOwnerSummary(
+                        owner=owner,
+                        is_current=is_current,
+                        table_count=int(row[3] or 0),
+                        view_count=int(row[4] or 0),
+                    )
+                )
+        return SchemaOwnersData(
+            current_owner=current_owner,
+            owners=owners,
+            excluded_oracle_maintained_count=len(excluded_maintained),
+        )
+
+    def fetch_catalog_objects(self, object_keys: set[tuple[str, str]]) -> SchemaCatalog:
+        """変更された object だけを詳細取得する（Oracle bind 数を bounded に保つ）。"""
+
+        if not object_keys:
+            return SchemaCatalog(refreshed_at=datetime.now(UTC).isoformat(), tables=[])
+        tables: list[SchemaTable] = []
+        dependencies: dict[tuple[str, str, str, str], SchemaViewDependency] = {}
+        ordered = sorted(object_keys)
+        for offset in range(0, len(ordered), 250):
+            partial = self.fetch_catalog(
+                include_samples=False,
+                object_keys=set(ordered[offset : offset + 250]),
+            )
+            tables.extend(partial.tables)
+            for dependency in partial.view_dependencies:
+                key = (
+                    dependency.owner,
+                    dependency.view_name,
+                    dependency.referenced_owner,
+                    dependency.referenced_name,
+                )
+                dependencies[key] = dependency
+        catalog = SchemaCatalog(
+            refreshed_at=datetime.now(UTC).isoformat(),
+            tables=tables,
+            view_dependencies=list(dependencies.values()),
+        )
+        catalog.schema_fingerprint = self._schema_fingerprint(catalog)
+        return catalog
+
+    def fetch_schema_manifest(self) -> dict[tuple[str, str], str]:
+        """ALL_OBJECTS から軽量 change manifest だけを取得する。"""
+
+        owner_filter, owner_binds = self._schema_owner_filter("o.owner")
+        sql = f"""
+            SELECT o.owner, o.object_name, o.last_ddl_time
+            FROM all_objects o
+            WHERE {owner_filter}
+              AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+              AND o.status = 'VALID'
+            ORDER BY o.owner, o.object_name
+        """
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(sql, owner_binds)
+            return {
+                (str(owner).upper(), str(object_name).upper()): (
+                    last_ddl_time.isoformat()
+                    if hasattr(last_ddl_time, "isoformat")
+                    else str(last_ddl_time or "")
+                )
+                for owner, object_name, last_ddl_time in cursor
+            }
+
+    def catalog_fingerprint(self, catalog: SchemaCatalog) -> str:
+        """Refresh worker 用の public deterministic fingerprint。"""
+
+        return self._schema_fingerprint(catalog)
+
+    def _configured_schema_owner_allowlist(self) -> set[str]:
+        return {
             owner.strip().upper()
             for owner in self.settings.nl2sql_schema_owner_allowlist
             if owner.strip()
-        ]
-        if not owners and self.settings.oracle_user.strip():
-            owners = [self.settings.oracle_user.strip().upper()]
-        if not owners:
-            return f"{column_sql} = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')", {}
-        binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(set(owners)))}
-        placeholders = ", ".join(f":{name}" for name in binds)
-        return f"{column_sql} IN ({placeholders})", binds
+        }
 
-    def _load_constraints(self, cursor: Any, tables: dict[str, SchemaTable]) -> None:
+    def _schema_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
+        owners = self._configured_schema_owner_allowlist()
+        business_owner_filter = (
+            "EXISTS (SELECT 1 FROM all_users nl2sql_owner "
+            f"WHERE nl2sql_owner.username = {column_sql} "
+            "AND NVL(nl2sql_owner.oracle_maintained, 'N') = 'N')"
+        )
+        if not owners:
+            return business_owner_filter, {}
+        binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(owners))}
+        placeholders = ", ".join(f":{name}" for name in binds)
+        return f"{business_owner_filter} AND {column_sql} IN ({placeholders})", binds
+
+    def _load_constraints(
+        self,
+        cursor: Any,
+        tables: dict[str, SchemaTable],
+        *,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> None:
         owner_filter, owner_binds = self._schema_owner_filter("uc.owner")
-        cursor.execute(f"""
+        target_filter, target_binds = self._object_key_filter(
+            "uc.owner", "uc.table_name", object_keys, prefix="constraint_target"
+        )
+        cursor.execute(
+            f"""
             SELECT
                 uc.table_name,
                 uc.constraint_name,
@@ -527,12 +704,15 @@ class OracleNl2SqlAdapter:
              AND rucc.table_name = ruc.table_name
              AND rucc.position = ucc.position
             WHERE {owner_filter}
+              {target_filter}
               AND uc.constraint_type IN ('P', 'R', 'U', 'C')
             GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type,
                      uc.owner, ruc.owner, ruc.table_name,
                      uc.delete_rule, uc.status, uc.deferrable
             ORDER BY uc.table_name, uc.constraint_name
-            """, owner_binds)
+            """,
+            {**owner_binds, **target_binds},
+        )
         for row in cursor:
             table_name, constraint_name, constraint_type, columns = row[:4]
             owner = str(row[4]) if len(row) > 4 and row[4] else "APP"
@@ -565,9 +745,18 @@ class OracleNl2SqlAdapter:
                 )
             )
 
-    def _load_view_dependencies(self, cursor: Any) -> list[SchemaViewDependency]:
+    def _load_view_dependencies(
+        self,
+        cursor: Any,
+        *,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> list[SchemaViewDependency]:
         owner_filter, owner_binds = self._schema_owner_filter("d.owner")
-        cursor.execute(f"""
+        target_filter, target_binds = self._object_key_filter(
+            "d.owner", "d.name", object_keys, prefix="dependency_target"
+        )
+        cursor.execute(
+            f"""
             SELECT
                 d.owner AS owner_name,
                 d.name AS view_name,
@@ -578,8 +767,11 @@ class OracleNl2SqlAdapter:
             WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')
               AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND {owner_filter}
+              {target_filter}
             ORDER BY d.name, d.referenced_owner, d.referenced_name
-            """, owner_binds)
+            """,
+            {**owner_binds, **target_binds},
+        )
         return [
             SchemaViewDependency(
                 owner=str(owner),
@@ -590,6 +782,30 @@ class OracleNl2SqlAdapter:
             )
             for owner, view_name, referenced_owner, referenced_name, referenced_type in cursor
         ]
+
+    @staticmethod
+    def _object_key_filter(
+        owner_column: str,
+        name_column: str,
+        object_keys: set[tuple[str, str]] | None,
+        *,
+        prefix: str,
+    ) -> tuple[str, dict[str, str]]:
+        """変更 object の metadata 関連 query を同じ bounded batch に限定する。"""
+
+        if not object_keys:
+            return "", {}
+        binds: dict[str, str] = {}
+        clauses: list[str] = []
+        for index, (owner, object_name) in enumerate(sorted(object_keys)):
+            owner_key = f"{prefix}_owner_{index}"
+            name_key = f"{prefix}_name_{index}"
+            binds[owner_key] = owner.upper()
+            binds[name_key] = object_name.upper()
+            clauses.append(
+                f"({owner_column} = :{owner_key} AND {name_column} = :{name_key})"
+            )
+        return "AND (" + " OR ".join(clauses) + ")", binds
 
     def _schema_fingerprint(self, catalog: SchemaCatalog) -> str:
         payload = {
@@ -656,9 +872,16 @@ class OracleNl2SqlAdapter:
         samples: dict[str, dict[str, list[str]]] = {}
         warnings: list[str] = []
         try:
-            with self.connection() as conn, conn.cursor() as cursor:
+            with self.user_data_connection() as conn, conn.cursor() as cursor:
                 for target in targets:
-                    object_name = _strict_sql_name(str(target.get("object_name") or ""))
+                    raw_object_name = str(target.get("object_name") or "")
+                    raw_owner = str(target.get("owner") or "")
+                    identity = parse_object_identity(
+                        raw_object_name,
+                        default_owner=raw_owner or self.settings.oracle_user,
+                    )
+                    owner = _strict_sql_name(identity.owner)
+                    object_name = _strict_sql_name(identity.object_name)
                     requested_columns = [
                         _strict_sql_name(str(column))
                         for column in target.get("columns", [])
@@ -666,11 +889,11 @@ class OracleNl2SqlAdapter:
                     ]
                     cursor.execute(
                         """
-                        SELECT column_name FROM user_tab_columns
-                        WHERE table_name = :object_name
+                        SELECT column_name FROM all_tab_columns
+                        WHERE owner = :owner AND table_name = :object_name
                         ORDER BY column_id
                         """,
-                        {"object_name": object_name},
+                        {"owner": owner, "object_name": object_name},
                     )
                     available_columns = {str(row[0]).upper() for row in cursor}
                     columns = requested_columns or list(available_columns)
@@ -685,7 +908,8 @@ class OracleNl2SqlAdapter:
                         warnings.append(f"{object_name}: サンプル取得可能な列がありません。")
                         continue
                     object_samples: dict[str, list[str]] = {}
-                    quoted_object = _quote_identifier(object_name)
+                    qualified_name = qualified_object_name(owner, object_name)
+                    quoted_object = f"{_quote_identifier(owner)}.{_quote_identifier(object_name)}"
                     for column in columns:
                         try:
                             quoted_column = _quote_identifier(column)
@@ -704,10 +928,10 @@ class OracleNl2SqlAdapter:
                                 object_samples[column] = values
                         except Exception as exc:
                             warnings.append(
-                                f"{object_name}.{column}: サンプル取得に失敗しました: {exc}"
+                                f"{qualified_name}.{column}: サンプル取得に失敗しました: {exc}"
                             )
                     if object_samples:
-                        samples[object_name] = object_samples
+                        samples[qualified_name] = object_samples
         except Exception as exc:
             if isinstance(exc, OracleAdapterError):
                 raise
@@ -715,7 +939,7 @@ class OracleNl2SqlAdapter:
         return samples, warnings
 
     def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.user_data_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
             columns = [description[0] for description in cursor.description or []]
             rows: list[dict[str, Any]] = []
@@ -732,7 +956,7 @@ class OracleNl2SqlAdapter:
         statement_id = f"NL2SQL_{hashlib.sha256(sql.encode()).hexdigest()[:20].upper()}"
         normalized = sql.strip().rstrip(";")
         try:
-            with self.connection() as conn, conn.cursor() as cursor:
+            with self.user_data_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM PLAN_TABLE WHERE statement_id = :statement_id",
                     {"statement_id": statement_id},
@@ -964,57 +1188,18 @@ class OracleNl2SqlAdapter:
         atomic=True は all-or-nothing、atomic=False は SQL Assist 互換の部分成功
         (成功が 1 件でもあれば commit、全滅なら rollback)。
         """
-        results: list[dict[str, Any]] = []
-        ok = True
-        success_count = 0
-        with self.connection() as conn, conn.cursor() as cursor:
-            with suppress(Exception):
-                cursor.callproc("dbms_output.enable")
-            for index, statement in enumerate(statements, start=1):
-                started = datetime.now(UTC)
-                statement_type = self._admin_statement_type(statement)
-                normalized = self._normalize_admin_statement(statement)
-                try:
-                    cursor.execute(normalized)
-                    row_count = getattr(cursor, "rowcount", None)
-                    message = self._fetch_dbms_output(cursor) or self._admin_success_message(
-                        statement_type,
-                        row_count,
-                    )
-                    elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
-                    success_count += 1
-                    results.append(
-                        {
-                            "index": index,
-                            "statement_type": statement_type,
-                            "status": "success",
-                            "sql": normalized,
-                            "row_count": row_count if isinstance(row_count, int) else None,
-                            "message": message,
-                            "elapsed_ms": elapsed_ms,
-                        }
-                    )
-                except Exception as exc:
-                    ok = False
-                    elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
-                    results.append(
-                        {
-                            "index": index,
-                            "statement_type": statement_type,
-                            "status": "error",
-                            "sql": normalized,
-                            "row_count": None,
-                            "message": "",
-                            "elapsed_ms": elapsed_ms,
-                            "error_message": str(exc),
-                        }
-                    )
-            committed = ok if atomic else success_count > 0
-            if committed:
-                conn.commit()
-            else:
-                conn.rollback()
-        return results
+        from app.clients.oracle_statement_executor import oracle_statement_executor
+
+        with self.connection() as conn:
+            return oracle_statement_executor.execute(
+                conn,
+                statements,
+                atomic=atomic,
+                normalize=self._normalize_admin_statement,
+                statement_type=self._admin_statement_type,
+                output_reader=self._fetch_dbms_output,
+                success_message=self._admin_success_message,
+            )
 
     def import_tabular_table(
         self,
@@ -1351,6 +1536,12 @@ class OracleNl2SqlAdapter:
             try:
                 cursor.execute(query, {"limit": max(1, min(int(limit), 50))})
                 rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+                # python-oracledb の CLOB は接続に紐づく locator なので、接続を閉じる前に
+                # 文字列へ materialize する。接続 context 外で read() すると
+                # DPY-1001 / DPI-1010 になる。
+                materialized_rows = [
+                    tuple(_coerce_result_value(value) for value in row) for row in rows
+                ]
             except Exception as exc:
                 message = str(exc)
                 if "ORA-00942" in message or "ORA-04043" in message:
@@ -1362,7 +1553,7 @@ class OracleNl2SqlAdapter:
                     f"Select AI feedback entries の取得に失敗しました: {message}"
                 ) from exc
         items: list[dict[str, Any]] = []
-        for row in rows:
+        for row in materialized_rows:
             attributes_text = _coerce_text(row[3] if len(row) > 3 else "")
             try:
                 attributes = json.loads(attributes_text) if attributes_text.strip() else {}
@@ -1708,8 +1899,7 @@ class OracleNl2SqlAdapter:
                     cursor,
                     name="user_cloud_ai_conversation_prompts",
                     sql=(
-                        "SELECT CONVERSATION_ID "
-                        "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS WHERE 1 = 0"
+                        "SELECT CONVERSATION_ID FROM USER_CLOUD_AI_CONVERSATION_PROMPTS WHERE 1 = 0"
                     ),
                     ok_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できます。",
                     warning_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できません。",
@@ -1930,9 +2120,7 @@ class OracleNl2SqlAdapter:
             overall = statuses[-1].lower()
         else:
             overall = "unknown"
-        message = next(
-            (entry["error_message"] for entry in entries if entry["error_message"]), ""
-        )
+        message = next((entry["error_message"] for entry in entries if entry["error_message"]), "")
         return {
             "runtime": "oracle",
             "status": overall,
@@ -2193,6 +2381,8 @@ class OracleNl2SqlAdapter:
             ),
         }
         agent_attributes = {
+            "profile_name": profile_name,
+            "role": description.strip() or "Oracle SQL による業務データ分析を支援します。",
             "tools": [tool_name],
         }
         task_attributes = {
@@ -2735,7 +2925,9 @@ class OracleNl2SqlAdapter:
         return self._oracledb
 
     def _init_client(self, oracledb: Any) -> None:
-        if self._client_initialized or not self.settings.oracle_client_lib_dir:
+        if self._client_initialized or self.settings.oracle_driver_mode == "thin":
+            return
+        if not self.settings.oracle_client_lib_dir:
             return
         init_oracle_client = getattr(oracledb, "init_oracle_client", None)
         if callable(init_oracle_client):

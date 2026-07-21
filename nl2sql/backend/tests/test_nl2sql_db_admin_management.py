@@ -76,7 +76,8 @@ class _FakeStatementsAdapter:
         self.calls.append((statements, atomic))
         return self.results
 
-    def fetch_catalog(self) -> SchemaCatalog:
+    def fetch_catalog(self, *, include_samples: bool = True) -> SchemaCatalog:
+        del include_samples
         return SchemaCatalog(refreshed_at="2026-07-10T00:00:00+00:00", tables=[])
 
 
@@ -218,8 +219,8 @@ def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> N
     assert len(data.profiles) == 1
     profile = data.profiles[0]
     assert profile.name == "FINANCE_SELECT_AI"
-    assert profile.tables == ["INVOICES"]
-    assert profile.views == ["V_INVOICE_SUMMARY"]
+    assert profile.tables == ["APP.INVOICES"]
+    assert profile.views == ["APP.V_INVOICE_SUMMARY"]
     assert profile.region == "ap-osaka-1"
     assert profile.model == "cohere.command-r-plus"
     assert profile.embedding_model == "cohere.embed-v4.0"

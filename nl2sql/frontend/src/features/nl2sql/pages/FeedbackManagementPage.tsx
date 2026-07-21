@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code2, DatabaseZap, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Code2, DatabaseZap, Link2, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 import {
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
@@ -18,13 +21,15 @@ import { engineLabel } from "../labels";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import type {
   FeedbackData,
+  FeedbackClearData,
   FeedbackEntriesData,
   FeedbackIndexData,
   FeedbackRating,
+  FeedbackListData,
+  FeedbackRecord,
   FeedbackSearchConfigData,
   FeedbackVectorEntry,
-  HistoryData,
-  HistoryItem,
+  Nl2SqlProfile,
   SelectAiDbProfile,
   SelectAiDbProfilesData,
   SelectAiFeedbackEntriesData,
@@ -52,7 +57,7 @@ function profileOptionLabel(profile: SelectAiDbProfile) {
   return profile.owner ? `${profile.name} (${profile.owner})` : profile.name;
 }
 
-function feedbackLabel(item: HistoryItem) {
+function feedbackLabel(item: FeedbackRecord) {
   if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
   if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
   return t("feedbackManagement.appFeedback.unrated");
@@ -68,19 +73,29 @@ function roundThreshold(value: number) {
 
 export function FeedbackManagementPage() {
   const confirm = useConfirm();
-  const [activeView, setActiveView] = useState<FeedbackManagementView>("entries");
+  const [searchParams] = useSearchParams();
+  const [activeView, setActiveView] = useState<FeedbackManagementView>(
+    searchParams.get("tab") === "appFeedback" ? "appFeedback" : "entries"
+  );
   const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
   const [profileName, setProfileName] = useState("");
   const [feedback, setFeedback] = useState<SelectAiFeedbackEntriesData | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.9);
   const [matchLimit, setMatchLimit] = useState(3);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [selectedFeedbackId, setSelectedFeedbackId] = useState("");
+  const [history, setHistory] = useState<FeedbackRecord[]>([]);
+  const [appProfiles, setAppProfiles] = useState<Nl2SqlProfile[]>([]);
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState(searchParams.get("history_id") || "");
   const [feedbackRating, setFeedbackRating] = useState<FeedbackRating>("good");
   const [feedbackComment, setFeedbackComment] = useState("");
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | FeedbackRating | "unrated">("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
+  const [appProfileFilter, setAppProfileFilter] = useState("");
+  const [feedbackCursor, setFeedbackCursor] = useState("");
+  const [feedbackCursorStack, setFeedbackCursorStack] = useState<string[]>([]);
+  const [feedbackPage, setFeedbackPage] = useState(1);
+  const [feedbackTotal, setFeedbackTotal] = useState(0);
+  const [feedbackNextCursor, setFeedbackNextCursor] = useState("");
   const [feedbackIndex, setFeedbackIndex] = useState<FeedbackIndexData | null>(null);
   const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntriesData | null>(null);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
@@ -121,13 +136,22 @@ export function FeedbackManagementPage() {
       `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(name)}&limit=50`
     );
 
+  const fetchAppFeedback = (cursor = "") => {
+    const params = new URLSearchParams({ limit: "20", rating: feedbackFilter });
+    if (cursor) params.set("cursor", cursor);
+    if (appProfileFilter) params.set("profile_id", appProfileFilter);
+    if (feedbackSearch.trim()) params.set("q", feedbackSearch.trim());
+    return apiGet<FeedbackListData>(`/api/nl2sql/feedback?${params.toString()}`);
+  };
+
   const load = async () => {
     setLoading("load");
     setMessage("");
     try {
-      const [dbProfileData, historyData, indexData, entriesData, configData] = await Promise.all([
+      const [dbProfileData, appProfileData, appFeedbackData, indexData, entriesData, configData] = await Promise.all([
         apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
-        apiGet<HistoryData>("/api/nl2sql/history"),
+        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+        fetchAppFeedback(),
         apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
         apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
         apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
@@ -143,12 +167,18 @@ export function FeedbackManagementPage() {
       setProfileName(nextProfile);
       setFeedback(feedbackData);
       setSelectedIndex(0);
-      setHistory(historyData.items);
+      setAppProfiles(appProfileData);
+      setHistory(appFeedbackData.items);
+      setFeedbackTotal(appFeedbackData.total);
+      setFeedbackNextCursor(appFeedbackData.next_cursor);
+      setFeedbackCursor("");
+      setFeedbackCursorStack([]);
+      setFeedbackPage(1);
       setFeedbackIndex(indexData);
       setFeedbackEntries(entriesData);
       setFeedbackConfig(configData);
       setSelectedFeedbackId((current) =>
-        historyData.items.some((item) => item.id === current) ? current : historyData.items[0]?.id || ""
+        appFeedbackData.items.some((item) => item.id === current) ? current : appFeedbackData.items[0]?.id || ""
       );
     } catch (err) {
       setMessageTone("error");
@@ -172,6 +202,49 @@ export function FeedbackManagementPage() {
     } finally {
       setLoading("");
     }
+  };
+
+  const refreshAppFeedback = async (
+    cursor = "",
+    direction: "reset" | "next" | "prev" = "reset"
+  ) => {
+    setLoading("app-feedback-load");
+    setMessage("");
+    try {
+      const data = await fetchAppFeedback(cursor);
+      setHistory(data.items);
+      setFeedbackTotal(data.total);
+      setFeedbackNextCursor(data.next_cursor);
+      setSelectedFeedbackId((current) =>
+        data.items.some((item) => item.id === current) ? current : data.items[0]?.id || ""
+      );
+      if (direction === "reset") {
+        setFeedbackCursor("");
+        setFeedbackCursorStack([]);
+        setFeedbackPage(1);
+      } else {
+        setFeedbackCursor(cursor);
+        setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
+      }
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const nextAppFeedbackPage = () => {
+    if (!feedbackNextCursor) return;
+    setFeedbackCursorStack((current) => [...current, feedbackCursor]);
+    void refreshAppFeedback(feedbackNextCursor, "next");
+  };
+
+  const previousAppFeedbackPage = () => {
+    const previous = feedbackCursorStack.at(-1);
+    if (previous === undefined) return;
+    setFeedbackCursorStack((current) => current.slice(0, -1));
+    void refreshAppFeedback(previous, "prev");
   };
 
   const changeProfile = (nextProfile: string) => {
@@ -240,9 +313,33 @@ export function FeedbackManagementPage() {
         rating: feedbackRating,
         comment: feedbackComment.trim(),
       });
-      await load();
+      await refreshAppFeedback();
       setMessageTone("success");
       setMessage(t("feedbackManagement.appFeedback.saved"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const clearAppFeedback = async () => {
+    if (!selectedAppFeedback) return;
+    const ok = await confirm({
+      title: t("feedbackManagement.appFeedback.clearTitle"),
+      description: t("feedbackManagement.appFeedback.clearDescription"),
+      confirmLabel: t("feedbackManagement.appFeedback.clear"),
+      tone: "danger",
+    });
+    if (!ok) return;
+    setLoading("app-feedback-clear");
+    setMessage("");
+    try {
+      await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
+      await refreshAppFeedback();
+      setMessageTone("success");
+      setMessage(t("feedbackManagement.appFeedback.cleared"));
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
@@ -377,7 +474,7 @@ export function FeedbackManagementPage() {
               emphasis: true,
               testId: "feedback-management-entry-count",
             },
-            { label: t("feedbackManagement.metric.appFeedback"), value: String(history.length) },
+            { label: t("feedbackManagement.metric.appFeedback"), value: String(feedbackTotal) },
             { label: t("feedbackManagement.metric.indexed"), value: String(feedbackEntries?.indexed_count ?? 0) },
             { label: t("feedbackManagement.metric.profile"), value: profileName || "-" },
           ]}
@@ -602,6 +699,29 @@ export function FeedbackManagementPage() {
                       ))}
                     </select>
                   </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-md border border-border bg-card p-3">
+                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.profile")}</p>
+                      <p className="mt-1 break-words text-sm font-semibold text-foreground">{selectedAppFeedback.profile_name || selectedAppFeedback.profile_id || "-"}</p>
+                      <p className="mt-1 break-words font-mono text-xs text-muted">{selectedAppFeedback.profile_id || "-"}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-card p-3">
+                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.createdAt")}</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">{formatDateTime(selectedAppFeedback.feedback_updated_at || selectedAppFeedback.created_at)}</p>
+                      {selectedAppFeedback.training_status && (
+                        <div className="mt-2"><StatusBadge variant="info" label={t(`qcm.candidates.status.${selectedAppFeedback.training_status}`)} /></div>
+                      )}
+                    </div>
+                  </div>
+                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                    <span>{t("feedbackManagement.appFeedback.generatedSql")}</span>
+                    <textarea
+                      value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
+                      readOnly
+                      rows={5}
+                      className="min-h-32 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+                    />
+                  </label>
                   <label className="grid gap-1 text-sm font-medium text-foreground">
                     <span>{t("feedbackManagement.appFeedback.rating")}</span>
                     <select
@@ -624,16 +744,31 @@ export function FeedbackManagementPage() {
                       placeholder={t("nl2sql.feedback.commentPlaceholder")}
                     />
                   </label>
-                  <Button
-                    type="button"
-                    size="sm"
-                    loading={loading === "app-feedback"}
-                    disabled={loading === "app-feedback"}
-                    onClick={() => void saveAppFeedback()}
-                  >
-                    <Save size={15} aria-hidden="true" />
-                    <span>{t("feedbackManagement.appFeedback.save")}</span>
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      loading={loading === "app-feedback"}
+                      disabled={loading === "app-feedback"}
+                      onClick={() => void saveAppFeedback()}
+                    >
+                      <Save size={15} aria-hidden="true" />
+                      <span>{t("feedbackManagement.appFeedback.save")}</span>
+                    </Button>
+                    <Button type="button" variant="danger" size="sm" loading={loading === "app-feedback-clear"} onClick={() => void clearAppFeedback()}>
+                      <Trash2 size={15} aria-hidden="true" />
+                      <span>{t("feedbackManagement.appFeedback.clear")}</span>
+                    </Button>
+                    {selectedAppFeedback.feedback_rating === "good" && (
+                      <a
+                        href={`${APP_ROUTES.questionClassifierModels}?tab=candidates&history_id=${encodeURIComponent(selectedAppFeedback.id)}`}
+                        className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
+                      >
+                        <Link2 size={15} aria-hidden="true" />
+                        <span>{t("feedbackManagement.appFeedback.openCandidate")}</span>
+                      </a>
+                    )}
+                  </div>
                 </>
               ) : (
                 <EmptyState
@@ -645,7 +780,7 @@ export function FeedbackManagementPage() {
 
             <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4">
               <DbObjectPanelHeader title={t("feedbackManagement.appFeedback.historyList")} icon={MessageSquareText} />
-              <div className="grid gap-3 md:grid-cols-[1fr_12rem]">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end">
                 <label className="grid gap-1 text-sm font-medium text-foreground">
                   <span>{t("feedbackManagement.appFeedback.search")}</span>
                   <input
@@ -671,6 +806,24 @@ export function FeedbackManagementPage() {
                     <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
                   </select>
                 </label>
+                <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.profileFilter")}</span>
+                  <select
+                    aria-label={t("feedbackManagement.appFeedback.profileFilter")}
+                    value={appProfileFilter}
+                    onChange={(event) => setAppProfileFilter(event.currentTarget.value)}
+                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  >
+                    <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
+                    {appProfiles.filter((profile) => !profile.archived).map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <Button type="button" variant="secondary" size="sm" loading={loading === "app-feedback-load"} onClick={() => void refreshAppFeedback()}>
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
+                </Button>
               </div>
               <div className="grid gap-2">
                 {appFeedbackItems.length > 0 ? (
@@ -688,6 +841,13 @@ export function FeedbackManagementPage() {
                     hint={t("feedbackManagement.appFeedback.noMatchesHint")}
                   />
                 )}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
+                <span className="text-sm text-muted">{t("feedbackManagement.appFeedback.page", { page: feedbackPage, total: feedbackTotal })}</span>
+                <div className="flex gap-2">
+                  <Button type="button" variant="secondary" size="sm" disabled={feedbackCursorStack.length === 0} onClick={previousAppFeedbackPage}>{t("qcm.training.pagination.prev")}</Button>
+                  <Button type="button" variant="secondary" size="sm" disabled={!feedbackNextCursor} onClick={nextAppFeedbackPage}>{t("qcm.training.pagination.next")}</Button>
+                </div>
               </div>
             </section>
           </DbObjectManagementPanelShell>
@@ -956,7 +1116,7 @@ function FeedbackHistoryRow({
   selected,
   onSelect,
 }: {
-  item: HistoryItem;
+  item: FeedbackRecord;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -974,6 +1134,8 @@ function FeedbackHistoryRow({
         <span className="flex flex-wrap gap-2">
           <StatusBadge variant="neutral" label={engineLabel(item.engine)} />
           <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
+          {item.profile_name && <StatusBadge variant="info" label={item.profile_name} />}
+          {item.training_status && <StatusBadge variant="neutral" label={t(`qcm.candidates.status.${item.training_status}`)} />}
           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
         </span>
       </span>

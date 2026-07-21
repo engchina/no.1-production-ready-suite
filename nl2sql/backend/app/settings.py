@@ -1,14 +1,18 @@
 """サービス設定。共通基底 BaseServiceSettings を継承し、ドメイン設定を足す。"""
 
+from __future__ import annotations
+
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from pr_backend_core.config import BaseServiceSettings
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
+logger = logging.getLogger(__name__)
 
 
 class EnterpriseAiConfiguredModel(BaseModel):
@@ -22,7 +26,8 @@ class EnterpriseAiConfiguredModel(BaseModel):
 class _PersistedEnterpriseAiSettings(BaseModel):
     endpoint: str = ""
     project_ocid: str = ""
-    api_key: str = ""
+    # v1 読み込み互換専用。v2 の writer は secret を JSON へ出力しない。
+    api_key: str | None = None
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     default_model_id: str = ""
     api_path: str = "/responses"
@@ -52,6 +57,13 @@ class _PersistedModelSettings(BaseModel):
         default_factory=_PersistedGenerativeAiSettings
     )
 
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: int) -> int:
+        if value not in {1, 2}:
+            raise ValueError("model-settings.json の version は 1 または 2 が必要です。")
+        return value
+
 
 class Settings(BaseServiceSettings):
     """サービス固有設定。
@@ -60,19 +72,28 @@ class Settings(BaseServiceSettings):
     """
 
     service_name: str = "production-ready-nl2sql"
+    # 参考実装互換の DEBUG。認証 bypass は ENVIRONMENT=local のときだけ許可する。
+    debug: bool = False
     enable_metrics: bool = True
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""
+    # Deep Data Security の local END USER は python-oracledb Thin 接続を使う。
+    # 既存環境との互換性のため DeepSec 無効時は thick を既定に保つ。
+    oracle_driver_mode: str = "thick"
     oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
     oracle_wallet_dir: str = ""
     oracle_wallet_password: str = ""
+    oracle_deepsec_enabled: bool = False
+    oracle_deepsec_end_user: str = "NL2SQL_APP_END_USER"
+    oracle_deepsec_end_user_password: str = ""
     oracle_adb_ocid: str = ""
     oracle_adb_region: str = ""
     oci_region: str = ""
     oci_compartment_id: str = ""
     oci_config_file: str = "~/.oci/config"
-    oci_config_profile: str = "DEFAULT"
+    # OCI_CONFIG_PROFILE が正本。空の場合だけ非推奨の OCI_PROFILE へ fallback する。
+    oci_config_profile: str = ""
     oci_profile: str = "DEFAULT"
     oci_auth_mode: str = "config_file"
     oci_user_ocid: str = ""
@@ -115,9 +136,29 @@ class Settings(BaseServiceSettings):
     nl2sql_default_row_limit: int = 100
     # deterministic: local/CI 用 mock, oracle: python-oracledb 経由で Oracle / Select AI を呼ぶ。
     nl2sql_runtime_mode: str = "deterministic"
-    # memory: local/CI 用, oracle: Oracle JSON CLOB table へ profile/job/history 等を保存。
-    nl2sql_persistence_mode: str = "memory"
+    # oracle が既定。memory は local/CI で明示指定する非永続モード。
+    nl2sql_persistence_mode: str = "oracle"
     nl2sql_oracle_state_table: str = "NL2SQL_STATE_STORE"
+    # incremental: entity 単位 repository（production 既定）、legacy_snapshot: 移行前互換。
+    nl2sql_state_backend: str = "incremental"
+    nl2sql_migration_mirror_enabled: bool = False
+    nl2sql_cache_ttl_seconds: float = 5.0
+    nl2sql_profile_cache_max_entries: int = 1000
+    nl2sql_schema_object_cache_max_entries: int = 500
+    nl2sql_ontology_graph_cache_max_revisions: int = 3
+    nl2sql_ontology_graph_cache_max_megabytes: int = 256
+    nl2sql_schema_refresh_worker_enabled: bool = True
+    nl2sql_schema_refresh_lease_seconds: float = 900.0
+    # Ontology worker / reasoning。production では external worker + Oracle RDF network を指定する。
+    nl2sql_ontology_worker_mode: str = "inprocess"
+    nl2sql_ontology_worker_poll_seconds: float = 1.0
+    nl2sql_ontology_worker_claim_timeout_seconds: float = 900.0
+    nl2sql_ontology_reasoning_profile: str = "owl2rl"
+    nl2sql_ontology_shacl_enabled: bool = True
+    nl2sql_ontology_rdf_network_owner: str = ""
+    nl2sql_ontology_rdf_network_name: str = ""
+    nl2sql_ontology_profile_confirmation_required: bool = True
+    nl2sql_ontology_confirmation_ttl_seconds: int = 900
     # ユーザ要望により Oracle Select AI / Select AI Agent を NL2SQL エンジンとして同時サポートする。
     # local / CI では deterministic adapter、実運用では Oracle DB adapter に差し替える。
     nl2sql_select_ai_enabled: bool = True
@@ -139,9 +180,92 @@ class Settings(BaseServiceSettings):
     nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"
     nl2sql_feedback_vector_index: str = "NL2SQL_FEEDBACK_VEC_IDX"
 
+    # アプリケーション認証/RBAC。local/CI は APP_AUTH_ENABLED=false を明示する。
+    app_auth_enabled: bool = True
+    app_auth_cookie_secure: bool = False
+    app_auth_session_cookie_name: str = "nl2sql_session"
+    app_auth_csrf_cookie_name: str = "nl2sql_csrf"
+    app_auth_idle_timeout_minutes: int = 30
+    app_auth_absolute_timeout_hours: int = 12
+    app_auth_failed_login_limit: int = 5
+    app_auth_lockout_minutes: int = 15
+    app_auth_password_min_length: int = 12
+    app_auth_password_max_length: int = 128
+    app_auth_argon2_time_cost: int = 3
+    app_auth_argon2_memory_kib: int = 65536
+    app_auth_argon2_parallelism: int = 4
+
+    _environment_enterprise_ai_api_key: str = PrivateAttr(default="")
+    _model_secret_source: str = PrivateAttr(default="missing")
+    _legacy_model_secret_detected: bool = PrivateAttr(default=False)
+    _model_secret_state_initialized: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="after")
+    def validate_security_boundaries(self) -> Settings:
+        """非 local 環境で debug bypass と非 Secure cookie を fail-closed にする。"""
+        if self.environment.strip().lower() == "local":
+            return self
+        if self.debug:
+            raise ValueError("非 local 環境では DEBUG=true を指定できません。")
+        if self.app_auth_enabled and not self.app_auth_cookie_secure:
+            raise ValueError(
+                "非 local 環境で認証を有効にする場合は APP_AUTH_COOKIE_SECURE=true が必要です。"
+            )
+        return self
+
+    @property
+    def local_debug_enabled(self) -> bool:
+        """local 開発だけで有効になる fail-closed debug mode。"""
+        return self.debug and self.environment.strip().lower() == "local"
+
+    @property
+    def resolved_oci_config_profile(self) -> str:
+        """正式な OCI_CONFIG_PROFILE と旧 OCI_PROFILE を一か所で解決する。"""
+        return self.oci_config_profile.strip() or self.oci_profile.strip() or "DEFAULT"
+
+    @property
+    def model_secret_source(self) -> str:
+        """Enterprise AI API Key の実効的な取得元。"""
+        return self._model_secret_source
+
+    @property
+    def legacy_model_secret_detected(self) -> bool:
+        """model-settings.json に旧 secret field が残っているか。"""
+        return self._legacy_model_secret_detected
+
+    def prepare_model_secret_state(self) -> None:
+        """JSON 再読込前に環境由来 secret を基準値へ戻す。"""
+        if not self._model_secret_state_initialized:
+            self._environment_enterprise_ai_api_key = self.oci_enterprise_ai_api_key.strip()
+            self._model_secret_state_initialized = True
+        self.oci_enterprise_ai_api_key = self._environment_enterprise_ai_api_key
+        self._model_secret_source = (
+            "environment" if self._environment_enterprise_ai_api_key else "missing"
+        )
+        self._legacy_model_secret_detected = False
+
+    def set_runtime_enterprise_ai_api_key(self, api_key: str) -> None:
+        """原子的 .env 更新後の secret 状態を現在プロセスへ反映する。"""
+        normalized = api_key.strip()
+        self._environment_enterprise_ai_api_key = normalized
+        self._model_secret_state_initialized = True
+        self.oci_enterprise_ai_api_key = normalized
+        self._model_secret_source = "environment" if normalized else "missing"
+        self._legacy_model_secret_detected = False
+
+    def apply_legacy_enterprise_ai_api_key(self, api_key: str, *, detected: bool) -> None:
+        """v1 JSON secret を環境未設定時だけ一時的に runtime へ適用する。"""
+        normalized = api_key.strip()
+        self._legacy_model_secret_detected = detected
+        if not self._environment_enterprise_ai_api_key and normalized:
+            self.oci_enterprise_ai_api_key = normalized
+            self._model_secret_source = "legacy_json"
+
     @property
     def resolved_oracle_wallet_dir(self) -> str:
-        """RAG と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        """driver mode に応じた Wallet 配置先を返す。"""
+        if self.oracle_driver_mode.strip().lower() == "thin":
+            return self.oracle_wallet_dir.strip()
         client_lib_dir = self.oracle_client_lib_dir.strip()
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
@@ -157,6 +281,14 @@ class Settings(BaseServiceSettings):
     def normalize_model_settings_file(cls, value: str) -> str:
         """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
+
+    @field_validator("oracle_driver_mode")
+    @classmethod
+    def validate_oracle_driver_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"thin", "thick"}:
+            raise ValueError("ORACLE_DRIVER_MODE は thin または thick を指定してください。")
+        return normalized
 
 
 _MODEL_SETTINGS_STATE: dict[str, int | str | None] = {"path": None, "mtime_ns": None}
@@ -267,6 +399,7 @@ def resolve_model_settings_file(path_value: str) -> Path:
 
 def load_persisted_model_settings(settings: Settings) -> None:
     """UI 保存済みのモデル設定 JSON があれば Settings へ上書き適用する。"""
+    settings.prepare_model_secret_state()
     path = resolve_model_settings_file(settings.model_settings_file)
     if not path.is_file():
         _remember_model_settings_file(path, None)
@@ -280,6 +413,11 @@ def load_persisted_model_settings(settings: Settings) -> None:
         raise ValueError(f"モデル設定ファイルを読み込めません: {path}") from exc
 
     _apply_persisted_model_settings(settings, persisted)
+    if settings.legacy_model_secret_detected:
+        logger.warning(
+            "legacy_model_secret_detected",
+            extra={"warning_code": "MODEL_SETTINGS_LEGACY_SECRET"},
+        )
     _remember_model_settings_file(path, stat_result.st_mtime_ns)
 
 
@@ -307,7 +445,11 @@ def _apply_persisted_model_settings(
 
     settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint
     settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
-    settings.oci_enterprise_ai_api_key = enterprise_ai.api_key
+    legacy_secret = (enterprise_ai.api_key or "").strip()
+    settings.apply_legacy_enterprise_ai_api_key(
+        legacy_secret if persisted.version == 1 else "",
+        detected=bool(legacy_secret),
+    )
     settings.oci_enterprise_ai_models = models
     settings.oci_enterprise_ai_default_model = default_model
     settings.oci_enterprise_ai_llm_model = default_model

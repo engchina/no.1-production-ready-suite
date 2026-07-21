@@ -4,8 +4,12 @@ import test from "node:test";
 import { QUESTION_TEMPLATES } from "../src/features/nl2sql/questionTemplates.ts";
 
 test("すべてのテンプレートが対象テーブル行を持つ穴埋め形式である", () => {
-  assert.equal(QUESTION_TEMPLATES.length, 4);
-  for (const template of QUESTION_TEMPLATES) {
+  assert.equal(QUESTION_TEMPLATES.length, 5);
+  assert.deepEqual(QUESTION_TEMPLATES[0], {
+    labelKey: "nl2sql.question.template.default",
+    body: "",
+  });
+  for (const template of QUESTION_TEMPLATES.slice(1)) {
     assert.match(template.body, /^対象テーブル/);
     assert.match(template.body, /抽出項目：|集計内容/);
     assert.ok(template.body.includes("抽出条件："));

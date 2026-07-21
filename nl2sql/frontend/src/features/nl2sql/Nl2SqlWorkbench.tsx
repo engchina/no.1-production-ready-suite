@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BookOpenText, ChevronDown, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
+  Banner,
   Button,
   PageHeader,
   toast,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
+import { useAuth } from "@/features/security/AuthProvider";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
@@ -17,6 +19,15 @@ import { EngineSelector } from "./components/EngineSelector";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
+import {
+  getSchemaObjectDetail,
+  useProfileDetail,
+  useProfileSummaries,
+  useSchemaCatalogHead,
+  useSchemaObjects,
+  useSchemaRefreshJob,
+  useStartSchemaRefresh,
+} from "./incrementalQueries";
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
 import { previewExecutePayload, previewToJob } from "./previewState";
@@ -28,13 +39,14 @@ import type {
   JobCreateData,
   JobData,
   Nl2SqlEngine,
-  Nl2SqlProfile,
   Nl2SqlResult,
   PreviewData,
   ProfileRecommendationData,
   QueryResults,
   RewriteData,
   SchemaCatalog,
+  SchemaObjectDetail,
+  SchemaTable,
   SimilarHistoryData,
   SimilarHistoryItem,
 } from "./types";
@@ -42,18 +54,21 @@ import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
 import { useOperationTimer } from "./useOperationTimer";
 import {
   confirmQuerySessionSql,
+  confirmOntologyProfileRecommendation,
   createOntologyImprovementProposal,
   createQuerySession,
   executeQuerySession,
   generateQuerySessionSql,
   getQuerySession,
   patchQuerySessionIntent,
+  recommendOntologyProfiles,
   QuerySessionVersionConflictError,
 } from "./ontology/api";
 import { QueryOntologyFlow } from "./ontology/QueryOntologyFlow";
 import {
   currentIntentVersionForSession,
   type GraphPatch,
+  type OntologyProfileRecommendation,
   type QuerySession,
   type QuerySessionExecuteRequest,
   type QuerySessionGenerateSqlRequest,
@@ -84,9 +99,23 @@ function queryResultsFromOntologySession(session: QuerySession): QueryResults | 
 }
 
 export function Nl2SqlWorkbench() {
+  const { hasPermission } = useAuth();
+  const canExecute = hasPermission("search.execute");
+  if (!canExecute) {
+    return (
+      <>
+        <PageHeader title={t("nav.query")} subtitle={t("page.query.subtitle")} />
+        <main className="p-4 lg:p-8">
+          <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
+        </main>
+      </>
+    );
+  }
+  return <ExecutableNl2SqlWorkbench />;
+}
+
+function ExecutableNl2SqlWorkbench() {
   const [searchParams] = useSearchParams();
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
-  const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
   const [profileId, setProfileId] = useState("default");
@@ -100,6 +129,14 @@ export function Nl2SqlWorkbench() {
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
   const [ontologySession, setOntologySession] = useState<QuerySession | null>(null);
+  const [ontologyProfileRecommendation, setOntologyProfileRecommendation] =
+    useState<OntologyProfileRecommendation | null>(null);
+  const [ontologyProfileConfirmation, setOntologyProfileConfirmation] = useState<{
+    question: string;
+    profileId: string;
+    revisionId: string;
+    token: string;
+  } | null>(null);
   const [ontologyLoading, setOntologyLoading] = useState(false);
   const [ontologyPatch, setOntologyPatch] = useState<GraphPatch | null>(null);
   const [ontologyVersionConflict, setOntologyVersionConflict] = useState<{
@@ -115,7 +152,9 @@ export function Nl2SqlWorkbench() {
   const [similarHistoryOpen, setSimilarHistoryOpen] = useState(false);
   const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
   const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useState("");
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [schemaSearch, setSchemaSearch] = useState("");
+  const [schemaDetails, setSchemaDetails] = useState<Record<string, SchemaObjectDetail>>({});
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewExecuteLoading, setPreviewExecuteLoading] = useState(false);
@@ -123,27 +162,78 @@ export function Nl2SqlWorkbench() {
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const schemaDetailRequests = useRef(new Set<string>());
 
-  // refresh=true のときは catalog を実データソースから再取得する（oracle モードは Oracle を再クエリ）。
-  const loadCatalog = useCallback(async (refresh = false) => {
-    setLoadingCatalog(true);
-    try {
-      const [catalogData, profilesData, historyData] = await Promise.all([
-        refresh
-          ? apiPost<SchemaCatalog>("/api/schema/refresh", {})
-          : apiGet<SchemaCatalog>("/api/schema/catalog"),
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
-        apiGet<HistoryData>("/api/nl2sql/history"),
-      ]);
-      setCatalog(catalogData);
-      setProfiles(profilesData);
-      setHistory(historyData.items);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
-    } finally {
-      setLoadingCatalog(false);
-    }
-  }, []);
+  useLayoutEffect(() => {
+    const textarea = questionTextareaRef.current;
+    if (!textarea) return;
+    const minHeight = 144;
+    const maxHeight = 266;
+    textarea.style.height = "0px";
+    const contentHeight = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(maxHeight, Math.max(minHeight, contentHeight))}px`;
+    textarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+  }, [question]);
+
+  const profilesQuery = useProfileSummaries("");
+  const profiles = useMemo(
+    () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [profilesQuery.data]
+  );
+  const selectedProfileQuery = useProfileDetail(profileId);
+  const schemaObjectsQuery = useSchemaObjects(schemaSearch, "", profileId);
+  const schemaHeadQuery = useSchemaCatalogHead();
+  const startSchemaRefresh = useStartSchemaRefresh();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshStatus = schemaRefreshJobQuery.isError
+    ? "error"
+    : (schemaRefreshJobQuery.data?.status ?? "");
+  const catalog = useMemo<SchemaCatalog>(() => {
+    const objects = schemaObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+    return {
+      refreshed_at: schemaHeadQuery.data?.refreshed_at ?? "",
+      schema_fingerprint: schemaHeadQuery.data?.schema_fingerprint ?? "",
+      tables: objects.map((object) => {
+        const key = `${object.owner}.${object.object_name}`.toUpperCase();
+        return (
+          schemaDetails[key]?.table ?? {
+            table_name: object.object_name,
+            qualified_name: `${object.owner}.${object.object_name}`,
+            logical_name: object.logical_name,
+            owner: object.owner,
+            table_type: object.object_type,
+            comment: object.comment,
+            row_count: object.row_count,
+            columns: [],
+            constraints: [],
+          }
+        );
+      }),
+    };
+  }, [schemaDetails, schemaHeadQuery.data, schemaObjectsQuery.data]);
+  const loadingCatalog = schemaObjectsQuery.isPending || schemaObjectsQuery.isFetching;
+
+  // 画面 entry は summary/object page だけを独立取得する。refresh は persistent job を投入し、
+  // 前 catalog を表示したまま job 完了時の query invalidation を待つ。
+  const loadCatalog = useCallback(
+    async (refresh = false) => {
+      try {
+        if (refresh) {
+          const job = await startSchemaRefresh.mutateAsync();
+          setSchemaRefreshJobId(job.job_id);
+          return;
+        }
+        await Promise.allSettled([
+          schemaObjectsQuery.refetch(),
+          schemaHeadQuery.refetch(),
+          profilesQuery.refetch(),
+        ]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+      }
+    },
+    [profilesQuery, schemaHeadQuery, schemaObjectsQuery, startSchemaRefresh]
+  );
 
   const refreshHistory = useCallback(async () => {
     const historyData = await apiGet<HistoryData>("/api/nl2sql/history");
@@ -179,16 +269,12 @@ export function Nl2SqlWorkbench() {
       additional_instructions: additionalInstructions,
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
-  const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
+  const selectedProfile = selectedProfileQuery.data?.profile ?? null;
   const profileAllowedTableNames = useMemo(() => {
     if (!selectedProfile) return null;
     const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
     return names.length > 0 ? names : null;
   }, [selectedProfile]);
-
-  useEffect(() => {
-    void loadCatalog();
-  }, [loadCatalog]);
 
   useEffect(() => {
     const prefill = prefillFromSearchParams(searchParams);
@@ -277,6 +363,27 @@ export function Nl2SqlWorkbench() {
       el.scrollTop = Math.max(0, caretLine * lineHeight - el.clientHeight + lineHeight);
     });
   };
+
+  const loadSchemaDetail = useCallback(async (table: SchemaTable) => {
+    const key = `${table.owner}.${table.table_name}`.toUpperCase();
+    if (schemaDetails[key] || schemaDetailRequests.current.has(key)) return;
+    schemaDetailRequests.current.add(key);
+    try {
+      const detail = await getSchemaObjectDetail(table.owner, table.table_name);
+      setSchemaDetails((current) => ({ ...current, [key]: detail }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+    } finally {
+      schemaDetailRequests.current.delete(key);
+    }
+  }, [schemaDetails]);
+
+  useEffect(() => {
+    if (!schemaSearch.trim()) return;
+    for (const table of catalog.tables) {
+      if (table.columns.length === 0) void loadSchemaDetail(table);
+    }
+  }, [catalog.tables, loadSchemaDetail, schemaSearch]);
 
   const applyRecommendation = () => {
     if (!recommendation) return;
@@ -395,6 +502,34 @@ export function Nl2SqlWorkbench() {
     setOntologyVersionConflict(null);
   };
 
+  const confirmOntologyProfile = async (candidateProfileId: string, revisionId: string) => {
+    const trimmed = question.trim();
+    if (!trimmed || !ontologyProfileRecommendation || active) return;
+    setOntologyLoading(true);
+    setError("");
+    try {
+      const confirmation = await confirmOntologyProfileRecommendation(
+        ontologyProfileRecommendation.id,
+        candidateProfileId,
+        revisionId
+      );
+      setProfileId(candidateProfileId);
+      setOntologyProfileConfirmation({
+        question: trimmed,
+        profileId: candidateProfileId,
+        revisionId,
+        token: confirmation.confirmation_token,
+      });
+      toast.success(t("nl2sql.ontologyProfile.confirmed"));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t("nl2sql.ontologyProfile.confirmFailed")
+      );
+    } finally {
+      setOntologyLoading(false);
+    }
+  };
+
   const startOntologySession = async () => {
     const trimmed = question.trim();
     if (!trimmed || active) return;
@@ -403,13 +538,23 @@ export function Nl2SqlWorkbench() {
     setOntologyPatch(null);
     setOntologyExecutionResults(null);
     try {
+      const confirmationIsCurrent =
+        ontologyProfileConfirmation?.question === trimmed &&
+        ontologyProfileConfirmation.profileId === profileId;
+      if (!confirmationIsCurrent) {
+        setOntologyProfileConfirmation(null);
+        setOntologyProfileRecommendation(await recommendOntologyProfiles(trimmed));
+        return;
+      }
       updateOntologySession(
         await createQuerySession({
           question: trimmed,
           profile_id: profileId,
           allowed_objects: toAllowedObjects(selection),
+          profile_confirmation_token: ontologyProfileConfirmation.token,
         })
       );
+      setOntologyProfileRecommendation(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("nl2sql.error.previewFailed"));
     } finally {
@@ -546,7 +691,7 @@ export function Nl2SqlWorkbench() {
           metrics={[
             {
               label: t("nl2sql.workspace.availableTables"),
-              value: formatNumber(catalog?.tables.length ?? 0),
+              value: formatNumber(schemaHeadQuery.data?.object_count ?? catalog.tables.length),
               emphasis: true,
             },
             {
@@ -556,17 +701,26 @@ export function Nl2SqlWorkbench() {
           ]}
           metricColumnsClass="sm:grid-cols-2"
           actions={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loadingCatalog}
-              disabled={active}
-              onClick={() => void loadCatalog(true)}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("nl2sql.action.refresh")}</span>
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className="text-xs text-muted" aria-live="polite" aria-atomic="true">
+                {schemaRefreshStatus
+                  ? t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)
+                  : ""}
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={
+                  schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
+                }
+                disabled={active}
+                onClick={() => void loadCatalog(true)}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("nl2sql.action.refresh")}</span>
+              </Button>
+            </div>
           }
         />
 
@@ -574,7 +728,7 @@ export function Nl2SqlWorkbench() {
           notice={error ? { tone: "danger", message: `${error} ${t("nl2sql.error.retryHint")}` } : null}
           action={
             error ? (
-              (catalog?.tables.length ?? 0) === 0 ? (
+              catalog.tables.length === 0 ? (
                 <Button
                   type="button"
                   variant="primary"
@@ -675,9 +829,12 @@ export function Nl2SqlWorkbench() {
                       id="nl2sql-profile-select"
                       value={profileId}
                       onChange={(event) => setProfileId(event.currentTarget.value)}
-                      disabled={active}
+                      disabled={active || profilesQuery.isPending}
                       className="min-h-11 min-w-0 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
+                      {profilesQuery.isPending && (
+                        <option value={profileId}>{t("profiles.summary.loading")}</option>
+                      )}
                       {profiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
                           {profile.name}
@@ -696,6 +853,18 @@ export function Nl2SqlWorkbench() {
                       <Wand2 size={16} aria-hidden="true" />
                       <span>{t("nl2sql.recommend.autoDetect")}</span>
                     </Button>
+                    {profilesQuery.hasNextPage && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        loading={profilesQuery.isFetchingNextPage}
+                        disabled={active}
+                        onClick={() => void profilesQuery.fetchNextPage()}
+                      >
+                        {t("profiles.action.loadMore")}
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {recommendation &&
@@ -725,6 +894,77 @@ export function Nl2SqlWorkbench() {
                       </Button>
                     </div>
                   )}
+                {ontologyProfileRecommendation ? (
+                  <section
+                    className="grid gap-3 rounded-md border border-primary/30 bg-primary/5 p-3"
+                    aria-labelledby="nl2sql-ontology-profile-recommendation-heading"
+                    data-testid="nl2sql-ontology-profile-recommendation"
+                  >
+                    <div>
+                      <h3
+                        id="nl2sql-ontology-profile-recommendation-heading"
+                        className="text-sm font-semibold text-foreground"
+                      >
+                        {t("nl2sql.ontologyProfile.title")}
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-muted">
+                        {t("nl2sql.ontologyProfile.description")}
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      {ontologyProfileRecommendation.candidates.map((candidate) => (
+                        <div
+                          key={candidate.profile_id}
+                          className="grid gap-2 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                        >
+                          <div className="min-w-0 text-sm">
+                            <p className="font-medium text-foreground">
+                              {candidate.profile_name}（{Math.round(candidate.score * 100)}%）
+                            </p>
+                            <p className="mt-1 text-muted">
+                              {candidate.reasons_ja.join(" ")}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={active}
+                            onClick={() =>
+                              void confirmOntologyProfile(
+                                candidate.profile_id,
+                                candidate.ontology_revision_id
+                              )
+                            }
+                          >
+                            {t("nl2sql.ontologyProfile.confirm")}
+                          </Button>
+                        </div>
+                      ))}
+                      {ontologyProfileRecommendation.candidates.length === 0 ? (
+                        <div className="grid gap-2 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                          <p className="text-sm leading-6 text-muted">
+                            {t("nl2sql.ontologyProfile.noMatch")}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={active || !profileId}
+                            onClick={() =>
+                              void confirmOntologyProfile(
+                                profileId,
+                                ontologyProfileRecommendation.ontology_revision_id
+                              )
+                            }
+                          >
+                            {t("nl2sql.ontologyProfile.confirmCurrent")}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
               </div>
 
                   {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
@@ -766,7 +1006,7 @@ export function Nl2SqlWorkbench() {
                           onChange={(event) => setQuestion(event.currentTarget.value)}
                             disabled={active}
                           rows={5}
-                          className="field-sizing-content min-h-36 max-h-[19.5rem] rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                       </label>
@@ -780,7 +1020,15 @@ export function Nl2SqlWorkbench() {
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"
                         onRefreshSchema={() => void loadCatalog(true)}
-                        refreshing={loadingCatalog}
+                        refreshing={
+                          schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
+                        }
+                        searchQuery={schemaSearch}
+                        onSearchQueryChange={setSchemaSearch}
+                        hasMore={Boolean(schemaObjectsQuery.hasNextPage)}
+                        loadingMore={schemaObjectsQuery.isFetchingNextPage}
+                        onLoadMore={() => void schemaObjectsQuery.fetchNextPage()}
+                        onExpandTable={(table) => void loadSchemaDetail(table)}
                         onInsert={insertSchemaText}
                       />
                     </div>

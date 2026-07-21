@@ -4,7 +4,7 @@ import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Uploa
 import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiFetch, apiGet, apiPost } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
@@ -217,7 +217,7 @@ export function DataManagementPage() {
     setLoading("preview-export");
     setMessage("");
     try {
-      const response = await fetch("/api/nl2sql/db-admin/preview-data/export.xlsx", {
+      const response = await apiFetch("/api/nl2sql/db-admin/preview-data/export.xlsx", {
         method: "POST",
         headers: {
           Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

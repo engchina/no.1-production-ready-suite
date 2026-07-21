@@ -129,7 +129,7 @@ class OciGenAiClient:
         config = load_oci_config_without_prompt(
             oci_config,
             self._settings.oci_config_file,
-            self._settings.oci_config_profile,
+            self._settings.resolved_oci_config_profile,
         )
         endpoint = self._settings.oci_genai_endpoint.strip()
         if endpoint:

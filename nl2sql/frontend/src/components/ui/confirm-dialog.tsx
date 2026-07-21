@@ -8,7 +8,7 @@ import { t } from "@/lib/i18n";
 export { useConfirm, type ConfirmOptions } from "@engchina/production-ready-ui";
 
 /**
- * 確認ダイアログ Provider。共有 UI パッケージの ConfirmProvider に RAG の i18n（既定文言）を注入する。
+ * 確認ダイアログ Provider。共有 UI パッケージへ NL2SQL の i18n（既定文言）を注入する。
  */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   return (

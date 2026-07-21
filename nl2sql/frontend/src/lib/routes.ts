@@ -1,5 +1,8 @@
 /** NL2SQL コンソールのルート定義。 */
 export const APP_ROUTES = {
+  login: "/login",
+  passwordChange: "/password/change",
+  forbidden: "/forbidden",
   dashboard: "/",
   tableManagement: "/table-management",
   viewManagement: "/view-management",
@@ -26,6 +29,10 @@ export const APP_ROUTES = {
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
   settingsAppearance: "/settings/appearance",
+  securityUsers: "/settings/security/users",
+  securityRoles: "/settings/security/roles",
+  securityAudit: "/settings/security/audit",
+  securityDeepSec: "/settings/security/deepsec",
   /** 旧「NL2SQL モデル学習」URL。業務プロファイルの few-shot 領域へ転送する。 */
   legacyNl2sqlModelLearning: "/settings/nl2sql-model",
   nl2sqlSettingsDatabase: "/settings/nl2sql-database",

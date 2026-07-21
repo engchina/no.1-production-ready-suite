@@ -9,8 +9,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from .object_identity import qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
 
 
@@ -133,6 +134,30 @@ class SchemaTable(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     constraint_details: list[SchemaConstraintDetail] = Field(default_factory=list)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def qualified_name(self) -> str:
+        """查询/API 专用的规范对象身份。"""
+
+        return qualified_object_name(self.owner, self.table_name)
+
+
+class SchemaOwnerSummary(BaseModel):
+    """当前连接用户可访问的一个非 Oracle 维护 schema。"""
+
+    owner: str
+    is_current: bool = False
+    table_count: int = 0
+    view_count: int = 0
+
+
+class SchemaOwnersData(BaseModel):
+    """Schema 发现结果。"""
+
+    current_owner: str
+    owners: list[SchemaOwnerSummary] = Field(default_factory=list)
+    excluded_oracle_maintained_count: int = 0
+
 
 class SchemaCatalog(BaseModel):
     """UI が表示する schema catalog."""
@@ -141,6 +166,51 @@ class SchemaCatalog(BaseModel):
     tables: list[SchemaTable]
     schema_fingerprint: str = ""
     view_dependencies: list[SchemaViewDependency] = Field(default_factory=list)
+    current_owner: str = ""
+    excluded_oracle_maintained_count: int = 0
+
+
+class SchemaCatalogHead(BaseModel):
+    """大規模 catalog を読み込まずに返せる active catalog metadata。"""
+
+    catalog_version: int = 0
+    schema_fingerprint: str = ""
+    refreshed_at: str = ""
+    object_count: int = 0
+    column_count: int = 0
+    change_token: int = 0
+    etag: str = ""
+
+
+class SchemaObjectSummary(BaseModel):
+    """Schema picker / search 用の軽量 object 行。"""
+
+    owner: str
+    object_name: str
+    object_type: str = "TABLE"
+    logical_name: str = ""
+    comment: str = ""
+    row_count: int | None = None
+    column_count: int = 0
+    last_ddl_at: str = ""
+
+
+class SchemaObjectPage(BaseModel):
+    """Keyset cursor で返す schema object page。"""
+
+    items: list[SchemaObjectSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+    catalog_version: int = 0
+
+
+class SchemaObjectDetail(BaseModel):
+    """選択された object だけを展開した schema detail。"""
+
+    table: SchemaTable
+    dependencies: list[SchemaViewDependency] = Field(default_factory=list)
+    catalog_version: int = 0
+    etag: str = ""
 
 
 class AllowedObjects(BaseModel):
@@ -183,6 +253,64 @@ class Nl2SqlProfile(BaseModel):
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
     archived: bool = False
+    version: int = Field(default=1, ge=1)
+    etag: str = ""
+    updated_at: str = ""
+    object_scope_version: int = Field(default=1, ge=1)
+
+
+class ProfileSummary(BaseModel):
+    """一覧で full profile payload を転送しないための summary。"""
+
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    archived: bool = False
+    allowed_table_count: int = 0
+    allowed_view_count: int = 0
+    glossary_count: int = 0
+    few_shot_count: int = 0
+    version: int = 1
+    etag: str = ""
+    updated_at: str = ""
+
+
+class ProfileSummaryPage(BaseModel):
+    """業務 profile の keyset cursor page。"""
+
+    items: list[ProfileSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+    change_token: int = 0
+
+
+class SchemaRefreshJobStatus(StrEnum):
+    """Schema refresh worker の永続 job 状態。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+class SchemaRefreshJob(BaseModel):
+    """非同期 schema refresh の公開契約。"""
+
+    job_id: str
+    status: SchemaRefreshJobStatus = SchemaRefreshJobStatus.PENDING
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    worker_id: str = ""
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    attempt: int = 0
+    scanned_objects: int = 0
+    changed_objects: int = 0
+    deleted_objects: int = 0
+    catalog_version: int | None = None
+    error_code: str = ""
 
 
 class ProfileUpsertRequest(BaseModel):
@@ -664,6 +792,7 @@ class HistoryItem(BaseModel):
     result_row_count: int = 0
     result_columns: list[str] = Field(default_factory=list)
     feedback_comment: str = ""
+    feedback_updated_at: str = ""
     session_id: str = ""
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
@@ -702,6 +831,28 @@ class FeedbackData(BaseModel):
     rating: FeedbackRating
     saved: bool
     comment: str = ""
+
+
+class FeedbackClearData(BaseModel):
+    """アプリ内 feedback を履歴を残したまま解除した response。"""
+
+    history_id: str
+    cleared: bool = True
+
+
+class FeedbackRecord(HistoryItem):
+    """管理画面向けのアプリ内 feedback と classifier 連携状態。"""
+
+    training_status: str = ""
+    training_example_id: str = ""
+
+
+class FeedbackListData(BaseModel):
+    """Cursor pagination 対応のアプリ内 feedback 一覧。"""
+
+    items: list[FeedbackRecord] = Field(default_factory=list)
+    total: int = 0
+    next_cursor: str = ""
 
 
 class FeedbackIndexRequest(StrictMutationRequest):
@@ -844,7 +995,86 @@ class ClassifierTrainingExample(BaseModel):
     category: str
     text: str
     profile_id: str = ""
+    profile_name: str = ""
     source: str = ""
+    source_type: Literal["file", "feedback"] = "file"
+    source_history_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ClassifierTrainingExampleUpdateRequest(BaseModel):
+    """Training example の質問/Profile 対応を修正する request。"""
+
+    text: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+
+
+class ClassifierTrainingCandidate(BaseModel):
+    """SQL feedback から導出した classifier training 候補。"""
+
+    history_id: str
+    question: str
+    profile_id: str = ""
+    profile_name: str = ""
+    feedback_rating: FeedbackRating | None = None
+    feedback_comment: str = ""
+    created_at: str = ""
+    status: Literal[
+        "pending",
+        "added",
+        "already_covered",
+        "conflict",
+        "profile_missing",
+        "source_changed",
+    ]
+    eligible: bool = False
+    training_example_id: str = ""
+    conflict_profile_ids: list[str] = Field(default_factory=list)
+
+
+class ClassifierTrainingCandidatesData(BaseModel):
+    """Cursor pagination 対応の feedback training 候補一覧。"""
+
+    items: list[ClassifierTrainingCandidate] = Field(default_factory=list)
+    total: int = 0
+    next_cursor: str = ""
+    pending_count: int = 0
+    added_count: int = 0
+    attention_count: int = 0
+
+
+class ClassifierFeedbackSelection(BaseModel):
+    """Feedback 候補の確認対象。profile_id は確認時の修正値を許可する。"""
+
+    history_id: str = Field(min_length=1)
+    profile_id: str = ""
+
+
+class ClassifierFeedbackImportRequest(BaseModel):
+    """確認済み feedback を training data に追加する request。"""
+
+    items: list[ClassifierFeedbackSelection] = Field(min_length=1, max_length=100)
+
+
+class ClassifierFeedbackImportResult(BaseModel):
+    """Feedback ごとの追加結果。"""
+
+    history_id: str
+    status: str
+    training_example_id: str = ""
+    profile_id: str = ""
+    message: str = ""
+
+
+class ClassifierFeedbackImportData(BaseModel):
+    """Feedback training data 追加 response。"""
+
+    imported_count: int = 0
+    skipped_count: int = 0
+    total_examples: int = 0
+    stale: bool = False
+    results: list[ClassifierFeedbackImportResult] = Field(default_factory=list)
 
 
 class ClassifierImportData(BaseModel):
@@ -872,6 +1102,7 @@ class ClassifierStatusData(BaseModel):
 
     ready: bool = False
     trained: bool = False
+    stale: bool = False
     classifier_version: str = ""
     updated_at: str = ""
     example_count: int = 0
@@ -882,11 +1113,13 @@ class ClassifierStatusData(BaseModel):
     persistence_mode: str = "memory"
     recommendation_source: str = "deterministic"
     metrics: dict[str, float | int | str] = Field(default_factory=dict)
+    trained_example_count: int = 0
+    pending_change_count: int = 0
     warnings: list[str] = Field(default_factory=list)
 
 
 class ClassifierModelInfo(BaseModel):
-    """Persisted classifier model version metadata."""
+    """Persisted current classifier model metadata."""
 
     version: str
     active: bool = False
@@ -899,25 +1132,13 @@ class ClassifierModelInfo(BaseModel):
     source: str = "oracle_state"
 
 
-class ClassifierModelsData(BaseModel):
-    """Classifier model registry response."""
-
-    active_version: str = ""
-    models: list[ClassifierModelInfo] = Field(default_factory=list)
-
-
 class ClassifierModelImportData(BaseModel):
-    """Legacy joblib/meta classifier artifact import response."""
+    """Single classifier model artifact import response.
+
+    ``active_version`` is retained for compatibility with the former registry API.
+    """
 
     imported: bool = False
-    active_version: str = ""
-    model: ClassifierModelInfo | None = None
-    warnings: list[str] = Field(default_factory=list)
-
-
-class ClassifierModelActivateData(BaseModel):
-    """Classifier model activation response."""
-
     active_version: str = ""
     model: ClassifierModelInfo | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -1761,6 +1982,22 @@ class DiagnosticsData(BaseModel):
     readiness: list[DiagnosticReadiness] = Field(default_factory=list)
     smoke_checks: list[DiagnosticSmokeCheck] = Field(default_factory=list)
     config_guides: list[DiagnosticConfigGuide] = Field(default_factory=list)
+
+
+class PersistenceStatusData(BaseModel):
+    """NL2SQL 共有状態の永続化可用性。"""
+
+    mode: Literal["memory", "oracle"]
+    ready: bool
+    durable: bool
+    writable: bool
+    snapshot_loaded: bool = Field(
+        description="Deprecated: incremental backend は snapshot をロードしません。",
+        deprecated=True,
+    )
+    reason_code: str | None = None
+    checked_at: str
+    state_backend: Literal["incremental", "legacy_snapshot"] = "legacy_snapshot"
 
 
 class CsvImportColumn(BaseModel):

@@ -649,7 +649,13 @@ class OntologyQuerySessionService:
             self._edges[stored.id] = edge_map
             return _copy_model(stored)
 
-    def publish_revision(self, revision_id: str, *, etag: str) -> OntologyRevision:
+    def publish_revision(
+        self,
+        revision_id: str,
+        *,
+        etag: str,
+        updates: Mapping[str, Any] | None = None,
+    ) -> OntologyRevision:
         with self._lock:
             revision = self._require_revision(revision_id)
             if revision.etag != etag:
@@ -663,6 +669,7 @@ class OntologyQuerySessionService:
                 )
             published = revision.model_copy(
                 update={
+                    **dict(updates or {}),
                     "status": OntologyRevisionStatus.PUBLISHED,
                     "published_at": utc_now(),
                 },
@@ -700,6 +707,41 @@ class OntologyQuerySessionService:
                 self._revisions[revision_id] = updated
                 archived.append(_copy_model(updated))
             return archived
+
+    def restore_revision_headers(self, revisions: Sequence[OntologyRevision]) -> None:
+        """永続 transaction 失敗時に in-memory header を元へ戻す。graph は不変。"""
+
+        with self._lock:
+            for revision in revisions:
+                if revision.id not in self._revisions:
+                    raise OntologyNotFoundError(
+                        "ONTOLOGY_REVISION_NOT_FOUND",
+                        "復元する Ontology revision が見つかりません。",
+                    )
+                self._revisions[revision.id] = _copy_model(revision)
+
+    def evict_revision(self, revision_id: str) -> list[str]:
+        """Immutable graph cache と、それに依存する再読込可能な session を破棄する。"""
+
+        with self._lock:
+            self._revisions.pop(revision_id, None)
+            self._nodes.pop(revision_id, None)
+            self._edges.pop(revision_id, None)
+            stale_view_ids = [
+                view_id
+                for view_id, view in self._profile_views.items()
+                if view.ontology_revision_id == revision_id
+            ]
+            for view_id in stale_view_ids:
+                self._profile_views.pop(view_id, None)
+            stale_session_ids = [
+                session_id
+                for session_id, session in self._sessions.items()
+                if session.ontology_revision_id == revision_id
+            ]
+            for session_id in stale_session_ids:
+                self._sessions.pop(session_id, None)
+            return stale_session_ids
 
     def register_profile_view(self, view: ProfileOntologyView) -> ProfileOntologyView:
         with self._lock:

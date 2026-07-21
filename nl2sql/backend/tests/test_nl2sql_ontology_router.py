@@ -32,13 +32,17 @@ from app.features.nl2sql.ontology_models import (
     PhysicalMapping,
     SqlConfirmationRequest,
 )
+from app.features.nl2sql.ontology_reasoning import OntologyPublishService
 from app.features.nl2sql.ontology_router import (
     GenerateSqlRequest,
     ImprovementProposalRequest,
     OntologyApiRuntime,
+    OntologyContextSearchRequest,
     OntologyDraftRequest,
+    OntologyProfileRecommendationRequest,
     OntologyPublishRequest,
     ProfileOntologyViewPatch,
+    ProfileRecommendationConfirmationRequest,
     QuerySessionApiCreate,
     router,
 )
@@ -49,6 +53,7 @@ from app.features.nl2sql.ontology_service import (
 )
 from app.features.nl2sql.ontology_store import InMemoryOntologyStore
 from app.main import app
+from app.settings import get_settings
 
 
 class _FakeLegacyNl2SqlService:
@@ -178,7 +183,12 @@ class _FakeOntologyEmbeddingClient:
 
 
 @pytest.fixture
-def runtime() -> tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService]:
+def runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService]:
+    # 既存の query-session 単体テストは Profile 確認以外を検証する。確認ゲートは専用テストで
+    # 既定 true のまま検証する。
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", False)
     store = InMemoryOntologyStore()
     legacy = _FakeLegacyNl2SqlService()
     return OntologyApiRuntime(legacy_service=legacy, store=store), store, legacy
@@ -219,6 +229,45 @@ def test_router_declares_complete_query_session_and_profile_view_api() -> None:
     assert "/nl2sql/ontology/revisions/current" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/drafts" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/publish" in declared_paths
+
+
+def test_ontology_revision_cache_keeps_active_and_latest_only(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, _legacy = runtime
+    active = api.current_ontology()
+    api._ontology_cache_max_revisions = 2  # noqa: SLF001 - bounded cache contract
+    second = active.model_copy(
+        update={"revision": active.revision.model_copy(update={"id": "revision-second"})},
+        deep=True,
+    )
+    latest = active.model_copy(
+        update={"revision": active.revision.model_copy(update={"id": "revision-latest"})},
+        deep=True,
+    )
+
+    api._cache_ontology(second)  # noqa: SLF001 - bounded cache contract
+    api._cache_ontology(latest)  # noqa: SLF001 - bounded cache contract
+
+    assert set(api._ontologies) == {active.revision.id, latest.revision.id}  # noqa: SLF001
+
+
+def test_profile_scenario_version_changes_for_keyword_only_update(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, _legacy = runtime
+    current, _ontology = api.profile_view("sales")
+
+    updated, _ontology = api.patch_profile_view(
+        "sales",
+        ProfileOntologyViewPatch(
+            base_etag=current.etag,
+            activation_keywords=["受注", " 受注 ", "売上"],
+        ),
+    )
+
+    assert updated.activation_keywords == ["受注", "売上"]
+    assert updated.scenario_version == current.scenario_version + 1
 
 
 def test_published_revision_pins_queries_until_reviewed_draft_is_published(
@@ -364,7 +413,9 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
 
     assert len(store.list_revisions()) == 1
     assert len(store.list_nodes(generated.session.ontology_revision_id)) >= 4
-    assert store.get_profile_view("sales") is not None
+    persisted_session = store.get_query_session(created.session.id)
+    assert persisted_session is not None
+    assert persisted_session["profile_view_snapshot"]["profile_id"] == "sales"
     assert store.get_query_session(created.session.id) is not None
     assert store.get_artifact(generated.session.sql_artifacts[-1].id) is not None
 
@@ -839,3 +890,345 @@ def test_profile_view_warnings_report_unresolved_objects(
     assert len(warnings) == 1
     assert "APP.MISSING_TABLE" in warnings[0]
     assert "スキーマ情報" in warnings[0]
+
+
+def test_profile_recommendation_requires_explicit_confirmation_and_binds_token(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", True)
+    recommendation = api.recommend_profiles(
+        OntologyProfileRecommendationRequest(question="販売分析で受注件数を表示")
+    )
+    assert recommendation.candidates[0].profile_id == "sales"
+
+    with pytest.raises(OntologyGateBlockedError) as missing_confirmation:
+        api.create_session(
+            QuerySessionApiCreate(question="販売分析で受注件数を表示", profile_id="sales")
+        )
+    assert missing_confirmation.value.code == "PROFILE_CONFIRMATION_REQUIRED"
+
+    with pytest.raises(OntologyVersionConflictError):
+        api.confirm_profile_recommendation(
+            recommendation.id,
+            ProfileRecommendationConfirmationRequest(
+                selected_profile_id="sales",
+                selected_revision_id="stale-revision",
+            ),
+        )
+    confirmed, token = api.confirm_profile_recommendation(
+        recommendation.id,
+        ProfileRecommendationConfirmationRequest(
+            selected_profile_id="sales",
+            selected_revision_id=recommendation.ontology_revision_id,
+        ),
+    )
+    assert confirmed.selected_profile_id == "sales"
+    assert token
+
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="販売分析で受注件数を表示",
+            profile_id="sales",
+            profile_confirmation_token=token,
+        )
+    )
+    assert created.session.profile_id == "sales"
+    persisted = api.store.get_document("query_sessions", {"session_id": created.session.id})
+    assert persisted is not None
+    assert persisted["runtime_context"]["profile_selection_source"] == "confirmed"
+
+    with pytest.raises(OntologyGateBlockedError):
+        api.create_session(
+            QuerySessionApiCreate(
+                question="同じ token を別の質問に使用",
+                profile_id="sales",
+                profile_confirmation_token=token,
+            )
+        )
+
+
+def test_zero_match_recommendation_can_be_confirmed_manually(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", True)
+    recommendation = api.recommend_profiles(
+        OntologyProfileRecommendationRequest(question="完全に無関係な質問")
+    )
+    assert recommendation.candidates == []
+    confirmed, token = api.confirm_profile_recommendation(
+        recommendation.id,
+        ProfileRecommendationConfirmationRequest(
+            selected_profile_id="sales",
+            selected_revision_id=recommendation.ontology_revision_id,
+        ),
+    )
+    assert confirmed.selected_profile_id == "sales"
+    assert token
+
+
+def test_profile_recommendation_uses_existing_oci_embedding_boundary(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+
+    class _MatchingEmbeddingClient:
+        def is_configured(self) -> bool:
+            return True
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0, 0.0] for _text in texts]
+
+    legacy._embedding_client = _MatchingEmbeddingClient()  # type: ignore[attr-defined]
+    recommendation = api.recommend_profiles(
+        OntologyProfileRecommendationRequest(question="語彙一致のない意味検索")
+    )
+    assert recommendation.candidates[0].profile_id == "sales"
+    assert any("意味類似度" in reason for reason in recommendation.candidates[0].reasons_ja)
+
+
+def test_context_search_is_revision_pinned_profile_scoped_and_deterministic(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, _legacy = runtime
+    view, ontology = api.profile_view("sales")
+    request = OntologyContextSearchRequest(
+        question="受注金額",
+        ontology_revision_id=ontology.revision.id,
+        top_k=8,
+        max_hops=2,
+    )
+    first = api.search_ontology_context("sales", request)
+    second = api.search_ontology_context("sales", request)
+
+    assert first.context_hash == second.context_hash
+    assert {node.id for node in first.nodes} <= set(view.node_ids)
+    assert {edge.id for edge in first.edges} <= set(view.edge_ids)
+    assert all(edge.review_status == OntologyReviewStatus.APPROVED for edge in first.edges)
+    assert first.ontology_revision_id == ontology.revision.id
+    assert ontology.revision.id in first.llm_markdown
+
+    with pytest.raises(OntologyVersionConflictError):
+        api.search_ontology_context(
+            "sales",
+            request.model_copy(update={"ontology_revision_id": "stale-revision"}),
+        )
+
+
+def test_inferred_context_expansion_never_leaves_profile_view(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, store, _legacy = runtime
+    view, ontology = api.profile_view("sales")
+    source_id, target_id = view.node_ids[:2]
+    outside_id = "outside-profile-node"
+    store.save_artifact(
+        {
+            "artifact_id": "inferred-context-test",
+            "session_id": ontology.revision.id,
+            "artifact_type": "ontology_inferred_turtle",
+            "content_hash": "hash",
+            "created_at": "2026-07-19T00:00:00Z",
+            "content": (
+                "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+                f"<urn:nl2sql:ontology:node:{source_id}> rdfs:subClassOf "
+                f"<urn:nl2sql:ontology:node:{target_id}> .\n"
+                f"<urn:nl2sql:ontology:node:{target_id}> rdfs:subClassOf "
+                f"<urn:nl2sql:ontology:node:{outside_id}> .\n"
+            ),
+        }
+    )
+    expanded = api._inferred_context_node_ids(
+        ontology.revision.id,
+        {source_id},
+        allowed_node_ids=set(view.node_ids),
+        max_hops=3,
+    )
+    assert target_id in expanded
+    assert outside_id not in expanded
+
+    store.save_artifact(
+        {
+            "artifact_id": "inferred-context-encoded-id",
+            "session_id": ontology.revision.id,
+            "artifact_type": "ontology_inferred_turtle",
+            "content_hash": "hash-encoded",
+            "created_at": "2026-07-19T00:00:01Z",
+            "content": (
+                "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+                "<urn:nl2sql:ontology:node:node%3Asource> rdfs:subClassOf "
+                "<urn:nl2sql:ontology:node:node%3Atarget> .\n"
+            ),
+        }
+    )
+    assert api._inferred_context_node_ids(
+        ontology.revision.id,
+        {"node:source"},
+        allowed_node_ids={"node:source", "node:target"},
+        max_hops=1,
+    ) == {"node:target"}
+
+
+def test_async_semantic_publish_succeeds_and_is_idempotent(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    revision = api.current_ontology().revision
+    publisher = OntologyPublishService(api)
+
+    queued = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-1")
+    duplicate = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-1")
+    assert duplicate.id == queued.id
+    finished = publisher.run_persisted(queued.id)
+
+    assert finished.status.value == "succeeded"
+    assert finished.requested_etag == revision.etag
+    assert finished.shacl_conforms is True
+    published = api.ontology_revision(revision.id)
+    assert published.revision.status.value == "published"
+    assert published.revision.reasoning_status.value == "ready"
+    assert published.revision.rdf_graph_name.startswith("ONT_")
+    artifacts = store.list_documents("artifacts", {"session_id": revision.id})
+    assert {item["artifact_type"] for item in artifacts} >= {
+        "ontology_owl_turtle",
+        "ontology_shacl_turtle",
+        "ontology_llm_markdown",
+        "ontology_shacl_report",
+    }
+
+
+def test_publish_validates_review_gate_before_materialization(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    base = api.current_ontology()
+    proposed = OntologyNode(
+        id="unreviewed-term",
+        revision_id=base.revision.id,
+        kind=OntologyNodeKind.BUSINESS_TERM,
+        business_name_ja="未確認用語",
+        provenance=OntologyProvenance(source_kind=OntologySourceKind.MANUAL),
+        review_status=OntologyReviewStatus.PROPOSED,
+    )
+    draft = api.create_ontology_draft(
+        base.revision.id,
+        OntologyDraftRequest(
+            base_etag=base.revision.etag,
+            node_upserts=[proposed],
+        ),
+    )
+    materialized = False
+
+    class _Materializer:
+        def materialize(self, **_values: Any) -> str:
+            nonlocal materialized
+            materialized = True
+            return ""
+
+    publisher = OntologyPublishService(api, materializer=_Materializer())
+    queued = publisher.start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-review-gate",
+    )
+    finished = publisher.run_persisted(queued.id)
+
+    assert finished.status.value == "failed"
+    assert materialized is False
+    assert api.ontology_revision(draft.revision.id).revision.reasoning_status.value == "failed"
+
+
+def test_publish_can_skip_shacl_only_with_explicit_rollout_flag(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_shacl_enabled", False)
+    revision = api.current_ontology().revision
+    publisher = OntologyPublishService(api)
+
+    queued = publisher.start(
+        revision.id,
+        etag=revision.etag,
+        idempotency_key="publish-shacl-rollout",
+    )
+    finished = publisher.run_persisted(queued.id)
+
+    assert finished.status.value == "succeeded"
+    assert finished.shacl_conforms is None
+    assert finished.warnings_ja == ["段階導入設定により SHACL Core 検証をスキップしました。"]
+
+
+def test_publish_materialization_failure_keeps_previous_revision_active(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    base = api.current_ontology()
+    active = api.publish_ontology_revision(
+        base.revision.id,
+        OntologyPublishRequest(etag=base.revision.etag),
+    )
+    draft = api.create_ontology_draft(
+        active.revision.id,
+        OntologyDraftRequest(base_etag=active.revision.etag, note="失敗確認"),
+    )
+
+    class _FailingMaterializer:
+        def materialize(self, **_values: Any) -> str:
+            raise RuntimeError("Oracle OWL2RL unavailable")
+
+    publisher = OntologyPublishService(api, materializer=_FailingMaterializer())
+    queued = publisher.start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-failure",
+    )
+    finished = publisher.run_persisted(queued.id)
+
+    assert finished.status.value == "failed"
+    assert finished.error_code == "ONTOLOGY_PUBLISH_FAILED"
+    _view, still_active = api.profile_view("sales")
+    assert still_active.revision.id == active.revision.id
+    failed_revision = api.ontology_revision(draft.revision.id).revision
+    assert failed_revision.status.value == "draft"
+    assert failed_revision.reasoning_status.value == "failed"
+
+
+def test_atomic_revision_switch_failure_restores_in_memory_active_revision(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+    base = api.current_ontology()
+    published = api.publish_ontology_revision(
+        base.revision.id,
+        OntologyPublishRequest(etag=base.revision.etag),
+    )
+    draft = api.create_ontology_draft(
+        published.revision.id,
+        OntologyDraftRequest(base_etag=published.revision.etag, note="atomic failure"),
+    )
+
+    def fail_atomic(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        raise RuntimeError("Oracle transaction failed")
+
+    monkeypatch.setattr(store, "save_documents_atomic", fail_atomic)
+    with pytest.raises(RuntimeError, match="Oracle transaction failed"):
+        api.publish_ontology_revision(
+            draft.revision.id,
+            OntologyPublishRequest(etag=draft.revision.etag),
+        )
+
+    _view, active = api.profile_view("sales")
+    assert active.revision.id == published.revision.id
+    assert api.ontology_revision(draft.revision.id).revision.status.value == "draft"

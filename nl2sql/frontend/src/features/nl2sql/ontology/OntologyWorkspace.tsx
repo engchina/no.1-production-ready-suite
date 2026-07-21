@@ -125,6 +125,8 @@ const NODE_KIND_LABELS: Record<OntologyNodeKind, string> = {
   business_entity: "業務エンティティ",
   business_event: "業務イベント",
   property: "属性",
+  business_rule: "業務ルール",
+  enum_value: "列挙値",
   metric: "指標",
   business_term: "業務用語",
   question_intent: "質問意図",

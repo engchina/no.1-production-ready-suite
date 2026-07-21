@@ -1,4 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { mockDatabaseGateReady } from "./_helpers/database-gate";
+
+test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({

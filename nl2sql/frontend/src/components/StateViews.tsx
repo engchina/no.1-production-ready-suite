@@ -10,7 +10,7 @@ import { t } from "@/lib/i18n";
 export { LoadingState, EmptyState };
 
 /**
- * エラー状態。共有 UI パッケージの ErrorState に RAG の i18n（再試行ラベル）を注入するラッパ。
+ * エラー状態。共有 UI パッケージの ErrorState に NL2SQL の i18n（再試行ラベル）を注入するラッパ。
  */
 export function ErrorState({
   message,

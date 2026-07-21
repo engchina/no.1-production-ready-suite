@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
+  ArrowDown,
   ArrowDownUp,
+  ArrowUp,
   Code2,
   Columns3,
   Database,
@@ -81,10 +83,10 @@ function HistoryListSkeleton() {
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="history-grid-heading">
       <h2 id="history-grid-heading" className="sr-only">{t("history.list.title")}</h2>
       <HistorySkeletonBlock className="h-14" />
-      <HistorySkeletonBlock className="h-20" />
+      <HistorySkeletonBlock className="h-28" />
       <div className="grid gap-2" data-testid="history-list-skeleton">
         {Array.from({ length: 6 }, (_, index) => (
-          <HistorySkeletonBlock key={index} className="h-16" />
+          <HistorySkeletonBlock key={index} className="h-20" />
         ))}
       </div>
     </section>
@@ -113,14 +115,24 @@ function HistorySortButton({
   onToggle: (key: HistorySortKey) => void;
 }) {
   const active = sort.key === sortKey;
+  const direction = active
+    ? sort.direction === "asc"
+      ? t("history.sort.asc")
+      : t("history.sort.desc")
+    : t("history.sort.inactive");
+  const SortIcon = active ? (sort.direction === "asc" ? ArrowUp : ArrowDown) : ArrowDownUp;
   return (
     <button
       type="button"
-      className="inline-flex min-h-8 items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+      aria-label={t("history.sort.button", { label, direction })}
+      aria-pressed={active}
+      className={`inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-left text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:min-h-9 ${
+        active ? "bg-primary/10 text-primary" : "text-muted hover:bg-background hover:text-foreground"
+      }`}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+      <SortIcon size={13} aria-hidden="true" />
     </button>
   );
 }
@@ -164,13 +176,16 @@ function HistoryGrid({
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-background p-3">
-        <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_10rem_10rem]">
-          <DbManagementSearchField
-            label={t("history.search.label")}
-            placeholder={t("history.search.placeholder")}
-            value={search}
-            onChange={onSearchChange}
-          />
+        <DbManagementSearchField
+          label={t("history.search.label")}
+          placeholder={t("history.search.placeholder")}
+          value={search}
+          onChange={onSearchChange}
+        />
+        <div
+          className="grid grid-cols-1 gap-2 sm:[grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]"
+          data-testid="history-filter-grid"
+        >
           <HistoryFilterSelect
             label={t("history.filter.feedback")}
             value={feedbackFilter}
@@ -204,72 +219,70 @@ function HistoryGrid({
         </div>
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className="max-h-[42rem] overflow-auto" data-testid="history-list">
-            <table className="w-full min-w-[40rem] table-fixed divide-y divide-border text-left text-sm" data-testid="history-grid">
-              <colgroup>
-                <col className="w-[35%]" />
-                <col className="w-[23%]" />
-                <col className="w-[27%]" />
-                <col className="w-[15%]" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
-                <tr>
-                  <th
-                    className="px-3 py-2"
-                    aria-sort={sort.key === "question" ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-                  >
-                    <HistorySortButton label={t("history.grid.question")} sortKey="question" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th
-                    className="px-3 py-2"
-                    aria-sort={sort.key === "created_at" ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-                  >
-                    <HistorySortButton label={t("history.grid.execution")} sortKey="created_at" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="px-3 py-2 font-semibold">{t("history.grid.status")}</th>
-                  <th className="px-3 py-2 text-right font-semibold">{t("history.grid.actions")}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {pageItems.map((item) => {
-                  const selected = item.id === selectedId;
-                  return (
-                    <tr key={item.id} className={selected ? "bg-primary/10" : "hover:bg-background"} data-testid="history-row">
-                      <td className="px-3 py-2 align-top">
-                        <button
-                          type="button"
-                          aria-label={t("history.grid.show", { question: item.question })}
-                          aria-current={selected ? "true" : undefined}
-                          className="line-clamp-3 min-h-8 text-left font-semibold leading-5 text-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-                          onClick={() => onSelect(item, false)}
-                        >
-                          {item.question}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <p className="font-mono text-xs tabular-nums text-foreground">{formatDateTime(item.created_at)}</p>
-                        <p className="mt-1 text-xs text-muted">{engineLabel(item.engine)}</p>
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex flex-wrap gap-1.5">
-                          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-                          <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
-                          <StatusBadge
-                            variant={item.safety_is_safe ? "success" : "danger"}
-                            label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
-                          />
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-right align-top">
-                        <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(item, true)}>
-                          {t("history.grid.detail")}
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div
+            className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5"
+            role="group"
+            aria-label={t("history.sort.label")}
+          >
+            <HistorySortButton
+              label={t("history.grid.question")}
+              sortKey="question"
+              sort={sort}
+              onToggle={onSortChange}
+            />
+            <HistorySortButton
+              label={t("history.grid.execution")}
+              sortKey="created_at"
+              sort={sort}
+              onToggle={onSortChange}
+            />
+          </div>
+          <div className="max-h-[42rem] overflow-x-hidden overflow-y-auto" data-testid="history-list">
+            <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
+              {pageItems.map((item) => {
+                const selected = item.id === selectedId;
+                return (
+                  <li key={item.id} className="min-w-0" data-testid="history-row">
+                    <button
+                      type="button"
+                      aria-label={t("history.grid.show", { question: item.question })}
+                      aria-current={selected ? "true" : undefined}
+                      className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 ${
+                        selected
+                          ? "border-l-primary bg-primary/10"
+                          : "border-l-transparent hover:bg-background"
+                      }`}
+                      onClick={() => onSelect(item, true)}
+                    >
+                      <span
+                        className="line-clamp-2 min-w-0 break-words text-sm font-semibold leading-5 text-primary [overflow-wrap:anywhere]"
+                        data-testid="history-question"
+                        title={item.question}
+                      >
+                        {item.question}
+                      </span>
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="font-mono text-xs tabular-nums text-foreground">
+                          {formatDateTime(item.created_at)}
+                        </span>
+                        <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+                          {engineLabel(item.engine)}
+                        </span>
+                        <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+                        <StatusBadge
+                          variant={item.feedback_rating ? "success" : "neutral"}
+                          label={feedbackLabel(item)}
+                        />
+                        <StatusBadge
+                          variant={item.safety_is_safe ? "success" : "danger"}
+                          label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
+                        />
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
           <Pagination
             page={page}
@@ -300,12 +313,12 @@ function HistoryFilterSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid gap-1 text-sm font-medium text-foreground">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
       <span>{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
       >
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>
@@ -357,19 +370,19 @@ function HistoryDetailPanel({
   };
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="history-detail-heading" data-testid="history-detail">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3 [grid-template-columns:minmax(0,1fr)]" aria-labelledby="history-detail-heading" data-testid="history-detail">
+      <div className="flex min-w-0 flex-wrap items-start gap-3" data-testid="history-detail-header">
+        <div className="min-w-0 flex-[1_1_28rem]">
           <h2
             id="history-detail-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="break-words text-base font-semibold leading-6 text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="min-w-0 break-words text-base font-semibold leading-6 text-foreground [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
             {item.question}
           </h2>
-          <p className="mt-1 font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
             <StatusBadge variant="info" label={engineLabel(item.engine)} />
             <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
             <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
@@ -379,7 +392,13 @@ function HistoryDetailPanel({
             />
           </div>
         </div>
-        <Button type="button" variant="primary" size="sm" className="w-full whitespace-nowrap sm:w-auto" onClick={() => onRerun(item)}>
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
+          onClick={() => onRerun(item)}
+        >
           <RotateCcw size={15} aria-hidden="true" />
           <span>{t("history.action.rerun")}</span>
         </Button>
@@ -415,8 +434,8 @@ function HistoryDetailPanel({
       </div>
 
       {tab === "overview" ? (
-        <div id="history-detail-panel-overview" role="tabpanel" aria-labelledby="history-detail-tab-overview" className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-3">
+        <div id="history-detail-panel-overview" role="tabpanel" aria-labelledby="history-detail-tab-overview" className="grid gap-3">
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]">
             <HistoryFact icon={Database} label={t("history.profile")} value={item.profile_name || item.profile_id || "—"} />
             <HistoryFact icon={Rows3} label={t("history.rows")} value={formatNumber(item.result_row_count)} />
             <HistoryFact icon={Columns3} label={t("history.columns")} value={formatNumber(item.result_columns.length)} />
@@ -449,7 +468,7 @@ function HistoryFact({ icon: Icon, label, value }: { icon: typeof Database; labe
       <Icon size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
       <div className="min-w-0">
         <p className="text-xs font-medium text-muted">{label}</p>
-        <p className="mt-1 truncate text-sm font-semibold tabular-nums text-foreground" title={value}>{value}</p>
+        <p className="mt-1 break-words text-sm font-semibold tabular-nums text-foreground [overflow-wrap:anywhere]" title={value}>{value}</p>
       </div>
     </div>
   );
@@ -459,7 +478,7 @@ function HistoryDetailSection({ title, value, mono = false }: { title: string; v
   return (
     <div className="rounded-md border border-border bg-card p-3">
       <p className="text-xs font-medium text-muted">{title}</p>
-      <p className={`mt-1 break-words text-sm leading-6 text-foreground ${mono ? "font-mono text-xs" : ""}`}>{value}</p>
+      <p className={`mt-1 break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere] ${mono ? "font-mono text-xs" : ""}`}>{value}</p>
     </div>
   );
 }
@@ -537,7 +556,7 @@ export function HistoryPage() {
   return (
     <>
       <PageHeader title={t("nav.history")} subtitle={t("history.subtitle")} />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <main className="grid gap-3 p-3 sm:p-4 lg:p-6">
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
           action={
@@ -550,6 +569,7 @@ export function HistoryPage() {
 
         <DbObjectManagementStatusBar
           ariaLabel={t("history.status.label")}
+          density="compact"
           metrics={[
             { label: t("history.status.visible"), value: formatNumber(filteredItems.length), emphasis: true },
             { label: t("history.status.evaluated"), value: formatNumber(evaluatedCount) },

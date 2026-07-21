@@ -122,7 +122,10 @@ class OciGenAiEmbeddingClient:
             signer = oci.auth.signers.get_resource_principals_signer()
         else:
             config_file = self.settings.oci_config_file or str(Path.home() / ".oci" / "config")
-            config = oci.config.from_file(config_file, self.settings.oci_profile)
+            config = oci.config.from_file(
+                config_file,
+                self.settings.resolved_oci_config_profile,
+            )
         client_kwargs: dict[str, Any] = {"config": config, "service_endpoint": endpoint}
         if signer is not None:
             client_kwargs["signer"] = signer

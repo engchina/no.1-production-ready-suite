@@ -4,6 +4,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useNavigationType,
 } from "react-router-dom";
 
@@ -11,6 +12,7 @@ import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
+import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
@@ -38,6 +40,13 @@ import { ViewManagementPage } from "@/features/nl2sql/pages/ViewManagementPage";
 import { DatabaseSettingsPage as Nl2SqlDatabaseSettingsPage } from "@/features/nl2sql/pages/SettingsPages";
 import { SqlAnalysisPage } from "@/features/nl2sql/pages/SqlAnalysisPage";
 import { SqlToQuestionPage } from "@/features/nl2sql/pages/SqlToQuestionPage";
+import { useAuth } from "@/features/security/AuthProvider";
+import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/features/security/AuthPages";
+import { ROUTE_PERMISSIONS, firstAllowedRoute } from "@/features/security/route-permissions";
+import { SecurityAuditPage } from "@/features/security/SecurityAuditPage";
+import { SecurityDeepSecPage } from "@/features/security/SecurityDeepSecPage";
+import { SecurityRolesPage } from "@/features/security/SecurityRolesPage";
+import { SecurityUsersPage } from "@/features/security/SecurityUsersPage";
 
 /**
  * ナビ切替で state を破棄したくない「AI 活用」4画面。常時マウントし表示のみ切替する。
@@ -52,11 +61,52 @@ const KEEP_ALIVE_PAGES = [
 const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.path));
 
 export function App() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const handleForbidden = () => navigate(APP_ROUTES.forbidden, { replace: true });
+    window.addEventListener("app-auth-forbidden", handleForbidden);
+    return () => window.removeEventListener("app-auth-forbidden", handleForbidden);
+  }, [navigate]);
+
+  return (
+    <Routes>
+      <Route path={APP_ROUTES.login} element={<LoginPage />} />
+      <Route path={APP_ROUTES.passwordChange} element={<PasswordChangePage />} />
+      <Route path={APP_ROUTES.forbidden} element={<ForbiddenPage />} />
+      <Route path="*" element={<AuthenticatedApplication />} />
+    </Routes>
+  );
+}
+
+function AuthenticatedApplication() {
+  const auth = useAuth();
+  const location = useLocation();
+
+  if (auth.status === "loading") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background p-4 text-sm text-muted" role="status">
+        {t("auth.loading")}
+      </main>
+    );
+  }
+  if (auth.status === "unauthenticated") {
+    return <Navigate to={APP_ROUTES.login} state={{ from: location.pathname }} replace />;
+  }
+  if (auth.user?.force_password_change) {
+    return <Navigate to={APP_ROUTES.passwordChange} replace />;
+  }
+
+  const requiredPermission = ROUTE_PERMISSIONS[location.pathname];
+  if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+    return <Navigate to={APP_ROUTES.forbidden} replace />;
+  }
+
   return (
     <AppLayout>
-      <KeepAlivePages />
-      <Routes>
-        <Route path={APP_ROUTES.dashboard} element={<Navigate to={APP_ROUTES.query} replace />} />
+      <DatabaseGate>
+        <KeepAlivePages />
+        <Routes>
+        <Route path={APP_ROUTES.dashboard} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
         <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
         <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
         <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
@@ -91,6 +141,10 @@ export function App() {
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
+        <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
+        <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+        <Route path={APP_ROUTES.securityAudit} element={<SecurityAuditPage />} />
+        <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
         <Route
           path={APP_ROUTES.legacyNl2sqlModelLearning}
           element={<Navigate to={`${APP_ROUTES.profiles}#profile-learning`} replace />}
@@ -100,7 +154,9 @@ export function App() {
           element={<Nl2SqlDatabaseSettingsPage />}
         />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
-      </Routes>
+        <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+        </Routes>
+      </DatabaseGate>
     </AppLayout>
   );
 }
@@ -111,12 +167,21 @@ export function App() {
  */
 function KeepAlivePages() {
   const { pathname } = useLocation();
+  const auth = useAuth();
   const mounted = useRef(new Set<string>());
-  if (KEEP_ALIVE_PATHS.has(pathname)) mounted.current.add(pathname);
+  if (
+    KEEP_ALIVE_PATHS.has(pathname) &&
+    auth.hasPermission(ROUTE_PERMISSIONS[pathname])
+  ) {
+    mounted.current.add(pathname);
+  }
 
   return (
     <>
-      {KEEP_ALIVE_PAGES.filter((page) => mounted.current.has(page.path)).map((page) => (
+      {KEEP_ALIVE_PAGES.filter(
+        (page) =>
+          mounted.current.has(page.path) && auth.hasPermission(ROUTE_PERMISSIONS[page.path])
+      ).map((page) => (
         <div key={page.path} style={{ display: page.path === pathname ? undefined : "none" }}>
           {page.element}
         </div>

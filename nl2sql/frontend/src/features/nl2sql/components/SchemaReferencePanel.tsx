@@ -10,6 +10,7 @@ import {
   buildTableInsertText,
   buildTableSqlIdentifierText,
   normalizeObjectIdentifier,
+  schemaTableQualifiedName,
 } from "../workbenchState";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
@@ -30,6 +31,12 @@ export function SchemaReferencePanel({
   listMaxHeightClass = "max-h-72",
   onRefreshSchema,
   refreshing = false,
+  searchQuery,
+  onSearchQueryChange,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  onExpandTable,
   onInsert,
 }: {
   catalog: SchemaCatalog | null;
@@ -43,9 +50,16 @@ export function SchemaReferencePanel({
   /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh）。 */
   onRefreshSchema?: () => void;
   refreshing?: boolean;
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  onExpandTable?: (table: SchemaTable) => void;
   onInsert: (text: string) => void;
 }) {
-  const [query, setQuery] = useState("");
+  const [localQuery, setLocalQuery] = useState("");
+  const query = searchQuery ?? localQuery;
   // アコーディオン: 同時に展開できる表は 1 つだけ（外側スクロール量を抑える）。
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
 
@@ -63,16 +77,23 @@ export function SchemaReferencePanel({
   const scopedTables = useMemo(() => {
     if (!catalog) return [];
     if (!allowedSet) return catalog.tables;
-    return catalog.tables.filter((table) =>
-      allowedSet.has(normalizeObjectIdentifier(table.table_name))
-    );
+    return catalog.tables.filter((table) => {
+      const qualifiedName = normalizeObjectIdentifier(schemaTableQualifiedName(table));
+      const objectName = normalizeObjectIdentifier(table.table_name);
+      // legacy profile は非修飾名、新しい cross-schema profile は OWNER.OBJECT を保持する。
+      return allowedSet.has(qualifiedName) || allowedSet.has(objectName);
+    });
   }, [catalog, allowedSet]);
 
   const filteredTables = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return scopedTables;
+    // controlled query は server-side 検索済み。summary に未取得の列が無くても結果を隠さない。
+    if (onSearchQueryChange) return scopedTables;
     return scopedTables.filter((table) => {
       return (
+        table.owner.toLowerCase().includes(normalized) ||
+        schemaTableQualifiedName(table).toLowerCase().includes(normalized) ||
         table.table_name.toLowerCase().includes(normalized) ||
         table.logical_name.toLowerCase().includes(normalized) ||
         table.columns.some(
@@ -82,10 +103,19 @@ export function SchemaReferencePanel({
         )
       );
     });
-  }, [scopedTables, query]);
+  }, [onSearchQueryChange, scopedTables, query]);
 
-  const toggleExpanded = (tableName: string) => {
-    setExpandedTable((current) => (current === tableName ? null : tableName));
+  const toggleExpanded = (qualifiedName: string) => {
+    setExpandedTable((current) => {
+      const next = current === qualifiedName ? null : qualifiedName;
+      if (next) {
+        const table = catalog?.tables.find(
+          (item) => schemaTableQualifiedName(item) === qualifiedName
+        );
+        if (table) onExpandTable?.(table);
+      }
+      return next;
+    });
   };
 
   return (
@@ -110,7 +140,11 @@ export function SchemaReferencePanel({
         />
         <input
           value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            if (onSearchQueryChange) onSearchQueryChange(value);
+            else setLocalQuery(value);
+          }}
           className="min-h-9 min-w-0 w-full rounded-md border border-border bg-card py-1.5 pl-8 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
           placeholder={t("nl2sql.schema.searchPlaceholder")}
           aria-label={t("nl2sql.schema.search")}
@@ -157,15 +191,27 @@ export function SchemaReferencePanel({
       >
         {filteredTables.map((table) => (
           <SchemaTableItem
-            key={table.table_name}
+            key={schemaTableQualifiedName(table)}
             table={table}
-            expanded={searching || expandedTable === table.table_name}
+            expanded={searching || expandedTable === schemaTableQualifiedName(table)}
             disabled={disabled}
             onToggleExpanded={toggleExpanded}
             insertMode={insertMode}
             onInsert={onInsert}
           />
         ))}
+        {hasMore && onLoadMore && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={loadingMore}
+            disabled={disabled}
+            onClick={onLoadMore}
+          >
+            {t("profiles.action.loadMore")}
+          </Button>
+        )}
       </div>
       )}
     </section>
@@ -201,7 +247,7 @@ function SchemaTableItem({
           className="flex shrink-0 items-center px-2 text-muted hover:bg-muted/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           aria-expanded={expanded}
           aria-label={t("nl2sql.schema.toggleTable", { name: table.logical_name })}
-          onClick={() => onToggleExpanded(table.table_name)}
+          onClick={() => onToggleExpanded(schemaTableQualifiedName(table))}
         >
           {expanded ? (
             <ChevronDown size={15} aria-hidden="true" />
@@ -220,6 +266,9 @@ function SchemaTableItem({
             {table.logical_name}
           </span>
           <span className="min-w-0 truncate font-mono text-xs text-muted">{table.table_name}</span>
+          <span className="shrink-0 rounded border border-border bg-muted/20 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+            {table.owner}
+          </span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted">
             {t("schema.table.rows", { count: formatSchemaCount(table.row_count) })}
             <Plus
@@ -250,7 +299,7 @@ function SchemaTableItem({
 
 function columnTooltip(table: SchemaTable, column: SchemaColumn): string {
   const lines = [
-    `${table.table_name}.${column.column_name} · ${column.data_type}${column.nullable ? "" : " · NOT NULL"}`,
+    `${schemaTableQualifiedName(table)}.${column.column_name} · ${column.data_type}${column.nullable ? "" : " · NOT NULL"}`,
   ];
   if (column.comment) lines.push(column.comment);
   if (column.sample_values.length > 0) {

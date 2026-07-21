@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Database, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { Banner, Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
@@ -21,8 +21,11 @@ export function DatabaseSettingsPage() {
   const [activeView, setActiveView] = useState<DatabaseSettingsView>("boundary");
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState("");
+  const loadSequence = useRef(0);
 
   const loadOverview = async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setOverviewLoading(true);
     setOverviewError("");
     try {
@@ -30,12 +33,18 @@ export function DatabaseSettingsPage() {
         apiGet<SchemaCatalog>("/api/schema/catalog"),
         apiGet<DiagnosticsData>("/api/nl2sql/diagnostics"),
       ]);
-      setCatalog(nextCatalog);
-      setDiagnostics(nextDiagnostics);
+      if (sequence === loadSequence.current) {
+        setCatalog(nextCatalog);
+        setDiagnostics(nextDiagnostics);
+      }
     } catch (err) {
-      setOverviewError(err instanceof Error ? err.message : t("nl2sqlSettings.database.overview.error"));
+      const nextError =
+        err instanceof Error && err.message.trim()
+          ? err.message
+          : t("nl2sqlSettings.database.overview.error");
+      if (sequence === loadSequence.current) setOverviewError(nextError);
     } finally {
-      setOverviewLoading(false);
+      if (sequence === loadSequence.current) setOverviewLoading(false);
     }
   };
 
@@ -56,7 +65,7 @@ export function DatabaseSettingsPage() {
         subtitle={t("nl2sqlSettings.database.subtitle")}
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        {overviewError && (
+        {overviewError ? (
           <Banner
             severity="danger"
             action={
@@ -68,7 +77,7 @@ export function DatabaseSettingsPage() {
           >
             {overviewError}
           </Banner>
-        )}
+        ) : null}
 
         <DatabaseStatusBar
           tableCount={catalog?.tables.length ?? 0}

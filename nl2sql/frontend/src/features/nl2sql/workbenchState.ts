@@ -62,8 +62,12 @@ function quoteSqlIdentifier(value: string) {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
+export function schemaTableQualifiedName(table: SchemaTable) {
+  return table.qualified_name || `${table.owner}.${table.table_name}`.toUpperCase();
+}
+
 export function buildSchemaSqlIdentifierText(table: SchemaTable, column: SchemaColumn) {
-  return `${quoteSqlIdentifier(table.table_name)}.${quoteSqlIdentifier(column.column_name)}`;
+  return `${quoteSqlIdentifier(table.owner)}.${quoteSqlIdentifier(table.table_name)}.${quoteSqlIdentifier(column.column_name)}`;
 }
 
 /** 表名の挿入テキスト（論理名・検索クエリ向け）。 */
@@ -73,7 +77,7 @@ export function buildTableInsertText(table: SchemaTable) {
 
 /** 表名の挿入テキスト（物理名・SQL 向け）。 */
 export function buildTableSqlIdentifierText(table: SchemaTable) {
-  return quoteSqlIdentifier(table.table_name);
+  return `${quoteSqlIdentifier(table.owner)}.${quoteSqlIdentifier(table.table_name)}`;
 }
 
 export function insertTextAtRange(source: string, insertText: string, start: number, end: number) {
@@ -97,13 +101,13 @@ export function leadingNewlinePrefix(source: string, start: number): string {
 
 /**
  * オブジェクト識別子を正規化する（backend `_normalize_identifier` 相当）。
- * `owner.name` の最終要素を取り、ダブルクオートを除去して大文字化する。
- * 例: `EMPLOYEE` / `APP.EMPLOYEE` / `"EMPLOYEE"` / `app."Employee"` → すべて `EMPLOYEE`。
+ * owner を保持したままダブルクオートを除去して大文字化する。
+ * 例: `APP.EMPLOYEE` / `app."Employee"` → `APP.EMPLOYEE`。
  */
 export function normalizeObjectIdentifier(value: string): string {
   const parts = value
     .trim()
     .split(".")
     .map((part) => part.trim().replaceAll('"', ""));
-  return (parts[parts.length - 1] ?? "").toUpperCase();
+  return parts.filter(Boolean).join(".").toUpperCase();
 }

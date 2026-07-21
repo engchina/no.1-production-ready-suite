@@ -431,9 +431,20 @@ function actionableError(error: unknown, fallback: string) {
 
 function filteredSchemaTables(catalog: SchemaCatalog | null, profile: Nl2SqlProfile | null) {
   if (!catalog) return [];
-  const allowed = new Set((profile?.allowed_tables ?? []).map((table) => table.toUpperCase()));
+  const allowed = new Set(
+    [...(profile?.allowed_tables ?? []), ...(profile?.allowed_views ?? [])].map((table) =>
+      table.replaceAll('"', "").toUpperCase()
+    )
+  );
   return catalog.tables.filter(
-    (table) => allowed.size === 0 || allowed.has(table.table_name.toUpperCase())
+    (table) => {
+      const qualifiedName = (table.qualified_name || `${table.owner}.${table.table_name}`).toUpperCase();
+      return (
+        allowed.size === 0 ||
+        allowed.has(qualifiedName) ||
+        allowed.has(table.table_name.replaceAll('"', "").toUpperCase())
+      );
+    }
   );
 }
 

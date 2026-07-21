@@ -162,8 +162,8 @@ def test_request_scope_is_intersection_of_profile_view() -> None:
         ),
     )
 
-    assert resolved.table_names == ["ORDERS"]
-    assert resolved.columns == {"ORDERS": ["ORDER_ID"]}
+    assert resolved.table_names == ["ADMIN.ORDERS"]
+    assert resolved.columns == {"ADMIN.ORDERS": ["ORDER_ID"]}
 
 
 def test_unknown_profile_never_falls_back_to_default() -> None:

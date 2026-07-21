@@ -38,6 +38,7 @@ import {
   type ModelSettingsCheckStatus,
   type ModelSettingsData,
   type ModelSettingsPayload,
+  type ModelSettingsSecretSource,
   type ModelSettingsTestRequest,
   type ModelSettingsTestResult,
   type ModelSettingsTestTargetType,
@@ -78,6 +79,12 @@ const STATUS_LABEL_KEYS: Record<ModelSettingsCheckStatus, I18nKey> = {
   ok: "settings.model.status.ok",
   missing: "settings.model.status.missing",
   invalid: "settings.model.status.invalid",
+};
+
+const SECRET_SOURCE_LABEL_KEYS: Record<ModelSettingsSecretSource, I18nKey> = {
+  environment: "settings.model.secretSource.environment",
+  legacy_json: "settings.model.secretSource.legacyJson",
+  missing: "settings.model.secretSource.missing",
 };
 
 const CHECK_KEYS: CheckKey[] = ["enterprise_ai", "generative_ai", "embedding_dim"];
@@ -142,7 +149,14 @@ export function ModelSettingsClient() {
     baselineData?.model_settings_file ??
     query.data?.model_settings_file ??
     DEFAULT_MODEL_SETTINGS_FILE;
-  const envPreview = buildModelEnvFile(modelSettingsFile);
+  const secretSource =
+    checkData?.secret_source ?? baselineData?.secret_source ?? query.data?.secret_source ?? "missing";
+  const legacySecretDetected =
+    checkData?.legacy_secret_detected ??
+    baselineData?.legacy_secret_detected ??
+    query.data?.legacy_secret_detected ??
+    false;
+  const envPreview = buildModelEnvFile(modelSettingsFile, draft?.enterprise_ai ?? null);
   const jsonPreview = draft ? buildModelSettingsJsonPreview(draft) : "";
 
   const updateEnterprise = <K extends keyof EnterpriseAiModelSettings>(
@@ -379,6 +393,9 @@ export function ModelSettingsClient() {
                 <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
                   {t("settings.model.source")}: {t("settings.model.source.runtime")}
                 </span>
+                <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
+                  {t("settings.model.secretSource")}: {t(SECRET_SOURCE_LABEL_KEYS[secretSource])}
+                </span>
               </div>
             </div>
           </div>
@@ -390,6 +407,14 @@ export function ModelSettingsClient() {
         {notice ? (
           <Banner severity={notice.tone === "error" ? "danger" : notice.tone}>
             {notice.message}
+          </Banner>
+        ) : null}
+        {legacySecretDetected ? (
+          <Banner
+            severity="warning"
+            title={t("settings.model.legacySecret.title")}
+          >
+            {t("settings.model.legacySecret.description")}
           </Banner>
         ) : null}
         {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
@@ -1152,20 +1177,23 @@ function FieldLabel({
   );
 }
 
-function buildModelEnvFile(modelSettingsFile: string): string {
+function buildModelEnvFile(
+  modelSettingsFile: string,
+  enterpriseAi: EnterpriseAiModelSettings | null
+): string {
   return [
     "# モデル設定",
     `MODEL_SETTINGS_FILE=${formatSettingsEnvValue(modelSettingsFile)}`,
+    `OCI_ENTERPRISE_AI_API_KEY=${formatSettingsEnvValue(modelApiKeyEnvPreview(enterpriseAi))}`,
   ].join("\n");
 }
 
 function buildModelSettingsJsonPreview(draft: ModelSettingsPayload): string {
   return formatSettingsJson({
-    version: 1,
+    version: 2,
     enterprise_ai: {
       endpoint: draft.enterprise_ai.endpoint,
       project_ocid: draft.enterprise_ai.project_ocid,
-      api_key: modelApiKeyPreview(draft.enterprise_ai),
       models: draft.enterprise_ai.models
         .filter((model) => model.model_id.trim())
         .map((model) => ({
@@ -1191,8 +1219,8 @@ function buildModelSettingsJsonPreview(draft: ModelSettingsPayload): string {
   });
 }
 
-function modelApiKeyPreview(settings: EnterpriseAiModelSettings): string {
-  if (settings.clear_api_key) return "";
+function modelApiKeyEnvPreview(settings: EnterpriseAiModelSettings | null): string {
+  if (!settings || settings.clear_api_key) return "";
   if (settings.api_key.trim()) return t("settings.preview.secret.entered");
   return settings.has_api_key ? t("settings.preview.secret.saved") : "";
 }

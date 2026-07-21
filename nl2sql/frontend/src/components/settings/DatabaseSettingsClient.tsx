@@ -2,7 +2,9 @@
 
 import {
   AlertCircle,
+  ArrowLeft,
   CheckCircle2,
+  CloudDownload,
   Database,
   Eye,
   EyeOff,
@@ -16,7 +18,10 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
@@ -30,18 +35,24 @@ import {
   SettingsSupplementalPanels,
   formatSettingsEnvValue,
 } from "@/components/settings/SettingsPreviewPanels";
+import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import {
   ApiError,
   type AdbInfoData,
   type DatabaseConnectionTestResult,
   type DatabaseSettingsData,
+  type SchemaOwnersData,
   type DatabaseSettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
+  queryKeys,
   useAdbInfo,
+  useDatabaseStatus,
   useDatabaseSettings,
+  useDownloadDatabaseWallet,
+  useSchemaOwners,
   useStartAdb,
   useStopAdb,
   useTestDatabaseSettings,
@@ -75,8 +86,10 @@ const EMPTY_FORM: DatabaseSettingsForm = {
 /** Oracle 26ai の runtime 接続設定フォーム。 */
 export function DatabaseSettingsClient() {
   const query = useDatabaseSettings();
+  const schemaOwners = useSchemaOwners();
   const save = useUpdateDatabaseSettings();
   const walletUpload = useUploadDatabaseWallet();
+  const walletDownload = useDownloadDatabaseWallet();
   const test = useTestDatabaseSettings();
   const resetTest = test.reset;
 
@@ -90,6 +103,7 @@ export function DatabaseSettingsClient() {
   const userRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const walletInputRef = useRef<HTMLInputElement>(null);
+  const autoWalletAttemptedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (query.data) {
@@ -99,6 +113,32 @@ export function DatabaseSettingsClient() {
       setOptimisticSettings(null);
     }
   }, [query.data]);
+
+  const downloadWallet = walletDownload.mutate;
+  const resetWalletDownload = walletDownload.reset;
+
+  useEffect(() => {
+    const settings = query.data;
+    const adbOcid = settings?.adb_ocid.trim() ?? "";
+    if (!settings || settings.wallet_uploaded || !adbOcid) return;
+    if (autoWalletAttemptedRef.current.has(adbOcid)) return;
+
+    autoWalletAttemptedRef.current.add(adbOcid);
+    resetWalletDownload();
+    downloadWallet();
+  }, [downloadWallet, query.data, resetWalletDownload]);
+
+  useEffect(() => {
+    const result = walletDownload.data;
+    if (!result) return;
+    setForm(formFromSettings(result.settings));
+    setOptimisticSettings(result.settings);
+    setSaved(false);
+    resetTest();
+    if (result.status === "downloaded") {
+      toast.success(t("settings.database.wallet.autoDownload.success"));
+    }
+  }, [resetTest, walletDownload.data]);
 
   function updateForm(update: Partial<DatabaseSettingsForm>) {
     setForm((current) => ({ ...current, ...update }));
@@ -161,6 +201,7 @@ export function DatabaseSettingsClient() {
     setSaved(false);
     setUploadedWalletFileName(null);
     setErrors((current) => ({ ...current, wallet: undefined }));
+    resetWalletDownload();
     resetTest();
     walletUpload.mutate(file, {
       onSuccess: (data) => {
@@ -178,6 +219,10 @@ export function DatabaseSettingsClient() {
     walletUpload.error instanceof ApiError
       ? walletUpload.error.message
       : t("settings.database.walletUploadError");
+  const walletDownloadError =
+    walletDownload.error instanceof ApiError
+      ? walletDownload.error.message
+      : t("settings.database.wallet.autoDownload.error");
   const testResult = test.data;
 
   if (query.isPending) {
@@ -272,10 +317,17 @@ export function DatabaseSettingsClient() {
                 inputRef={walletInputRef}
                 settings={settings}
                 uploadPending={walletUpload.isPending}
+                autoDownloadPending={walletDownload.isPending}
+                autoDownloadError={walletDownload.isError ? walletDownloadError : null}
+                canAutoDownload={Boolean(settings.adb_ocid.trim())}
                 uploadedFileName={uploadedWalletFileName}
                 uploadError={walletUpload.isError ? walletUploadError : null}
                 validationError={errors.wallet}
                 onUpload={uploadWallet}
+                onRetryDownload={() => {
+                  resetWalletDownload();
+                  downloadWallet();
+                }}
               />
 
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -311,10 +363,18 @@ export function DatabaseSettingsClient() {
         </form>
 
           <AdbManagementCard settings={settings} />
+          <SystemTablesCard />
         </div>
 
         <SettingsSupplementalPanels
-          status={<StatusPanel settings={settings} />}
+          status={
+            <StatusPanel
+              settings={settings}
+              schemaOwners={schemaOwners.data ?? null}
+              schemaOwnersLoading={schemaOwners.isLoading}
+              schemaOwnersError={schemaOwners.isError}
+            />
+          }
           env={{
             description: t("settings.database.env.description"),
             value: envPreview,
@@ -371,6 +431,8 @@ const ADB_LIFECYCLE_LABEL_KEYS: Record<string, I18nKey> = {
 
 /** Autonomous Database の情報取得・起動・停止を行う運用パネル。 */
 function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
+  const location = useLocation();
+  const queryClient = useQueryClient();
   const infoQuery = useAdbInfo();
   const saveSettings = useUpdateAdbSettings();
   const start = useStartAdb();
@@ -386,9 +448,19 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
   }, [settings.region]);
 
   const info = infoQuery.data;
+  const lifecycle = info?.lifecycle_state ?? null;
+  const databaseStatus = useDatabaseStatus({ enabled: lifecycle === "AVAILABLE" });
+  const returnTo = safeReturnTo(location.state);
+  const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
+  const canStop = lifecycle === "AVAILABLE";
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
   const busy = saveSettings.isPending || start.isPending || stop.isPending;
+
+  useEffect(() => {
+    if (lifecycle !== "AVAILABLE") return;
+    void queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });
+  }, [lifecycle, queryClient]);
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -449,7 +521,7 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             : null;
 
   return (
-    <Card className="rounded-md">
+    <Card id="adb-management" className="scroll-mt-4 rounded-md">
       <CardHeader className="p-6 pb-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-5">
           <div className="flex items-center gap-2">
@@ -520,8 +592,8 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             type="button"
             size="lg"
             variant="secondary"
-            loading={start.isPending}
-            disabled={busy || !ocid.trim()}
+            loading={start.isPending || lifecycle === "STARTING"}
+            disabled={busy || !ocid.trim() || !canStart}
             onClick={() => void handleStart()}
           >
             <Power size={16} aria-hidden />
@@ -534,7 +606,7 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             size="lg"
             variant="secondary"
             loading={stop.isPending}
-            disabled={busy || !ocid.trim()}
+            disabled={busy || !ocid.trim() || !canStop}
             onClick={() => void handleStop()}
           >
             <PowerOff size={16} aria-hidden />
@@ -545,10 +617,33 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
 
         {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
 
+        {lifecycle === "AVAILABLE" && databaseStatus.data?.status === "unreachable" ? (
+          <FormStatus tone="warning" message={t("settings.adb.connectionStillUnavailable")} />
+        ) : null}
+
+        {returnTo && databaseStatus.data?.status === "ok" ? (
+          <Link
+            to={returnTo}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            <ArrowLeft size={16} aria-hidden />
+            {t("settings.adb.action.returnToPrevious")}
+          </Link>
+        ) : null}
+
         {log.length > 0 ? <AdbOperationLog entries={log} /> : null}
       </CardContent>
     </Card>
   );
+}
+
+function safeReturnTo(state: unknown): string | null {
+  if (!state || typeof state !== "object" || !("returnTo" in state)) return null;
+  const value = (state as { returnTo?: unknown }).returnTo;
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
+    return null;
+  }
+  return value.startsWith("/settings") ? null : value;
 }
 
 function AdbInfoPanel({ info }: { info: AdbInfoData }) {
@@ -839,20 +934,29 @@ function WalletUploadField({
   inputRef,
   settings,
   uploadPending,
+  autoDownloadPending,
+  autoDownloadError,
+  canAutoDownload,
   uploadedFileName,
   uploadError,
   validationError,
   onUpload,
+  onRetryDownload,
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
   settings: DatabaseSettingsData;
   uploadPending: boolean;
+  autoDownloadPending: boolean;
+  autoDownloadError: string | null;
+  canAutoDownload: boolean;
   uploadedFileName: string | null;
   uploadError: string | null;
   validationError?: string;
   onUpload: (file: File) => void;
+  onRetryDownload: () => void;
 }) {
   const hintId = "oracle-wallet-upload-hint";
+  const walletBusy = uploadPending || autoDownloadPending;
 
   function handleDrop(event: DragEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -867,7 +971,7 @@ function WalletUploadField({
       </span>
       <button
         type="button"
-        disabled={uploadPending}
+        disabled={walletBusy}
         onClick={() => inputRef.current?.click()}
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}
@@ -891,13 +995,44 @@ function WalletUploadField({
         accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream"
         aria-label={t("settings.database.walletInput.aria")}
         aria-describedby={hintId}
-        disabled={uploadPending}
+        disabled={walletBusy}
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file) onUpload(file);
           event.target.value = "";
         }}
       />
+
+      {autoDownloadPending ? (
+        <FormStatus
+          tone="info"
+          className="text-xs"
+          message={t("settings.database.wallet.autoDownload.pending")}
+        />
+      ) : null}
+      {!settings.wallet_uploaded && !canAutoDownload ? (
+        <FormStatus
+          tone="info"
+          className="text-xs"
+          message={t("settings.database.wallet.autoDownload.missingOcid")}
+        />
+      ) : null}
+      {autoDownloadError ? (
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+          <FormStatus tone="danger" className="min-w-0 flex-1 text-xs" message={autoDownloadError} />
+          <Button
+            type="button"
+            size="md"
+            variant="secondary"
+            className="w-full shrink-0 sm:w-auto"
+            aria-label={t("settings.database.wallet.autoDownload.retryAria")}
+            onClick={onRetryDownload}
+          >
+            <CloudDownload size={16} aria-hidden />
+            {t("settings.database.wallet.autoDownload.retry")}
+          </Button>
+        </div>
+      ) : null}
 
       {uploadedFileName ? (
         <FormStatus
@@ -976,7 +1111,17 @@ function SecretClearCheckbox({
   );
 }
 
-function StatusPanel({ settings }: { settings: DatabaseSettingsData }) {
+function StatusPanel({
+  settings,
+  schemaOwners,
+  schemaOwnersLoading,
+  schemaOwnersError,
+}: {
+  settings: DatabaseSettingsData;
+  schemaOwners: SchemaOwnersData | null;
+  schemaOwnersLoading: boolean;
+  schemaOwnersError: boolean;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -1004,6 +1149,27 @@ function StatusPanel({ settings }: { settings: DatabaseSettingsData }) {
               : t("settings.database.wallet.notDetected")
           }
         />
+        <MetadataRow
+          label={t("settings.database.status.currentOwner")}
+          value={
+            schemaOwnersLoading
+              ? t("common.loading")
+              : schemaOwners?.current_owner || settings.user || "-"
+          }
+        />
+        <MetadataRow
+          label={t("settings.database.status.accessibleSchemas")}
+          value={
+            schemaOwnersError
+              ? t("settings.database.status.schemaUnavailable")
+              : t("settings.database.status.schemaCount", {
+                  count: schemaOwners?.owners.length ?? 0,
+                })
+          }
+        />
+        <p className="rounded-md border border-info/25 bg-info-bg/40 px-3 py-2 text-xs leading-5 text-foreground">
+          {t("settings.database.status.scopeBoundary")}
+        </p>
       </CardContent>
     </Card>
   );

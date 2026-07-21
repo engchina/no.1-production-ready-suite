@@ -8,6 +8,7 @@
 - `POST /classifier/train`: 取り込み済みデータを OCI GenAI embedding 1536 次元に変換し、LogisticRegression を学習する。
 - `POST /classifier/predict`: 学習済み分類器で profile category を予測する。
 - `GET /classifier`: training data と classifier artifact の状態を確認する。
+- `POST /classifier/model/import`: joblib / JSON artifact で唯一の classifier model を置き換える。旧 `/classifier/models/import` は互換 alias として `activate=true` の場合だけ受理する。
 - `POST /rewrite`: glossary/schema/extra prompt を使い、OCI Enterprise AI で自然言語質問を書き換える。未設定または失敗時は deterministic rewrite。
 - `GET /select-ai/db-profiles`: Oracle DBMS_CLOUD_AI profile 一覧を表示する。
 - `POST /select-ai/db-profiles/{profile_name}/drop`: profile 名と確認語を指定して drop を実行する。
@@ -19,9 +20,14 @@
 
 LLM/VLM は OCI Enterprise AI のみ、embedding は OCI GenAI のみ、永続 state と SQL/DB 操作は Oracle に集約する。外部 LLM provider や外部 vector DB は使わない。
 
+Classifier model は `classifier_artifact` 1 件のみを保存する。学習または artifact import が成功すると
+現在の model を置き換え、model registry・version 切替・個別削除 API は提供しない。旧 snapshot に
+`classifier_model_registry` が残っていても active な `classifier_artifact` だけを引き継ぎ、履歴 version は
+次回保存時に破棄する。
+
 ## 管理 UI
 
-- `Learning`: LogisticRegression 分類器の training import/train/predict、feedback vector entries/config/rebuild を扱う。
+- `Learning`: LogisticRegression 分類器の training import/train/predict と単一 model 状態、feedback vector entries/config/rebuild を扱う。
 - `Query Workbench`: Query Rewrite パネルを持つ。glossary/schema/extra prompt の使用有無を切り替える。
 - `Engine Operations`: Select AI / Agent assets の refresh/cleanup、DB profile 一覧、DB profile 単体 drop、Agent run/conversations/privileges、manual integration report import を扱う。
 - `Data Tools`: Excel/CSV import/export、COMMENT ON、annotations、DBMS_CLOUD_AI synthetic data を扱う。

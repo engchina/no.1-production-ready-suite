@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { mockDatabaseGateReady } from "./_helpers/database-gate";
+
+test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
@@ -65,6 +68,48 @@ async function mockProfileManagement(page: Page) {
       ],
     })
   );
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfillJson(route, {
+      catalog_version: 1,
+      schema_fingerprint: "catalog-v1",
+      refreshed_at: "2026-07-11T00:00:00Z",
+      object_count: 1,
+      column_count: 0,
+      change_token: 1,
+      etag: "catalog-v1",
+    })
+  );
+  await page.route("**/api/schema/objects?**", async (route) => {
+    const objectType = new URL(route.request().url()).searchParams.get("type") ?? "";
+    const items =
+      objectType.toUpperCase() === "VIEW"
+        ? []
+        : [
+            {
+              owner: "APP",
+              object_name: "INVOICES",
+              object_type: "TABLE",
+              logical_name: "請求",
+              comment: "",
+              row_count: null,
+              column_count: 0,
+              last_ddl_at: "2026-07-11T00:00:00Z",
+            },
+          ];
+    await fulfillJson(route, {
+      items,
+      next_cursor: null,
+      total: items.length,
+      catalog_version: 1,
+    });
+  });
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [{ owner: "APP", is_current: true, table_count: 1, view_count: 0 }],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
   );
@@ -95,13 +140,46 @@ async function mockProfileManagement(page: Page) {
     await route.fallback();
   });
   await page.route("**/api/nl2sql/profiles/*", async (route) => {
+    const url = new URL(route.request().url());
+    const profileId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if (route.request().method() === "GET" && profileId === "search") {
+      const items = profiles
+        .filter((item) => !item.archived)
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          category: item.category,
+          description: item.description,
+          archived: item.archived,
+          allowed_table_count: item.allowed_tables.length,
+          allowed_view_count: item.allowed_views.length,
+          glossary_count: Object.keys(item.glossary).length,
+          few_shot_count: item.few_shot_examples.length,
+          version: 1,
+          etag: `profile-${item.id}-v1`,
+          updated_at: "2026-07-11T00:00:00Z",
+        }));
+      await fulfillJson(route, { items, next_cursor: null, total: items.length, change_token: 1 });
+      return;
+    }
+    if (route.request().method() === "GET") {
+      const target = profiles.find((item) => item.id === profileId);
+      if (target) {
+        await fulfillJson(route, { ...target, version: 1, etag: `profile-${target.id}-v1` });
+      } else {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+        });
+      }
+      return;
+    }
     if (route.request().method() !== "DELETE") {
       await route.fallback();
       return;
     }
     deleteRequests += 1;
-    const url = new URL(route.request().url());
-    const profileId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
     const target = profiles.find((item) => item.id === profileId);
     if (!target) {
       await route.fulfill({

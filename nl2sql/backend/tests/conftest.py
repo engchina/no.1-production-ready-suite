@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 
 os.environ["ENABLE_METRICS"] = "false"
+os.environ["DEBUG"] = "false"
 os.environ["NL2SQL_RUNTIME_MODE"] = "deterministic"
 os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"
 os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
+os.environ["APP_AUTH_ENABLED"] = "false"

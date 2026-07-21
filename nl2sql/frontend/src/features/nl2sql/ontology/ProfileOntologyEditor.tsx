@@ -49,12 +49,29 @@ export interface ProfileOntologyEditorLabels {
   inspectorTitle: string;
   inspectorDescription: string;
   inspectorEmpty: string;
+  inspectorTarget: string;
   nodeInspectorTitle: string;
   relationshipInspectorTitle: string;
   physicalObject: string;
   businessName: string;
   tableUsage: string;
   tableUsagePlaceholder: string;
+  semanticType: string;
+  businessRule: string;
+  ruleSeverity: string;
+  ruleExecution: string;
+  enumCode: string;
+  enumLiteral: string;
+  governedProperty: string;
+  evidenceTitle: string;
+  inferredReadOnly: string;
+  semanticDraftSave: string;
+  semanticDraftSaving: string;
+  semanticDraftSaved: string;
+  semanticDraftError: string;
+  enumLabel: string;
+  enumAliases: string;
+  enumDataType: string;
   relationshipName: string;
   cardinality: string;
   allowedPath: string;
@@ -93,12 +110,30 @@ export const DEFAULT_PROFILE_ONTOLOGY_EDITOR_LABELS: ProfileOntologyEditorLabels
   inspectorDescription:
     "業務名、用途、関係の基数と許可パスを Profile の draft として編集します。",
   inspectorEmpty: "グラフまたは関連一覧からノード・関係を選択してください。",
+  inspectorTarget: "Inspector の編集対象",
   nodeInspectorTitle: "業務エンティティ",
   relationshipInspectorTitle: "業務関係",
   physicalObject: "物理オブジェクト",
   businessName: "日本語の業務名",
   tableUsage: "表・ビューの用途",
   tableUsagePlaceholder: "例: 確定済み受注の売上分析に使用",
+  semanticType: "意味タイプ",
+  businessRule: "業務ルール",
+  ruleSeverity: "重大度",
+  ruleExecution: "実行方式",
+  enumCode: "列挙コード",
+  enumLiteral: "物理リテラル",
+  governedProperty: "対象属性",
+  evidenceTitle: "根拠",
+  inferredReadOnly:
+    "推論結果は読み取り専用です。変更する場合は元の業務モデルを Draft として更新し、再公開してください。",
+  semanticDraftSave: "意味定義を Draft に保存",
+  semanticDraftSaving: "意味定義を保存中…",
+  semanticDraftSaved: "新しい Ontology revision の Draft に保存しました。",
+  semanticDraftError: "意味定義を保存できませんでした。入力内容を確認してください。",
+  enumLabel: "日本語ラベル",
+  enumAliases: "別名（カンマ区切り）",
+  enumDataType: "データ型",
   relationshipName: "関係名",
   cardinality: "基数",
   allowedPath: "検索時にこの関係パスを許可する",
@@ -130,6 +165,7 @@ export interface ProfileOntologyEditorProps {
   /** backend の GET ontology-view が返す診断 warning(未解決オブジェクト名など) */
   warnings?: string[];
   onSaveDraft?: (payload: ProfileOntologyDraftPayload) => void | Promise<void>;
+  onSaveSemanticNode?: (node: OntologyNode) => void | Promise<void>;
   onDraftChange?: (draft: ProfileOntologyDraftState) => void;
   /** POST /api/schema/refresh 相当。実行後に ontology-view を再取得する */
   onRefreshSchema?: () => void | Promise<void>;
@@ -143,6 +179,52 @@ const inputClass =
   "min-h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
 const textareaClass =
   "min-h-28 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+
+function normalizedSemanticNode(node: OntologyNode): OntologyNode {
+  const rule = node.business_rule_definition;
+  if (rule && !rule.statement_ja.trim()) {
+    throw new Error("業務ルールの説明を入力してください。");
+  }
+  const normalizedRuleNode = rule
+    ? {
+        ...node,
+        business_rule_definition: { ...rule, statement_ja: rule.statement_ja.trim() },
+      }
+    : node;
+  const enumValue = node.enum_value_definition;
+  if (!enumValue) return normalizedRuleNode;
+  if (!enumValue.code.trim() || !enumValue.label_ja.trim()) {
+    throw new Error("列挙コードと日本語ラベルを入力してください。");
+  }
+  const raw = enumValue.physical_literal;
+  let physicalLiteral = raw;
+  if (enumValue.data_type === "integer") {
+    const parsed = Number.parseInt(String(raw), 10);
+    if (!Number.isInteger(parsed) || String(parsed) !== String(raw).trim()) {
+      throw new Error("物理リテラルには整数を入力してください。");
+    }
+    physicalLiteral = parsed;
+  } else if (enumValue.data_type === "number") {
+    const parsed = Number(String(raw));
+    if (!Number.isFinite(parsed)) throw new Error("物理リテラルには数値を入力してください。");
+    physicalLiteral = parsed;
+  } else if (enumValue.data_type === "boolean") {
+    const normalized = String(raw).trim().toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      throw new Error("物理リテラルには true または false を入力してください。");
+    }
+    physicalLiteral = normalized === "true";
+  }
+  return {
+    ...normalizedRuleNode,
+    enum_value_definition: {
+      ...enumValue,
+      code: enumValue.code.trim(),
+      label_ja: enumValue.label_ja.trim(),
+      physical_literal: physicalLiteral,
+    },
+  };
+}
 
 function mergedLabels(
   overrides: Partial<ProfileOntologyEditorLabels> | undefined
@@ -162,14 +244,21 @@ function NodeInspector({
   draft,
   labels,
   onChange,
+  onSaveSemanticNode,
+  propertyOptions,
 }: {
   node: OntologyNode;
   draft: ProfileOntologyDraftState;
   labels: ProfileOntologyEditorLabels;
   onChange: (next: ProfileOntologyDraftState) => void;
+  onSaveSemanticNode?: (node: OntologyNode) => void | Promise<void>;
+  propertyOptions: OntologyNode[];
 }) {
   const reference = profileOntologyObjectFromNode(node);
   const value = draft.nodes[node.id] ?? {};
+  const evidence = node.provenance?.evidence ?? [];
+  const [semanticNode, setSemanticNode] = useState(node);
+  const [semanticSaveState, setSemanticSaveState] = useState<SaveState>("idle");
   const update = (patch: { business_name_ja?: string; table_usage?: string }) => {
     onChange({
       ...draft,
@@ -182,6 +271,23 @@ function NodeInspector({
         },
       },
     });
+  };
+  const rule = semanticNode.business_rule_definition;
+  const enumValue = semanticNode.enum_value_definition;
+  const isInferred = node.provenance?.inferred_by === "oracle_owl2rl";
+
+  const saveSemanticNode = async () => {
+    if (!onSaveSemanticNode || semanticSaveState === "saving" || isInferred) return;
+    setSemanticSaveState("saving");
+    try {
+      await onSaveSemanticNode({
+        ...normalizedSemanticNode(semanticNode),
+        review_status: "approved",
+      });
+      setSemanticSaveState("saved");
+    } catch {
+      setSemanticSaveState("error");
+    }
   };
 
   return (
@@ -202,6 +308,288 @@ function NodeInspector({
           </code>
         </div>
       ) : null}
+      <dl className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
+        <div className="grid gap-1">
+          <dt className="text-xs font-semibold text-muted">{labels.semanticType}</dt>
+          <dd className="break-all text-foreground">{node.kind}</dd>
+        </div>
+        {node.business_rule_definition ? (
+          <>
+            <div className="grid gap-1">
+              <dt className="text-xs font-semibold text-muted">{labels.businessRule}</dt>
+              <dd className="text-foreground">{node.business_rule_definition.statement_ja}</dd>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <dt className="text-xs font-semibold text-muted">{labels.ruleSeverity}</dt>
+                <dd className="mt-1 text-foreground">
+                  {node.business_rule_definition.severity}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold text-muted">{labels.ruleExecution}</dt>
+                <dd className="mt-1 text-foreground">
+                  {node.business_rule_definition.execution_mode}
+                </dd>
+              </div>
+            </div>
+          </>
+        ) : null}
+        {node.enum_value_definition ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <dt className="text-xs font-semibold text-muted">{labels.enumCode}</dt>
+                <dd className="mt-1 break-all text-foreground">
+                  {node.enum_value_definition.code}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold text-muted">{labels.enumLiteral}</dt>
+                <dd className="mt-1 break-all text-foreground">
+                  {String(node.enum_value_definition.physical_literal ?? "")}
+                </dd>
+              </div>
+            </div>
+            <div className="grid gap-1">
+              <dt className="text-xs font-semibold text-muted">{labels.governedProperty}</dt>
+              <dd className="break-all text-foreground">
+                {node.enum_value_definition.property_node_id}
+              </dd>
+            </div>
+          </>
+        ) : null}
+      </dl>
+      {isInferred ? (
+        <Banner severity="info">{labels.inferredReadOnly}</Banner>
+      ) : null}
+      {rule ? (
+        <fieldset className="grid gap-4 rounded-md border border-border bg-background p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">
+            {labels.businessRule}
+          </legend>
+          <label className="grid gap-2 text-sm font-medium text-foreground">
+            <span>{labels.businessRule}</span>
+            <textarea
+              className={textareaClass}
+              value={rule.statement_ja}
+              onChange={(event) =>
+                setSemanticNode({
+                  ...semanticNode,
+                  business_rule_definition: { ...rule, statement_ja: event.target.value },
+                })
+              }
+            />
+          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.ruleSeverity}</span>
+              <select
+                className={inputClass}
+                value={rule.severity}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    business_rule_definition: {
+                      ...rule,
+                      severity: event.target.value as typeof rule.severity,
+                    },
+                  })
+                }
+              >
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="violation">Violation</option>
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.ruleExecution}</span>
+              <select
+                className={inputClass}
+                value={rule.execution_mode}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    business_rule_definition: {
+                      ...rule,
+                      execution_mode: event.target.value as typeof rule.execution_mode,
+                    },
+                  })
+                }
+              >
+                <option value="documentation">Documentation</option>
+                {rule.expression && ["constraint", "validation"].includes(rule.rule_kind) ? (
+                  <option value="shacl">SHACL Core</option>
+                ) : null}
+                {rule.rule_kind === "calculation" ? (
+                  <option value="sql_definition">SQL definition</option>
+                ) : null}
+              </select>
+            </label>
+          </div>
+        </fieldset>
+      ) : null}
+      {enumValue ? (
+        <fieldset className="grid gap-4 rounded-md border border-border bg-background p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">
+            {labels.enumCode}
+          </legend>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.enumCode}</span>
+              <input
+                className={inputClass}
+                value={enumValue.code}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    enum_value_definition: { ...enumValue, code: event.target.value },
+                  })
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.enumLabel}</span>
+              <input
+                className={inputClass}
+                value={enumValue.label_ja}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    enum_value_definition: { ...enumValue, label_ja: event.target.value },
+                  })
+                }
+              />
+            </label>
+          </div>
+          <label className="grid gap-2 text-sm font-medium text-foreground">
+            <span>{labels.enumAliases}</span>
+            <input
+              className={inputClass}
+              value={enumValue.aliases.join(", ")}
+              onChange={(event) =>
+                setSemanticNode({
+                  ...semanticNode,
+                  enum_value_definition: {
+                    ...enumValue,
+                    aliases: event.target.value
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  },
+                })
+              }
+            />
+          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.enumLiteral}</span>
+              <input
+                className={inputClass}
+                value={String(enumValue.physical_literal ?? "")}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    enum_value_definition: {
+                      ...enumValue,
+                      physical_literal: event.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.enumDataType}</span>
+              <select
+                className={inputClass}
+                value={enumValue.data_type}
+                onChange={(event) =>
+                  setSemanticNode({
+                    ...semanticNode,
+                    enum_value_definition: {
+                      ...enumValue,
+                      data_type: event.target.value as typeof enumValue.data_type,
+                    },
+                  })
+                }
+              >
+                {(["string", "integer", "number", "boolean", "date", "datetime"] as const).map(
+                  (dataType) => (
+                    <option key={dataType} value={dataType}>
+                      {dataType}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          </div>
+          <label className="grid gap-2 text-sm font-medium text-foreground">
+            <span>{labels.governedProperty}</span>
+            <select
+              className={inputClass}
+              value={enumValue.property_node_id}
+              onChange={(event) =>
+                setSemanticNode({
+                  ...semanticNode,
+                  enum_value_definition: {
+                    ...enumValue,
+                    property_node_id: event.target.value,
+                  },
+                })
+              }
+            >
+              {propertyOptions.map((property) => (
+                <option key={property.id} value={property.id}>
+                  {property.business_name_ja} ({property.technical_name || property.id})
+                </option>
+              ))}
+            </select>
+          </label>
+        </fieldset>
+      ) : null}
+      {rule || enumValue ? (
+        <div className="grid gap-2">
+          {semanticSaveState === "saved" ? (
+            <Banner severity="success">{labels.semanticDraftSaved}</Banner>
+          ) : null}
+          {semanticSaveState === "error" ? (
+            <Banner severity="danger">{labels.semanticDraftError}</Banner>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            disabled={!onSaveSemanticNode || semanticSaveState === "saving" || isInferred}
+            loading={semanticSaveState === "saving"}
+            onClick={() => void saveSemanticNode()}
+          >
+            <Save size={16} aria-hidden="true" />
+            {semanticSaveState === "saving"
+              ? labels.semanticDraftSaving
+              : labels.semanticDraftSave}
+          </Button>
+        </div>
+      ) : null}
+      {evidence.length > 0 ? (
+        <section aria-label={labels.evidenceTitle} className="grid gap-2">
+          <h3 className="text-xs font-semibold text-muted">{labels.evidenceTitle}</h3>
+          <ul className="grid gap-2">
+            {evidence.map((item) => (
+              <li
+                key={`${item.source_document_id}:${item.locator}:${item.excerpt_hash}`}
+                className="rounded-md border border-border bg-background p-2 text-xs leading-5"
+              >
+                <code className="break-all text-foreground">
+                  {item.source_document_id} / {item.locator}
+                </code>
+                {item.excerpt_ja ? (
+                  <p className="mt-1 whitespace-pre-wrap text-muted">{item.excerpt_ja}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <label className="block space-y-2 text-sm font-medium text-foreground">
         <span>{labels.businessName}</span>
         <input
@@ -210,15 +598,17 @@ function NodeInspector({
           onChange={(event) => update({ business_name_ja: event.target.value })}
         />
       </label>
-      <label className="block space-y-2 text-sm font-medium text-foreground">
-        <span>{labels.tableUsage}</span>
-        <textarea
-          className={textareaClass}
-          value={value.table_usage ?? ""}
-          placeholder={labels.tableUsagePlaceholder}
-          onChange={(event) => update({ table_usage: event.target.value })}
-        />
-      </label>
+      {reference ? (
+        <label className="block space-y-2 text-sm font-medium text-foreground">
+          <span>{labels.tableUsage}</span>
+          <textarea
+            className={textareaClass}
+            value={value.table_usage ?? ""}
+            placeholder={labels.tableUsagePlaceholder}
+            onChange={(event) => update({ table_usage: event.target.value })}
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -329,6 +719,7 @@ export function ProfileOntologyEditor({
   profileId,
   warnings = [],
   onSaveDraft,
+  onSaveSemanticNode,
   onDraftChange,
   onRefreshSchema,
   refreshingSchema = false,
@@ -367,6 +758,9 @@ export function ProfileOntologyEditor({
   const selectedEdge =
     displayGraph.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const selectedSummary = labels.selectedSummary(selectedTables.length, selectedViews.length);
+  const propertyOptions = displayGraph.nodes.filter(
+    (node) => node.kind === "property" || node.kind === "column"
+  );
   const revision = graph?.revision;
 
   const changeDraft = (next: ProfileOntologyDraftState) => {
@@ -494,12 +888,59 @@ export function ProfileOntologyEditor({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
+            <label className="grid gap-2 text-sm font-medium text-foreground">
+              <span>{labels.inspectorTarget}</span>
+              <select
+                className={inputClass}
+                value={
+                  selectedNodeId
+                    ? `node:${selectedNodeId}`
+                    : selectedEdgeId
+                      ? `edge:${selectedEdgeId}`
+                      : ""
+                }
+                onChange={(event) => {
+                  const separator = event.target.value.indexOf(":");
+                  const kind = event.target.value.slice(0, separator);
+                  const id = event.target.value.slice(separator + 1);
+                  if (kind === "node") {
+                    const node = displayGraph.nodes.find((item) => item.id === id);
+                    if (node) selectNode(node);
+                  } else if (kind === "edge") {
+                    const edge = displayGraph.edges.find((item) => item.id === id);
+                    if (edge) selectEdge(edge);
+                  } else {
+                    setSelectedNodeId(null);
+                    setSelectedEdgeId(null);
+                  }
+                }}
+              >
+                <option value="">{labels.inspectorEmpty}</option>
+                <optgroup label="ノード">
+                  {displayGraph.nodes.map((node) => (
+                    <option key={node.id} value={`node:${node.id}`}>
+                      {node.business_name_ja} ({node.kind})
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="関係">
+                  {displayGraph.edges.map((edge) => (
+                    <option key={edge.id} value={`edge:${edge.id}`}>
+                      {edge.relationship_name_ja}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </label>
             {selectedNode ? (
               <NodeInspector
+                key={selectedNode.id}
                 node={selectedNode}
                 draft={draft}
                 labels={labels}
                 onChange={changeDraft}
+                onSaveSemanticNode={onSaveSemanticNode}
+                propertyOptions={propertyOptions}
               />
             ) : selectedEdge ? (
               <EdgeInspector

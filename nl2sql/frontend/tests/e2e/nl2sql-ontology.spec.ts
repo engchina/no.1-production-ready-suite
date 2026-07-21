@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { mockDatabaseGateReady } from "./_helpers/database-gate";
+
+test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
 const catalog = {
   refreshed_at: "2026-07-11T00:00:00Z",
@@ -111,6 +114,44 @@ const orderStatusNode = {
   description_ja: "受注の業務状態",
   aliases: ["ステータス"],
   metadata: { owner: "APP", object_name: "ORDERS", column_name: "STATUS" },
+};
+
+const statusRuleNode = {
+  ...graphNode,
+  id: "business-rule-order-status",
+  kind: "business_rule",
+  technical_name: "order_status_required",
+  business_name_ja: "受注状態の必須ルール",
+  description_ja: "受注状態は必須です。",
+  aliases: [],
+  metadata: {},
+  business_rule_definition: {
+    rule_kind: "validation",
+    statement_ja: "受注状態は必須です。",
+    applies_to_node_ids: ["property-order-status"],
+    expression: { operator: "not_null", property_node_id: "property-order-status" },
+    severity: "violation",
+    execution_mode: "shacl",
+  },
+};
+
+const confirmedStatusNode = {
+  ...graphNode,
+  id: "enum-order-status-confirmed",
+  kind: "enum_value",
+  technical_name: "order_status_confirmed",
+  business_name_ja: "確定済み",
+  description_ja: "確定した受注状態",
+  aliases: ["確定"],
+  metadata: {},
+  enum_value_definition: {
+    code: "CONFIRMED",
+    label_ja: "確定済み",
+    aliases: ["確定"],
+    physical_literal: "CONFIRMED",
+    data_type: "string",
+    property_node_id: "property-order-status",
+  },
 };
 
 const customerNode = {
@@ -327,6 +368,8 @@ function sessionData(status: string, withSql = false, confirmed = false, done = 
         "property-order-date",
         "property-order-status",
         "physical-customers",
+        "business-rule-order-status",
+        "enum-order-status-confirmed",
       ],
       edge_ids: ["edge-order-customer"],
       physical_objects: [
@@ -336,7 +379,15 @@ function sessionData(status: string, withSql = false, confirmed = false, done = 
     },
     ontology_graph: {
       revision,
-      nodes: [graphNode, metricNode, orderDateNode, orderStatusNode, customerNode],
+      nodes: [
+        graphNode,
+        metricNode,
+        orderDateNode,
+        orderStatusNode,
+        customerNode,
+        statusRuleNode,
+        confirmedStatusNode,
+      ],
       edges: [orderCustomerEdge],
     },
     result: done
@@ -362,9 +413,87 @@ async function mockApi(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    // 共通 helper の認証 mock を優先し、catch-all で CurrentUser を空 object にしない。
+    if (path === "/api/auth/me") return route.fallback();
+    if (path === "/api/ready/database") {
+      return fulfill(route, { status: "ok", check: "ok", detail: null });
+    }
+    if (path === "/api/nl2sql/persistence") {
+      return fulfill(route, {
+        mode: "oracle",
+        ready: true,
+        durable: true,
+        writable: true,
+        snapshot_loaded: true,
+        reason_code: null,
+        checked_at: "2026-07-19T00:00:00Z",
+      });
+    }
+    if (path === "/api/schema/catalog/head") {
+      return fulfill(route, {
+        catalog_version: 1,
+        schema_fingerprint: catalog.schema_fingerprint,
+        refreshed_at: catalog.refreshed_at,
+        object_count: catalog.tables.length,
+        column_count: catalog.tables.reduce((total, table) => total + table.columns.length, 0),
+        change_token: 1,
+        etag: catalog.schema_fingerprint,
+      });
+    }
+    if (path === "/api/schema/objects") {
+      return fulfill(route, {
+        items: catalog.tables.map((table) => ({
+          owner: table.owner,
+          object_name: table.table_name,
+          object_type: table.table_type,
+          logical_name: table.logical_name,
+          comment: table.comment,
+          row_count: table.row_count,
+          column_count: table.columns.length,
+          last_ddl_at: "",
+        })),
+        next_cursor: null,
+        total: catalog.tables.length,
+        catalog_version: 1,
+      });
+    }
+    if (path.startsWith("/api/schema/objects/")) {
+      return fulfill(route, {
+        table: catalog.tables[0],
+        dependencies: [],
+        catalog_version: 1,
+        etag: catalog.schema_fingerprint,
+      });
+    }
     if (path === "/api/schema/catalog") return fulfill(route, catalog);
+    if (path === "/api/nl2sql/profiles/search") {
+      return fulfill(route, {
+        items: [
+          {
+            id: profile.id,
+            name: profile.name,
+            category: profile.category,
+            description: profile.description,
+            archived: profile.archived,
+            allowed_table_count: profile.allowed_tables.length,
+            allowed_view_count: profile.allowed_views.length,
+            glossary_count: Object.keys(profile.glossary).length,
+            few_shot_count: profile.few_shot_examples.length,
+            version: 1,
+            etag: "profile-etag",
+            updated_at: "2026-07-11T00:00:00Z",
+          },
+        ],
+        next_cursor: null,
+        total: 1,
+        change_token: 1,
+      });
+    }
     if (path === "/api/nl2sql/profiles" && request.method() === "GET") {
       return fulfill(route, [profile]);
+    }
+    if (path === "/api/nl2sql/profiles/default" && request.method() === "GET") {
+      return fulfill(route, profile);
     }
     if (path === "/api/nl2sql/history") return fulfill(route, { items: [] });
     if (path === "/api/nl2sql/recommend-profile") {
@@ -379,6 +508,41 @@ async function mockApi(page: Page) {
       });
     }
     if (path === "/api/nl2sql/similar-history") return fulfill(route, { items: [] });
+    if (path === "/api/nl2sql/ontology/profile-recommendations") {
+      return fulfill(route, {
+        recommendation: {
+          id: "recommendation-1",
+          question_hash: "a".repeat(64),
+          ontology_revision_id: "revision-1",
+          candidates: [
+            {
+              profile_id: "default",
+              profile_name: "標準プロファイル",
+              ontology_revision_id: "revision-1",
+              score: 1,
+              matched_scenarios_ja: ["受注分析"],
+              matched_terms: ["受注"],
+              reasons_ja: ["用語「受注」が一致しました。"],
+            },
+          ],
+          expires_at: "2026-07-19T12:15:00Z",
+        },
+      });
+    }
+    if (path.endsWith("/ontology/profile-recommendations/recommendation-1/confirm")) {
+      return fulfill(route, {
+        recommendation: {
+          id: "recommendation-1",
+          question_hash: "a".repeat(64),
+          ontology_revision_id: "revision-1",
+          candidates: [],
+          selected_profile_id: "default",
+          selected_revision_id: "revision-1",
+          expires_at: "2026-07-19T12:15:00Z",
+        },
+        confirmation_token: "profile-confirmation-token",
+      });
+    }
     if (path === "/api/nl2sql/query-sessions" && request.method() === "POST") {
       payloads.create = request.postDataJSON();
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
@@ -406,6 +570,17 @@ async function mockApi(page: Page) {
         ontology_graph: data.ontology_graph,
       });
     }
+    if (
+      path === "/api/nl2sql/ontology/revisions/revision-1/drafts" &&
+      request.method() === "POST"
+    ) {
+      payloads.semanticDraft = request.postDataJSON();
+      const data = sessionData("awaiting_intent_confirmation").ontology_graph;
+      return fulfill(route, {
+        ...data,
+        revision: { ...revision, id: "revision-2", version: 2, etag: "revision-2-etag" },
+      });
+    }
     if (path === "/api/nl2sql/db-admin/views") {
       return fulfill(route, { runtime: "deterministic", items: [], warnings: [] });
     }
@@ -417,12 +592,21 @@ async function mockApi(page: Page) {
   return payloads;
 }
 
+async function startConfirmedOntologySession(page: Page) {
+  const start = page.getByRole("button", { name: "質問を解釈" });
+  await start.click();
+  const recommendation = page.getByTestId("nl2sql-ontology-profile-recommendation");
+  await expect(recommendation).toBeVisible();
+  await recommendation.getByRole("button", { name: "この Profile を確認" }).click();
+  await start.click();
+}
+
 test("質問と SQL の Ontology を二段階確認して hash binding で実行する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
   await page.getByLabel("検索クエリ").fill("受注件数を表示");
-  await page.getByRole("button", { name: "質問を解釈" }).click();
+  await startConfirmedOntologySession(page);
   await expect(page.getByRole("tab", { name: "質問の解釈" })).toBeVisible();
   await expect(page.getByText("受注件数", { exact: true }).filter({ visible: true }).first()).toBeVisible();
 
@@ -438,6 +622,7 @@ test("質問と SQL の Ontology を二段階確認して hash binding で実行
   expect(payloads.create).toMatchObject({
     question: "受注件数を表示",
     profile_id: "default",
+    profile_confirmation_token: "profile-confirmation-token",
   });
   expect(payloads.generate).toMatchObject({ confirm_intent: true, intent_version: 1 });
   expect(payloads.confirm).toMatchObject({
@@ -455,7 +640,7 @@ test("非 SQL 利用者が質問の解釈をフォームで修正し、明示操
   await page.goto("/query");
 
   await page.getByLabel("検索クエリ").fill("受注件数を表示");
-  await page.getByRole("button", { name: "質問を解釈" }).click();
+  await startConfirmedOntologySession(page);
 
   const openEditor = page.getByRole("button", { name: "解釈を編集" });
   await openEditor.focus();
@@ -547,21 +732,53 @@ test("対象オブジェクトは業務プロファイル、オントロジー�
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル"]')).toHaveCount(0);
 
-  // オントロジー構築ページ: 構築の直下に物理・業務モデルが並ぶ。
-  await page.goto("/ontology-build?profile=default");
+  // 専用ページは URL 復元可能な業務モデル tab で表示する。
+  await page.goto("/ontology-build?profile=default&tab=model");
   const modelSection = page.locator('section[aria-label="物理・業務モデル"]');
   await expect(modelSection).toBeVisible();
   await expect(page.getByText("受注", { exact: true }).filter({ visible: true }).first()).toBeVisible();
-  const [buildBox, modelBox] = await Promise.all([
-    page.getByTestId("profile-ontology-build").boundingBox(),
-    modelSection.boundingBox(),
-  ]);
-  expect(buildBox).not.toBeNull();
-  expect(modelBox).not.toBeNull();
-  expect(modelBox!.y).toBeGreaterThan(buildBox!.y);
+  await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await modelSection.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("ontology-build.png"), fullPage: true });
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
+});
+
+test("業務ルールと列挙値をキーボード操作できるフォームで確認し、revision Draft に保存する", async ({
+  page,
+}) => {
+  const payloads = await mockApi(page);
+  await page.goto("/ontology-build?profile=default&tab=model");
+
+  const target = page.getByLabel("Inspector の編集対象");
+  await target.focus();
+  await target.selectOption("node:business-rule-order-status");
+  await page
+    .getByRole("textbox", { name: "業務ルール", exact: true })
+    .fill("受注状態を必須にします。");
+  await page.getByLabel("重大度").selectOption("warning");
+  await page.getByRole("button", { name: "意味定義を Draft に保存" }).click();
+
+  await expect(page.getByText("新しい Ontology revision の Draft に保存しました。")).toBeVisible();
+  await expect.poll(() => payloads.semanticDraft).toBeTruthy();
+  expect(payloads.semanticDraft).toMatchObject({
+    base_etag: "revision-etag",
+    node_upserts: [
+      expect.objectContaining({
+        id: "business-rule-order-status",
+        review_status: "approved",
+        business_rule_definition: expect.objectContaining({
+          statement_ja: "受注状態を必須にします。",
+          severity: "warning",
+          execution_mode: "shacl",
+        }),
+      }),
+    ],
+  });
+
+  await target.selectOption("node:enum-order-status-confirmed");
+  await expect(page.getByLabel("列挙コード", { exact: true })).toHaveValue("CONFIRMED");
+  await expect(page.getByLabel("日本語ラベル")).toHaveValue("確定済み");
+  await expect(page.getByLabel("対象属性")).toHaveValue("property-order-status");
 });

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -30,6 +30,14 @@ class OntologyRevisionStatus(StrEnum):
     DRAFT = "draft"
     PUBLISHED = "published"
     ARCHIVED = "archived"
+
+
+class OntologyReasoningStatus(StrEnum):
+    NOT_STARTED = "not_started"
+    MATERIALIZING = "materializing"
+    VALIDATING = "validating"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class OntologyReviewStatus(StrEnum):
@@ -58,6 +66,8 @@ class OntologyNodeKind(StrEnum):
     PROPERTY = "property"
     METRIC = "metric"
     BUSINESS_TERM = "business_term"
+    BUSINESS_RULE = "business_rule"
+    ENUM_VALUE = "enum_value"
     QUESTION_INTENT = "question_intent"
     QUERY_PLAN = "query_plan"
     SQL_ARTIFACT = "sql_artifact"
@@ -76,6 +86,12 @@ class OntologyEdgeKind(StrEnum):
     FILTERS = "filters"
     GROUPS_BY = "groups_by"
     SORTS_BY = "sorts_by"
+    IS_A = "is_a"
+    DOMAIN = "domain"
+    RANGE = "range"
+    INSTANCE_OF = "instance_of"
+    HAS_VALUE = "has_value"
+    GOVERNS = "governs"
 
 
 class RelationshipDirection(StrEnum):
@@ -113,6 +129,30 @@ class OntologyRevision(OntologyContract):
     note: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     published_at: datetime | None = None
+    reasoning_status: OntologyReasoningStatus = OntologyReasoningStatus.NOT_STARTED
+    rdf_graph_name: str = ""
+    inferred_graph_name: str = ""
+    shacl_report_artifact_id: str = ""
+    renderer_version: str = ""
+    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+
+
+class OntologyEvidenceLocatorKind(StrEnum):
+    PAGE = "page"
+    PARAGRAPH = "paragraph"
+    SHEET_ROW = "sheet_row"
+    LINE = "line"
+    QA_ROW = "qa_row"
+    SCHEMA_OBJECT = "schema_object"
+
+
+class OntologyEvidence(OntologyContract):
+    source_document_id: str = Field(min_length=1)
+    source_sha256: str = Field(min_length=64, max_length=64)
+    locator_kind: OntologyEvidenceLocatorKind
+    locator: str = Field(min_length=1)
+    excerpt_hash: str = Field(min_length=64, max_length=64)
+    excerpt_ja: str = Field(default="", max_length=500)
 
 
 class OntologyProvenance(OntologyContract):
@@ -121,6 +161,96 @@ class OntologyProvenance(OntologyContract):
     source_detail: str = ""
     inferred_by: str = ""
     observed_at: datetime = Field(default_factory=utc_now)
+    evidence: list[OntologyEvidence] = Field(default_factory=list)
+
+
+class BusinessRuleKind(StrEnum):
+    CONSTRAINT = "constraint"
+    CALCULATION = "calculation"
+    CLASSIFICATION = "classification"
+    VALIDATION = "validation"
+
+
+class BusinessRuleSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    VIOLATION = "violation"
+
+
+class BusinessRuleExecutionMode(StrEnum):
+    SHACL = "shacl"
+    SQL_DEFINITION = "sql_definition"
+    DOCUMENTATION = "documentation"
+
+
+class BusinessRuleExpression(OntologyContract):
+    """任意コードを受け付けない、業務制約用の固定演算子 AST。"""
+
+    operator: Literal[
+        "all",
+        "any",
+        "not",
+        "eq",
+        "ne",
+        "lt",
+        "lte",
+        "gt",
+        "gte",
+        "in",
+        "not_in",
+        "is_null",
+        "not_null",
+    ]
+    property_node_id: str = ""
+    value: Any = None
+    values: list[Any] = Field(default_factory=list)
+    children: list[BusinessRuleExpression] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> BusinessRuleExpression:
+        if self.operator in {"all", "any"} and not self.children:
+            raise ValueError("all/any rule expression requires children.")
+        if self.operator == "not" and len(self.children) != 1:
+            raise ValueError("not rule expression requires exactly one child.")
+        if self.operator not in {"all", "any", "not"} and not self.property_node_id:
+            raise ValueError("comparison rule expression requires property_node_id.")
+        if self.operator in {"in", "not_in"} and not self.values:
+            raise ValueError("in/not_in rule expression requires values.")
+        return self
+
+
+class BusinessRuleDefinition(OntologyContract):
+    rule_kind: BusinessRuleKind
+    statement_ja: str = Field(min_length=1)
+    applies_to_node_ids: list[str] = Field(min_length=1)
+    expression: BusinessRuleExpression | None = None
+    severity: BusinessRuleSeverity = BusinessRuleSeverity.VIOLATION
+    execution_mode: BusinessRuleExecutionMode = BusinessRuleExecutionMode.DOCUMENTATION
+
+    @model_validator(mode="after")
+    def validate_execution_mode(self) -> BusinessRuleDefinition:
+        if self.execution_mode == BusinessRuleExecutionMode.SHACL and self.expression is None:
+            raise ValueError("SHACL business rule requires expression.")
+        if self.execution_mode == BusinessRuleExecutionMode.SHACL and self.rule_kind not in {
+            BusinessRuleKind.CONSTRAINT,
+            BusinessRuleKind.VALIDATION,
+        }:
+            raise ValueError("SHACL execution is limited to constraint/validation rules.")
+        if (
+            self.execution_mode == BusinessRuleExecutionMode.SQL_DEFINITION
+            and self.rule_kind != BusinessRuleKind.CALCULATION
+        ):
+            raise ValueError("SQL definition execution is limited to calculation rules.")
+        return self
+
+
+class EnumValueDefinition(OntologyContract):
+    code: str = Field(min_length=1)
+    label_ja: str = Field(min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    physical_literal: Any = None
+    data_type: Literal["string", "integer", "number", "boolean", "date", "datetime"] = "string"
+    property_node_id: str = Field(min_length=1)
 
 
 class PhysicalObjectRef(OntologyContract):
@@ -170,6 +300,23 @@ class OntologyNode(OntologyContract):
     review_status: OntologyReviewStatus = OntologyReviewStatus.PROPOSED
     embedding_ref: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
+    business_rule_definition: BusinessRuleDefinition | None = None
+    enum_value_definition: EnumValueDefinition | None = None
+
+    @model_validator(mode="after")
+    def validate_typed_definition(self) -> OntologyNode:
+        if self.kind == OntologyNodeKind.BUSINESS_RULE and self.business_rule_definition is None:
+            raise ValueError("business_rule node requires business_rule_definition.")
+        if (
+            self.kind != OntologyNodeKind.BUSINESS_RULE
+            and self.business_rule_definition is not None
+        ):
+            raise ValueError("business_rule_definition is only valid for business_rule nodes.")
+        if self.kind == OntologyNodeKind.ENUM_VALUE and self.enum_value_definition is None:
+            raise ValueError("enum_value node requires enum_value_definition.")
+        if self.kind != OntologyNodeKind.ENUM_VALUE and self.enum_value_definition is not None:
+            raise ValueError("enum_value_definition is only valid for enum_value nodes.")
+        return self
 
 
 class OntologyEdge(OntologyContract):
@@ -224,6 +371,9 @@ class ProfileOntologyView(OntologyContract):
     archived: bool = False
     updated_at: datetime = Field(default_factory=utc_now)
     published_at: datetime | None = None
+    activation_scenarios_ja: list[str] = Field(default_factory=list)
+    activation_keywords: list[str] = Field(default_factory=list)
+    scenario_version: int = Field(default=1, ge=1)
 
 
 class MetricAggregation(StrEnum):
@@ -657,6 +807,7 @@ class QaPair(OntologyContract):
 
 
 class OntologyBuildStepName(StrEnum):
+    SOURCE_EXTRACTION = "source_extraction"
     SCHEMA_CONTEXT = "schema_context"
     SCHEMA_NAMING = "schema_naming"
     QA_EXTRACTION = "qa_extraction"
@@ -679,6 +830,38 @@ class OntologyBuildStatus(StrEnum):
     FAILED = "failed"
 
 
+class OntologySourceStatus(StrEnum):
+    STORED = "stored"
+    EXTRACTING = "extracting"
+    EXTRACTED = "extracted"
+    FAILED = "failed"
+
+
+class OntologySourceDocument(OntologyContract):
+    id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+    media_type: str = "application/octet-stream"
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(min_length=64, max_length=64)
+    storage_uri: str = Field(min_length=1)
+    status: OntologySourceStatus = OntologySourceStatus.STORED
+    extracted_chunk_count: int = Field(default=0, ge=0)
+    warnings_ja: list[str] = Field(default_factory=list)
+    error_message_ja: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class OntologySourceProgress(OntologyContract):
+    source_document_id: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+    status: OntologySourceStatus = OntologySourceStatus.STORED
+    extracted_chunk_count: int = Field(default=0, ge=0)
+    warnings_ja: list[str] = Field(default_factory=list)
+    error_message_ja: str = ""
+
+
 class OntologyBuildStep(OntologyContract):
     name: OntologyBuildStepName
     status: OntologyBuildStepStatus = OntologyBuildStepStatus.PENDING
@@ -695,7 +878,7 @@ class OntologyBuildEvent(OntologyContract):
 
 
 class OntologyBuildJob(OntologyContract):
-    """AI 構築 job(in-memory)。成果物の proposal は store に永続化される。"""
+    """永続化され、in-process または独立 worker が処理する AI 構築 job。"""
 
     id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
@@ -703,11 +886,82 @@ class OntologyBuildJob(OntologyContract):
     steps: list[OntologyBuildStep] = Field(default_factory=list)
     events: list[OntologyBuildEvent] = Field(default_factory=list)
     proposal_ids: list[str] = Field(default_factory=list)
+    source_document_ids: list[str] = Field(default_factory=list)
+    sources: list[OntologySourceProgress] = Field(default_factory=list)
     warnings_ja: list[str] = Field(default_factory=list)
     error_message_ja: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class OntologyPublishStatus(StrEnum):
+    QUEUED = "queued"
+    MATERIALIZING = "materializing"
+    VALIDATING = "validating"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class OntologyPublishJob(OntologyContract):
+    id: str = Field(min_length=1)
+    revision_id: str = Field(min_length=1)
+    requested_etag: str = Field(min_length=1)
+    status: OntologyPublishStatus = OntologyPublishStatus.QUEUED
+    rdf_graph_name: str = ""
+    inferred_graph_name: str = ""
+    shacl_conforms: bool | None = None
+    shacl_report_artifact_id: str = ""
+    warnings_ja: list[str] = Field(default_factory=list)
+    error_code: str = ""
+    error_message_ja: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ProfileRecommendationCandidateV2(OntologyContract):
+    profile_id: str = Field(min_length=1)
+    profile_name: str = Field(min_length=1)
+    ontology_revision_id: str = Field(min_length=1)
+    score: float = Field(ge=0.0, le=1.0)
+    matched_scenarios_ja: list[str] = Field(default_factory=list)
+    matched_terms: list[str] = Field(default_factory=list)
+    reasons_ja: list[str] = Field(default_factory=list)
+
+
+class ProfileRecommendation(OntologyContract):
+    id: str = Field(min_length=1)
+    question_hash: str = Field(min_length=64, max_length=64)
+    ontology_revision_id: str = Field(min_length=1)
+    candidates: list[ProfileRecommendationCandidateV2] = Field(default_factory=list)
+    selected_profile_id: str = ""
+    selected_revision_id: str = ""
+    confirmed_at: datetime | None = None
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class OntologyContextHit(OntologyContract):
+    node: OntologyNode
+    score: float = Field(ge=0.0, le=1.0)
+    matched_terms: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    inference_source: str = "asserted"
+
+
+class OntologyContextSearchResult(OntologyContract):
+    profile_id: str = Field(min_length=1)
+    profile_view_id: str = Field(min_length=1)
+    ontology_revision_id: str = Field(min_length=1)
+    hits: list[OntologyContextHit] = Field(default_factory=list)
+    nodes: list[OntologyNode] = Field(default_factory=list)
+    edges: list[OntologyEdge] = Field(default_factory=list)
+    mermaid: str = ""
+    llm_markdown: str = ""
+    owl_turtle: str = ""
+    shacl_turtle: str = ""
+    context_hash: str = Field(min_length=64, max_length=64)
 
 
 class OntologySqlGenerationContext(OntologyContract):
@@ -734,6 +988,7 @@ class OntologySqlGenerationContext(OntologyContract):
     join_condition_summaries: list[str] = Field(default_factory=list)
     metric_definitions: list[MetricDefinition] = Field(default_factory=list)
     warnings_ja: list[str] = Field(default_factory=list)
+    llm_markdown: str = ""
     # LLM プロンプト用の erDiagram 表現。context_hash の計算対象には含めない
     # (永続化済み session・確認 binding との互換を保つ)。
     mermaid_er: str = ""

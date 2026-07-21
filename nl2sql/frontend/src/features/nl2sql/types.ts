@@ -33,6 +33,7 @@ export interface SchemaColumn {
 
 export interface SchemaTable {
   table_name: string;
+  qualified_name?: string;
   logical_name: string;
   owner: string;
   table_type: string;
@@ -59,6 +60,8 @@ export interface SchemaCatalog {
   refreshed_at: string;
   schema_fingerprint?: string;
   tables: SchemaTable[];
+  current_owner?: string;
+  excluded_oracle_maintained_count?: number;
   view_dependencies?: Array<{
     owner?: string;
     view_name: string;
@@ -66,6 +69,19 @@ export interface SchemaCatalog {
     referenced_name: string;
     referenced_type?: string;
   }>;
+}
+
+export interface SchemaOwnerSummary {
+  owner: string;
+  is_current: boolean;
+  table_count: number;
+  view_count: number;
+}
+
+export interface SchemaOwnersData {
+  current_owner: string;
+  owners: SchemaOwnerSummary[];
+  excluded_oracle_maintained_count: number;
 }
 
 export interface AllowedObjects {
@@ -106,6 +122,82 @@ export interface Nl2SqlProfile {
   few_shot_examples: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
   archived: boolean;
+  object_scope_version?: number;
+  version?: number;
+  etag?: string;
+  updated_at?: string;
+}
+
+export interface ProfileSummary {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  archived: boolean;
+  allowed_table_count: number;
+  allowed_view_count: number;
+  glossary_count: number;
+  few_shot_count: number;
+  version: number;
+  etag: string;
+  updated_at: string;
+}
+
+export interface ProfileSummaryPage {
+  items: ProfileSummary[];
+  next_cursor: string | null;
+  total: number;
+  change_token: number;
+}
+
+export interface SchemaCatalogHead {
+  catalog_version: number;
+  schema_fingerprint: string;
+  refreshed_at: string;
+  object_count: number;
+  column_count: number;
+  change_token: number;
+  etag: string;
+}
+
+export interface SchemaObjectSummary {
+  owner: string;
+  object_name: string;
+  object_type: string;
+  logical_name: string;
+  comment: string;
+  row_count?: number | null;
+  column_count: number;
+  last_ddl_at: string;
+}
+
+export interface SchemaObjectPage {
+  items: SchemaObjectSummary[];
+  next_cursor: string | null;
+  total: number | null;
+  catalog_version: number;
+}
+
+export interface SchemaObjectDetail {
+  table: SchemaTable;
+  dependencies: NonNullable<SchemaCatalog["view_dependencies"]>;
+  catalog_version: number;
+  etag: string;
+}
+
+export type SchemaRefreshJobStatus = "pending" | "running" | "done" | "error";
+
+export interface SchemaRefreshJob {
+  job_id: string;
+  status: SchemaRefreshJobStatus;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  scanned_objects: number;
+  changed_objects: number;
+  deleted_objects: number;
+  catalog_version: number;
+  error_code: string;
 }
 
 export interface ProfileUpsertPayload {
@@ -166,7 +258,57 @@ export interface ClassifierTrainingExample {
   category: string;
   text: string;
   profile_id: string;
+  profile_name: string;
   source: string;
+  source_type: "file" | "feedback";
+  source_history_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ClassifierTrainingCandidateStatus =
+  | "pending"
+  | "added"
+  | "already_covered"
+  | "conflict"
+  | "profile_missing"
+  | "source_changed";
+
+export interface ClassifierTrainingCandidate {
+  history_id: string;
+  question: string;
+  profile_id: string;
+  profile_name: string;
+  feedback_rating?: FeedbackRating | null;
+  feedback_comment: string;
+  created_at: string;
+  status: ClassifierTrainingCandidateStatus;
+  eligible: boolean;
+  training_example_id: string;
+  conflict_profile_ids: string[];
+}
+
+export interface ClassifierTrainingCandidatesData {
+  items: ClassifierTrainingCandidate[];
+  total: number;
+  next_cursor: string;
+  pending_count: number;
+  added_count: number;
+  attention_count: number;
+}
+
+export interface ClassifierFeedbackImportData {
+  imported_count: number;
+  skipped_count: number;
+  total_examples: number;
+  stale: boolean;
+  results: Array<{
+    history_id: string;
+    status: string;
+    training_example_id: string;
+    profile_id: string;
+    message: string;
+  }>;
 }
 
 export interface ClassifierImportData {
@@ -188,6 +330,7 @@ export interface ClassifierTrainingDataData {
 export interface ClassifierStatusData {
   ready: boolean;
   trained: boolean;
+  stale: boolean;
   classifier_version: string;
   updated_at: string;
   example_count: number;
@@ -198,29 +341,8 @@ export interface ClassifierStatusData {
   persistence_mode: string;
   recommendation_source: string;
   metrics: Record<string, string | number>;
-  warnings: string[];
-}
-
-export interface ClassifierModelInfo {
-  version: string;
-  active: boolean;
-  updated_at: string;
-  category_count: number;
-  categories: string[];
-  embedding_model: string;
-  vector_dimension: number;
-  metrics: Record<string, string | number>;
-  source: string;
-}
-
-export interface ClassifierModelsData {
-  active_version: string;
-  models: ClassifierModelInfo[];
-}
-
-export interface ClassifierModelActivateData {
-  active_version: string;
-  model?: ClassifierModelInfo | null;
+  trained_example_count: number;
+  pending_change_count: number;
   warnings: string[];
 }
 
@@ -348,6 +470,7 @@ export interface HistoryItem {
   result_row_count: number;
   result_columns: string[];
   feedback_comment: string;
+  feedback_updated_at?: string;
 }
 
 export interface HistoryData {
@@ -361,6 +484,22 @@ export interface FeedbackData {
   rating: FeedbackRating;
   saved: boolean;
   comment: string;
+}
+
+export interface FeedbackRecord extends HistoryItem {
+  training_status: ClassifierTrainingCandidateStatus | "";
+  training_example_id: string;
+}
+
+export interface FeedbackListData {
+  items: FeedbackRecord[];
+  total: number;
+  next_cursor: string;
+}
+
+export interface FeedbackClearData {
+  history_id: string;
+  cleared: boolean;
 }
 
 export interface FeedbackIndexData {

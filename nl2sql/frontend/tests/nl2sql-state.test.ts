@@ -101,7 +101,7 @@ test("schema insertion uses denpyo-style logical table and column names", () => 
 
 test("table insertion builds logical and physical table identifiers", () => {
   assert.equal(buildTableInsertText(invoiceTable), "\"請求\"");
-  assert.equal(buildTableSqlIdentifierText(invoiceTable), "\"INVOICES\"");
+  assert.equal(buildTableSqlIdentifierText(invoiceTable), "\"APP\".\"INVOICES\"");
 });
 
 test("fixed split pane stores ratio per page split id", () => {
@@ -176,7 +176,10 @@ test("fixed split pane grid templates use equal and golden-ratio tracks", () => 
 });
 
 test("schema SQL insertion uses quoted physical table and column names", () => {
-  assert.equal(buildSchemaSqlIdentifierText(invoiceTable, invoiceColumn), "\"INVOICES\".\"TOTAL_AMOUNT\"");
+  assert.equal(
+    buildSchemaSqlIdentifierText(invoiceTable, invoiceColumn),
+    "\"APP\".\"INVOICES\".\"TOTAL_AMOUNT\""
+  );
 });
 
 test("selection converts to allowed_objects without empty column arrays", () => {
@@ -236,9 +239,9 @@ test("question insertion replaces selected text at the cursor range", () => {
 test("object identifier normalization strips owner and quotes and uppercases", () => {
   assert.equal(normalizeObjectIdentifier("EMPLOYEE"), "EMPLOYEE");
   assert.equal(normalizeObjectIdentifier("employee"), "EMPLOYEE");
-  assert.equal(normalizeObjectIdentifier("APP.EMPLOYEE"), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier("APP.EMPLOYEE"), "APP.EMPLOYEE");
   assert.equal(normalizeObjectIdentifier('"EMPLOYEE"'), "EMPLOYEE");
-  assert.equal(normalizeObjectIdentifier('app."Employee"'), "EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier('app."Employee"'), "APP.EMPLOYEE");
 });
 
 test("schema insert prepends a newline only when not at start / not after a newline", () => {

@@ -27,6 +27,44 @@ ONTOLOGY_STAGE_SECONDS = Histogram(
     ("stage",),
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
 )
+ONTOLOGY_JOBS = Counter(
+    "nl2sql_ontology_jobs_total",
+    "Ontology build and publish job outcomes.",
+    ("job_type", "status", "error_code"),
+)
+ONTOLOGY_SOURCE_EXTRACTIONS = Counter(
+    "nl2sql_ontology_source_extractions_total",
+    "Ontology source extraction outcomes by controlled file format.",
+    ("format", "status"),
+)
+ONTOLOGY_SHACL_VALIDATIONS = Counter(
+    "nl2sql_ontology_shacl_validations_total",
+    "SHACL Core validation outcomes and controlled result codes.",
+    ("conforms", "code"),
+)
+ONTOLOGY_REASONING_TRIPLES = Histogram(
+    "nl2sql_ontology_reasoning_triples",
+    "Number of triples in an OWL 2 RL materialized closure.",
+    buckets=(10, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 50_000),
+)
+ONTOLOGY_PROFILE_RECOMMENDATIONS = Counter(
+    "nl2sql_ontology_profile_recommendations_total",
+    "Ontology profile recommendation outcomes.",
+    ("outcome",),
+)
+ONTOLOGY_CONTEXT_HITS = Histogram(
+    "nl2sql_ontology_context_hits",
+    "Number of nodes returned by bounded ontology context retrieval.",
+    buckets=(0, 1, 2, 4, 8, 12, 16, 24),
+)
+
+_JOB_TYPES = frozenset({"build", "publish"})
+_JOB_STATUSES = frozenset({"succeeded", "failed"})
+_SOURCE_FORMATS = frozenset({"pdf", "docx", "txt", "md", "csv", "tsv", "xlsx", "xlsm"})
+_SOURCE_STATUSES = frozenset({"extracted", "failed", "duplicate"})
+_RECOMMENDATION_OUTCOMES = frozenset(
+    {"with_candidates", "no_candidates", "accepted", "manually_changed"}
+)
 
 
 def record_transition(*, session_id: str, revision_id: str, state: str) -> None:
@@ -48,6 +86,50 @@ def record_findings(findings: list[object]) -> None:
         severity = str(getattr(finding, "severity", "unknown"))
         code = str(getattr(finding, "code", "unknown"))[:64]
         ONTOLOGY_VALIDATION_FINDINGS.labels(severity=severity, code=code).inc()
+
+
+def record_job(*, job_type: str, status: str, error_code: str = "none") -> None:
+    """永続 job の終端結果だけを、制御済み label で記録する。"""
+
+    normalized_type = job_type if job_type in _JOB_TYPES else "unknown"
+    normalized_status = status if status in _JOB_STATUSES else "unknown"
+    normalized_code = error_code[:64] if error_code else "none"
+    ONTOLOGY_JOBS.labels(
+        job_type=normalized_type,
+        status=normalized_status,
+        error_code=normalized_code,
+    ).inc()
+
+
+def record_source_extraction(*, file_format: str, status: str) -> None:
+    normalized_format = file_format.lower().lstrip(".")
+    if normalized_format not in _SOURCE_FORMATS:
+        normalized_format = "unknown"
+    normalized_status = status if status in _SOURCE_STATUSES else "unknown"
+    ONTOLOGY_SOURCE_EXTRACTIONS.labels(
+        format=normalized_format,
+        status=normalized_status,
+    ).inc()
+
+
+def record_shacl_validation(*, conforms: bool) -> None:
+    ONTOLOGY_SHACL_VALIDATIONS.labels(
+        conforms=str(conforms).lower(),
+        code="none" if conforms else "ONTOLOGY_SHACL_VIOLATION",
+    ).inc()
+
+
+def record_reasoning_triples(count: int) -> None:
+    ONTOLOGY_REASONING_TRIPLES.observe(max(0, count))
+
+
+def record_profile_recommendation(outcome: str) -> None:
+    normalized = outcome if outcome in _RECOMMENDATION_OUTCOMES else "unknown"
+    ONTOLOGY_PROFILE_RECOMMENDATIONS.labels(outcome=normalized).inc()
+
+
+def record_context_hits(count: int) -> None:
+    ONTOLOGY_CONTEXT_HITS.observe(max(0, count))
 
 
 @contextmanager

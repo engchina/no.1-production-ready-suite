@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -97,6 +98,13 @@ def _workbook_bytes(workbook: Any) -> bytes:
     return buffer.getvalue()
 
 
+def _classifier_model_bytes(*categories: str) -> bytes:
+    buffer = io.BytesIO()
+    joblib = importlib.import_module("joblib")
+    joblib.dump(SimpleNamespace(classes_=list(categories)), buffer)
+    return buffer.getvalue()
+
+
 def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
@@ -142,33 +150,105 @@ def test_classifier_training_predicts_and_drives_profile_recommendation() -> Non
         ("標準業務プロファイル", "売上合計を顧客別に確認したい"),
     ]
 
+    first_status = service.train_classifier(ClassifierTrainRequest())
+    assert first_status.ready
+    assert first_status.example_count == 4
+    assert first_status.category_count == 2
+
     status = service.train_classifier(ClassifierTrainRequest())
     assert status.ready
-    assert status.example_count == 4
-    assert status.category_count == 2
+    assert status.classifier_version != first_status.classifier_version
 
     prediction = service.predict_classifier(
         ClassifierPredictRequest(question="未入金の請求を確認したい")
     )
     assert prediction.recommendation_source == "classifier"
+    assert prediction.classifier_version == status.classifier_version
     assert prediction.candidates
 
     recommendation = service.recommend_profile(
         ProfileRecommendationRequest(question="未入金の請求を確認したい")
     )
     assert recommendation.recommendation_source == "classifier"
-    assert recommendation.classifier_version
+    assert recommendation.classifier_version == status.classifier_version
     assert recommendation.category_scores
 
-    models = service.list_classifier_models()
-    assert models.active_version == status.classifier_version
-    assert models.models
 
-    activated = service.activate_classifier_model(status.classifier_version)
-    assert activated.active_version == status.classifier_version
+def test_classifier_model_import_replaces_the_single_model_and_preserves_it_on_failure() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
 
-    deleted = service.delete_classifier_model(status.classifier_version)
-    assert deleted.active_version == ""
+    first = service.import_classifier_model_artifact(
+        filename="first.joblib",
+        content=_classifier_model_bytes("入金管理", "標準業務プロファイル"),
+    )
+    assert first.imported is True
+    assert first.model is not None
+    assert first.model.active is True
+    assert service.classifier_status().classifier_version == first.active_version
+
+    second = service.import_classifier_model_artifact(
+        filename="second.joblib",
+        content=_classifier_model_bytes("監査", "標準業務プロファイル"),
+    )
+    assert second.imported is True
+    assert second.active_version != first.active_version
+    assert second.model is not None
+    assert second.model.active is True
+    assert service.classifier_status().classifier_version == second.active_version
+
+    failed = service.import_classifier_model_artifact(
+        filename="broken.txt",
+        content=b"not-a-model",
+    )
+    assert failed.imported is False
+    assert failed.active_version == second.active_version
+    assert service.classifier_status().classifier_version == second.active_version
+
+
+@pytest.mark.asyncio
+async def test_classifier_model_api_exposes_only_single_model_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    raw_model = _classifier_model_bytes("入金管理", "標準業務プロファイル")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        imported = await client.post(
+            "/api/nl2sql/classifier/model/import",
+            files={"file": ("single.joblib", raw_model, "application/octet-stream")},
+        )
+        legacy_imported = await client.post(
+            "/api/nl2sql/classifier/models/import",
+            data={"activate": "true"},
+            files={"file": ("legacy.joblib", raw_model, "application/octet-stream")},
+        )
+        inactive = await client.post(
+            "/api/nl2sql/classifier/models/import",
+            data={"activate": "false"},
+            files={"file": ("inactive.joblib", raw_model, "application/octet-stream")},
+        )
+        listed = await client.get("/api/nl2sql/classifier/models")
+        activated = await client.post(
+            "/api/nl2sql/classifier/models/legacy/activate",
+            json={},
+        )
+        deleted = await client.delete("/api/nl2sql/classifier/models/legacy")
+
+    assert imported.status_code == 200
+    assert imported.json()["data"]["model"]["active"] is True
+    assert legacy_imported.status_code == 200
+    assert legacy_imported.json()["data"]["model"]["active"] is True
+    assert inactive.status_code == 422
+    assert "activate=false" in inactive.text
+    assert listed.status_code == 404
+    assert activated.status_code == 404
+    assert deleted.status_code == 404
 
 
 def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
@@ -240,7 +320,7 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
         )
     )
 
-    assert created.allowed_views == ["V_INVOICE_SUMMARY"]
+    assert created.allowed_views == ["ADMIN.V_INVOICE_SUMMARY"]
     assert created.select_ai_config.profile_name == "FINANCE_SELECT_AI"
     assert created.select_ai_config.embedding_model == "cohere.embed-v4.0"
     assert created.select_ai_config.role == "財務 SQL アシスタント"
@@ -258,7 +338,7 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
         ),
     )
 
-    assert updated.allowed_views == ["V_CUSTOMER_BALANCE"]
+    assert updated.allowed_views == ["ADMIN.V_CUSTOMER_BALANCE"]
     assert updated.select_ai_config.profile_name == "FINANCE_SELECT_AI_V2"
     assert updated.select_ai_config.max_tokens == 32000
 
@@ -358,6 +438,7 @@ def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() ->
 
 def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(Nl2SqlProfile(id="payment", name="入金管理"))
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.Workbook()
     sheet = workbook.active
@@ -375,17 +456,17 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
         replace=True,
     )
 
-    assert imported.imported_count == 3
-    assert imported.skipped_count == 2
+    assert imported.imported_count == 2
+    assert imported.skipped_count == 3
     assert imported.categories == ["入金管理", "標準業務プロファイル"]
     listed = service.classifier_training_data()
-    assert listed.total_examples == 3
+    assert listed.total_examples == 2
     assert [item.text for item in listed.examples] == [
         "請求金額を確認したい",
         "未入金の請求を確認したい",
-        "未入金の請求を確認したい",
     ]
 
+    service.create_profile(Nl2SqlProfile(id="audit", name="監査"))
     replacement_payload = "CATEGORY,TEXT\n監査,監査ログを確認したい\n".encode()
     replaced = service.import_classifier_training_data(
         filename="replacement.csv",
@@ -397,6 +478,58 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     assert replaced_listing.total_examples == 1
     assert replaced_listing.categories == ["監査"]
     assert replaced_listing.examples[0].text == "監査ログを確認したい"
+
+
+def test_classifier_training_data_xlsx_export_contains_profile_and_source_metadata() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_classifier_training_data(
+        filename="training_data.csv",
+        content=(
+            "CATEGORY,TEXT\n"
+            "標準業務プロファイル,請求金額を確認したい\n"
+            "入金管理,未入金の請求を確認したい\n"
+        ).encode(),
+        replace=True,
+        profile_id="default",
+    )
+
+    filename, content = service.export_classifier_training_data_xlsx()
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    rows = list(workbook["training_data"].iter_rows(values_only=True))
+
+    assert filename == "nl2sql_classifier_training_data.xlsx"
+    assert rows == [
+        (
+            "CATEGORY",
+            "TEXT",
+            "PROFILE_ID",
+            "SOURCE",
+            "SOURCE_TYPE",
+            "SOURCE_HISTORY_ID",
+        ),
+        (
+            "標準業務プロファイル",
+            "請求金額を確認したい",
+            "default",
+            "training_data.csv",
+            "file",
+            None,
+        ),
+        (
+            "入金管理",
+            "未入金の請求を確認したい",
+            "default",
+            "training_data.csv",
+            "file",
+            None,
+        ),
+    ]
+
+
+def test_classifier_training_data_jsonl_export_route_is_not_registered() -> None:
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/api/nl2sql/classifier/training-data/export.jsonl" not in paths
 
 
 def test_annotations_and_synthetic_data_require_confirmation_without_oracle() -> None:
@@ -704,7 +837,7 @@ def test_global_rule_xlsx_preserves_newlines_blank_lines_and_indentation() -> No
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
     multiline_rule = (
-        "SELECT customer_name\n\n" "    FROM customers\n" "    WHERE customer_status = 'ACTIVE'"
+        "SELECT customer_name\n\n    FROM customers\n    WHERE customer_status = 'ACTIVE'"
     )
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.Workbook()

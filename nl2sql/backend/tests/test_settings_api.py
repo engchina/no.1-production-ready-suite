@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import stat
+import string
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 import httpx
+import pytest
 from pytest import MonkeyPatch
 
-from app.clients.oci_database import AutonomousDatabaseInfo
+from app.clients.oci_database import (
+    AutonomousDatabaseInfo,
+    OciDatabaseClient,
+    WalletDownloadTooLargeError,
+)
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
 from app.features.settings import router as settings_router
 from app.main import app
@@ -320,6 +327,427 @@ def test_upload_database_wallet_extracts_to_resolved_wallet_dir(
     assert "mydb_high" in data["available_services"]
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert not (wallet_dir / "readme").exists()
+    assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
+    for file_name in settings_router.ORACLE_WALLET_REQUIRED_FILES:
+        assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
+
+
+def test_database_wallet_state_requires_all_four_files(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    client_lib_dir = tmp_path / "instantclient"
+    wallet_dir = client_lib_dir / "network" / "admin"
+    wallet_dir.mkdir(parents=True)
+    (wallet_dir / "tnsnames.ora").write_text("mydb_high = (...)\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", str(client_lib_dir))
+    monkeypatch.setattr(settings, "oracle_wallet_dir", "")
+
+    data = settings_router._database_settings_data(settings)
+
+    assert data.wallet_uploaded is False
+    assert data.available_services == []
+
+
+def test_download_database_wallet_repairs_partial_serverless_wallet(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    wallet_dir = Path(settings.resolved_oracle_wallet_dir)
+    wallet_dir.mkdir(parents=True)
+    (wallet_dir / "tnsnames.ora").write_text("partial", encoding="utf-8")
+    monkeypatch.setattr(settings, "oracle_password", "database-secret")
+    monkeypatch.setattr(settings, "oracle_wallet_password", "saved-wallet-secret")
+    captured: dict[str, Any] = {}
+
+    class FakeDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            captured["get_ocid"] = adb_ocid
+            return _adb_info(adb_ocid, is_dedicated=False)
+
+        async def download_autonomous_database_wallet(
+            self,
+            adb_ocid: str,
+            password: str,
+            generate_type: str | None,
+            max_bytes: int,
+        ) -> bytes:
+            captured.update(
+                adb_ocid=adb_ocid,
+                password=password,
+                generate_type=generate_type,
+                max_bytes=max_bytes,
+            )
+            return _wallet_zip_bytes()
+
+    pool_closed: list[bool] = []
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(settings_router, "close_oracle_pool", lambda: pool_closed.append(True))
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["status"] == "downloaded"
+    assert body["data"]["settings"]["wallet_uploaded"] is True
+    assert body["data"]["settings"]["available_services"] == ["mydb_high"]
+    assert captured["get_ocid"] == settings.oracle_adb_ocid
+    assert captured["generate_type"] == "SINGLE"
+    assert captured["max_bytes"] == settings_router.ORACLE_WALLET_MAX_BYTES
+    password = str(captured["password"])
+    assert len(password) == settings_router.ORACLE_WALLET_GENERATED_PASSWORD_LENGTH
+    assert any(char in string.ascii_lowercase for char in password)
+    assert any(char in string.ascii_uppercase for char in password)
+    assert any(char in string.digits for char in password)
+    assert any(char in settings_router.ORACLE_WALLET_PASSWORD_SPECIALS for char in password)
+    assert password not in {settings.oracle_password, settings.oracle_wallet_password}
+    assert password not in resp.text
+    assert pool_closed == [True]
+    assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
+    for file_name in settings_router.ORACLE_WALLET_REQUIRED_FILES:
+        assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
+
+
+def test_download_database_wallet_omits_generate_type_for_dedicated(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    class FakeDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            return _adb_info(adb_ocid, is_dedicated=True)
+
+        async def download_autonomous_database_wallet(
+            self,
+            adb_ocid: str,
+            password: str,
+            generate_type: str | None,
+            max_bytes: int,
+        ) -> bytes:
+            captured["generate_type"] = generate_type
+            return _wallet_zip_bytes()
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 200
+    assert captured["generate_type"] is None
+
+
+def test_download_database_wallet_is_idempotent_when_complete(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    settings_router._install_database_wallet(settings, _wallet_zip_bytes(), "wallet.zip")
+
+    class UnexpectedDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            raise AssertionError("complete Wallet must not call OCI")
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", UnexpectedDatabaseClient)
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "already_configured"
+
+
+def test_download_database_wallet_requires_adb_ocid(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "oracle_adb_ocid", "")
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 422
+    assert "ADB OCID" in resp.text
+    assert "手動アップロード" in resp.text
+
+
+def test_download_database_wallet_requires_complete_oci_configuration(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "oci_config_file", str(tmp_path / "missing-config"))
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 422
+    assert "OCI 認証設定" in resp.text
+    assert "手動アップロード" in resp.text
+
+
+def test_download_database_wallet_maps_oci_error_without_leaking_details(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+
+    class FailingDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            raise RuntimeError("SDK secret detail must not leak")
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FailingDatabaseClient)
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 502
+    assert "IAM 権限" in resp.text
+    assert "SDK secret detail" not in resp.text
+
+
+def test_download_database_wallet_rejects_invalid_upstream_zip(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+
+    class InvalidWalletClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            return _adb_info(adb_ocid, is_dedicated=False)
+
+        async def download_autonomous_database_wallet(
+            self,
+            adb_ocid: str,
+            password: str,
+            generate_type: str | None,
+            max_bytes: int,
+        ) -> bytes:
+            return b"not-a-wallet-zip"
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", InvalidWalletClient)
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 502
+    assert "内容を検証できませんでした" in resp.text
+
+
+def test_download_database_wallet_maps_stream_limit_to_413(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+
+    class OversizedWalletClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            return _adb_info(adb_ocid, is_dedicated=False)
+
+        async def download_autonomous_database_wallet(
+            self,
+            adb_ocid: str,
+            password: str,
+            generate_type: str | None,
+            max_bytes: int,
+        ) -> bytes:
+            raise WalletDownloadTooLargeError
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", OversizedWalletClient)
+
+    resp = client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 413
+    assert "20 MB" in resp.text
+
+
+def test_database_wallet_install_lock_returns_conflict(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+
+    with settings_router._database_wallet_install_lock(settings):
+        resp = client.post(
+            "/api/settings/database/wallet",
+            files={"file": ("wallet.zip", _wallet_zip_bytes(), "application/zip")},
+        )
+
+    assert resp.status_code == 409
+    assert "処理中" in resp.text
+
+
+def test_database_wallet_install_failure_restores_existing_wallet(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    wallet_dir = settings_router._install_database_wallet(
+        settings,
+        _wallet_zip_bytes(),
+        "old-wallet.zip",
+    )
+    old_tnsnames = (wallet_dir / "tnsnames.ora").read_bytes()
+
+    def fail_permissions(path: Path) -> None:
+        raise OSError("simulated chmod failure")
+
+    monkeypatch.setattr(settings_router, "_secure_database_wallet", fail_permissions)
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        files={"file": ("new-wallet.zip", _wallet_zip_bytes(), "application/zip")},
+    )
+
+    assert resp.status_code == 500
+    assert (wallet_dir / "tnsnames.ora").read_bytes() == old_tnsnames
+    assert not list(wallet_dir.parent.glob(f".{wallet_dir.name}.backup-*"))
+
+
+def test_upload_database_wallet_rejects_zip_slip_without_overwriting(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    wallet_dir = settings_router._install_database_wallet(
+        settings,
+        _wallet_zip_bytes(),
+        "old-wallet.zip",
+    )
+    old_tnsnames = (wallet_dir / "tnsnames.ora").read_bytes()
+    unsafe_zip = BytesIO()
+    with ZipFile(unsafe_zip, "w") as archive:
+        archive.writestr("../tnsnames.ora", "unsafe")
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        files={"file": ("unsafe.zip", unsafe_zip.getvalue(), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "安全でないファイルパス" in resp.text
+    assert (wallet_dir / "tnsnames.ora").read_bytes() == old_tnsnames
+
+
+def test_upload_database_wallet_rejects_symlink_member(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+    unsafe_zip = BytesIO()
+    with ZipFile(unsafe_zip, "w") as archive:
+        symlink = ZipInfo("Wallet_MYDB/cwallet.sso")
+        symlink.create_system = 3
+        symlink.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(symlink, "tnsnames.ora")
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        files={"file": ("symlink.zip", unsafe_zip.getvalue(), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "シンボリックリンク" in resp.text
+
+
+def test_upload_database_wallet_enforces_extracted_size_limit(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings_router, "ORACLE_WALLET_MAX_EXTRACTED_BYTES", 8)
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        files={"file": ("wallet.zip", _wallet_zip_bytes(), "application/zip")},
+    )
+
+    assert resp.status_code == 413
+    assert "展開後サイズ" in resp.text
+
+
+def test_oci_database_wallet_streaming_applies_limit_and_model_parameters() -> None:
+    captured: list[dict[str, str]] = []
+
+    class FakeRaw:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self.chunks = chunks
+            self.closed = False
+
+        def stream(self, chunk_size: int, *, decode_content: bool) -> list[bytes]:
+            assert chunk_size == 1024 * 1024
+            assert decode_content is True
+            return self.chunks
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeSdkClient:
+        def __init__(self, raw: FakeRaw) -> None:
+            self.raw = raw
+
+        def generate_autonomous_database_wallet(self, adb_ocid: str, details: Any) -> object:
+            assert adb_ocid == "ocid1.autonomousdatabase.oc1..example"
+            captured.append(details)
+            return SimpleNamespace(data=SimpleNamespace(raw=self.raw))
+
+    async def inline_runner(operation: Any) -> Any:
+        return operation()
+
+    factory = lambda **kwargs: kwargs  # noqa: E731 - SDK model factory の最小 fixture
+    raw = FakeRaw([b"abc", b"def"])
+    sdk_client = FakeSdkClient(raw)
+    database_client = OciDatabaseClient(
+        settings=Settings(_env_file=None),
+        database_client=sdk_client,  # type: ignore[arg-type]
+        sdk_call_runner=inline_runner,
+        wallet_details_factory=factory,
+    )
+
+    result = asyncio.run(
+        database_client.download_autonomous_database_wallet(
+            "ocid1.autonomousdatabase.oc1..example",
+            "temporary-secret",
+            "SINGLE",
+            6,
+        )
+    )
+
+    assert result == b"abcdef"
+    assert captured == [{"password": "temporary-secret", "generate_type": "SINGLE"}]
+    assert raw.closed is True
+
+    dedicated_raw = FakeRaw([b"1234", b"5"])
+    dedicated_client = OciDatabaseClient(
+        settings=Settings(_env_file=None),
+        database_client=FakeSdkClient(dedicated_raw),  # type: ignore[arg-type]
+        sdk_call_runner=inline_runner,
+        wallet_details_factory=factory,
+    )
+    with pytest.raises(WalletDownloadTooLargeError):
+        asyncio.run(
+            dedicated_client.download_autonomous_database_wallet(
+                "ocid1.autonomousdatabase.oc1..example",
+                "another-secret",
+                None,
+                4,
+            )
+        )
+    assert captured[-1] == {"password": "another-secret"}
+    assert dedicated_raw.closed is True
 
 
 def test_update_database_settings_preserves_client_lib_dir_in_env(
@@ -391,14 +819,18 @@ def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> N
     assert settings.object_storage_bucket == "nl2sql-originals"
 
 
-def test_update_model_settings_persists_json_with_resolved_secret(
+def test_update_model_settings_persists_v2_json_and_env_secret(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     settings = get_settings()
     model_settings_file = tmp_path / "model-settings.json"
+    env_file = tmp_path / ".env"
+    env_file.write_text("OCI_ENTERPRISE_AI_API_KEY=saved-secret\n", encoding="utf-8")
+    env_file.chmod(0o600)
     monkeypatch.setattr(settings, "model_settings_file", str(model_settings_file))
-    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "saved-secret")
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    settings.set_runtime_enterprise_ai_api_key("saved-secret")
 
     resp = client.patch(
         "/api/settings/model",
@@ -447,11 +879,46 @@ def test_update_model_settings_persists_json_with_resolved_secret(
         "mistral.vision-model",
     ]
     assert models[1]["vision_enabled"] is True
-    document = model_settings_file.read_text(encoding="utf-8")
-    assert '"api_key": "saved-secret"' in document
-    assert '"model_id": "mistral.vision-model"' in document
-    assert '"embedding_dim": 1536' in document
+    document = json.loads(model_settings_file.read_text(encoding="utf-8"))
+    assert document["version"] == 2
+    assert "api_key" not in document["enterprise_ai"]
+    assert document["enterprise_ai"]["models"][1]["model_id"] == "mistral.vision-model"
+    assert document["generative_ai"]["embedding_dim"] == 1536
+    assert env_file.read_text(encoding="utf-8") == "OCI_ENTERPRISE_AI_API_KEY=saved-secret\n"
+    assert resp.json()["data"]["secret_source"] == "environment"
+    assert resp.json()["data"]["legacy_secret_detected"] is False
     assert stat.S_IMODE(model_settings_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
+def test_enterprise_ai_api_key_env_update_and_clear_are_atomic(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# keep this comment\nOCI_ENTERPRISE_AI_API_KEY=old-secret\nDEBUG=true\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+
+    settings_router._persist_enterprise_ai_api_key("new-secret")
+
+    updated = env_file.read_text(encoding="utf-8")
+    assert "old-secret" not in updated
+    assert "OCI_ENTERPRISE_AI_API_KEY=new-secret" in updated
+    assert "# keep this comment" in updated
+    assert "DEBUG=true" in updated
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+    settings_router._persist_enterprise_ai_api_key("")
+
+    cleared = env_file.read_text(encoding="utf-8")
+    assert "OCI_ENTERPRISE_AI_API_KEY" not in cleared
+    assert "# keep this comment" in cleared
+    assert "DEBUG=true" in cleared
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
 
 def test_load_persisted_model_settings_applies_runtime_fields(tmp_path: Path) -> None:
@@ -491,12 +958,14 @@ def test_load_persisted_model_settings_applies_runtime_fields(tmp_path: Path) ->
         """,
         encoding="utf-8",
     )
-    settings = Settings(model_settings_file=str(model_settings_file))
+    settings = Settings(_env_file=None, model_settings_file=str(model_settings_file))
 
     load_persisted_model_settings(settings)
 
     assert settings.oci_enterprise_ai_endpoint == "https://enterprise-ai.example.com"
     assert settings.oci_enterprise_ai_api_key == "persisted-secret"
+    assert settings.model_secret_source == "legacy_json"
+    assert settings.legacy_model_secret_detected is True
     assert settings.oci_enterprise_ai_default_model == "cohere.command-r-plus"
     assert settings.oci_enterprise_ai_vlm_model == "mistral.vision-model"
     assert [model.model_id for model in settings.oci_enterprise_ai_models] == [
@@ -507,6 +976,79 @@ def test_load_persisted_model_settings_applies_runtime_fields(tmp_path: Path) ->
     assert settings.oci_enterprise_ai_max_retries == 4
     assert settings.oci_genai_embed_model_id == "cohere.embed-v4.0"
     assert settings.oci_genai_rerank_model_id == "cohere.rerank-v4.0-fast"
+
+
+def test_environment_model_secret_takes_precedence_over_v1_json(tmp_path: Path) -> None:
+    model_settings_file = tmp_path / "model-settings.json"
+    model_settings_file.write_text(
+        '{"version":1,"enterprise_ai":{"api_key":"legacy-secret"}}',
+        encoding="utf-8",
+    )
+    settings = Settings(
+        _env_file=None,
+        model_settings_file=str(model_settings_file),
+        oci_enterprise_ai_api_key="environment-secret",
+    )
+
+    load_persisted_model_settings(settings)
+
+    assert settings.oci_enterprise_ai_api_key == "environment-secret"
+    assert settings.model_secret_source == "environment"
+    assert settings.legacy_model_secret_detected is True
+
+
+def test_v2_model_settings_never_reads_api_key_field(tmp_path: Path) -> None:
+    model_settings_file = tmp_path / "model-settings.json"
+    model_settings_file.write_text(
+        '{"version":2,"enterprise_ai":{"api_key":"must-not-load"}}',
+        encoding="utf-8",
+    )
+    settings = Settings(_env_file=None, model_settings_file=str(model_settings_file))
+
+    load_persisted_model_settings(settings)
+
+    assert settings.oci_enterprise_ai_api_key == ""
+    assert settings.model_secret_source == "missing"
+    assert settings.legacy_model_secret_detected is True
+
+
+def test_oci_config_profile_prefers_canonical_and_falls_back_to_legacy() -> None:
+    canonical = Settings(
+        _env_file=None,
+        oci_config_profile="CANONICAL",
+        oci_profile="LEGACY",
+    )
+    legacy = Settings(_env_file=None, oci_config_profile="", oci_profile="LEGACY")
+
+    assert canonical.resolved_oci_config_profile == "CANONICAL"
+    assert legacy.resolved_oci_config_profile == "LEGACY"
+
+
+def test_nonlocal_security_boundaries_fail_closed() -> None:
+    with pytest.raises(ValueError, match="DEBUG=true"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            debug=True,
+            app_auth_enabled=False,
+        )
+    with pytest.raises(ValueError, match="APP_AUTH_COOKIE_SECURE=true"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            debug=False,
+            app_auth_enabled=True,
+            app_auth_cookie_secure=False,
+        )
+
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        debug=False,
+        app_auth_enabled=True,
+        app_auth_cookie_secure=True,
+    )
+    assert settings.local_debug_enabled is False
 
 
 def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -> None:
@@ -565,6 +1107,16 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
     assert captured["endpoint"] == "https://enterprise-ai.example.com"
     assert captured["model_id"] == "cohere.command-r-plus"
     assert captured["api_key"] == "request-secret"
+
+
+def test_model_settings_error_sanitizer_never_returns_secret() -> None:
+    sanitized = settings_router._sanitize_model_test_error(
+        "gateway rejected Bearer request-secret with status 401",
+        ["request-secret"],
+    )
+
+    assert "request-secret" not in sanitized
+    assert sanitized == "gateway rejected Bearer <secret> with status 401"
 
 
 def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
@@ -790,6 +1342,45 @@ def test_oracle_adapter_wallet_only_connection_uses_wallet_kwargs(
     assert "retry_count" not in str(kwargs["dsn"]).lower()
     assert captured["sql"] == "SELECT 1 FROM DUAL"
     assert captured["closed"] is True
+
+
+def _configure_wallet_download(monkeypatch: MonkeyPatch, tmp_path: Path) -> Settings:
+    settings = get_settings()
+    client_lib_dir = tmp_path / "instantclient"
+    key_file = tmp_path / "oci_api_key.pem"
+    key_file.write_text(
+        "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    config_file = tmp_path / "oci_config"
+    config_file.write_text(
+        "[DEFAULT]\n"
+        "user=ocid1.user.oc1..example\n"
+        "fingerprint=aa:bb:cc\n"
+        "tenancy=ocid1.tenancy.oc1..example\n"
+        "region=ap-osaka-1\n"
+        f"key_file={key_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", str(client_lib_dir))
+    monkeypatch.setattr(settings, "oracle_wallet_dir", "")
+    monkeypatch.setattr(settings, "oracle_adb_ocid", "ocid1.autonomousdatabase.oc1..example")
+    monkeypatch.setattr(settings, "oracle_adb_region", "ap-osaka-1")
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+    return settings
+
+
+def _adb_info(adb_ocid: str, *, is_dedicated: bool) -> AutonomousDatabaseInfo:
+    return AutonomousDatabaseInfo(
+        id=adb_ocid,
+        display_name="NL2SQLADB",
+        lifecycle_state="AVAILABLE",
+        db_name="NL2SQL",
+        cpu_core_count=1,
+        data_storage_size_in_tbs=1,
+        is_dedicated=is_dedicated,
+    )
 
 
 def _wallet_zip_bytes() -> bytes:

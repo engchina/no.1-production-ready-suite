@@ -72,6 +72,8 @@ _BUSINESS_NODE_KINDS = frozenset(
         OntologyNodeKind.PROPERTY,
         OntologyNodeKind.METRIC,
         OntologyNodeKind.BUSINESS_TERM,
+        OntologyNodeKind.BUSINESS_RULE,
+        OntologyNodeKind.ENUM_VALUE,
     }
 )
 _PATH_EDGE_KINDS = frozenset({OntologyEdgeKind.FOREIGN_KEY, OntologyEdgeKind.BUSINESS_RELATIONSHIP})

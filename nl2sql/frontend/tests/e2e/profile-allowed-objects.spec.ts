@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { mockDatabaseGateReady } from "./_helpers/database-gate";
+
+test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
@@ -80,8 +83,8 @@ const profiles = [
     name: "既定プロファイル",
     category: "既定プロファイル",
     description: "許可オブジェクトの表示確認",
-    allowed_tables: ["TABLE_01"],
-    allowed_views: ["VIEW_02"],
+    allowed_tables: ["APP.TABLE_01"],
+    allowed_views: ["APP.VIEW_02"],
     glossary: {},
     sql_rules: ["SELECT のみ"],
     default_row_limit: 100,
@@ -106,8 +109,8 @@ const dbProfiles = {
         { owner: "APP", name: "TABLE_01" },
         { owner: "APP", name: "VIEW_02" },
       ],
-      tables: ["TABLE_01"],
-      views: ["VIEW_02"],
+      tables: ["APP.TABLE_01"],
+      views: ["APP.VIEW_02"],
       region: "ap-osaka-1",
       model: "cohere.command-r-plus",
       embedding_model: "cohere.embed-v4.0",
@@ -241,7 +244,78 @@ async function mockProfileApi(
     { name: "VIEW_02", owner: "APP", object_type: "VIEW", row_count: null, comment: "view" },
     { name: "V_$SESSION", owner: "SYS", object_type: "VIEW", row_count: null, comment: "system" },
   ];
+  const catalog = options.catalog ?? schemaCatalog;
+  const profileItems = options.profileItems ?? profiles;
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, options.catalog ?? schemaCatalog));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfillJson(route, {
+      catalog_version: 1,
+      schema_fingerprint: "cross-schema-test",
+      refreshed_at: catalog.refreshed_at,
+      object_count: catalog.tables.length,
+      column_count: 0,
+      change_token: 1,
+      etag: "cross-schema-test",
+    })
+  );
+  await page.route("**/api/schema/owners", (route) => {
+    const counts = new Map<string, { table_count: number; view_count: number }>();
+    for (const object of catalog.tables.filter((item) => !item.table_name.includes("$"))) {
+      const current = counts.get(object.owner) ?? { table_count: 0, view_count: 0 };
+      if (["VIEW", "MATERIALIZED VIEW"].includes(object.table_type.toUpperCase())) {
+        current.view_count += 1;
+      } else {
+        current.table_count += 1;
+      }
+      counts.set(object.owner, current);
+    }
+    return fulfillJson(route, {
+      current_owner: "APP",
+      owners: [...counts.entries()].map(([owner, value]) => ({
+        owner,
+        is_current: owner === "APP",
+        ...value,
+      })),
+      excluded_oracle_maintained_count: 2,
+    });
+  });
+  await page.route("**/api/schema/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    const type = url.searchParams.get("type") ?? "";
+    const owner = (url.searchParams.get("owner") ?? "").toUpperCase();
+    const query = (url.searchParams.get("q") ?? "").toLowerCase();
+    const items = catalog.tables
+      .filter((object) => !owner || object.owner.toUpperCase() === owner)
+      .filter((object) => !type || object.table_type.toUpperCase() === type.toUpperCase())
+      .filter((object) =>
+        [
+          object.owner,
+          `${object.owner}.${object.table_name}`,
+          object.table_name,
+          object.logical_name,
+          object.comment,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query)
+      )
+      .map((object) => ({
+        owner: object.owner,
+        object_name: object.table_name,
+        object_type: object.table_type,
+        logical_name: object.logical_name,
+        comment: object.comment,
+        row_count: object.row_count,
+        column_count: object.columns.length,
+        last_ddl_at: "",
+      }));
+    return fulfillJson(route, {
+      items,
+      next_cursor: null,
+      total: items.length,
+      catalog_version: 1,
+    });
+  });
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, {
       runtime: "deterministic",
@@ -262,10 +336,38 @@ async function mockProfileApi(
   );
   await page.route("**/api/nl2sql/profiles", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, options.profileItems ?? profiles);
+      await fulfillJson(route, profileItems);
       return;
     }
     await route.fallback();
+  });
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: profileItems.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: profile.archived,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: Object.keys(profile.glossary).length,
+        few_shot_count: profile.few_shot_examples.length,
+        version: 1,
+        etag: `etag-${profile.id}`,
+        updated_at: "2026-07-19T00:00:00Z",
+      })),
+      next_cursor: null,
+      total: profileItems.length,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/*", (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/search")) return route.fallback();
+    const profileId = pathname.split("/").at(-1);
+    const profile = profileItems.find((item) => item.id === profileId) ?? profileItems[0];
+    return fulfillJson(route, { ...profile, etag: `etag-${profile.id}` });
   });
   await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) =>
     fulfillJson(route, profileOntologyView)
@@ -353,14 +455,14 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   // 対象オブジェクト選択はタブなしで常時表示される
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
-  await expect(tableList.getByText("TABLE_01", { exact: true })).toBeVisible();
-  await expect(viewList.getByText("VIEW_02", { exact: true })).toBeVisible();
-  await expect(tableList.getByText("VIEW_02", { exact: true })).toHaveCount(0);
-  await expect(viewList.getByText("TABLE_01", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("APP.TABLE_01", { exact: true })).toBeVisible();
+  await expect(viewList.getByText("APP.VIEW_02", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("APP.VIEW_02", { exact: true })).toHaveCount(0);
+  await expect(viewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
   await expect(page.getByText("SYS$AUDIT", { exact: true })).toHaveCount(0);
   await expect(page.getByText("V_$SESSION", { exact: true })).toHaveCount(0);
-  await expect(tableList.getByText("表論理名_01", { exact: true })).toHaveCount(0);
-  await expect(viewList.getByText("ビューコメント_02", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("表論理名_01", { exact: true })).toBeVisible();
+  await expect(viewList.getByText("ビュー論理名_02", { exact: true })).toBeVisible();
 
   const objectSection = page.getByTestId("profile-allowed-object-list");
   const objectSearchToolbar = page.getByTestId("profile-object-search-toolbar");
@@ -383,17 +485,18 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   expect(searchBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x + 11);
   expect(searchBox!.x).toBeLessThanOrEqual(toolbarBox!.x + 14);
 
-  await expect(tableList.getByLabel("TABLE_01")).toBeChecked();
-  await expect(viewList.getByLabel("VIEW_02")).toBeChecked();
+  await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
+  await expect(viewList.getByLabel("APP.VIEW_02")).toBeChecked();
   await objectSearch.fill("03");
-  await expect(tableList.getByText("TABLE_03", { exact: true })).toBeVisible();
-  await expect(viewList.getByText("VIEW_03", { exact: true })).toBeVisible();
-  await expect(tableList.getByText("TABLE_01", { exact: true })).toHaveCount(0);
-  await expect(viewList.getByText("VIEW_02", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("APP.TABLE_03", { exact: true })).toBeVisible();
+  await expect(viewList.getByText("APP.VIEW_03", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
+  await expect(viewList.getByText("APP.VIEW_02", { exact: true })).toHaveCount(0);
   await objectSearch.clear();
-  await expect(tableList.getByLabel("TABLE_01")).toBeChecked();
-  await expect(viewList.getByLabel("VIEW_02")).toBeChecked();
+  await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
+  await expect(viewList.getByLabel("APP.VIEW_02")).toBeChecked();
 
+  const tableScrollRegion = page.getByTestId("profile-allowed-table-list-scroll-region");
   const fit = await tableList.evaluate((node) => {
     const listBox = node.getBoundingClientRect();
     const rows = Array.from(node.querySelectorAll("label")).map((row) => row.getBoundingClientRect());
@@ -402,19 +505,24 @@ test("業務プロファイルは表とビューを固定高リストで管理�
       listHeight: listBox.height,
       visibleRows,
       totalRows: rows.length,
-      scrollable: node.scrollHeight > node.clientHeight,
       noHorizontalOverflow: node.scrollWidth <= node.clientWidth + 1,
     };
   });
+  const scrollMetrics = await tableScrollRegion.evaluate((node) => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    overflowY: window.getComputedStyle(node).overflowY,
+  }));
   expect(fit.listHeight).toBeGreaterThanOrEqual(388);
   expect(fit.listHeight).toBeLessThanOrEqual(396);
   expect(fit.visibleRows).toBeGreaterThan(0);
   expect(fit.visibleRows).toBeLessThan(fit.totalRows);
-  expect(fit.scrollable).toBe(true);
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+  expect(scrollMetrics.overflowY).toBe("auto");
   expect(fit.noHorizontalOverflow).toBe(true);
 
-  await tableList.getByLabel("TABLE_03").check();
-  await viewList.getByLabel("VIEW_04").check();
+  await tableList.getByLabel("APP.TABLE_03").check();
+  await viewList.getByLabel("APP.VIEW_04").check();
   const roleField = page.getByLabel("アシスタントロール");
   const instructionsField = page.getByLabel("追加指示", { exact: true });
   const roleBox = await roleField.boundingBox();
@@ -435,8 +543,8 @@ test("業務プロファイルは表とビューを固定高リストで管理�
     allowed_views: string[];
     select_ai_config: Record<string, unknown>;
   } | null;
-  expect(payload?.allowed_tables).toEqual(["TABLE_01", "TABLE_03"]);
-  expect(payload?.allowed_views).toEqual(["VIEW_02", "VIEW_04"]);
+  expect(payload?.allowed_tables).toEqual(["APP.TABLE_01", "APP.TABLE_03"]);
+  expect(payload?.allowed_views).toEqual(["APP.VIEW_02", "APP.VIEW_04"]);
   expect(payload).toHaveProperty("sql_rules", []);
   expect(payload?.select_ai_config).toMatchObject({
     embedding_model: "cohere.embed-v4.0",
@@ -476,6 +584,67 @@ test("業務プロファイルは表とビューを固定高リストで管理�
     clientWidth: document.documentElement.clientWidth,
   }));
   expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
+});
+
+test("異なる schema の同名表を別々に選択できる", async ({ page }) => {
+  const duplicateCatalog = {
+    ...schemaCatalog,
+    tables: [
+      ...schemaCatalog.tables,
+      {
+        table_name: "ORDERS",
+        qualified_name: "APP.ORDERS",
+        logical_name: "アプリ受注",
+        owner: "APP",
+        table_type: "TABLE",
+        comment: "APP の受注",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "ORDERS",
+        qualified_name: "SH.ORDERS",
+        logical_name: "販売受注",
+        owner: "SH",
+        table_type: "TABLE",
+        comment: "SH の受注",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+    ],
+  };
+  const duplicateProfiles = [
+    {
+      ...profiles[0],
+      allowed_tables: ["APP.ORDERS", "SH.ORDERS"],
+      allowed_views: [],
+    },
+  ];
+  await mockProfileApi(page, {
+    catalog: duplicateCatalog,
+    profileItems: duplicateProfiles,
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  await expect(tableList.getByLabel("APP.ORDERS")).toBeChecked();
+  await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
+  await expect(tableList.getByText("APP", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("SH", { exact: true })).toBeVisible();
+
+  await tableList.getByLabel("SH.ORDERS").uncheck();
+  await expect(tableList.getByLabel("APP.ORDERS")).toBeChecked();
+  await expect(tableList.getByLabel("SH.ORDERS")).not.toBeChecked();
+
+  await tableList.getByRole("checkbox", { name: "SH schema を一括選択" }).click();
+  await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
+
+  await page.getByRole("searchbox", { name: "オブジェクト検索" }).fill("SH.ORDERS");
+  await expect(tableList.getByLabel("SH.ORDERS")).toBeVisible();
+  await expect(tableList.getByLabel("APP.ORDERS")).toHaveCount(0);
 });
 
 test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重ならない", async ({ page }) => {
@@ -524,8 +693,7 @@ test("名称未入力で保存すると名称欄直下に FieldError が出る",
   await expect(fieldError).toHaveCount(0);
 });
 
-test("業務プロファイルはcatalogが空でもDB管理テーブル一覧から対象テーブルを選択できる", async ({ page }) => {
-  let savedPayload: Record<string, unknown> | null = null;
+test("業務プロファイルはcatalogが空のときDB管理用の現在schema一覧を混在させない", async ({ page }) => {
   await mockProfileApi(page, {
     catalog: { ...schemaCatalog, tables: [] },
     tableItems: [
@@ -539,29 +707,18 @@ test("業務プロファイルはcatalogが空でもDB管理テーブル一覧�
     ],
     profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
   });
-  await page.route("**/api/nl2sql/profiles/default", async (route) => {
-    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default" });
-  });
-
   await page.goto("/profiles");
   await page.getByRole("button", { name: /^既定プロファイル/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
 
-  await expect(tableList.getByText("選択できるテーブルがありません。")).toHaveCount(0);
-  await expect(tableList.getByText("DEPARTMENT", { exact: true })).toBeVisible();
-  await expect(tableList.getByText("EMPLOYEE", { exact: true })).toBeVisible();
-  await expect(tableList.getByText("PROJECT", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("選択できるテーブルがありません。")).toBeVisible();
+  await expect(tableList.getByText("DEPARTMENT", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("EMPLOYEE", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("PROJECT", { exact: true })).toHaveCount(0);
   await expect(tableList.getByText("SYS$AUDIT", { exact: true })).toHaveCount(0);
-  await expect(viewList.getByText("V_EMP_DEPT", { exact: true })).toBeVisible();
-
-  await tableList.getByLabel("DEPARTMENT").check();
-  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-
-  expect((savedPayload as { allowed_tables?: string[] } | null)?.allowed_tables).toContain("DEPARTMENT");
+  await expect(viewList.getByText("V_EMP_DEPT", { exact: true })).toHaveCount(0);
 });
 
 test("業務プロファイルの対象オブジェクト空状態はExcelプレビュー風の広い面で表示する", async ({ page }) => {
@@ -614,10 +771,35 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
 test("未解決オブジェクトの警告からスキーマ情報を更新して復旧できる", async ({ page }) => {
   await mockProfileApi(page);
   let schemaRefreshed = false;
+  let refreshJobPolls = 0;
   let ontologyViewCalls = 0;
-  await page.route("**/api/schema/refresh", async (route) => {
-    schemaRefreshed = true;
-    await fulfillJson(route, { refreshed_at: "2026-07-12T00:00:00Z", tables: [] });
+  await page.route("**/api/schema/refresh-jobs**", async (route) => {
+    if (route.request().method() === "POST") {
+      await fulfillJson(route, {
+        job_id: "schema-refresh-1",
+        status: "pending",
+        created_at: "2026-07-12T00:00:00Z",
+        scanned_objects: 0,
+        changed_objects: 0,
+        deleted_objects: 0,
+        catalog_version: 1,
+        error_code: "",
+      });
+      return;
+    }
+    refreshJobPolls += 1;
+    const done = refreshJobPolls >= 2;
+    schemaRefreshed = done;
+    await fulfillJson(route, {
+      job_id: "schema-refresh-1",
+      status: done ? "done" : "running",
+      created_at: "2026-07-12T00:00:00Z",
+      scanned_objects: done ? 1 : 0,
+      changed_objects: done ? 1 : 0,
+      deleted_objects: 0,
+      catalog_version: done ? 2 : 1,
+      error_code: "",
+    });
   });
   // 初回は未解決警告つき空グラフ、スキーマ更新後は解決済みグラフを返す
   await page.route("**/api/nl2sql/profiles/*/ontology-view", async (route) => {
@@ -639,7 +821,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
     await fulfillJson(route, { ...profileOntologyView, warnings_ja: [] });
   });
 
-  await page.goto("/ontology-build?profile=default");
+  await page.goto("/ontology-build?profile=default&tab=model");
 
   const unresolved = page.getByTestId("profile-ontology-unresolved");
   await expect(unresolved).toBeVisible();
@@ -647,7 +829,10 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
 
   await unresolved.getByRole("button", { name: "スキーマ情報を更新" }).click();
 
+  await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toBeVisible();
+  await expect(unresolved).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
+  await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toBeVisible();
   await expect(page.getByText("3 ノード", { exact: true })).toBeVisible();
   expect(schemaRefreshed).toBe(true);
   expect(ontologyViewCalls).toBeGreaterThanOrEqual(2);
@@ -660,7 +845,7 @@ test("Ontology 未公開のとき物理・業務モデルは整った空状態�
     await fulfillJson(route, { ontology_graph: null, warnings_ja: [] });
   });
 
-  await page.goto("/ontology-build?profile=default");
+  await page.goto("/ontology-build?profile=default&tab=model");
 
   const empty = page.getByTestId("profile-ontology-empty");
   await expect(empty).toBeVisible();

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowDownUp,
@@ -26,9 +27,9 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useSchemaOwners } from "@/lib/queries";
 import {
   ExecutionConfirmationField,
-  SelectionListPanel,
 } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
@@ -36,14 +37,26 @@ import {
   DbObjectPanelHeader,
 } from "../components/DbObjectManagementShared";
 import { engineLabel } from "../labels";
+import {
+  nl2sqlIncrementalKeys,
+  getSchemaObjectSnapshot,
+  useProfileDetail,
+  useProfileSummaries,
+  useSchemaCatalogHead,
+  useSchemaObjects,
+  useSchemaRefreshJob,
+  useStartSchemaRefresh,
+} from "../incrementalQueries";
 import { BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL } from "../selectAiProfileUrls";
+import { schemaTableQualifiedName } from "../workbenchState";
 import type {
   AssetRefreshData,
-  DbAdminObjectsData,
   Nl2SqlProfile,
+  ProfileSummary,
   ProfileSelectAiConfig,
   ProfileUpsertPayload,
-  SchemaCatalog,
+  SchemaObjectSummary,
+  SchemaTable,
   SelectAiDbProfileMutationData,
   SelectAiDbProfilesData,
 } from "../types";
@@ -53,6 +66,20 @@ type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
 
 const panelClass = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
+
+function filterProfileObjects(objects: SchemaTable[], query: string) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return objects;
+  return objects.filter((object) =>
+    [
+      object.owner,
+      object.table_name,
+      schemaTableQualifiedName(object),
+      object.logical_name,
+      object.comment,
+    ].some((value) => value.toLowerCase().includes(normalized))
+  );
+}
 
 interface SortState {
   key: SortKey;
@@ -211,10 +238,24 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
   };
 }
 
-function profileSortValue(profile: Nl2SqlProfile, key: SortKey) {
-  if (key === "tables") return profile.allowed_tables.length;
-  if (key === "views") return (profile.allowed_views ?? []).length;
+function profileSortValue(profile: ProfileSummary, key: SortKey) {
+  if (key === "tables") return profile.allowed_table_count;
+  if (key === "views") return profile.allowed_view_count;
   return profile.name.toLowerCase();
+}
+
+function schemaSummaryToTable(object: SchemaObjectSummary): SchemaTable {
+  return {
+    table_name: object.object_name,
+    qualified_name: `${object.owner}.${object.object_name}`,
+    logical_name: object.logical_name,
+    owner: object.owner,
+    table_type: object.object_type,
+    comment: object.comment,
+    row_count: object.row_count,
+    columns: [],
+    constraints: [],
+  };
 }
 
 function SortButton({
@@ -259,6 +300,8 @@ function StatusBar({
   runtime,
   loading,
   onRefresh,
+  schemaRefreshStatus,
+  onSchemaRefresh,
 }: {
   profileCount: number;
   objectCount: number;
@@ -266,6 +309,8 @@ function StatusBar({
   runtime: string;
   loading: boolean;
   onRefresh: () => void;
+  schemaRefreshStatus: string;
+  onSchemaRefresh: () => void;
 }) {
   return (
     <DbObjectManagementStatusBar
@@ -278,10 +323,37 @@ function StatusBar({
         { label: t("profiles.oracle.runtime"), value: runtime },
       ]}
       actions={
-        <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
-          <RefreshCw size={15} aria-hidden="true" />
-          <span>{t("profiles.action.refresh")}</span>
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="sr-only" aria-live="polite" aria-atomic="true">
+            {schemaRefreshStatus}
+          </span>
+          {schemaRefreshStatus && (
+            <StatusBadge
+              variant={
+                schemaRefreshStatus === "done"
+                  ? "success"
+                  : schemaRefreshStatus === "error"
+                    ? "danger"
+                    : "info"
+              }
+              label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+            />
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"}
+            onClick={onSchemaRefresh}
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+            <span>{t("profiles.schemaRefresh.action")}</span>
+          </Button>
+          <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
+            <RefreshCw size={15} aria-hidden="true" />
+            <span>{t("profiles.action.refresh")}</span>
+          </Button>
+        </div>
       }
     />
   );
@@ -298,17 +370,23 @@ function ProfileList({
   onDelete,
   onCreateNew,
   deletingId,
+  hasNextPage,
+  loadingNextPage,
+  onLoadMore,
 }: {
-  profiles: Nl2SqlProfile[];
+  profiles: ProfileSummary[];
   loading: boolean;
   search: string;
   sort: SortState;
   onSearchChange: (value: string) => void;
   onSortChange: (key: SortKey) => void;
-  onSelect: (profile: Nl2SqlProfile) => void;
-  onDelete: (profile: Nl2SqlProfile) => void;
+  onSelect: (profile: ProfileSummary) => void;
+  onDelete: (profile: ProfileSummary) => void;
   onCreateNew: () => void;
   deletingId: string;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
+  onLoadMore: () => void;
 }) {
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="profile-list-heading">
@@ -384,8 +462,8 @@ function ProfileList({
                           <span className="line-clamp-2 text-xs leading-5 text-muted">{profile.category || "-"}</span>
                         </button>
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_tables.length}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-foreground">{(profile.allowed_views ?? []).length}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_table_count}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_view_count}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex flex-wrap justify-end gap-2">
                           <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
@@ -409,6 +487,19 @@ function ProfileList({
               </tbody>
             </table>
           </div>
+          {hasNextPage && (
+            <div className="flex justify-center border-t border-border p-3">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={loadingNextPage}
+                onClick={onLoadMore}
+              >
+                {t("profiles.action.loadMore")}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -536,11 +627,258 @@ function SelectAiConfigFields({
   );
 }
 
+function SchemaObjectOption({
+  object,
+  selected,
+  onToggle,
+  className = "",
+}: {
+  object: SchemaTable;
+  selected: boolean;
+  onToggle: (name: string) => void;
+  className?: string;
+}) {
+  const qualified = schemaTableQualifiedName(object);
+  return (
+    <label
+      className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-primary/5 focus-within:ring-2 focus-within:ring-ring/40 ${className}`}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(qualified)}
+        aria-label={qualified}
+        className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-mono text-xs font-medium text-foreground">
+          {qualified}
+        </span>
+        <span className="block truncate text-xs text-muted">
+          {object.logical_name || object.comment || object.table_name}
+        </span>
+      </span>
+    </label>
+  );
+}
+
+function VirtualizedSchemaOptions({
+  entries,
+  selectedSet,
+  onToggle,
+}: {
+  entries: SchemaTable[];
+  selectedSet: Set<string>;
+  onToggle: (name: string) => void;
+}) {
+  const rowHeight = 52;
+  const viewportHeight = 320;
+  const [scrollTop, setScrollTop] = useState(0);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 5);
+  const visibleCount = Math.ceil(viewportHeight / rowHeight) + 10;
+  const visible = entries.slice(start, start + visibleCount);
+
+  return (
+    <div
+      className="relative overflow-y-auto"
+      style={{ height: viewportHeight }}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      data-testid="schema-object-virtual-list"
+    >
+      <div style={{ height: entries.length * rowHeight }} aria-hidden="true" />
+      <div
+        className="absolute inset-x-0 top-0 grid p-1"
+        style={{ transform: `translateY(${start * rowHeight}px)` }}
+      >
+        {visible.map((object) => {
+          const qualified = schemaTableQualifiedName(object);
+          return (
+            <SchemaObjectOption
+              key={qualified}
+              object={object}
+              selected={selectedSet.has(qualified)}
+              onToggle={onToggle}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SchemaGroupedSelectionPanel({
+  title,
+  objects,
+  selectedItems,
+  dataTestId,
+  emptyTitle,
+  emptyHint,
+  onToggle,
+  loading,
+  hasNextPage,
+  loadingNextPage,
+  onLoadMore,
+  ownerTotals,
+  onToggleSchema,
+}: {
+  title: string;
+  objects: SchemaTable[];
+  selectedItems: string[];
+  dataTestId: string;
+  emptyTitle: string;
+  emptyHint: string;
+  onToggle: (name: string) => void;
+  loading: boolean;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
+  onLoadMore: () => void;
+  ownerTotals: Record<string, number>;
+  onToggleSchema: (owner: string, select: boolean) => Promise<void>;
+}) {
+  const [schemaSelectionOwner, setSchemaSelectionOwner] = useState("");
+  const selectedSet = useMemo(
+    () => new Set(selectedItems.map((name) => name.replaceAll('"', "").toUpperCase())),
+    [selectedItems]
+  );
+  const groups = useMemo(() => {
+    const grouped = new Map<string, SchemaTable[]>();
+    for (const object of objects) {
+      const owner = object.owner.toUpperCase();
+      grouped.set(owner, [...(grouped.get(owner) ?? []), object]);
+    }
+    return [...grouped.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([owner, entries]) => ({
+        owner,
+        entries: entries.sort((left, right) =>
+          schemaTableQualifiedName(left).localeCompare(schemaTableQualifiedName(right))
+        ),
+      }));
+  }, [objects]);
+
+  return (
+    <section
+      className="grid h-[392px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden rounded-md border border-border bg-card p-3"
+      aria-label={title}
+      data-testid={dataTestId}
+    >
+      <div className="flex min-h-8 items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+        <span className="text-xs text-muted">
+          {t("profiles.objects.selected", { count: selectedItems.length })}
+        </span>
+      </div>
+      {loading ? (
+        <div className="grid gap-2" aria-label={t("profiles.objects.loading")}>
+          {Array.from({ length: 5 }, (_, index) => (
+            <div key={index} className="h-11 animate-pulse rounded-md bg-muted/30" />
+          ))}
+        </div>
+      ) : groups.length === 0 ? (
+        <EmptyState title={emptyTitle} hint={emptyHint} />
+      ) : (
+        <div
+          className="grid min-h-0 content-start gap-2 overflow-y-auto pr-1"
+          data-testid={`${dataTestId}-scroll-region`}
+        >
+          {groups.map(({ owner, entries }) => {
+            const selectedCount = [...selectedSet].filter((name) =>
+              name.startsWith(`${owner}.`)
+            ).length;
+            const total = ownerTotals[owner] ?? entries.length;
+            const allSelected = total > 0 && selectedCount >= total;
+            return (
+              <section
+                key={owner}
+                className="rounded-md border border-border bg-background"
+                aria-label={t("profiles.objects.schemaGroup", { owner })}
+              >
+                <div className="flex min-h-11 items-center gap-2 border-b border-border bg-muted/15 px-2.5">
+                  <span className="rounded border border-border bg-card px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                    {owner}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {t("profiles.objects.schemaCount", {
+                      selected: selectedCount,
+                      total,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={allSelected}
+                    aria-busy={schemaSelectionOwner === owner}
+                    aria-label={t("profiles.objects.selectSchema", { owner })}
+                    disabled={Boolean(schemaSelectionOwner)}
+                    className="ml-auto min-h-11 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-wait disabled:opacity-60"
+                    onClick={async () => {
+                      setSchemaSelectionOwner(owner);
+                      try {
+                        await onToggleSchema(owner, !allSelected);
+                      } finally {
+                        setSchemaSelectionOwner("");
+                      }
+                    }}
+                  >
+                    {allSelected
+                      ? t("profiles.objects.clearSchema")
+                      : t("profiles.objects.selectSchemaAction")}
+                  </button>
+                </div>
+                {entries.length > 50 ? (
+                  <VirtualizedSchemaOptions
+                    entries={entries}
+                    selectedSet={selectedSet}
+                    onToggle={onToggle}
+                  />
+                ) : (
+                  <div className="grid p-1">
+                    {entries.map((object) => {
+                      const qualified = schemaTableQualifiedName(object);
+                      return (
+                        <SchemaObjectOption
+                          key={qualified}
+                          object={object}
+                          selected={selectedSet.has(qualified)}
+                          onToggle={onToggle}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
+      {hasNextPage && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          loading={loadingNextPage}
+          onClick={onLoadMore}
+        >
+          {t("profiles.action.loadMore")}
+        </Button>
+      )}
+    </section>
+  );
+}
+
 function ProfileEditor({
   selectedProfile,
   form,
-  tableNames,
-  viewNames,
+  tableObjects,
+  viewObjects,
+  tableOwnerTotals,
+  viewOwnerTotals,
+  tableObjectsLoading,
+  viewObjectsLoading,
+  tableHasNextPage,
+  viewHasNextPage,
+  tableLoadingNextPage,
+  viewLoadingNextPage,
   objectFilter,
   saving,
   nameError,
@@ -554,6 +892,10 @@ function ProfileEditor({
   onNameErrorClear,
   onToggleTable,
   onToggleView,
+  onToggleTableSchema,
+  onToggleViewSchema,
+  onLoadMoreTables,
+  onLoadMoreViews,
   onSave,
   onDelete,
   onOracleConfirmationChange,
@@ -562,8 +904,16 @@ function ProfileEditor({
 }: {
   selectedProfile: Nl2SqlProfile | null;
   form: ProfileFormState;
-  tableNames: string[];
-  viewNames: string[];
+  tableObjects: SchemaTable[];
+  viewObjects: SchemaTable[];
+  tableOwnerTotals: Record<string, number>;
+  viewOwnerTotals: Record<string, number>;
+  tableObjectsLoading: boolean;
+  viewObjectsLoading: boolean;
+  tableHasNextPage: boolean;
+  viewHasNextPage: boolean;
+  tableLoadingNextPage: boolean;
+  viewLoadingNextPage: boolean;
   objectFilter: string;
   saving: boolean;
   nameError: boolean;
@@ -577,6 +927,10 @@ function ProfileEditor({
   onNameErrorClear: () => void;
   onToggleTable: (name: string) => void;
   onToggleView: (name: string) => void;
+  onToggleTableSchema: (owner: string, select: boolean) => Promise<void>;
+  onToggleViewSchema: (owner: string, select: boolean) => Promise<void>;
+  onLoadMoreTables: () => void;
+  onLoadMoreViews: () => void;
   onSave: () => void;
   onDelete: () => void;
   onOracleConfirmationChange: (value: string) => void;
@@ -671,27 +1025,35 @@ function ProfileEditor({
           </div>
         </div>
         <div className="grid gap-3 xl:grid-cols-2">
-          <SelectionListPanel
+          <SchemaGroupedSelectionPanel
             title={t("profiles.objects.tablesTitle")}
-            items={tableNames}
+            objects={tableObjects}
             selectedItems={form.allowedTables}
-            selectedCountLabel={t("profiles.objects.selected", { count: form.allowedTables.length })}
             dataTestId="profile-allowed-table-list"
-            ariaLabel={t("profiles.objects.tablesTitle")}
             emptyTitle={t("profiles.objects.emptyTables")}
             emptyHint={t("profiles.objects.emptyTablesHint")}
             onToggle={onToggleTable}
+            loading={tableObjectsLoading}
+            hasNextPage={tableHasNextPage}
+            loadingNextPage={tableLoadingNextPage}
+            onLoadMore={onLoadMoreTables}
+            ownerTotals={tableOwnerTotals}
+            onToggleSchema={onToggleTableSchema}
           />
-          <SelectionListPanel
+          <SchemaGroupedSelectionPanel
             title={t("profiles.objects.viewsTitle")}
-            items={viewNames}
+            objects={viewObjects}
             selectedItems={form.allowedViews}
-            selectedCountLabel={t("profiles.objects.selected", { count: form.allowedViews.length })}
             dataTestId="profile-allowed-view-list"
-            ariaLabel={t("profiles.objects.viewsTitle")}
             emptyTitle={t("profiles.objects.emptyViews")}
             emptyHint={t("profiles.objects.emptyViewsHint")}
             onToggle={onToggleView}
+            loading={viewObjectsLoading}
+            hasNextPage={viewHasNextPage}
+            loadingNextPage={viewLoadingNextPage}
+            onLoadMore={onLoadMoreViews}
+            ownerTotals={viewOwnerTotals}
+            onToggleSchema={onToggleViewSchema}
           />
         </div>
       </section>
@@ -862,15 +1224,11 @@ export function ProfileManagementPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirm();
-  const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
-  const [profilesLoaded, setProfilesLoaded] = useState(false);
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
-  const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
-  const [views, setViews] = useState<DbAdminObjectsData | null>(null);
-  const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
+  const queryClient = useQueryClient();
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
   const [profileSearch, setProfileSearch] = useState("");
   const [objectFilter, setObjectFilter] = useState("");
+  const [refreshJobId, setRefreshJobId] = useState("");
   const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
   const [oraclePreview, setOraclePreview] = useState<SelectAiDbProfileMutationData | null>(null);
   const [oracleConfirmation, setOracleConfirmation] = useState("");
@@ -884,92 +1242,128 @@ export function ProfileManagementPage() {
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
   const activeView: ActiveView = profileParam ? "editor" : "list";
-  const selectedProfile = useMemo(
-    () =>
-      profileParam && profileParam !== "new"
-        ? profiles.find((profile) => profile.id === profileParam && !profile.archived) ?? null
-        : null,
-    [profiles, profileParam]
+  const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
+  const profilesQuery = useProfileSummaries(profileSearch);
+  const profileDetailQuery = useProfileDetail(selectedProfileId);
+  const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
+  const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
+  const schemaOwnersQuery = useSchemaOwners();
+  const schemaHeadQuery = useSchemaCatalogHead();
+  const startSchemaRefresh = useStartSchemaRefresh();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(refreshJobId);
+  const schemaRefreshStatus = schemaRefreshJobQuery.isError
+    ? "error"
+    : (schemaRefreshJobQuery.data?.status ?? "");
+  const dbProfilesQuery = useQuery({
+    queryKey: ["nl2sql", "select-ai", "business-profiles"],
+    queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL),
+    staleTime: 5_000,
+  });
+  const profiles = useMemo(
+    () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [profilesQuery.data]
   );
+  const profilesLoaded = !profilesQuery.isPending;
+  const selectedProfile = profileDetailQuery.data?.profile ?? null;
+  const dbProfiles = dbProfilesQuery.data ?? null;
 
-  const tableNames = useMemo(() => {
-    const fromCatalog = (catalog?.tables ?? [])
-      .filter((table) => !table.table_name.includes("$") && !table.table_type.toLowerCase().includes("view"))
-      .map((table) => table.table_name);
-    const fromAdmin = (tables?.items ?? []).filter((table) => !table.name.includes("$")).map((table) => table.name);
-    return Array.from(new Set([...fromCatalog, ...fromAdmin])).sort();
-  }, [catalog, tables]);
-  const viewNames = useMemo(() => {
-    const fromCatalog = (catalog?.tables ?? [])
-      .filter((table) => !table.table_name.includes("$") && table.table_type.toLowerCase().includes("view"))
-      .map((table) => table.table_name);
-    const fromAdmin = (views?.items ?? []).filter((view) => !view.name.includes("$")).map((view) => view.name);
-    return Array.from(new Set([...fromCatalog, ...fromAdmin])).sort();
-  }, [catalog, views]);
-  const filteredTableNames = useMemo(() => {
-    const q = objectFilter.trim().toLowerCase();
-    return q ? tableNames.filter((name) => name.toLowerCase().includes(q)) : tableNames;
-  }, [objectFilter, tableNames]);
-  const filteredViewNames = useMemo(() => {
-    const q = objectFilter.trim().toLowerCase();
-    return q ? viewNames.filter((name) => name.toLowerCase().includes(q)) : viewNames;
-  }, [objectFilter, viewNames]);
+  const tableObjects = useMemo(
+    () =>
+      (tableObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [])
+        .filter((object) => !object.object_name.includes("$"))
+        .map(schemaSummaryToTable),
+    [tableObjectsQuery.data]
+  );
+  const viewObjects = useMemo(
+    () =>
+      (viewObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [])
+        .filter((object) => !object.object_name.includes("$"))
+        .map(schemaSummaryToTable),
+    [viewObjectsQuery.data]
+  );
+  const filteredTableObjects = useMemo(
+    () => filterProfileObjects(tableObjects, objectFilter),
+    [objectFilter, tableObjects]
+  );
+  const filteredViewObjects = useMemo(
+    () => filterProfileObjects(viewObjects, objectFilter),
+    [objectFilter, viewObjects]
+  );
+  const tableOwnerTotals = useMemo(
+    () =>
+      Object.fromEntries(
+        (schemaOwnersQuery.data?.owners ?? []).map((item) => [
+          item.owner.toUpperCase(),
+          item.table_count,
+        ])
+      ),
+    [schemaOwnersQuery.data]
+  );
+  const viewOwnerTotals = useMemo(
+    () =>
+      Object.fromEntries(
+        (schemaOwnersQuery.data?.owners ?? []).map((item) => [
+          item.owner.toUpperCase(),
+          item.view_count,
+        ])
+      ),
+    [schemaOwnersQuery.data]
+  );
   const filteredProfiles = useMemo(() => {
-    const q = profileSearch.trim().toLowerCase();
     return profiles
-      .filter((profile) => {
-        if (profile.archived) return false;
-        if (!q) return true;
-        return (
-          profile.name.toLowerCase().includes(q) ||
-          (profile.category ?? "").toLowerCase().includes(q)
-        );
-      })
       .sort((left, right) => {
         const a = profileSortValue(left, profileSort.key);
         const b = profileSortValue(right, profileSort.key);
         const result = a < b ? -1 : a > b ? 1 : 0;
         return profileSort.direction === "asc" ? result : -result;
       });
-  }, [profileSearch, profileSort, profiles]);
+  }, [profileSort, profiles]);
 
-  const selectProfile = (profile: Nl2SqlProfile) => {
+  const selectProfile = (profile: ProfileSummary) => {
     setMessage("");
     setSearchParams({ profile: profile.id });
-  };
-
-  const applyDbProfiles = (data: SelectAiDbProfilesData) => {
-    setDbProfiles(data);
   };
 
   const load = async () => {
     setLoading("load");
     setMessage("");
+    const results = await Promise.allSettled([
+      profilesQuery.refetch(),
+      tableObjectsQuery.refetch(),
+      viewObjectsQuery.refetch(),
+      schemaHeadQuery.refetch(),
+      schemaOwnersQuery.refetch(),
+      dbProfilesQuery.refetch(),
+    ]);
+    if (results.every((result) => result.status === "rejected")) {
+      setMessage(t("profiles.error.load"));
+    }
+    setLoading("");
+  };
+
+  const runSchemaRefresh = async () => {
     try {
-      const [profileData, catalogData, tableData, viewData, dbProfileData] = await Promise.all([
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
-        apiGet<SchemaCatalog>("/api/schema/catalog"),
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
-        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL),
-      ]);
-      const normalizedProfiles = profileData.map(normalizeProfile);
-      setProfiles(normalizedProfiles);
-      setProfilesLoaded(true);
-      setCatalog(catalogData);
-      setTables(tableData);
-      setViews(viewData);
-      applyDbProfiles(dbProfileData);
+      const job = await startSchemaRefresh.mutateAsync();
+      setRefreshJobId(job.job_id);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("profiles.error.load"));
-    } finally {
-      setLoading("");
+      toast.error(err instanceof Error ? err.message : t("profiles.schemaRefresh.error"));
     }
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    if (job.status === "done") {
+      toast.success(
+        t("profiles.schemaRefresh.done", {
+          changed: job.changed_objects,
+          version: job.catalog_version,
+        })
+      );
+    } else if (job.status === "error") {
+      toast.error(t("profiles.schemaRefresh.error"));
+    }
+  }, [schemaRefreshJobQuery.data?.status]);
 
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
@@ -984,11 +1378,24 @@ export function ProfileManagementPage() {
 
   // 無効な id(削除済み等)の deep link は一覧へ縮退
   useEffect(() => {
-    if (!profilesLoaded) return;
-    if (profileParam && profileParam !== "new" && !selectedProfile) {
+    if (selectedProfileId && profileDetailQuery.isError) {
       setSearchParams({}, { replace: true });
     }
-  }, [profilesLoaded, profileParam, selectedProfile, setSearchParams]);
+  }, [profileDetailQuery.isError, selectedProfileId, setSearchParams]);
+
+  useEffect(() => {
+    const error =
+      profilesQuery.error ??
+      tableObjectsQuery.error ??
+      viewObjectsQuery.error ??
+      schemaHeadQuery.error;
+    setMessage(error instanceof Error ? error.message : "");
+  }, [
+    profilesQuery.error,
+    schemaHeadQuery.error,
+    tableObjectsQuery.error,
+    viewObjectsQuery.error,
+  ]);
 
   // legacy hash 導線: #profile-learning を ?profile= 付き URL へ正規化する
   useEffect(() => {
@@ -1046,6 +1453,31 @@ export function ProfileManagementPage() {
     });
   };
 
+  const toggleSchemaSnapshot = async (
+    kind: "table" | "view",
+    owner: string,
+    select: boolean
+  ) => {
+    const key = kind === "table" ? "allowedTables" : "allowedViews";
+    const ownerPrefix = `${owner.toUpperCase()}.`;
+    try {
+      const snapshot = select
+        ? await getSchemaObjectSnapshot(owner, kind === "table" ? "TABLE" : "VIEW")
+        : [];
+      setForm((current) => {
+        const retained = current[key].filter(
+          (name) => !name.replaceAll('"', "").toUpperCase().startsWith(ownerPrefix)
+        );
+        return {
+          ...current,
+          [key]: select ? [...retained, ...snapshot] : retained,
+        };
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("profiles.error.load"));
+    }
+  };
+
   const save = async () => {
     if (!form.name.trim()) {
       setNameError(true);
@@ -1056,9 +1488,17 @@ export function ProfileManagementPage() {
     try {
       const payload = formToPayload(form);
       const saved = selectedProfile
-        ? await apiPatch<Nl2SqlProfile>(`/api/nl2sql/profiles/${selectedProfile.id}`, payload)
+        ? await apiPatch<Nl2SqlProfile>(
+            `/api/nl2sql/profiles/${selectedProfile.id}`,
+            payload,
+            { "If-Match": `"${profileDetailQuery.data?.etag || selectedProfile.etag || ""}"` }
+          )
         : await apiPost<Nl2SqlProfile>("/api/nl2sql/profiles", payload);
-      await load();
+      queryClient.setQueryData(nl2sqlIncrementalKeys.profile(saved.id), {
+        profile: saved,
+        etag: saved.etag ?? "",
+      });
+      await queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
       setForm(profileToForm(normalizeProfile(saved)));
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
@@ -1079,7 +1519,7 @@ export function ProfileManagementPage() {
           ...current.filter((item) => item.engine !== asset.engine),
         ]);
       }
-      applyDbProfiles(await apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL));
+      await dbProfilesQuery.refetch();
       toast.success(t("profiles.message.saved"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
@@ -1088,7 +1528,7 @@ export function ProfileManagementPage() {
     }
   };
 
-  const deleteProfile = async (profile: Nl2SqlProfile) => {
+  const deleteProfile = async (profile: Pick<Nl2SqlProfile, "id" | "name" | "etag">) => {
     const ok = await confirm({
       title: t("profiles.delete.confirm.title"),
       description: t("profiles.delete.confirm.description", { name: profile.name }),
@@ -1101,10 +1541,11 @@ export function ProfileManagementPage() {
     setLoading(`delete-profile-${profile.id}`);
     try {
       const deleted = await apiDelete<Nl2SqlProfile>(
-        `/api/nl2sql/profiles/${encodeURIComponent(profile.id)}`
+        `/api/nl2sql/profiles/${encodeURIComponent(profile.id)}`,
+        { "If-Match": `"${profile.etag || profileDetailQuery.data?.etag || ""}"` }
       );
-      setProfiles((current) => current.filter((item) => item.id !== deleted.id));
-      await load();
+      queryClient.removeQueries({ queryKey: nl2sqlIncrementalKeys.profile(deleted.id) });
+      await queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
       if (profileParam) {
         setSearchParams({}, { replace: true });
       }
@@ -1127,8 +1568,16 @@ export function ProfileManagementPage() {
     <ProfileEditor
       selectedProfile={selectedProfile}
       form={form}
-      tableNames={filteredTableNames}
-      viewNames={filteredViewNames}
+      tableObjects={filteredTableObjects}
+      viewObjects={filteredViewObjects}
+      tableOwnerTotals={tableOwnerTotals}
+      viewOwnerTotals={viewOwnerTotals}
+      tableObjectsLoading={tableObjectsQuery.isPending}
+      viewObjectsLoading={viewObjectsQuery.isPending}
+      tableHasNextPage={Boolean(tableObjectsQuery.hasNextPage)}
+      viewHasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
+      tableLoadingNextPage={tableObjectsQuery.isFetchingNextPage}
+      viewLoadingNextPage={viewObjectsQuery.isFetchingNextPage}
       objectFilter={objectFilter}
       saving={loading === "save"}
       nameError={nameError}
@@ -1141,6 +1590,14 @@ export function ProfileManagementPage() {
       onFormChange={setForm}
       onToggleTable={(name) => toggleObject("table", name)}
       onToggleView={(name) => toggleObject("view", name)}
+      onToggleTableSchema={(owner, select) =>
+        toggleSchemaSnapshot("table", owner, select)
+      }
+      onToggleViewSchema={(owner, select) =>
+        toggleSchemaSnapshot("view", owner, select)
+      }
+      onLoadMoreTables={() => void tableObjectsQuery.fetchNextPage()}
+      onLoadMoreViews={() => void viewObjectsQuery.fetchNextPage()}
       onNameErrorClear={() => setNameError(false)}
       onSave={() => void save()}
       onDelete={() => {
@@ -1173,14 +1630,14 @@ export function ProfileManagementPage() {
         {activeView === "list" ? (
           <>
             <StatusBar
-              profileCount={profiles.filter((profile) => !profile.archived).length}
-              objectCount={profiles
-                .filter((profile) => !profile.archived)
-                .reduce((sum, profile) => sum + profile.allowed_tables.length + (profile.allowed_views ?? []).length, 0)}
+              profileCount={profilesQuery.data?.pages[0]?.total ?? profiles.length}
+              objectCount={schemaHeadQuery.data?.object_count ?? 0}
               oracleProfileCount={dbProfiles?.profiles.length ?? 0}
               runtime={dbProfiles?.runtime ?? "deterministic"}
-              loading={loading === "load"}
+              loading={loading === "load" || profilesQuery.isFetching}
               onRefresh={() => void load()}
+              schemaRefreshStatus={schemaRefreshStatus}
+              onSchemaRefresh={() => void runSchemaRefresh()}
             />
             <section
               id="profile-management-panel-list"
@@ -1198,6 +1655,9 @@ export function ProfileManagementPage() {
                 onDelete={(profile) => void deleteProfile(profile)}
                 onCreateNew={startNew}
                 deletingId={loading.startsWith("delete-profile-") ? loading.replace("delete-profile-", "") : ""}
+                hasNextPage={Boolean(profilesQuery.hasNextPage)}
+                loadingNextPage={profilesQuery.isFetchingNextPage}
+                onLoadMore={() => void profilesQuery.fetchNextPage()}
               />
             </section>
           </>
@@ -1210,7 +1670,11 @@ export function ProfileManagementPage() {
             {selectedProfile || profileParam === "new" ? (
               editor
             ) : (
-              <div className="grid gap-2" data-testid="profile-editor-skeleton">
+              <div
+                className="grid gap-2"
+                data-testid="profile-editor-skeleton"
+                aria-label={t("profiles.detail.loading")}
+              >
                 {Array.from({ length: 6 }, (_, index) => (
                   <div key={index} className="h-12 animate-pulse rounded-md bg-muted/30" />
                 ))}

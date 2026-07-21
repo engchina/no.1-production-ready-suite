@@ -21,8 +21,22 @@ dependencies = [
   "scikit-learn>=1.7",
   "joblib>=1.5",
   "openpyxl>=3.1",
+  "pypdf>=6.0",
+  "pypdfium2>=4.30",
+  "pillow>=11.0",
+  "python-docx>=1.2",
+  "rdflib>=7.1",
+  "pyshacl>=0.30",
   "sqlglot>=27",
+  "pwdlib[argon2]>=0.3,<1.0",
+  "cryptography>=48.0.1",
 ]
+
+[project.scripts]
+nl2sql-migrate-state = "app.cli.nl2sql_migrate_state:main"
+nl2sql-system-schema = "app.cli.nl2sql_system_schema:main"
+nl2sql-schema-refresh-worker = "app.cli.nl2sql_schema_refresh_worker:main"
+nl2sql-config-audit = "app.cli.config_audit:main"
 
 [dependency-groups]
 dev = [

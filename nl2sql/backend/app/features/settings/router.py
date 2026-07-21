@@ -6,32 +6,48 @@ OCI 認証、アップロード保存先、モデル、データベース設定�
 """
 
 import configparser
+import fcntl
 import importlib
 import io
 import json
+import logging
 import re
+import secrets
 import shutil
 import stat
+import string
 import time
 from base64 import b64decode
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
     pem_file_is_encrypted,
     resolve_oci_key_file,
 )
-from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
+from app.clients.oci_database import (
+    AutonomousDatabaseInfo,
+    OciDatabaseClient,
+    WalletDownloadTooLargeError,
+)
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.features.settings.system_schema import (
+    SystemSchemaError,
+    oracle_error_code,
+    system_schema_manager,
+)
+from app.features.settings.system_schema_runtime import reset_system_schema_runtime
 from app.schemas.settings import (
     AdbInfoData,
     AdbOperationStatus,
@@ -39,6 +55,7 @@ from app.schemas.settings import (
     DatabaseConnectionTestResult,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
+    DatabaseWalletDownloadData,
     EnterpriseAiModelEntrySettings,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -59,9 +76,14 @@ from app.schemas.settings import (
     OciPrivateKeyUploadData,
     OciSettingsData,
     OciSettingsUpdate,
+    SystemTablesInitializeRequest,
+    SystemTablesOperationData,
+    SystemTablesStatusData,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
 )
+from app.security.request_actor import current_actor_user_id
+from app.security.service import get_security_service
 from app.settings import (
     EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
 )
@@ -74,6 +96,7 @@ from app.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+logger = logging.getLogger(__name__)
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_FILE_MODE = 0o600
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -85,6 +108,10 @@ OCI_PRIVATE_KEY_FILE_MODE = 0o600
 OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
 ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
+ORACLE_WALLET_DIRECTORY_MODE = 0o700
+ORACLE_WALLET_FILE_MODE = 0o600
+ORACLE_WALLET_GENERATED_PASSWORD_LENGTH = 32
+ORACLE_WALLET_PASSWORD_SPECIALS = "!#$%&*+-=?@^_"
 ORACLE_WALLET_REQUIRED_FILES = frozenset(
     {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
 )
@@ -168,8 +195,11 @@ async def get_model_settings() -> ApiResponse[ModelSettingsData]:
 async def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
     settings = get_settings()
     resolved_payload = _model_settings_with_resolved_secret(settings, payload)
+    resolved_api_key = resolved_payload.enterprise_ai.api_key
+    _persist_enterprise_ai_api_key(resolved_api_key)
     _persist_model_settings(settings, resolved_payload)
     _apply_model_settings(settings, payload)
+    settings.set_runtime_enterprise_ai_api_key(resolved_api_key)
     return ApiResponse(data=_model_settings_data(_model_payload(settings), settings))
 
 
@@ -210,6 +240,117 @@ async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     return ApiResponse(data=_database_settings_data(get_settings()))
 
 
+@router.get(
+    "/database/system-tables",
+    response_model=ApiResponse[SystemTablesStatusData],
+)
+async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
+    """NL2SQL system table の状態を DDL なしで取得する。"""
+
+    try:
+        data = await run_in_threadpool(system_schema_manager.status)
+    except Exception as exc:
+        code = _safe_schema_error_code(exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"システムテーブルの状態を取得できませんでした ({code})。",
+        ) from exc
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
+
+
+@router.post(
+    "/database/system-tables/initialize",
+    response_model=ApiResponse[SystemTablesOperationData],
+)
+async def initialize_system_tables(
+    payload: SystemTablesInitializeRequest,
+    request: Request,
+) -> ApiResponse[SystemTablesOperationData]:
+    """明示操作として system table を作成・更新または全再作成する。"""
+
+    operation_name = "recreate" if payload.recreate else "initialize"
+    try:
+        data = await run_in_threadpool(
+            system_schema_manager.initialize,
+            recreate=payload.recreate,
+            confirmation=payload.confirmation,
+        )
+    except SystemSchemaError as exc:
+        await run_in_threadpool(
+            _audit_system_schema_operation,
+            request,
+            operation_name,
+            "FAILURE",
+            exc.code,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
+    try:
+        await run_in_threadpool(
+            reset_system_schema_runtime,
+            schema_epoch=int(data["operation_state"]["schema_epoch"]),
+        )
+    except Exception as exc:
+        await run_in_threadpool(
+            _audit_system_schema_operation,
+            request,
+            operation_name,
+            "FAILURE",
+            "SCHEMA_RUNTIME_RECOVERY_FAILED",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "システムテーブルは更新されましたが、実行中 API の再接続に失敗しました。"
+                "状態を再取得してから再試行してください。"
+            ),
+        ) from exc
+    await run_in_threadpool(
+        _audit_system_schema_operation,
+        request,
+        operation_name,
+        "SUCCESS",
+        None,
+    )
+    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+
+
+def _safe_schema_error_code(exc: Exception) -> str:
+    code = oracle_error_code(exc)
+    return code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
+
+
+def _audit_system_schema_operation(
+    request: Request,
+    operation: str,
+    outcome: str,
+    error_code: str | None,
+) -> None:
+    """認証有効時だけ、保全対象の security audit table へ結果を記録する。"""
+
+    if not get_settings().app_auth_enabled:
+        return
+    principal = getattr(request.state, "principal", None)
+    actor = str(getattr(principal, "user_id", "") or current_actor_user_id()) or None
+    request_id = request.headers.get("X-Request-ID", "")[:128]
+    client_ip = request.client.host[:128] if request.client else ""
+    try:
+        get_security_service().store.write_audit(
+            actor_user_id=actor,
+            event_type=f"SYSTEM_SCHEMA_{operation.upper()}",
+            target_type="SYSTEM_SCHEMA",
+            target_id="NL2SQL",
+            outcome=outcome,
+            detail={"error_code": error_code} if error_code else {},
+            request_id=request_id,
+            client_ip=client_ip,
+        )
+    except Exception as exc:  # noqa: BLE001 - DDL は rollback 不可。監査失敗を別ログへ残す。
+        logger.warning(
+            "nl2sql_system_schema_audit_failed",
+            extra={"operation": operation, "exception_type": type(exc).__name__},
+        )
+
+
 @router.patch("/database", response_model=ApiResponse[DatabaseSettingsData])
 async def update_database_settings(
     payload: DatabaseSettingsUpdate,
@@ -228,10 +369,84 @@ async def upload_database_wallet(
 ) -> ApiResponse[DatabaseSettingsData]:
     settings = get_settings()
     data = await _read_upload_file(file, ORACLE_WALLET_MAX_BYTES)
-    wallet_dir = _install_database_wallet(settings, data, file.filename)
+    with _database_wallet_install_lock(settings):
+        wallet_dir = _install_database_wallet(settings, data, file.filename)
     settings.oracle_wallet_dir = str(wallet_dir)
     close_oracle_pool()
     return ApiResponse(data=_database_settings_data(settings))
+
+
+@router.post(
+    "/database/wallet/download",
+    response_model=ApiResponse[DatabaseWalletDownloadData],
+)
+async def download_database_wallet() -> ApiResponse[DatabaseWalletDownloadData]:
+    """OCI から Wallet を取得し、ブラウザへ ZIP を返さずサーバーへ設置する。"""
+    settings = get_settings()
+    with _database_wallet_install_lock(settings):
+        target = _wallet_storage_root(settings)
+        if _database_wallet_is_configured(target):
+            return ApiResponse(
+                data=DatabaseWalletDownloadData(
+                    status="already_configured",
+                    settings=_database_settings_data(settings),
+                )
+            )
+
+        _require_wallet_download_configuration(settings)
+        adb_ocid = settings.oracle_adb_ocid.strip()
+        client = OciDatabaseClient(settings=settings)
+        password = _generate_wallet_password()
+        try:
+            info = await client.get_autonomous_database(adb_ocid)
+            generate_type = None if info.is_dedicated is True else "SINGLE"
+            wallet_zip = await client.download_autonomous_database_wallet(
+                adb_ocid,
+                password,
+                generate_type,
+                ORACLE_WALLET_MAX_BYTES,
+            )
+        except WalletDownloadTooLargeError as exc:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "OCI から取得した Wallet ZIP が 20 MB の上限を超えました。"
+                    "OCI 側の Wallet を確認するか、Wallet ZIP を手動アップロードしてください。"
+                ),
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "OCI から Wallet を取得できませんでした。OCI 認証、region、ADB OCID、"
+                    "IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。"
+                ),
+            ) from exc
+
+        try:
+            wallet_dir = _install_database_wallet(settings, wallet_zip, "wallet.zip")
+        except HTTPException as exc:
+            if exc.status_code == 413:
+                raise
+            if exc.status_code in {400, 415}:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "OCI から取得した Wallet の内容を検証できませんでした。"
+                        "OCI 側で Wallet を再生成して再試行するか、"
+                        "Wallet ZIP を手動アップロードしてください。"
+                    ),
+                ) from exc
+            raise
+
+        settings.oracle_wallet_dir = str(wallet_dir)
+        close_oracle_pool()
+        return ApiResponse(
+            data=DatabaseWalletDownloadData(
+                status="downloaded",
+                settings=_database_settings_data(settings),
+            )
+        )
 
 
 @router.post("/database/test", response_model=ApiResponse[DatabaseConnectionTestResult])
@@ -539,11 +754,10 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]
     enterprise = payload.enterprise_ai
     generative = payload.generative_ai
     return {
-        "version": 1,
+        "version": 2,
         "enterprise_ai": {
             "endpoint": enterprise.endpoint,
             "project_ocid": enterprise.project_ocid,
-            "api_key": enterprise.api_key,
             "models": [
                 {
                     "model_id": model.model_id,
@@ -595,6 +809,19 @@ def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> M
         },
         model_settings_file=settings.model_settings_file,
         source="runtime",
+        secret_source=settings.model_secret_source,
+        legacy_secret_detected=settings.legacy_model_secret_detected,
+    )
+
+
+def _persist_enterprise_ai_api_key(api_key: str) -> None:
+    """Enterprise AI API Key を唯一の secret source である backend/.env へ保存する。"""
+    normalized = api_key.strip()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"OCI_ENTERPRISE_AI_API_KEY": normalized or None},
+        section_comment="# OCI Enterprise AI secret",
+        error_detail="Enterprise AI API Key を backend/.env へ保存できませんでした。",
     )
 
 
@@ -898,23 +1125,20 @@ def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
     return sanitized[:2000]
 
 
-def _database_settings_data(
-    settings: Settings,
-    wallet_uploaded: bool | None = None,
-) -> DatabaseSettingsData:
+def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
     wallet_dir = settings.resolved_oracle_wallet_dir
     wallet_path = _expand(wallet_dir) if wallet_dir else None
     if wallet_path is not None:
         _sanitize_database_wallet_dir(wallet_path)
-    wallet_exists = bool(wallet_path and wallet_path.is_dir())
+    wallet_configured = bool(wallet_path and _database_wallet_is_configured(wallet_path))
     has_password = bool(getattr(settings, "oracle_password", ""))
     return DatabaseSettingsData(
         user=getattr(settings, "oracle_user", ""),
         dsn=getattr(settings, "oracle_dsn", ""),
         wallet_dir=wallet_dir,
-        wallet_uploaded=wallet_exists if wallet_uploaded is None else wallet_uploaded,
+        wallet_uploaded=wallet_configured,
         available_services=(
-            _extract_wallet_services(wallet_path) if wallet_path and wallet_exists else []
+            _extract_wallet_services(wallet_path) if wallet_path and wallet_configured else []
         ),
         has_password=has_password,
         has_wallet_password=bool(getattr(settings, "oracle_wallet_password", "")),
@@ -937,6 +1161,108 @@ def _sanitize_database_wallet_dir(wallet_path: Path) -> None:
                 path.unlink()
         except OSError:
             continue
+
+
+def _database_wallet_is_configured(wallet_path: Path) -> bool:
+    """接続に必須の四ファイルが通常ファイルとして揃っているか判定する。"""
+    return wallet_path.is_dir() and all(
+        (wallet_path / file_name).is_file() for file_name in ORACLE_WALLET_REQUIRED_FILES
+    )
+
+
+def _require_wallet_download_configuration(settings: Settings) -> None:
+    """Wallet 取得前に不足を 422 として説明可能な範囲で検出する。"""
+    if not settings.oracle_adb_ocid.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "ADB OCID が未設定のため Wallet を自動取得できません。"
+                "データベース設定で ADB OCID を保存するか、"
+                "Wallet ZIP を手動アップロードしてください。"
+            ),
+        )
+
+    config_file = _oci_config_file(settings)
+    parsed = _read_runtime_oci_config(config_file, _oci_profile(settings))
+    required_values = (
+        parsed.user if parsed is not None else "",
+        parsed.fingerprint if parsed is not None else "",
+        parsed.tenancy if parsed is not None else "",
+        parsed.key_file if parsed is not None else "",
+    )
+    region = settings.resolved_oracle_adb_region or (parsed.region if parsed is not None else "")
+    key_path = (
+        resolve_oci_key_file(parsed.key_file, config_file)
+        if parsed is not None and parsed.key_file
+        else None
+    )
+    if not all(value.strip() for value in required_values) or not region.strip() or not (
+        key_path and key_path.is_file()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OCI 認証設定または region が不足しているため Wallet を自動取得できません。"
+                "OCI 認証設定を完了するか、Wallet ZIP を手動アップロードしてください。"
+            ),
+        )
+
+
+def _generate_wallet_password(length: int = ORACLE_WALLET_GENERATED_PASSWORD_LENGTH) -> str:
+    """保存も返却もしない Wallet ZIP 用の一時 password を生成する。"""
+    if length < 24:
+        raise ValueError("Wallet password length must be at least 24")
+    required = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(ORACLE_WALLET_PASSWORD_SPECIALS),
+    ]
+    alphabet = (
+        string.ascii_lowercase
+        + string.ascii_uppercase
+        + string.digits
+        + ORACLE_WALLET_PASSWORD_SPECIALS
+    )
+    password = required + [secrets.choice(alphabet) for _ in range(length - len(required))]
+    secrets.SystemRandom().shuffle(password)
+    return "".join(password)
+
+
+@contextmanager
+def _database_wallet_install_lock(settings: Settings) -> Iterator[None]:
+    """複数 worker の Wallet 設置を非ブロッキング排他する。"""
+    target = _wallet_storage_root(settings)
+    lock_path = target.parent / f".{target.name}.install.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a+b")
+        lock_path.chmod(ORACLE_WALLET_FILE_MODE)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Wallet 保存先のロックファイルを作成できませんでした。"
+                "保存先のパスと書き込み権限を確認してください。"
+            ),
+        ) from exc
+
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "別の Wallet 取得またはアップロードを処理中です。"
+                    "完了後にもう一度お試しください。"
+                ),
+            ) from exc
+        yield
+    finally:
+        with suppress(OSError):
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
 
 
 def _database_settings_candidate(base: Settings, payload: DatabaseSettingsUpdate) -> Settings:
@@ -993,7 +1319,7 @@ def _database_readiness(settings: Settings) -> str:
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     if not wallet_dir:
         return "missing_credentials"
-    if not Path(wallet_dir).expanduser().is_dir():
+    if not _database_wallet_is_configured(Path(wallet_dir).expanduser()):
         return "wallet_not_found"
     return "ok"
 
@@ -1237,11 +1563,7 @@ def _oci_config_file(settings: Settings) -> str:
 
 
 def _oci_profile(settings: Settings) -> str:
-    return (
-        getattr(settings, "oci_config_profile", "").strip()
-        or getattr(settings, "oci_profile", "").strip()
-        or "DEFAULT"
-    )
+    return settings.resolved_oci_config_profile
 
 
 def _read_runtime_oci_config(config_file: str, profile: str) -> OciConfigReadData | None:
@@ -1345,24 +1667,51 @@ def _install_database_wallet(settings: Settings, data: bytes, file_name: str | N
     target = _wallet_storage_root(settings)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
+    backup = target.parent / f".{target.name}.backup-{uuid4().hex}"
+    previous_moved = False
     try:
         wallet_dir = _extract_wallet_zip(data, tmp_dir)
         if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        shutil.move(str(wallet_dir), str(target))
+            target.replace(backup)
+            previous_moved = True
+        wallet_dir.replace(target)
+        _secure_database_wallet(target)
+        _remove_wallet_path(backup)
         return target
     except HTTPException:
         raise
     except OSError as exc:
+        _remove_wallet_path(target)
+        if previous_moved and backup.exists():
+            with suppress(OSError):
+                backup.replace(target)
         raise HTTPException(
             status_code=500,
-            detail="Wallet ZIP をバックエンドの保存先へ展開できませんでした。",
+            detail=(
+                "Wallet ZIP をバックエンドの保存先へ安全に設置できませんでした。"
+                "保存先の空き容量と書き込み権限を確認してください。"
+            ),
         ) from exc
     finally:
         _remove_tmp_wallet_dir(tmp_dir)
+
+
+def _secure_database_wallet(wallet_dir: Path) -> None:
+    """Wallet 配下を所有者だけが読める権限へ補正する。"""
+    wallet_dir.chmod(ORACLE_WALLET_DIRECTORY_MODE)
+    for path in wallet_dir.rglob("*"):
+        if path.is_dir():
+            path.chmod(ORACLE_WALLET_DIRECTORY_MODE)
+        elif path.is_file():
+            path.chmod(ORACLE_WALLET_FILE_MODE)
+
+
+def _remove_wallet_path(path: Path) -> None:
+    """今回の atomic install が管理する path だけを削除する。"""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
 
 
 def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
@@ -1370,6 +1719,8 @@ def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
     extracted_files: list[Path] = []
     total_uncompressed = 0
     try:
+        target_dir.mkdir(mode=ORACLE_WALLET_DIRECTORY_MODE, parents=False, exist_ok=False)
+        target_dir.chmod(ORACLE_WALLET_DIRECTORY_MODE)
         with ZipFile(io.BytesIO(data)) as archive:
             members = [member for member in archive.infolist() if not member.is_dir()]
             if not members:
@@ -1392,11 +1743,17 @@ def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
                         status_code=400,
                         detail="Wallet ZIP にシンボリックリンクは含められません。",
                     )
-                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.parent.mkdir(
+                    mode=ORACLE_WALLET_DIRECTORY_MODE,
+                    parents=True,
+                    exist_ok=True,
+                )
+                destination.parent.chmod(ORACLE_WALLET_DIRECTORY_MODE)
                 with archive.open(member) as src, destination.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
+                destination.chmod(ORACLE_WALLET_FILE_MODE)
                 extracted_files.append(destination)
-    except BadZipFile as exc:
+    except (BadZipFile, NotImplementedError, RuntimeError) as exc:
         raise HTTPException(
             status_code=400,
             detail="Wallet ZIP の形式を確認してください。",

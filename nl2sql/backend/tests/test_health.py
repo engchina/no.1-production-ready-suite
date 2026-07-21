@@ -58,6 +58,7 @@ def _transport() -> httpx.ASGITransport:
 
 class _FakeOracleDb:
     def __init__(self) -> None:
+        self.connection_open = False
         self.state_json: object = ""
         self.executed: list[str] = []
         self.executed_params: list[dict[str, object] | None] = []
@@ -91,9 +92,11 @@ class _FakeOracleConnection:
         self.db = db
 
     def __enter__(self) -> "_FakeOracleConnection":
+        self.db.connection_open = True
         return self
 
     def __exit__(self, *_exc: object) -> None:
+        self.db.connection_open = False
         return None
 
     def cursor(self) -> "_FakeOracleCursor":
@@ -221,10 +224,13 @@ class _FakeOracleCursor:
 
 
 class _FakeLob:
-    def __init__(self, value: str | bytes) -> None:
+    def __init__(self, value: str | bytes, db: _FakeOracleDb | None = None) -> None:
         self.value = value
+        self.db = db
 
     def read(self) -> str | bytes:
+        if self.db is not None and not self.db.connection_open:
+            raise RuntimeError("DPY-1001: not connected to database")
         return self.value
 
 
@@ -232,9 +238,40 @@ class _FakeRuntimeOracleAdapter(OracleNl2SqlAdapter):
     def __init__(self, db: _FakeOracleDb) -> None:
         super().__init__(get_settings())
         self.db = db
+        self.profile_details: dict[str, dict[str, Any]] = {}
 
     def is_configured(self) -> bool:
         return True
+
+    def upsert_select_ai_profile_low_level(
+        self,
+        *,
+        profile_name: str,
+        attributes: dict[str, Any],
+        description: str = "",
+        original_name: str = "",
+    ) -> dict[str, Any]:
+        result = super().upsert_select_ai_profile_low_level(
+            profile_name=profile_name,
+            attributes=attributes,
+            description=description,
+            original_name=original_name,
+        )
+        self.profile_details[profile_name.upper()] = {
+            "name": profile_name,
+            "status": "ready",
+            "owner": "APP",
+            "description": description,
+            "attributes": dict(attributes),
+            "object_list": list(attributes.get("object_list") or []),
+        }
+        return result
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        detail = self.profile_details.get(profile_name.upper())
+        if detail is not None:
+            return dict(detail)
+        return super().get_select_ai_profile_detail(profile_name=profile_name)
 
     @contextmanager
     def connection(self) -> Iterator[Any]:
@@ -306,7 +343,13 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
                 )
         return results
 
-    def fetch_catalog(self) -> SchemaCatalog:
+    def fetch_catalog(
+        self,
+        *,
+        include_samples: bool = True,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> SchemaCatalog:
+        _ = (include_samples, object_keys)
         return SchemaCatalog(
             refreshed_at="2026-06-23T00:00:00+00:00",
             tables=[
@@ -739,7 +782,7 @@ def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
         'JOIN "owner"."bills" b ON t."id" = b."trading_partner_id"'
     )
 
-    assert _extract_referenced_tables(sql) == ["TRADING_PARTNERS", "BILLS"]
+    assert _extract_referenced_tables(sql) == ["OWNER.TRADING_PARTNERS", "OWNER.BILLS"]
 
 
 def test_select_only_guard() -> None:
@@ -786,11 +829,11 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     )
     profile = service.get_profile(imported.profile_id)
     assert set(profile.allowed_tables) == {
-        "DEPARTMENT",
-        "EMPLOYEE",
-        "PROJECT",
-        "V_EMP_DEPT",
-        "V_DEPT_PROJECT",
+        "APP.DEPARTMENT",
+        "APP.EMPLOYEE",
+        "APP.PROJECT",
+        "APP.V_EMP_DEPT",
+        "APP.V_DEPT_PROJECT",
     }
 
     missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
@@ -880,7 +923,7 @@ async def test_allowed_objects_rejects_unselected_columns() -> None:
     safety = analyze_resp.json()["data"]["safety"]
     assert safety["is_safe"] is False
     assert safety["blocked_reason"] == "許可されていない列を参照しています。"
-    assert safety["referenced_columns"] == ["INVOICES.TOTAL_AMOUNT"]
+    assert safety["referenced_columns"] == ["APP.INVOICES.TOTAL_AMOUNT"]
     assert "INVOICES.INVOICE_ID" in " ".join(analyze_resp.json()["data"]["recommendations"])
     assert execute_resp.status_code == 400
 
@@ -1036,7 +1079,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
         assert create_resp.status_code == 200
         created = create_resp.json()["data"]
         profile_id = created["id"]
-        assert created["allowed_tables"] == ["INVOICES"]
+        assert created["allowed_tables"] == ["APP.INVOICES"]
         assert created["sql_rules"] == []
         assert "SELECT/WITH のみ" in created["select_ai_config"]["additional_instructions"]
 
@@ -1169,7 +1212,7 @@ async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
         assert recommend_resp.status_code == 200
         data = recommend_resp.json()["data"]
         assert data["recommended_profile_id"] == profile_id
-        assert data["recommended_allowed_objects"]["table_names"] == ["PAYMENTS"]
+        assert data["recommended_allowed_objects"]["table_names"] == ["APP.PAYMENTS"]
         assert "PAYMENTS.PAID_AMOUNT" in data["rewritten_question"]
         assert data["candidates"]
 
@@ -1618,8 +1661,11 @@ def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
     assert ready is True
     assert "NL2SQL_STATE_STORE" in message
     assert restored == {"schema_version": 1, "profiles": [{"id": "default"}]}
-    assert fake_db.commits >= 2
-    assert any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
+    assert fake_db.commits == 1
+    assert not any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
+    assert any(
+        sql == "SELECT 1 FROM NL2SQL_STATE_STORE WHERE 1 = 0" for sql in fake_db.executed
+    )
     assert any(sql.startswith("MERGE INTO NL2SQL_STATE_STORE") for sql in fake_db.executed)
     assert any("state_json" in input_sizes for input_sizes in fake_db.input_sizes)
     assert any(
@@ -1920,6 +1966,40 @@ def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
     assert fake_db.commits >= 2
 
 
+def test_oracle_adapter_materializes_select_ai_feedback_lobs_before_disconnect() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_rows = [
+        (
+            _FakeLob("select ai showsql 請求金額を確認したい", fake_db),
+            "sql-001",
+            _FakeLob("SELECT TOTAL_AMOUNT FROM INVOICES", fake_db),
+            _FakeLob(
+                '{"sql_id":"sql-001","sql_text":"SELECT TOTAL_AMOUNT FROM INVOICES"}',
+                fake_db,
+            ),
+        )
+    ]
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    result = adapter.list_select_ai_feedback_entries(profile_name="default")
+
+    assert fake_db.connection_open is False
+    assert result["items"] == [
+        {
+            "content": "select ai showsql 請求金額を確認したい",
+            "sql_id": "sql-001",
+            "sql_text": "SELECT TOTAL_AMOUNT FROM INVOICES",
+            "attributes": {
+                "sql_id": "sql-001",
+                "sql_text": "SELECT TOTAL_AMOUNT FROM INVOICES",
+            },
+            "raw_attributes": (
+                '{"sql_id":"sql-001","sql_text":"SELECT TOTAL_AMOUNT FROM INVOICES"}'
+            ),
+        }
+    ]
+
+
 def test_service_select_ai_feedback_missing_table_returns_warning() -> None:
     fake_db = _FakeOracleDb()
     fake_db.select_ai_feedback_missing = True
@@ -2047,7 +2127,7 @@ def test_oracle_adapter_refresh_select_ai_agent_assets_executes_dbms_cloud_ai_ag
         agent_name="NL2SQL_DEFAULT_AGENT",
         task_name="NL2SQL_DEFAULT_TASK",
         team_name="NL2SQL_DEFAULT_TEAM",
-        allowed_tables=["INVOICES"],
+        allowed_tables=["SH.INVOICES"],
         row_limit=100,
         description="請求 agent",
     )
@@ -2055,9 +2135,14 @@ def test_oracle_adapter_refresh_select_ai_agent_assets_executes_dbms_cloud_ai_ag
     assert meta["package"] == "DBMS_CLOUD_AI_AGENT"
     assert meta["runtime"] == "oracle"
     assert meta["select_ai_profile_meta"]["package"] == "DBMS_CLOUD_AI"
+    assert meta["profile_attributes"]["object_list"] == [
+        {"owner": "SH", "name": "INVOICES"}
+    ]
     assert meta["tool_attributes"]["tool_type"] == "SQL"
     assert meta["tool_attributes"]["tool_params"] == {"profile_name": "NL2SQL_DEFAULT_PROFILE"}
     assert meta["agent_attributes"]["tools"] == ["NL2SQL_DEFAULT_TOOL"]
+    assert meta["agent_attributes"]["profile_name"] == "NL2SQL_DEFAULT_PROFILE"
+    assert meta["agent_attributes"]["role"]
     assert meta["task_attributes"]["tools"] == ["NL2SQL_DEFAULT_TOOL"]
     assert meta["task_attributes"]["enable_human_tool"] is False
     assert meta["team_attributes"] == {

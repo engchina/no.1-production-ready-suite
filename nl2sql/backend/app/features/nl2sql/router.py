@@ -5,9 +5,20 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from pr_backend_core import ApiResponse
 
+from .incremental_store import IncrementalVersionConflict
 from .models import (
     AgentConversationCreateData,
     AgentConversationCreateRequest,
@@ -24,14 +35,17 @@ from .models import (
     AssetCleanupData,
     AssetCleanupRequest,
     AssetRefreshData,
+    ClassifierFeedbackImportData,
+    ClassifierFeedbackImportRequest,
     ClassifierImportData,
-    ClassifierModelActivateData,
     ClassifierModelImportData,
-    ClassifierModelsData,
     ClassifierPredictionData,
     ClassifierPredictRequest,
     ClassifierStatusData,
+    ClassifierTrainingCandidatesData,
     ClassifierTrainingDataData,
+    ClassifierTrainingExample,
+    ClassifierTrainingExampleUpdateRequest,
     ClassifierTrainRequest,
     CommentApplyData,
     CommentApplyRequest,
@@ -66,11 +80,13 @@ from .models import (
     EvaluationSetsData,
     EvaluationSetUpsertRequest,
     ExecuteRequest,
+    FeedbackClearData,
     FeedbackData,
     FeedbackEntriesData,
     FeedbackEntriesDeleteRequest,
     FeedbackIndexData,
     FeedbackIndexRequest,
+    FeedbackListData,
     FeedbackRequest,
     FeedbackSearchConfigData,
     FeedbackSearchConfigRequest,
@@ -84,12 +100,14 @@ from .models import (
     MetadataSqlSampleData,
     MetadataSqlSampleRequest,
     Nl2SqlProfile,
+    PersistenceStatusData,
     PreviewData,
     PreviewRequest,
     ProfileLearningMaterialImportData,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
     ProfileSelectAiProfileRequest,
+    ProfileSummaryPage,
     ProfileUpsertRequest,
     QueryResults,
     RepairData,
@@ -126,7 +144,35 @@ from .models import (
 from .service import is_select_only as _is_select_only
 from .service import nl2sql_service
 
-router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
+
+async def _require_persistence() -> None:
+    nl2sql_service.ensure_persistence_available()
+
+
+persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
+router = APIRouter(
+    prefix="/nl2sql",
+    tags=["nl2sql"],
+    dependencies=[Depends(_require_persistence)],
+)
+
+
+@persistence_router.get(
+    "/persistence",
+    response_model=ApiResponse[PersistenceStatusData],
+)
+async def persistence_status() -> ApiResponse[PersistenceStatusData]:
+    """NL2SQL incremental store の可用性を返す。"""
+    return ApiResponse(data=nl2sql_service.persistence_status())
+
+
+@persistence_router.post(
+    "/persistence/recover",
+    response_model=ApiResponse[PersistenceStatusData],
+)
+async def recover_persistence() -> ApiResponse[PersistenceStatusData]:
+    """DB 復旧後に接続/migration を再確認する（業務 state は再読込しない）。"""
+    return ApiResponse(data=nl2sql_service.recover_persistence())
 
 
 def is_select_only(sql: str) -> bool:
@@ -165,10 +211,17 @@ async def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
 
 
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
-async def create_job(req: JobCreateRequest) -> ApiResponse[JobCreateData]:
+async def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL 検索 job を開始する。"""
     try:
-        return ApiResponse(data=nl2sql_service.start_job(req))
+        principal = getattr(request.state, "principal", None)
+        actor_user_id = str(getattr(principal, "user_id", ""))
+        return ApiResponse(
+            data=nl2sql_service.start_job(
+                req,
+                actor_user_id=actor_user_id,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -183,37 +236,140 @@ async def get_job(job_id: str) -> ApiResponse[JobData]:
 
 
 @router.get("/profiles", response_model=ApiResponse[list[Nl2SqlProfile]])
-async def list_profiles(include_archived: bool = False) -> ApiResponse[list[Nl2SqlProfile]]:
+async def list_profiles(
+    response: Response, include_archived: bool = False
+) -> ApiResponse[list[Nl2SqlProfile]]:
     """NL2SQL profile 一覧。"""
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
+    response.headers["Link"] = '</api/nl2sql/profiles/search>; rel="successor-version"'
     return ApiResponse(data=nl2sql_service.list_profiles(include_archived=include_archived))
 
 
+@router.get("/profiles/search", response_model=ApiResponse[ProfileSummaryPage])
+async def search_profiles(
+    response: Response,
+    cursor: str | None = None,
+    limit: int = 50,
+    q: str = "",
+    include_archived: bool = False,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> ApiResponse[ProfileSummaryPage] | Response:
+    """Full payload を返さない業務 profile keyset page。"""
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
+    page = nl2sql_service.search_profiles(
+        cursor=cursor,
+        limit=limit,
+        query=q,
+        include_archived=include_archived,
+    )
+    quoted_etag = f'"profiles-{page.change_token}"'
+    if if_none_match == quoted_etag:
+        return Response(status_code=304, headers={"ETag": quoted_etag})
+    response.headers["ETag"] = quoted_etag
+    return ApiResponse(data=page)
+
+
+@router.get("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
+async def get_profile_detail(
+    profile_id: str,
+    response: Response,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> ApiResponse[Nl2SqlProfile] | Response:
+    """選択された profile だけを遅延取得する。"""
+    try:
+        profile = nl2sql_service.get_profile(profile_id, include_archived=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    quoted_etag = f'"{profile.etag}"'
+    if profile.etag and if_none_match == quoted_etag:
+        return Response(status_code=304, headers={"ETag": quoted_etag})
+    if profile.etag:
+        response.headers["ETag"] = quoted_etag
+    return ApiResponse(data=profile)
+
+
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
-async def create_profile(req: ProfileUpsertRequest) -> ApiResponse[Nl2SqlProfile]:
+async def create_profile(
+    req: ProfileUpsertRequest, response: Response
+) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を作成する。"""
     profile = Nl2SqlProfile(id=str(uuid.uuid4()), **req.model_dump())
-    return ApiResponse(data=nl2sql_service.create_profile(profile))
+    try:
+        stored = nl2sql_service.create_profile(profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _materialize_incremental_profile_view(stored.id)
+    if stored.etag:
+        response.headers["ETag"] = f'"{stored.etag}"'
+    return ApiResponse(data=stored)
 
 
 @router.patch("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
-async def update_profile(profile_id: str, req: ProfileUpsertRequest) -> ApiResponse[Nl2SqlProfile]:
+async def update_profile(
+    profile_id: str,
+    req: ProfileUpsertRequest,
+    response: Response,
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を更新する。"""
     try:
+        if nl2sql_service.uses_incremental_store and not if_match:
+            raise HTTPException(status_code=428, detail="If-Match header が必要です。")
         updated = nl2sql_service.update_profile(
-            profile_id, lambda current: current.model_copy(update=req.model_dump())
+            profile_id,
+            lambda current: current.model_copy(update=req.model_dump()),
+            expected_etag=if_match.strip('"') if if_match else None,
         )
+    except IncrementalVersionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="業務 profile が更新されています。再読込してください。",
+            headers={"ETag": f'"{exc.current_etag}"'},
+        ) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if updated.etag:
+        response.headers["ETag"] = f'"{updated.etag}"'
+    _materialize_incremental_profile_view(updated.id)
     return ApiResponse(data=updated)
 
 
+def _materialize_incremental_profile_view(profile_id: str) -> None:
+    if not nl2sql_service.uses_incremental_store:
+        return
+    # Local import avoids router construction cycles while keeping mutation-time materialization.
+    from .ontology_router import ontology_runtime
+
+    ontology_runtime.materialize_profile_view(profile_id)
+
+
 @router.delete("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
-async def delete_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+async def delete_profile(
+    profile_id: str,
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を物理削除する。"""
     try:
-        return ApiResponse(data=nl2sql_service.delete_profile(profile_id))
+        if nl2sql_service.uses_incremental_store and not if_match:
+            raise HTTPException(status_code=428, detail="If-Match header が必要です。")
+        return ApiResponse(
+            data=nl2sql_service.delete_profile(
+                profile_id,
+                expected_etag=if_match.strip('"') if if_match else None,
+            )
+        )
+    except IncrementalVersionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="業務 profile が更新されています。再読込してください。",
+            headers={"ETag": f'"{exc.current_etag}"'},
+        ) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
@@ -340,7 +496,9 @@ async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
 async def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     """archive 済みの NL2SQL profile を復元する。"""
     try:
-        return ApiResponse(data=nl2sql_service.restore_profile(profile_id))
+        profile = nl2sql_service.restore_profile(profile_id)
+        _materialize_incremental_profile_view(profile.id)
+        return ApiResponse(data=profile)
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
@@ -616,7 +774,45 @@ async def history() -> ApiResponse[HistoryData]:
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
 async def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
     """検索結果 feedback を保存する。"""
-    return ApiResponse(data=nl2sql_service.save_feedback(req.history_id, req.rating, req.comment))
+    try:
+        data = nl2sql_service.save_feedback(req.history_id, req.rating, req.comment)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/feedback", response_model=ApiResponse[FeedbackListData])
+async def list_feedback(
+    cursor: str | None = None,
+    limit: int = 20,
+    rating: str = "all",
+    profile_id: str = "",
+    q: str = "",
+) -> ApiResponse[FeedbackListData]:
+    """アプリ内 SQL feedback を Profile/評価/キーワードで一覧する。"""
+    if rating not in {"all", "good", "bad", "unrated"}:
+        raise HTTPException(status_code=422, detail="rating が不正です。")
+    try:
+        data = nl2sql_service.list_feedback(
+            cursor=cursor,
+            limit=max(1, min(limit, 100)),
+            rating=rating,
+            profile_id=profile_id.strip(),
+            query=q.strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.delete("/feedback/{history_id}", response_model=ApiResponse[FeedbackClearData])
+async def clear_feedback(history_id: str) -> ApiResponse[FeedbackClearData]:
+    """SQL 履歴を残したままアプリ内 feedback だけを解除する。"""
+    try:
+        data = nl2sql_service.clear_feedback(history_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    return ApiResponse(data=data)
 
 
 @router.post("/demo/learning", response_model=ApiResponse[DemoLearningData])
@@ -699,16 +895,90 @@ async def classifier_status() -> ApiResponse[ClassifierStatusData]:
     return ApiResponse(data=nl2sql_service.classifier_status())
 
 
-@router.get("/classifier/models", response_model=ApiResponse[ClassifierModelsData])
-async def classifier_models() -> ApiResponse[ClassifierModelsData]:
-    """Persisted LogisticRegression classifier model versions を返す。"""
-    return ApiResponse(data=nl2sql_service.list_classifier_models())
-
-
 @router.get("/classifier/training-data", response_model=ApiResponse[ClassifierTrainingDataData])
 async def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
     """Classifier training data 一覧を返す。"""
     return ApiResponse(data=nl2sql_service.classifier_training_data())
+
+
+@router.get(
+    "/classifier/training-candidates",
+    response_model=ApiResponse[ClassifierTrainingCandidatesData],
+)
+async def classifier_training_candidates(
+    cursor: str | None = None,
+    limit: int = 20,
+    status: str = "all",
+    profile_id: str = "",
+    q: str = "",
+    history_id: str = "",
+) -> ApiResponse[ClassifierTrainingCandidatesData]:
+    """good feedback から質問/Profile training 候補を導出する。"""
+    allowed_statuses = {
+        "all",
+        "pending",
+        "added",
+        "already_covered",
+        "conflict",
+        "profile_missing",
+        "source_changed",
+    }
+    if status not in allowed_statuses:
+        raise HTTPException(status_code=422, detail="status が不正です。")
+    try:
+        data = nl2sql_service.classifier_training_candidates(
+            cursor=cursor,
+            limit=max(1, min(limit, 100)),
+            status=status,
+            profile_id=profile_id.strip(),
+            query=q.strip(),
+            history_id=history_id.strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.post(
+    "/classifier/training-data/from-feedback",
+    response_model=ApiResponse[ClassifierFeedbackImportData],
+)
+async def import_classifier_training_data_from_feedback(
+    req: ClassifierFeedbackImportRequest,
+) -> ApiResponse[ClassifierFeedbackImportData]:
+    """確認済み feedback の質問/Profile 対応を training data に追加する。"""
+    return ApiResponse(data=nl2sql_service.import_classifier_feedback_examples(req))
+
+
+@router.patch(
+    "/classifier/training-data/{example_id}",
+    response_model=ApiResponse[ClassifierTrainingExample],
+)
+async def update_classifier_training_example(
+    example_id: str,
+    req: ClassifierTrainingExampleUpdateRequest,
+) -> ApiResponse[ClassifierTrainingExample]:
+    try:
+        data = nl2sql_service.update_classifier_training_example(example_id, req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Training data が見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.delete(
+    "/classifier/training-data/{example_id}",
+    response_model=ApiResponse[ClassifierTrainingDataData],
+)
+async def delete_classifier_training_example(
+    example_id: str,
+) -> ApiResponse[ClassifierTrainingDataData]:
+    try:
+        data = nl2sql_service.delete_classifier_training_example(example_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Training data が見つかりません。") from exc
+    return ApiResponse(data=data)
 
 
 @router.post("/classifier/training-data/import", response_model=ApiResponse[ClassifierImportData])
@@ -740,52 +1010,38 @@ async def export_classifier_training_data_xlsx() -> Response:
     )
 
 
-@router.get("/classifier/training-data/export.jsonl")
-async def export_classifier_training_data_jsonl() -> Response:
-    """Classifier training data を JSONL として出力する。"""
-    filename, content = nl2sql_service.export_classifier_training_data_jsonl()
-    return Response(
-        content=content,
-        media_type="application/x-ndjson",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
 @router.post("/classifier/train", response_model=ApiResponse[ClassifierStatusData])
 async def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatusData]:
     """Imported training data から LogisticRegression classifier を学習する。"""
     return ApiResponse(data=nl2sql_service.train_classifier(req))
 
 
-@router.post("/classifier/models/import", response_model=ApiResponse[ClassifierModelImportData])
+@router.post("/classifier/model/import", response_model=ApiResponse[ClassifierModelImportData])
 async def import_classifier_model(
     file: Annotated[UploadFile, File()],
-    activate: Annotated[bool, Form()] = True,
 ) -> ApiResponse[ClassifierModelImportData]:
-    """Legacy models/*.joblib / *.meta.json classifier artifact を import する。"""
+    """唯一の classifier model を joblib / JSON artifact で置き換える。"""
     content = await file.read()
     return ApiResponse(
         data=nl2sql_service.import_classifier_model_artifact(
             filename=file.filename or "classifier.joblib",
             content=content,
-            activate=activate,
         )
     )
 
 
-@router.post(
-    "/classifier/models/{version}/activate",
-    response_model=ApiResponse[ClassifierModelActivateData],
-)
-async def activate_classifier_model(version: str) -> ApiResponse[ClassifierModelActivateData]:
-    """Persisted classifier model version を active にする。"""
-    return ApiResponse(data=nl2sql_service.activate_classifier_model(version))
-
-
-@router.delete("/classifier/models/{version}", response_model=ApiResponse[ClassifierModelsData])
-async def delete_classifier_model(version: str) -> ApiResponse[ClassifierModelsData]:
-    """Persisted classifier model version を削除する。"""
-    return ApiResponse(data=nl2sql_service.delete_classifier_model(version))
+@router.post("/classifier/models/import", response_model=ApiResponse[ClassifierModelImportData])
+async def import_classifier_model_legacy(
+    file: Annotated[UploadFile, File()],
+    activate: Annotated[bool, Form()] = True,
+) -> ApiResponse[ClassifierModelImportData]:
+    """旧複数形 URL。単一モデルとして置き換える場合のみ受理する。"""
+    if not activate:
+        raise HTTPException(
+            status_code=422,
+            detail="単一モデル管理では activate=false を指定できません。",
+        )
+    return await import_classifier_model(file)
 
 
 @router.post("/classifier/predict", response_model=ApiResponse[ClassifierPredictionData])

@@ -9,7 +9,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiFetch, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
   ExecutionConfirmationField,
@@ -404,7 +404,7 @@ export function TableManagementPage() {
     setLoading("table-export");
     setMessage("");
     try {
-      const response = await fetch(`/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}/export.xlsx`, {
+      const response = await apiFetch(`/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}/export.xlsx`, {
         headers: {
           Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         },

@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field, field_validator
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
 UploadStorageBackend = Literal["local", "oci"]
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
+ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 DatabaseConnectionTestStatus = Literal["success", "failed"]
+DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 AdbOperationStatus = Literal[
@@ -25,6 +27,10 @@ AdbOperationStatus = Literal[
     "cannot_start",
     "cannot_stop",
 ]
+SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
+SystemTableOperationStatus = Literal["idle", "running", "failed"]
+SystemTableOperationKind = Literal["initialize", "recreate"]
+SystemTableOperationResult = Literal["no_op", "initialized", "migrated", "recreated"]
 
 
 class EnterpriseAiModelEntrySettings(BaseModel):
@@ -152,6 +158,8 @@ class ModelSettingsData(BaseModel):
     checks: dict[str, ModelSettingsCheckStatus]
     model_settings_file: str
     source: Literal["runtime"]
+    secret_source: ModelSettingsSecretSource
+    legacy_secret_detected: bool = False
 
 
 class ModelSettingsTestRequest(BaseModel):
@@ -200,6 +208,13 @@ class DatabaseSettingsData(BaseModel):
     adb_ocid: str
     region: str
     config_source: Literal["runtime"]
+
+
+class DatabaseWalletDownloadData(BaseModel):
+    """OCI からの Wallet 取得結果。ZIP や生成 password は含めない。"""
+
+    status: DatabaseWalletDownloadStatus
+    settings: DatabaseSettingsData
 
 
 class AdbSettingsUpdate(BaseModel):
@@ -262,6 +277,65 @@ class DatabaseConnectionTestResult(BaseModel):
     details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_type: str | None = None
+
+
+class SystemTableMissingObject(BaseModel):
+    """不足している manifest object。"""
+
+    name: str
+    object_type: Literal["TABLE", "INDEX", "SEQUENCE"]
+
+
+class SystemTableMetadata(BaseModel):
+    """USER_TABLES / USER_OBJECTS から取得する概算 metadata。"""
+
+    name: str
+    exists: bool
+    estimated_rows: int | None = None
+    created_at: str | None = None
+    last_analyzed_at: str | None = None
+
+
+class SystemTableOperationState(BaseModel):
+    """複数 replica が共有する schema operation lease 状態。"""
+
+    status: SystemTableOperationStatus
+    operation_kind: SystemTableOperationKind | None = None
+    lease_expires_at: str | None = None
+    last_error_code: str | None = None
+    schema_epoch: int = 0
+    updated_at: str | None = None
+
+
+class SystemTablesStatusData(BaseModel):
+    """NL2SQL system table の read-only status。"""
+
+    status: SystemTableSchemaStatus
+    schema_head: int
+    applied_versions: list[int]
+    pending_versions: list[int]
+    expected_object_count: int
+    existing_object_count: int
+    expected_table_count: int
+    existing_table_count: int
+    missing_objects: list[SystemTableMissingObject]
+    tables: list[SystemTableMetadata]
+    operation_state: SystemTableOperationState
+
+
+class SystemTablesInitializeRequest(BaseModel):
+    """初期化または全再作成の request。"""
+
+    recreate: bool = False
+    confirmation: str | None = Field(default=None, max_length=128)
+
+
+class SystemTablesOperationData(SystemTablesStatusData):
+    """DDL operation 後の状態と件数。"""
+
+    operation: SystemTableOperationResult
+    dropped_object_count: int
+    created_object_count: int
 
 
 class UploadStorageSettingsData(BaseModel):

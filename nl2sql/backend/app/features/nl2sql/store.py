@@ -7,6 +7,7 @@ store を差し替えられる。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -58,8 +59,8 @@ class MemoryNl2SqlStore:
 class OracleJsonNl2SqlStore:
     """Oracle JSON CLOB table backed store.
 
-    1 row に NL2SQL state snapshot を保存する。DDL は idempotent に作成し、既存 table
-    がある場合はそのまま利用する。
+    旧互換/移行期間だけ 1 row に NL2SQL state snapshot を保存する。DDL は versioned
+    migration の責務であり、この store は既存 table を bounded query で確認するだけ。
     """
 
     mode = "oracle"
@@ -69,11 +70,13 @@ class OracleJsonNl2SqlStore:
         *,
         connection_factory: Callable[[], AbstractContextManager[Any]],
         table_name: str,
+        migration_mirror_enabled: bool = False,
     ) -> None:
         self._connection_factory = connection_factory
         self._table_name = self._validate_table_name(table_name)
         self._initialized = False
         self._lock = threading.RLock()
+        self._migration_mirror_enabled = migration_mirror_enabled
 
     @property
     def table_name(self) -> str:
@@ -120,12 +123,28 @@ class OracleJsonNl2SqlStore:
                     "  source.state_key, source.state_json, SYSTIMESTAMP"
                     ")"
                 )
-                _set_json_clob_input_size(cursor)
-                cursor.execute(
-                    merge_sql,
-                    {"state_key": _STATE_KEY, "state_json": payload},
-                )
-                conn.commit()
+                try:
+                    _set_json_clob_input_size(cursor)
+                    cursor.execute(
+                        merge_sql,
+                        {"state_key": _STATE_KEY, "state_json": payload},
+                    )
+                    if self._migration_mirror_enabled:
+                        cursor.execute(
+                            "INSERT INTO NL2SQL_MIGRATION_OUTBOX (SNAPSHOT_VERSION, "
+                            "SNAPSHOT_CHECKSUM, STATE_JSON) VALUES "
+                            "(NL2SQL_MIGRATION_SNAPSHOT_SEQ.NEXTVAL, :checksum, :state_json)",
+                            {
+                                "checksum": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                                "state_json": payload,
+                            },
+                        )
+                    conn.commit()
+                except Exception:
+                    rollback = getattr(conn, "rollback", None)
+                    if callable(rollback):
+                        rollback()
+                    raise
 
     def check(self) -> tuple[bool, str]:
         try:
@@ -138,18 +157,11 @@ class OracleJsonNl2SqlStore:
         if self._initialized:
             return
         with self._connection_factory() as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute(f"""
-                    CREATE TABLE {self._table_name} (
-                        state_key VARCHAR2(64) PRIMARY KEY,
-                        state_json CLOB CHECK (state_json IS JSON),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-                    )
-                    """)
-                conn.commit()
-            except Exception as exc:
-                if "ORA-00955" not in str(exc):
-                    raise
+            # Runtime/request path では DDL を実行しない。旧 snapshot table も versioned
+            # migration で準備済みであることを bounded scalar query だけで確認する。
+            cursor.execute(
+                f"SELECT 1 FROM {self._table_name} WHERE 1 = 0"  # nosec B608
+            )
             self._initialized = True
 
     def _validate_table_name(self, table_name: str) -> str:

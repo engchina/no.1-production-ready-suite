@@ -26,6 +26,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { apiPost } from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import type {
   DbAdminExecuteData,
@@ -43,16 +44,7 @@ export function downloadText(filename: string, text: string) {
   downloadBlob(filename, blob);
 }
 
-export function downloadBlob(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
+export { downloadBlob } from "@/lib/download";
 
 /** File を base64 文字列に変換する(tabular import 用)。 */
 export async function fileToBase64(file: File) {

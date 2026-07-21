@@ -9,6 +9,57 @@
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
 @source "../node_modules/@engchina/production-ready-ui/dist";
 
+/*
+ * ダークテーマは VS Code Dark+ と同じ中立グレー基調で統一する。
+ * メインはエディター、サイドナビはワークベンチ、カードはパネルに対応させ、
+ * 純黒を使わずに画面の階層と十分なコントラストを保つ。
+ */
+.dark {
+  --background: #1e1e1e;
+  --foreground: #cccccc;
+  --card: #252526;
+  --border: #3c3c3c;
+  --primary: #3794ff;
+  --primary-foreground: #ffffff;
+  --muted: #9d9d9d;
+  --sidebar: #181818;
+  --sidebar-foreground: #cccccc;
+  --sidebar-active: #3794ff;
+  --success: #89d185;
+  --success-bg: #263d2a;
+  --warning: #cca700;
+  --warning-bg: #413a1d;
+  --danger: #f14c4c;
+  --danger-bg: #4a2424;
+  --info: #3794ff;
+  --info-bg: #1f3a5f;
+  --ring: #3794ff;
+  --graph-entity: #264f78;
+  --graph-metric: #4b3f72;
+  --graph-sql: #3c3c3c;
+  --graph-term: #245b52;
+  --graph-default: #2d2d30;
+  --graph-fg: #cccccc;
+  --graph-line: #6a6a6a;
+}
+
+/*
+ * サイドバー内のローカル DEBUG 状態。
+ * 警告背景へ sidebar-foreground を重ねるとライトテーマで十分な文字コントラストを
+ * 確保できないため、状態表示専用の前景色を定義する。
+ */
+.sidebar-debug-status {
+  border-color: #d97706;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.dark .sidebar-debug-status {
+  border-color: #fbbf24;
+  background: #451a03;
+  color: #fde68a;
+}
+
 @layer base {
   pre {
     min-width: 0;

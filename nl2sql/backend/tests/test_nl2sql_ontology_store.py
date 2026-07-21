@@ -227,6 +227,42 @@ def test_memory_store_round_trips_graph_and_returns_detached_values() -> None:
     assert unchanged["embedding"] == [0.25, 0.5]
 
 
+def test_memory_atomic_save_rolls_back_entire_revision_switch_on_conflict() -> None:
+    store = InMemoryOntologyStore()
+    first = store.save_revision(
+        {"revision_id": "rev-1", "status": "published", "schema_fingerprint": "a" * 64}
+    )
+    second = store.save_revision(
+        {"revision_id": "rev-2", "status": "draft", "schema_fingerprint": "b" * 64}
+    )
+
+    with pytest.raises(OntologyVersionConflict):
+        store.save_documents_atomic(
+            "revisions",
+            [
+                (
+                    {
+                        "revision_id": "rev-1",
+                        "status": "archived",
+                        "schema_fingerprint": "a" * 64,
+                    },
+                    first["etag"],
+                ),
+                (
+                    {
+                        "revision_id": "rev-2",
+                        "status": "published",
+                        "schema_fingerprint": "b" * 64,
+                    },
+                    "stale-etag",
+                ),
+            ],
+        )
+
+    assert store.get_revision("rev-1") == first
+    assert store.get_revision("rev-2") == second
+
+
 def test_memory_store_covers_query_trace_and_governance_collections() -> None:
     store = InMemoryOntologyStore()
     profile_view = store.save_profile_view(
@@ -298,7 +334,8 @@ def test_oracle_store_does_not_run_ddl_until_ensure_schema_is_called() -> None:
     store.ensure_schema()
 
     assert database.factory_calls == 1
-    assert database.commits == 1
+    assert database.commits == 0
     assert database.rollbacks == 0
-    assert len(database.executed) == len(ONTOLOGY_DDL_STATEMENTS)
-    assert database.executed[0].startswith("CREATE TABLE NL2SQL_ONTOLOGY_REVISIONS")
+    assert database.executed == [
+        "SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0"
+    ]

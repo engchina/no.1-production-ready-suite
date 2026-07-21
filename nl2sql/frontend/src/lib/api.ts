@@ -1,7 +1,47 @@
+import {
+  confirmDatabaseUnavailable,
+  isDatabaseReadinessRequest,
+  shouldConfirmDatabaseUnavailable,
+} from "./database-load-error.ts";
+
 export interface ApiEnvelope<T> {
   data: T;
   error?: string;
   request_id?: string;
+}
+
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function readCookie(name: string): string | null {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
+}
+
+/**
+ * アプリ全体の API 境界。Cookie セッション、CSRF、認証状態イベントを一箇所で扱う。
+ */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
+  if (UNSAFE_METHODS.has(method)) {
+    const csrfToken = readCookie("nl2sql_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers, credentials: "include" });
+  } catch (cause) {
+    if (!isDatabaseReadinessRequest(path)) await confirmDatabaseUnavailable();
+    throw cause;
+  }
+  if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
+  if (response.status === 403) window.dispatchEvent(new CustomEvent("app-auth-forbidden"));
+  if (shouldConfirmDatabaseUnavailable(path, response.status)) {
+    await confirmDatabaseUnavailable();
+  }
+  return response;
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -17,18 +57,29 @@ async function parseJson<T>(response: Response): Promise<T> {
       (typeof payload === "object" && payload !== null && "detail" in payload
         ? String((payload as { detail?: unknown }).detail)
         : "API リクエストに失敗しました");
-    throw new Error(message);
+    throw new ApiError(response.status, [message]);
   }
   return payload.data;
 }
 
+export interface ApiResponseMetadata<T> {
+  data: T;
+  etag: string;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { Accept: "application/json" } });
+  const response = await apiFetch(path);
   return parseJson<T>(response);
 }
 
+export async function apiGetWithMetadata<T>(path: string): Promise<ApiResponseMetadata<T>> {
+  const response = await apiFetch(path);
+  const data = await parseJson<T>(response);
+  return { data, etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "" };
+}
+
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -36,19 +87,26 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return parseJson<T>(response);
 }
 
-export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+export async function apiPatch<T>(
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
     method: "PATCH",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return parseJson<T>(response);
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(path, {
+export async function apiDelete<T>(
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
     method: "DELETE",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...headers },
   });
   return parseJson<T>(response);
 }
@@ -62,6 +120,7 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
+export type ModelSettingsSecretSource = "environment" | "legacy_json" | "missing";
 export type ModelSettingsTestStatus = "success" | "failed";
 export type ModelSettingsTestTargetType =
   | "enterprise_text"
@@ -71,6 +130,22 @@ export type ModelSettingsTestTargetType =
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
+
+export interface DatabaseStatusData {
+  status: "ok" | "not_configured" | "setup_required" | "unreachable";
+  check: string;
+  detail: string | null;
+}
+
+export interface PersistenceStatusData {
+  mode: "memory" | "oracle";
+  ready: boolean;
+  durable: boolean;
+  writable: boolean;
+  snapshot_loaded: boolean;
+  reason_code: string | null;
+  checked_at: string;
+}
 
 export interface SettingsApiResponse<T> {
   data: T | null;
@@ -120,6 +195,8 @@ export interface ModelSettingsData {
   checks: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
   model_settings_file: string;
   source: "runtime";
+  secret_source: ModelSettingsSecretSource;
+  legacy_secret_detected: boolean;
 }
 
 export interface ModelSettingsTestRequest {
@@ -156,6 +233,79 @@ export interface DatabaseSettingsData {
   adb_ocid: string;
   region: string;
   config_source: "runtime";
+}
+
+export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationResult =
+  | "no_op"
+  | "initialized"
+  | "migrated"
+  | "recreated";
+
+export interface SystemTableMissingObject {
+  name: string;
+  object_type: "TABLE" | "INDEX" | "SEQUENCE";
+}
+
+export interface SystemTableMetadata {
+  name: string;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
+export interface SystemTableOperationState {
+  status: SystemTableOperationStatus;
+  operation_kind: "initialize" | "recreate" | null;
+  lease_expires_at: string | null;
+  last_error_code: string | null;
+  schema_epoch: number;
+  updated_at: string | null;
+}
+
+export interface SystemTablesStatusData {
+  status: SystemTableSchemaStatus;
+  schema_head: number;
+  applied_versions: number[];
+  pending_versions: number[];
+  expected_object_count: number;
+  existing_object_count: number;
+  expected_table_count: number;
+  existing_table_count: number;
+  missing_objects: SystemTableMissingObject[];
+  tables: SystemTableMetadata[];
+  operation_state: SystemTableOperationState;
+}
+
+export interface SystemTablesInitializeRequest {
+  recreate: boolean;
+  confirmation?: string;
+}
+
+export interface SystemTablesOperationData extends SystemTablesStatusData {
+  operation: SystemTableOperationResult;
+  dropped_object_count: number;
+  created_object_count: number;
+}
+
+export type DatabaseWalletDownloadStatus = "downloaded" | "already_configured";
+
+export interface DatabaseWalletDownloadData {
+  status: DatabaseWalletDownloadStatus;
+  settings: DatabaseSettingsData;
+}
+
+export interface SchemaOwnersData {
+  current_owner: string;
+  owners: Array<{
+    owner: string;
+    is_current: boolean;
+    table_count: number;
+    view_count: number;
+  }>;
+  excluded_oracle_maintained_count: number;
 }
 
 export type AdbOperationStatus =
@@ -334,7 +484,7 @@ async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApi
 }
 
 async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -362,6 +512,13 @@ function jsonBody(body: unknown): RequestInit {
 }
 
 export const api = {
+  getDatabaseStatus: () => settingsRequest<DatabaseStatusData>("/api/ready/database"),
+  getPersistenceStatus: () =>
+    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence"),
+  recoverPersistence: () =>
+    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence/recover", {
+      method: "POST",
+    }),
   getModelSettings: () => settingsRequest<ModelSettingsData>("/api/settings/model"),
   updateModelSettings: (body: ModelSettingsPayload) =>
     settingsRequest<ModelSettingsData>("/api/settings/model", {
@@ -375,6 +532,14 @@ export const api = {
     settingsRequest<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
 
   getDatabaseSettings: () => settingsRequest<DatabaseSettingsData>("/api/settings/database"),
+  getSystemTablesStatus: () =>
+    settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables"),
+  initializeSystemTables: (body: SystemTablesInitializeRequest) =>
+    settingsRequest<SystemTablesOperationData>(
+      "/api/settings/database/system-tables/initialize",
+      jsonBody(body)
+    ),
+  getSchemaOwners: () => settingsRequest<SchemaOwnersData>("/api/schema/owners"),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     settingsRequest<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -389,6 +554,11 @@ export const api = {
       body: form,
     });
   },
+  downloadDatabaseWallet: () =>
+    settingsRequest<DatabaseWalletDownloadData>(
+      "/api/settings/database/wallet/download",
+      { method: "POST" }
+    ),
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     settingsRequest<DatabaseConnectionTestResult>(
       "/api/settings/database/test",

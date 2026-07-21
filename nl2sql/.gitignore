@@ -34,3 +34,7 @@ backend/model-settings.json
 # --- local agent worktrees ---
 .claude/worktrees/
 .learnings/
+
+# --- local reference sources / internal source material ---
+/DataClaw-main/
+/docs/Oracle AI Database 26ai for AgenticApps_v3_internal_deep_data_security.pptx

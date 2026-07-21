@@ -309,7 +309,29 @@ function DbObjectDetailSkeleton({ idPrefix }: { idPrefix: string }) {
   );
 }
 
-export function DbObjectStatusMetricItem({ label, value, testId, emphasis = false }: DbObjectStatusMetric) {
+export function DbObjectStatusMetricItem({
+  label,
+  value,
+  testId,
+  emphasis = false,
+  density = "default",
+}: DbObjectStatusMetric & { density?: "default" | "compact" }) {
+  if (density === "compact") {
+    return (
+      <div className="flex min-w-0 items-baseline gap-2 py-1">
+        <dt className="shrink-0 text-xs font-medium text-muted">{label}</dt>
+        <dd
+          className={`min-w-0 break-words font-semibold tabular-nums text-foreground [overflow-wrap:anywhere] ${
+            emphasis ? "text-base" : "text-sm"
+          }`}
+          data-testid={testId}
+        >
+          {value}
+        </dd>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2">
       <dt className="text-xs font-medium text-muted">{label}</dt>
@@ -328,14 +350,43 @@ export function DbObjectManagementStatusBar({
   metrics,
   actions,
   metricColumnsClass = "sm:grid-cols-3",
+  density = "default",
 }: {
   ariaLabel: string;
   metrics: DbObjectStatusMetric[];
   actions?: ReactNode;
   metricColumnsClass?: string;
+  density?: "default" | "compact";
 }) {
+  if (density === "compact") {
+    return (
+      <section
+        className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+        aria-label={ariaLabel}
+        data-density="compact"
+      >
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-x-5 gap-y-1">
+            {metrics.map((metric) => (
+              <DbObjectStatusMetricItem
+                key={`${metric.label}-${metric.value}`}
+                {...metric}
+                density="compact"
+              />
+            ))}
+          </dl>
+          {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <section className="rounded-md border border-border bg-card px-4 py-3 shadow-sm" aria-label={ariaLabel}>
+    <section
+      className="rounded-md border border-border bg-card px-4 py-3 shadow-sm"
+      aria-label={ariaLabel}
+      data-density="default"
+    >
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <dl className={`grid gap-3 ${metricColumnsClass} xl:flex xl:flex-wrap xl:items-center`}>
           {metrics.map((metric) => (

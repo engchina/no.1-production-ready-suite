@@ -1,10 +1,10 @@
 /**
- * 日本語文言。文言はハードコードせずここを経由する。
+ * NL2SQL の日本語基底文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
-  "app.title": "Production Ready RAG",
+  "app.title": "Production Ready NL2SQL",
   "app.sidebarTitle.line1": "Production Ready",
-  "app.sidebarTitle.line2": "RAG",
+  "app.sidebarTitle.line2": "NL2SQL",
 
   // 共通メッセージ機構・ボタン（docs/frontend-messaging-spec.md / frontend-button-spec.md）
   "common.confirm": "実行",
@@ -17,15 +17,26 @@ export const ja = {
   "dbGate.checking": "データベースの状態を確認しています…",
   "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
   "dbGate.notConfigured.message":
-    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+    "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+  "dbGate.setupRequired.title": "データベース接続済み・初期化が必要です",
+  "dbGate.setupRequired.message":
+    "データベースへの接続は確認できましたが、NL2SQL の保存領域が初期化されていません。管理者が migration 003 を適用した後、再試行してください。",
   "dbGate.unreachable.title": "データベースを起動してください",
   "dbGate.unreachable.message":
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
+  "dbGate.settingsHint":
+    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",
   "dbGate.checkFailed.message":
     "バックエンドの起動状態を確認して再試行してください。",
+  "dbGate.recovering": "保存済みの業務データを復元しています…",
+  "dbGate.persistenceFailed.title": "保存済みの業務データを復元できません",
+  "dbGate.persistenceFailed.message":
+    "データベース接続を確認できましたが、保存済みデータの読込に失敗しました。Wallet サービス名、DSN、認証情報を確認して再試行してください。",
+  "persistence.memoryWarning.title": "非永続モードで実行中です",
+  "persistence.memoryWarning.message":
+    "業務プロファイル、タスク、履歴、フィードバック、評価はメモリだけに保存され、バックエンドの再起動で失われます。",
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",
@@ -47,7 +58,7 @@ export const ja = {
   "auth.status.checking": "認証状態を確認中…",
   "auth.status.error": "認証状態の確認に失敗しました。",
   "auth.login.title": "ログイン",
-  "auth.login.subtitle": "Production Ready RAG コンソールにサインインします。",
+  "auth.login.subtitle": "Production Ready NL2SQL コンソールにサインインします。",
   "auth.login.username": "ユーザー名",
   "auth.login.usernamePlaceholder": "ユーザー名を入力",
   "auth.login.password": "パスワード",
@@ -63,20 +74,20 @@ export const ja = {
   "auth.user.role": "USER",
 
   "nav.section.ingestion": "データ取込",
-  "nav.section.rag": "RAG",
-  "nav.section.pipeline": "RAG パイプライン",
+  "nav.section.nl2sql": "NL2SQL",
+  "nav.section.pipeline": "NL2SQL パイプライン",
   "nav.section.settings": "システム設定",
   "nav.dashboard": "ダッシュボード",
   "nav.upload": "ドキュメントアップロード",
   "nav.upload.sidebar": "アップロード",
   "nav.fileList": "文書インデックス",
   "nav.knowledgeBases": "知識ベース管理",
-  "nav.search": "RAG 検索",
+  "nav.search": "NL2SQL 検索",
   "nav.nl2sqlConsole": "NL2SQL コンソール (Console)",
   "nav.nl2sqlConsole.sidebar": "NL2SQL コンソール",
   "nav.businessViews": "業務アシスタント (Assistant)",
   "nav.businessViews.sidebar": "業務アシスタント (Assistant)",
-  "nav.evaluation": "RAG 評価",
+  "nav.evaluation": "NL2SQL 評価",
   // ページタイトルは AGENTS.md 準拠の正式名を維持し、サイドバー表示のみ短縮形(*.sidebar)。
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",
@@ -413,7 +424,7 @@ export const ja = {
   "settings.services.controlEnabled.on": "有効",
   "settings.services.controlEnabled.off": "無効(可視化のみ)",
   "settings.services.controlDisabled.hint":
-    "起動/停止は無効です。有効化するには rag_service_control_enabled=true を設定してください。",
+    "起動/停止は無効です。有効化するには nl2sql_service_control_enabled=true を設定してください。",
   "settings.services.mode.dev": "開発 (uv)",
   "settings.services.mode.prod": "本番 (docker)",
   "settings.services.mode.dev.hint":
@@ -948,12 +959,19 @@ export const ja = {
   "settings.model.test.noDetails": "詳細は返されませんでした。",
   "settings.model.source": "反映先",
   "settings.model.source.runtime": "現在のプロセス設定",
+  "settings.model.secretSource": "API Key 保存先",
+  "settings.model.secretSource.environment": "backend/.env",
+  "settings.model.secretSource.legacyJson": "旧 JSON（移行が必要）",
+  "settings.model.secretSource.missing": "未設定",
+  "settings.model.legacySecret.title": "旧 JSON に API Key が残っています",
+  "settings.model.legacySecret.description":
+    "原因: v1 の model-settings.json が secret を保存していました。復旧方法: この画面で保存すると API Key を backend/.env へ移し、JSON を secret のない v2 へ更新します。移行後は接続テストを実行してください。",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.fixed": "固定",
   "settings.model.env.description":
-    "モデル設定 JSON の保存先を決める backend/.env の値です。保存済み JSON が存在する場合は JSON が優先されます。",
+    "backend/.env に保存する JSON ファイル名と Enterprise AI API Key の状態です。secret の値は表示しません。",
   "settings.model.json.description":
-    "MODEL_SETTINGS_FILE に保存されるモデル設定 JSON のプレビューです。secret は伏せ字で表示します。",
+    "MODEL_SETTINGS_FILE に保存される v2 JSON のプレビューです。API Key は JSON に保存されません。",
 
   "settings.model.status.title": "構成状態",
   "settings.model.status.subtitle": "保存前チェックと readiness に影響する項目",
@@ -986,7 +1004,7 @@ export const ja = {
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
   "settings.model.enterprise.apiKey": "API key",
   "settings.model.enterprise.apiKeyHelp":
-    "OpenAI-compatible gateway の Bearer 認証で使います。実行環境では必ず設定してください。",
+    "OpenAI-compatible gateway の Bearer 認証で使います。保存先は backend/.env のみで、JSON や API 応答には含めません。",
   "settings.model.enterprise.apiKeySaved": "保存済み",
   "settings.model.enterprise.apiKeyNotSet": "未設定",
   "settings.model.enterprise.apiKeyShow": "API key を表示",
@@ -1055,7 +1073,7 @@ export const ja = {
   "settings.model.placeholder.project": "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
   "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   "settings.model.placeholder.modelId": "enterprise-llm",
-  "settings.model.placeholder.displayName": "業務 RAG 標準",
+  "settings.model.placeholder.displayName": "業務 NL2SQL 標準",
   "settings.model.placeholder.apiPath": "/responses",
   "settings.model.placeholder.textPayloadTemplate":
     "{\"model\":\"${model}\",\"messages\":\"${messages}\",\"parameters\":\"${parameters}\"}",
@@ -1087,10 +1105,12 @@ export const ja = {
   "settings.database.loadError": "データベース設定の取得に失敗しました。",
   "settings.database.saveError": "データベース設定の保存に失敗しました。入力値と backend/.env の書き込み権限を確認してください。",
   "settings.database.walletUploadError": "Wallet ZIP のアップロードに失敗しました。ZIP 形式とファイルサイズを確認してください。",
+  "settings.database.wallet.autoDownload.error":
+    "OCI から Wallet を取得できませんでした。OCI 認証、ADB OCID、IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。",
   "settings.database.cardTitle": "データベース設定",
   "settings.database.connection.title": "Oracle 26ai 接続",
   "settings.database.connection.description":
-    "RAG ドキュメントと VECTOR(1536, FLOAT32) チャンクを保存する Oracle Database 26ai の接続先。",
+    "NL2SQL ドキュメントと VECTOR(1536, FLOAT32) チャンクを保存する Oracle Database 26ai の接続先。",
   "settings.database.secrets.title": "認証情報",
   "settings.database.secrets.description":
     "secret はレスポンスに含めません。更新する場合だけ入力してください。",
@@ -1124,7 +1144,7 @@ export const ja = {
   "settings.database.helper.walletPasswordSaved":
     "保存済み Wallet パスワードがあります。空欄のまま保存すると既存値を保持し、削除する場合は下のチェックボックスをオンにします。",
   "settings.database.helper.walletPasswordEmpty": "暗号化 Wallet を使う場合のみ入力します。",
-  "settings.database.placeholder.user": "rag_app",
+  "settings.database.placeholder.user": "nl2sql_app",
   "settings.database.placeholder.dbUser": "admin",
   "settings.database.placeholder.password": "******",
   "settings.database.placeholder.passwordSaved": "********",
@@ -1150,6 +1170,14 @@ export const ja = {
   "settings.database.actions.selectWallet": "Wallet ZIP を選択",
   "settings.database.actions.uploadingWallet": "アップロード中…",
   "settings.database.actions.walletUploaded": "Wallet ZIP をアップロードしました: {fileName}",
+  "settings.database.wallet.autoDownload.pending":
+    "OCI から Wallet を取得し、サーバーへ安全に設定しています…",
+  "settings.database.wallet.autoDownload.retry": "OCI から再取得",
+  "settings.database.wallet.autoDownload.retryAria": "OCI から Wallet を再取得",
+  "settings.database.wallet.autoDownload.success":
+    "Oracle Wallet を OCI から取得し、サーバーへ設定しました。",
+  "settings.database.wallet.autoDownload.missingOcid":
+    "ADB OCID が未設定のため自動取得は行いません。ADB OCID を設定するか、下の領域から Wallet ZIP を手動アップロードしてください。",
   "settings.database.walletInput.aria": "Wallet ZIP ファイルを選択",
   "settings.database.wallet.title": "Wallet（ZIP）",
   "settings.database.wallet.uploadCta": "`.zip` Wallet ファイルをアップロード",
@@ -1164,6 +1192,12 @@ export const ja = {
   "settings.database.status.readiness": "Readiness",
   "settings.database.status.authMethod": "認証方式",
   "settings.database.status.wallet": "Wallet",
+  "settings.database.status.currentOwner": "現在の接続ユーザー",
+  "settings.database.status.accessibleSchemas": "参照可能な業務 schema",
+  "settings.database.status.schemaCount": "{count} schema",
+  "settings.database.status.schemaUnavailable": "取得できませんでした",
+  "settings.database.status.scopeBoundary":
+    "データベース接続ユーザーの権限がシステム上限です。実際の問い合わせ範囲は業務プロファイルで明示的に選択します。",
   "settings.database.authMethod.password": "パスワード",
   "settings.database.authMethod.wallet": "Wallet",
   "settings.database.authMethod.passwordAndWallet": "パスワード + Wallet",
@@ -1223,6 +1257,9 @@ export const ja = {
   "settings.adb.notify.alreadyAvailable": "データベースは既に起動しています。",
   "settings.adb.notify.alreadyStopped": "データベースは既に停止しています。",
   "settings.adb.notify.actionFailed": "ADB の操作に失敗しました。",
+  "settings.adb.connectionStillUnavailable":
+    "ADB は起動済みですが接続できません。Wallet のサービス名、DSN、認証情報、ネットワーク到達性を確認してください。",
+  "settings.adb.action.returnToPrevious": "元の画面に戻る",
   "settings.adb.lifecycle.AVAILABLE": "起動済み",
   "settings.adb.lifecycle.STARTING": "起動中",
   "settings.adb.lifecycle.STOPPING": "停止中",
@@ -1243,7 +1280,7 @@ export const ja = {
 
   "dashboard.title": "ダッシュボード",
   "dashboard.subtitle":
-    "データ取込から根拠付き検索まで、RAG パイプラインの状態を確認できます。",
+    "データ取込から根拠付き検索まで、NL2SQL パイプラインの状態を確認できます。",
   "dashboard.refresh": "今すぐ更新",
   "dashboard.lastUpdated": "最終更新",
 
@@ -1254,17 +1291,17 @@ export const ja = {
   "dashboard.metric.thisMonth": "今月 +{count}",
 
   "dashboard.featureHub.title": "主要機能ハブ",
-  "dashboard.featureHub.subtitle": "RAG 運用の入口を集約",
+  "dashboard.featureHub.subtitle": "NL2SQL 運用の入口を集約",
   "dashboard.feature.open": "画面を開く",
   "dashboard.feature.upload.description": "検索対象にする文書を Object Storage 境界へ保存します。",
   "dashboard.feature.fileList.description": "OCR、chunking、embedding、索引状態を確認します。",
   "dashboard.feature.search.description": "索引済み文書を根拠付きで自然言語検索します。",
 
-  "dashboard.workflow.title": "RAG フロー",
+  "dashboard.workflow.title": "NL2SQL フロー",
   "dashboard.workflow.subtitle": "推奨する処理順",
   "dashboard.workflow.step.upload": "アップロード",
   "dashboard.workflow.step.ingest": "取込・索引",
-  "dashboard.workflow.step.search": "RAG 検索",
+  "dashboard.workflow.step.search": "NL2SQL 検索",
 
   "dashboard.activity.title": "最近のアクティビティ",
   "dashboard.activity.subtitle": "直近の処理履歴",
@@ -1767,9 +1804,9 @@ export const ja = {
   "flow.ingestFailed": "取込に失敗しました。",
   "flow.ingestionQueued": "取込ジョブをキューに投入しました。完了まで状態を更新します。",
   "flow.ingestionSkipped": "この文書の取込ジョブはスキップされました。",
-  "flow.indexed": "索引が完了し、RAG 検索の対象になりました。",
+  "flow.indexed": "索引が完了し、NL2SQL 検索の対象になりました。",
   "flow.review.description":
-    "抽出が完了しました。内容を確認し、問題なければ「承認して索引」を実行してください。承認した文書のみ RAG 検索の対象になります。",
+    "抽出が完了しました。内容を確認し、問題なければ「承認して索引」を実行してください。承認した文書のみ NL2SQL 検索の対象になります。",
   "flow.approve": "承認して索引",
   "flow.approved": "承認しました。索引を開始します。",
   "flow.approveFailed": "承認に失敗しました。",
@@ -1878,7 +1915,7 @@ export const ja = {
   "search.initialHint": "質問を入力すると、根拠付きで回答します。",
   "search.businessViewRequired.title": "業務アシスタントを作成してください",
   "search.businessViewRequired.hint":
-    "RAG 検索は業務アシスタント単位で行います。知識ベースを束ねた業務アシスタントを作成すると検索できます。",
+    "NL2SQL 検索は業務アシスタント単位で行います。知識ベースを束ねた業務アシスタントを作成すると検索できます。",
   "search.businessViewRequired.cta": "業務アシスタントを作成",
   "search.businessViewError": "業務アシスタントを読み込めませんでした。",
   "search.guardrail": "ガードレール警告",
@@ -1910,7 +1947,7 @@ export const ja = {
   "search.selectAi.queryChars": "入力文字数",
   "search.selectAi.error": "Select AI の実行に失敗しました。",
 
-  "evaluation.subtitle": "Golden set で RAG 品質を検証します。",
+  "evaluation.subtitle": "Golden set で NL2SQL 品質を検証します。",
   "evaluation.suite.title": "評価スイート(Evaluation アダプター)",
   "evaluation.suite.description":
     "合否判定に使う閾値プリセットを選びます。スイートの閾値を採点基準として適用します。",
@@ -2007,7 +2044,7 @@ export const ja = {
     "選択した知識ベースを評価実行と比較実行の検索対象にします。未選択の場合は JSON の指定を使います。",
   "evaluation.compare.experiments": "Experiments JSON",
   "evaluation.compare.placeholder":
-    "[{\"id\":\"hybrid-structure\",\"top_k\":20,\"rerank_top_n\":8,\"mode\":\"hybrid\",\"filters\":{\"status\":\"INDEXED\"},\"rag_overrides\":{\"rrf_k\":30,\"context_diversity_lambda\":0.4,\"context_adaptive_expansion_enabled\":true,\"context_adaptive_neighbor_window\":1,\"context_adaptive_min_overlap\":0.08,\"context_dependency_promotion_enabled\":true,\"context_dependency_max_chunks\":2,\"context_group_expansion_enabled\":true,\"context_group_max_chunks\":2}},{\"id\":\"keyword-k10\",\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"keyword\",\"filters\":{\"status\":\"INDEXED\"}}]",
+    "[{\"id\":\"hybrid-structure\",\"top_k\":20,\"rerank_top_n\":8,\"mode\":\"hybrid\",\"filters\":{\"status\":\"INDEXED\"},\"nl2sql_overrides\":{\"rrf_k\":30,\"context_diversity_lambda\":0.4,\"context_adaptive_expansion_enabled\":true,\"context_adaptive_neighbor_window\":1,\"context_adaptive_min_overlap\":0.08,\"context_dependency_promotion_enabled\":true,\"context_dependency_max_chunks\":2,\"context_group_expansion_enabled\":true,\"context_group_max_chunks\":2}},{\"id\":\"keyword-k10\",\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"keyword\",\"filters\":{\"status\":\"INDEXED\"}}]",
   "evaluation.compare.metric": "ランキング指標",
   "evaluation.compare.best": "Best",
   "evaluation.compare.rank": "順位",
