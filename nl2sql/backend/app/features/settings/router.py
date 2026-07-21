@@ -27,8 +27,8 @@ from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
-from starlette.concurrency import run_in_threadpool
 
+from app.api.concurrency import run_sync_io
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
     pem_file_is_encrypted,
@@ -96,6 +96,7 @@ from app.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+run_in_threadpool = run_sync_io
 logger = logging.getLogger(__name__)
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_FILE_MODE = 0o600
@@ -185,14 +186,14 @@ MODEL_TEST_IMAGE_BYTES = b64decode(
 
 
 @router.get("/model", response_model=ApiResponse[ModelSettingsData])
-async def get_model_settings() -> ApiResponse[ModelSettingsData]:
+def get_model_settings() -> ApiResponse[ModelSettingsData]:
     settings = get_settings()
     payload = _model_payload(settings)
     return ApiResponse(data=_model_settings_data(payload, settings))
 
 
 @router.patch("/model", response_model=ApiResponse[ModelSettingsData])
-async def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
+def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
     settings = get_settings()
     resolved_payload = _model_settings_with_resolved_secret(settings, payload)
     resolved_api_key = resolved_payload.enterprise_ai.api_key
@@ -204,7 +205,7 @@ async def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[Mo
 
 
 @router.post("/model/check", response_model=ApiResponse[ModelSettingsData])
-async def check_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
+def check_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
     return ApiResponse(data=_model_settings_data(payload, get_settings()))
 
 
@@ -236,7 +237,7 @@ async def test_model_settings(
 
 
 @router.get("/database", response_model=ApiResponse[DatabaseSettingsData])
-async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
+def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     return ApiResponse(data=_database_settings_data(get_settings()))
 
 
@@ -244,11 +245,11 @@ async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     "/database/system-tables",
     response_model=ApiResponse[SystemTablesStatusData],
 )
-async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
+def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     """NL2SQL system table の状態を DDL なしで取得する。"""
 
     try:
-        data = await run_in_threadpool(system_schema_manager.status)
+        data = system_schema_manager.status()
     except Exception as exc:
         code = _safe_schema_error_code(exc)
         raise HTTPException(
@@ -262,7 +263,7 @@ async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     "/database/system-tables/initialize",
     response_model=ApiResponse[SystemTablesOperationData],
 )
-async def initialize_system_tables(
+def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
     request: Request,
 ) -> ApiResponse[SystemTablesOperationData]:
@@ -270,14 +271,12 @@ async def initialize_system_tables(
 
     operation_name = "recreate" if payload.recreate else "initialize"
     try:
-        data = await run_in_threadpool(
-            system_schema_manager.initialize,
+        data = system_schema_manager.initialize(
             recreate=payload.recreate,
             confirmation=payload.confirmation,
         )
     except SystemSchemaError as exc:
-        await run_in_threadpool(
-            _audit_system_schema_operation,
+        _audit_system_schema_operation(
             request,
             operation_name,
             "FAILURE",
@@ -285,13 +284,11 @@ async def initialize_system_tables(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
     try:
-        await run_in_threadpool(
-            reset_system_schema_runtime,
+        reset_system_schema_runtime(
             schema_epoch=int(data["operation_state"]["schema_epoch"]),
         )
     except Exception as exc:
-        await run_in_threadpool(
-            _audit_system_schema_operation,
+        _audit_system_schema_operation(
             request,
             operation_name,
             "FAILURE",
@@ -304,8 +301,7 @@ async def initialize_system_tables(
                 "状態を再取得してから再試行してください。"
             ),
         ) from exc
-    await run_in_threadpool(
-        _audit_system_schema_operation,
+    _audit_system_schema_operation(
         request,
         operation_name,
         "SUCCESS",
@@ -352,7 +348,7 @@ def _audit_system_schema_operation(
 
 
 @router.patch("/database", response_model=ApiResponse[DatabaseSettingsData])
-async def update_database_settings(
+def update_database_settings(
     payload: DatabaseSettingsUpdate,
 ) -> ApiResponse[DatabaseSettingsData]:
     settings = get_settings()
@@ -369,11 +365,14 @@ async def upload_database_wallet(
 ) -> ApiResponse[DatabaseSettingsData]:
     settings = get_settings()
     data = await _read_upload_file(file, ORACLE_WALLET_MAX_BYTES)
-    with _database_wallet_install_lock(settings):
-        wallet_dir = _install_database_wallet(settings, data, file.filename)
-    settings.oracle_wallet_dir = str(wallet_dir)
-    close_oracle_pool()
-    return ApiResponse(data=_database_settings_data(settings))
+    return ApiResponse(
+        data=await run_sync_io(
+            _install_uploaded_database_wallet,
+            settings,
+            data,
+            file.filename,
+        )
+    )
 
 
 @router.post(
@@ -383,70 +382,65 @@ async def upload_database_wallet(
 async def download_database_wallet() -> ApiResponse[DatabaseWalletDownloadData]:
     """OCI から Wallet を取得し、ブラウザへ ZIP を返さずサーバーへ設置する。"""
     settings = get_settings()
-    with _database_wallet_install_lock(settings):
-        target = _wallet_storage_root(settings)
-        if _database_wallet_is_configured(target):
-            return ApiResponse(
-                data=DatabaseWalletDownloadData(
-                    status="already_configured",
-                    settings=_database_settings_data(settings),
-                )
-            )
+    precheck = await run_sync_io(_prepare_database_wallet_download, settings)
+    if precheck is not None:
+        return ApiResponse(data=precheck)
 
-        _require_wallet_download_configuration(settings)
-        adb_ocid = settings.oracle_adb_ocid.strip()
-        client = OciDatabaseClient(settings=settings)
-        password = _generate_wallet_password()
-        try:
-            info = await client.get_autonomous_database(adb_ocid)
-            generate_type = None if info.is_dedicated is True else "SINGLE"
-            wallet_zip = await client.download_autonomous_database_wallet(
-                adb_ocid,
-                password,
-                generate_type,
-                ORACLE_WALLET_MAX_BYTES,
-            )
-        except WalletDownloadTooLargeError as exc:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    "OCI から取得した Wallet ZIP が 20 MB の上限を超えました。"
-                    "OCI 側の Wallet を確認するか、Wallet ZIP を手動アップロードしてください。"
-                ),
-            ) from exc
-        except Exception as exc:
+    adb_ocid = settings.oracle_adb_ocid.strip()
+    client = OciDatabaseClient(settings=settings)
+    password = _generate_wallet_password()
+    try:
+        info = await client.get_autonomous_database(adb_ocid)
+        generate_type = None if info.is_dedicated is True else "SINGLE"
+        wallet_zip = await client.download_autonomous_database_wallet(
+            adb_ocid,
+            password,
+            generate_type,
+            ORACLE_WALLET_MAX_BYTES,
+        )
+    except WalletDownloadTooLargeError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "OCI から取得した Wallet ZIP が 20 MB の上限を超えました。"
+                "OCI 側の Wallet を確認するか、Wallet ZIP を手動アップロードしてください。"
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "OCI から Wallet を取得できませんでした。OCI 認証、region、ADB OCID、"
+                "IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。"
+            ),
+        ) from exc
+
+    try:
+        settings_data = await run_sync_io(
+            _install_downloaded_database_wallet,
+            settings,
+            wallet_zip,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 413:
+            raise
+        if exc.status_code in {400, 415}:
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "OCI から Wallet を取得できませんでした。OCI 認証、region、ADB OCID、"
-                    "IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。"
+                    "OCI から取得した Wallet の内容を検証できませんでした。"
+                    "OCI 側で Wallet を再生成して再試行するか、"
+                    "Wallet ZIP を手動アップロードしてください。"
                 ),
             ) from exc
+        raise
 
-        try:
-            wallet_dir = _install_database_wallet(settings, wallet_zip, "wallet.zip")
-        except HTTPException as exc:
-            if exc.status_code == 413:
-                raise
-            if exc.status_code in {400, 415}:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        "OCI から取得した Wallet の内容を検証できませんでした。"
-                        "OCI 側で Wallet を再生成して再試行するか、"
-                        "Wallet ZIP を手動アップロードしてください。"
-                    ),
-                ) from exc
-            raise
-
-        settings.oracle_wallet_dir = str(wallet_dir)
-        close_oracle_pool()
-        return ApiResponse(
-            data=DatabaseWalletDownloadData(
-                status="downloaded",
-                settings=_database_settings_data(settings),
-            )
+    return ApiResponse(
+        data=DatabaseWalletDownloadData(
+            status="downloaded",
+            settings=settings_data,
         )
+    )
 
 
 @router.post("/database/test", response_model=ApiResponse[DatabaseConnectionTestResult])
@@ -516,7 +510,7 @@ async def get_adb_info() -> ApiResponse[AdbInfoData]:
 async def update_adb_settings(payload: AdbSettingsUpdate) -> ApiResponse[AdbInfoData]:
     settings = get_settings()
     _apply_adb_settings(settings, payload)
-    _persist_adb_settings(settings)
+    await run_sync_io(_persist_adb_settings, settings)
     return ApiResponse(data=await _load_adb_info(settings))
 
 
@@ -531,12 +525,12 @@ async def stop_adb() -> ApiResponse[AdbInfoData]:
 
 
 @router.get("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
+def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
     return ApiResponse(data=_upload_storage_settings_data(get_settings()))
 
 
 @router.patch("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def update_upload_storage_settings(
+def update_upload_storage_settings(
     payload: UploadStorageSettingsUpdate,
 ) -> ApiResponse[UploadStorageSettingsData]:
     settings = get_settings()
@@ -547,12 +541,12 @@ async def update_upload_storage_settings(
 
 
 @router.get("/oci", response_model=ApiResponse[OciSettingsData])
-async def get_oci_settings() -> ApiResponse[OciSettingsData]:
+def get_oci_settings() -> ApiResponse[OciSettingsData]:
     return ApiResponse(data=_oci_settings_data(get_settings()))
 
 
 @router.patch("/oci", response_model=ApiResponse[OciSettingsData])
-async def update_oci_settings(payload: OciSettingsUpdate) -> ApiResponse[OciSettingsData]:
+def update_oci_settings(payload: OciSettingsUpdate) -> ApiResponse[OciSettingsData]:
     settings = get_settings()
     _write_oci_config(settings, payload)
     _persist_oci_settings(settings, payload)
@@ -561,7 +555,7 @@ async def update_oci_settings(payload: OciSettingsUpdate) -> ApiResponse[OciSett
 
 
 @router.patch("/oci/object-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def update_oci_object_storage_settings(
+def update_oci_object_storage_settings(
     payload: OciObjectStorageSettingsUpdate,
 ) -> ApiResponse[UploadStorageSettingsData]:
     settings = get_settings()
@@ -572,13 +566,13 @@ async def update_oci_object_storage_settings(
 
 
 @router.post("/oci/config/read", response_model=ApiResponse[OciConfigReadData])
-async def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
+def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
     content = _read_oci_config_text(payload.config_file)
     return ApiResponse(data=_parse_oci_config(content, payload.profile))
 
 
 @router.post("/oci/config/test", response_model=ApiResponse[OciConfigTestResult])
-async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
+def test_oci_config() -> ApiResponse[OciConfigTestResult]:
     return ApiResponse(data=_test_oci_config(get_settings()))
 
 
@@ -586,7 +580,7 @@ async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
     "/oci/object-storage/namespace",
     response_model=ApiResponse[OciObjectStorageNamespaceData],
 )
-async def read_oci_object_storage_namespace(
+def read_oci_object_storage_namespace(
     payload: OciObjectStorageNamespaceRequest,
 ) -> ApiResponse[OciObjectStorageNamespaceData]:
     return ApiResponse(
@@ -603,7 +597,7 @@ async def upload_oci_private_key(
         OCI_PRIVATE_KEY_MAX_BYTES,
         "秘密鍵 PEM ファイルのサイズが上限を超えています。",
     )
-    _install_oci_private_key(data, file.filename)
+    await run_sync_io(_install_oci_private_key, data, file.filename)
     return ApiResponse(data=OciPrivateKeyUploadData(key_file=OCI_PRIVATE_KEY_FILE, saved=True))
 
 
@@ -1263,6 +1257,41 @@ def _database_wallet_install_lock(settings: Settings) -> Iterator[None]:
         with suppress(OSError):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         lock_file.close()
+
+
+def _install_uploaded_database_wallet(
+    settings: Settings,
+    data: bytes,
+    file_name: str | None,
+) -> DatabaseSettingsData:
+    with _database_wallet_install_lock(settings):
+        wallet_dir = _install_database_wallet(settings, data, file_name)
+    settings.oracle_wallet_dir = str(wallet_dir)
+    close_oracle_pool()
+    return _database_settings_data(settings)
+
+
+def _prepare_database_wallet_download(settings: Settings) -> DatabaseWalletDownloadData | None:
+    with _database_wallet_install_lock(settings):
+        target = _wallet_storage_root(settings)
+        if _database_wallet_is_configured(target):
+            return DatabaseWalletDownloadData(
+                status="already_configured",
+                settings=_database_settings_data(settings),
+            )
+        _require_wallet_download_configuration(settings)
+    return None
+
+
+def _install_downloaded_database_wallet(
+    settings: Settings,
+    wallet_zip: bytes,
+) -> DatabaseSettingsData:
+    with _database_wallet_install_lock(settings):
+        wallet_dir = _install_database_wallet(settings, wallet_zip, "wallet.zip")
+    settings.oracle_wallet_dir = str(wallet_dir)
+    close_oracle_pool()
+    return _database_settings_data(settings)
 
 
 def _database_settings_candidate(base: Settings, payload: DatabaseSettingsUpdate) -> Settings:

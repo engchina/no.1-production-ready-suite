@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import io
-from collections.abc import AsyncGenerator, Callable
+import re
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
@@ -17,7 +18,13 @@ from app.cli.app_security_migrate import split_ddl
 from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.dependencies import authorize_api_request, local_debug_principal
-from app.security.domain import SYSTEM_ADMIN_ROLE_ID, AuditRecord, Principal
+from app.security.domain import (
+    SYSTEM_ADMIN_ROLE_ID,
+    AuditRecord,
+    DataEntitlementRecord,
+    Principal,
+    RoleRecord,
+)
 from app.security.passwords import PasswordPolicyError, validate_password
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
@@ -33,7 +40,7 @@ from app.security.router import (
 )
 from app.security.schemas import DataEntitlementInput, PasswordChangeRequest
 from app.security.service import SecurityApiError, SecurityService, reset_security_service
-from app.security.store import InMemorySecurityStore, SecurityConflict
+from app.security.store import InMemorySecurityStore, OracleSecurityStore, SecurityConflict
 from app.settings import Settings, get_settings
 
 
@@ -79,6 +86,18 @@ def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
 
 
+class _RecordingCursor:
+    def __init__(self, fetchone_rows: list[tuple[int]] | None = None) -> None:
+        self.executed: list[tuple[str, dict[str, object]]] = []
+        self._fetchone_rows = list(fetchone_rows or [])
+
+    def execute(self, sql: str, params: Mapping[str, object] | None = None) -> None:
+        self.executed.append((sql, dict(params or {})))
+
+    def fetchone(self) -> tuple[int]:
+        return self._fetchone_rows.pop(0) if self._fetchone_rows else (0,)
+
+
 def test_debug_auth_bypass_is_local_only_and_has_system_admin_permissions() -> None:
     local = Settings.model_construct(debug=True, environment="local")
     production = Settings.model_construct(debug=True, environment="production")
@@ -114,7 +133,7 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
         )
         authorization = cast(AsyncGenerator[None, None], authorize_api_request(request))
         await anext(authorization)
-        current = await me(request)
+        current = me(request)
         assert current.data is not None
         assert current.data.model_dump() == {
             "user_id": "00000000-0000-0000-0000-000000000000",
@@ -127,10 +146,10 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
             "data_entitlements": [],
             "debug_mode": True,
         }
-        logged_out = await logout(request, Response())
+        logged_out = logout(request, Response())
         assert logged_out.data == {"logged_out": False}
         with pytest.raises(SecurityApiError, match="DEBUG"):
-            await change_password(
+            change_password(
                 PasswordChangeRequest(
                     current_password="unused",
                     new_password="unused",
@@ -226,6 +245,72 @@ def test_data_entitlement_capability_is_structured() -> None:
             scope_code="SALES",
             capability="ARBITRARY_SQL",
         )
+
+
+def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
+    cursor = _RecordingCursor()
+    role = RoleRecord(
+        role_id="role-1",
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        is_built_in=False,
+        archived=False,
+        version=1,
+        permissions={"search.execute", "search.view"},
+        entitlements=[
+            DataEntitlementRecord(
+                entitlement_id="entitlement-1",
+                role_id="role-1",
+                resource_code="NL2SQL_DEEPSEC_PROBE",
+                scope_code="*",
+                capability="ROW_READ",
+            )
+        ],
+    )
+
+    OracleSecurityStore._replace_role_access(cursor, role)
+
+    permission_inserts = [
+        item
+        for item in cursor.executed
+        if "INSERT INTO NL2SQL_APP_ROLE_PERMISSIONS" in item[0]
+    ]
+    assert len(permission_inserts) == 2
+    data_inserts = [
+        item
+        for item in cursor.executed
+        if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
+    ]
+    assert len(data_inserts) == 1
+    sql, params = data_inserts[0]
+    assert re.search(r":(?:id|resource|scope|capability)\b", sql) is None
+    assert params == {
+        "entitlement_id": "entitlement-1",
+        "role_id": "role-1",
+        "resource_code": "NL2SQL_DEEPSEC_PROBE",
+        "scope_code": "*",
+        "capability_code": "ROW_READ",
+    }
+
+
+def test_oracle_system_admin_probe_entitlement_uses_safe_bind_name() -> None:
+    cursor = _RecordingCursor(fetchone_rows=[(0,)])
+
+    OracleSecurityStore._ensure_system_admin_probe_entitlement(cursor)
+
+    data_inserts = [
+        item
+        for item in cursor.executed
+        if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
+    ]
+    assert len(data_inserts) == 1
+    sql, params = data_inserts[0]
+    assert re.search(r":id\b", sql) is None
+    assert ":entitlement_id" in sql
+    assert set(params) == {"entitlement_id", "role_id"}
+    assert params["role_id"] == SYSTEM_ADMIN_ROLE_ID
+    assert isinstance(params["entitlement_id"], str)
 
 
 def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
@@ -446,7 +531,7 @@ def test_audit_page_and_export_router_contract(
     monkeypatch.setattr("app.security.router.get_security_service", lambda: service)
     monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
 
-    page_response = asyncio.run(audit_log_page(page=99, page_size=10))
+    page_response = audit_log_page(page=99, page_size=10)
     assert page_response.data is not None
     assert page_response.data.page == 2
     assert page_response.data.page_size == 10
@@ -454,7 +539,7 @@ def test_audit_page_and_export_router_contract(
     assert page_response.data.total_pages == 2
     assert [record.audit_id for record in page_response.data.items] == [2, 1]
 
-    export_response = asyncio.run(export_audit_log_xlsx())
+    export_response = export_audit_log_xlsx()
     assert export_response.media_type == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -486,6 +571,12 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 assert permission != UNCLASSIFIED_PERMISSION, (
                     f"unclassified route: {method.upper()} {path}"
                 )
+
+    assert permission_for_route("POST", "/nl2sql/execute") == "search.execute"
+    assert (
+        permission_for_route("POST", "/nl2sql/db-admin/execute")
+        == "settings.database.sql_execute"
+    )
 
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(

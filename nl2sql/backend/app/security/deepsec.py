@@ -338,7 +338,7 @@ class DeepSecService:
     def apply_step(self, step_no: int, checksum: str, actor: Principal) -> dict[str, object]:
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
-        self.pools.validate_deepsec_mode()
+        self.pools.validate_deepsec_configuration()
         plan = {step.step_no: step for step in build_v001_plan(self.settings)}
         step = plan.get(step_no)
         if step is None:

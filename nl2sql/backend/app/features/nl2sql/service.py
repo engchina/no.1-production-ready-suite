@@ -8141,7 +8141,10 @@ class Nl2SqlService:
         if not statements:
             warnings.append("SQL statement がありません。")
         statement_types = [_admin_statement_type(statement) for statement in statements]
-        select_count = sum(1 for kind in statement_types if kind == "SELECT")
+        # 確認不要の read-only 経路は、先頭 keyword ではなく通常の SELECT-only
+        # safety guard で判定する。WITH で始まる更新文も管理 SQL として確認を必須にする。
+        select_only_flags = [is_select_only(statement) for statement in statements]
+        select_count = sum(select_only_flags)
         if len(statements) > 1 and select_count > 0:
             warnings.append("複数 statement 実行に SELECT は含められません。")
             return DbAdminExecuteData(
@@ -8160,7 +8163,7 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
-        if len(statements) == 1 and statement_types == ["SELECT"]:
+        if len(statements) == 1 and select_only_flags == [True]:
             sql = enforce_row_limit(statements[0], request.row_limit)
             results = (
                 self._oracle_adapter.execute_select(sql, request.row_limit)

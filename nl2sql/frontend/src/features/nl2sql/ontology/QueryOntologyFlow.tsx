@@ -335,7 +335,7 @@ function IntentSummary({
   labels: QueryOntologyFlowLabels;
 }) {
   const intent = currentIntentForSession(session);
-  if (!intent) return <Banner severity="info">質問の解釈を作成中です。</Banner>;
+  if (!intent) return <Banner severity="info">{t("ontologyQuery.intent.loading")}</Banner>;
   const filterLabels = intent.filters.map((filter) => {
     const field = filter.label_ja || filter.field || filter.property_node_id || "条件";
     return `${field} ${filter.operator} ${jsonValueLabel(filter.value)}`;
@@ -528,7 +528,7 @@ function RawSqlDetails({ sql, label }: { sql: string; label: string }) {
 
 function ValidationFindings({ findings }: { findings: OntologyValidationFinding[] }) {
   if (findings.length === 0) {
-    return <Banner severity="success">差分は検出されませんでした。</Banner>;
+    return <Banner severity="success">{t("ontologyQuery.validation.noFindings")}</Banner>;
   }
   return (
     <ol className="grid gap-3">
@@ -841,7 +841,7 @@ export function QueryOntologyFlow({
               ) : null}
             </>
           ) : (
-            <Banner severity="info">SQL の生成後に、業務的な意味と AST グラフを表示します。</Banner>
+            <Banner severity="info">{t("ontologyQuery.graph.waitingForSql")}</Banner>
           )
         ) : null}
 
@@ -869,11 +869,11 @@ export function QueryOntologyFlow({
                 {validation ? (
                   <ValidationFindings findings={validation.findings} />
                 ) : (
-                  <Banner severity="info">SQL の生成後に三方差分を表示します。</Banner>
+                  <Banner severity="info">{t("ontologyQuery.validation.waitingForSql")}</Banner>
                 )}
                 {blockers.length > 0 ? (
-                  <Banner severity="danger" title="実行をブロックしています">
-                    未解決の blocker を修正して SQL を再生成してください。
+                  <Banner severity="danger" title={t("ontologyQuery.validation.blockedTitle")}>
+                    {t("ontologyQuery.validation.blockedDescription")}
                   </Banner>
                 ) : null}
                 <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">

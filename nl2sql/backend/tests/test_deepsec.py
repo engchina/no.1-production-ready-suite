@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.clients.oracle_runtime import OraclePoolManager
+from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.security.deepsec import PASSWORD_PLACEHOLDER, DeepSecService, build_v001_plan
 from app.security.domain import Principal
 from app.security.service import SecurityApiError, SecurityService
@@ -14,15 +15,21 @@ from app.security.store import InMemorySecurityStore
 from app.settings import Settings
 
 
-def _settings() -> Settings:
+def _settings(
+    *,
+    driver_mode: str = "thin",
+    deepsec_enabled: bool = True,
+    end_user_password: str = "DeepSecret!123",
+) -> Settings:
     return Settings.model_construct(
         oracle_user="APP_OWNER",
         oracle_password="ControlPass!123",
         oracle_dsn="test",
-        oracle_driver_mode="thin",
-        oracle_deepsec_enabled=True,
+        oracle_driver_mode=driver_mode,
+        oracle_client_lib_dir="/opt/oracle/instantclient",
+        oracle_deepsec_enabled=deepsec_enabled,
         oracle_deepsec_end_user="NL2SQL_APP_END_USER",
-        oracle_deepsec_end_user_password="DeepSecret!123",
+        oracle_deepsec_end_user_password=end_user_password,
         nl2sql_persistence_mode="memory",
         app_auth_password_min_length=12,
         app_auth_password_max_length=128,
@@ -103,6 +110,65 @@ class _FakePool:
 
     def drop(self, connection: _FakeConnection) -> None:
         self.dropped.append(connection)
+
+
+class _FakeOracleDb:
+    def __init__(self) -> None:
+        self.thin_mode = True
+        self.init_calls: list[str] = []
+        self.pool_kwargs: list[dict[str, object]] = []
+
+    def is_thin_mode(self) -> bool:
+        return self.thin_mode
+
+    def init_oracle_client(self, *, lib_dir: str) -> None:
+        self.init_calls.append(lib_dir)
+        self.thin_mode = False
+
+    def create_pool(self, **kwargs: object) -> _FakePool:
+        self.pool_kwargs.append(kwargs)
+        return _FakePool(_FakeConnection([]))
+
+
+@pytest.mark.parametrize("driver_mode", ["thin", "thick"])
+def test_deepsec_configuration_accepts_thin_and_thick(driver_mode: str) -> None:
+    OraclePoolManager(_settings(driver_mode=driver_mode)).validate_deepsec_configuration()
+
+
+@pytest.mark.parametrize("driver_mode", ["thin", "thick"])
+def test_deepsec_configuration_requires_end_user_password(driver_mode: str) -> None:
+    manager = OraclePoolManager(_settings(driver_mode=driver_mode, end_user_password=""))
+
+    with pytest.raises(OracleAdapterError, match="ORACLE_DEEPSEC_END_USER_PASSWORD"):
+        manager.validate_deepsec_configuration()
+
+
+@pytest.mark.parametrize(
+    ("driver_mode", "expected_init_calls"),
+    [("thin", []), ("thick", ["/opt/oracle/instantclient"])],
+)
+def test_data_pool_uses_selected_driver_and_end_user_credentials(
+    driver_mode: str,
+    expected_init_calls: list[str],
+) -> None:
+    manager = OraclePoolManager(_settings(driver_mode=driver_mode))
+    fake_oracledb = _FakeOracleDb()
+    manager._oracledb = fake_oracledb
+
+    manager._get_pool(data_plane=True)
+
+    assert fake_oracledb.init_calls == expected_init_calls
+    assert fake_oracledb.pool_kwargs == [
+        {
+            "user": "NL2SQL_APP_END_USER",
+            "password": "DeepSecret!123",
+            "dsn": "test",
+            "tcp_connect_timeout": 5,
+            "min": 1,
+            "max": 4,
+            "increment": 1,
+        }
+    ]
 
 
 def test_data_pool_sets_and_clears_each_actor_without_cross_user_leak(

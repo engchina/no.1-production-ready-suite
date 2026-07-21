@@ -1,6 +1,7 @@
 import { APP_ROUTES } from "@/lib/routes";
 
 export const ROUTE_PERMISSIONS: Record<string, string> = {
+  [APP_ROUTES.adminSql]: "settings.database.sql_execute",
   [APP_ROUTES.tableManagement]: "documents.view",
   [APP_ROUTES.viewManagement]: "documents.view",
   [APP_ROUTES.dataManagement]: "documents.view",
@@ -8,7 +9,7 @@ export const ROUTE_PERMISSIONS: Record<string, string> = {
   [APP_ROUTES.commentManagement]: "documents.view",
   [APP_ROUTES.annotationManagement]: "documents.view",
   [APP_ROUTES.query]: "search.view",
-  [APP_ROUTES.directSql]: "settings.database.sql_execute",
+  [APP_ROUTES.directSql]: "search.view",
   [APP_ROUTES.sqlAnalysis]: "search.view",
   [APP_ROUTES.sqlToQuestion]: "search.view",
   [APP_ROUTES.history]: "search.view",

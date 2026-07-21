@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { isAbortError } from "@/lib/api";
 import { securityApi } from "./api";
 import type { CurrentUser } from "./types";
 
@@ -28,19 +29,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<CurrentUser | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const current = await securityApi.me();
+      const current = await securityApi.me({ signal });
+      if (signal?.aborted) return;
       setUser(current);
       setStatus("authenticated");
-    } catch {
+    } catch (cause) {
+      if (isAbortError(cause)) return;
       setUser(null);
       setStatus("unauthenticated");
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const controller = new AbortController();
+    void refresh(controller.signal);
+    return () => controller.abort();
   }, [refresh]);
 
   useEffect(() => {

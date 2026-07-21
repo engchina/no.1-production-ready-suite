@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
 import {
@@ -12,9 +12,10 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiGet } from "@/lib/api";
+import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import { FileInputControl, downloadBlob } from "../components/DbAdminShared";
 import {
   DbObjectManagementPanelShell,
@@ -36,26 +37,43 @@ export function GlobalRulesPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState("");
   const [filename, setFilename] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const load = async (announce = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
     setErrorText(null);
     try {
-      const data = await apiGet<LegacyLearningMaterialData>("/api/nl2sql/legacy-learning-material");
-      setRules(data.rules);
-      setLastLoadedAt(new Date().toISOString());
-      if (announce) {
-        toast.success(t("globalRules.message.serverLoaded"));
-      }
+      await runScopedRequest(async (signal) => {
+        const data = await apiGet<LegacyLearningMaterialData>(
+          "/api/nl2sql/legacy-learning-material",
+          { signal }
+        );
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setRules(data.rules);
+        setLastLoadedAt(new Date().toISOString());
+        if (announce) {
+          toast.success(t("globalRules.message.serverLoaded"));
+        }
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.load"));
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const importRules = async (file: File) => {
@@ -82,6 +100,7 @@ export function GlobalRulesPage() {
       });
       if (!response.ok) throw new Error(t("globalRules.error.export"));
       downloadBlob("rules.xlsx", await response.blob());
+      toast.success(t("common.action.downloaded"));
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.export"));
     } finally {
@@ -253,7 +272,7 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
         pageIndicator={t("glossary.pagination.page", { page: currentPage, total: totalPages })}
         prevLabel={t("glossary.pagination.prev")}
         nextLabel={t("glossary.pagination.next")}
-        ariaLabel={t("glossary.pagination.label")}
+        ariaLabel={t("globalRules.pagination.label")}
         testId="global-rules-pagination"
       />
     </div>

@@ -15,9 +15,11 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { isAbortError } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import { securityApi } from "./api";
 import type { AuditPage } from "./types";
 
@@ -35,6 +37,7 @@ export function SecurityAuditPage() {
   const [exporting, setExporting] = useState(false);
   const [loadError, setLoadError] = useState("");
   const requestSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const load = useCallback(async (requestedPage = 1) => {
     const sequence = requestSequence.current + 1;
@@ -42,18 +45,32 @@ export function SecurityAuditPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const nextPage = await securityApi.auditPage(requestedPage, DEFAULT_PAGE_SIZE);
-      if (sequence === requestSequence.current) setPageData(nextPage);
-    } catch {
-      if (sequence === requestSequence.current) setLoadError(t("security.audit.loadError"));
+      await runScopedRequest(async (signal) => {
+        const nextPage = await securityApi.auditPage(requestedPage, DEFAULT_PAGE_SIZE, {
+          signal,
+        });
+        if (signal.aborted || sequence !== requestSequence.current) return;
+        setPageData(nextPage);
+      });
+    } catch (cause) {
+      if (isAbortError(cause)) {
+        return;
+      }
+      if (sequence === requestSequence.current) {
+        setLoadError(t("security.audit.loadError"));
+      }
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, []);
+  }, [abortAll, runScopedRequest]);
 
   useEffect(() => {
     void load(1);
-  }, [load]);
+    return () => {
+      requestSequence.current += 1;
+      abortAll();
+    };
+  }, [abortAll, load]);
 
   const exportAudit = async () => {
     setExporting(true);

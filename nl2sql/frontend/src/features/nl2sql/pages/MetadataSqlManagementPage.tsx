@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownUp,
   Code2,
@@ -17,8 +17,9 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectPanelHeader,
   DbObjectStatusBar,
@@ -92,6 +93,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const allTargets = useMemo(
     () => [
@@ -133,33 +136,45 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   }, [allTargets, targetFilter, targetSearch, targetSort]);
 
   const load = async (refreshSchema = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      const [tableData, viewData, catalogData] = await Promise.all([
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
-        refreshSchema
-          ? apiPost<SchemaCatalog>("/api/schema/refresh")
-          : apiGet<SchemaCatalog>("/api/schema/catalog"),
-      ]);
-      setTables(tableData);
-      setViews(viewData);
-      setCatalog(catalogData);
-      const availableKeys = new Set([
-        ...targetItemsFromObjects(tableData.items, "table").map((item) => item.key),
-        ...targetItemsFromObjects(viewData.items, "view").map((item) => item.key),
-      ]);
-      setSelectedKeys((current) => current.filter((key) => availableKeys.has(key)));
+      await runScopedRequest(async (signal) => {
+        const [tableData, viewData, catalogData] = await Promise.all([
+          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables", { signal }),
+          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views", { signal }),
+          refreshSchema
+            ? apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal })
+            : apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
+        ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setTables(tableData);
+        setViews(viewData);
+        setCatalog(catalogData);
+        const availableKeys = new Set([
+          ...targetItemsFromObjects(tableData.items, "table").map((item) => item.key),
+          ...targetItemsFromObjects(viewData.items, "view").map((item) => item.key),
+        ]);
+        setSelectedKeys((current) => current.filter((key) => availableKeys.has(key)));
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const toggleTarget = (target: MetadataSqlTarget) => {

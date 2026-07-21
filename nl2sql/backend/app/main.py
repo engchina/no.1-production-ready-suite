@@ -7,9 +7,9 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
 from pr_backend_core import configure_logging, create_app
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
+from app.api.concurrency import run_sync_io as run_in_threadpool
 from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
 from app.features.nl2sql.ontology_router import OntologyApiRuntime, ontology_runtime
@@ -29,18 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 def _runtime_readiness_checks() -> dict[str, str]:
-    """接続と migration head だけを読む bounded readiness。業務 CLOB は読まない。"""
+    """汎用 /ready は event loop を塞がない軽量設定チェックだけを返す。"""
 
-    checks = readiness_checks(get_settings())
-    if checks.get("oracle") != "ok" or not nl2sql_service.uses_incremental_store:
-        return checks
-    try:
-        migrated, _detail = nl2sql_service.check_incremental_store()
-    except Exception:  # noqa: BLE001 - readiness は短い状態コードへ正規化する
-        checks["incremental_migration"] = "unreachable"
-    else:
-        checks["incremental_migration"] = "ok" if migrated else "migration_required"
-    return checks
+    return readiness_checks(get_settings())
 
 
 @dataclass(frozen=True, slots=True)

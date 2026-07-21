@@ -538,9 +538,9 @@ class OracleSecurityStore:
                 """
                 INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS
                   (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY)
-                VALUES (:id, :role_id, 'NL2SQL_DEEPSEC_PROBE', '*', 'FULL')
+                VALUES (:entitlement_id, :role_id, 'NL2SQL_DEEPSEC_PROBE', '*', 'FULL')
                 """,
-                {"id": str(uuid4()), "role_id": SYSTEM_ADMIN_ROLE_ID},
+                {"entitlement_id": str(uuid4()), "role_id": SYSTEM_ADMIN_ROLE_ID},
             )
 
     def get_user_by_login(self, normalized_login: str) -> UserRecord | None:
@@ -1159,14 +1159,14 @@ class OracleSecurityStore:
                 """
                 INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS
                   (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY)
-                VALUES (:id, :role_id, :resource, :scope, :capability)
+                VALUES (:entitlement_id, :role_id, :resource_code, :scope_code, :capability_code)
                 """,
                 {
-                    "id": entitlement.entitlement_id,
+                    "entitlement_id": entitlement.entitlement_id,
                     "role_id": role.role_id,
-                    "resource": entitlement.resource_code,
-                    "scope": entitlement.scope_code,
-                    "capability": entitlement.capability,
+                    "resource_code": entitlement.resource_code,
+                    "scope_code": entitlement.scope_code,
+                    "capability_code": entitlement.capability,
                 },
             )
 

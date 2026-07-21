@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { Banner, Button, EmptyState, PageHeader } from "@engchina/production-ready-ui";
 
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
   useProfileDetail,
@@ -89,6 +89,7 @@ export function OntologyBuildPage() {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     void apiGet<{
       profile_ontology_view?: {
         id?: string;
@@ -112,7 +113,9 @@ export function OntologyBuildPage() {
       };
       ontology_graph?: OntologyGraph;
       warnings_ja?: string[];
-    }>(`/api/nl2sql/profiles/${encodeURIComponent(targetId)}/ontology-view`)
+    }>(`/api/nl2sql/profiles/${encodeURIComponent(targetId)}/ontology-view`, {
+      signal: controller.signal,
+    })
       .then((data) => {
         if (cancelled) return;
         const view = data.profile_ontology_view;
@@ -138,8 +141,8 @@ export function OntologyBuildPage() {
           ),
         });
       })
-      .catch(() => {
-        if (cancelled) return;
+      .catch((err) => {
+        if (cancelled || isAbortError(err)) return;
         setOntologyGraph(null);
         setProfileOntologyView(null);
         setOntologyWarnings([]);
@@ -147,6 +150,7 @@ export function OntologyBuildPage() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [selectedProfileId, ontologyViewNonce]);
 

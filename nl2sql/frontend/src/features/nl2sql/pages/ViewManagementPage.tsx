@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectDetailPanel,
   DbObjectGrid,
@@ -218,6 +219,8 @@ export function ViewManagementPage() {
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const fetchDetail = async (name: string) => {
     setLoading(`detail-${name}`);
@@ -259,38 +262,55 @@ export function ViewManagementPage() {
   };
 
   const load = async (refreshSchema = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-      if (refreshSchema) {
-        await apiPost<SchemaCatalog>("/api/schema/refresh");
-      }
-      const viewData = await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views");
-      setViews(viewData);
-      const nextSelected =
-        viewData.items.find((item) => item.name === selectedViewName)?.name || viewData.items[0]?.name || "";
-      setSelectedViewName(nextSelected);
-      setJoinWhere(null);
-      if (nextSelected) {
-        setDetail(
-          await apiGet<DbAdminObjectDetail>(
-            `/api/nl2sql/db-admin/views/${encodeURIComponent(nextSelected)}?include_ddl=0`,
-          ),
+      await runScopedRequest(async (signal) => {
+        // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+        // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+        if (refreshSchema) {
+          await apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal });
+        }
+        const viewData = await apiGet<DbAdminObjectsData>(
+          "/api/nl2sql/db-admin/views",
+          { signal }
         );
-      } else {
-        setDetail(null);
-      }
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setViews(viewData);
+        const nextSelected =
+          viewData.items.find((item) => item.name === selectedViewName)?.name ||
+          viewData.items[0]?.name ||
+          "";
+        setSelectedViewName(nextSelected);
+        setJoinWhere(null);
+        if (nextSelected) {
+          const nextDetail = await apiGet<DbAdminObjectDetail>(
+            `/api/nl2sql/db-admin/views/${encodeURIComponent(nextSelected)}?include_ddl=0`,
+            { signal }
+          );
+          if (!signal.aborted && sequence === loadSequence.current) setDetail(nextDetail);
+        } else {
+          setDetail(null);
+        }
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("viewMgmt.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const filteredViews = useMemo(() => {

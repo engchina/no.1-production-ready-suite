@@ -23,6 +23,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from pr_backend_core import ApiResponse
 from pydantic import Field
 
+from app.api.concurrency import run_sync_io
 from app.settings import get_settings
 
 from .models import (
@@ -3287,6 +3288,16 @@ ontology_publish_service = OntologyPublishService(ontology_runtime)
 router = APIRouter(prefix="/nl2sql", tags=["nl2sql-ontology"])
 
 
+def _run_runtime_sync[T](
+    function: Callable[..., T],
+    *args: Any,
+    **kwargs: Any,
+) -> T:
+    """同期 route 内で runtime 呼び出し境界を読みやすく保つ。"""
+
+    return function(*args, **kwargs)
+
+
 def _raise_domain_error(exc: Exception) -> NoReturn:
     if isinstance(exc, OntologyNotFoundError):
         status_code = 404
@@ -3319,9 +3330,11 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
     "/ontology/revisions",
     response_model=ApiResponse[OntologyRevisionListData],
 )
-async def list_ontology_revisions() -> ApiResponse[OntologyRevisionListData]:
+def list_ontology_revisions() -> ApiResponse[OntologyRevisionListData]:
     try:
-        revisions, active_revision_id = ontology_runtime.list_ontology_revisions()
+        revisions, active_revision_id = _run_runtime_sync(
+            ontology_runtime.list_ontology_revisions
+        )
         return ApiResponse(
             data=OntologyRevisionListData(
                 revisions=revisions,
@@ -3336,9 +3349,9 @@ async def list_ontology_revisions() -> ApiResponse[OntologyRevisionListData]:
     "/ontology/revisions/current",
     response_model=ApiResponse[OntologyGraphData],
 )
-async def get_current_ontology_revision() -> ApiResponse[OntologyGraphData]:
+def get_current_ontology_revision() -> ApiResponse[OntologyGraphData]:
     try:
-        ontology = ontology_runtime.current_ontology()
+        ontology = _run_runtime_sync(ontology_runtime.current_ontology)
         return ApiResponse(
             data=OntologyGraphData(
                 revision=ontology.revision,
@@ -3354,9 +3367,9 @@ async def get_current_ontology_revision() -> ApiResponse[OntologyGraphData]:
     "/ontology/revisions/{revision_id}",
     response_model=ApiResponse[OntologyGraphData],
 )
-async def get_ontology_revision(revision_id: str) -> ApiResponse[OntologyGraphData]:
+def get_ontology_revision(revision_id: str) -> ApiResponse[OntologyGraphData]:
     try:
-        ontology = ontology_runtime.ontology_revision(revision_id)
+        ontology = _run_runtime_sync(ontology_runtime.ontology_revision, revision_id)
         return ApiResponse(
             data=OntologyGraphData(
                 revision=ontology.revision,
@@ -3372,12 +3385,16 @@ async def get_ontology_revision(revision_id: str) -> ApiResponse[OntologyGraphDa
     "/ontology/revisions/{revision_id}/drafts",
     response_model=ApiResponse[OntologyGraphData],
 )
-async def create_ontology_revision_draft(
+def create_ontology_revision_draft(
     revision_id: str,
     request: OntologyDraftRequest,
 ) -> ApiResponse[OntologyGraphData]:
     try:
-        ontology = ontology_runtime.create_ontology_draft(revision_id, request)
+        ontology = _run_runtime_sync(
+            ontology_runtime.create_ontology_draft,
+            revision_id,
+            request,
+        )
         return ApiResponse(
             data=OntologyGraphData(
                 revision=ontology.revision,
@@ -3394,7 +3411,7 @@ async def create_ontology_revision_draft(
     response_model=ApiResponse[OntologyPublishJobData],
     status_code=202,
 )
-async def publish_ontology_revision(
+def publish_ontology_revision(
     revision_id: str,
     request: OntologyPublishRequest,
     if_match: str = Header(..., alias="If-Match"),
@@ -3407,7 +3424,8 @@ async def publish_ontology_revision(
                 "REVISION_ETAG_MISMATCH",
                 "If-Match と request etag が一致しません。",
             )
-        job = ontology_publish_service.start(
+        job = _run_runtime_sync(
+            ontology_publish_service.start,
             revision_id,
             etag=request.etag,
             idempotency_key=idempotency_key,
@@ -3421,8 +3439,8 @@ async def publish_ontology_revision(
     "/ontology-publish/{job_id}",
     response_model=ApiResponse[OntologyPublishJobData],
 )
-async def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]:
-    job = ontology_publish_service.get(job_id)
+def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]:
+    job = _run_runtime_sync(ontology_publish_service.get, job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
@@ -3438,9 +3456,14 @@ async def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJo
     "/profiles/{profile_id}/ontology-view",
     response_model=ApiResponse[ProfileOntologyViewData],
 )
-async def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyViewData]:
+def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyViewData]:
     try:
-        view, ontology = ontology_runtime.profile_view(profile_id)
+        view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
+        warnings = _run_runtime_sync(
+            ontology_runtime.profile_view_warnings,
+            profile_id,
+            view,
+        )
         return ApiResponse(
             data=ProfileOntologyViewData(
                 profile_ontology_view=view,
@@ -3449,7 +3472,7 @@ async def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntol
                     nodes=[node for node in ontology.nodes if node.id in view.node_ids],
                     edges=[edge for edge in ontology.edges if edge.id in view.edge_ids],
                 ),
-                warnings_ja=ontology_runtime.profile_view_warnings(profile_id, view),
+                warnings_ja=warnings,
             )
         )
     except Exception as exc:
@@ -3466,11 +3489,11 @@ class ProfileOntologyMermaidData(OntologyContract):
     "/profiles/{profile_id}/ontology-view/mermaid",
     response_model=ApiResponse[ProfileOntologyMermaidData],
 )
-async def get_profile_ontology_mermaid(profile_id: str) -> ApiResponse[ProfileOntologyMermaidData]:
+def get_profile_ontology_mermaid(profile_id: str) -> ApiResponse[ProfileOntologyMermaidData]:
     """Profile スコープの erDiagram(SQL 生成プロンプトへ注入するものと同じ表現)。"""
 
     try:
-        view, ontology = ontology_runtime.profile_view(profile_id)
+        view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
         return ApiResponse(
             data=ProfileOntologyMermaidData(
                 profile_id=profile_id,
@@ -3486,13 +3509,16 @@ async def get_profile_ontology_mermaid(profile_id: str) -> ApiResponse[ProfileOn
     "/ontology/profile-recommendations",
     response_model=ApiResponse[OntologyProfileRecommendationData],
 )
-async def recommend_ontology_profile(
+def recommend_ontology_profile(
     request: OntologyProfileRecommendationRequest,
 ) -> ApiResponse[OntologyProfileRecommendationData]:
     try:
         return ApiResponse(
             data=OntologyProfileRecommendationData(
-                recommendation=ontology_runtime.recommend_profiles(request)
+                recommendation=_run_runtime_sync(
+                    ontology_runtime.recommend_profiles,
+                    request,
+                )
             )
         )
     except Exception as exc:
@@ -3503,12 +3529,13 @@ async def recommend_ontology_profile(
     "/ontology/profile-recommendations/{recommendation_id}/confirm",
     response_model=ApiResponse[ProfileRecommendationConfirmationData],
 )
-async def confirm_ontology_profile_recommendation(
+def confirm_ontology_profile_recommendation(
     recommendation_id: str,
     request: ProfileRecommendationConfirmationRequest,
 ) -> ApiResponse[ProfileRecommendationConfirmationData]:
     try:
-        recommendation, token = ontology_runtime.confirm_profile_recommendation(
+        recommendation, token = _run_runtime_sync(
+            ontology_runtime.confirm_profile_recommendation,
             recommendation_id,
             request,
         )
@@ -3526,12 +3553,18 @@ async def confirm_ontology_profile_recommendation(
     "/profiles/{profile_id}/ontology-context/search",
     response_model=ApiResponse[OntologyContextSearchResult],
 )
-async def search_profile_ontology_context(
+def search_profile_ontology_context(
     profile_id: str,
     request: OntologyContextSearchRequest,
 ) -> ApiResponse[OntologyContextSearchResult]:
     try:
-        return ApiResponse(data=ontology_runtime.search_ontology_context(profile_id, request))
+        return ApiResponse(
+            data=_run_runtime_sync(
+                ontology_runtime.search_ontology_context,
+                profile_id,
+                request,
+            )
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3540,12 +3573,21 @@ async def search_profile_ontology_context(
     "/profiles/{profile_id}/ontology-view",
     response_model=ApiResponse[ProfileOntologyViewData],
 )
-async def patch_profile_ontology_view(
+def patch_profile_ontology_view(
     profile_id: str,
     request: ProfileOntologyViewPatch,
 ) -> ApiResponse[ProfileOntologyViewData]:
     try:
-        view, ontology = ontology_runtime.patch_profile_view(profile_id, request)
+        view, ontology = _run_runtime_sync(
+            ontology_runtime.patch_profile_view,
+            profile_id,
+            request,
+        )
+        warnings = _run_runtime_sync(
+            ontology_runtime.profile_view_warnings,
+            profile_id,
+            view,
+        )
         return ApiResponse(
             data=ProfileOntologyViewData(
                 profile_ontology_view=view,
@@ -3554,7 +3596,7 @@ async def patch_profile_ontology_view(
                     nodes=[node for node in ontology.nodes if node.id in view.node_ids],
                     edges=[edge for edge in ontology.edges if edge.id in view.edge_ids],
                 ),
-                warnings_ja=ontology_runtime.profile_view_warnings(profile_id, view),
+                warnings_ja=warnings,
             )
         )
     except Exception as exc:
@@ -3565,13 +3607,14 @@ async def patch_profile_ontology_view(
     "/query-sessions",
     response_model=ApiResponse[QuerySessionData],
 )
-async def create_query_session(
+def create_query_session(
     request: QuerySessionApiCreate,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
         return ApiResponse(
-            data=ontology_runtime.create_session_idempotent(
+            data=_run_runtime_sync(
+                ontology_runtime.create_session_idempotent,
                 request,
                 idempotency_key=idempotency_key,
             )
@@ -3584,9 +3627,11 @@ async def create_query_session(
     "/query-sessions/{session_id}",
     response_model=ApiResponse[QuerySessionData],
 )
-async def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
+def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
     try:
-        return ApiResponse(data=ontology_runtime.get_session(session_id))
+        return ApiResponse(
+            data=_run_runtime_sync(ontology_runtime.get_session, session_id)
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3595,15 +3640,19 @@ async def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
     "/query-sessions/{session_id}/intent",
     response_model=ApiResponse[QuerySessionData],
 )
-async def patch_query_intent(
+def patch_query_intent(
     session_id: str,
     patch: GraphPatch,
 ) -> ApiResponse[QuerySessionData]:
     try:
-        return ApiResponse(data=ontology_runtime.patch_intent(session_id, patch))
+        return ApiResponse(
+            data=_run_runtime_sync(ontology_runtime.patch_intent, session_id, patch)
+        )
     except OntologyVersionConflictError as exc:
         try:
-            current = ontology_runtime.get_session(session_id).session
+            current = (
+                _run_runtime_sync(ontology_runtime.get_session, session_id)
+            ).session
         except Exception:
             _raise_domain_error(exc)
         raise HTTPException(
@@ -3623,14 +3672,15 @@ async def patch_query_intent(
     "/query-sessions/{session_id}/generate-sql",
     response_model=ApiResponse[QuerySessionData],
 )
-async def generate_query_sql(
+def generate_query_sql(
     session_id: str,
     request: GenerateSqlRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
         return ApiResponse(
-            data=ontology_runtime.generate_sql_idempotent(
+            data=_run_runtime_sync(
+                ontology_runtime.generate_sql_idempotent,
                 session_id,
                 request,
                 idempotency_key=idempotency_key,
@@ -3644,7 +3694,7 @@ async def generate_query_sql(
     "/query-sessions/{session_id}/confirm-sql",
     response_model=ApiResponse[QuerySessionData],
 )
-async def confirm_query_sql(
+def confirm_query_sql(
     session_id: str,
     request: SqlBindingRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -3656,7 +3706,8 @@ async def confirm_query_sql(
                 "確認 binding の session ID が URL と一致しません。",
             )
         return ApiResponse(
-            data=ontology_runtime.confirm_sql_idempotent(
+            data=_run_runtime_sync(
+                ontology_runtime.confirm_sql_idempotent,
                 session_id,
                 request.binding(),
                 idempotency_key=idempotency_key,
@@ -3670,7 +3721,7 @@ async def confirm_query_sql(
     "/query-sessions/{session_id}/execute",
     response_model=ApiResponse[QueryExecutionData],
 )
-async def execute_query_session(
+def execute_query_session(
     session_id: str,
     request: SqlBindingRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -3682,7 +3733,8 @@ async def execute_query_session(
                 "実行 binding の session ID が URL と一致しません。",
             )
         return ApiResponse(
-            data=ontology_runtime.execute_idempotent(
+            data=_run_runtime_sync(
+                ontology_runtime.execute_idempotent,
                 session_id,
                 request.binding(),
                 idempotency_key=idempotency_key,
@@ -3696,12 +3748,16 @@ async def execute_query_session(
     "/query-sessions/{session_id}/improvement-proposal",
     response_model=ApiResponse[OntologyProposal],
 )
-async def create_ontology_improvement_proposal(
+def create_ontology_improvement_proposal(
     session_id: str,
     request: ImprovementProposalRequest,
 ) -> ApiResponse[OntologyProposal]:
     try:
-        proposal, _session = ontology_runtime.create_proposal(session_id, request)
+        proposal, _session = _run_runtime_sync(
+            ontology_runtime.create_proposal,
+            session_id,
+            request,
+        )
         return ApiResponse(data=proposal)
     except Exception as exc:
         _raise_domain_error(exc)
@@ -3711,9 +3767,11 @@ async def create_ontology_improvement_proposal(
     "/ontology/proposals/{proposal_id}",
     response_model=ApiResponse[OntologyProposal],
 )
-async def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposal]:
+def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposal]:
     try:
-        return ApiResponse(data=ontology_runtime.get_proposal(proposal_id))
+        return ApiResponse(
+            data=_run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3722,11 +3780,13 @@ async def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposa
     "/ontology/proposals/{proposal_id}/accept",
     response_model=ApiResponse[OntologyProposalReviewData],
 )
-async def accept_ontology_proposal(
+def accept_ontology_proposal(
     proposal_id: str,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
-        return ApiResponse(data=ontology_runtime.accept_proposal(proposal_id))
+        return ApiResponse(
+            data=_run_runtime_sync(ontology_runtime.accept_proposal, proposal_id)
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3735,11 +3795,13 @@ async def accept_ontology_proposal(
     "/ontology/proposals/{proposal_id}/reject",
     response_model=ApiResponse[OntologyProposalReviewData],
 )
-async def reject_ontology_proposal(
+def reject_ontology_proposal(
     proposal_id: str,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
-        return ApiResponse(data=ontology_runtime.reject_proposal(proposal_id))
+        return ApiResponse(
+            data=_run_runtime_sync(ontology_runtime.reject_proposal, proposal_id)
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3757,13 +3819,16 @@ class OntologyProposalBatchReviewData(OntologyContract):
     "/ontology/proposals/batch-accept",
     response_model=ApiResponse[OntologyProposalBatchReviewData],
 )
-async def batch_accept_ontology_proposals(
+def batch_accept_ontology_proposals(
     request: OntologyProposalBatchAcceptRequest,
 ) -> ApiResponse[OntologyProposalBatchReviewData]:
     """複数提案を 1 つの draft revision へまとめて承認する(一括承認)。"""
 
     try:
-        proposals, draft = ontology_runtime.accept_proposals(request.proposal_ids)
+        proposals, draft = _run_runtime_sync(
+            ontology_runtime.accept_proposals,
+            request.proposal_ids,
+        )
         return ApiResponse(
             data=OntologyProposalBatchReviewData(
                 proposals=proposals,
@@ -3825,7 +3890,8 @@ async def start_ontology_build(
                 detail={"code": code, "message_ja": message},
             ) from exc
     try:
-        job = ontology_build_service.start(
+        job = await run_sync_io(
+            ontology_build_service.start,
             profile_id,
             business_text=business_text,
             qa_pairs=[],
@@ -3845,8 +3911,8 @@ async def start_ontology_build(
     "/ontology-build/{job_id}",
     response_model=ApiResponse[OntologyBuildJobData],
 )
-async def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
-    job = ontology_build_service.get(job_id)
+def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+    job = _run_runtime_sync(ontology_build_service.get, job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
@@ -3862,13 +3928,16 @@ async def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobDat
     "/profiles/{profile_id}/ontology-proposals",
     response_model=ApiResponse[OntologyProposalListData],
 )
-async def list_profile_ontology_proposals(
+def list_profile_ontology_proposals(
     profile_id: str,
 ) -> ApiResponse[OntologyProposalListData]:
     try:
         return ApiResponse(
             data=OntologyProposalListData(
-                proposals=ontology_runtime.list_profile_proposals(profile_id)
+                proposals=_run_runtime_sync(
+                    ontology_runtime.list_profile_proposals,
+                    profile_id,
+                )
             )
         )
     except Exception as exc:

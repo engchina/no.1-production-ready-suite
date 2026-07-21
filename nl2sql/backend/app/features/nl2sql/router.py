@@ -18,6 +18,8 @@ from fastapi import (
 )
 from pr_backend_core import ApiResponse
 
+from app.api.concurrency import run_sync_io
+
 from .incremental_store import IncrementalVersionConflict
 from .models import (
     AgentConversationCreateData,
@@ -145,7 +147,7 @@ from .service import is_select_only as _is_select_only
 from .service import nl2sql_service
 
 
-async def _require_persistence() -> None:
+def _require_persistence() -> None:
     nl2sql_service.ensure_persistence_available()
 
 
@@ -161,7 +163,7 @@ router = APIRouter(
     "/persistence",
     response_model=ApiResponse[PersistenceStatusData],
 )
-async def persistence_status() -> ApiResponse[PersistenceStatusData]:
+def persistence_status() -> ApiResponse[PersistenceStatusData]:
     """NL2SQL incremental store の可用性を返す。"""
     return ApiResponse(data=nl2sql_service.persistence_status())
 
@@ -170,7 +172,7 @@ async def persistence_status() -> ApiResponse[PersistenceStatusData]:
     "/persistence/recover",
     response_model=ApiResponse[PersistenceStatusData],
 )
-async def recover_persistence() -> ApiResponse[PersistenceStatusData]:
+def recover_persistence() -> ApiResponse[PersistenceStatusData]:
     """DB 復旧後に接続/migration を再確認する（業務 state は再読込しない）。"""
     return ApiResponse(data=nl2sql_service.recover_persistence())
 
@@ -181,7 +183,7 @@ def is_select_only(sql: str) -> bool:
 
 
 @router.post("/preview", response_model=ApiResponse[PreviewData])
-async def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
+def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
     """自然言語から SQL を生成して実行せずに safety / engine meta を返す。"""
     try:
         return ApiResponse(data=nl2sql_service.preview(req))
@@ -190,7 +192,7 @@ async def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
 
 
 @router.post("/execute", response_model=ApiResponse[QueryResults])
-async def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
+def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
     """SELECT/WITH のみを安全に実行する。
 
     local skeleton は deterministic mock result を返す。
@@ -211,7 +213,7 @@ async def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
 
 
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
-async def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
+def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL 検索 job を開始する。"""
     try:
         principal = getattr(request.state, "principal", None)
@@ -227,7 +229,7 @@ async def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[Job
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
-async def get_job(job_id: str) -> ApiResponse[JobData]:
+def get_job(job_id: str) -> ApiResponse[JobData]:
     """NL2SQL 検索 job の状態・結果を返す。"""
     job = nl2sql_service.get_job(job_id)
     if job is None:
@@ -236,7 +238,7 @@ async def get_job(job_id: str) -> ApiResponse[JobData]:
 
 
 @router.get("/profiles", response_model=ApiResponse[list[Nl2SqlProfile]])
-async def list_profiles(
+def list_profiles(
     response: Response, include_archived: bool = False
 ) -> ApiResponse[list[Nl2SqlProfile]]:
     """NL2SQL profile 一覧。"""
@@ -247,7 +249,7 @@ async def list_profiles(
 
 
 @router.get("/profiles/search", response_model=ApiResponse[ProfileSummaryPage])
-async def search_profiles(
+def search_profiles(
     response: Response,
     cursor: str | None = None,
     limit: int = 50,
@@ -272,7 +274,7 @@ async def search_profiles(
 
 
 @router.get("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
-async def get_profile_detail(
+def get_profile_detail(
     profile_id: str,
     response: Response,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
@@ -291,7 +293,7 @@ async def get_profile_detail(
 
 
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
-async def create_profile(
+def create_profile(
     req: ProfileUpsertRequest, response: Response
 ) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を作成する。"""
@@ -307,7 +309,7 @@ async def create_profile(
 
 
 @router.patch("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
-async def update_profile(
+def update_profile(
     profile_id: str,
     req: ProfileUpsertRequest,
     response: Response,
@@ -350,7 +352,7 @@ def _materialize_incremental_profile_view(profile_id: str) -> None:
 
 
 @router.delete("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
-async def delete_profile(
+def delete_profile(
     profile_id: str,
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> ApiResponse[Nl2SqlProfile]:
@@ -389,7 +391,8 @@ async def import_profile_learning_material(
     content = await file.read()
     try:
         return ApiResponse(
-            data=nl2sql_service.import_profile_learning_material(
+            data=await run_sync_io(
+                nl2sql_service.import_profile_learning_material,
                 profile_id=profile_id,
                 filename=file.filename or "learning_material.csv",
                 content=content,
@@ -403,7 +406,7 @@ async def import_profile_learning_material(
 
 
 @router.get("/profiles/{profile_id}/learning-material/export.xlsx")
-async def export_profile_learning_material(profile_id: str) -> Response:
+def export_profile_learning_material(profile_id: str) -> Response:
     """Profile learning material を Excel workbook として出力する。"""
     try:
         filename, content = nl2sql_service.export_profile_learning_material_xlsx(profile_id)
@@ -422,7 +425,7 @@ async def export_profile_learning_material(profile_id: str) -> Response:
     "/legacy-learning-material",
     response_model=ApiResponse[LegacyLearningMaterialData],
 )
-async def get_legacy_learning_material() -> ApiResponse[LegacyLearningMaterialData]:
+def get_legacy_learning_material() -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 terms.xlsx / rules.xlsx 互換データ（グローバル用語集・グローバルルール）を返す。"""
     return ApiResponse(data=nl2sql_service.get_legacy_learning_material())
 
@@ -435,10 +438,12 @@ async def import_legacy_terms(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 terms.xlsx 互換の用語集を取り込む。"""
+    content = await file.read()
     return ApiResponse(
-        data=nl2sql_service.import_legacy_terms(
+        data=await run_sync_io(
+            nl2sql_service.import_legacy_terms,
             filename=file.filename or "terms.xlsx",
-            content=await file.read(),
+            content=content,
         )
     )
 
@@ -451,16 +456,18 @@ async def import_legacy_rules(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 rules.xlsx 互換のグローバルルールを取り込む。"""
+    content = await file.read()
     return ApiResponse(
-        data=nl2sql_service.import_legacy_rules(
+        data=await run_sync_io(
+            nl2sql_service.import_legacy_rules,
             filename=file.filename or "rules.xlsx",
-            content=await file.read(),
+            content=content,
         )
     )
 
 
 @router.get("/legacy-learning-material/terms/export.xlsx")
-async def export_legacy_terms() -> Response:
+def export_legacy_terms() -> Response:
     """旧版 terms.xlsx 互換の用語集を Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_legacy_terms_xlsx()
     return Response(
@@ -471,7 +478,7 @@ async def export_legacy_terms() -> Response:
 
 
 @router.get("/legacy-learning-material/rules/export.xlsx")
-async def export_legacy_rules() -> Response:
+def export_legacy_rules() -> Response:
     """旧版 rules.xlsx 互換のグローバルルールを Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_legacy_rules_xlsx()
     return Response(
@@ -482,7 +489,7 @@ async def export_legacy_rules() -> Response:
 
 
 @router.post("/profiles/{profile_id}/archive", response_model=ApiResponse[Nl2SqlProfile])
-async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を archive する。"""
     try:
         return ApiResponse(data=nl2sql_service.archive_profile(profile_id))
@@ -493,7 +500,7 @@ async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
 
 
 @router.post("/profiles/{profile_id}/restore", response_model=ApiResponse[Nl2SqlProfile])
-async def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     """archive 済みの NL2SQL profile を復元する。"""
     try:
         profile = nl2sql_service.restore_profile(profile_id)
@@ -509,7 +516,7 @@ async def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     "/profiles/{profile_id}/select-ai-profile",
     response_model=ApiResponse[SelectAiDbProfileMutationData],
 )
-async def upsert_profile_select_ai_profile(
+def upsert_profile_select_ai_profile(
     profile_id: str,
     req: ProfileSelectAiProfileRequest,
 ) -> ApiResponse[SelectAiDbProfileMutationData]:
@@ -523,13 +530,13 @@ async def upsert_profile_select_ai_profile(
 
 
 @router.post("/select-ai/profiles/refresh", response_model=ApiResponse[AssetRefreshData])
-async def refresh_select_ai_profile(profile_id: str | None = None) -> ApiResponse[AssetRefreshData]:
+def refresh_select_ai_profile(profile_id: str | None = None) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
     return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
 
 
 @router.post("/select-ai-agent/assets/refresh", response_model=ApiResponse[AssetRefreshData])
-async def refresh_select_ai_agent_assets(
+def refresh_select_ai_agent_assets(
     profile_id: str | None = None,
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI Agent assets を作成/更新する adapter boundary。"""
@@ -537,7 +544,7 @@ async def refresh_select_ai_agent_assets(
 
 
 @router.post("/select-ai/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
-async def cleanup_select_ai_assets(
+def cleanup_select_ai_assets(
     req: AssetCleanupRequest,
 ) -> ApiResponse[list[AssetCleanupData]]:
     """Oracle Select AI / Agent assets の cleanup を実行する。"""
@@ -552,7 +559,7 @@ async def cleanup_select_ai_assets(
 
 
 @router.get("/select-ai/db-profiles", response_model=ApiResponse[SelectAiDbProfilesData])
-async def select_ai_db_profiles(
+def select_ai_db_profiles(
     include_detail: bool = False,
     business_profiles_only: bool = False,
     include_archived_business_profiles: bool = True,
@@ -571,7 +578,7 @@ async def select_ai_db_profiles(
     "/select-ai/db-profiles/{profile_name}",
     response_model=ApiResponse[SelectAiDbProfileDetailData],
 )
-async def select_ai_db_profile_detail(
+def select_ai_db_profile_detail(
     profile_name: str,
 ) -> ApiResponse[SelectAiDbProfileDetailData]:
     """Oracle DBMS_CLOUD_AI profile 詳細を返す。"""
@@ -579,7 +586,7 @@ async def select_ai_db_profile_detail(
 
 
 @router.get("/select-ai/feedback", response_model=ApiResponse[SelectAiFeedbackEntriesData])
-async def select_ai_feedback(
+def select_ai_feedback(
     profile_name: str,
     limit: int = 50,
 ) -> ApiResponse[SelectAiFeedbackEntriesData]:
@@ -591,7 +598,7 @@ async def select_ai_feedback(
     "/select-ai/feedback/add",
     response_model=ApiResponse[SelectAiFeedbackAddData],
 )
-async def add_select_ai_feedback(
+def add_select_ai_feedback(
     req: SelectAiFeedbackAddRequest,
 ) -> ApiResponse[SelectAiFeedbackAddData]:
     """Oracle DBMS_CLOUD_AI profile feedback entry を追加する。"""
@@ -602,7 +609,7 @@ async def add_select_ai_feedback(
     "/select-ai/feedback/delete",
     response_model=ApiResponse[SelectAiFeedbackMutationData],
 )
-async def delete_select_ai_feedback(
+def delete_select_ai_feedback(
     req: SelectAiFeedbackDeleteRequest,
 ) -> ApiResponse[SelectAiFeedbackMutationData]:
     """Oracle DBMS_CLOUD_AI profile feedback entry を削除する。"""
@@ -613,7 +620,7 @@ async def delete_select_ai_feedback(
     "/select-ai/feedback/vector-index",
     response_model=ApiResponse[SelectAiFeedbackMutationData],
 )
-async def update_select_ai_feedback_vector_index(
+def update_select_ai_feedback_vector_index(
     req: SelectAiFeedbackVectorIndexRequest,
 ) -> ApiResponse[SelectAiFeedbackMutationData]:
     """Oracle DBMS_CLOUD_AI feedback vector index attributes を更新する。"""
@@ -624,7 +631,7 @@ async def update_select_ai_feedback_vector_index(
     "/select-ai/db-profiles",
     response_model=ApiResponse[SelectAiDbProfileMutationData],
 )
-async def upsert_select_ai_db_profile(
+def upsert_select_ai_db_profile(
     req: SelectAiDbProfileUpsertRequest,
 ) -> ApiResponse[SelectAiDbProfileMutationData]:
     """Oracle DBMS_CLOUD_AI profile を low-level JSON から作成/更新する。"""
@@ -635,7 +642,7 @@ async def upsert_select_ai_db_profile(
     "/select-ai/db-profiles/{profile_name}",
     response_model=ApiResponse[SelectAiDbProfileMutationData],
 )
-async def patch_select_ai_db_profile(
+def patch_select_ai_db_profile(
     profile_name: str,
     req: SelectAiDbProfileUpsertRequest,
 ) -> ApiResponse[SelectAiDbProfileMutationData]:
@@ -656,7 +663,7 @@ async def patch_select_ai_db_profile(
     "/select-ai/profiles/export.json",
     response_model=ApiResponse[SelectAiProfilesExportData],
 )
-async def export_select_ai_profiles_json(
+def export_select_ai_profiles_json(
     business_profiles_only: bool = False,
     include_archived_business_profiles: bool = True,
 ) -> ApiResponse[SelectAiProfilesExportData]:
@@ -673,7 +680,7 @@ async def export_select_ai_profiles_json(
     "/select-ai/profiles/import-json",
     response_model=ApiResponse[list[SelectAiDbProfileMutationData]],
 )
-async def import_select_ai_profiles_json(
+def import_select_ai_profiles_json(
     req: SelectAiProfilesImportRequest,
 ) -> ApiResponse[list[SelectAiDbProfileMutationData]]:
     """Oracle DBMS_CLOUD_AI profile definitions JSON を import する。"""
@@ -684,7 +691,7 @@ async def import_select_ai_profiles_json(
     "/select-ai/db-profiles/{profile_name}/drop",
     response_model=ApiResponse[AssetCleanupData],
 )
-async def drop_select_ai_db_profile(
+def drop_select_ai_db_profile(
     profile_name: str,
     req: SelectAiDbProfileDropRequest,
 ) -> ApiResponse[AssetCleanupData]:
@@ -699,13 +706,13 @@ async def drop_select_ai_db_profile(
 
 
 @router.get("/select-ai-agent/assets", response_model=ApiResponse[SelectAiAgentAssetsData])
-async def select_ai_agent_assets() -> ApiResponse[SelectAiAgentAssetsData]:
+def select_ai_agent_assets() -> ApiResponse[SelectAiAgentAssetsData]:
     """Oracle Select AI Agent low-level asset names を返す。"""
     return ApiResponse(data=nl2sql_service.list_select_ai_agent_assets())
 
 
 @router.post("/select-ai-agent/run-team", response_model=ApiResponse[AgentTeamRunData])
-async def run_select_ai_agent_team(
+def run_select_ai_agent_team(
     req: AgentTeamRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent team を実行する。"""
@@ -713,7 +720,7 @@ async def run_select_ai_agent_team(
 
 
 @router.post("/select-ai-agent/run-tool", response_model=ApiResponse[AgentTeamRunData])
-async def run_select_ai_agent_tool(
+def run_select_ai_agent_tool(
     req: AgentToolRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent tool を明示名で実行する。"""
@@ -724,7 +731,7 @@ async def run_select_ai_agent_tool(
     "/select-ai-agent/conversations/create",
     response_model=ApiResponse[AgentConversationCreateData],
 )
-async def create_select_ai_agent_conversation(
+def create_select_ai_agent_conversation(
     req: AgentConversationCreateRequest,
 ) -> ApiResponse[AgentConversationCreateData]:
     """Oracle Select AI Agent conversation を作成する。"""
@@ -732,7 +739,7 @@ async def create_select_ai_agent_conversation(
 
 
 @router.post("/select-ai-agent/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
-async def cleanup_select_ai_agent_assets(
+def cleanup_select_ai_agent_assets(
     req: AssetCleanupRequest,
 ) -> ApiResponse[list[AssetCleanupData]]:
     """Oracle Select AI Agent low-level assets の cleanup を実行する。"""
@@ -743,7 +750,7 @@ async def cleanup_select_ai_agent_assets(
     "/select-ai-agent/conversations",
     response_model=ApiResponse[AgentConversationsData],
 )
-async def select_ai_agent_conversations(
+def select_ai_agent_conversations(
     team_name: str | None = None,
     limit: int = 20,
 ) -> ApiResponse[AgentConversationsData]:
@@ -760,19 +767,19 @@ async def select_ai_agent_conversations(
     "/select-ai-agent/privileges/check",
     response_model=ApiResponse[AgentPrivilegeCheckData],
 )
-async def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
+def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
     """Oracle Select AI Agent 実行に必要な package/view 可視性を確認する。"""
     return ApiResponse(data=nl2sql_service.check_select_ai_agent_privileges())
 
 
 @router.get("/history", response_model=ApiResponse[HistoryData])
-async def history() -> ApiResponse[HistoryData]:
+def history() -> ApiResponse[HistoryData]:
     """NL2SQL 検索履歴。"""
     return ApiResponse(data=nl2sql_service.list_history())
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
-async def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
+def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
     """検索結果 feedback を保存する。"""
     try:
         data = nl2sql_service.save_feedback(req.history_id, req.rating, req.comment)
@@ -782,7 +789,7 @@ async def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
 
 
 @router.get("/feedback", response_model=ApiResponse[FeedbackListData])
-async def list_feedback(
+def list_feedback(
     cursor: str | None = None,
     limit: int = 20,
     rating: str = "all",
@@ -806,7 +813,7 @@ async def list_feedback(
 
 
 @router.delete("/feedback/{history_id}", response_model=ApiResponse[FeedbackClearData])
-async def clear_feedback(history_id: str) -> ApiResponse[FeedbackClearData]:
+def clear_feedback(history_id: str) -> ApiResponse[FeedbackClearData]:
     """SQL 履歴を残したままアプリ内 feedback だけを解除する。"""
     try:
         data = nl2sql_service.clear_feedback(history_id)
@@ -816,19 +823,19 @@ async def clear_feedback(history_id: str) -> ApiResponse[FeedbackClearData]:
 
 
 @router.post("/demo/learning", response_model=ApiResponse[DemoLearningData])
-async def seed_demo_learning() -> ApiResponse[DemoLearningData]:
+def seed_demo_learning() -> ApiResponse[DemoLearningData]:
     """Learning / feedback 画面の検証用 demo データを投入する。"""
     return ApiResponse(data=nl2sql_service.seed_demo_learning_data())
 
 
 @router.get("/sample-data", response_model=ApiResponse[SampleDataInfo])
-async def sample_data_info() -> ApiResponse[SampleDataInfo]:
+def sample_data_info() -> ApiResponse[SampleDataInfo]:
     """Optional SQL Assist sample package status / SQL preview."""
     return ApiResponse(data=nl2sql_service.sample_data_info())
 
 
 @router.post("/sample-data/import", response_model=ApiResponse[SampleDataMutationData])
-async def import_sample_data(
+def import_sample_data(
     req: SampleDataMutationRequest,
 ) -> ApiResponse[SampleDataMutationData]:
     """Optional SQL Assist sample data import execution."""
@@ -836,7 +843,7 @@ async def import_sample_data(
 
 
 @router.post("/sample-data/delete", response_model=ApiResponse[SampleDataMutationData])
-async def delete_sample_data(
+def delete_sample_data(
     req: SampleDataMutationRequest,
 ) -> ApiResponse[SampleDataMutationData]:
     """Optional SQL Assist sample data delete execution."""
@@ -844,31 +851,31 @@ async def delete_sample_data(
 
 
 @router.get("/feedback-index", response_model=ApiResponse[FeedbackIndexData])
-async def feedback_index_status() -> ApiResponse[FeedbackIndexData]:
+def feedback_index_status() -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の状態を返す。"""
     return ApiResponse(data=nl2sql_service.feedback_index_status())
 
 
 @router.post("/feedback-index/rebuild", response_model=ApiResponse[FeedbackIndexData])
-async def rebuild_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+def rebuild_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の再構築 plan / 実行。"""
     return ApiResponse(data=nl2sql_service.rebuild_feedback_index(req))
 
 
 @router.post("/feedback-index/clear", response_model=ApiResponse[FeedbackIndexData])
-async def clear_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+def clear_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の clear plan / 実行。"""
     return ApiResponse(data=nl2sql_service.clear_feedback_index(req))
 
 
 @router.get("/feedback-entries", response_model=ApiResponse[FeedbackEntriesData])
-async def feedback_entries() -> ApiResponse[FeedbackEntriesData]:
+def feedback_entries() -> ApiResponse[FeedbackEntriesData]:
     """Feedback learning entries を一覧する。"""
     return ApiResponse(data=nl2sql_service.list_feedback_entries())
 
 
 @router.post("/feedback-entries/delete", response_model=ApiResponse[FeedbackEntriesData])
-async def delete_feedback_entries(
+def delete_feedback_entries(
     req: FeedbackEntriesDeleteRequest,
 ) -> ApiResponse[FeedbackEntriesData]:
     """Feedback learning entries を削除する。"""
@@ -876,13 +883,13 @@ async def delete_feedback_entries(
 
 
 @router.get("/feedback-config", response_model=ApiResponse[FeedbackSearchConfigData])
-async def feedback_config() -> ApiResponse[FeedbackSearchConfigData]:
+def feedback_config() -> ApiResponse[FeedbackSearchConfigData]:
     """Feedback similar-history default config を返す。"""
     return ApiResponse(data=nl2sql_service.feedback_search_config())
 
 
 @router.patch("/feedback-config", response_model=ApiResponse[FeedbackSearchConfigData])
-async def update_feedback_config(
+def update_feedback_config(
     req: FeedbackSearchConfigRequest,
 ) -> ApiResponse[FeedbackSearchConfigData]:
     """Feedback similar-history default config を更新する。"""
@@ -890,13 +897,13 @@ async def update_feedback_config(
 
 
 @router.get("/classifier", response_model=ApiResponse[ClassifierStatusData])
-async def classifier_status() -> ApiResponse[ClassifierStatusData]:
+def classifier_status() -> ApiResponse[ClassifierStatusData]:
     """Embedding + LogisticRegression classifier の状態を返す。"""
     return ApiResponse(data=nl2sql_service.classifier_status())
 
 
 @router.get("/classifier/training-data", response_model=ApiResponse[ClassifierTrainingDataData])
-async def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
+def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
     """Classifier training data 一覧を返す。"""
     return ApiResponse(data=nl2sql_service.classifier_training_data())
 
@@ -905,7 +912,7 @@ async def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
     "/classifier/training-candidates",
     response_model=ApiResponse[ClassifierTrainingCandidatesData],
 )
-async def classifier_training_candidates(
+def classifier_training_candidates(
     cursor: str | None = None,
     limit: int = 20,
     status: str = "all",
@@ -943,7 +950,7 @@ async def classifier_training_candidates(
     "/classifier/training-data/from-feedback",
     response_model=ApiResponse[ClassifierFeedbackImportData],
 )
-async def import_classifier_training_data_from_feedback(
+def import_classifier_training_data_from_feedback(
     req: ClassifierFeedbackImportRequest,
 ) -> ApiResponse[ClassifierFeedbackImportData]:
     """確認済み feedback の質問/Profile 対応を training data に追加する。"""
@@ -954,7 +961,7 @@ async def import_classifier_training_data_from_feedback(
     "/classifier/training-data/{example_id}",
     response_model=ApiResponse[ClassifierTrainingExample],
 )
-async def update_classifier_training_example(
+def update_classifier_training_example(
     example_id: str,
     req: ClassifierTrainingExampleUpdateRequest,
 ) -> ApiResponse[ClassifierTrainingExample]:
@@ -971,7 +978,7 @@ async def update_classifier_training_example(
     "/classifier/training-data/{example_id}",
     response_model=ApiResponse[ClassifierTrainingDataData],
 )
-async def delete_classifier_training_example(
+def delete_classifier_training_example(
     example_id: str,
 ) -> ApiResponse[ClassifierTrainingDataData]:
     try:
@@ -990,7 +997,8 @@ async def import_classifier_training_data(
     """CATEGORY/TEXT の CSV/XLSX training data を取り込む。"""
     content = await file.read()
     return ApiResponse(
-        data=nl2sql_service.import_classifier_training_data(
+        data=await run_sync_io(
+            nl2sql_service.import_classifier_training_data,
             filename=file.filename or "training_data.csv",
             content=content,
             replace=replace,
@@ -1000,7 +1008,7 @@ async def import_classifier_training_data(
 
 
 @router.get("/classifier/training-data/export.xlsx")
-async def export_classifier_training_data_xlsx() -> Response:
+def export_classifier_training_data_xlsx() -> Response:
     """Classifier training data を Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_classifier_training_data_xlsx()
     return Response(
@@ -1011,7 +1019,7 @@ async def export_classifier_training_data_xlsx() -> Response:
 
 
 @router.post("/classifier/train", response_model=ApiResponse[ClassifierStatusData])
-async def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatusData]:
+def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatusData]:
     """Imported training data から LogisticRegression classifier を学習する。"""
     return ApiResponse(data=nl2sql_service.train_classifier(req))
 
@@ -1023,7 +1031,8 @@ async def import_classifier_model(
     """唯一の classifier model を joblib / JSON artifact で置き換える。"""
     content = await file.read()
     return ApiResponse(
-        data=nl2sql_service.import_classifier_model_artifact(
+        data=await run_sync_io(
+            nl2sql_service.import_classifier_model_artifact,
             filename=file.filename or "classifier.joblib",
             content=content,
         )
@@ -1045,7 +1054,7 @@ async def import_classifier_model_legacy(
 
 
 @router.post("/classifier/predict", response_model=ApiResponse[ClassifierPredictionData])
-async def predict_classifier(
+def predict_classifier(
     req: ClassifierPredictRequest,
 ) -> ApiResponse[ClassifierPredictionData]:
     """質問を classifier category/profile 候補へ分類する。"""
@@ -1053,13 +1062,13 @@ async def predict_classifier(
 
 
 @router.post("/similar-history", response_model=ApiResponse[SimilarHistoryData])
-async def similar_history(req: SimilarHistoryRequest) -> ApiResponse[SimilarHistoryData]:
+def similar_history(req: SimilarHistoryRequest) -> ApiResponse[SimilarHistoryData]:
     """質問に近い履歴を few-shot / feedback 学習候補として返す。"""
     return ApiResponse(data=nl2sql_service.similar_history(req))
 
 
 @router.post("/recommend-profile", response_model=ApiResponse[ProfileRecommendationData])
-async def recommend_profile(
+def recommend_profile(
     req: ProfileRecommendationRequest,
 ) -> ApiResponse[ProfileRecommendationData]:
     """質問から profile / schema 範囲と query rewrite を推薦する。"""
@@ -1067,13 +1076,13 @@ async def recommend_profile(
 
 
 @router.post("/rewrite", response_model=ApiResponse[RewriteData])
-async def rewrite(req: RewriteRequest) -> ApiResponse[RewriteData]:
+def rewrite(req: RewriteRequest) -> ApiResponse[RewriteData]:
     """用語・schema・追加指示を使って質問を書き換える。"""
     return ApiResponse(data=nl2sql_service.rewrite(req))
 
 
 @router.post("/analyze", response_model=ApiResponse[AnalyzeData])
-async def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
+def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
     """SQL の安全性・参照表・推奨修正を返す。"""
     return ApiResponse(
         data=nl2sql_service.analyze_sql(
@@ -1086,7 +1095,7 @@ async def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
 
 
 @router.post("/repair", response_model=ApiResponse[RepairData])
-async def repair(req: RepairRequest) -> ApiResponse[RepairData]:
+def repair(req: RepairRequest) -> ApiResponse[RepairData]:
     """Oracle error message に基づいて SELECT SQL の修復候補を返す。"""
     return ApiResponse(
         data=nl2sql_service.repair_oracle_error(
@@ -1097,31 +1106,31 @@ async def repair(req: RepairRequest) -> ApiResponse[RepairData]:
 
 
 @router.post("/evaluate", response_model=ApiResponse[EvaluateData])
-async def evaluate(req: EvaluateRequest) -> ApiResponse[EvaluateData]:
+def evaluate(req: EvaluateRequest) -> ApiResponse[EvaluateData]:
     """Deterministic NL2SQL 評価。外部 LLM-as-judge は使わない。"""
     return ApiResponse(data=nl2sql_service.evaluate(req))
 
 
 @router.get("/evaluation-runs", response_model=ApiResponse[EvaluationRunsData])
-async def evaluation_runs(limit: int = 20) -> ApiResponse[EvaluationRunsData]:
+def evaluation_runs(limit: int = 20) -> ApiResponse[EvaluationRunsData]:
     """保存済み deterministic NL2SQL 評価実行 record の最近分を返す。"""
     return ApiResponse(data=nl2sql_service.list_evaluation_runs(limit=max(1, min(limit, 100))))
 
 
 @router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
-async def evaluation_sets(include_archived: bool = False) -> ApiResponse[EvaluationSetsData]:
+def evaluation_sets(include_archived: bool = False) -> ApiResponse[EvaluationSetsData]:
     """保存済み NL2SQL 評価セットを返す。"""
     return ApiResponse(data=nl2sql_service.list_evaluation_sets(include_archived=include_archived))
 
 
 @router.post("/evaluation-sets", response_model=ApiResponse[EvaluationSet])
-async def create_evaluation_set(req: EvaluationSetUpsertRequest) -> ApiResponse[EvaluationSet]:
+def create_evaluation_set(req: EvaluationSetUpsertRequest) -> ApiResponse[EvaluationSet]:
     """NL2SQL 評価セットを作成する。"""
     return ApiResponse(data=nl2sql_service.create_evaluation_set(req))
 
 
 @router.patch("/evaluation-sets/{evaluation_set_id}", response_model=ApiResponse[EvaluationSet])
-async def update_evaluation_set(
+def update_evaluation_set(
     evaluation_set_id: str, req: EvaluationSetUpsertRequest
 ) -> ApiResponse[EvaluationSet]:
     """NL2SQL 評価セットを更新する。"""
@@ -1137,7 +1146,7 @@ async def update_evaluation_set(
     "/evaluation-sets/{evaluation_set_id}/archive",
     response_model=ApiResponse[EvaluationSet],
 )
-async def archive_evaluation_set(evaluation_set_id: str) -> ApiResponse[EvaluationSet]:
+def archive_evaluation_set(evaluation_set_id: str) -> ApiResponse[EvaluationSet]:
     """NL2SQL 評価セットを archive する。"""
     try:
         return ApiResponse(data=nl2sql_service.archive_evaluation_set(evaluation_set_id))
@@ -1148,31 +1157,31 @@ async def archive_evaluation_set(evaluation_set_id: str) -> ApiResponse[Evaluati
 
 
 @router.post("/compare", response_model=ApiResponse[CompareData])
-async def compare(req: CompareRequest) -> ApiResponse[CompareData]:
+def compare(req: CompareRequest) -> ApiResponse[CompareData]:
     """同一質問を複数 engine で preview し、SQL・安全性・時間を比較する。"""
     return ApiResponse(data=nl2sql_service.compare_engines(req))
 
 
 @router.get("/compare-history", response_model=ApiResponse[CompareHistoryData])
-async def compare_history(limit: int = 20) -> ApiResponse[CompareHistoryData]:
+def compare_history(limit: int = 20) -> ApiResponse[CompareHistoryData]:
     """保存済み engine 比較 record の最近分を返す。"""
     return ApiResponse(data=nl2sql_service.list_compare_records(limit=max(1, min(limit, 50))))
 
 
 @router.post("/reverse", response_model=ApiResponse[ReverseSqlData])
-async def reverse(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
+def reverse(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
     """SQL から自然言語説明を生成する。"""
     return ApiResponse(data=nl2sql_service.reverse_sql(req))
 
 
 @router.post("/reverse/deep", response_model=ApiResponse[ReverseSqlData])
-async def reverse_deep(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
+def reverse_deep(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
     """SQL から Enterprise AI backed の自然言語説明を生成する。"""
     return ApiResponse(data=nl2sql_service.reverse_sql_deep(req))
 
 
 @router.post("/comments/suggest", response_model=ApiResponse[CommentSuggestionData])
-async def suggest_comments(
+def suggest_comments(
     req: CommentSuggestionRequest | None = None,
 ) -> ApiResponse[CommentSuggestionData]:
     """表/列コメント候補を deterministic / Enterprise AI で生成する。"""
@@ -1180,7 +1189,7 @@ async def suggest_comments(
 
 
 @router.post("/comments/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])
-async def generate_comment_sql(
+def generate_comment_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist コメント管理互換の COMMENT ON SQL を生成する。"""
@@ -1188,7 +1197,7 @@ async def generate_comment_sql(
 
 
 @router.post("/metadata-samples", response_model=ApiResponse[MetadataSqlSampleData])
-async def metadata_samples(
+def metadata_samples(
     req: MetadataSqlSampleRequest,
 ) -> ApiResponse[MetadataSqlSampleData]:
     """コメント/アノテーション SQL 生成向けの列代表値を再取得する。"""
@@ -1196,19 +1205,19 @@ async def metadata_samples(
 
 
 @router.post("/comments/apply", response_model=ApiResponse[CommentApplyData])
-async def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyData]:
+def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyData]:
     """COMMENT ON TABLE/COLUMN の restricted execution。"""
     return ApiResponse(data=nl2sql_service.apply_comments(req))
 
 
 @router.post("/annotations/generate", response_model=ApiResponse[AnnotationSuggestionData])
-async def generate_annotations() -> ApiResponse[AnnotationSuggestionData]:
+def generate_annotations() -> ApiResponse[AnnotationSuggestionData]:
     """Oracle annotation 候補を生成する。"""
     return ApiResponse(data=nl2sql_service.suggest_annotations())
 
 
 @router.post("/annotations/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])
-async def generate_annotation_sql(
+def generate_annotation_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist アノテーション管理互換の ALTER ... ANNOTATIONS SQL を生成する。"""
@@ -1216,19 +1225,19 @@ async def generate_annotation_sql(
 
 
 @router.post("/annotations/apply", response_model=ApiResponse[AnnotationApplyData])
-async def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationApplyData]:
+def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationApplyData]:
     """Oracle annotation の restricted execution。"""
     return ApiResponse(data=nl2sql_service.apply_annotations(req))
 
 
 @router.get("/db-admin/tables", response_model=ApiResponse[DbAdminObjectsData])
-async def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
+def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
     """DB admin table 一覧を返す。"""
     return ApiResponse(data=nl2sql_service.list_db_admin_tables())
 
 
 @router.get("/db-admin/tables/{table_name}", response_model=ApiResponse[DbAdminObjectDetail])
-async def db_admin_table_detail(
+def db_admin_table_detail(
     table_name: str, include_ddl: bool = True, exact_count: bool = False
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin table 詳細/DDL を返す。
@@ -1244,13 +1253,13 @@ async def db_admin_table_detail(
 
 
 @router.get("/db-admin/views", response_model=ApiResponse[DbAdminObjectsData])
-async def db_admin_views() -> ApiResponse[DbAdminObjectsData]:
+def db_admin_views() -> ApiResponse[DbAdminObjectsData]:
     """DB admin view 一覧を返す。"""
     return ApiResponse(data=nl2sql_service.list_db_admin_views())
 
 
 @router.get("/db-admin/views/{view_name}", response_model=ApiResponse[DbAdminObjectDetail])
-async def db_admin_view_detail(
+def db_admin_view_detail(
     view_name: str, include_ddl: bool = True, exact_count: bool = False
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin view 詳細/DDL を返す。
@@ -1266,31 +1275,31 @@ async def db_admin_view_detail(
 
 
 @router.post("/db-admin/drop-table", response_model=ApiResponse[DbAdminExecuteData])
-async def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdminExecuteData]:
+def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin DROP TABLE execution。"""
     return ApiResponse(data=nl2sql_service.drop_db_admin_table(req))
 
 
 @router.post("/db-admin/execute", response_model=ApiResponse[DbAdminExecuteData])
-async def db_admin_execute(req: DbAdminExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
+def db_admin_execute(req: DbAdminExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin SQL executor。通常 NL2SQL 実行 path とは分離する。"""
     return ApiResponse(data=nl2sql_service.execute_db_admin_sql(req))
 
 
 @router.post("/db-admin/statements", response_model=ApiResponse[DbAdminExecuteData])
-async def db_admin_statements(req: DbAdminStatementsRequest) -> ApiResponse[DbAdminExecuteData]:
+def db_admin_statements(req: DbAdminStatementsRequest) -> ApiResponse[DbAdminExecuteData]:
     """文種 whitelist 付き複数 statement 実行(テーブル/ビュー作成・データ SQL)。"""
     return ApiResponse(data=nl2sql_service.execute_db_admin_statements(req))
 
 
 @router.post("/db-admin/drop-view", response_model=ApiResponse[DbAdminExecuteData])
-async def db_admin_drop_view(req: DbAdminDropViewRequest) -> ApiResponse[DbAdminExecuteData]:
+def db_admin_drop_view(req: DbAdminDropViewRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin DROP VIEW execution。"""
     return ApiResponse(data=nl2sql_service.drop_db_admin_view(req))
 
 
 @router.post("/db-admin/preview-data", response_model=ApiResponse[DbAdminDataPreviewData])
-async def db_admin_preview_data(
+def db_admin_preview_data(
     req: DbAdminDataPreviewRequest,
 ) -> ApiResponse[DbAdminDataPreviewData]:
     """テーブル/ビューのデータ表示(件数上限+任意 WHERE)。"""
@@ -1301,7 +1310,7 @@ async def db_admin_preview_data(
 
 
 @router.post("/db-admin/preview-data/export.xlsx")
-async def db_admin_export_preview_xlsx(req: DbAdminDataPreviewRequest) -> Response:
+def db_admin_export_preview_xlsx(req: DbAdminDataPreviewRequest) -> Response:
     """テーブル/ビューの表示結果を Excel workbook として出力する。"""
     try:
         filename, content = nl2sql_service.export_db_admin_preview_xlsx(req)
@@ -1315,7 +1324,7 @@ async def db_admin_export_preview_xlsx(req: DbAdminDataPreviewRequest) -> Respon
 
 
 @router.post("/db-admin/upload-csv", response_model=ApiResponse[DbAdminCsvUploadData])
-async def db_admin_upload_csv(
+def db_admin_upload_csv(
     req: DbAdminCsvUploadRequest,
 ) -> ApiResponse[DbAdminCsvUploadData]:
     """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)。"""
@@ -1326,7 +1335,7 @@ async def db_admin_upload_csv(
 
 
 @router.post("/db-admin/analyze-error", response_model=ApiResponse[DbAdminAiAnalysisData])
-async def db_admin_analyze_error(
+def db_admin_analyze_error(
     req: DbAdminAiAnalysisRequest,
 ) -> ApiResponse[DbAdminAiAnalysisData]:
     """Admin SQL 実行結果の AI 分析(OCI Enterprise AI、未設定時は deterministic)。"""
@@ -1334,7 +1343,7 @@ async def db_admin_analyze_error(
 
 
 @router.post("/db-admin/extract-join-where", response_model=ApiResponse[DbAdminJoinWhereData])
-async def db_admin_extract_join_where(
+def db_admin_extract_join_where(
     req: DbAdminJoinWhereRequest,
 ) -> ApiResponse[DbAdminJoinWhereData]:
     """ビュー DDL から JOIN/WHERE 条件を抽出する(OCI Enterprise AI、未設定時は deterministic)。"""
@@ -1342,7 +1351,7 @@ async def db_admin_extract_join_where(
 
 
 @router.post("/db-admin/import-tabular", response_model=ApiResponse[DbAdminImportTabularData])
-async def db_admin_import_tabular(
+def db_admin_import_tabular(
     req: DbAdminImportTabularRequest,
 ) -> ApiResponse[DbAdminImportTabularData]:
     """CSV/XLSX tabular data を DB admin tool から import する。"""
@@ -1350,7 +1359,7 @@ async def db_admin_import_tabular(
 
 
 @router.get("/db-admin/tables/{table_name}/export.xlsx")
-async def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
+def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
     """DB admin table の列情報を Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_db_admin_table_xlsx(
         table_name,
@@ -1364,7 +1373,7 @@ async def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Resp
 
 
 @router.post("/synthetic-cases", response_model=ApiResponse[SyntheticCasesData])
-async def synthetic_cases(
+def synthetic_cases(
     profile_id: str | None = None, limit: int = 6
 ) -> ApiResponse[SyntheticCasesData]:
     """Synthetic NL2SQL 評価ケースを生成する。"""
@@ -1372,7 +1381,7 @@ async def synthetic_cases(
 
 
 @router.post("/synthetic-data/generate", response_model=ApiResponse[SyntheticDataOperationData])
-async def generate_synthetic_data(
+def generate_synthetic_data(
     req: SyntheticDataGenerateRequest,
 ) -> ApiResponse[SyntheticDataOperationData]:
     """DBMS_CLOUD_AI synthetic table data generation execution。"""
@@ -1383,7 +1392,7 @@ async def generate_synthetic_data(
     "/synthetic-data/operations/{operation_id}",
     response_model=ApiResponse[SyntheticDataOperationStatusData],
 )
-async def synthetic_data_operation_status(
+def synthetic_data_operation_status(
     operation_id: str,
 ) -> ApiResponse[SyntheticDataOperationStatusData]:
     """DBMS_CLOUD_AI synthetic data operation status を返す。"""
@@ -1391,7 +1400,7 @@ async def synthetic_data_operation_status(
 
 
 @router.get("/synthetic-data/results", response_model=ApiResponse[SyntheticDataResultsData])
-async def synthetic_data_results(
+def synthetic_data_results(
     table_name: str,
     limit: int = 100,
 ) -> ApiResponse[SyntheticDataResultsData]:
@@ -1405,6 +1414,6 @@ async def synthetic_data_results(
 
 
 @router.get("/diagnostics", response_model=ApiResponse[DiagnosticsData])
-async def diagnostics() -> ApiResponse[DiagnosticsData]:
+def diagnostics() -> ApiResponse[DiagnosticsData]:
     """OCI / Oracle / NL2SQL エンジン設定の非 secret 診断を返す。"""
     return ApiResponse(data=nl2sql_service.diagnostics())

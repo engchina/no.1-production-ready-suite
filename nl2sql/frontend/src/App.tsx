@@ -20,6 +20,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
+import { AdminSqlPage } from "@/features/nl2sql/pages/AdminSqlPage";
 import { DataManagementPage } from "@/features/nl2sql/pages/DataManagementPage";
 import { DirectSqlPage } from "@/features/nl2sql/pages/DirectSqlPage";
 import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
@@ -107,6 +108,7 @@ function AuthenticatedApplication() {
         <KeepAlivePages />
         <Routes>
         <Route path={APP_ROUTES.dashboard} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+        <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
         <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
         <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
         <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />

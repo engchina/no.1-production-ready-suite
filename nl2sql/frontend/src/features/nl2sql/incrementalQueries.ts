@@ -30,8 +30,8 @@ function profileSummary(profile: Nl2SqlProfile) {
   };
 }
 
-async function legacyCatalog(): Promise<SchemaCatalog> {
-  return legacyCatalogOverride ?? apiGet<SchemaCatalog>("/api/schema/catalog");
+async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
+  return legacyCatalogOverride ?? apiGet<SchemaCatalog>("/api/schema/catalog", { signal });
 }
 
 export const nl2sqlIncrementalKeys = {
@@ -47,12 +47,16 @@ export function useProfileSummaries(query: string) {
   return useInfiniteQuery({
     queryKey: nl2sqlIncrementalKeys.profiles(query.trim()),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ limit: "50", q: query.trim() });
       if (pageParam) params.set("cursor", pageParam);
-      return apiGet<ProfileSummaryPage>(`/api/nl2sql/profiles/search?${params}`).catch(
+      return apiGet<ProfileSummaryPage>(`/api/nl2sql/profiles/search?${params}`, {
+        signal,
+      }).catch(
         async () => {
-          const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles");
+          const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", {
+            signal,
+          });
           const normalizedQuery = query.trim().toLowerCase();
           const items = profiles
             .filter(
@@ -75,11 +79,14 @@ export function useProfileSummaries(query: string) {
 export function useProfileDetail(profileId: string) {
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.profile(profileId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const response = await apiGetWithMetadata<Nl2SqlProfile>(
-        `/api/nl2sql/profiles/${encodeURIComponent(profileId)}`
+        `/api/nl2sql/profiles/${encodeURIComponent(profileId)}`,
+        { signal }
       ).catch(async () => {
-        const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles");
+        const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", {
+          signal,
+        });
         const profile = profiles.find((item) => item.id === profileId);
         if (!profile) throw new Error("指定された profile が見つかりません。");
         return { data: profile, etag: profile.etag ?? "" };
@@ -95,9 +102,9 @@ export function useProfileDetail(profileId: string) {
 export function useSchemaCatalogHead() {
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.schemaHead,
-    queryFn: () =>
-      apiGet<SchemaCatalogHead>("/api/schema/catalog/head").catch(async () => {
-        const catalog = await legacyCatalog();
+    queryFn: ({ signal }) =>
+      apiGet<SchemaCatalogHead>("/api/schema/catalog/head", { signal }).catch(async () => {
+        const catalog = await legacyCatalog(signal);
         return {
           catalog_version: 0,
           schema_fingerprint: catalog.schema_fingerprint ?? "",
@@ -116,7 +123,7 @@ export function useSchemaObjects(query: string, objectType: string, profileId = 
   return useInfiniteQuery({
     queryKey: nl2sqlIncrementalKeys.schemaObjects(query.trim(), objectType, profileId),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({
         limit: "50",
         q: query.trim(),
@@ -124,8 +131,8 @@ export function useSchemaObjects(query: string, objectType: string, profileId = 
       });
       if (pageParam) params.set("cursor", pageParam);
       if (profileId) params.set("profile_id", profileId);
-      return apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`).catch(async () => {
-        const catalog = await legacyCatalog();
+      return apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, { signal }).catch(async () => {
+        const catalog = await legacyCatalog(signal);
         const normalizedQuery = query.trim().toLowerCase();
         const items = catalog.tables
           .filter(
@@ -159,7 +166,11 @@ export function useSchemaObjects(query: string, objectType: string, profileId = 
   });
 }
 
-export async function getSchemaObjectSnapshot(owner: string, objectType: string) {
+export async function getSchemaObjectSnapshot(
+  owner: string,
+  objectType: string,
+  signal?: AbortSignal
+) {
   const names = new Set<string>();
   let cursor = "";
   const seenCursors = new Set<string>();
@@ -171,7 +182,9 @@ export async function getSchemaObjectSnapshot(owner: string, objectType: string)
         type: objectType.trim().toUpperCase(),
       });
       if (cursor) params.set("cursor", cursor);
-      const page = await apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`);
+      const page = await apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
+        signal,
+      });
       for (const object of page.items) {
         names.add(`${object.owner}.${object.object_name}`.toUpperCase());
       }
@@ -182,7 +195,7 @@ export async function getSchemaObjectSnapshot(owner: string, objectType: string)
     } while (cursor);
     return [...names].sort();
   } catch {
-    const catalog = await legacyCatalog();
+    const catalog = await legacyCatalog(signal);
     return catalog.tables
       .filter(
         (table) =>
@@ -196,11 +209,16 @@ export async function getSchemaObjectSnapshot(owner: string, objectType: string)
   }
 }
 
-export async function getSchemaObjectDetail(owner: string, objectName: string) {
+export async function getSchemaObjectDetail(
+  owner: string,
+  objectName: string,
+  signal?: AbortSignal
+) {
   return apiGet<SchemaObjectDetail>(
-    `/api/schema/objects/${encodeURIComponent(owner)}/${encodeURIComponent(objectName)}`
+    `/api/schema/objects/${encodeURIComponent(owner)}/${encodeURIComponent(objectName)}`,
+    { signal }
   ).catch(async () => {
-    const catalog = await legacyCatalog();
+    const catalog = await legacyCatalog(signal);
     const table = catalog.tables.find(
       (item) =>
         item.owner.toUpperCase() === owner.toUpperCase() &&
@@ -248,7 +266,8 @@ export function useSchemaRefreshJob(jobId: string) {
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.schemaRefreshJob(jobId),
-    queryFn: () => apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`),
+    queryFn: ({ signal }) =>
+      apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, { signal }),
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;

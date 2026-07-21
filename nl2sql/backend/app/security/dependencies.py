@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from fastapi import HTTPException, Request
-from starlette.concurrency import run_in_threadpool
 
+from app.api.concurrency import run_sync_io as run_in_threadpool
 from app.settings import get_settings
 
 from .domain import SYSTEM_ADMIN_ROLE_CODE, Principal

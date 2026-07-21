@@ -98,6 +98,14 @@ export function SystemTablesCard() {
     if (accepted) execute(true);
   };
 
+  const refreshStatus = async () => {
+    setOperationError("");
+    const result = await statusQuery.refetch();
+    if (!result.error) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
   return (
     <Card
       id="system-tables"
@@ -140,7 +148,7 @@ export function SystemTablesCard() {
         {statusQuery.isError ? (
           <DatabaseUnavailableNotice
             mode="banner"
-            onRetry={() => void statusQuery.refetch()}
+            onRetry={() => void refreshStatus()}
             isRetrying={statusQuery.isFetching}
           />
         ) : null}
@@ -216,10 +224,7 @@ export function SystemTablesCard() {
               <Button
                 size="md"
                 variant="secondary"
-                onClick={() => {
-                  setOperationError("");
-                  void statusQuery.refetch();
-                }}
+                onClick={() => void refreshStatus()}
                 loading={statusQuery.isFetching}
                 disabled={operation.isPending}
               >

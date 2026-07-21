@@ -96,8 +96,6 @@ export function DatabaseSettingsClient() {
   const [form, setForm] = useState<DatabaseSettingsForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<DatabaseSettingsFormErrors>({});
   const [passwordVisible, setPasswordVisible] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [uploadedWalletFileName, setUploadedWalletFileName] = useState<string | null>(null);
   const [optimisticSettings, setOptimisticSettings] = useState<DatabaseSettingsData | null>(null);
 
   const userRef = useRef<HTMLInputElement>(null);
@@ -109,7 +107,6 @@ export function DatabaseSettingsClient() {
     if (query.data) {
       setForm(formFromSettings(query.data));
       setErrors({});
-      setSaved(false);
       setOptimisticSettings(null);
     }
   }, [query.data]);
@@ -133,7 +130,6 @@ export function DatabaseSettingsClient() {
     if (!result) return;
     setForm(formFromSettings(result.settings));
     setOptimisticSettings(result.settings);
-    setSaved(false);
     resetTest();
     if (result.status === "downloaded") {
       toast.success(t("settings.database.wallet.autoDownload.success"));
@@ -143,7 +139,6 @@ export function DatabaseSettingsClient() {
   function updateForm(update: Partial<DatabaseSettingsForm>) {
     setForm((current) => ({ ...current, ...update }));
     setErrors((current) => clearChangedErrors(current, update));
-    setSaved(false);
     resetTest();
   }
 
@@ -158,7 +153,7 @@ export function DatabaseSettingsClient() {
         setForm(formFromSettings(data));
         setOptimisticSettings(data);
         setErrors({});
-        setSaved(true);
+        toast.success(t("settings.database.actions.saved"));
       },
     });
   }
@@ -198,8 +193,6 @@ export function DatabaseSettingsClient() {
       return;
     }
 
-    setSaved(false);
-    setUploadedWalletFileName(null);
     setErrors((current) => ({ ...current, wallet: undefined }));
     resetWalletDownload();
     resetTest();
@@ -207,8 +200,7 @@ export function DatabaseSettingsClient() {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
         setOptimisticSettings(data);
-        setUploadedWalletFileName(file.name);
-        setSaved(true);
+        toast.success(t("settings.database.actions.walletUploaded", { fileName: file.name }));
       },
     });
   }
@@ -320,7 +312,6 @@ export function DatabaseSettingsClient() {
                 autoDownloadPending={walletDownload.isPending}
                 autoDownloadError={walletDownload.isError ? walletDownloadError : null}
                 canAutoDownload={Boolean(settings.adb_ocid.trim())}
-                uploadedFileName={uploadedWalletFileName}
                 uploadError={walletUpload.isError ? walletUploadError : null}
                 validationError={errors.wallet}
                 onUpload={uploadWallet}
@@ -349,9 +340,6 @@ export function DatabaseSettingsClient() {
                     ? t("settings.database.actions.testing")
                     : t("settings.database.actions.testDb")}
                 </Button>
-                {saved ? (
-                  <FormStatus tone="success" message={t("settings.database.actions.saved")} />
-                ) : null}
                 {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
               </div>
 
@@ -937,7 +925,6 @@ function WalletUploadField({
   autoDownloadPending,
   autoDownloadError,
   canAutoDownload,
-  uploadedFileName,
   uploadError,
   validationError,
   onUpload,
@@ -949,7 +936,6 @@ function WalletUploadField({
   autoDownloadPending: boolean;
   autoDownloadError: string | null;
   canAutoDownload: boolean;
-  uploadedFileName: string | null;
   uploadError: string | null;
   validationError?: string;
   onUpload: (file: File) => void;
@@ -1034,13 +1020,6 @@ function WalletUploadField({
         </div>
       ) : null}
 
-      {uploadedFileName ? (
-        <FormStatus
-          tone="success"
-          className="text-xs"
-          message={t("settings.database.actions.walletUploaded", { fileName: uploadedFileName })}
-        />
-      ) : null}
       {validationError ? (
         <FormStatus tone="warning" className="text-xs" message={validationError} />
       ) : null}

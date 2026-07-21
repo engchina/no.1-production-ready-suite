@@ -10,7 +10,15 @@ export interface ApiEnvelope<T> {
   request_id?: string;
 }
 
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+}
+
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+export function isAbortError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError";
+}
 
 function readCookie(name: string): string | null {
   const prefix = `${encodeURIComponent(name)}=`;
@@ -33,6 +41,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   try {
     response = await fetch(path, { ...init, headers, credentials: "include" });
   } catch (cause) {
+    if (isAbortError(cause)) throw cause;
     if (!isDatabaseReadinessRequest(path)) await confirmDatabaseUnavailable();
     throw cause;
   }
@@ -67,22 +76,30 @@ export interface ApiResponseMetadata<T> {
   etag: string;
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const response = await apiFetch(path);
+export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await apiFetch(path, { signal: options.signal });
   return parseJson<T>(response);
 }
 
-export async function apiGetWithMetadata<T>(path: string): Promise<ApiResponseMetadata<T>> {
-  const response = await apiFetch(path);
+export async function apiGetWithMetadata<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<ApiResponseMetadata<T>> {
+  const response = await apiFetch(path, { signal: options.signal });
   const data = await parseJson<T>(response);
   return { data, etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "" };
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  options: ApiRequestOptions = {}
+): Promise<T> {
   const response = await apiFetch(path, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options.signal,
   });
   return parseJson<T>(response);
 }
@@ -90,23 +107,27 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPatch<T>(
   path: string,
   body?: unknown,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  options: ApiRequestOptions = {}
 ): Promise<T> {
   const response = await apiFetch(path, {
     method: "PATCH",
     headers: { Accept: "application/json", "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options.signal,
   });
   return parseJson<T>(response);
 }
 
 export async function apiDelete<T>(
   path: string,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  options: ApiRequestOptions = {}
 ): Promise<T> {
   const response = await apiFetch(path, {
     method: "DELETE",
     headers: { Accept: "application/json", ...headers },
+    signal: options.signal,
   });
   return parseJson<T>(response);
 }
@@ -512,14 +533,22 @@ function jsonBody(body: unknown): RequestInit {
 }
 
 export const api = {
-  getDatabaseStatus: () => settingsRequest<DatabaseStatusData>("/api/ready/database"),
-  getPersistenceStatus: () =>
-    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence"),
+  getDatabaseStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<DatabaseStatusData>("/api/ready/database", {
+      signal: options.signal,
+    }),
+  getPersistenceStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence", {
+      signal: options.signal,
+    }),
   recoverPersistence: () =>
     settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence/recover", {
       method: "POST",
     }),
-  getModelSettings: () => settingsRequest<ModelSettingsData>("/api/settings/model"),
+  getModelSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<ModelSettingsData>("/api/settings/model", {
+      signal: options.signal,
+    }),
   updateModelSettings: (body: ModelSettingsPayload) =>
     settingsRequest<ModelSettingsData>("/api/settings/model", {
       method: "PATCH",
@@ -531,15 +560,23 @@ export const api = {
   testModelSettings: (body: ModelSettingsTestRequest) =>
     settingsRequest<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
 
-  getDatabaseSettings: () => settingsRequest<DatabaseSettingsData>("/api/settings/database"),
-  getSystemTablesStatus: () =>
-    settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables"),
+  getDatabaseSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<DatabaseSettingsData>("/api/settings/database", {
+      signal: options.signal,
+    }),
+  getSystemTablesStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables", {
+      signal: options.signal,
+    }),
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     settingsRequest<SystemTablesOperationData>(
       "/api/settings/database/system-tables/initialize",
       jsonBody(body)
     ),
-  getSchemaOwners: () => settingsRequest<SchemaOwnersData>("/api/schema/owners"),
+  getSchemaOwners: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SchemaOwnersData>("/api/schema/owners", {
+      signal: options.signal,
+    }),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     settingsRequest<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -565,7 +602,10 @@ export const api = {
       jsonBody(body)
     ),
 
-  getAdbInfo: () => settingsRequest<AdbInfoData>("/api/settings/database/adb"),
+  getAdbInfo: (options: ApiRequestOptions = {}) =>
+    settingsRequest<AdbInfoData>("/api/settings/database/adb", {
+      signal: options.signal,
+    }),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
     settingsRequest<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
   startAdb: () =>
@@ -573,8 +613,10 @@ export const api = {
   stopAdb: () =>
     settingsRequest<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
-  getUploadStorageSettings: () =>
-    settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage"),
+  getUploadStorageSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      signal: options.signal,
+    }),
   updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
     settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage", {
       method: "PATCH",
@@ -582,7 +624,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  getOciSettings: () => settingsRequest<OciSettingsData>("/api/settings/oci"),
+  getOciSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<OciSettingsData>("/api/settings/oci", {
+      signal: options.signal,
+    }),
   updateOciSettings: (body: OciSettingsUpdate) =>
     settingsRequest<OciSettingsData>("/api/settings/oci", {
       method: "PATCH",

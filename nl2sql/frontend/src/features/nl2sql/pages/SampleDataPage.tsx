@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbAdminExecutionResult,
   ExecutionConfirmationField,
@@ -114,6 +115,8 @@ export function SampleDataPage() {
   const [sampleResult, setSampleResult] = useState<SampleDataMutationData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const expectedConfirmation = sampleInfo?.confirmation ?? "SQL_ASSIST_SAMPLE";
   const confirmationMatched = sampleConfirmation.trim() === expectedConfirmation;
@@ -127,19 +130,31 @@ export function SampleDataPage() {
   }, [activeAction, sampleInfo, sampleStep]);
 
   const load = async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading("load");
     setMessage("");
     try {
-      setSampleInfo(await apiGet<SampleDataInfo>("/api/nl2sql/sample-data"));
+      await runScopedRequest(async (signal) => {
+        const data = await apiGet<SampleDataInfo>("/api/nl2sql/sample-data", { signal });
+        if (!signal.aborted && sequence === loadSequence.current) setSampleInfo(data);
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const reloadSampleState = async () => {

@@ -15,11 +15,19 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import { useAuth } from "./AuthProvider";
 import { securityApi } from "./api";
 import type { DeepSecPlan, DeepSecStatus, DeepSecStep, DeepSecVerification } from "./types";
+
+function loadErrorMessage(cause: unknown) {
+  return cause instanceof Error && cause.message.trim()
+    ? cause.message
+    : t("security.common.loadError");
+}
 
 function stepStatus(step: DeepSecStep) {
   if (step.status === "APPLIED") return { variant: "success" as const, label: t("security.deepsec.complete") };
@@ -36,45 +44,83 @@ export function SecurityDeepSecPage() {
   const [status, setStatus] = useState<DeepSecStatus | null>(null);
   const [plan, setPlan] = useState<DeepSecPlan | null>(null);
   const [verification, setVerification] = useState<DeepSecVerification | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [planLoading, setPlanLoading] = useState(true);
   const [busyStep, setBusyStep] = useState<number | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [loadError, setLoadError] = useState("");
+  const [statusLoadError, setStatusLoadError] = useState("");
+  const [planLoadError, setPlanLoadError] = useState("");
   const [actionError, setActionError] = useState("");
-  const loadSequence = useRef(0);
+  const statusLoadSequence = useRef(0);
+  const planLoadSequence = useRef(0);
+  const { abortAll: abortStatusRequests, run: runStatusRequest } = useRequestScope();
+  const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
+  const refreshing = statusLoading || planLoading;
 
-  const load = async () => {
-    const sequence = loadSequence.current + 1;
-    loadSequence.current = sequence;
-    setLoading(true);
-    setLoadError("");
-    setActionError("");
+  const loadStatus = async () => {
+    const sequence = statusLoadSequence.current + 1;
+    statusLoadSequence.current = sequence;
+    setStatusLoading(true);
+    setStatusLoadError("");
     try {
-      const [nextStatus, nextPlan] = await Promise.all([
-        securityApi.deepSecStatus(),
-        securityApi.deepSecPlan(),
-      ]);
-      if (sequence === loadSequence.current) {
+      await runStatusRequest(async (signal) => {
+        const nextStatus = await securityApi.deepSecStatus({ signal });
+        if (signal.aborted || sequence !== statusLoadSequence.current) return;
         setStatus(nextStatus);
-        setPlan(nextPlan);
-      }
+      });
     } catch (cause) {
-      const nextError =
-        cause instanceof Error && cause.message.trim()
-          ? cause.message
-          : t("security.common.loadError");
-      if (sequence === loadSequence.current) setLoadError(nextError);
+      if (isAbortError(cause)) {
+        return;
+      }
+      if (sequence === statusLoadSequence.current) {
+        setStatusLoadError(loadErrorMessage(cause));
+      }
     } finally {
-      if (sequence === loadSequence.current) setLoading(false);
+      if (sequence === statusLoadSequence.current) setStatusLoading(false);
     }
   };
 
+  const loadPlan = async () => {
+    const sequence = planLoadSequence.current + 1;
+    planLoadSequence.current = sequence;
+    setPlanLoading(true);
+    setPlanLoadError("");
+    try {
+      await runPlanRequest(async (signal) => {
+        const nextPlan = await securityApi.deepSecPlan({ signal });
+        if (signal.aborted || sequence !== planLoadSequence.current) return;
+        setPlan(nextPlan);
+      });
+    } catch (cause) {
+      if (isAbortError(cause)) {
+        return;
+      }
+      if (sequence === planLoadSequence.current) {
+        setPlanLoadError(loadErrorMessage(cause));
+      }
+    } finally {
+      if (sequence === planLoadSequence.current) setPlanLoading(false);
+    }
+  };
+
+  const load = () => {
+    setActionError("");
+    void loadStatus();
+    void loadPlan();
+  };
+
   useEffect(() => {
-    void load();
+    load();
+    return () => {
+      statusLoadSequence.current += 1;
+      planLoadSequence.current += 1;
+      abortStatusRequests();
+      abortPlanRequests();
+    };
   }, []);
 
   const canApply = (step: DeepSecStep) => {
-    if (!plan?.deepsec_enabled || plan.driver_mode !== "thin" || step.status === "APPLIED") return false;
+    if (!plan?.deepsec_enabled || step.status === "APPLIED") return false;
     return plan.steps.filter((item) => item.step_no < step.step_no).every((item) => item.status === "APPLIED");
   };
 
@@ -95,10 +141,12 @@ export function SecurityDeepSecPage() {
     try {
       await securityApi.applyDeepSecStep(plan.version, step);
       toast.success(t("security.deepsec.applied"));
-      await load();
+      void loadStatus();
+      await loadPlan();
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
-      await load();
+      void loadStatus();
+      await loadPlan();
     } finally {
       setBusyStep(null);
     }
@@ -134,25 +182,27 @@ export function SecurityDeepSecPage() {
         title={t("nav.securityDeepSec")}
         subtitle={t("security.deepsec.subtitle")}
         actions={
-          <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
-            <RefreshCw size={14} aria-hidden />
+          <Button variant="secondary" size="sm" onClick={load}>
+            <RefreshCw size={14} className={refreshing ? "animate-spin" : undefined} aria-hidden />
             {t("security.common.reload")}
           </Button>
         }
       />
       <main className="space-y-5 p-4 lg:p-8">
-        {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
         {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
-        {plan && (!plan.deepsec_enabled || plan.driver_mode !== "thin") ? (
-          <Banner severity="warning">{t("security.deepsec.disabled")}</Banner>
+        {plan && !plan.deepsec_enabled ? (
+          <Banner severity="warning">{t("security.deepsec.banner.disabled")}</Banner>
         ) : null}
         <Card>
           <CardHeader>
             <CardTitle>{t("security.deepsec.status")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {loading ? (
-              <p className="text-sm text-muted">{t("security.common.loading")}</p>
+            {statusLoadError ? (
+              <Banner severity="danger">{statusLoadError}</Banner>
+            ) : null}
+            {statusLoading && !status ? (
+              <p className="text-sm text-muted" role="status">{t("security.deepsec.statusLoading")}</p>
             ) : status ? (
               <>
                 <Banner severity={status.configured ? "success" : "info"}>{status.message}</Banner>
@@ -172,6 +222,9 @@ export function SecurityDeepSecPage() {
                 </dl>
               </>
             ) : null}
+            {statusLoading && status ? (
+              <p className="text-xs text-muted" role="status">{t("security.deepsec.statusLoading")}</p>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -188,6 +241,31 @@ export function SecurityDeepSecPage() {
               </Button>
             ) : null}
           </div>
+          {planLoadError ? (
+            <Card>
+              <CardContent className="space-y-3">
+                <Banner severity="danger">{planLoadError}</Banner>
+                <Button variant="secondary" size="sm" onClick={() => void loadPlan()}>
+                  <RefreshCw size={14} aria-hidden />
+                  {t("security.common.reload")}
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+          {planLoading && !plan ? (
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted" role="status">{t("security.deepsec.planLoading")}</p>
+              </CardContent>
+            </Card>
+          ) : null}
+          {plan && plan.steps.length === 0 ? (
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted">{t("security.deepsec.planEmpty")}</p>
+              </CardContent>
+            </Card>
+          ) : null}
           {plan?.steps.map((step) => {
             const statusBadge = stepStatus(step);
             return (

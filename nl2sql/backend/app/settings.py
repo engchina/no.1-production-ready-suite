@@ -78,8 +78,8 @@ class Settings(BaseServiceSettings):
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""
-    # Deep Data Security の local END USER は python-oracledb Thin 接続を使う。
-    # 既存環境との互換性のため DeepSec 無効時は thick を既定に保つ。
+    # Deep Data Security は共有 local END USER の password direct logon を使うため
+    # Thin/Thick の両方に対応する。payload API/SPI を導入する場合は Thin が必要。
     oracle_driver_mode: str = "thick"
     oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
     oracle_wallet_dir: str = ""

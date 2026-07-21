@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Code2, DatabaseZap, Link2, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
@@ -39,7 +40,6 @@ import type {
 import { formatElapsed } from "../useOperationTimer";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
-type MessageTone = "success" | "error";
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "entries", label: t("feedbackManagement.tabs.entries"), icon: MessageSquareText },
@@ -101,7 +101,8 @@ export function FeedbackManagementPage() {
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<MessageTone>("success");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const profiles = dbProfiles?.profiles ?? [];
   const selectAiFeedbackItems = feedback?.items ?? [];
@@ -131,64 +132,90 @@ export function FeedbackManagementPage() {
     [history, selectedFeedbackId]
   );
 
-  const fetchSelectAiFeedback = (name: string) =>
+  const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
-      `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(name)}&limit=50`
+      `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(name)}&limit=50`,
+      { signal }
     );
 
-  const fetchAppFeedback = (cursor = "") => {
+  const fetchAppFeedback = (cursor = "", signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: "20", rating: feedbackFilter });
     if (cursor) params.set("cursor", cursor);
     if (appProfileFilter) params.set("profile_id", appProfileFilter);
     if (feedbackSearch.trim()) params.set("q", feedbackSearch.trim());
-    return apiGet<FeedbackListData>(`/api/nl2sql/feedback?${params.toString()}`);
+    return apiGet<FeedbackListData>(`/api/nl2sql/feedback?${params.toString()}`, {
+      signal,
+    });
   };
 
-  const load = async () => {
+  const load = async (announce = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading("load");
     setMessage("");
     try {
-      const [dbProfileData, appProfileData, appFeedbackData, indexData, entriesData, configData] = await Promise.all([
-        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
-        fetchAppFeedback(),
-        apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
-        apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
-        apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
-      ]);
-      const hasCurrentProfile = dbProfileData.profiles.some((profile) => profile.name === profileName);
-      const nextProfile = !profileName
-        ? dbProfileData.profiles[0]?.name || ""
-        : hasCurrentProfile
-          ? profileName
-          : "";
-      const feedbackData = nextProfile ? await fetchSelectAiFeedback(nextProfile) : null;
-      setDbProfiles(dbProfileData);
-      setProfileName(nextProfile);
-      setFeedback(feedbackData);
-      setSelectedIndex(0);
-      setAppProfiles(appProfileData);
-      setHistory(appFeedbackData.items);
-      setFeedbackTotal(appFeedbackData.total);
-      setFeedbackNextCursor(appFeedbackData.next_cursor);
-      setFeedbackCursor("");
-      setFeedbackCursorStack([]);
-      setFeedbackPage(1);
-      setFeedbackIndex(indexData);
-      setFeedbackEntries(entriesData);
-      setFeedbackConfig(configData);
-      setSelectedFeedbackId((current) =>
-        appFeedbackData.items.some((item) => item.id === current) ? current : appFeedbackData.items[0]?.id || ""
-      );
+      await runScopedRequest(async (signal) => {
+        const [
+          dbProfileData,
+          appProfileData,
+          appFeedbackData,
+          indexData,
+          entriesData,
+          configData,
+        ] = await Promise.all([
+          apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL, {
+            signal,
+          }),
+          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
+          fetchAppFeedback("", signal),
+          apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index", { signal }),
+          apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries", { signal }),
+          apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", { signal }),
+        ]);
+        const hasCurrentProfile = dbProfileData.profiles.some(
+          (profile) => profile.name === profileName
+        );
+        const nextProfile = !profileName
+          ? dbProfileData.profiles[0]?.name || ""
+          : hasCurrentProfile
+            ? profileName
+            : "";
+        const feedbackData = nextProfile
+          ? await fetchSelectAiFeedback(nextProfile, signal)
+          : null;
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setDbProfiles(dbProfileData);
+        setProfileName(nextProfile);
+        setFeedback(feedbackData);
+        setSelectedIndex(0);
+        setAppProfiles(appProfileData);
+        setHistory(appFeedbackData.items);
+        setFeedbackTotal(appFeedbackData.total);
+        setFeedbackNextCursor(appFeedbackData.next_cursor);
+        setFeedbackCursor("");
+        setFeedbackCursorStack([]);
+        setFeedbackPage(1);
+        setFeedbackIndex(indexData);
+        setFeedbackEntries(entriesData);
+        setFeedbackConfig(configData);
+        setSelectedFeedbackId((current) =>
+          appFeedbackData.items.some((item) => item.id === current)
+            ? current
+            : appFeedbackData.items[0]?.id || ""
+        );
+        if (announce) toast.success(t("common.action.refreshed"));
+      });
     } catch (err) {
-      setMessageTone("error");
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
-  const refreshSelectAiFeedback = async (name = profileName) => {
+  const refreshSelectAiFeedback = async (name = profileName, announce = false) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     setLoading("feedback");
@@ -196,8 +223,8 @@ export function FeedbackManagementPage() {
     try {
       setFeedback(await fetchSelectAiFeedback(trimmed));
       setSelectedIndex(0);
+      if (announce) toast.success(t("common.action.refreshed"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
     } finally {
       setLoading("");
@@ -227,7 +254,6 @@ export function FeedbackManagementPage() {
         setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
     } finally {
       setLoading("");
@@ -269,12 +295,12 @@ export function FeedbackManagementPage() {
         profile_name: profileName,
         sql_text: selectedSelectAiFeedback.sql_text,
       });
-      setMessageTone(data.executed ? "success" : "error");
-      setMessage(data.warnings.join(" ") || t("feedbackManagement.deleted"));
+      const resultMessage = data.warnings.join(" ") || t("feedbackManagement.deleted");
+      if (data.executed) toast.success(resultMessage);
+      else setMessage(resultMessage);
       setFeedback(await fetchSelectAiFeedback(profileName));
       setSelectedIndex(0);
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.delete"));
     } finally {
       setLoading("");
@@ -291,12 +317,12 @@ export function FeedbackManagementPage() {
         similarity_threshold: similarityThreshold,
         match_limit: matchLimit,
       });
-      setMessageTone(data.executed ? "success" : "error");
-      setMessage(data.warnings.join(" ") || t("feedbackManagement.index.updated"));
+      const resultMessage = data.warnings.join(" ") || t("feedbackManagement.index.updated");
+      if (data.executed) toast.success(resultMessage);
+      else setMessage(resultMessage);
       setFeedback(await fetchSelectAiFeedback(profileName));
       setSelectedIndex(0);
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.update"));
     } finally {
       setLoading("");
@@ -314,10 +340,8 @@ export function FeedbackManagementPage() {
         comment: feedbackComment.trim(),
       });
       await refreshAppFeedback();
-      setMessageTone("success");
-      setMessage(t("feedbackManagement.appFeedback.saved"));
+      toast.success(t("feedbackManagement.appFeedback.saved"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
     } finally {
       setLoading("");
@@ -338,10 +362,8 @@ export function FeedbackManagementPage() {
     try {
       await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
       await refreshAppFeedback();
-      setMessageTone("success");
-      setMessage(t("feedbackManagement.appFeedback.cleared"));
+      toast.success(t("feedbackManagement.appFeedback.cleared"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
     } finally {
       setLoading("");
@@ -361,8 +383,8 @@ export function FeedbackManagementPage() {
     try {
       setFeedbackIndex(await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/rebuild", {}));
       setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
+      toast.success(t("feedbackManagement.similarityIndex.rebuilt"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackIndex"));
     } finally {
       setLoading("");
@@ -383,8 +405,8 @@ export function FeedbackManagementPage() {
     try {
       setFeedbackIndex(await apiPost<FeedbackIndexData>("/api/nl2sql/feedback-index/clear", {}));
       setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
+      toast.success(t("feedbackManagement.similarityIndex.cleared"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackIndex"));
     } finally {
       setLoading("");
@@ -397,10 +419,8 @@ export function FeedbackManagementPage() {
     setMessage("");
     try {
       setFeedbackConfig(await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig));
-      setMessageTone("success");
-      setMessage(t("feedbackManagement.similarityIndex.configSaved"));
+      toast.success(t("feedbackManagement.similarityIndex.configSaved"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackConfig"));
     } finally {
       setLoading("");
@@ -417,10 +437,8 @@ export function FeedbackManagementPage() {
         })
       );
       setHistory((current) => current.filter((item) => item.id !== historyId));
-      setMessageTone("success");
-      setMessage(t("feedbackManagement.similarityIndex.entryDeleted"));
+      toast.success(t("feedbackManagement.similarityIndex.entryDeleted"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackEntries"));
     } finally {
       setLoading("");
@@ -429,6 +447,10 @@ export function FeedbackManagementPage() {
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   useEffect(() => {
@@ -456,7 +478,7 @@ export function FeedbackManagementPage() {
         title={t("nav.feedbackManagement")}
         subtitle={t("feedbackManagement.subtitle")}
         actions={
-          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load()}>
+          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load(true)}>
             <RefreshCw size={15} aria-hidden="true" />
             <span>{t("feedbackManagement.action.reload")}</span>
           </Button>
@@ -485,7 +507,7 @@ export function FeedbackManagementPage() {
               size="sm"
               loading={loading === "feedback"}
               disabled={!profileName.trim()}
-              onClick={() => void refreshSelectAiFeedback()}
+              onClick={() => void refreshSelectAiFeedback(profileName, true)}
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("feedbackManagement.action.refresh")}</span>
@@ -493,9 +515,7 @@ export function FeedbackManagementPage() {
           }
         />
 
-        <PageNotice
-          notice={message ? { tone: messageTone === "error" ? "danger" : "success", message } : null}
-        />
+        <PageNotice notice={message ? { tone: "danger", message } : null} />
 
         <DbObjectManagementTabs
           idPrefix="feedback-management"

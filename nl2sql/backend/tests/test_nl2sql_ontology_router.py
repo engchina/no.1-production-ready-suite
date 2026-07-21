@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -796,6 +799,55 @@ async def test_http_contract_accepts_frontend_confirmation_and_draft_payloads(
             ]
             == "受注"
         )
+
+
+@pytest.mark.asyncio
+async def test_ontology_proposals_does_not_block_unrelated_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingOntologyRuntime:
+        def list_profile_proposals(self, profile_id: str) -> list[Any]:
+            assert profile_id == "sales"
+            started.set()
+            release.wait(timeout=1.0)
+            return []
+
+    monkeypatch.setattr(
+        ontology_router_module,
+        "ontology_runtime",
+        _BlockingOntologyRuntime(),
+    )
+    timer = threading.Timer(0.5, release.set)
+    timer.start()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        proposal_task = asyncio.create_task(
+            client.get("/api/nl2sql/profiles/sales/ontology-proposals")
+        )
+        try:
+            started_at = time.perf_counter()
+            assert await asyncio.to_thread(started.wait, 1.0)
+            assert time.perf_counter() - started_at < 0.2
+
+            permissions_response = await asyncio.wait_for(
+                client.get("/api/security/permissions"),
+                timeout=0.2,
+            )
+            assert permissions_response.status_code == 200
+        finally:
+            release.set()
+            timer.cancel()
+        proposal_response = await asyncio.wait_for(proposal_task, timeout=1.0)
+        assert proposal_response.status_code == 200
+        assert proposal_response.json()["data"]["proposals"] == []
 
 
 def test_pure_physical_published_follows_schema_drift_automatically(

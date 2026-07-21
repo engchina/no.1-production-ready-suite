@@ -20,6 +20,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { toast } from "@engchina/production-ready-ui";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +34,7 @@ import {
 import {
   ApiError,
   api,
+  isAbortError,
   type OciConfigReadData,
   type OciConfigTestResult,
   type OciSettingsData,
@@ -55,6 +57,7 @@ import {
   type OciValidationCode,
   type OciValidationResult,
 } from "@/lib/oci-settings";
+import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 
 type FeedbackState = "idle" | "loading" | "success" | "error";
@@ -111,41 +114,45 @@ export function OciSettingsClient() {
   const [namespaceFetchMessage, setNamespaceFetchMessage] = useState("");
   const [configTestState, setConfigTestState] = useState<ConfigTestState>({ phase: "idle" });
   const keyFileInputRef = useRef<HTMLInputElement | null>(null);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   useEffect(() => {
-    let active = true;
     const storedDraft = readStoredOciSettingsDraft();
     setDraft(storedDraft);
 
-    void Promise.allSettled([api.getOciSettings(), api.getUploadStorageSettings()]).then(
-      ([ociResult, storageResult]) => {
-        if (!active) return;
+    void runScopedRequest(async (signal) => {
+      const [ociResult, storageResult] = await Promise.allSettled([
+        api.getOciSettings({ signal }),
+        api.getUploadStorageSettings({ signal }),
+      ]);
+      if (signal.aborted) return;
 
-        setDraft((current) => {
-          let next = current;
-          if (ociResult.status === "fulfilled" && ociResult.value) {
-            next = normalizeOciSettingsDraft({
-              ...next,
-              ...runtimeOciSettingsToDraft(ociResult.value),
-            });
-          }
-          if (storageResult.status === "fulfilled" && storageResult.value) {
-            next = normalizeOciSettingsDraft({
-              ...next,
-              ...runtimeObjectStorageSettingsToDraft(storageResult.value),
-            });
-          }
-          return next;
-        });
-
+      setDraft((current) => {
+        let next = current;
         if (ociResult.status === "fulfilled" && ociResult.value) {
-          setKeyFileExists(ociResult.value.key_file_exists);
+          next = normalizeOciSettingsDraft({
+            ...next,
+            ...runtimeOciSettingsToDraft(ociResult.value),
+          });
         }
+        if (storageResult.status === "fulfilled" && storageResult.value) {
+          next = normalizeOciSettingsDraft({
+            ...next,
+            ...runtimeObjectStorageSettingsToDraft(storageResult.value),
+          });
+        }
+        return next;
+      });
+
+      if (ociResult.status === "fulfilled" && ociResult.value) {
+        setKeyFileExists(ociResult.value.key_file_exists);
       }
-    );
+    }).catch((cause: unknown) => {
+      if (isAbortError(cause)) return;
+    });
 
     return () => {
-      active = false;
+      abortAll();
     };
   }, []);
 
@@ -196,7 +203,8 @@ export function OciSettingsClient() {
           ...runtimeOciSettingsToDraft(saved),
         })
       );
-      setAuthSaveState("success");
+      setAuthSaveState("idle");
+      toast.success(t("settings.oci.message.saved"));
     } catch {
       setAuthSaveState("error");
       setConfigTestState({ phase: "idle" });
@@ -232,7 +240,8 @@ export function OciSettingsClient() {
           ...runtimeObjectStorageSettingsToDraft(saved),
         })
       );
-      setStorageSaveState("success");
+      setStorageSaveState("idle");
+      toast.success(t("settings.oci.message.storageSaved"));
     } catch {
       setStorageSaveState("error");
     }
@@ -270,9 +279,10 @@ export function OciSettingsClient() {
         }
         return next;
       });
-      setConfigImportState("success");
+      setConfigImportState("idle");
       setAuthSaveState("idle");
       setKeyFileState("idle");
+      toast.success(t("settings.oci.message.configImported"));
     } catch (error) {
       setConfigImportState("error");
       setConfigImportMessage(
@@ -296,6 +306,7 @@ export function OciSettingsClient() {
       setKeyFileExists(true);
       setKeyFileState("success");
       setConfigTestState({ phase: "idle" });
+      toast.success(t("settings.oci.message.keyUploaded"));
     } catch (error) {
       setKeyFileState("error");
       setKeyFileMessage(
@@ -337,6 +348,7 @@ export function OciSettingsClient() {
       });
       setStorageSaveState("idle");
       setNamespaceFetchState("success");
+      toast.success(t("settings.oci.message.namespaceFetched"));
     } catch (error) {
       setNamespaceFetchState("error");
       setNamespaceFetchMessage(

@@ -51,9 +51,8 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         href: APP_ROUTES.directSql,
         labelKey: "nav.directSql",
-        sidebarLabelKey: "nav.directSql.sidebar",
         icon: Code2,
-        permission: "settings.database.sql_execute",
+        permission: "search.view",
       },
       { href: APP_ROUTES.sqlAnalysis, labelKey: "nav.sqlAnalysis", icon: ShieldCheck, permission: "search.view" },
       { href: APP_ROUTES.sqlToQuestion, labelKey: "nav.sqlToQuestion", icon: ArrowRightLeft, permission: "search.view" },
@@ -63,6 +62,12 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.prepare",
     items: [
+      {
+        href: APP_ROUTES.adminSql,
+        labelKey: "nav.adminSql",
+        icon: Code2,
+        permission: "settings.database.sql_execute",
+      },
       { href: APP_ROUTES.tableManagement, labelKey: "nav.tableManagement", icon: Table2, permission: "documents.view" },
       { href: APP_ROUTES.viewManagement, labelKey: "nav.viewManagement", icon: Eye, permission: "documents.view" },
       { href: APP_ROUTES.dataManagement, labelKey: "nav.dataManagement", icon: FileSpreadsheet, permission: "documents.view" },

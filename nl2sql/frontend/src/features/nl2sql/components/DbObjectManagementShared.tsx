@@ -1,4 +1,4 @@
-import { Children, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Children, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Check,
@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -637,8 +637,6 @@ export function DbObjectDetailPanel({
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
-  const [copied, setCopied] = useState(false);
-
   if (loading) return <DbObjectDetailSkeleton idPrefix={idPrefix} />;
 
   if (!detail) {
@@ -652,10 +650,9 @@ export function DbObjectDetailPanel({
   const copyDdl = async () => {
     try {
       await navigator.clipboard.writeText(detail.ddl);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      toast.success(t("common.action.copied"));
     } catch {
-      downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
+      toast.error(t("common.action.copyFailed"));
     }
   };
   const detailTabs = [
@@ -815,14 +812,21 @@ export function DbObjectDetailPanel({
         >
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
-              {copied ? t("dbAdmin.detail.copied") : t("dbAdmin.detail.copy")}
+              {t("dbAdmin.detail.copy")}
             </Button>
             <Button
               type="button"
               variant="secondary"
               size="sm"
               disabled={!detail.ddl}
-              onClick={() => downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl)}
+              onClick={() => {
+                try {
+                  downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
+                  toast.success(t("common.action.downloaded"));
+                } catch {
+                  toast.error(t("common.action.downloadFailed"));
+                }
+              }}
             >
               <Download size={15} aria-hidden="true" />
               <span>{t("dbAdmin.detail.download")}</span>

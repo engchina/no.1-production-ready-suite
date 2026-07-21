@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { apiGet } from "@/lib/api";
+import { apiGet, isAbortError } from "@/lib/api";
 import {
   clearActiveJobSnapshot,
   isJobInFlight,
@@ -32,14 +32,16 @@ export function useNl2SqlJobPolling({
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
 
   const pollJob = useCallback(
-    async (jobId: string) => {
-      const data = await apiGet<JobData>(`/api/nl2sql/jobs/${jobId}`);
+    async (jobId: string, signal?: AbortSignal) => {
+      const data = await apiGet<JobData>(`/api/nl2sql/jobs/${jobId}`, { signal });
+      if (signal?.aborted) return data;
       setJob(data);
       if (isJobTerminal(data.status)) {
         const storage = getBrowserStorage();
         if (storage) clearActiveJobSnapshot(storage);
         if (data.result) onResult(data.result);
         if (data.error_message) onError(data.error_message);
+        if (signal?.aborted) return data;
         await onHistoryRefresh();
       }
       return data;
@@ -66,15 +68,34 @@ export function useNl2SqlJobPolling({
     if (!storage) return;
     const snapshot = readActiveJobSnapshot(storage, Date.now());
     if (!snapshot) return;
+    const controller = new AbortController();
     setJobStartedAt(snapshot.startedAtMs);
-    void pollJob(snapshot.jobId);
-  }, [pollJob]);
+    void pollJob(snapshot.jobId, controller.signal).catch((cause: unknown) => {
+      if (!isAbortError(cause)) {
+        onError(cause instanceof Error ? cause.message : "Job status check failed");
+      }
+    });
+    return () => controller.abort();
+  }, [onError, pollJob]);
 
   useEffect(() => {
     if (!job || !isJobInFlight(job.status)) return undefined;
-    const timer = window.setInterval(() => void pollJob(job.job_id), pollIntervalMs);
-    return () => window.clearInterval(timer);
-  }, [job, pollIntervalMs, pollJob]);
+    let controller: AbortController | null = null;
+    const tick = () => {
+      controller?.abort();
+      controller = new AbortController();
+      void pollJob(job.job_id, controller.signal).catch((cause: unknown) => {
+        if (!isAbortError(cause)) {
+          onError(cause instanceof Error ? cause.message : "Job status check failed");
+        }
+      });
+    };
+    const timer = window.setInterval(tick, pollIntervalMs);
+    return () => {
+      controller?.abort();
+      window.clearInterval(timer);
+    };
+  }, [job, onError, pollIntervalMs, pollJob]);
 
   return {
     job,

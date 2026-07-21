@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
@@ -9,8 +9,9 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiGet, apiPost } from "@/lib/api";
+import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   ExecutionConfirmationField,
   FileInputControl,
@@ -237,6 +238,8 @@ export function TableManagementPage() {
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const fetchDetail = async (name: string) => {
     setLoading(`detail-${name}`);
@@ -296,38 +299,55 @@ export function TableManagementPage() {
   };
 
   const load = async (refreshSchema = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-      if (refreshSchema) {
-        await apiPost<SchemaCatalog>("/api/schema/refresh");
-      }
-      const tableData = await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables");
-      setTables(tableData);
-      const nextSelected =
-        tableData.items.find((item) => item.name === selectedTableName)?.name || tableData.items[0]?.name || "";
-      setSelectedTableName(nextSelected);
-      setExactCountDone(false);
-      if (nextSelected) {
-        setDetail(
-          await apiGet<DbAdminObjectDetail>(
-            `/api/nl2sql/db-admin/tables/${encodeURIComponent(nextSelected)}?include_ddl=0`,
-          ),
+      await runScopedRequest(async (signal) => {
+        // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+        // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+        if (refreshSchema) {
+          await apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal });
+        }
+        const tableData = await apiGet<DbAdminObjectsData>(
+          "/api/nl2sql/db-admin/tables",
+          { signal }
         );
-      } else {
-        setDetail(null);
-      }
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setTables(tableData);
+        const nextSelected =
+          tableData.items.find((item) => item.name === selectedTableName)?.name ||
+          tableData.items[0]?.name ||
+          "";
+        setSelectedTableName(nextSelected);
+        setExactCountDone(false);
+        if (nextSelected) {
+          const nextDetail = await apiGet<DbAdminObjectDetail>(
+            `/api/nl2sql/db-admin/tables/${encodeURIComponent(nextSelected)}?include_ddl=0`,
+            { signal }
+          );
+          if (!signal.aborted && sequence === loadSequence.current) setDetail(nextDetail);
+        } else {
+          setDetail(null);
+        }
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const filteredTables = useMemo(() => {
@@ -413,6 +433,7 @@ export function TableManagementPage() {
         throw new Error(t("tableMgmt.error.export"));
       }
       downloadBlob(`${name.toLowerCase()}_columns.xlsx`, await response.blob());
+      toast.success(t("common.action.downloaded"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.export"));
     } finally {

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request, Response
 from pr_backend_core import ApiResponse
-from starlette.concurrency import run_in_threadpool
 
+from app.api.concurrency import run_sync_io
 from app.settings import get_settings
 
 from .deepsec import get_deepsec_service
@@ -34,6 +34,7 @@ from .schemas import (
 from .service import get_security_service
 
 router = APIRouter(tags=["security"])
+run_in_threadpool = run_sync_io
 
 
 def _set_auth_cookie(
@@ -56,7 +57,7 @@ def _set_auth_cookie(
 
 
 @router.post("/auth/login", response_model=ApiResponse[CurrentUserData])
-async def login(
+def login(
     payload: LoginRequest, request: Request, response: Response
 ) -> ApiResponse[CurrentUserData]:
     if get_settings().local_debug_enabled:
@@ -64,10 +65,9 @@ async def login(
             data=CurrentUserData.from_principal(
                 local_debug_principal(), debug_mode=True
             )
-        )
+    )
     request_id, client_ip = request_context(request)
-    principal, session_token, csrf_token = await run_in_threadpool(
-        get_security_service().login,
+    principal, session_token, csrf_token = get_security_service().login(
         payload.login_name,
         payload.password,
         request_id=request_id,
@@ -90,7 +90,7 @@ async def login(
 
 
 @router.get("/auth/me", response_model=ApiResponse[CurrentUserData])
-async def me(request: Request) -> ApiResponse[CurrentUserData]:
+def me(request: Request) -> ApiResponse[CurrentUserData]:
     settings = get_settings()
     return ApiResponse(
         data=CurrentUserData.from_principal(
@@ -100,13 +100,12 @@ async def me(request: Request) -> ApiResponse[CurrentUserData]:
 
 
 @router.post("/auth/logout", response_model=ApiResponse[dict[str, bool]])
-async def logout(request: Request, response: Response) -> ApiResponse[dict[str, bool]]:
+def logout(request: Request, response: Response) -> ApiResponse[dict[str, bool]]:
     if get_settings().local_debug_enabled:
         return ApiResponse(data={"logged_out": False})
     principal = current_principal(request)
     request_id, client_ip = request_context(request)
-    await run_in_threadpool(
-        get_security_service().logout,
+    get_security_service().logout(
         principal,
         request_id=request_id,
         client_ip=client_ip,
@@ -118,7 +117,7 @@ async def logout(request: Request, response: Response) -> ApiResponse[dict[str, 
 
 
 @router.post("/auth/password/change", response_model=ApiResponse[dict[str, bool]])
-async def change_password(
+def change_password(
     payload: PasswordChangeRequest,
     request: Request,
     response: Response,
@@ -129,8 +128,7 @@ async def change_password(
         raise SecurityApiError(409, "ローカル DEBUG モードではパスワードを変更できません。")
     principal = current_principal(request)
     request_id, client_ip = request_context(request)
-    await run_in_threadpool(
-        get_security_service().change_password,
+    get_security_service().change_password(
         principal,
         payload.current_password,
         payload.new_password,
@@ -144,17 +142,16 @@ async def change_password(
 
 
 @router.get("/security/users", response_model=ApiResponse[list[UserData]])
-async def list_users() -> ApiResponse[list[UserData]]:
-    users = await run_in_threadpool(get_security_service().list_users)
+def list_users() -> ApiResponse[list[UserData]]:
+    users = get_security_service().list_users()
     return ApiResponse(data=[UserData.from_record(user) for user in users])
 
 
 @router.post("/security/users", response_model=ApiResponse[UserCreateData])
-async def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[UserCreateData]:
+def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[UserCreateData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    user, password = await run_in_threadpool(
-        get_security_service().create_user,
+    user, password = get_security_service().create_user(
         login_name=payload.login_name,
         display_name=payload.display_name,
         role_ids=payload.role_ids,
@@ -169,8 +166,8 @@ async def create_user(payload: UserCreateRequest, request: Request) -> ApiRespon
 
 
 @router.get("/security/users/{user_id}", response_model=ApiResponse[UserData])
-async def get_user(user_id: str) -> ApiResponse[UserData]:
-    user = await run_in_threadpool(get_security_service().store.get_user, user_id)
+def get_user(user_id: str) -> ApiResponse[UserData]:
+    user = get_security_service().store.get_user(user_id)
     if user is None:
         from .service import SecurityApiError
 
@@ -179,7 +176,7 @@ async def get_user(user_id: str) -> ApiResponse[UserData]:
 
 
 @router.patch("/security/users/{user_id}", response_model=ApiResponse[UserData])
-async def update_user(
+def update_user(
     user_id: str,
     payload: UserUpdateRequest,
     request: Request,
@@ -187,8 +184,7 @@ async def update_user(
 ) -> ApiResponse[UserData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    user = await run_in_threadpool(
-        get_security_service().update_user,
+    user = get_security_service().update_user(
         user_id,
         expected_version=payload.version,
         display_name=payload.display_name,
@@ -205,15 +201,14 @@ async def update_user(
 @router.post(
     "/security/users/{user_id}/reset-password", response_model=ApiResponse[PasswordResetData]
 )
-async def reset_password(
+def reset_password(
     user_id: str,
     payload: PasswordResetRequest,
     request: Request,
 ) -> ApiResponse[PasswordResetData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    user, password = await run_in_threadpool(
-        get_security_service().reset_password,
+    user, password = get_security_service().reset_password(
         user_id,
         payload.temporary_password,
         actor=actor,
@@ -226,11 +221,10 @@ async def reset_password(
 
 
 @router.post("/security/users/{user_id}/unlock", response_model=ApiResponse[UserData])
-async def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
+def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    user = await run_in_threadpool(
-        get_security_service().unlock_user,
+    user = get_security_service().unlock_user(
         user_id,
         actor=actor,
         request_id=request_id,
@@ -239,22 +233,21 @@ async def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
     return ApiResponse(data=UserData.from_record(user))
 
 
-async def _change_user_status(
+def _change_user_status(
     user_id: str,
     payload: VersionRequest,
     request: Request,
     status: str,
 ) -> ApiResponse[UserData]:
     service = get_security_service()
-    current = await run_in_threadpool(service.store.get_user, user_id)
+    current = service.store.get_user(user_id)
     if current is None:
         from .service import SecurityApiError
 
         raise SecurityApiError(404, "ユーザーが見つかりません。")
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    updated = await run_in_threadpool(
-        service.update_user,
+    updated = service.update_user(
         user_id,
         expected_version=payload.version,
         display_name=current.display_name,
@@ -268,34 +261,32 @@ async def _change_user_status(
 
 
 @router.post("/security/users/{user_id}/enable", response_model=ApiResponse[UserData])
-async def enable_user(
+def enable_user(
     user_id: str, payload: VersionRequest, request: Request
 ) -> ApiResponse[UserData]:
-    return await _change_user_status(user_id, payload, request, "ACTIVE")
+    return _change_user_status(user_id, payload, request, "ACTIVE")
 
 
 @router.post("/security/users/{user_id}/disable", response_model=ApiResponse[UserData])
-async def disable_user(
+def disable_user(
     user_id: str, payload: VersionRequest, request: Request
 ) -> ApiResponse[UserData]:
-    return await _change_user_status(user_id, payload, request, "DISABLED")
+    return _change_user_status(user_id, payload, request, "DISABLED")
 
 
 @router.get("/security/roles", response_model=ApiResponse[list[RoleData]])
-async def list_roles(include_archived: bool = Query(default=False)) -> ApiResponse[list[RoleData]]:
-    roles = await run_in_threadpool(
-        get_security_service().list_roles,
+def list_roles(include_archived: bool = Query(default=False)) -> ApiResponse[list[RoleData]]:
+    roles = get_security_service().list_roles(
         include_archived=include_archived,
     )
     return ApiResponse(data=[RoleData.from_record(role) for role in roles])
 
 
 @router.post("/security/roles", response_model=ApiResponse[RoleData])
-async def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[RoleData]:
+def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[RoleData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    role = await run_in_threadpool(
-        get_security_service().create_role,
+    role = get_security_service().create_role(
         role_code=payload.role_code,
         display_name=payload.display_name,
         description=payload.description,
@@ -312,8 +303,8 @@ async def create_role(payload: RoleCreateRequest, request: Request) -> ApiRespon
 
 
 @router.get("/security/roles/{role_id}", response_model=ApiResponse[RoleData])
-async def get_role(role_id: str) -> ApiResponse[RoleData]:
-    role = await run_in_threadpool(get_security_service().store.get_role, role_id)
+def get_role(role_id: str) -> ApiResponse[RoleData]:
+    role = get_security_service().store.get_role(role_id)
     if role is None:
         from .service import SecurityApiError
 
@@ -322,7 +313,7 @@ async def get_role(role_id: str) -> ApiResponse[RoleData]:
 
 
 @router.patch("/security/roles/{role_id}", response_model=ApiResponse[RoleData])
-async def update_role(
+def update_role(
     role_id: str,
     payload: RoleUpdateRequest,
     request: Request,
@@ -330,8 +321,7 @@ async def update_role(
 ) -> ApiResponse[RoleData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    role = await run_in_threadpool(
-        get_security_service().update_role,
+    role = get_security_service().update_role(
         role_id,
         expected_version=payload.version,
         display_name=payload.display_name,
@@ -350,15 +340,14 @@ async def update_role(
 
 
 @router.post("/security/roles/{role_id}/archive", response_model=ApiResponse[RoleData])
-async def archive_role(
+def archive_role(
     role_id: str,
     payload: RoleArchiveRequest,
     request: Request,
 ) -> ApiResponse[RoleData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
-    role = await run_in_threadpool(
-        get_security_service().archive_role,
+    role = get_security_service().archive_role(
         role_id,
         expected_version=payload.version,
         actor=actor,
@@ -369,23 +358,22 @@ async def archive_role(
 
 
 @router.get("/security/permissions", response_model=ApiResponse[list[PermissionData]])
-async def permission_catalog() -> ApiResponse[list[PermissionData]]:
+def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
 
 
 @router.get("/security/audit", response_model=ApiResponse[list[AuditData]])
-async def audit_log(limit: int = Query(default=200, ge=1, le=500)) -> ApiResponse[list[AuditData]]:
-    records = await run_in_threadpool(get_security_service().store.list_audit, limit=limit)
+def audit_log(limit: int = Query(default=200, ge=1, le=500)) -> ApiResponse[list[AuditData]]:
+    records = get_security_service().store.list_audit(limit=limit)
     return ApiResponse(data=[AuditData.from_record(record) for record in records])
 
 
 @router.get("/security/audit/page", response_model=ApiResponse[AuditPageData])
-async def audit_log_page(
+def audit_log_page(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
 ) -> ApiResponse[AuditPageData]:
-    records, total, resolved_page = await run_in_threadpool(
-        get_security_service().get_audit_page,
+    records, total, resolved_page = get_security_service().get_audit_page(
         page=page,
         page_size=page_size,
     )
@@ -402,10 +390,8 @@ async def audit_log_page(
 
 
 @router.get("/security/audit/export.xlsx")
-async def export_audit_log_xlsx() -> Response:
-    filename, content = await run_in_threadpool(
-        get_security_service().export_audit_log_xlsx
-    )
+def export_audit_log_xlsx() -> Response:
+    filename, content = get_security_service().export_audit_log_xlsx()
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -414,20 +400,20 @@ async def export_audit_log_xlsx() -> Response:
 
 
 @router.get("/security/deepsec/status", response_model=ApiResponse[dict[str, object]])
-async def deepsec_status() -> ApiResponse[dict[str, object]]:
-    return ApiResponse(data=await run_in_threadpool(get_deepsec_service().status))
+def deepsec_status() -> ApiResponse[dict[str, object]]:
+    return ApiResponse(data=get_deepsec_service().status())
 
 
 @router.get("/security/deepsec/plan", response_model=ApiResponse[dict[str, object]])
-async def deepsec_plan() -> ApiResponse[dict[str, object]]:
-    return ApiResponse(data=await run_in_threadpool(get_deepsec_service().plan))
+def deepsec_plan() -> ApiResponse[dict[str, object]]:
+    return ApiResponse(data=get_deepsec_service().plan())
 
 
 @router.post(
     "/security/deepsec/plan/{version}/steps/{step_no}/apply",
     response_model=ApiResponse[dict[str, object]],
 )
-async def apply_deepsec_step(
+def apply_deepsec_step(
     version: str,
     step_no: int,
     payload: DeepSecApplyRequest,
@@ -437,8 +423,7 @@ async def apply_deepsec_step(
         from .service import SecurityApiError
 
         raise SecurityApiError(404, "DeepSec plan version が見つかりません。")
-    result = await run_in_threadpool(
-        get_deepsec_service().apply_step,
+    result = get_deepsec_service().apply_step(
         step_no,
         payload.checksum,
         current_principal(request),
@@ -447,10 +432,9 @@ async def apply_deepsec_step(
 
 
 @router.post("/security/deepsec/verify", response_model=ApiResponse[dict[str, object]])
-async def verify_deepsec(request: Request) -> ApiResponse[dict[str, object]]:
+def verify_deepsec(request: Request) -> ApiResponse[dict[str, object]]:
     return ApiResponse(
-        data=await run_in_threadpool(
-            get_deepsec_service().verify,
+        data=get_deepsec_service().verify(
             current_principal(request),
         )
     )

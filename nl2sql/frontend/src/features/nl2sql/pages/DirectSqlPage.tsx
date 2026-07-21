@@ -4,6 +4,8 @@ import { Play, X } from "lucide-react";
 import { Button, PageHeader } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
+import { Banner } from "@/components/ui/banner";
+import { useAuth } from "@/features/security/AuthProvider";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { SqlFileInput } from "../components/DbAdminShared";
@@ -13,12 +15,28 @@ import type { QueryResults } from "../types";
 import { emptySelection, toAllowedObjects } from "../workbenchState";
 
 /**
- * SELECT SQL を直接実行する専用ページ。
- * NL2SQL 生成とは独立した「SQL を手で書いて実行し結果を見る」導線。
- * プロファイル/スキーマ選択は持たず（profile_id=null, allowed_objects=[]）、
- * バックエンドの SELECT/WITH ガードと安全チェックに委ねる。
+ * SELECT/WITH を直接実行する AI 活用ページ。
+ * 管理 SQL API へは接続せず、通常の SELECT-only 実行境界を使用する。
  */
 export function DirectSqlPage() {
+  const { hasPermission } = useAuth();
+  const canExecute = hasPermission("search.execute");
+
+  if (!canExecute) {
+    return (
+      <>
+        <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
+        <main className="p-4 lg:p-8">
+          <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
+        </main>
+      </>
+    );
+  }
+
+  return <ExecutableDirectSqlPage />;
+}
+
+function ExecutableDirectSqlPage() {
   const [sqlText, setSqlText] = useState("");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [results, setResults] = useState<QueryResults | null>(null);
@@ -26,14 +44,14 @@ export function DirectSqlPage() {
   const [error, setError] = useState("");
 
   const execute = async () => {
-    const trimmed = sqlText.trim();
-    if (!trimmed || loading) return;
+    const trimmedSql = sqlText.trim();
+    if (!trimmedSql || loading) return;
     setLoading(true);
     setError("");
     setResults(null);
     try {
       const data = await apiPost<QueryResults>("/api/nl2sql/execute", {
-        ...sqlExecutePayload(trimmed, null, toAllowedObjects(emptySelection())),
+        ...sqlExecutePayload(trimmedSql, null, toAllowedObjects(emptySelection())),
       });
       setResults(data);
     } catch (err) {
@@ -78,12 +96,12 @@ export function DirectSqlPage() {
               setError("");
             }}
           />
-          {/* 主アクションバー: spec §4(border-t で区切り、primary → secondary を左から、size 統一) */}
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
             <Button
               type="button"
               variant="primary"
               size="lg"
+              className="w-full sm:w-auto"
               loading={loading}
               disabled={!sqlText.trim() || loading}
               onClick={() => void execute()}
@@ -95,6 +113,7 @@ export function DirectSqlPage() {
               type="button"
               variant="secondary"
               size="lg"
+              className="w-full sm:w-auto"
               disabled={!sqlText || loading}
               onClick={clear}
             >

@@ -11,7 +11,7 @@ import {
 
 import { PageNotice } from "@/components/page-notice";
 import { useAuth } from "@/features/security/AuthProvider";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
 import { DbObjectManagementStatusBar, DbObjectPanelHeader } from "./components/DbObjectManagementShared";
@@ -289,21 +289,23 @@ function ExecutableNl2SqlWorkbench() {
       setRecommendation(null);
       return undefined;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
         question: trimmed,
         current_profile_id: profileId || null,
-      })
+      }, { signal: controller.signal })
         .then((data) => {
-          if (!cancelled) setRecommendation(data);
+          if (!controller.signal.aborted) setRecommendation(data);
         })
-        .catch(() => {
-          if (!cancelled) setRecommendation(null);
+        .catch((cause: unknown) => {
+          if (!controller.signal.aborted && !isAbortError(cause)) {
+            setRecommendation(null);
+          }
         });
     }, 500);
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [active, profileId, profiles.length, question]);
@@ -314,26 +316,28 @@ function ExecutableNl2SqlWorkbench() {
       setSimilarHistory([]);
       return undefined;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSimilarHistoryLoading(true);
       void apiPost<SimilarHistoryData>("/api/nl2sql/similar-history", {
         question: trimmed,
         profile_id: profileId || null,
         limit: 3,
-      })
+      }, { signal: controller.signal })
         .then((data) => {
-          if (!cancelled) setSimilarHistory(data.items);
+          if (!controller.signal.aborted) setSimilarHistory(data.items);
         })
-        .catch(() => {
-          if (!cancelled) setSimilarHistory([]);
+        .catch((cause: unknown) => {
+          if (!controller.signal.aborted && !isAbortError(cause)) {
+            setSimilarHistory([]);
+          }
         })
         .finally(() => {
-          if (!cancelled) setSimilarHistoryLoading(false);
+          if (!controller.signal.aborted) setSimilarHistoryLoading(false);
         });
     }, 650);
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [active, profileId, question]);
@@ -364,15 +368,18 @@ function ExecutableNl2SqlWorkbench() {
     });
   };
 
-  const loadSchemaDetail = useCallback(async (table: SchemaTable) => {
+  const loadSchemaDetail = useCallback(async (table: SchemaTable, signal?: AbortSignal) => {
     const key = `${table.owner}.${table.table_name}`.toUpperCase();
     if (schemaDetails[key] || schemaDetailRequests.current.has(key)) return;
     schemaDetailRequests.current.add(key);
     try {
-      const detail = await getSchemaObjectDetail(table.owner, table.table_name);
+      const detail = await getSchemaObjectDetail(table.owner, table.table_name, signal);
+      if (signal?.aborted) return;
       setSchemaDetails((current) => ({ ...current, [key]: detail }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+      if (!signal?.aborted && !isAbortError(err)) {
+        setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+      }
     } finally {
       schemaDetailRequests.current.delete(key);
     }
@@ -380,9 +387,11 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     if (!schemaSearch.trim()) return;
+    const controller = new AbortController();
     for (const table of catalog.tables) {
-      if (table.columns.length === 0) void loadSchemaDetail(table);
+      if (table.columns.length === 0) void loadSchemaDetail(table, controller.signal);
     }
+    return () => controller.abort();
   }, [catalog.tables, loadSchemaDetail, schemaSearch]);
 
   const applyRecommendation = () => {

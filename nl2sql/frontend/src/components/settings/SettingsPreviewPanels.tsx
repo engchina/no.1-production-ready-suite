@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { toast } from "@engchina/production-ready-ui";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +18,7 @@ import { FormStatus } from "@/components/ui/form-status";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-type CopyState = "idle" | "success" | "error";
+type CopyState = "idle" | "error";
 
 export const SETTINGS_DETAIL_GRID_CLASS =
   "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]";
@@ -168,7 +169,8 @@ function SettingsPreviewCard({
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(value);
-      setCopyState("success");
+      setCopyState("idle");
+      toast.success(t("common.action.copied"));
     } catch {
       setCopyState("error");
     }
@@ -187,9 +189,7 @@ function SettingsPreviewCard({
             onClick={() => void handleCopy()}
           >
             <Clipboard size={14} aria-hidden />
-            {copyState === "success"
-              ? t("settings.preview.copy.copied")
-              : copyLabel}
+            {copyLabel}
           </Button>
         </div>
       </CardHeader>

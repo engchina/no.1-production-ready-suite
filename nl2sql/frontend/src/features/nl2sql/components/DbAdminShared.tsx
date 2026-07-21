@@ -22,6 +22,7 @@ import {
   EmptyState,
   Pagination,
   StatusBadge,
+  toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
@@ -1050,7 +1051,6 @@ export function ObjectDetailPanel({
   catalog?: SchemaCatalog | null;
   actions?: ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
   const sampleByColumn = useMemo(() => {
     if (!detail || !catalog) return new Map<string, string>();
     const table = catalog.tables.find(
@@ -1071,10 +1071,9 @@ export function ObjectDetailPanel({
   const copyDdl = async () => {
     try {
       await navigator.clipboard.writeText(detail.ddl);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      toast.success(t("common.action.copied"));
     } catch {
-      // clipboard 不可の環境ではダウンロードを使う
+      toast.error(t("common.action.copyFailed"));
     }
   };
 
@@ -1141,14 +1140,21 @@ export function ObjectDetailPanel({
         <div className="grid gap-2 border-t border-border bg-card p-3">
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
-              {copied ? t("dbAdmin.detail.copied") : t("dbAdmin.detail.copy")}
+              {t("dbAdmin.detail.copy")}
             </Button>
             <Button
               type="button"
               variant="secondary"
               size="sm"
               disabled={!detail.ddl}
-              onClick={() => downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl)}
+              onClick={() => {
+                try {
+                  downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
+                  toast.success(t("common.action.downloaded"));
+                } catch {
+                  toast.error(t("common.action.downloadFailed"));
+                }
+              }}
             >
               <Download size={15} aria-hidden="true" />
               <span>{t("dbAdmin.detail.download")}</span>

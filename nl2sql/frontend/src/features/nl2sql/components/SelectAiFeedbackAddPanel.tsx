@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DatabaseZap, ThumbsDown, ThumbsUp } from "lucide-react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, Card, CardContent, CardHeader, CardTitle, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
@@ -13,7 +13,6 @@ import type {
   SelectAiFeedbackAddData,
 } from "../types";
 
-type MessageTone = "success" | "error";
 type Rating = "good" | "bad";
 type SelectAiFeedbackSource = (GeneratedSqlPanelData | Nl2SqlResult) & { original_question?: string };
 
@@ -34,7 +33,6 @@ export function SelectAiFeedbackAddPanel({
   const [feedbackContent, setFeedbackContent] = useState("");
   const [savingRating, setSavingRating] = useState<Rating | null>(null);
   const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<MessageTone>("success");
   const [addData, setAddData] = useState<SelectAiFeedbackAddData | null>(null);
 
   const generatedSql = useMemo(
@@ -62,12 +60,10 @@ export function SelectAiFeedbackAddPanel({
     if (!question.trim()) return;
     if (rating === "bad") {
       if (!effectiveResponse) {
-        setMessageTone("error");
         setMessage(t("nl2sql.selectAiFeedbackAdd.requiresResponse"));
         return;
       }
       if (!trimmedContent) {
-        setMessageTone("error");
         setMessage(t("nl2sql.selectAiFeedbackAdd.requiresContent"));
         return;
       }
@@ -109,8 +105,15 @@ export function SelectAiFeedbackAddPanel({
         }
       }
       await onSaved();
-      setMessageTone(allOk ? "success" : "error");
-      setMessage(warnings.join(" ") || t("nl2sql.selectAiFeedbackAdd.saved"));
+      if (!allOk) {
+        setMessage(warnings.join(" ") || t("nl2sql.selectAiFeedbackAdd.failed"));
+      } else if (warnings.length > 0) {
+        toast.warning(warnings.join(" "));
+      } else {
+        toast.success(t("nl2sql.selectAiFeedbackAdd.saved"));
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
     } finally {
       setSavingRating(null);
     }
@@ -156,7 +159,7 @@ export function SelectAiFeedbackAddPanel({
         </label>
         <div className="flex flex-wrap items-center justify-end gap-3">
           <FormStatus
-            tone={messageTone === "error" ? "danger" : "success"}
+            tone="danger"
             message={message}
             className="mr-auto"
           />

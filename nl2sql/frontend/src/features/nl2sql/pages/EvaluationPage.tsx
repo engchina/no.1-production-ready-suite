@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRightLeft,
   Archive,
@@ -19,11 +19,14 @@ import {
   EmptyState,
   PageHeader,
   StatusBadge,
+  toast,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
@@ -65,7 +68,6 @@ type EvaluationCaseLike = {
 };
 
 type ActiveView = "sets" | "analyze" | "compare" | "synthetic" | "reverse";
-type MessageTone = "info" | "success" | "error";
 
 const fieldClass = "grid min-w-0 gap-1 text-sm font-medium text-foreground";
 const controlClass =
@@ -74,6 +76,7 @@ const textareaClass =
   "rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
 
 export function EvaluationPage() {
+  const confirm = useConfirm();
   const [activeView, setActiveView] = useState<ActiveView>("sets");
   const [question, setQuestion] = useState("");
   const [engine, setEngine] = useState<Nl2SqlEngine>("auto");
@@ -98,69 +101,108 @@ export function EvaluationPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<MessageTone>("info");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const setNotice = (text: string, tone: MessageTone = "info") => {
-    setMessageTone(tone);
-    setMessage(text);
-  };
-
-  const loadCompareHistory = async () => {
+  const loadCompareHistory = async (signal?: AbortSignal): Promise<boolean> => {
     try {
-      const data = await apiGet<CompareHistoryData>("/api/nl2sql/compare-history?limit=5");
+      const data = await apiGet<CompareHistoryData>(
+        "/api/nl2sql/compare-history?limit=5",
+        { signal }
+      );
+      if (signal?.aborted) return true;
       setCompareHistory(data.items);
-    } catch {
+      return true;
+    } catch (cause) {
+      if (isAbortError(cause)) throw cause;
       setCompareHistory([]);
+      return false;
     }
   };
 
-  const loadProfiles = async () => {
+  const loadProfiles = async (signal?: AbortSignal): Promise<boolean> => {
     try {
-      const data = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles");
+      const data = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal });
+      if (signal?.aborted) return true;
       setProfiles(data);
       if (data.length > 0 && !data.some((profile) => profile.id === profileId)) {
         setProfileId(data[0].id);
       }
-    } catch {
+      return true;
+    } catch (cause) {
+      if (isAbortError(cause)) throw cause;
       setProfiles([]);
+      return false;
     }
   };
 
-  const loadEvaluationSets = async () => {
+  const loadEvaluationSets = async (signal?: AbortSignal): Promise<boolean> => {
     try {
-      const data = await apiGet<EvaluationSetsData>("/api/nl2sql/evaluation-sets");
+      const data = await apiGet<EvaluationSetsData>("/api/nl2sql/evaluation-sets", {
+        signal,
+      });
+      if (signal?.aborted) return true;
       setEvaluationSets(data.items);
-    } catch {
+      return true;
+    } catch (cause) {
+      if (isAbortError(cause)) throw cause;
       setEvaluationSets([]);
+      return false;
     }
   };
 
-  const loadEvaluationRuns = async () => {
+  const loadEvaluationRuns = async (signal?: AbortSignal): Promise<boolean> => {
     try {
-      const data = await apiGet<EvaluationRunsData>("/api/nl2sql/evaluation-runs?limit=5");
+      const data = await apiGet<EvaluationRunsData>(
+        "/api/nl2sql/evaluation-runs?limit=5",
+        { signal }
+      );
+      if (signal?.aborted) return true;
       setEvaluationRuns(data.items);
-    } catch {
+      return true;
+    } catch (cause) {
+      if (isAbortError(cause)) throw cause;
       setEvaluationRuns([]);
+      return false;
     }
   };
 
-  const loadPageData = async () => {
+  const loadPageData = async (announce = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
     setMessage("");
     try {
-      await Promise.all([
-        loadCompareHistory(),
-        loadProfiles(),
-        loadEvaluationSets(),
-        loadEvaluationRuns(),
-      ]);
+      await runScopedRequest(async (signal) => {
+        const results = await Promise.all([
+          loadCompareHistory(signal),
+          loadProfiles(signal),
+          loadEvaluationSets(signal),
+          loadEvaluationRuns(signal),
+        ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        if (results.every(Boolean)) {
+          if (announce) toast.success(t("common.action.refreshed"));
+        } else {
+          setMessage(t("evaluation.error.load"));
+        }
+      });
+    } catch (cause) {
+      if (isAbortError(cause)) {
+        return;
+      }
+      setMessage(t("evaluation.error.load"));
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     void loadPageData();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const currentCases = evaluationCases(synthetic);
@@ -194,9 +236,8 @@ export function EvaluationPage() {
         })
       );
       void loadEvaluationRuns();
-      setNotice(t("evaluation.run.executed"), "success");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.error.run"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.error.run"));
     } finally {
       setLoading(false);
     }
@@ -212,9 +253,8 @@ export function EvaluationPage() {
         )
       );
       setActiveView("synthetic");
-      setNotice(t("evaluation.synthetic.generated"), "success");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.error.synthetic"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.error.synthetic"));
     } finally {
       setLoading(false);
     }
@@ -231,9 +271,9 @@ export function EvaluationPage() {
         profilePayloadWithSynthetic(profile, synthetic)
       );
       setProfiles((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-      setNotice(t("evaluation.synthetic.saved"), "success");
+      toast.success(t("evaluation.synthetic.saved"));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.synthetic.saveError"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.synthetic.saveError"));
     } finally {
       setLoading(false);
     }
@@ -255,13 +295,12 @@ export function EvaluationPage() {
     setSynthetic({ cases: selected.cases });
     setEvaluation(null);
     setActiveView("sets");
-    setNotice(t("evaluation.set.loaded"), "info");
   };
 
   const saveEvaluationSet = async () => {
     const name = evaluationSetName.trim();
     if (!name) {
-      setNotice(t("evaluation.set.nameRequired"), "error");
+      setMessage(t("evaluation.set.nameRequired"));
       return;
     }
     setLoading(true);
@@ -282,9 +321,9 @@ export function EvaluationPage() {
       setEvaluationSetDescription(saved.description);
       setSynthetic({ cases: saved.cases });
       await loadEvaluationSets();
-      setNotice(t("evaluation.set.saved"), "success");
+      toast.success(t("evaluation.set.saved"));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.set.saveError"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.set.saveError"));
     } finally {
       setLoading(false);
     }
@@ -292,6 +331,14 @@ export function EvaluationPage() {
 
   const archiveEvaluationSet = async () => {
     if (!evaluationSetId) return;
+    const accepted = await confirm({
+      title: t("evaluation.set.archiveConfirmTitle"),
+      description: t("evaluation.set.archiveConfirmDescription"),
+      confirmLabel: t("evaluation.action.archiveSet"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (!accepted) return;
     setLoading(true);
     setMessage("");
     try {
@@ -300,9 +347,9 @@ export function EvaluationPage() {
       setEvaluationSetName(t("evaluation.set.defaultName"));
       setEvaluationSetDescription("");
       await loadEvaluationSets();
-      setNotice(t("evaluation.set.archived"), "success");
+      toast.success(t("evaluation.set.archived"));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.set.archiveError"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.set.archiveError"));
     } finally {
       setLoading(false);
     }
@@ -320,25 +367,37 @@ export function EvaluationPage() {
       setEvaluationSetDescription(selected?.description ?? "");
     }
     setActiveView("sets");
-    setNotice(t("evaluation.run.historyRestored"), "info");
   };
 
   const exportEvaluationRunReport = (record: EvaluationRunRecord) => {
-    downloadTextFile(
-      record.report || buildEvaluationRunReport(record),
-      `${evaluationRunFileStem(record)}.md`,
-      "text/markdown;charset=utf-8"
-    );
-    setNotice(t("evaluation.run.reportDownloaded"), "success");
+    try {
+      downloadTextFile(
+        record.report || buildEvaluationRunReport(record),
+        `${evaluationRunFileStem(record)}.md`,
+        "text/markdown;charset=utf-8"
+      );
+      toast.success(t("evaluation.run.reportDownloaded"));
+    } catch {
+      toast.error(t("evaluation.run.downloadError"));
+    }
   };
 
   const exportEvaluationRunCases = (record: EvaluationRunRecord) => {
-    downloadEvaluationCasesCsv(record.cases, `${evaluationRunFileStem(record)}_cases.csv`);
-    setNotice(t("evaluation.run.casesDownloaded"), "success");
+    try {
+      downloadEvaluationCasesCsv(record.cases, `${evaluationRunFileStem(record)}_cases.csv`);
+      toast.success(t("evaluation.run.casesDownloaded"));
+    } catch {
+      toast.error(t("evaluation.run.downloadError"));
+    }
   };
 
   const exportEvaluationCases = () => {
-    downloadEvaluationCasesCsv(evaluationCases(synthetic));
+    try {
+      downloadEvaluationCasesCsv(evaluationCases(synthetic));
+      toast.success(t("evaluation.run.casesDownloaded"));
+    } catch {
+      toast.error(t("evaluation.run.downloadError"));
+    }
   };
 
   const importEvaluationCases = async (file: File | undefined) => {
@@ -348,14 +407,14 @@ export function EvaluationPage() {
       const text = await file.text();
       const cases = parseEvaluationCasesCsv(text, profileId);
       if (cases.length === 0) {
-        setNotice(t("evaluation.synthetic.importEmpty"), "info");
+        toast.info(t("evaluation.synthetic.importEmpty"));
         return;
       }
       setSynthetic({ cases });
       setEvaluation(null);
-      setNotice(t("evaluation.synthetic.imported", { count: cases.length }), "success");
+      toast.success(t("evaluation.synthetic.imported", { count: cases.length }));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.synthetic.importError"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.synthetic.importError"));
     }
   };
 
@@ -372,7 +431,7 @@ export function EvaluationPage() {
       setActiveView("compare");
       void loadCompareHistory();
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.error.compare"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.error.compare"));
     } finally {
       setLoading(false);
     }
@@ -382,7 +441,6 @@ export function EvaluationPage() {
     setQuestion(record.question);
     setComparison(record.comparison);
     setActiveView("compare");
-    setNotice(t("evaluation.compare.historyRestored"), "info");
   };
 
   const compareReport = comparison ? buildCompareReport(comparison) : "";
@@ -391,9 +449,9 @@ export function EvaluationPage() {
     if (!compareReport) return;
     try {
       await navigator.clipboard.writeText(compareReport);
-      setNotice(t("evaluation.compare.reportCopied"), "success");
+      toast.success(t("evaluation.compare.reportCopied"));
     } catch {
-      setNotice(t("evaluation.compare.reportCopyError"), "error");
+      toast.error(t("evaluation.compare.reportCopyError"));
     }
   };
 
@@ -405,7 +463,7 @@ export function EvaluationPage() {
     try {
       setAnalysis(await apiPost<AnalyzeData>("/api/nl2sql/analyze", { sql }));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.error.analyze"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.error.analyze"));
     } finally {
       setAnalysisLoading(false);
     }
@@ -424,9 +482,8 @@ export function EvaluationPage() {
           use_glossary: reverseUseGlossary,
         })
       );
-      setNotice(t("evaluation.reverse.generated"), "success");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : t("evaluation.error.reverse"), "error");
+      setMessage(err instanceof Error ? err.message : t("evaluation.error.reverse"));
     } finally {
       setReverseLoading(false);
     }
@@ -444,9 +501,7 @@ export function EvaluationPage() {
     <>
       <PageHeader title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        <PageNotice
-          notice={message ? { tone: messageTone === "error" ? "danger" : messageTone, message } : null}
-        />
+        <PageNotice notice={message ? { tone: "danger", message } : null} />
 
         <DbObjectManagementStatusBar
           ariaLabel={t("evaluation.status.label")}
@@ -458,7 +513,7 @@ export function EvaluationPage() {
             { label: t("evaluation.status.comparisons"), value: String(compareHistory.length) },
           ]}
           actions={
-            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void loadPageData()}>
+            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void loadPageData(true)}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("evaluation.action.refresh")}</span>
             </Button>

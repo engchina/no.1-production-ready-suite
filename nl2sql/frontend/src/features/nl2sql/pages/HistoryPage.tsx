@@ -26,10 +26,11 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet } from "@/lib/api";
+import { apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
@@ -495,23 +496,37 @@ export function HistoryPage() {
   const [sort, setSort] = useState<HistorySortState>({ key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useState("");
   const [detailTab, setDetailTab] = useState<HistoryDetailTab>("overview");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const load = async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
     setMessage("");
     try {
-      const data = await apiGet<HistoryData>("/api/nl2sql/history");
-      setItems(data.items);
-      setSelectedId((current) => selectedVisibleHistoryId(data.items, current));
+      await runScopedRequest(async (signal) => {
+        const data = await apiGet<HistoryData>("/api/nl2sql/history", { signal });
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setItems(data.items);
+        setSelectedId((current) => selectedVisibleHistoryId(data.items, current));
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("history.error.load"));
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const filteredItems = useMemo(

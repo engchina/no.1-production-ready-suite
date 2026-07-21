@@ -21,11 +21,12 @@ class OraclePoolManager:
         self._data_pool: Any | None = None
         self._lock = threading.RLock()
 
-    def validate_deepsec_mode(self) -> None:
-        if self.settings.oracle_deepsec_enabled and self.settings.oracle_driver_mode != "thin":
-            raise OracleAdapterError(
-                "Deep Data Security を有効にする場合は ORACLE_DRIVER_MODE=thin が必要です。"
-            )
+    def validate_deepsec_configuration(self) -> None:
+        """共有 local END USER の direct logon に必要な設定を検証する。
+
+        この integration は EndUserSecurityContext payload API/SPI を使用しないため、
+        python-oracledb の Thin/Thick のどちらでも実行できる。
+        """
         if (
             self.settings.oracle_deepsec_enabled
             and not self.settings.oracle_deepsec_end_user_password
@@ -62,7 +63,7 @@ class OraclePoolManager:
 
     @contextmanager
     def _data_connection_raw(self) -> Iterator[Any]:
-        self.validate_deepsec_mode()
+        self.validate_deepsec_configuration()
         if not self.settings.oracle_deepsec_enabled:
             raise OracleAdapterError("Deep Data Security が有効ではありません。")
         pool = self._get_pool(data_plane=True)

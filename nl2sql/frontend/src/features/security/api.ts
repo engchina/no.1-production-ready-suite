@@ -1,4 +1,4 @@
-import { apiFetch, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiFetch, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 import type {
   AuditPage,
@@ -32,14 +32,15 @@ export interface RoleDraft {
 export const securityApi = {
   login: (loginName: string, password: string) =>
     apiPost<CurrentUser>("/api/auth/login", { login_name: loginName, password }),
-  me: () => apiGet<CurrentUser>("/api/auth/me"),
+  me: (options: ApiRequestOptions = {}) => apiGet<CurrentUser>("/api/auth/me", options),
   logout: () => apiPost<{ logged_out: boolean }>("/api/auth/logout"),
   changePassword: (currentPassword: string, newPassword: string) =>
     apiPost<{ changed: boolean }>("/api/auth/password/change", {
       current_password: currentPassword,
       new_password: newPassword,
     }),
-  users: () => apiGet<SecurityUser[]>("/api/security/users"),
+  users: (options: ApiRequestOptions = {}) =>
+    apiGet<SecurityUser[]>("/api/security/users", options),
   createUser: (draft: UserDraft) =>
     apiPost<{ user: SecurityUser; temporary_password: string }>("/api/security/users", draft),
   updateUser: (user: SecurityUser) =>
@@ -61,8 +62,11 @@ export const securityApi = {
       `/api/security/users/${user.user_id}/${enabled ? "enable" : "disable"}`,
       { version: user.version }
     ),
-  roles: (includeArchived = false) =>
-    apiGet<SecurityRole[]>(`/api/security/roles?include_archived=${String(includeArchived)}`),
+  roles: (includeArchived = false, options: ApiRequestOptions = {}) =>
+    apiGet<SecurityRole[]>(
+      `/api/security/roles?include_archived=${String(includeArchived)}`,
+      options
+    ),
   createRole: (draft: RoleDraft) => apiPost<SecurityRole>("/api/security/roles", draft),
   updateRole: (role: SecurityRole) =>
     apiPatch<SecurityRole>(`/api/security/roles/${role.role_id}`, {
@@ -76,18 +80,26 @@ export const securityApi = {
     apiPost<SecurityRole>(`/api/security/roles/${role.role_id}/archive`, {
       version: role.version,
     }),
-  permissions: () => apiGet<PermissionDefinition[]>("/api/security/permissions"),
-  audit: () => apiGet<AuditRecord[]>("/api/security/audit"),
-  auditPage: (page = 1, pageSize = 10) =>
-    apiGet<AuditPage>(`/api/security/audit/page?page=${page}&page_size=${pageSize}`),
-  exportAudit: () =>
+  permissions: (options: ApiRequestOptions = {}) =>
+    apiGet<PermissionDefinition[]>("/api/security/permissions", options),
+  audit: (options: ApiRequestOptions = {}) =>
+    apiGet<AuditRecord[]>("/api/security/audit", options),
+  auditPage: (page = 1, pageSize = 10, options: ApiRequestOptions = {}) =>
+    apiGet<AuditPage>(
+      `/api/security/audit/page?page=${page}&page_size=${pageSize}`,
+      options
+    ),
+  exportAudit: (options: ApiRequestOptions = {}) =>
     apiFetch("/api/security/audit/export.xlsx", {
       headers: {
         Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       },
+      signal: options.signal,
     }),
-  deepSecStatus: () => apiGet<DeepSecStatus>("/api/security/deepsec/status"),
-  deepSecPlan: () => apiGet<DeepSecPlan>("/api/security/deepsec/plan"),
+  deepSecStatus: (options: ApiRequestOptions = {}) =>
+    apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
+  deepSecPlan: (options: ApiRequestOptions = {}) =>
+    apiGet<DeepSecPlan>("/api/security/deepsec/plan", options),
   applyDeepSecStep: (version: string, step: DeepSecStep) =>
     apiPost<{ version: string; step_no: number; status: string }>(`/api/security/deepsec/plan/${version}/steps/${step.step_no}/apply`, {
       checksum: step.checksum,

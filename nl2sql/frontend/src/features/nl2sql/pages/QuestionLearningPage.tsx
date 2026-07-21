@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckSquare,
   BrainCircuit,
@@ -20,15 +20,17 @@ import {
   PageHeader,
   Pagination,
   StatusBadge,
+  toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatDateTime, formatNumber } from "@/lib/format";
-import { apiDelete, apiFetch, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import { useRequestScope } from "@/lib/useRequestScope";
 import { FileInputControl } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
@@ -51,7 +53,6 @@ import type {
 } from "../types";
 
 type ActiveView = "trainingData" | "train" | "test" | "candidates";
-type MessageTone = "error" | "success";
 
 const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
 const controlClass =
@@ -90,7 +91,8 @@ export function QuestionClassifierModelsPage() {
   const [editingProfileId, setEditingProfileId] = useState("");
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<MessageTone>("error");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const filteredExamples = useMemo(() => {
     const query = trainingSearch.trim().toLowerCase();
@@ -105,41 +107,56 @@ export function QuestionClassifierModelsPage() {
     );
   }, [classifierTrainingData, trainingSearch]);
 
-  const load = async () => {
+  const load = async (announce = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading("load");
     setMessage("");
     try {
-      const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
-        apiGet<ClassifierStatusData>("/api/nl2sql/classifier"),
-        apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"),
-        apiGet<ClassifierTrainingCandidatesData>(
-          `/api/nl2sql/classifier/training-candidates?limit=20${focusedCandidateHistoryId ? `&history_id=${encodeURIComponent(focusedCandidateHistoryId)}` : ""}`
-        ),
-      ]);
-      setProfiles(profileData);
-      setClassifierStatus(classifierData);
-      setClassifierTrainingData(trainingData);
-      setCandidates(candidateData);
+      await runScopedRequest(async (signal) => {
+        const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
+          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
+          apiGet<ClassifierStatusData>("/api/nl2sql/classifier", { signal }),
+          apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data", {
+            signal,
+          }),
+          apiGet<ClassifierTrainingCandidatesData>(
+            `/api/nl2sql/classifier/training-candidates?limit=20${focusedCandidateHistoryId ? `&history_id=${encodeURIComponent(focusedCandidateHistoryId)}` : ""}`,
+            { signal }
+          ),
+        ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setProfiles(profileData);
+        setClassifierStatus(classifierData);
+        setClassifierTrainingData(trainingData);
+        setCandidates(candidateData);
+        if (announce) toast.success(t("common.action.refreshed"));
+      });
     } catch (err) {
-      setMessageTone("error");
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("qcm.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
-  const refreshTrainingData = async () => {
+  const refreshTrainingData = async (announce = false) => {
     setLoading("training-load");
     setMessage("");
     try {
       setClassifierTrainingData(await apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"));
+      if (announce) toast.success(t("common.action.refreshed"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("qcm.error.trainingData"));
     } finally {
       setLoading("");
@@ -172,7 +189,6 @@ export function QuestionClassifierModelsPage() {
         setCandidatePage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("qcm.candidates.error.load"));
     } finally {
       setLoading("");
@@ -221,10 +237,8 @@ export function QuestionClassifierModelsPage() {
       setClassifierStatus(statusData);
       setClassifierTrainingData(trainingData);
       await loadCandidates();
-      setMessageTone("success");
-      setMessage(t("qcm.candidates.added", { count: data.imported_count }));
+      toast.success(t("qcm.candidates.added", { count: data.imported_count }));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("qcm.candidates.error.add"));
     } finally {
       setLoading("");
@@ -240,10 +254,8 @@ export function QuestionClassifierModelsPage() {
       setClassifierImport(data);
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
       setClassifierTrainingData(await apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"));
-      setMessageTone("success");
-      setMessage(t("learning.classifier.imported", { count: data.imported_count }));
+      toast.success(t("learning.classifier.imported", { count: data.imported_count }));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
     } finally {
       setLoading("");
@@ -258,10 +270,9 @@ export function QuestionClassifierModelsPage() {
         min_examples_per_category: 1,
       });
       setClassifierStatus(data);
-      setMessageTone(data.ready ? "success" : "error");
-      setMessage(data.ready ? t("learning.classifier.trained") : data.warnings.join(" "));
+      if (data.ready) toast.success(t("learning.classifier.trained"));
+      else setMessage(data.warnings.join(" ") || t("learning.error.classifier"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
     } finally {
       setLoading("");
@@ -281,7 +292,6 @@ export function QuestionClassifierModelsPage() {
         })
       );
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
     } finally {
       setLoading("");
@@ -310,10 +320,8 @@ export function QuestionClassifierModelsPage() {
       setClassifierStatus(statusData);
       setClassifierTrainingData(trainingData);
       setEditingExampleId("");
-      setMessageTone("success");
-      setMessage(t("qcm.training.updated"));
+      toast.success(t("qcm.training.updated"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("qcm.training.error.update"));
     } finally {
       setLoading("");
@@ -336,10 +344,8 @@ export function QuestionClassifierModelsPage() {
       );
       setClassifierTrainingData(trainingData);
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
-      setMessageTone("success");
-      setMessage(t("qcm.training.deleted"));
+      toast.success(t("qcm.training.deleted"));
     } catch (err) {
-      setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("qcm.training.error.delete"));
     } finally {
       setLoading("");
@@ -351,10 +357,10 @@ export function QuestionClassifierModelsPage() {
       <PageHeader title={t("nav.questionClassifierModels")} subtitle={t("qcm.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
-          notice={message ? { tone: messageTone === "success" ? "success" : "danger", message } : null}
+          notice={message ? { tone: "danger", message } : null}
           action={
-            message && messageTone === "error" ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            message ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load(true)}>
                 <RefreshCw size={15} aria-hidden="true" />
                 <span>{t("learning.action.refresh")}</span>
               </Button>
@@ -384,7 +390,7 @@ export function QuestionClassifierModelsPage() {
             { label: t("learning.classifier.dimension"), value: formatNumber(classifierStatus?.vector_dimension ?? 1536) },
           ]}
           actions={
-            <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load()}>
+            <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load(true)}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("learning.action.refresh")}</span>
             </Button>
@@ -423,7 +429,7 @@ export function QuestionClassifierModelsPage() {
               importSummary={classifierImport}
               onSearchChange={setTrainingSearch}
               onReplaceChange={setClassifierReplace}
-              onRefresh={() => void refreshTrainingData()}
+              onRefresh={() => void refreshTrainingData(true)}
               onImport={(file) => void importClassifierTraining(file)}
               onClearFile={() => setTrainingFilename("")}
               profiles={profiles}

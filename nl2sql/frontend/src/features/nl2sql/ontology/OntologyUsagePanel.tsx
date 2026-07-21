@@ -274,9 +274,10 @@ export function OntologyUsagePanel({
               variant="ghost"
               size="sm"
               onClick={() => {
-                void navigator.clipboard.writeText(previewText).then(() =>
-                  toast.success(t("ontologyUsage.context.copied"))
-                );
+                void navigator.clipboard
+                  .writeText(previewText)
+                  .then(() => toast.success(t("ontologyUsage.context.copied")))
+                  .catch(() => toast.error(t("common.action.copyFailed")));
               }}
             >
               <ClipboardCopy size={16} aria-hidden="true" />

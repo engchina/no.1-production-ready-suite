@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
@@ -6,9 +6,10 @@ import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/productio
 import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectManagementStatusBar,
   DbObjectPanelHeader,
@@ -35,6 +36,8 @@ export function SqlToQuestionPage() {
   const [reverseMode, setReverseMode] = useState<ReverseMode>("");
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
@@ -47,28 +50,42 @@ export function SqlToQuestionPage() {
   );
 
   const loadReferenceData = useCallback(async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
     setLoadError("");
     try {
-      const [profileData, schemaData] = await Promise.all([
-        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
-        apiGet<SchemaCatalog>("/api/schema/catalog"),
-      ]);
-      setProfiles(profileData);
-      setCatalog(schemaData);
-      setSelectedProfileId((current) =>
-        profileData.some((profile) => profile.id === current) ? current : (profileData[0]?.id ?? "")
-      );
+      await runScopedRequest(async (signal) => {
+        const [profileData, schemaData] = await Promise.all([
+          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
+          apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
+        ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setProfiles(profileData);
+        setCatalog(schemaData);
+        setSelectedProfileId((current) =>
+          profileData.some((profile) => profile.id === current)
+            ? current
+            : (profileData[0]?.id ?? "")
+        );
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setLoadError(actionableError(err, t("sqlToQuestion.error.load")));
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, []);
+  }, [abortAll, runScopedRequest]);
 
   useEffect(() => {
     void loadReferenceData();
-  }, [loadReferenceData]);
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
+  }, [abortAll, loadReferenceData]);
 
   const analyzeStructure = async () => {
     const trimmedSql = sql.trim();

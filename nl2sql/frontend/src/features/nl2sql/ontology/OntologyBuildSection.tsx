@@ -12,6 +12,7 @@ import {
 import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageNotice, usePageNotice } from "@/components/page-notice";
+import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { FileInputControl } from "../components/DbAdminShared";
 import {
@@ -92,7 +93,6 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   // 承認/却下は行単位の busy(他の行の操作をブロックしない)
   const [reviewBusyIds, setReviewBusyIds] = useState<ReadonlySet<string>>(new Set());
   const [mermaid, setMermaid] = useState("");
-  const [mermaidCopied, setMermaidCopied] = useState(false);
   // 実行中ステップの経過秒を更新するための現在時刻(ポーリングと同じ周期で更新)
   const [nowTick, setNowTick] = useState(() => Date.now());
   const timelineRef = useRef<HTMLOListElement | null>(null);
@@ -126,19 +126,20 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     [proposals, latestSessionId]
   );
 
-  const refreshProposals = useCallback(async (targetProfileId: string) => {
+  const refreshProposals = useCallback(async (targetProfileId: string, signal?: AbortSignal) => {
     try {
-      const next = await listProfileOntologyProposals(targetProfileId);
+      const next = await listProfileOntologyProposals(targetProfileId, { signal });
       if (profileIdRef.current === targetProfileId) setProposals(next);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // 一覧取得の失敗は致命的ではない(次の操作で再取得する)
     }
   }, []);
 
   // 承認済みで未公開の draft をリロード後も検出し、「公開」導線を維持する。
-  const detectPendingDraft = useCallback(async () => {
+  const detectPendingDraft = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await listOntologyRevisions();
+      const data = await listOntologyRevisions({ signal });
       const active = data.revisions.find(
         (revision) => revision.id === data.active_revision_id
       );
@@ -152,7 +153,8 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
         )
         .sort((left, right) => right.version - left.version)[0];
       setDraftRevision(pending ?? null);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // 取得できない場合は accept 応答由来の draft 表示にフォールバック
     }
   }, []);
@@ -168,10 +170,12 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     setBusinessText("");
     setQaFile(null);
     setSourceFiles([]);
+    const controller = new AbortController();
     if (profileId) {
-      void refreshProposals(profileId);
-      void detectPendingDraft();
+      void refreshProposals(profileId, controller.signal);
+      void detectPendingDraft(controller.signal);
     }
+    return () => controller.abort();
   }, [detectPendingDraft, profileId, refreshProposals]);
 
   // job ポーリング(1s)。完了で停止し、提案一覧を更新する。
@@ -180,11 +184,13 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     if (!jobRunning || !jobId || !profileId) return;
     pollFailureCountRef.current = 0;
     let cancelled = false;
+    let currentController: AbortController | null = null;
     const timer = window.setInterval(() => {
       setNowTick(Date.now());
       if (pollInFlightRef.current) return; // 応答遅延時に GET を重ねない
+      currentController = new AbortController();
       pollInFlightRef.current = true;
-      getOntologyBuildJob(jobId)
+      getOntologyBuildJob(jobId, { signal: currentController.signal })
         .then((next) => {
           if (cancelled) return; // 古い応答で新しい状態を上書きしない
           pollFailureCountRef.current = 0;
@@ -209,7 +215,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           }
         })
         .catch((err) => {
-          if (cancelled) return;
+          if (cancelled || isAbortError(err)) return;
           // 永続 job 自体が削除・期限切れになった 404 は即終端する
           const notFound = err instanceof ApiError && err.status === 404;
           pollFailureCountRef.current += 1;
@@ -229,20 +235,24 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           // それ以外の一時的な失敗は次のポーリングで回復を試みる
         })
         .finally(() => {
+          currentController = null;
           pollInFlightRef.current = false;
         });
     }, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      currentController?.abort();
     };
   }, [jobRunning, jobId, profileId, refreshProposals, showNotice]);
 
   useEffect(() => {
     if (!publishRunning || !publishJob) return;
     let cancelled = false;
+    let currentController: AbortController | null = null;
     const timer = window.setInterval(() => {
-      void getOntologyPublishJob(publishJob.id)
+      currentController = new AbortController();
+      void getOntologyPublishJob(publishJob.id, { signal: currentController.signal })
         .then((next) => {
           if (cancelled) return;
           setPublishJob(next);
@@ -259,6 +269,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           }
         })
         .catch((err) => {
+          if (cancelled || isAbortError(err)) return;
           if (!cancelled) {
             showNotice(
               "danger",
@@ -266,11 +277,15 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             );
             setPublishJob(null);
           }
+        })
+        .finally(() => {
+          currentController = null;
         });
     }, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      currentController?.abort();
     };
   }, [onPublished, publishJob, publishRunning, showNotice]);
 
@@ -396,10 +411,9 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const copyMermaid = async () => {
     try {
       await navigator.clipboard.writeText(mermaid);
-      setMermaidCopied(true);
-      window.setTimeout(() => setMermaidCopied(false), 2000);
+      toast.success(t("common.action.copied"));
     } catch {
-      // clipboard 不許可時は何もしない(表示テキストから手動コピー可能)
+      toast.error(t("common.action.copyFailed"));
     }
   };
 
@@ -863,11 +877,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
                 onClick={() => void copyMermaid()}
               >
                 <ClipboardCopy size={15} aria-hidden="true" />
-                <span>
-                  {mermaidCopied
-                    ? t("profiles.ontologyBuild.mermaidCopied")
-                    : t("profiles.ontologyBuild.mermaidCopy")}
-                </span>
+                <span>{t("profiles.ontologyBuild.mermaidCopy")}</span>
               </Button>
             ) : null}
           </div>

@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
-import { Banner, Button, Card, CardContent, CardHeader, CardTitle, FormStatus } from "@engchina/production-ready-ui";
+import { Banner, Button, Card, CardContent, CardHeader, CardTitle, toast } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -121,7 +121,6 @@ export function PasswordChangePage() {
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   if (auth.status === "unauthenticated") return <Navigate to={APP_ROUTES.login} replace />;
   if (auth.user?.debug_mode) {
@@ -138,7 +137,7 @@ export function PasswordChangePage() {
     setError("");
     try {
       await securityApi.changePassword(currentPassword, newPassword);
-      setSuccess(t("auth.password.changed"));
+      toast.success(t("auth.password.changed"));
       window.setTimeout(() => {
         void auth.refresh().finally(() => navigate(APP_ROUTES.login, { replace: true }));
       }, 900);
@@ -177,12 +176,11 @@ export function PasswordChangePage() {
                 />
               </label>
             ))}
-            <div className="space-y-2 border-t border-border pt-4">
+            <div className="border-t border-border pt-4">
               <Button className="h-11 w-full" loading={busy} type="submit">
                 <KeyRound size={16} aria-hidden />
                 {t("auth.password.submit")}
               </Button>
-              <FormStatus tone="success" message={success} />
             </div>
           </form>
         </CardContent>

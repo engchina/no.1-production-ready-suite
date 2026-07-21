@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiGet, apiPost } from "@/lib/api";
+import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useRequestScope } from "@/lib/useRequestScope";
 import {
   ExecutionConfirmationField,
   FileInputControl,
@@ -102,6 +103,8 @@ export function DataManagementPage() {
   const [syntheticResultLimit, setSyntheticResultLimit] = useState(100);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const loadSequence = useRef(0);
+  const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
     const tables = (dbAdminTables?.items ?? []).map((item) => ({
@@ -159,38 +162,54 @@ export function DataManagementPage() {
   };
 
   const load = async (refreshSchema = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
     try {
-      const [catalogData, profileData, adminTables, adminViews] = await Promise.all([
-        refreshSchema ? apiPost<SchemaCatalog>("/api/schema/refresh") : apiGet<SchemaCatalog>("/api/schema/catalog"),
-        apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
-        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
-      ]);
-      const nextSyntheticProfileName = resolveBusinessSelectAiProfileName(
-        syntheticProfileName,
-        profileData.profiles
-      );
-      setCatalog(catalogData);
-      setSelectAiDbProfiles(profileData);
-      setDbAdminTables(adminTables);
-      setDbAdminViews(adminViews);
-      setSyntheticProfileName(nextSyntheticProfileName);
-      if (syntheticProfileName && syntheticProfileName !== nextSyntheticProfileName) {
-        clearSyntheticProfileTargets();
-      }
-      setPreviewObject((current) => current || adminTables.items[0]?.name || adminViews.items[0]?.name || "");
-      setCsvTable((current) => current || adminTables.items[0]?.name || "");
+      await runScopedRequest(async (signal) => {
+        const [catalogData, profileData, adminTables, adminViews] = await Promise.all([
+          refreshSchema
+            ? apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal })
+            : apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
+          apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL, { signal }),
+          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables", { signal }),
+          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views", { signal }),
+        ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        const nextSyntheticProfileName = resolveBusinessSelectAiProfileName(
+          syntheticProfileName,
+          profileData.profiles
+        );
+        setCatalog(catalogData);
+        setSelectAiDbProfiles(profileData);
+        setDbAdminTables(adminTables);
+        setDbAdminViews(adminViews);
+        setSyntheticProfileName(nextSyntheticProfileName);
+        if (syntheticProfileName && syntheticProfileName !== nextSyntheticProfileName) {
+          clearSyntheticProfileTargets();
+        }
+        setPreviewObject(
+          (current) => current || adminTables.items[0]?.name || adminViews.items[0]?.name || ""
+        );
+        setCsvTable((current) => current || adminTables.items[0]?.name || "");
+      });
     } catch (err) {
+      if (isAbortError(err)) {
+        return;
+      }
       setMessage(err instanceof Error ? err.message : t("dataTools.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
     void load();
+    return () => {
+      loadSequence.current += 1;
+      abortAll();
+    };
   }, []);
 
   const showPreview = async () => {
@@ -234,6 +253,7 @@ export function DataManagementPage() {
       }
       const filename = `${previewObject.toLowerCase()}_preview.xlsx`;
       downloadBlob(filename, await response.blob());
+      toast.success(t("common.action.downloaded"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataMgmt.error.previewExport"));
     } finally {

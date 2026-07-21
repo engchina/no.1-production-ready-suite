@@ -12,6 +12,7 @@ import {
   EmptyState,
   StatusBadge,
   cn,
+  toast,
 } from "@engchina/production-ready-ui";
 
 import { OntologyWorkspace } from "./OntologyWorkspace";
@@ -284,7 +285,8 @@ function NodeInspector({
         ...normalizedSemanticNode(semanticNode),
         review_status: "approved",
       });
-      setSemanticSaveState("saved");
+      setSemanticSaveState("idle");
+      toast.success(labels.semanticDraftSaved);
     } catch {
       setSemanticSaveState("error");
     }
@@ -549,9 +551,6 @@ function NodeInspector({
       ) : null}
       {rule || enumValue ? (
         <div className="grid gap-2">
-          {semanticSaveState === "saved" ? (
-            <Banner severity="success">{labels.semanticDraftSaved}</Banner>
-          ) : null}
           {semanticSaveState === "error" ? (
             <Banner severity="danger">{labels.semanticDraftError}</Banner>
           ) : null}
@@ -792,7 +791,8 @@ export function ProfileOntologyEditor({
           draft
         )
       );
-      setSaveState("saved");
+      setSaveState("idle");
+      toast.success(labels.saveSuccessTitle, { description: labels.saveSuccess });
     } catch {
       setSaveState("error");
     }
@@ -953,11 +953,6 @@ export function ProfileOntologyEditor({
               <Banner severity="info">{labels.inspectorEmpty}</Banner>
             )}
 
-            {saveState === "saved" ? (
-              <Banner severity="success" title={labels.saveSuccessTitle}>
-                {labels.saveSuccess}
-              </Banner>
-            ) : null}
             {saveState === "error" ? (
               <Banner severity="danger" title={labels.saveErrorTitle}>
                 {labels.saveError}

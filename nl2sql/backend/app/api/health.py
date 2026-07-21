@@ -8,6 +8,7 @@ import re
 from fastapi import APIRouter
 from pr_backend_core import ApiResponse
 
+from app.api.concurrency import run_sync_io
 from app.api.models import DatabaseStatusData
 from app.clients.oracle import OracleConnectionTimeoutError, test_oracle_connection
 from app.features.nl2sql.incremental_observability import record_ready_once
@@ -63,7 +64,9 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
 
     if nl2sql_service.uses_incremental_store:
         try:
-            migrated, migration_detail = nl2sql_service.check_incremental_store()
+            migrated, migration_detail = await run_sync_io(
+                nl2sql_service.check_incremental_store
+            )
         except Exception as exc:  # noqa: BLE001 - normalized readiness boundary
             logger.exception(
                 "incremental_store_check_failed",
@@ -88,7 +91,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
             )
 
         try:
-            observe_system_schema_epoch()
+            await run_sync_io(observe_system_schema_epoch)
         except Exception as exc:  # noqa: BLE001 - readiness boundary で安全な状態へ正規化
             logger.warning(
                 "system_schema_epoch_check_failed",

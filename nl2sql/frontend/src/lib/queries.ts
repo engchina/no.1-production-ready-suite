@@ -42,7 +42,7 @@ function adbIsTransitioning(state: string | null | undefined): boolean {
 export function useDatabaseStatus({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.databaseStatus,
-    queryFn: api.getDatabaseStatus,
+    queryFn: ({ signal }) => api.getDatabaseStatus({ signal }),
     enabled,
     staleTime: 15_000,
     retry: false,
@@ -52,7 +52,7 @@ export function useDatabaseStatus({ enabled = true }: { enabled?: boolean } = {}
 export function usePersistenceStatus({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.persistenceStatus,
-    queryFn: api.getPersistenceStatus,
+    queryFn: ({ signal }) => api.getPersistenceStatus({ signal }),
     enabled,
     retry: false,
   });
@@ -69,7 +69,7 @@ export function useRecoverPersistence() {
 export function useModelSettings() {
   return useQuery({
     queryKey: queryKeys.modelSettings,
-    queryFn: api.getModelSettings,
+    queryFn: ({ signal }) => api.getModelSettings({ signal }),
   });
 }
 
@@ -92,14 +92,14 @@ export function useTestModelSettings() {
 export function useDatabaseSettings() {
   return useQuery({
     queryKey: queryKeys.databaseSettings,
-    queryFn: api.getDatabaseSettings,
+    queryFn: ({ signal }) => api.getDatabaseSettings({ signal }),
   });
 }
 
 export function useSystemTablesStatus() {
   return useQuery({
     queryKey: queryKeys.systemTables,
-    queryFn: api.getSystemTablesStatus,
+    queryFn: ({ signal }) => api.getSystemTablesStatus({ signal }),
     retry: false,
     refetchInterval: (query) =>
       query.state.data?.operation_state.status === "running"
@@ -131,7 +131,7 @@ export function useInitializeSystemTables() {
 export function useSchemaOwners() {
   return useQuery({
     queryKey: queryKeys.schemaOwners,
-    queryFn: api.getSchemaOwners,
+    queryFn: ({ signal }) => api.getSchemaOwners({ signal }),
     staleTime: 30_000,
     retry: false,
   });
@@ -177,7 +177,7 @@ export function useTestDatabaseSettings() {
 export function useAdbInfo() {
   return useQuery({
     queryKey: queryKeys.adbInfo,
-    queryFn: api.getAdbInfo,
+    queryFn: ({ signal }) => api.getAdbInfo({ signal }),
     refetchInterval: (query) =>
       adbIsTransitioning(query.state.data?.lifecycle_state)
         ? ACTIVE_REFETCH_INTERVAL_MS
@@ -222,7 +222,7 @@ export function useStopAdb() {
 export function useUploadStorageSettings() {
   return useQuery({
     queryKey: queryKeys.uploadStorageSettings,
-    queryFn: api.getUploadStorageSettings,
+    queryFn: ({ signal }) => api.getUploadStorageSettings({ signal }),
   });
 }
 

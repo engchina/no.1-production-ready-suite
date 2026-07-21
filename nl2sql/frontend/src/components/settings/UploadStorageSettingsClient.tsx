@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
@@ -62,14 +63,12 @@ export function UploadStorageSettingsClient() {
   const [form, setForm] = useState<UploadStorageForm>(EMPTY_FORM);
   const [objectStorageNamespace, setObjectStorageNamespace] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (query.data) {
       setForm(formFromSettings(query.data));
       setObjectStorageNamespace(resolveObjectStorageNamespace(query.data));
       setErrors({});
-      setSaved(false);
     }
   }, [query.data]);
 
@@ -83,7 +82,6 @@ export function UploadStorageSettingsClient() {
       if ("backend" in update) delete next.objectStorageNamespace;
       return next;
     });
-    setSaved(false);
     save.reset();
   }
 
@@ -94,7 +92,7 @@ export function UploadStorageSettingsClient() {
         setForm(formFromSettings(data));
         setObjectStorageNamespace(resolveObjectStorageNamespace(data));
         setErrors({});
-        setSaved(true);
+        toast.success(t("settings.uploadStorage.actions.saved"));
       },
     });
   }
@@ -228,9 +226,6 @@ export function UploadStorageSettingsClient() {
                 ? t("settings.uploadStorage.actions.saving")
                 : t("settings.uploadStorage.actions.save")}
             </Button>
-            {saved ? (
-              <FormStatus tone="success" message={t("settings.uploadStorage.actions.saved")} />
-            ) : null}
             {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
           </div>
         </form>

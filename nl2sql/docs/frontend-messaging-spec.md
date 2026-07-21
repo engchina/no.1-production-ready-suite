@@ -172,6 +172,28 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
   - ✓ 「保存に失敗しました。接続情報を確認して再試行してください。」
 - 数値・日時はロケール対応で整形(`src/lib/format.ts`)。データ列は等幅数字(`tnum`)。
 
+### 4.1 文末優先の折返し
+
+- Toast / Banner / FormStatus / FieldError / ConfirmDialog / ErrorState / EmptyState の文字列は、共有 UI の `<MessageText>` を通して描画する。
+- 改行・タブ・連続空白は 1 つの空白へ正規化し、`。！？；` と英語の `.?!` を文末候補として扱う。小数・version・URL 内の `.` は分割しない。
+- 文ごとに atomic inline box として描画し、**幅が不足したときだけ文末を優先して折り返す**。各文を常に改行してはならない。
+- 単独の長文・URL はコンテナ幅内で `break-words` し、375px でも横スクロールを発生させない。
+- 複数行の表・リスト等は文字列へ `\n` を埋め込まず、ReactNode と意味的な要素で構造化する。
+
+### 4.2 結果アクションのフィードバック契約
+
+| 操作 | pending | success | failure |
+|---|---|---|---|
+| 保存/作成/更新/削除/取込/出力/コピー/起動/停止/再作成 | `<Button loading>` + 二重実行禁止 | 原則 `toast.success` | FieldError / FormStatus / PageNotice。固定面が無い場合のみ danger Toast |
+| ユーザーが押した更新/再試行/接続確認 | `<Button loading>` | 差分なしでも完了 Toast | 原因 + 復旧方法を近傍に保持 |
+| 長時間 job | 開始 info Toast + 永続 status | 終端遷移で 1 回だけ success Toast | 終端遷移で 1 回だけ danger 通知 |
+| SQL 生成/実行/評価等の主結果 | Skeleton / 進行状態 | 結果領域自体を完了通知とする | FormStatus / Banner / ErrorState |
+| navigation / tab / filter / expand / select | 可視状態 + ARIA | Toast を出さない | — |
+
+- 初期 load と background polling は静かに行い、明示的なユーザー操作だけを通知する。
+- 同じ結果を Toast と Banner/FormStatus に二重表示しない。成功の瞬間は Toast、継続する警告・復旧可能な失敗は固定面を正本とする。
+- clipboard / download / file import は Promise/HTTP の success と failure の両方を必ず扱う。
+
 ---
 
 ## 5. アクセシビリティ チェックリスト(各チャネル共通・必須)

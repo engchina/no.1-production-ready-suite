@@ -19,14 +19,14 @@ router = APIRouter(prefix="/schema", tags=["schema"])
 
 
 @router.get("/owners", response_model=ApiResponse[SchemaOwnersData])
-async def owners() -> ApiResponse[SchemaOwnersData]:
+def owners() -> ApiResponse[SchemaOwnersData]:
     """現在の接続ユーザーが参照可能な業務 schema 一覧を返す。"""
 
     return ApiResponse(data=nl2sql_service.get_schema_owners())
 
 
 @router.get("/catalog", response_model=ApiResponse[SchemaCatalog])
-async def catalog(response: Response) -> ApiResponse[SchemaCatalog]:
+def catalog(response: Response) -> ApiResponse[SchemaCatalog]:
     """NL2SQL の表/列選択 UI が利用する schema catalog を返す。"""
     response.headers["Deprecation"] = "true"
     response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
@@ -35,7 +35,7 @@ async def catalog(response: Response) -> ApiResponse[SchemaCatalog]:
 
 
 @router.post("/refresh", response_model=ApiResponse[SchemaCatalog])
-async def refresh(response: Response) -> ApiResponse[SchemaCatalog]:
+def refresh(response: Response) -> ApiResponse[SchemaCatalog]:
     """Oracle schema catalog を再取得する。
 
     local skeleton では deterministic sample catalog を返す。
@@ -47,7 +47,7 @@ async def refresh(response: Response) -> ApiResponse[SchemaCatalog]:
 
 
 @router.get("/catalog/head", response_model=ApiResponse[SchemaCatalogHead])
-async def catalog_head(
+def catalog_head(
     response: Response,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[SchemaCatalogHead] | Response:
@@ -62,7 +62,7 @@ async def catalog_head(
 
 
 @router.get("/objects", response_model=ApiResponse[SchemaObjectPage])
-async def search_objects(
+def search_objects(
     response: Response,
     cursor: str | None = None,
     limit: int = 50,
@@ -93,7 +93,7 @@ async def search_objects(
 @router.get(
     "/objects/{owner}/{object_name}", response_model=ApiResponse[SchemaObjectDetail]
 )
-async def object_detail(
+def object_detail(
     owner: str,
     object_name: str,
     response: Response,
@@ -116,13 +116,13 @@ async def object_detail(
     response_model=ApiResponse[SchemaRefreshJob],
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def start_refresh_job() -> ApiResponse[SchemaRefreshJob]:
+def start_refresh_job() -> ApiResponse[SchemaRefreshJob]:
     """Schema refresh を永続 job として投入し即時に返す。"""
     return ApiResponse(data=nl2sql_service.start_schema_refresh_job())
 
 
 @router.get("/refresh-jobs/{job_id}", response_model=ApiResponse[SchemaRefreshJob])
-async def refresh_job(job_id: str) -> ApiResponse[SchemaRefreshJob]:
+def refresh_job(job_id: str) -> ApiResponse[SchemaRefreshJob]:
     job = nl2sql_service.get_schema_refresh_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Schema refresh job が見つかりません。")

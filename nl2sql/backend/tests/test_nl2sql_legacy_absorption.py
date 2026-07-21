@@ -22,6 +22,7 @@ from app.features.nl2sql.models import (
     PreviewRequest,
     ProfileRecommendationRequest,
     ProfileSelectAiProfileRequest,
+    QueryResults,
     ReverseSqlRequest,
     RewriteRequest,
     SampleDataMutationRequest,
@@ -90,6 +91,19 @@ class FakeOracleGenerator:
 
     def search_feedback_vector_index(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return []
+
+
+class FakeDbAdminSelectAdapter:
+    def __init__(self) -> None:
+        self.select_calls: list[tuple[str, int]] = []
+
+    def execute_select(self, sql: str, row_limit: int) -> QueryResults:
+        self.select_calls.append((sql, row_limit))
+        return QueryResults(
+            columns=["CUSTOMER_NAME"],
+            rows=[{"CUSTOMER_NAME": "青山商事"}],
+            total=1,
+        )
 
 
 def _workbook_bytes(workbook: Any) -> bytes:
@@ -266,6 +280,63 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
     )
     assert confirmation_required.executed is False
     assert confirmation_required.statements[0].status == "confirmation_required"
+
+
+def test_db_admin_executor_with_dml_requires_confirmation() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    confirmation_required = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql=(
+                "WITH pending AS (SELECT INVOICE_ID FROM INVOICES WHERE STATUS = 'PENDING') "
+                "UPDATE INVOICES SET STATUS = 'REVIEWED' "
+                "WHERE INVOICE_ID IN (SELECT INVOICE_ID FROM pending)"
+            )
+        )
+    )
+
+    assert confirmation_required.executed is False
+    assert confirmation_required.statements[0].status == "confirmation_required"
+    assert any("ADMIN_EXECUTE" in warning for warning in confirmation_required.warnings)
+
+
+def test_db_admin_executor_blocks_mixed_select_and_update_batch() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    blocked = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql=(
+                "SELECT INVOICE_ID FROM INVOICES; "
+                "UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1"
+            ),
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert blocked.executed is False
+    assert {statement.status for statement in blocked.statements} == {"blocked"}
+    assert any("SELECT は含められません" in warning for warning in blocked.warnings)
+
+
+def test_db_admin_executor_select_uses_oracle_select_data_plane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    adapter = FakeDbAdminSelectAdapter()
+    monkeypatch.setattr(service, "_oracle_adapter", adapter)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    selected = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=3)
+    )
+
+    assert selected.executed is True
+    assert selected.runtime == "oracle"
+    assert selected.select_result is not None
+    assert selected.committed is False
+    assert selected.statements[0].statement_type == "SELECT"
+    assert selected.statements[0].status == "executed"
+    assert adapter.select_calls == [("SELECT * FROM INVOICES FETCH FIRST 3 ROWS ONLY", 3)]
 
 
 def test_select_ai_profile_mutation_requires_confirmation() -> None:

@@ -1,7 +1,6 @@
-import { Check, Copy, Play } from "lucide-react";
-import { useState } from "react";
+import { Copy, Play } from "lucide-react";
 
-import { Button, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { engineLabel } from "../labels";
@@ -21,13 +20,15 @@ export function GeneratedSqlSummary({
   executeLoading?: boolean;
   onExecute?: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
   const displayedSql = result.executable_sql || result.generated_sql;
 
   const copySql = async () => {
-    await navigator.clipboard.writeText(displayedSql);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
+    try {
+      await navigator.clipboard.writeText(displayedSql);
+      toast.success(t("common.action.copied"));
+    } catch {
+      toast.error(t("common.action.copyFailed"));
+    }
   };
 
   return (
@@ -62,8 +63,8 @@ export function GeneratedSqlSummary({
             </Button>
           )}
           <Button type="button" variant="secondary" size="sm" onClick={copySql}>
-            {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-            <span>{copied ? t("nl2sql.sql.copied") : t("nl2sql.sql.copy")}</span>
+            <Copy size={15} aria-hidden="true" />
+            <span>{t("nl2sql.sql.copy")}</span>
           </Button>
         </div>
       </div>
