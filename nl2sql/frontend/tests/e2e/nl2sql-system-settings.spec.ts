@@ -255,10 +255,6 @@ async function mockNl2sqlSettingsApi(page: Page) {
   await page.route("**/api/settings/database/adb/stop", (route) =>
     fulfillJson(route, adbInfo)
   );
-
-  await page.route("**/api/nl2sql/diagnostics", (route) =>
-    fulfillJson(route, { readiness: [], checks: [] })
-  );
 }
 
 async function expectNoHorizontalOverflow(page: Page) {

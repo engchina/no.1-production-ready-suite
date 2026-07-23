@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
-  ClipboardCopy,
-  FileCode2,
   Loader2,
   Sparkles,
   UploadCloud,
@@ -11,15 +9,20 @@ import {
 
 import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
+import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { FileInputControl } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
+  DbObjectPanelHeader,
+} from "../components/DbObjectManagementShared";
+import {
   acceptOntologyProposal,
   acceptOntologyProposalsBatch,
   ApiError,
-  fetchProfileOntologyMermaid,
   getOntologyBuildJob,
   getOntologyPublishJob,
   listOntologyRevisions,
@@ -86,18 +89,20 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const [runText, setRunText] = useState(true);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
   const [proposals, setProposals] = useState<OntologyProposal[]>([]);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
+  const [proposalsError, setProposalsError] = useState("");
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
   const [publishJob, setPublishJob] = useState<OntologyPublishJob | null>(null);
   const { notice, showNotice, clearNotice } = usePageNotice();
   const [busy, setBusy] = useState("");
   // 承認/却下は行単位の busy(他の行の操作をブロックしない)
   const [reviewBusyIds, setReviewBusyIds] = useState<ReadonlySet<string>>(new Set());
-  const [mermaid, setMermaid] = useState("");
   // 実行中ステップの経過秒を更新するための現在時刻(ポーリングと同じ周期で更新)
   const [nowTick, setNowTick] = useState(() => Date.now());
   const timelineRef = useRef<HTMLOListElement | null>(null);
   // プロファイル切替後に in-flight 応答が旧プロファイルの状態を上書きしないためのガード
   const profileIdRef = useRef(profileId);
+  const proposalsRequestIdRef = useRef(0);
   const pollInFlightRef = useRef(false);
   const pollFailureCountRef = useRef(0);
   // 終端(完了/失敗)通知を job ごとに一度だけ出す
@@ -127,12 +132,33 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   );
 
   const refreshProposals = useCallback(async (targetProfileId: string, signal?: AbortSignal) => {
+    const requestId = proposalsRequestIdRef.current + 1;
+    proposalsRequestIdRef.current = requestId;
+    setProposalsLoading(true);
+    setProposalsError("");
     try {
       const next = await listProfileOntologyProposals(targetProfileId, { signal });
-      if (profileIdRef.current === targetProfileId) setProposals(next);
+      if (
+        profileIdRef.current === targetProfileId &&
+        proposalsRequestIdRef.current === requestId
+      ) {
+        setProposals(next);
+      }
     } catch (err) {
       if (isAbortError(err)) return;
-      // 一覧取得の失敗は致命的ではない(次の操作で再取得する)
+      if (
+        profileIdRef.current === targetProfileId &&
+        proposalsRequestIdRef.current === requestId
+      ) {
+        setProposalsError(t("profiles.ontologyBuild.proposalsLoadError"));
+      }
+    } finally {
+      if (
+        profileIdRef.current === targetProfileId &&
+        proposalsRequestIdRef.current === requestId
+      ) {
+        setProposalsLoading(false);
+      }
     }
   }, []);
 
@@ -166,7 +192,8 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     setDraftRevision(null);
     setPublishJob(null);
     clearNotice();
-    setMermaid("");
+    setProposalsLoading(Boolean(profileId));
+    setProposalsError("");
     setBusinessText("");
     setQaFile(null);
     setSourceFiles([]);
@@ -258,7 +285,6 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           setPublishJob(next);
           if (next.status === "succeeded") {
             setDraftRevision(null);
-            setMermaid("");
             toast.success(t("profiles.ontologyBuild.published"));
             onPublished?.();
           } else if (next.status === "failed") {
@@ -396,27 +422,6 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     }
   };
 
-  const loadMermaid = async () => {
-    setBusy("mermaid");
-    try {
-      const data = await fetchProfileOntologyMermaid(profileId);
-      setMermaid(data.mermaid);
-    } catch (err) {
-      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.mermaid"));
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const copyMermaid = async () => {
-    try {
-      await navigator.clipboard.writeText(mermaid);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  };
-
   const toggles: Array<{
     checked: boolean;
     onChange: (value: boolean) => void;
@@ -429,13 +434,27 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
 
   return (
     <section
-      className="grid gap-4 rounded-md border border-border bg-card p-3"
+      className="grid min-w-0 gap-4 rounded-md border border-border bg-card p-4 shadow-sm"
       aria-label={t("profiles.ontologyBuild.title")}
       data-testid="profile-ontology-build"
     >
       <SectionHeading />
-
-      <div className="grid gap-3 lg:grid-cols-2">
+      <PageNotice notice={notice} />
+      <FixedSplitPane
+        splitId="ontology-build-workspace"
+        preferredWidePane="right"
+        minLeftPaneWidthPx={420}
+        minRightPaneWidthPx={520}
+        left={
+          <section
+            className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+            aria-label={t("profiles.ontologyBuild.setupTitle")}
+          >
+            <DbObjectPanelHeader
+              icon={UploadCloud}
+              title={t("profiles.ontologyBuild.setupTitle")}
+              description={t("profiles.ontologyBuild.setupHint")}
+            />
         <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-foreground">
           <span>{t("profiles.ontologyBuild.businessText")}</span>
           <textarea
@@ -446,7 +465,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             onChange={(event) => setBusinessText(event.currentTarget.value)}
           />
         </label>
-        <div className="grid content-start gap-3">
+        <div className="grid min-w-0 content-start gap-3">
           <div
             className="grid gap-2 rounded-md border border-border bg-background p-3"
             data-testid="ontology-build-source-panel"
@@ -540,13 +559,13 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             ))}
           </fieldset>
         </div>
-      </div>
 
-      <div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
         <Button
           type="button"
           variant="primary"
-          size="sm"
+          size="lg"
+          className="w-full sm:w-auto"
           loading={busy === "start" || jobRunning}
           disabled={busy === "start" || jobRunning}
           onClick={() => void startBuild()}
@@ -559,9 +578,18 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           </span>
         </Button>
       </div>
-
-      <PageNotice notice={notice} />
-
+          </section>
+        }
+        right={
+          <section
+            className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+            aria-label={t("profiles.ontologyBuild.reviewTitle")}
+          >
+            <DbObjectPanelHeader
+              icon={Check}
+              title={t("profiles.ontologyBuild.reviewTitle")}
+              description={t("profiles.ontologyBuild.reviewHint")}
+            />
       {!job && busy === "start" ? (
         // スピナーは「AI 構築を実行」ボタン内の loading 表示に一本化する
         // (ここに Loader2 を置くと二重スピナーになるため、テキストのみ表示)。
@@ -731,7 +759,19 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             );
           })()}
         </div>
-        {runProposals.length === 0 ? (
+        {proposalsLoading ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="ontology-proposals"
+            ariaLabel={t("profiles.ontologyBuild.proposalsLoading")}
+            variant="list"
+            rows={4}
+          />
+        ) : proposalsError ? (
+          <ErrorState
+            message={proposalsError}
+            onRetry={() => void refreshProposals(profileId)}
+          />
+        ) : runProposals.length === 0 ? (
           <p className="rounded-md border border-dashed border-border bg-background p-4 text-sm text-muted">
             {t("profiles.ontologyBuild.proposalsEmpty")}
           </p>
@@ -770,7 +810,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
                     <div className="flex shrink-0 gap-2">
                       <Button
                         type="button"
-                        variant="primary"
+                      variant="secondary"
                         size="sm"
                         loading={reviewBusyIds.has(proposal.id)}
                         disabled={reviewBusyIds.has(proposal.id) || busy === "accept-all"}
@@ -809,7 +849,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             <Button
               type="button"
               variant="primary"
-              size="sm"
+              size="lg"
               loading={busy === "publish"}
               disabled={publishRunning || (busy !== "" && busy !== "publish")}
               onClick={() => void publish()}
@@ -849,60 +889,19 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           </div>
         ) : null}
       </section>
-
-      <details className="rounded-md border border-border bg-background p-3">
-        <summary className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
-          <FileCode2 size={15} className="text-primary" aria-hidden="true" />
-          {t("profiles.ontologyBuild.mermaidTitle")}
-        </summary>
-        <div className="mt-2 grid gap-2">
-          <p className="text-xs text-muted">{t("profiles.ontologyBuild.mermaidHint")}</p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={busy === "mermaid"}
-              onClick={() => void loadMermaid()}
-            >
-              <FileCode2 size={15} aria-hidden="true" />
-              <span>{t("profiles.ontologyBuild.mermaidLoad")}</span>
-            </Button>
-            {mermaid ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={t("profiles.ontologyBuild.mermaidCopy")}
-                onClick={() => void copyMermaid()}
-              >
-                <ClipboardCopy size={15} aria-hidden="true" />
-                <span>{t("profiles.ontologyBuild.mermaidCopy")}</span>
-              </Button>
-            ) : null}
-          </div>
-          {mermaid ? (
-            <pre
-              className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg"
-              data-testid="ontology-build-mermaid"
-            >
-              <code>{mermaid}</code>
-            </pre>
-          ) : null}
-        </div>
-      </details>
+          </section>
+        }
+      />
     </section>
   );
 }
 
 function SectionHeading() {
   return (
-    <div>
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <Sparkles size={16} className="text-primary" aria-hidden="true" />
-        {t("profiles.ontologyBuild.title")}
-      </h3>
-      <p className="mt-1 text-sm leading-6 text-muted">{t("profiles.ontologyBuild.hint")}</p>
-    </div>
+    <DbObjectPanelHeader
+      icon={Sparkles}
+      title={t("profiles.ontologyBuild.title")}
+      description={t("profiles.ontologyBuild.hint")}
+    />
   );
 }

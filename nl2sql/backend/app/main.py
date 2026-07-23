@@ -15,6 +15,7 @@ from app.clients.oracle_runtime import close_oracle_pools
 from app.features.nl2sql.ontology_router import OntologyApiRuntime, ontology_runtime
 from app.features.nl2sql.service import (
     Nl2SqlPersistenceUnavailable,
+    Nl2SqlRepositoryOperationFailed,
     Nl2SqlService,
     nl2sql_service,
 )
@@ -101,6 +102,24 @@ async def nl2sql_persistence_unavailable_handler(
             "data": None,
             "error_messages": [exc.public_message],
             "warning_messages": [],
+            "error_code": exc.reason_code,
+        },
+    )
+
+
+@app.exception_handler(Nl2SqlRepositoryOperationFailed)
+async def nl2sql_repository_operation_failed_handler(
+    _request: Request,
+    exc: Nl2SqlRepositoryOperationFailed,
+) -> JSONResponse:
+    """SQL 実装/互換性エラーを DB 全体の停止と誤認させず局所化する。"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "data": None,
+            "error_messages": [exc.public_message],
+            "warning_messages": [],
+            "error_code": exc.reason_code,
         },
     )
 

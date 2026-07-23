@@ -15,6 +15,8 @@ import { elapsedSecondsSince, formatElapsed } from "../src/features/nl2sql/opera
 import {
   adjustFixedSplitFraction,
   clampFixedSplitFraction,
+  clampFixedSplitFractionToPaneWidths,
+  fixedSplitFractionBounds,
   fixedSplitFractionForRatio,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
@@ -166,6 +168,19 @@ test("fixed split pane keyboard adjustment uses pixel-equivalent fractions", () 
   assert.equal(adjustFixedSplitFraction(0.5, 24, 1000), 0.524);
   assert.equal(adjustFixedSplitFraction(0.5, -72, 1000), 0.428);
   assert.equal(adjustFixedSplitFraction(0.5, -400, 1000), 0.25);
+});
+
+test("fixed split pane keeps both panes outside the reserved divider track", () => {
+  assert.deepEqual(fixedSplitFractionBounds(1000, 320, 400), {
+    minFraction: 0.32,
+    maxFraction: 0.6,
+  });
+  assert.equal(clampFixedSplitFractionToPaneWidths(0.25, 1000, 320, 400), 0.32);
+  assert.equal(clampFixedSplitFractionToPaneWidths(0.75, 1000, 320, 400), 0.6);
+  assert.deepEqual(fixedSplitFractionBounds(700, 400, 400), {
+    minFraction: 0.5,
+    maxFraction: 0.5,
+  });
 });
 
 test("fixed split pane grid templates use equal and golden-ratio tracks", () => {

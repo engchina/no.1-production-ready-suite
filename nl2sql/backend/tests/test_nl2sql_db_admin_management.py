@@ -5,8 +5,9 @@ from __future__ import annotations
 import importlib
 import io
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -39,6 +40,7 @@ from app.features.nl2sql.oracle_adapter import (
 )
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.settings import get_settings
 
 
 class FakeEnterpriseAiClient:
@@ -196,6 +198,51 @@ def test_statement_policy_table_ddl_accepts_and_blocks() -> None:
     assert blocked.statements[1].status == "blocked"
     assert "禁止された操作" in blocked.statements[1].error_message
     assert any("禁止された操作" in warning for warning in blocked.warnings)
+
+
+def test_admin_mutation_submits_schema_job_only_for_schema_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "DML",
+                "status": "success",
+                "sql": "",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+    submitted = 0
+
+    def submit() -> str:
+        nonlocal submitted
+        submitted += 1
+        return "refresh-job-1"
+
+    monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    dml = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="UPDATE ORDERS SET STATUS = 'DONE'",
+            policy="data_dml",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    ddl = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="CREATE TABLE ORDERS_ARCHIVE (ID NUMBER)",
+            policy="table_ddl",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert dml.executed is True
+    assert dml.schema_refresh_job_id == ""
+    assert ddl.executed is True
+    assert ddl.schema_refresh_job_id == "refresh-job-1"
+    assert submitted == 1
 
 
 def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> None:
@@ -835,6 +882,47 @@ def test_preview_data_builds_guarded_select() -> None:
     assert "WHERE STATUS = 'X'" in normalized.sql
     assert "WHERE WHERE" not in normalized.sql
 
+    # Oracle の既存 object 名に有効な `$` を import 用 sanitizer で変換しない。
+    special = service.preview_db_admin_data(
+        DbAdminDataPreviewRequest(object_name="DBTOOLS$EXECUTION_HISTORY")
+    )
+    assert special.sql == (
+        'SELECT * FROM "DBTOOLS$EXECUTION_HISTORY" FETCH FIRST 100 ROWS ONLY'
+    )
+
+    with pytest.raises(ValueError, match="Oracle 識別子"):
+        service.preview_db_admin_data(
+            DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET')
+        )
+
+
+def test_oracle_adapter_execute_select_normalizes_driver_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingCursor:
+        def __enter__(self) -> _FailingCursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            raise RuntimeError("ORA-00942: table or view does not exist")
+
+    class _FailingConnection:
+        def cursor(self) -> _FailingCursor:
+            return _FailingCursor()
+
+    @contextmanager
+    def failing_connection() -> Iterator[_FailingConnection]:
+        yield _FailingConnection()
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "user_data_connection", failing_connection)
+
+    with pytest.raises(OracleAdapterError, match="SELECT の実行に失敗しました.*ORA-00942"):
+        adapter.execute_select('SELECT * FROM "MISSING_TABLE"', 100)
+
 
 def test_preview_data_exports_xlsx() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
@@ -940,16 +1028,16 @@ def test_get_db_admin_object_uses_ontology_business_name_for_logical(
 ) -> None:
     """論理名はオントロジー業務名、コメントは生カラムコメント(別ソース)になる。"""
     from app.features.nl2sql import ontology_router
-    from app.features.nl2sql.ontology_catalog import build_schema_ontology
 
-    # オントロジー側で業務名をキュレーション(コメントとは別文字列)
-    ontology = build_schema_ontology(
-        _invoices_catalog(column_logical="得意先名称", column_comment="取引先名")
-    )
+    calls: list[dict[str, str]] = []
 
     class _StubRuntime:
+        def column_business_names(self, **kwargs: str) -> dict[str, str]:
+            calls.append(kwargs)
+            return {"CUSTOMER_NAME": "得意先名称"}
+
         def current_ontology(self) -> Any:
-            return ontology
+            raise AssertionError("table detail must not load the full ontology")
 
     monkeypatch.setattr(ontology_router, "ontology_runtime", _StubRuntime())
 
@@ -961,6 +1049,9 @@ def test_get_db_admin_object_uses_ontology_business_name_for_logical(
     column = detail.columns[0]
     assert column.logical_name == "得意先名称"  # オントロジー業務名で上書き
     assert column.comment == "取引先名"  # 生カラムコメントは保持
+    assert calls == [
+        {"owner": "APP", "object_name": "INVOICES", "object_type": "table"}
+    ]
 
 
 def test_get_db_admin_object_blanks_logical_when_ontology_unavailable(
@@ -970,7 +1061,7 @@ def test_get_db_admin_object_blanks_logical_when_ontology_unavailable(
     from app.features.nl2sql import ontology_router
 
     class _BrokenRuntime:
-        def current_ontology(self) -> Any:
+        def column_business_names(self, **_kwargs: str) -> dict[str, str]:
             raise RuntimeError("ontology unavailable")
 
     monkeypatch.setattr(ontology_router, "ontology_runtime", _BrokenRuntime())
@@ -991,8 +1082,8 @@ def test_get_db_admin_object_blanks_logical_when_no_ontology_name(
     from app.features.nl2sql import ontology_router
 
     class _EmptyRuntime:
-        def current_ontology(self) -> Any:
-            return SimpleNamespace(nodes=[])
+        def column_business_names(self, **_kwargs: str) -> dict[str, str]:
+            return {}
 
     monkeypatch.setattr(ontology_router, "ontology_runtime", _EmptyRuntime())
 
@@ -1141,7 +1232,10 @@ def test_flexible_date_value_parses_common_formats() -> None:
 
 def test_select_ai_object_list_normalizes_nested_oracle_profile_attributes() -> None:
     oracle_object_list_json = (
-        '[{"OWNER": "APP", "NAME": "PAYMENTS"}, ' '{"owner": "APP", "name": "INVOICES"}]'
+        '[{"OWNER": "APP", "NAME": "PAYMENTS"}, '
+        '{"owner": "APP", "name": "INVOICES"}, '
+        '{"owner": "APP", "name": "VECTOR_IDX$VECTAB"}, '
+        '{"owner": "APP", "name": "SYS#AUDIT"}]'
     )
     object_list = _normalize_select_ai_object_list(
         {"PROFILE_ATTRIBUTES": {"OBJECT_LIST": oracle_object_list_json}}

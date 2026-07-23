@@ -16,10 +16,17 @@ logger = logging.getLogger(__name__)
 class OntologyWorker:
     """queued job を ETag 付き更新で 1 件だけ claim して処理する。"""
 
-    def __init__(self, runtime: Any, build_service: Any, publish_service: Any) -> None:
+    def __init__(
+        self,
+        runtime: Any,
+        build_service: Any,
+        publish_service: Any,
+        profile_sync_service: Any | None = None,
+    ) -> None:
         self.runtime = runtime
         self.build_service = build_service
         self.publish_service = publish_service
+        self.profile_sync_service = profile_sync_service
         self.worker_id = f"{socket.gethostname()}:{id(self)}"
 
     def claim_next(self) -> dict[str, Any] | None:
@@ -66,6 +73,8 @@ class OntologyWorker:
             self.build_service.run_persisted(job_id)
         elif job_type == "publish":
             self.publish_service.run_persisted(job_id)
+        elif job_type == "profile_sync" and self.profile_sync_service is not None:
+            self.profile_sync_service.run_persisted(job_id)
         else:
             raise RuntimeError(f"未対応の Ontology job type です: {job_type}")
         logger.info("ontology_job_finished", extra={"job_id": job_id, "job_type": job_type})
@@ -83,11 +92,13 @@ def main() -> None:
         ontology_publish_service,
         ontology_runtime,
     )
+    from .profile_sync import profile_sync_service
 
     worker = OntologyWorker(
         ontology_runtime,
         ontology_build_service,
         ontology_publish_service,
+        profile_sync_service,
     )
     if args.once:
         worker.process_one()

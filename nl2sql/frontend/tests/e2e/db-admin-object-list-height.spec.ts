@@ -170,6 +170,20 @@ async function mockObjectManagementApi(page: Page, scenario: (typeof scenarios)[
       warnings: [],
     })
   );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: items.length,
+      table_count: scenario.objectType === "table" ? items.length : 0,
+      view_count: scenario.objectType === "view" ? items.length : 0,
+      next_cursor: null,
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    })
+  );
   await page.route("**/api/nl2sql/db-admin/tables/*", (route) =>
     fulfillJson(route, {
       name: "TABLE_01",
@@ -236,6 +250,21 @@ async function mockMetadataManagementApi(page: Page, options: { empty?: boolean 
       warnings: [],
     })
   );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const items = [...tableItems, ...viewItems];
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: items.length,
+      table_count: tableItems.length,
+      view_count: viewItems.length,
+      next_cursor: null,
+      refreshed_at: catalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
 }
 
 async function mockDataManagementApi(page: Page) {
@@ -243,6 +272,21 @@ async function mockDataManagementApi(page: Page) {
   await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) => fulfillJson(route, tableObjects));
   await page.route("**/api/nl2sql/db-admin/views", (route) => fulfillJson(route, viewObjects));
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const items = [...tableObjects.items, ...viewObjects.items];
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: items.length,
+      table_count: tableObjects.items.length,
+      view_count: viewObjects.items.length,
+      next_cursor: null,
+      refreshed_at: managementCatalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
   await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) =>
     fulfillJson(route, { runtime: "deterministic", profiles: [selectAiProfile], warnings: [] })
   );
@@ -512,6 +556,150 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
   await page.getByRole("tab", { name: "DDL" }).click();
   await expect(page.getByText('CREATE TABLE "TABLE_01" ("ID" NUMBER)')).toBeVisible();
   expect(detailUrls.some((url) => url.includes("include_ddl=1"))).toBe(true);
+});
+
+for (const scenario of scenarios) {
+  test(`${scenario.title}の詳細エラーは局所表示され、キーボードで再試行できる`, async ({
+    page,
+  }) => {
+    const objectName = `${scenario.prefix}_RETRY`;
+    let detailAttempts = 0;
+    await page.route(scenario.apiPath, (route) =>
+      fulfillJson(route, {
+        runtime: "deterministic",
+        items: [
+          {
+            name: objectName,
+            owner: "APP",
+            object_type: scenario.objectType,
+            row_count: 1,
+            comment: "",
+          },
+        ],
+        refreshed_at: "2026-07-21T00:00:00+00:00",
+        warnings: [],
+      }),
+    );
+    await page.route(`${scenario.apiPath}/*`, async (route) => {
+      detailAttempts += 1;
+      if (detailAttempts === 1) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error_messages: ["詳細サービスが応答しませんでした。"] }),
+        });
+        return;
+      }
+      await fulfillJson(route, {
+        name: objectName,
+        owner: "APP",
+        object_type: scenario.objectType,
+        row_count: 1,
+        comment: "",
+        columns: [
+          {
+            column_name: "ID",
+            logical_name: "識別子",
+            data_type: "NUMBER",
+            nullable: false,
+            comment: "",
+            sample_values: ["1"],
+          },
+        ],
+        ddl: "",
+        warnings: [],
+      });
+    });
+
+    await page.goto(scenario.path);
+
+    const errorRegion = page.getByTestId(`${scenario.path.slice(1)}-detail-error`);
+    await expect(errorRegion.getByRole("alert")).toContainText("詳細の取得に失敗しました");
+    await expect(page.locator("main").getByRole("alert")).toHaveCount(1);
+    const retry = errorRegion.getByRole("button", { name: "再試行" });
+    await retry.focus();
+    await expect(retry).toBeFocused();
+    await retry.press("Enter");
+
+    await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
+    await expect(page.getByTestId("db-admin-detail-columns")).toContainText("識別子");
+    expect(detailAttempts).toBe(2);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(false);
+  });
+}
+
+test("テーブル詳細は A→B→A の遅延応答でも最後に選んだ A だけを表示する", async ({
+  page,
+}) => {
+  const tableNames = ["TABLE_A", "TABLE_B"];
+  let releaseTableB: (() => void) | undefined;
+  let markTableBStarted: (() => void) | undefined;
+  const tableBRelease = new Promise<void>((resolve) => {
+    releaseTableB = resolve;
+  });
+  const tableBStarted = new Promise<void>((resolve) => {
+    markTableBStarted = resolve;
+  });
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: tableNames.map((name) => ({
+        name,
+        owner: "APP",
+        object_type: "table",
+        row_count: 1,
+        comment: "",
+      })),
+      refreshed_at: "2026-07-21T00:00:00+00:00",
+      warnings: [],
+    }),
+  );
+  await page.route("**/api/nl2sql/db-admin/tables/*", async (route) => {
+    const tableName = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "");
+    if (tableName === "TABLE_B") {
+      markTableBStarted?.();
+      await tableBRelease;
+    }
+    try {
+      await fulfillJson(route, {
+        name: tableName,
+        owner: "APP",
+        object_type: "table",
+        row_count: 1,
+        comment: "",
+        columns: [
+          {
+            column_name: `${tableName}_ID`,
+            logical_name: `${tableName} の識別子`,
+            data_type: "NUMBER",
+            nullable: false,
+            comment: "",
+            sample_values: ["1"],
+          },
+        ],
+        ddl: "",
+        warnings: [],
+      });
+    } catch {
+      // TABLE_B は後続選択時に client 側で abort されるため fulfill 不可でも正常。
+    }
+  });
+
+  await page.goto("/table-management");
+  await expect(page.getByRole("heading", { name: "TABLE_A" })).toBeVisible();
+  await page.getByRole("button", { name: "TABLE_B を表示" }).click();
+  await tableBStarted;
+  await page.getByRole("button", { name: "TABLE_A を表示" }).click();
+  await expect(page.getByRole("heading", { name: "TABLE_A" })).toBeVisible();
+  releaseTableB?.();
+  await page.waitForTimeout(100);
+
+  await expect(page.getByRole("heading", { name: "TABLE_B" })).toHaveCount(0);
+  await expect(page.getByTestId("db-admin-detail-columns")).toContainText("TABLE_A の識別子");
 });
 
 test("Excel/CSV 取込フォームはファイル選択と取込方法の高さを揃える", async ({ page }) => {

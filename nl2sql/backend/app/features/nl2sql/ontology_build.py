@@ -849,6 +849,50 @@ class OntologyBuildService:
             raise RuntimeError("Ontology build job の実行結果を取得できません。")
         return result
 
+    def cancel_profile_jobs(self, profile_id: str) -> int:
+        """削除対象 Profile の queued/running build を永続的に取消す。"""
+
+        cancelled = 0
+        documents = self._runtime.store.list_documents("jobs", {"profile_id": profile_id})
+        for document in documents:
+            if document.get("job_type") != "build":
+                continue
+            job = OntologyBuildJob.model_validate(document["payload"])
+            if job.status in {
+                OntologyBuildStatus.SUCCEEDED,
+                OntologyBuildStatus.FAILED,
+                OntologyBuildStatus.CANCELLED,
+            }:
+                continue
+            now = utc_now()
+            job.status = OntologyBuildStatus.CANCELLED
+            job.error_message_ja = "業務 Profile が削除されたため構築を中止しました。"
+            job.finished_at = now
+            for step in job.steps:
+                if step.status in {
+                    OntologyBuildStepStatus.PENDING,
+                    OntologyBuildStepStatus.RUNNING,
+                }:
+                    step.status = OntologyBuildStepStatus.SKIPPED
+                    step.finished_at = now
+            self._runtime.store.save_document(
+                "jobs",
+                {
+                    **{
+                        key: value
+                        for key, value in document.items()
+                        if key not in {"etag", "created_at", "updated_at"}
+                    },
+                    "status": OntologyBuildStatus.CANCELLED.value,
+                    "payload": job.model_dump(mode="json"),
+                },
+                expected_etag=str(document["etag"]),
+            )
+            with self._lock:
+                self._jobs[job.id] = job.model_copy(deep=True)
+            cancelled += 1
+        return cancelled
+
     # --- internal ---------------------------------------------------------------------------
 
     def _prune_finished_jobs_locked(self) -> None:
@@ -866,6 +910,12 @@ class OntologyBuildService:
             del self._jobs[job.id]
 
     def _update(self, job_id: str, mutate: Any) -> None:
+        persisted = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        if persisted is not None and persisted.get("status") == OntologyBuildStatus.CANCELLED.value:
+            cancelled = OntologyBuildJob.model_validate(persisted["payload"])
+            with self._lock:
+                self._jobs[job_id] = cancelled
+            return
         updated: OntologyBuildJob | None = None
         with self._lock:
             job = self._jobs.get(job_id)
@@ -993,6 +1043,9 @@ class OntologyBuildService:
             self._run(job_id, business_text, qa_pairs)
         except Exception as exc:  # pragma: no cover - 予期しない障害の最終防壁
             logger.warning("ontology_build_job_failed", exc_info=True)
+            current = self.get(job_id)
+            if current is not None and current.status == OntologyBuildStatus.CANCELLED:
+                return
             message = f"オントロジー構築に失敗しました: {exc}"
 
             def mutate(job: OntologyBuildJob) -> None:
@@ -1022,6 +1075,9 @@ class OntologyBuildService:
         record_job(job_type="build", status="failed", error_code="build_failed")
 
     def _run(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
+        if self._is_cancelled(job_id):
+            return
+
         def start_job(job: OntologyBuildJob) -> None:
             job.status = OntologyBuildStatus.RUNNING
             job.started_at = utc_now()
@@ -1271,6 +1327,8 @@ class OntologyBuildService:
                 )
 
         for index, (name, prompt, context, cross_check) in enumerate(llm_steps, start=1):
+            if self._is_cancelled(job_id):
+                return
             label = _STEP_LABELS_JA[name]
             self._set_step(
                 job_id,
@@ -1321,6 +1379,10 @@ class OntologyBuildService:
                 )
                 self._emit(job_id, f"{label}: LLM 抽出に失敗しました。")
 
+        if self._is_cancelled(job_id):
+            return
+        # Profile 削除と競合した場合に proposal を再生成しないため、書込直前に再確認する。
+        self._runtime.ensure_profile(job.profile_id)
         self._set_step(
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
@@ -1338,6 +1400,8 @@ class OntologyBuildService:
         # timestamp は揺れるため、安定 ID(node/edge)と kind で同一性を判定する。
         seen_payload_keys: set[str] = set()
         for draft in drafts:
+            if self._is_cancelled(job_id):
+                return
             payload_key = _proposal_payload_key(draft.kind.value, dict(draft.payload.values))
             if payload_key in seen_payload_keys:
                 continue
@@ -1392,3 +1456,7 @@ class OntologyBuildService:
             job_id,
             f"構築が完了しました(提案 {len(proposal_ids)} 件、警告 {len(warnings)} 件)。",
         )
+
+    def _is_cancelled(self, job_id: str) -> bool:
+        current = self.get(job_id)
+        return current is not None and current.status == OntologyBuildStatus.CANCELLED

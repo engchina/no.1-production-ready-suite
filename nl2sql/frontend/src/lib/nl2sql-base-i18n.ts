@@ -39,7 +39,8 @@ export const ja = {
   "dbGate.recovering": "保存済みの業務データを復元しています…",
   "dbGate.persistenceFailed.title": "保存済みの業務データを復元できません",
   "dbGate.persistenceFailed.message":
-    "データベース接続を確認できましたが、保存済みデータの読込に失敗しました。Wallet サービス名、DSN、認証情報を確認して再試行してください。",
+    "データベース接続は正常ですが、NL2SQL の保存領域を利用できません。再試行しても解消しない場合は、システムテーブルとバックエンドログを確認してください。",
+  "dbGate.reasonCode": "診断コード: {code}",
   "persistence.memoryWarning.title": "非永続モードで実行中です",
   "persistence.memoryWarning.message":
     "業務プロファイル、タスク、履歴、フィードバック、評価はメモリだけに保存され、バックエンドの再起動で失われます。",
@@ -1270,6 +1271,18 @@ export const ja = {
   "settings.adb.notify.actionFailed": "ADB の操作に失敗しました。",
   "settings.adb.connectionStillUnavailable":
     "ADB は起動済みですが接続できません。Wallet のサービス名、DSN、認証情報、ネットワーク到達性を確認してください。",
+  "settings.adb.operational.title": "サービス利用状態",
+  "settings.adb.operational.lifecycle": "OCI ADB",
+  "settings.adb.operational.sql": "Oracle SQL 接続",
+  "settings.adb.operational.persistence": "NL2SQL 保存領域",
+  "settings.adb.operational.checking": "確認中…",
+  "settings.adb.operational.available": "利用可能",
+  "settings.adb.operational.unavailable": "利用できません",
+  "settings.adb.operational.unavailableWithCode": "利用できません（{code}）",
+  "settings.adb.operational.waitingForSql": "SQL 接続の確認後に検査します",
+  "settings.adb.operational.recovering": "再接続中…",
+  "settings.adb.operational.retryPersistence": "保存領域へ再接続",
+  "settings.adb.operational.recoveryFailed": "保存領域への再接続に失敗しました。",
   "settings.adb.action.returnToPrevious": "元の画面に戻る",
   "settings.adb.lifecycle.AVAILABLE": "起動済み",
   "settings.adb.lifecycle.STARTING": "起動中",

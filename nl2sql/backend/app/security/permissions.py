@@ -303,11 +303,7 @@ def permission_for_route(method: str, route_path: str) -> str | None:
         return "settings.database.sql_execute"
     if route_path.startswith("/nl2sql/profiles") or route_path.startswith("/nl2sql/ontology"):
         return "business_views.view" if method == "GET" else "business_views.manage"
-    if (
-        "evaluation" in route_path
-        or route_path.endswith("/evaluate")
-        or route_path.endswith("/compare")
-    ):
+    if "evaluation" in route_path:
         return "evaluation.view" if method == "GET" else "evaluation.run"
     if route_path.startswith("/nl2sql/sample-data") or "training-data" in route_path:
         return "documents.view" if method == "GET" else "documents.upload"

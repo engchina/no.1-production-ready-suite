@@ -37,6 +37,10 @@ from .models import (
     SchemaTable,
     SchemaViewDependency,
 )
+from .object_visibility import (
+    filter_user_visible_catalog,
+    is_user_visible_object_name,
+)
 
 PROFILE_NAMESPACE = "profiles"
 SCHEMA_NAMESPACE = "schema"
@@ -215,6 +219,7 @@ class IncrementalNl2SqlRepository(Protocol):
         owner: str,
         object_type: str,
         allowed_names: set[str] | None,
+        row_state: str = "",
     ) -> SchemaObjectPage: ...
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None: ...
@@ -233,6 +238,10 @@ class IncrementalNl2SqlRepository(Protocol):
     def save_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob: ...
 
     def get_refresh_job(self, job_id: str) -> SchemaRefreshJob | None: ...
+
+    def find_active_refresh_job(self) -> SchemaRefreshJob | None: ...
+
+    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob: ...
 
     def claim_refresh_job(
         self,
@@ -447,20 +456,21 @@ class MemoryIncrementalNl2SqlRepository:
 
     def get_catalog_head(self) -> SchemaCatalogHead:
         with self._lock:
+            visible_catalog = filter_user_visible_catalog(self._catalog)
             etag = self._catalog.schema_fingerprint or f"schema-{self._catalog_version}"
             return SchemaCatalogHead(
                 catalog_version=self._catalog_version,
                 schema_fingerprint=self._catalog.schema_fingerprint,
                 refreshed_at=self._catalog.refreshed_at,
-                object_count=len(self._catalog.tables),
-                column_count=sum(len(table.columns) for table in self._catalog.tables),
+                object_count=len(visible_catalog.tables),
+                column_count=sum(len(table.columns) for table in visible_catalog.tables),
                 change_token=self._tokens[SCHEMA_NAMESPACE],
                 etag=etag,
             )
 
     def load_catalog(self) -> SchemaCatalog:
         with self._lock:
-            return self._catalog.model_copy(deep=True)
+            return filter_user_visible_catalog(self._catalog).model_copy(deep=True)
 
     def search_schema_objects(
         self,
@@ -471,16 +481,19 @@ class MemoryIncrementalNl2SqlRepository:
         owner: str,
         object_type: str,
         allowed_names: set[str] | None,
+        row_state: str = "",
     ) -> SchemaObjectPage:
         after = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
         owner_key = owner.upper().strip()
         type_key = object_type.upper().strip()
+        row_state_key = row_state.lower().strip()
         with self._lock:
             tables = [
                 table
                 for table in self._catalog.tables
-                if (not owner_key or table.owner.upper() == owner_key)
+                if is_user_visible_object_name(table.table_name)
+                and (not owner_key or table.owner.upper() == owner_key)
                 and (
                     not type_key
                     or table.table_type.upper() == type_key
@@ -488,6 +501,13 @@ class MemoryIncrementalNl2SqlRepository:
                         type_key == "VIEW"
                         and table.table_type.upper() == "MATERIALIZED VIEW"
                     )
+                )
+                and (
+                    not row_state_key
+                    or row_state_key == "all"
+                    or (row_state_key == "with_rows" and (table.row_count or 0) > 0)
+                    or (row_state_key == "empty_rows" and table.row_count == 0)
+                    or (row_state_key == "unknown_rows" and table.row_count is None)
                 )
                 and (
                     allowed_names is None
@@ -511,6 +531,11 @@ class MemoryIncrementalNl2SqlRepository:
             ]
             tables.sort(key=lambda item: (item.owner.upper(), item.table_name.upper()))
             total = len(tables)
+            table_count = sum(
+                item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"}
+                for item in tables
+            )
+            view_count = total - table_count
             if after:
                 tables = [
                     item
@@ -528,10 +553,15 @@ class MemoryIncrementalNl2SqlRepository:
                 items=[self._schema_summary(table) for table in selected],
                 next_cursor=next_cursor,
                 total=total,
+                table_count=table_count,
+                view_count=view_count,
+                refreshed_at=self._catalog.refreshed_at,
                 catalog_version=self._catalog_version,
             )
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
+        if not is_user_visible_object_name(object_name):
+            return None
         owner_key = owner.upper()
         name_key = object_name.upper()
         with self._lock:
@@ -571,8 +601,12 @@ class MemoryIncrementalNl2SqlRepository:
     ) -> SchemaCatalogHead:
         del changed_keys, deleted_keys
         with self._lock:
-            self._catalog = catalog.model_copy(deep=True)
-            self._manifest = dict(manifest)
+            self._catalog = filter_user_visible_catalog(catalog).model_copy(deep=True)
+            self._manifest = {
+                key: value
+                for key, value in manifest.items()
+                if is_user_visible_object_name(key[1])
+            }
             self._catalog_version += 1
             self._tokens[SCHEMA_NAMESPACE] += 1
             return self.get_catalog_head()
@@ -586,6 +620,36 @@ class MemoryIncrementalNl2SqlRepository:
         with self._lock:
             job = self._refresh_jobs.get(job_id)
             return job.model_copy(deep=True) if job else None
+
+    def find_active_refresh_job(self) -> SchemaRefreshJob | None:
+        with self._lock:
+            active = [
+                job
+                for job in self._refresh_jobs.values()
+                if job.status in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
+            ]
+            if not active:
+                return None
+            return min(active, key=lambda item: (item.created_at, item.job_id)).model_copy(
+                deep=True
+            )
+
+    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+        """process 間の submit 契約と同じく、active job の確認と作成を原子的に行う。"""
+
+        with self._lock:
+            active = [
+                item
+                for item in self._refresh_jobs.values()
+                if item.status
+                in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
+            ]
+            if active:
+                return min(
+                    active, key=lambda item: (item.created_at, item.job_id)
+                ).model_copy(deep=True)
+            self._refresh_jobs[job.job_id] = job.model_copy(deep=True)
+            return job.model_copy(deep=True)
 
     def claim_refresh_job(
         self,
@@ -948,6 +1012,17 @@ class OracleIncrementalNl2SqlRepository:
                     raise KeyError(profile_id)
                 if expected_etag != str(current[0]):
                     raise IncrementalVersionConflict(str(current[0]))
+                # view revision と旧互換 row を parent と同じ transaction で削除する。
+                # migration の ON DELETE CASCADE は競合時の最終防壁として残す。
+                cursor.execute(
+                    "DELETE FROM NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS "
+                    "WHERE PROFILE_ID = :profile_id",
+                    {"profile_id": profile_id},
+                )
+                cursor.execute(
+                    "DELETE FROM NL2SQL_ONTOLOGY_PROFILE_VIEWS WHERE PROFILE_ID = :profile_id",
+                    {"profile_id": profile_id},
+                )
                 cursor.execute(
                     "DELETE FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id",
                     {"profile_id": profile_id},
@@ -1091,9 +1166,10 @@ class OracleIncrementalNl2SqlRepository:
         owner: str,
         object_type: str,
         allowed_names: set[str] | None,
+        row_state: str = "",
     ) -> SchemaObjectPage:
         after = _decode_cursor(cursor, 2)
-        where = ["1 = 1"]
+        where = ["o.OBJECT_NAME NOT LIKE '%$%'", "o.OBJECT_NAME NOT LIKE '%#%'"]
         binds: dict[str, Any] = {"limit": limit + 1}
         if owner.strip():
             where.append("o.OWNER_NAME = :owner")
@@ -1116,6 +1192,13 @@ class OracleIncrementalNl2SqlRepository:
                 "(UPPER(c.COLUMN_NAME) LIKE :query OR UPPER(c.LOGICAL_NAME) LIKE :query)))"
             )
             binds["query"] = f"%{query.strip().upper()}%"
+        normalized_row_state = row_state.strip().lower()
+        if normalized_row_state == "with_rows":
+            where.append("o.ROW_COUNT > 0")
+        elif normalized_row_state == "empty_rows":
+            where.append("o.ROW_COUNT = 0")
+        elif normalized_row_state == "unknown_rows":
+            where.append("o.ROW_COUNT IS NULL")
         if after:
             where.append(
                 "(o.OWNER_NAME > :after_owner OR "
@@ -1136,9 +1219,7 @@ class OracleIncrementalNl2SqlRepository:
         base_where = " AND ".join(where)
         sql = (
             "SELECT o.OWNER_NAME, o.OBJECT_NAME, o.OBJECT_TYPE, o.LOGICAL_NAME, "
-            "o.COMMENTS, o.ROW_COUNT, o.COLUMN_COUNT, o.LAST_DDL_AT, "
-            "(SELECT h.CATALOG_VERSION FROM NL2SQL_SCHEMA_CATALOG_HEAD h "
-            "WHERE h.HEAD_KEY = 'active') "
+            "o.COMMENTS, o.ROW_COUNT, o.COLUMN_COUNT, o.LAST_DDL_AT "
             "FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
             + base_where
             + " ORDER BY o.OWNER_NAME, o.OBJECT_NAME FETCH FIRST :limit ROWS ONLY"
@@ -1154,9 +1235,20 @@ class OracleIncrementalNl2SqlRepository:
                 for key, value in binds.items()
                 if key not in {"limit", "after_owner", "after_name"}
             }
+            # Oracle は aggregate と scalar subquery を同じ SELECT level に混在させると
+            # ORA-00937 を返す。件数を一行の derived table に確定してから head を結合する。
             db_cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
-                + " AND ".join(count_where),
+                "SELECT stats.TOTAL_COUNT, stats.TABLE_COUNT, stats.VIEW_COUNT, "
+                "h.CATALOG_VERSION, h.REFRESHED_AT "
+                "FROM (SELECT COUNT(*) TOTAL_COUNT, "
+                "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
+                "THEN 0 ELSE 1 END) TABLE_COUNT, "
+                "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
+                "THEN 1 ELSE 0 END) VIEW_COUNT "
+                "FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
+                + " AND ".join(count_where)
+                + ") stats LEFT JOIN NL2SQL_SCHEMA_CATALOG_HEAD h "
+                "ON h.HEAD_KEY = 'active'",
                 count_binds,
             )
             count_row = db_cursor.fetchone()
@@ -1184,14 +1276,15 @@ class OracleIncrementalNl2SqlRepository:
             items=items,
             next_cursor=next_cursor,
             total=int(count_row[0]) if count_row else 0,
-            catalog_version=(
-                int(rows[0][8] or 0)
-                if rows
-                else self.get_catalog_head().catalog_version
-            ),
+            table_count=int(count_row[1] or 0) if count_row else 0,
+            view_count=int(count_row[2] or 0) if count_row else 0,
+            refreshed_at=str(count_row[4] or "") if count_row else "",
+            catalog_version=int(count_row[3] or 0) if count_row else 0,
         )
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
+        if not is_user_visible_object_name(object_name):
+            return None
         owner_key = owner.upper()
         object_key = object_name.upper()
         catalog = self._load_catalog_subset(owner_key, object_key)
@@ -1222,6 +1315,15 @@ class OracleIncrementalNl2SqlRepository:
         changed_keys: set[tuple[str, str]],
         deleted_keys: set[tuple[str, str]],
     ) -> SchemaCatalogHead:
+        catalog = filter_user_visible_catalog(catalog)
+        manifest = {
+            key: value
+            for key, value in manifest.items()
+            if is_user_visible_object_name(key[1])
+        }
+        changed_keys = {
+            key for key in changed_keys if is_user_visible_object_name(key[1])
+        }
         table_by_key = {
             (table.owner.upper(), table.table_name.upper()): table for table in catalog.tables
         }
@@ -1340,6 +1442,56 @@ class OracleIncrementalNl2SqlRepository:
             row = cursor.fetchone()
             raw = _read_lob(row[0]) if row else ""
         return SchemaRefreshJob.model_validate_json(raw) if raw else None
+
+    def find_active_refresh_job(self) -> SchemaRefreshJob | None:
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS "
+                "WHERE STATUS IN ('pending', 'running') "
+                "ORDER BY CREATED_AT, JOB_ID FETCH FIRST 1 ROWS ONLY"
+            )
+            row = cursor.fetchone()
+            raw = _read_lob(row[0]) if row else ""
+        record_repository("schema_refresh_active", rows=1 if row else 0)
+        return SchemaRefreshJob.model_validate_json(raw) if raw else None
+
+    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+        """複数 API process の同時 submit も1件へ合流させる。DDL 追加は不要。"""
+
+        payload = _canonical_json(job.model_dump(mode="json"))
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "LOCK TABLE NL2SQL_SCHEMA_REFRESH_JOBS IN EXCLUSIVE MODE"
+                )
+                cursor.execute(
+                    "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS "
+                    "WHERE STATUS IN ('pending', 'running') "
+                    "ORDER BY CREATED_AT, JOB_ID FETCH FIRST 1 ROWS ONLY"
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    active = SchemaRefreshJob.model_validate_json(_read_lob(row[0]))
+                    connection.commit()
+                    record_repository("schema_refresh_submit", statements=2, rows=1)
+                    return active
+                cursor.execute(
+                    "INSERT INTO NL2SQL_SCHEMA_REFRESH_JOBS "
+                    "(JOB_ID, STATUS, PAYLOAD_JSON) VALUES (:job_id, :status, :payload)",
+                    {
+                        "job_id": job.job_id,
+                        "status": job.status.value,
+                        "payload": payload,
+                    },
+                )
+                connection.commit()
+            except Exception:
+                rollback = getattr(connection, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                raise
+        record_repository("schema_refresh_submit", statements=3, rows=1)
+        return job.model_copy(deep=True)
 
     def claim_refresh_job(
         self,

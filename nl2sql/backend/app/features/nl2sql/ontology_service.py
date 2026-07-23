@@ -743,6 +743,19 @@ class OntologyQuerySessionService:
                 self._sessions.pop(session_id, None)
             return stale_session_ids
 
+    def evict_profile_views(self, profile_id: str) -> list[str]:
+        """削除済み Profile の live view cache だけを破棄し、監査 session は保持する。"""
+
+        with self._lock:
+            stale_view_ids = [
+                view_id
+                for view_id, view in self._profile_views.items()
+                if view.profile_id == profile_id
+            ]
+            for view_id in stale_view_ids:
+                self._profile_views.pop(view_id, None)
+            return stale_view_ids
+
     def register_profile_view(self, view: ProfileOntologyView) -> ProfileOntologyView:
         with self._lock:
             revision = self._require_revision(view.ontology_revision_id)

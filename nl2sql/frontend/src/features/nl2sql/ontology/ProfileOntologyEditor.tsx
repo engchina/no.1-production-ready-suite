@@ -1,4 +1,4 @@
-import { CheckCircle2, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
+import { CheckCircle2, Network, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -15,6 +15,8 @@ import {
   toast,
 } from "@engchina/production-ready-ui";
 
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { OntologyWorkspace } from "./OntologyWorkspace";
 import {
   createProfileOntologyDraftPayload,
@@ -33,6 +35,8 @@ import type {
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 export interface ProfileOntologyEditorLabels {
+  sectionTitle: string;
+  sectionDescription: string;
   graphTitle: string;
   graphDescription: string;
   relationListTitle: string;
@@ -89,7 +93,10 @@ export interface ProfileOntologyEditorLabels {
 }
 
 export const DEFAULT_PROFILE_ONTOLOGY_EDITOR_LABELS: ProfileOntologyEditorLabels = {
-  graphTitle: "物理・業務モデル",
+  sectionTitle: "物理・業務モデル編集",
+  sectionDescription:
+    "公開 Ontology の物理対応と業務定義を確認し、Profile 固有の Draft として編集します。",
+  graphTitle: "関係グラフ",
   graphDescription:
     "Profile が許可した表・ビューと業務エンティティを、公開 Ontology の FK・承認済み関係とともに表示します。",
   relationListTitle: "関連一覧",
@@ -827,6 +834,18 @@ export function ProfileOntologyEditor({
       </div>
     ) : null;
 
+  const headerAction = (
+    <>
+      {revision ? (
+        <StatusBadge
+          variant="neutral"
+          label={labels.revisionBadge(revision.version, revision.status)}
+        />
+      ) : null}
+      <StatusBadge variant="info" label={selectedSummary} />
+    </>
+  );
+
   if (graph === null) {
     return (
       <section
@@ -834,13 +853,15 @@ export function ProfileOntologyEditor({
           "space-y-4 rounded-md border border-border bg-card p-4 shadow-sm",
           className
         )}
-        aria-label={labels.graphTitle}
+        aria-label={labels.sectionTitle}
         data-testid="profile-ontology-empty"
       >
-        <header className="space-y-1">
-          <h2 className="text-base font-semibold text-foreground">{labels.graphTitle}</h2>
-          <p className="text-sm leading-6 text-muted">{labels.graphDescription}</p>
-        </header>
+        <DbObjectPanelHeader
+          icon={Network}
+          title={labels.sectionTitle}
+          description={labels.sectionDescription}
+          action={headerAction}
+        />
         {unresolvedBanner}
         <EmptyState title={labels.graphUnavailableTitle} hint={labels.graphUnavailable} />
       </section>
@@ -848,22 +869,30 @@ export function ProfileOntologyEditor({
   }
 
   return (
-    <section className={cn("space-y-4", className)} aria-label={labels.graphTitle}>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {revision ? (
-          <StatusBadge
-            variant="neutral"
-            label={labels.revisionBadge(revision.version, revision.status)}
-          />
-        ) : null}
-        <StatusBadge variant="info" label={selectedSummary} />
-      </div>
+    <section
+      className={cn(
+        "grid min-w-0 gap-4 rounded-md border border-border bg-card p-4 shadow-sm",
+        className
+      )}
+      aria-label={labels.sectionTitle}
+      data-testid="profile-ontology-editor"
+    >
+      <DbObjectPanelHeader
+        icon={Network}
+        title={labels.sectionTitle}
+        description={labels.sectionDescription}
+        action={headerAction}
+      />
       {unresolvedBanner}
       <Banner severity="info" title={labels.graphLayoutNoticeTitle}>
         {labels.graphLayoutNotice}
       </Banner>
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
-        <OntologyWorkspace
+      <FixedSplitPane
+        splitId="profile-ontology-editor"
+        preferredWidePane="left"
+        minLeftPaneWidthPx={640}
+        minRightPaneWidthPx={320}
+        left={<OntologyWorkspace
           graph={displayGraph}
           title={labels.graphTitle}
           description={labels.graphDescription}
@@ -876,8 +905,8 @@ export function ProfileOntologyEditor({
             relationListTitle: labels.relationListTitle,
             relationListDescription: labels.relationListDescription,
           }}
-        />
-        <Card className="xl:sticky xl:top-4">
+        />}
+        right={<Card className="xl:sticky xl:top-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <SlidersHorizontal size={17} className="text-primary" aria-hidden="true" />
@@ -977,8 +1006,8 @@ export function ProfileOntologyEditor({
               {saveState === "saving" ? labels.savingDraft : labels.saveDraft}
             </Button>
           </CardContent>
-        </Card>
-      </div>
+        </Card>}
+      />
     </section>
   );
 }

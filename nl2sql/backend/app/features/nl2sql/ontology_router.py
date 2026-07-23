@@ -106,6 +106,7 @@ from .ontology_store import (
     canonical_json,
     compute_etag,
     stable_ontology_id,
+    stable_physical_id,
 )
 from .service import nl2sql_service
 
@@ -281,6 +282,8 @@ class OntologyRevisionListData(OntologyContract):
 class ProfileOntologyViewData(OntologyContract):
     profile_ontology_view: ProfileOntologyView
     ontology_graph: OntologyGraphData
+    materialized: bool = False
+    stale: bool = False
     # 公開 Ontology に解決できなかった対象オブジェクト名の診断(応答のみ、永続化しない)
     warnings_ja: list[str] = Field(default_factory=list)
 
@@ -318,6 +321,13 @@ class OntologyApiRuntime:
         self.store = store or self._default_store(legacy_service)
         self.sessions = session_service or OntologyQuerySessionService()
         self._lock = RLock()
+        # テーブル詳細の論理名 lookup は全量 ontology graph の lock と分離する。
+        self._business_name_lock = RLock()
+        self._business_name_cache: OrderedDict[tuple[str, str], dict[str, str]] = (
+            OrderedDict()
+        )
+        self._business_name_cache_max_objects = 512
+        self._business_name_cache_generation = 0
         self._store_ready = False
         self._published_revision_loaded = False
         self._revision_headers_loaded = False
@@ -359,6 +369,9 @@ class OntologyApiRuntime:
             self._results.clear()
             self._plans.clear()
             self._embeddings.clear()
+        with self._business_name_lock:
+            self._business_name_cache.clear()
+            self._business_name_cache_generation += 1
 
     @staticmethod
     def _default_store(legacy_service: Any) -> OntologyStore:
@@ -374,6 +387,87 @@ class OntologyApiRuntime:
     def current_ontology(self) -> SchemaOntology:
         with self._lock:
             return self._sync_ontology()
+
+    def column_business_names(
+        self,
+        *,
+        owner: str,
+        object_name: str,
+        object_type: Literal["table", "view"],
+    ) -> dict[str, str]:
+        """Published ontology から対象 object の列業務名だけを取得する。
+
+        テーブル詳細は全 graph や schema catalog を必要としない。published revision の
+        header と indexed physical_id に一致する column node だけを読み、全量 graph 用
+        ``_lock`` を取得しないことで、ontology 初期化中も詳細表示を待たせない。
+        """
+
+        normalized_type: Literal["table", "view"] = (
+            "view" if object_type == "view" else "table"
+        )
+        physical_id = stable_physical_id(
+            normalized_type,
+            owner,
+            object_name,
+        )
+        with self._business_name_lock:
+            self._ensure_store()
+            cache_generation = self._business_name_cache_generation
+        revision_documents = self.store.list_documents(
+            "revisions",
+            {"status": OntologyRevisionStatus.PUBLISHED.value},
+        )
+        revisions = [
+            OntologyRevision.model_validate(
+                self._stored_payload(document, collection="revision")
+            )
+            for document in revision_documents
+        ]
+        if not revisions:
+            return {}
+        active = max(
+            revisions,
+            key=lambda item: (
+                item.version,
+                item.published_at or item.created_at,
+                item.id,
+            ),
+        )
+        cache_key = (active.id, physical_id)
+        with self._business_name_lock:
+            cached = self._business_name_cache.get(cache_key)
+            if cached is not None:
+                self._business_name_cache.move_to_end(cache_key)
+                return dict(cached)
+
+        node_documents = self.store.list_documents(
+            "nodes",
+            {
+                "revision_id": active.id,
+                "node_type": OntologyNodeKind.COLUMN.value,
+                "physical_id": physical_id,
+            },
+            include_embedding=False,
+        )
+        names: dict[str, str] = {}
+        for document in node_documents:
+            node = OntologyNode.model_validate(
+                self._stored_payload(document, collection="node")
+            )
+            column_name = str(node.metadata.get("column_name") or "").strip().upper()
+            if not column_name:
+                parts = node.technical_name.upper().split(".")
+                column_name = parts[-1] if len(parts) >= 3 else ""
+            if column_name:
+                names[column_name] = node.business_name_ja
+
+        with self._business_name_lock:
+            if cache_generation == self._business_name_cache_generation:
+                self._business_name_cache[cache_key] = names
+                self._business_name_cache.move_to_end(cache_key)
+                while len(self._business_name_cache) > self._business_name_cache_max_objects:
+                    self._business_name_cache.popitem(last=False)
+        return dict(names)
 
     def list_ontology_revisions(self) -> tuple[list[OntologyRevision], str]:
         with self._lock:
@@ -993,6 +1087,29 @@ class OntologyApiRuntime:
             view = self._base_profile_view(profile, ontology)
             return view.model_copy(deep=True), ontology.model_copy(deep=True)
 
+    def profile_view_persistence_state(self, view: ProfileOntologyView) -> tuple[bool, bool]:
+        """現在 revision の永続 view 有無と、元 Profile からの stale 状態を返す。"""
+
+        with self._lock:
+            document = self.store.get_document(
+                "profile_views",
+                {
+                    "profile_id": view.profile_id,
+                    "revision_id": view.ontology_revision_id,
+                },
+            )
+            if document is None:
+                return False, False
+            stored = ProfileOntologyView.model_validate(
+                self._stored_payload(document, collection="profile view")
+            )
+            stale = (
+                stored.source_profile_etag != view.source_profile_etag
+                or stored.source_profile_scope_fingerprint
+                != view.source_profile_scope_fingerprint
+            )
+            return True, stale
+
     def profile_view_warnings(self, profile_id: str, view: ProfileOntologyView) -> list[str]:
         """公開 Ontology に解決できなかった対象オブジェクト名の診断 warning(応答用)。"""
 
@@ -1285,7 +1402,7 @@ class OntologyApiRuntime:
             return recommendation
 
     def materialize_profile_view(self, profile_id: str) -> ProfileOntologyView:
-        """Profile mutation 時だけ active revision view を再生成して永続化する。"""
+        """Ontology view page から active revision view を明示的に再生成する。"""
 
         with self._lock:
             ontology = self._query_ontology()
@@ -1293,6 +1410,23 @@ class OntologyApiRuntime:
             view = self._base_profile_view(profile, ontology)
             self._persist_profile_view(view)
             return view.model_copy(deep=True)
+
+    def delete_profile_state(self, profile_id: str) -> int:
+        """Profile hard delete 後に live view/cache を除去する。監査 snapshot は保持する。"""
+
+        with self._lock:
+            deleted = 0
+            # Oracle は Profile repository の同一 transaction + FK cascade で削除済み。
+            # memory store には FK が無いためここで明示的に全 revision を削除する。
+            if self.store.mode == "memory":
+                deleted = self.store.delete_documents(
+                    "profile_views",
+                    {"profile_id": profile_id},
+                )
+            for key in [key for key in self._profile_view_overrides if key[0] == profile_id]:
+                self._profile_view_overrides.pop(key, None)
+            self.sessions.evict_profile_views(profile_id)
+            return deleted
 
     def materialize_profile_views_for_revision(
         self, revision_id: str
@@ -3464,6 +3598,10 @@ def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyVie
             profile_id,
             view,
         )
+        materialized, stale = _run_runtime_sync(
+            ontology_runtime.profile_view_persistence_state,
+            view,
+        )
         return ApiResponse(
             data=ProfileOntologyViewData(
                 profile_ontology_view=view,
@@ -3472,6 +3610,42 @@ def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyVie
                     nodes=[node for node in ontology.nodes if node.id in view.node_ids],
                     edges=[edge for edge in ontology.edges if edge.id in view.edge_ids],
                 ),
+                materialized=materialized,
+                stale=stale,
+                warnings_ja=warnings,
+            )
+        )
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/profiles/{profile_id}/ontology-view/materialize",
+    response_model=ApiResponse[ProfileOntologyViewData],
+)
+def materialize_profile_ontology_view(
+    profile_id: str,
+) -> ApiResponse[ProfileOntologyViewData]:
+    """Ontology view page から現在の Profile scope を明示的に永続化する。"""
+
+    try:
+        view = _run_runtime_sync(ontology_runtime.materialize_profile_view, profile_id)
+        _current_view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
+        warnings = _run_runtime_sync(
+            ontology_runtime.profile_view_warnings,
+            profile_id,
+            view,
+        )
+        return ApiResponse(
+            data=ProfileOntologyViewData(
+                profile_ontology_view=view,
+                ontology_graph=OntologyGraphData(
+                    revision=ontology.revision,
+                    nodes=[node for node in ontology.nodes if node.id in view.node_ids],
+                    edges=[edge for edge in ontology.edges if edge.id in view.edge_ids],
+                ),
+                materialized=True,
+                stale=False,
                 warnings_ja=warnings,
             )
         )
@@ -3596,6 +3770,8 @@ def patch_profile_ontology_view(
                     nodes=[node for node in ontology.nodes if node.id in view.node_ids],
                     edges=[edge for edge in ontology.edges if edge.id in view.edge_ids],
                 ),
+                materialized=True,
+                stale=False,
                 warnings_ja=warnings,
             )
         )

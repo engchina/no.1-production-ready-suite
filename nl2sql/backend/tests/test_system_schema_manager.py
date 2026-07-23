@@ -66,11 +66,12 @@ def _ready_operation_state(epoch: int = 1) -> dict[str, Any]:
 
 def _status_payload(status: str, *, existing: int | None = None) -> dict[str, Any]:
     expected = len(MANAGED_OBJECTS)
+    versions = [migration.version for migration in MIGRATIONS]
     return {
         "status": status,
-        "schema_head": 6,
-        "applied_versions": [0, 1, 2, 3, 5, 6] if status == "ready" else [],
-        "pending_versions": [] if status == "ready" else [0, 1, 2, 3, 5, 6],
+        "schema_head": versions[-1],
+        "applied_versions": versions if status == "ready" else [],
+        "pending_versions": [] if status == "ready" else versions,
         "expected_object_count": expected,
         "existing_object_count": expected if existing is None else existing,
         "expected_table_count": len(MANAGED_TABLES),
@@ -87,14 +88,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert set(MIGRATIONS[index].version for index in range(len(MIGRATIONS))) == {
-        0,
-        1,
-        2,
-        3,
-        5,
-        6,
-    }
+    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
     assert "NL2SQL_FEEDBACK_VECTORS" not in MANAGED_TABLES
@@ -287,7 +281,7 @@ def test_initialize_is_idempotent_and_failure_is_safe_and_retryable() -> None:
     retried = manager.initialize()
     assert retried["operation"] == "initialized"
     assert retried["status"] == "ready"
-    assert retried["applied_versions"] == [0, 1, 2, 3, 5, 6]
+    assert retried["applied_versions"] == [migration.version for migration in MIGRATIONS]
 
 
 class _ApiManager:
@@ -299,7 +293,7 @@ class _ApiManager:
         return {
             **result,
             "operation": "recreated" if recreate else "migrated",
-            "applied_versions": [0, 1, 2, 3, 5, 6],
+            "applied_versions": [migration.version for migration in MIGRATIONS],
             "dropped_object_count": 42 if recreate else 0,
             "created_object_count": 48 if recreate else 44,
         }

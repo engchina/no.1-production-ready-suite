@@ -11,9 +11,6 @@ import pytest
 
 from app.features.nl2sql.models import (
     AgentTeamRunRequest,
-    CompareRequest,
-    EvaluateRequest,
-    EvaluationSetUpsertRequest,
     FeedbackIndexRequest,
     FeedbackRating,
     HistoryItem,
@@ -30,7 +27,6 @@ from app.features.nl2sql.models import (
     SelectAiFeedbackDeleteRequest,
     SelectAiFeedbackVectorIndexRequest,
     SimilarHistoryRequest,
-    SyntheticCase,
 )
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
@@ -38,7 +34,12 @@ from app.features.nl2sql.oracle_adapter import (
     _extract_select_statement,
 )
 from app.features.nl2sql.router import is_select_only
-from app.features.nl2sql.service import GeneratedSql, Nl2SqlService, _extract_referenced_tables
+from app.features.nl2sql.service import (
+    DefaultProfileDeleteForbidden,
+    GeneratedSql,
+    Nl2SqlService,
+    _extract_referenced_tables,
+)
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
 from app.main import app
 from app.settings import get_settings
@@ -828,12 +829,13 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
         for statement in adapter.admin_statements
     )
     profile = service.get_profile(imported.profile_id)
+    current_owner = get_settings().oracle_user.strip().upper() or "APP"
     assert set(profile.allowed_tables) == {
-        "APP.DEPARTMENT",
-        "APP.EMPLOYEE",
-        "APP.PROJECT",
-        "APP.V_EMP_DEPT",
-        "APP.V_DEPT_PROJECT",
+        f"{current_owner}.DEPARTMENT",
+        f"{current_owner}.EMPLOYEE",
+        f"{current_owner}.PROJECT",
+        f"{current_owner}.V_EMP_DEPT",
+        f"{current_owner}.V_DEPT_PROJECT",
     }
 
     missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
@@ -1020,7 +1022,7 @@ async def test_repair_oracle_error_converts_limit_syntax() -> None:
     assert "FETCH FIRST" in " ".join(data["recommendations"])
 
 
-async def test_asset_refresh_feedback_and_evaluation() -> None:
+async def test_asset_refresh() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         await _api_import_sample(client)
         profile_resp = await client.post("/api/nl2sql/select-ai-agent/assets/refresh")
@@ -1030,16 +1032,6 @@ async def test_asset_refresh_feedback_and_evaluation() -> None:
         assert asset_data["status"] == "ready"
         assert {"profile", "tool", "agent", "task", "team"} <= set(asset_data["asset_names"])
 
-        eval_resp = await client.post(
-            "/api/nl2sql/evaluate",
-            json={
-                "cases": [
-                    {"question": "社員一覧", "expected_sql": "SELECT EMPLOYEE_ID FROM EMPLOYEE"}
-                ]
-            },
-        )
-    assert eval_resp.status_code == 200
-    assert eval_resp.json()["data"]["total_cases"] == 1
 
 
 def test_feedback_rating_has_no_needs_review() -> None:
@@ -1137,7 +1129,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
     assert profile_id not in {profile["id"] for profile in list_resp.json()["data"]}
 
 
-async def test_profile_training_examples_update_and_evaluate() -> None:
+async def test_profile_training_examples_update() -> None:
     payload = {
         "name": "モデル訓練",
         "description": "few-shot 訓練データを管理する profile",
@@ -1166,22 +1158,6 @@ async def test_profile_training_examples_update_and_evaluate() -> None:
         updated = update_resp.json()["data"]
         assert updated["few_shot_examples"] == training_examples
         assert updated["sql_rules"] == []
-
-        eval_resp = await client.post(
-            "/api/nl2sql/evaluate",
-            json={
-                "cases": [
-                    {"question": item["question"], "expected_sql": item["sql"]}
-                    for item in updated["few_shot_examples"]
-                ],
-                "engine": "auto",
-            },
-        )
-        assert eval_resp.status_code == 200
-        eval_data = eval_resp.json()["data"]
-        assert eval_data["total_cases"] == 2
-        assert eval_data["executable_rate"] == 1.0
-        assert eval_data["select_only_rate"] == 1.0
 
         archive_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/archive")
         assert archive_resp.status_code == 200
@@ -1320,38 +1296,9 @@ async def test_demo_learning_seed_no_longer_creates_fixed_business_history() -> 
         assert index_resp.json()["data"]["indexable_count"] >= 0
 
 
-async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
+async def test_reverse_comments_and_diagnostics() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         await _api_import_sample(client)
-        compare_resp = await client.post(
-            "/api/nl2sql/compare", json={"question": "社員一覧を見たい"}
-        )
-        assert compare_resp.status_code == 200
-        compare_data = compare_resp.json()["data"]
-        assert len(compare_data["results"]) >= 2
-        assert compare_data["recommendation"]
-        assert compare_data["execution_results"] == []
-
-        compare_execute_resp = await client.post(
-            "/api/nl2sql/compare", json={"question": "社員一覧を見たい", "execute": True}
-        )
-        assert compare_execute_resp.status_code == 200
-        compare_execute_data = compare_execute_resp.json()["data"]
-        assert len(compare_execute_data["execution_results"]) == len(
-            compare_execute_data["results"]
-        )
-        assert 0 <= compare_execute_data["error_rate"] <= 1
-        assert compare_execute_data["execution_results"][0]["row_count"] >= 0
-
-        compare_history_resp = await client.get("/api/nl2sql/compare-history")
-        assert compare_history_resp.status_code == 200
-        compare_history = compare_history_resp.json()["data"]["items"]
-        assert compare_history
-        assert compare_history[0]["question"] == "社員一覧を見たい"
-        assert compare_history[0]["comparison"]["recommendation"]
-        assert "NL2SQL engine comparison" in compare_history[0]["report"]
-        assert "SELECT" in compare_history[0]["report"]
-
         reverse_resp = await client.post(
             "/api/nl2sql/reverse", json={"sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE"}
         )
@@ -1429,10 +1376,6 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert confirmed_apply_data["statements"][0]["status"] == "requires_oracle"
         assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(confirmed_apply_data["warnings"])
 
-        synthetic_resp = await client.post("/api/nl2sql/synthetic-cases")
-        assert synthetic_resp.status_code == 200
-        assert synthetic_resp.json()["data"]["cases"]
-
         diagnostics_resp = await client.get("/api/nl2sql/diagnostics")
         assert diagnostics_resp.status_code == 200
         diagnostics_data = diagnostics_resp.json()["data"]
@@ -1503,36 +1446,6 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         } <= required_feedback_env
 
 
-def test_compare_execute_collects_engine_execution_errors() -> None:
-    service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
-    original_execute_sql = service.execute_sql
-    calls = 0
-
-    def flaky_execute(sql: str, allowed: Any, row_limit: int | None) -> Any:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("ORA-00942 mock")
-        return original_execute_sql(sql, allowed, row_limit)
-
-    service.execute_sql = flaky_execute  # type: ignore[method-assign]
-
-    data = service.compare_engines(
-        CompareRequest(
-            question="社員一覧を見たい",
-            execute=True,
-            engines=[Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI],
-        )
-    )
-
-    assert len(data.execution_results) == 2
-    assert data.error_rate == 0.5
-    assert data.execution_results[0].executed is True
-    assert data.execution_results[1].executed is False
-    assert "ORA-00942 mock" in data.execution_results[1].error_message
-
-
 async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
@@ -1569,38 +1482,6 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
-    compare_data = service.compare_engines(
-        CompareRequest(question="社員一覧を比較したい", execute=True)
-    )
-    compare_record = service.list_compare_records().items[0]
-    evaluation_set = service.create_evaluation_set(
-        EvaluationSetUpsertRequest(
-            name="永続化評価セット",
-            profile_id=profile.id,
-            engine=Nl2SqlEngine.SELECT_AI,
-            cases=[
-                SyntheticCase(
-                    question="社員名を一覧したい",
-                    expected_sql="SELECT EMPLOYEE_NAME FROM EMPLOYEE",
-                )
-            ],
-        )
-    )
-    evaluation = service.evaluate(
-        EvaluateRequest(
-            evaluation_set_id=evaluation_set.id,
-            profile_id=profile.id,
-            engine=Nl2SqlEngine.SELECT_AI,
-            cases=[
-                {
-                    "question": "社員名を一覧したい",
-                    "expected_sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE",
-                }
-            ],
-        )
-    )
-    evaluation_run = service.list_evaluation_runs().items[0]
-
     reloaded = Nl2SqlService(store=store)
     assert reloaded.get_profile(profile.id).name == "永続化テスト"
     restored_job = reloaded.get_job(job_info.job_id)
@@ -1613,35 +1494,16 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_history.id == history_item.id
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
-    restored_compare = reloaded.list_compare_records().items[0]
-    assert restored_compare.id == compare_record.id
-    assert restored_compare.comparison.recommendation == compare_data.recommendation
-    assert "NL2SQL engine comparison" in restored_compare.report
-    restored_evaluation_set = reloaded.list_evaluation_sets().items[0]
-    assert restored_evaluation_set.id == evaluation_set.id
-    assert restored_evaluation_set.name == "永続化評価セット"
-    assert restored_evaluation_set.profile_id == profile.id
-    assert restored_evaluation_set.cases[0].profile_id == profile.id
-    restored_evaluation_run = reloaded.list_evaluation_runs().items[0]
-    assert restored_evaluation_run.id == evaluation_run.id
-    assert restored_evaluation_run.evaluation_set_id == evaluation_set.id
-    assert restored_evaluation_run.profile_id == profile.id
-    assert restored_evaluation_run.result.total_cases == evaluation.total_cases
-    assert "NL2SQL deterministic evaluation" in restored_evaluation_run.report
-
-
-def test_nl2sql_store_persists_empty_profile_list_after_physical_delete() -> None:
+def test_nl2sql_store_forbids_default_profile_physical_delete() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
 
-    deleted = service.delete_profile("default")
-    assert deleted.id == "default"
-    assert service.list_profiles(include_archived=True) == []
+    with pytest.raises(DefaultProfileDeleteForbidden):
+        service.delete_profile("default")
+    assert [profile.id for profile in service.list_profiles(include_archived=True)] == ["default"]
 
     reloaded = Nl2SqlService(store=store)
-    assert reloaded.list_profiles(include_archived=True) == []
-    with pytest.raises(ValueError):
-        reloaded.get_profile("default")
+    assert reloaded.get_profile("default").id == "default"
 
 
 def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:

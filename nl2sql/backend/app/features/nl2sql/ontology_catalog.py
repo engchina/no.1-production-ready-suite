@@ -803,6 +803,13 @@ def migrate_profile_ontology_view(
         "edge_ids": sorted(selected_edge_ids),
         "allowed_path_ids": allowed_path_ids,
         "archived": profile.archived,
+        "source_profile_etag": profile.etag,
+        "source_profile_scope_fingerprint": schema_fingerprint(
+            {
+                "allowed_tables": sorted(profile.allowed_tables),
+                "allowed_views": sorted(profile.allowed_views),
+            }
+        ),
     }
     return ProfileOntologyView(
         **payload,

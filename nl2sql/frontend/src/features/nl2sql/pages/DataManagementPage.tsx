@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
 
 import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
 
-import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
+import { ErrorState } from "@/components/StateViews";
+import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useRequestScope } from "@/lib/useRequestScope";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
   ExecutionConfirmationField,
   FileInputControl,
@@ -17,6 +18,7 @@ import {
   fileToBase64,
 } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
   DbObjectManagementTabs,
@@ -32,11 +34,16 @@ import {
   buildUpdateTemplate,
 } from "../sqlTemplates";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
+import {
+  useDbAdminObjects,
+  useSchemaRefreshJob,
+  useStartSchemaRefresh,
+} from "../incrementalQueries";
 import type {
   DbAdminCsvUploadData,
   DbAdminDataPreviewData,
   DbAdminObjectsData,
-  SchemaCatalog,
+  SchemaRefreshJob,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
   SelectAiDbProfilesData,
@@ -51,6 +58,7 @@ type CsvMode = "insert" | "truncate_insert";
 type PreviewObjectKind = "table" | "view";
 type PreviewObjectKindFilter = "all" | PreviewObjectKind;
 type PreviewObjectRowFilter = "all" | "with_rows" | "empty_rows" | "unknown_rows";
+type SyntheticLoading = "" | "tables" | "generate" | "status" | "results";
 
 const DATA_MANAGEMENT_ID = "data-management";
 
@@ -68,10 +76,6 @@ function resolveBusinessSelectAiProfileName(current: string, profiles: SelectAiD
 }
 
 export function DataManagementPage() {
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
-  const [selectAiDbProfiles, setSelectAiDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
-  const [dbAdminTables, setDbAdminTables] = useState<DbAdminObjectsData | null>(null);
-  const [dbAdminViews, setDbAdminViews] = useState<DbAdminObjectsData | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("preview");
   const [previewObject, setPreviewObject] = useState("");
   const [previewObjectSearch, setPreviewObjectSearch] = useState("");
@@ -101,28 +105,60 @@ export function DataManagementPage() {
   const [syntheticUseComments, setSyntheticUseComments] = useState(true);
   const [syntheticResultTable, setSyntheticResultTable] = useState("");
   const [syntheticResultLimit, setSyntheticResultLimit] = useState(100);
-  const [loading, setLoading] = useState("");
-  const [message, setMessage] = useState("");
-  const loadSequence = useRef(0);
-  const { abortAll, run: runScopedRequest } = useRequestScope();
+  const [previewLoadingObject, setPreviewLoadingObject] = useState("");
+  const [previewError, setPreviewError] = useState("");
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvUploadError, setCsvUploadError] = useState("");
+  const [syntheticLoading, setSyntheticLoading] = useState<SyntheticLoading>("");
+  const [syntheticError, setSyntheticError] = useState("");
+  const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
+  const [schemaJobId, setSchemaJobId] = useState("");
+  const [schemaJobError, setSchemaJobError] = useState("");
+  const completedSchemaJob = useRef("");
+  const previewRequestSequence = useRef(0);
+  const debouncedObjectSearch = useDebouncedValue(previewObjectSearch, 250);
+  const baseObjectsQuery = useDbAdminObjects("", "all", "all");
+  const previewObjectsQuery = useDbAdminObjects(
+    debouncedObjectSearch,
+    previewObjectKindFilter,
+    previewObjectRowFilter
+  );
+  const startSchemaRefresh = useStartSchemaRefresh();
+  const schemaJobQuery = useSchemaRefreshJob(schemaJobId);
+  const selectAiProfilesQuery = useQuery({
+    queryKey: ["nl2sql", "select-ai", "db-profiles", "business"],
+    queryFn: ({ signal }) =>
+      apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
+      }),
+    enabled: activeView === "synthetic",
+    staleTime: 5_000,
+    retry: false,
+  });
+  const selectAiDbProfiles = selectAiProfilesQuery.data ?? null;
+  const baseObjectPages = baseObjectsQuery.data?.pages ?? [];
+  const baseObjectItems = baseObjectPages.flatMap((page) => page.items);
+  const dbAdminTables: DbAdminObjectsData = {
+    runtime: baseObjectPages[0]?.runtime ?? "",
+    items: baseObjectItems.filter((item) => item.object_type === "table"),
+    refreshed_at: baseObjectPages[0]?.refreshed_at ?? "",
+    warnings: baseObjectPages.flatMap((page) => page.warnings),
+  };
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
-    const tables = (dbAdminTables?.items ?? []).map((item) => ({
-      name: item.name,
-      kind: "table" as const,
-      owner: item.owner,
-      rowCount: item.row_count,
-      comment: item.comment,
-    }));
-    const views = (dbAdminViews?.items ?? []).map((item) => ({
-      name: item.name,
-      kind: "view" as const,
-      owner: item.owner,
-      rowCount: item.row_count,
-      comment: item.comment,
-    }));
-    return [...tables, ...views];
-  }, [dbAdminTables, dbAdminViews]);
+    return (previewObjectsQuery.data?.pages ?? []).flatMap((page) =>
+      page.items.map((item) => ({
+        name: item.name,
+        kind: item.object_type === "view" ? ("view" as const) : ("table" as const),
+        owner: item.owner,
+        rowCount: item.row_count,
+        comment: item.comment,
+      }))
+    );
+  }, [previewObjectsQuery.data]);
 
   const filteredPreviewObjects = useMemo(
     () =>
@@ -161,80 +197,104 @@ export function DataManagementPage() {
     clearSyntheticProfileTargets();
   };
 
-  const load = async (refreshSchema = false) => {
-    const sequence = loadSequence.current + 1;
-    loadSequence.current = sequence;
-    setLoading(refreshSchema ? "schema-refresh" : "load");
-    setMessage("");
+  useEffect(() => {
+    const profiles = selectAiProfilesQuery.data;
+    if (!profiles) return;
+    const nextName = resolveBusinessSelectAiProfileName(syntheticProfileName, profiles.profiles);
+    setSyntheticProfileName(nextName);
+    if (syntheticProfileName && syntheticProfileName !== nextName) {
+      clearSyntheticProfileTargets();
+    }
+  }, [selectAiProfilesQuery.data]);
+
+  useEffect(() => {
+    const firstObject = previewObjects[0]?.name ?? "";
+    setPreviewObject((current) =>
+      current && previewObjects.some((item) => item.name === current) ? current : firstObject
+    );
+  }, [previewObjects]);
+
+  useEffect(() => {
+    const firstTable = dbAdminTables.items[0]?.name ?? "";
+    setCsvTable((current) =>
+      current && dbAdminTables.items.some((item) => item.name === current) ? current : firstTable
+    );
+  }, [baseObjectsQuery.data]);
+
+  useEffect(() => {
+    const job = schemaJobQuery.data;
+    if (!job || completedSchemaJob.current === `${job.job_id}:${job.status}`) return;
+    if (job.status === "done") {
+      completedSchemaJob.current = `${job.job_id}:${job.status}`;
+      setSchemaJobError("");
+      toast.success(t("dataMgmt.schemaJob.done"));
+      void baseObjectsQuery.refetch();
+      void previewObjectsQuery.refetch();
+    } else if (job.status === "error") {
+      completedSchemaJob.current = `${job.job_id}:${job.status}`;
+      setSchemaJobError(t("dataMgmt.schemaJob.error"));
+    }
+  }, [schemaJobQuery.data]);
+
+  const refreshObjects = async () => {
+    setSchemaJobError("");
+    await Promise.all([baseObjectsQuery.refetch(), previewObjectsQuery.refetch()]);
+  };
+
+  const submitSchemaRefresh = async () => {
+    setSchemaJobError("");
     try {
-      await runScopedRequest(async (signal) => {
-        const [catalogData, profileData, adminTables, adminViews] = await Promise.all([
-          refreshSchema
-            ? apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal })
-            : apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
-          apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL, { signal }),
-          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables", { signal }),
-          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views", { signal }),
-        ]);
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        const nextSyntheticProfileName = resolveBusinessSelectAiProfileName(
-          syntheticProfileName,
-          profileData.profiles
-        );
-        setCatalog(catalogData);
-        setSelectAiDbProfiles(profileData);
-        setDbAdminTables(adminTables);
-        setDbAdminViews(adminViews);
-        setSyntheticProfileName(nextSyntheticProfileName);
-        if (syntheticProfileName && syntheticProfileName !== nextSyntheticProfileName) {
-          clearSyntheticProfileTargets();
-        }
-        setPreviewObject(
-          (current) => current || adminTables.items[0]?.name || adminViews.items[0]?.name || ""
-        );
-        setCsvTable((current) => current || adminTables.items[0]?.name || "");
-      });
-    } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.load"));
-    } finally {
-      if (sequence === loadSequence.current) setLoading("");
+      const job = await startSchemaRefresh.mutateAsync();
+      setSchemaJobId(job.job_id);
+      toast.success(t("dataMgmt.schemaJob.accepted"));
+      if (!job.job_id && job.status === "done") await refreshObjects();
+    } catch (error) {
+      setSchemaJobError(apiErrorMessage(error, "dataMgmt.schemaJob.submitError"));
     }
   };
 
-  useEffect(() => {
-    void load();
-    return () => {
-      loadSequence.current += 1;
-      abortAll();
-    };
-  }, []);
+  const selectPreviewObject = (objectName: string) => {
+    previewRequestSequence.current += 1;
+    setPreviewLoadingObject("");
+    setPreviewObject(objectName);
+    setPreview(null);
+    setPreviewError("");
+    setExportError("");
+  };
 
-  const showPreview = async () => {
-    if (!previewObject) return;
-    setLoading("preview");
-    setMessage("");
+  const showPreview = async (objectName: string) => {
+    if (!objectName) return;
+    const sequence = previewRequestSequence.current + 1;
+    previewRequestSequence.current = sequence;
+    setPreviewObject(objectName);
+    setPreview(null);
+    setPreviewLoadingObject(objectName);
+    setPreviewError("");
+    setExportError("");
     try {
-      setPreview(
-        await apiPost<DbAdminDataPreviewData>("/api/nl2sql/db-admin/preview-data", {
-          object_name: previewObject,
+      const result = await apiPost<DbAdminDataPreviewData>(
+        "/api/nl2sql/db-admin/preview-data",
+        {
+          object_name: objectName,
           limit: previewLimit,
           where_clause: previewWhere,
-        })
+        },
+        { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
+      if (sequence !== previewRequestSequence.current) return;
+      setPreview(result);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataMgmt.error.preview"));
+      if (sequence !== previewRequestSequence.current) return;
+      setPreviewError(apiErrorMessage(err, "dataMgmt.error.preview"));
     } finally {
-      setLoading("");
+      if (sequence === previewRequestSequence.current) setPreviewLoadingObject("");
     }
   };
 
   const downloadPreviewXlsx = async () => {
     if (!previewObject) return;
-    setLoading("preview-export");
-    setMessage("");
+    setExportLoading(true);
+    setExportError("");
     try {
       const response = await apiFetch("/api/nl2sql/db-admin/preview-data/export.xlsx", {
         method: "POST",
@@ -247,6 +307,7 @@ export function DataManagementPage() {
           limit: previewLimit,
           where_clause: previewWhere,
         }),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS.interactiveDetail),
       });
       if (!response.ok) {
         throw new Error(await previewExportError(response));
@@ -255,9 +316,9 @@ export function DataManagementPage() {
       downloadBlob(filename, await response.blob());
       toast.success(t("common.action.downloaded"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataMgmt.error.previewExport"));
+      setExportError(apiErrorMessage(err, "dataMgmt.error.previewExport"));
     } finally {
-      setLoading("");
+      setExportLoading(false);
     }
   };
 
@@ -278,8 +339,8 @@ export function DataManagementPage() {
 
   const uploadCsv = async () => {
     if (!canUploadCsv) return;
-    setLoading("csv-upload");
-    setMessage("");
+    setCsvUploading(true);
+    setCsvUploadError("");
     try {
       const result = await apiPost<DbAdminCsvUploadData>("/api/nl2sql/db-admin/upload-csv", {
         table_name: csvTable,
@@ -288,29 +349,33 @@ export function DataManagementPage() {
         mode: csvMode,
         confirmation: csvConfirmation,
         reason: "ui-data-management-csv",
-      });
+      }, { timeoutMs: API_TIMEOUT_MS.interactiveDetail });
       setCsvUploadResult(result);
       setCsvStep("execute");
       if (result.executed) {
-        await load(true);
+        toast.success(t("dataMgmt.csv.successToast"));
+        await baseObjectsQuery.refetch();
+        await previewObjectsQuery.refetch();
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataMgmt.error.csvUpload"));
+      setCsvUploadError(apiErrorMessage(err, "dataMgmt.error.csvUpload"));
     } finally {
-      setLoading("");
+      setCsvUploading(false);
     }
   };
 
   const refreshSyntheticTables = async () => {
     const profileName = syntheticProfileName.trim();
     if (!profileName) return;
-    setLoading("synthetic-tables");
-    setMessage("");
+    setSyntheticLoading("tables");
+    setSyntheticError("");
+    setSyntheticErrorOperation("");
     try {
       let profile = selectedSyntheticProfile;
       try {
         const detail = await apiGet<SelectAiDbProfileDetailData>(
-          `/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(profileName)}`
+          `/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(profileName)}`,
+          { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
         );
         profile = detail.profile;
       } catch {
@@ -325,9 +390,10 @@ export function DataManagementPage() {
       setSyntheticDataStatus(null);
       setSyntheticDataResults(null);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.load"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.load"));
+      setSyntheticErrorOperation("tables");
     } finally {
-      setLoading("");
+      setSyntheticLoading("");
     }
   };
 
@@ -335,8 +401,9 @@ export function DataManagementPage() {
     if (!canGenerateSyntheticData) return;
     const selectedTables = syntheticSelectedTables;
     const singleTable = selectedTables.length === 1;
-    setLoading("synthetic-data");
-    setMessage("");
+    setSyntheticLoading("generate");
+    setSyntheticError("");
+    setSyntheticErrorOperation("");
     try {
       setSyntheticDataStatus(null);
       setSyntheticDataResults(null);
@@ -351,7 +418,7 @@ export function DataManagementPage() {
         use_comments: syntheticUseComments,
         confirmation: syntheticConfirmation,
         reason: "ui-synthetic-data",
-      });
+      }, { timeoutMs: API_TIMEOUT_MS.jobControl });
       setSyntheticData(result);
       setSyntheticResultTable((current) => {
         const allowedTables = syntheticAvailableTables;
@@ -364,67 +431,83 @@ export function DataManagementPage() {
         setSyntheticDataStatus(await fetchSyntheticDataStatus(operationId));
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.syntheticData"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData"));
+      setSyntheticErrorOperation("generate");
     } finally {
-      setLoading("");
+      setSyntheticLoading("");
     }
   };
 
   const checkSyntheticDataStatus = async () => {
     const operationId = syntheticData?.operation_id.trim();
     if (!operationId) return;
-    setLoading("synthetic-status");
-    setMessage("");
+    setSyntheticLoading("status");
+    setSyntheticError("");
+    setSyntheticErrorOperation("");
     try {
       setSyntheticDataStatus(await fetchSyntheticDataStatus(operationId));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.syntheticStatus"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticStatus"));
+      setSyntheticErrorOperation("status");
     } finally {
-      setLoading("");
+      setSyntheticLoading("");
     }
   };
 
   const loadSyntheticDataResults = async () => {
     const tableName = syntheticResultTable.trim();
     if (!tableName || !syntheticAvailableTables.includes(tableName)) return;
-    setLoading("synthetic-results");
-    setMessage("");
+    setSyntheticLoading("results");
+    setSyntheticError("");
+    setSyntheticErrorOperation("");
     try {
       setSyntheticDataResults(
         await apiGet<SyntheticDataResultsData>(
-          `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=${syntheticResultLimit}`
+          `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=${syntheticResultLimit}`,
+          { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
         )
       );
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.syntheticResults"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticResults"));
+      setSyntheticErrorOperation("results");
     } finally {
-      setLoading("");
+      setSyntheticLoading("");
     }
   };
+
+  const objectQueryError = previewObjectsQuery.error ?? baseObjectsQuery.error;
+  const objectErrorMessage = objectQueryError
+    ? apiErrorMessage(
+        objectQueryError,
+        "dataMgmt.objectList.error",
+        "dataMgmt.objectList.timeout"
+      )
+    : "";
+  const firstObjectPage = baseObjectPages[0];
+  const schemaJob = schemaJobQuery.data ?? null;
+  const visibleSchemaJobError = schemaJobQuery.error
+    ? apiErrorMessage(schemaJobQuery.error, "dataMgmt.schemaJob.error")
+    : schemaJobError;
+  const schemaRefreshing =
+    !schemaJobQuery.error &&
+    (startSchemaRefresh.isPending || schemaJob?.status === "pending" || schemaJob?.status === "running");
 
   return (
     <>
       <PageHeader title={t("nav.dataManagement")} subtitle={t("dataMgmt.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        <PageNotice
-          notice={message ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` } : null}
-          action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
-            </Button>
-          }
-        />
-
         <DataStatusBar
-          tableCount={dbAdminTables?.items.length ?? catalog?.tables.length ?? 0}
-          viewCount={dbAdminViews?.items.length ?? 0}
-          profileCount={selectAiDbProfiles?.profiles.length ?? 0}
-          runtime={dbAdminTables?.runtime ?? dbAdminViews?.runtime ?? "deterministic"}
-          refreshedAt={catalog?.refreshed_at ?? ""}
-          loading={loading}
-          onRefresh={() => void load()}
-          onSchemaRefresh={() => void load(true)}
+          tableCount={firstObjectPage?.table_count ?? null}
+          viewCount={firstObjectPage?.view_count ?? null}
+          profileCount={selectAiDbProfiles ? selectAiDbProfiles.profiles.length : null}
+          runtime={firstObjectPage?.runtime ?? null}
+          refreshedAt={firstObjectPage?.refreshed_at ?? ""}
+          objectRefreshing={baseObjectsQuery.isFetching || previewObjectsQuery.isFetching}
+          schemaRefreshing={schemaRefreshing}
+          schemaJob={schemaJob}
+          schemaError={visibleSchemaJobError}
+          onRefresh={() => void refreshObjects()}
+          onSchemaRefresh={() => void submitSchemaRefresh()}
         />
 
         <DbObjectManagementTabs
@@ -448,6 +531,8 @@ export function DataManagementPage() {
             ariaLabel={t("dataMgmt.workspace.preview")}
             splitId="data-management-preview"
             preferredWidePane="right"
+            minLeftPaneWidthPx={520}
+            minRightPaneWidthPx={560}
           >
             <PreviewControlsPanel
               previewObjects={previewObjects}
@@ -458,21 +543,28 @@ export function DataManagementPage() {
               previewObjectRowFilter={previewObjectRowFilter}
               previewLimit={previewLimit}
               previewWhere={previewWhere}
-              loading={loading}
-              onPreviewObjectChange={(value) => {
-                setPreviewObject(value);
-                setPreview(null);
-              }}
+              loadingObjectName={previewLoadingObject}
+              initialLoading={previewObjectsQuery.isPending && !previewObjectsQuery.data}
+              error={objectErrorMessage}
+              hasNextPage={Boolean(previewObjectsQuery.hasNextPage)}
+              loadingNextPage={previewObjectsQuery.isFetchingNextPage}
+              onPreviewObjectChange={selectPreviewObject}
               onPreviewObjectSearchChange={setPreviewObjectSearch}
               onPreviewObjectKindFilterChange={setPreviewObjectKindFilter}
               onPreviewObjectRowFilterChange={setPreviewObjectRowFilter}
               onPreviewLimitChange={setPreviewLimit}
               onPreviewWhereChange={setPreviewWhere}
-              onShowPreview={() => void showPreview()}
+              onShowPreview={(objectName) => void showPreview(objectName)}
+              onRetry={() => void refreshObjects()}
+              onLoadMore={() => void previewObjectsQuery.fetchNextPage()}
             />
             <PreviewResultsPanel
               preview={preview}
-              loading={loading}
+              loading={Boolean(previewLoadingObject)}
+              exporting={exportLoading}
+              previewError={previewError}
+              exportError={exportError}
+              onRetryPreview={() => void showPreview(previewObject)}
               onDownload={() => void downloadPreviewXlsx()}
             />
           </DbObjectManagementPanelShell>
@@ -486,7 +578,7 @@ export function DataManagementPage() {
             ariaLabel={t("dataMgmt.workspace.csv")}
           >
             <CsvUploadWorkspace
-              tables={dbAdminTables?.items ?? []}
+              tables={dbAdminTables.items}
               table={csvTable}
               filename={csvFilename}
               fileReady={Boolean(csvBase64)}
@@ -496,7 +588,10 @@ export function DataManagementPage() {
               confirmed={csvConfirmed}
               canUpload={canUploadCsv}
               result={csvUploadResult}
-              loading={loading === "csv-upload"}
+              loading={csvUploading}
+              error={csvUploadError}
+              hasNextPage={Boolean(baseObjectsQuery.hasNextPage)}
+              loadingNextPage={baseObjectsQuery.isFetchingNextPage}
               onTableChange={(value) => {
                 setCsvTable(value);
                 setCsvUploadResult(null);
@@ -514,6 +609,8 @@ export function DataManagementPage() {
                 if (value.trim()) setCsvStep("execute");
               }}
               onUpload={() => void uploadCsv()}
+              onRetry={() => void uploadCsv()}
+              onLoadMore={() => void baseObjectsQuery.fetchNextPage()}
             />
           </DbObjectManagementPanelShell>
         )}
@@ -540,7 +637,10 @@ export function DataManagementPage() {
               confirmationTitle={t("dataMgmt.sql.executeTitle")}
               executeOnly
               framed={false}
-              onExecuted={() => load(true)}
+              onExecuted={() => {
+                void baseObjectsQuery.refetch();
+                void previewObjectsQuery.refetch();
+              }}
             />
             <p className="px-1 text-xs text-muted">{t("dataMgmt.sql.note")}</p>
           </DbObjectManagementPanelShell>
@@ -553,6 +653,18 @@ export function DataManagementPage() {
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.synthetic")}
           >
+            {selectAiProfilesQuery.isPending ? (
+              <DbManagementLoadingSkeleton
+                idPrefix="data-synthetic-profiles"
+                ariaLabel={t("dataTools.syntheticData.profilesLoading")}
+                variant="detail"
+              />
+            ) : selectAiProfilesQuery.error ? (
+              <ErrorState
+                message={apiErrorMessage(selectAiProfilesQuery.error, "dataMgmt.profiles.error")}
+                onRetry={() => void selectAiProfilesQuery.refetch()}
+              />
+            ) : (
             <SyntheticWorkspace
               selectAiDbProfiles={selectAiDbProfiles}
               selectedSyntheticProfile={selectedSyntheticProfile}
@@ -571,7 +683,8 @@ export function DataManagementPage() {
               syntheticUseComments={syntheticUseComments}
               syntheticResultTable={syntheticResultTable}
               syntheticResultLimit={syntheticResultLimit}
-              loading={loading}
+              loading={syntheticLoading}
+              error={syntheticError}
               onRefreshTables={() => void refreshSyntheticTables()}
               onSyntheticProfileNameChange={changeSyntheticProfileName}
               onSyntheticTableToggle={(tableName, selected) => {
@@ -600,7 +713,14 @@ export function DataManagementPage() {
               onGenerateSyntheticData={() => void generateSyntheticData()}
               onCheckSyntheticDataStatus={() => void checkSyntheticDataStatus()}
               onLoadSyntheticDataResults={() => void loadSyntheticDataResults()}
+              onRetry={() => {
+                if (syntheticErrorOperation === "tables") void refreshSyntheticTables();
+                else if (syntheticErrorOperation === "status") void checkSyntheticDataStatus();
+                else if (syntheticErrorOperation === "results") void loadSyntheticDataResults();
+                else void generateSyntheticData();
+              }}
             />
+            )}
           </DbObjectManagementPanelShell>
         )}
       </main>
@@ -614,16 +734,22 @@ function DataStatusBar({
   profileCount,
   runtime,
   refreshedAt,
-  loading,
+  objectRefreshing,
+  schemaRefreshing,
+  schemaJob,
+  schemaError,
   onRefresh,
   onSchemaRefresh,
 }: {
-  tableCount: number;
-  viewCount: number;
-  profileCount: number;
-  runtime: string;
+  tableCount: number | null;
+  viewCount: number | null;
+  profileCount: number | null;
+  runtime: string | null;
   refreshedAt: string;
-  loading: string;
+  objectRefreshing: boolean;
+  schemaRefreshing: boolean;
+  schemaJob: SchemaRefreshJob | null;
+  schemaError: string;
   onRefresh: () => void;
   onSchemaRefresh: () => void;
 }) {
@@ -632,15 +758,20 @@ function DataStatusBar({
       ariaLabel={t("dataMgmt.toolbar.status")}
       metricColumnsClass="sm:grid-cols-2 lg:grid-cols-5"
       metrics={[
-        { label: t("tableMgmt.metric.tables"), value: formatNumber(tableCount), emphasis: true },
-        { label: t("dataMgmt.metric.views"), value: formatNumber(viewCount), emphasis: true },
-        { label: t("dataTools.metric.profiles"), value: formatNumber(profileCount), emphasis: true },
-        { label: t("tableMgmt.metric.runtime"), value: runtime },
-        { label: t("tableMgmt.metric.schemaRefreshed"), value: formatDateTime(refreshedAt) },
+        { label: t("tableMgmt.metric.tables"), value: tableCount === null ? "—" : formatNumber(tableCount), emphasis: true },
+        { label: t("dataMgmt.metric.views"), value: viewCount === null ? "—" : formatNumber(viewCount), emphasis: true },
+        { label: t("dataTools.metric.profiles"), value: profileCount === null ? "—" : formatNumber(profileCount), emphasis: true },
+        { label: t("tableMgmt.metric.runtime"), value: runtime ?? "—" },
+        { label: t("tableMgmt.metric.schemaRefreshed"), value: refreshedAt ? formatDateTime(refreshedAt) : "—" },
       ]}
       actions={
         <>
-          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={onRefresh}>
+          {(schemaJob || schemaError) && (
+            <span className={schemaError ? "text-xs text-danger" : "text-xs text-muted"} aria-live="polite">
+              {schemaError || schemaJobLabel(schemaJob)}
+            </span>
+          )}
+          <Button type="button" variant="secondary" size="sm" loading={objectRefreshing} onClick={onRefresh}>
             <RefreshCw size={15} aria-hidden="true" />
             <span>{t("tableMgmt.action.refresh")}</span>
           </Button>
@@ -648,7 +779,8 @@ function DataStatusBar({
             type="button"
             variant="primary"
             size="sm"
-            loading={loading === "schema-refresh"}
+            loading={schemaRefreshing}
+            disabled={schemaRefreshing}
             onClick={onSchemaRefresh}
           >
             <RefreshCw size={15} aria-hidden="true" />
@@ -669,7 +801,11 @@ function PreviewControlsPanel({
   previewObjectRowFilter,
   previewLimit,
   previewWhere,
-  loading,
+  loadingObjectName,
+  initialLoading,
+  error,
+  hasNextPage,
+  loadingNextPage,
   onPreviewObjectChange,
   onPreviewObjectSearchChange,
   onPreviewObjectKindFilterChange,
@@ -677,6 +813,8 @@ function PreviewControlsPanel({
   onPreviewLimitChange,
   onPreviewWhereChange,
   onShowPreview,
+  onRetry,
+  onLoadMore,
 }: {
   previewObjects: PreviewObject[];
   filteredPreviewObjects: PreviewObject[];
@@ -686,14 +824,20 @@ function PreviewControlsPanel({
   previewObjectRowFilter: PreviewObjectRowFilter;
   previewLimit: number;
   previewWhere: string;
-  loading: string;
+  loadingObjectName: string;
+  initialLoading: boolean;
+  error: string;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
   onPreviewObjectChange: (value: string) => void;
   onPreviewObjectSearchChange: (value: string) => void;
   onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
   onPreviewObjectRowFilterChange: (value: PreviewObjectRowFilter) => void;
   onPreviewLimitChange: (value: number) => void;
   onPreviewWhereChange: (value: string) => void;
-  onShowPreview: () => void;
+  onShowPreview: (objectName: string) => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
 }) {
   const tableCount = previewObjects.filter((item) => item.kind === "table").length;
   const viewCount = previewObjects.filter((item) => item.kind === "view").length;
@@ -715,17 +859,6 @@ function PreviewControlsPanel({
             <StatusBadge variant="info" label={t("dataMgmt.preview.objectTotalCount", { count: previewObjects.length })} />
             <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectTableCount", { count: tableCount })} />
             <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectViewCount", { count: viewCount })} />
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              loading={loading === "preview"}
-              disabled={!previewObject}
-              onClick={onShowPreview}
-            >
-              <Eye size={15} aria-hidden="true" />
-              <span>{t("dataMgmt.preview.show")}</span>
-            </Button>
           </>
         }
       />
@@ -776,18 +909,44 @@ function PreviewControlsPanel({
               </select>
             </label>
           </div>
-          <p className="text-xs text-muted" aria-live="polite">
-            {t("dataMgmt.preview.filteredObjectCount", {
-              filtered: filteredPreviewObjects.length,
-              total: previewObjects.length,
-            })}
-          </p>
-          <PreviewObjectList
-            objects={filteredPreviewObjects}
-            selectedObject={previewObject}
-            hasActiveFilter={hasActiveFilter}
-            onSelect={onPreviewObjectChange}
-          />
+          {initialLoading ? (
+            <DbManagementLoadingSkeleton
+              idPrefix="data-preview-object"
+              ariaLabel={t("dataMgmt.objectList.loading")}
+              variant="list"
+              rows={6}
+            />
+          ) : error ? (
+            <ErrorState message={error} onRetry={onRetry} />
+          ) : (
+            <>
+              <p className="text-xs text-muted" aria-live="polite">
+                {t("dataMgmt.preview.filteredObjectCount", {
+                  filtered: filteredPreviewObjects.length,
+                  total: previewObjects.length,
+                })}
+              </p>
+              <PreviewObjectList
+                objects={filteredPreviewObjects}
+                selectedObject={previewObject}
+                hasActiveFilter={hasActiveFilter}
+                loadingObjectName={loadingObjectName}
+                onSelect={onPreviewObjectChange}
+                onShowPreview={onShowPreview}
+              />
+              {hasNextPage && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={loadingNextPage}
+                  onClick={onLoadMore}
+                >
+                  {t("dataMgmt.objectList.loadMore")}
+                </Button>
+              )}
+            </>
+          )}
         </div>
 
         <div className="grid gap-3 border-t border-border pt-3">
@@ -831,12 +990,16 @@ function PreviewObjectList({
   objects,
   selectedObject,
   hasActiveFilter,
+  loadingObjectName,
   onSelect,
+  onShowPreview,
 }: {
   objects: PreviewObject[];
   selectedObject: string;
   hasActiveFilter: boolean;
+  loadingObjectName: string;
   onSelect: (value: string) => void;
+  onShowPreview: (objectName: string) => void;
 }) {
   if (objects.length === 0) {
     return (
@@ -852,34 +1015,39 @@ function PreviewObjectList({
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card" data-testid="data-preview-object-list">
       <div
-        className="hidden grid-cols-[minmax(0,1.5fr)_5.75rem_5.75rem_minmax(4.5rem,0.75fr)] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
+        className="hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
         aria-hidden="true"
       >
         <span>{t("dataMgmt.preview.objectName")}</span>
         <span>{t("dataMgmt.preview.objectKind")}</span>
         <span>{t("dataMgmt.preview.objectRows")}</span>
         <span>{t("dataMgmt.preview.objectOwner")}</span>
+        <span className="text-right">{t("dataMgmt.preview.actions")}</span>
       </div>
       <div className="max-h-80 overflow-auto" role="list" aria-label={t("dataMgmt.preview.object")}>
         {objects.map((item) => {
           const selected = item.name === selectedObject;
+          const loading = item.name === loadingObjectName;
           return (
-            <button
+            <div
               key={`${item.kind}-${item.name}`}
-              type="button"
-              aria-current={selected ? "true" : undefined}
-              aria-label={t("dataMgmt.preview.selectObject", { name: item.name })}
+              role="listitem"
               className={[
-                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring/40",
-                "md:grid-cols-[minmax(0,1.5fr)_5.75rem_5.75rem_minmax(4.5rem,0.75fr)] md:items-center md:py-2",
+                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background",
+                "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] md:items-center md:py-2",
                 selected ? "bg-primary/10" : "bg-card",
               ].join(" ")}
-              onClick={() => onSelect(item.name)}
             >
-              <span className="min-w-0">
+              <button
+                type="button"
+                aria-current={selected ? "true" : undefined}
+                aria-label={t("dataMgmt.preview.selectObject", { name: item.name })}
+                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-ring/40 md:min-h-0"
+                onClick={() => onSelect(item.name)}
+              >
                 <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
                 {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
-              </span>
+              </button>
               <span className="flex items-center gap-2 md:block">
                 <span className="text-xs font-medium text-muted md:hidden">{t("dataMgmt.preview.objectKind")}</span>
                 <StatusBadge variant={item.kind === "view" ? "info" : "neutral"} label={previewObjectKindLabel(item.kind)} />
@@ -892,7 +1060,20 @@ function PreviewObjectList({
                 <span className="font-sans font-medium text-muted md:hidden">{t("dataMgmt.preview.objectOwner")}</span>
                 <span className="break-all">{item.owner || "-"}</span>
               </span>
-            </button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="w-full whitespace-nowrap md:w-auto"
+                aria-label={t("dataMgmt.preview.showObject", { name: item.name })}
+                loading={loading}
+                disabled={Boolean(loadingObjectName) && !loading}
+                onClick={() => onShowPreview(item.name)}
+              >
+                <Eye size={15} aria-hidden="true" />
+                <span>{t("dataMgmt.preview.show")}</span>
+              </Button>
+            </div>
           );
         })}
       </div>
@@ -918,6 +1099,33 @@ function filterPreviewObjects(
   });
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+  return debounced;
+}
+
+function apiErrorMessage(
+  error: unknown,
+  fallbackKey: Parameters<typeof t>[0],
+  timeoutKey: Parameters<typeof t>[0] = "dataMgmt.operation.timeout"
+) {
+  if (isTimeoutError(error)) return t(timeoutKey);
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function schemaJobLabel(job: SchemaRefreshJob | null) {
+  if (!job) return "";
+  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
+  const progress = job.total_objects
+    ? ` ${formatNumber(job.processed_objects ?? 0)}/${formatNumber(job.total_objects)}`
+    : "";
+  return t("dataMgmt.schemaJob.progress", { phase: t(`dataMgmt.schemaJob.phase.${phase}`), progress });
+}
+
 function previewObjectMatchesRowFilter(item: PreviewObject, filter: PreviewObjectRowFilter) {
   if (filter === "all") return true;
   if (filter === "with_rows") return typeof item.rowCount === "number" && item.rowCount > 0;
@@ -937,10 +1145,18 @@ function previewObjectRowCountLabel(rowCount?: number | null) {
 function PreviewResultsPanel({
   preview,
   loading,
+  exporting,
+  previewError,
+  exportError,
+  onRetryPreview,
   onDownload,
 }: {
   preview: DbAdminDataPreviewData | null;
-  loading: string;
+  loading: boolean;
+  exporting: boolean;
+  previewError: string;
+  exportError: string;
+  onRetryPreview: () => void;
   onDownload: () => void;
 }) {
   return (
@@ -955,7 +1171,7 @@ function PreviewResultsPanel({
             type="button"
             variant="secondary"
             size="sm"
-            loading={loading === "preview-export"}
+            loading={exporting}
             disabled={!preview || preview.results.rows.length === 0}
             onClick={onDownload}
           >
@@ -964,8 +1180,17 @@ function PreviewResultsPanel({
           </Button>
         }
       />
-      {preview ? (
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix="data-preview-results"
+          ariaLabel={t("dataMgmt.preview.loading")}
+          variant="detail"
+        />
+      ) : previewError ? (
+        <ErrorState message={previewError} onRetry={onRetryPreview} />
+      ) : preview ? (
         <div className="grid gap-2">
+          {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <StatusBadge variant="neutral" label={preview.runtime} />
             <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
@@ -979,7 +1204,10 @@ function PreviewResultsPanel({
           <QueryResultsTable results={preview.results} />
         </div>
       ) : (
-        <EmptyState title={t("dataMgmt.preview.emptyTitle")} hint={t("dataMgmt.preview.emptyHint")} />
+        <>
+          {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
+          <EmptyState title={t("dataMgmt.preview.emptyTitle")} hint={t("dataMgmt.preview.emptyHint")} />
+        </>
       )}
     </section>
   );
@@ -997,12 +1225,17 @@ function CsvUploadWorkspace({
   canUpload,
   result,
   loading,
+  error,
+  hasNextPage,
+  loadingNextPage,
   onTableChange,
   onModeChange,
   onFilePick,
   onFileClear,
   onConfirmationChange,
   onUpload,
+  onRetry,
+  onLoadMore,
 }: {
   tables: DbAdminObjectsData["items"];
   table: string;
@@ -1015,12 +1248,17 @@ function CsvUploadWorkspace({
   canUpload: boolean;
   result: DbAdminCsvUploadData | null;
   loading: boolean;
+  error: string;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
   onTableChange: (value: string) => void;
   onModeChange: (value: CsvMode) => void;
   onFilePick: (file: File) => void;
   onFileClear: () => void;
   onConfirmationChange: (value: string) => void;
   onUpload: () => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
 }) {
   const activeIndex = step === "execute" ? 1 : 0;
   return (
@@ -1039,19 +1277,26 @@ function CsvUploadWorkspace({
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
-          <span>{t("dataMgmt.csv.table")}</span>
-          <select
-            value={table}
-            onChange={(event) => onTableChange(event.currentTarget.value)}
-            className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-          >
-            {tables.length === 0 && <option value="">{t("tableMgmt.list.emptyTitle")}</option>}
-            {tables.map((item) => (
-              <option key={item.name} value={item.name}>{item.name}</option>
-            ))}
-          </select>
-        </label>
+        <div className="grid min-w-0 gap-2">
+          <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
+            <span>{t("dataMgmt.csv.table")}</span>
+            <select
+              value={table}
+              onChange={(event) => onTableChange(event.currentTarget.value)}
+              className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+            >
+              {tables.length === 0 && <option value="">{t("tableMgmt.list.emptyTitle")}</option>}
+              {tables.map((item) => (
+                <option key={`${item.owner}.${item.name}`} value={item.name}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+          {hasNextPage && (
+            <Button type="button" variant="secondary" size="sm" loading={loadingNextPage} onClick={onLoadMore}>
+              {t("dataMgmt.objectList.loadMore")}
+            </Button>
+          )}
+        </div>
         <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
           <span>{t("dataMgmt.csv.mode")}</span>
           <select
@@ -1064,6 +1309,8 @@ function CsvUploadWorkspace({
           </select>
         </label>
       </div>
+
+      {error && <ErrorState message={error} onRetry={onRetry} />}
 
       <FileInputControl
         label={t("dataMgmt.csv.file")}
@@ -1188,6 +1435,7 @@ function SyntheticWorkspace({
   syntheticResultTable,
   syntheticResultLimit,
   loading,
+  error,
   onRefreshTables,
   onSyntheticProfileNameChange,
   onSyntheticTableToggle,
@@ -1201,6 +1449,7 @@ function SyntheticWorkspace({
   onGenerateSyntheticData,
   onCheckSyntheticDataStatus,
   onLoadSyntheticDataResults,
+  onRetry,
 }: {
   selectAiDbProfiles: SelectAiDbProfilesData | null;
   selectedSyntheticProfile: SelectAiDbProfile | null;
@@ -1219,7 +1468,8 @@ function SyntheticWorkspace({
   syntheticUseComments: boolean;
   syntheticResultTable: string;
   syntheticResultLimit: number;
-  loading: string;
+  loading: SyntheticLoading;
+  error: string;
   onRefreshTables: () => void;
   onSyntheticProfileNameChange: (value: string) => void;
   onSyntheticTableToggle: (tableName: string, selected: boolean) => void;
@@ -1233,6 +1483,7 @@ function SyntheticWorkspace({
   onGenerateSyntheticData: () => void;
   onCheckSyntheticDataStatus: () => void;
   onLoadSyntheticDataResults: () => void;
+  onRetry: () => void;
 }) {
   const activeStep = syntheticDataResults ? 3 : syntheticData || syntheticDataStatus ? 1 : 0;
   const operationId = syntheticData?.operation_id.trim() ?? "";
@@ -1246,6 +1497,7 @@ function SyntheticWorkspace({
         title={t("dataTools.synthetic.title")}
         description={t("dataMgmt.section.syntheticHint")}
       />
+      {error && <ErrorState message={error} onRetry={onRetry} />}
 
       <DbObjectStepIndicator
         steps={[
@@ -1270,7 +1522,7 @@ function SyntheticWorkspace({
               variant="secondary"
               size="sm"
               className="w-full sm:w-auto"
-              loading={loading === "synthetic-tables"}
+              loading={loading === "tables"}
               disabled={!syntheticProfileName}
               onClick={onRefreshTables}
             >
@@ -1330,7 +1582,14 @@ function SyntheticWorkspace({
 
         <div className="grid min-w-0 gap-2">
           <div className="text-sm font-medium text-foreground">{t("dataTools.syntheticData.tables")}</div>
-          {syntheticAvailableTables.length > 0 ? (
+          {loading === "tables" ? (
+            <DbManagementLoadingSkeleton
+              idPrefix="data-synthetic-tables"
+              ariaLabel={t("dataTools.syntheticData.tablesLoading")}
+              variant="list"
+              rows={4}
+            />
+          ) : syntheticAvailableTables.length > 0 ? (
             <div className="max-h-56 overflow-auto rounded-md border border-border bg-card" role="group" aria-label={t("dataTools.syntheticData.tables")}>
               <div className="grid divide-y divide-border/70">
                 {syntheticAvailableTables.map((tableName) => {
@@ -1413,7 +1672,7 @@ function SyntheticWorkspace({
                 variant="danger"
                 size="sm"
                 className="w-full sm:w-auto"
-                loading={loading === "synthetic-data"}
+                loading={loading === "generate"}
                 disabled={!canGenerateSyntheticData}
                 onClick={onGenerateSyntheticData}
               >
@@ -1437,7 +1696,7 @@ function SyntheticWorkspace({
               variant="secondary"
               size="sm"
               className="w-full sm:w-auto"
-              loading={loading === "synthetic-status"}
+              loading={loading === "status"}
               disabled={!operationId}
               onClick={onCheckSyntheticDataStatus}
             >
@@ -1474,7 +1733,13 @@ function SyntheticWorkspace({
           <EmptyState title={t("dataTools.syntheticData.noOperationTitle")} hint={t("dataTools.syntheticData.noOperationHint")} />
         )}
 
-        {syntheticDataStatus && (
+        {loading === "status" ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="data-synthetic-status"
+            ariaLabel={t("dataTools.syntheticData.statusLoading")}
+            variant="compact"
+          />
+        ) : syntheticDataStatus ? (
           <div className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" aria-label={t("dataTools.syntheticData.statusResult")}>
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant="info" label={syntheticDataStatus.status} />
@@ -1492,7 +1757,7 @@ function SyntheticWorkspace({
               </pre>
             )}
           </div>
-        )}
+        ) : null}
       </section>
 
       <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-results-heading">
@@ -1507,7 +1772,7 @@ function SyntheticWorkspace({
               variant="secondary"
               size="sm"
               className="w-full sm:w-auto"
-              loading={loading === "synthetic-results"}
+              loading={loading === "results"}
               disabled={!hasValidResultTable}
               onClick={onLoadSyntheticDataResults}
             >
@@ -1547,7 +1812,13 @@ function SyntheticWorkspace({
           </label>
         </div>
 
-        {syntheticDataResults ? (
+        {loading === "results" ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="data-synthetic-results"
+            ariaLabel={t("dataTools.syntheticData.resultsLoading")}
+            variant="detail"
+          />
+        ) : syntheticDataResults ? (
           <div className="grid min-w-0 gap-2">
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant="neutral" label={syntheticDataResults.runtime} />
@@ -1570,7 +1841,8 @@ function SyntheticWorkspace({
 
 async function fetchSyntheticDataStatus(operationId: string) {
   return apiGet<SyntheticDataOperationStatusData>(
-    `/api/nl2sql/synthetic-data/operations/${encodeURIComponent(operationId)}`
+    `/api/nl2sql/synthetic-data/operations/${encodeURIComponent(operationId)}`,
+    { timeoutMs: API_TIMEOUT_MS.jobControl }
   );
 }
 

@@ -64,6 +64,16 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "feedback classifier learning metadata",
     ),
     MigrationArtifact(6, "006_incremental_job_leases.sql", "incremental job leases"),
+    MigrationArtifact(
+        7,
+        "007_profile_ontology_lifecycle.sql",
+        "profile ontology lifecycle integrity",
+    ),
+    MigrationArtifact(
+        8,
+        "008_quality_evaluation_jobs.sql",
+        "durable NL2SQL quality evaluation jobs",
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -94,6 +104,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "NL2SQL_STATE_DOCUMENTS",
     "NL2SQL_MIGRATION_OUTBOX",
     "NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS",
+    "NL2SQL_EVALUATION_JOBS",
+    "NL2SQL_EVALUATION_RESULTS",
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
@@ -118,6 +130,8 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "IX_NL2SQL_ONT_VIEW_REVISION",
     "IX_NL2SQL_ONT_PROPOSAL_PROFILE",
     "IX_NL2SQL_SCHEMA_REFRESH_LEASE",
+    "IX_NL2SQL_EVAL_JOB_STATE",
+    "IX_NL2SQL_EVAL_JOB_LEASE",
 )
 
 MANAGED_SEQUENCES: tuple[str, ...] = (

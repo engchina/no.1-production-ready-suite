@@ -58,7 +58,7 @@ ONTOLOGY_CONTEXT_HITS = Histogram(
     buckets=(0, 1, 2, 4, 8, 12, 16, 24),
 )
 
-_JOB_TYPES = frozenset({"build", "publish"})
+_JOB_TYPES = frozenset({"build", "publish", "profile_sync"})
 _JOB_STATUSES = frozenset({"succeeded", "failed"})
 _SOURCE_FORMATS = frozenset({"pdf", "docx", "txt", "md", "csv", "tsv", "xlsx", "xlsm"})
 _SOURCE_STATUSES = frozenset({"extracted", "failed", "duplicate"})

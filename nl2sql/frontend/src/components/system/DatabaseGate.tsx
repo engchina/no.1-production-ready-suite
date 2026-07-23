@@ -1,13 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 
 import { Banner } from "@engchina/production-ready-ui";
 
-import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
+import {
+  DatabaseUnavailableNotice,
+  type DatabaseNoticeStatus,
+} from "@/components/system/DatabaseUnavailableNotice";
 import {
   DATABASE_UNAVAILABLE_EVENT,
   supersedeDatabaseUnavailableProbe,
+  type DatabaseOperationalFailure,
 } from "@/lib/database-load-error";
 import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -15,6 +20,7 @@ import {
   useDatabaseStatus,
   usePersistenceStatus,
   useRecoverPersistence,
+  queryKeys,
 } from "@/lib/queries";
 
 const DATABASE_GATE_EXEMPT_ROUTES = [
@@ -35,8 +41,12 @@ function isDatabaseGateExemptRoute(pathname: string) {
 /** DB と persisted snapshot の両方が復旧するまで業務ページを描画しない。 */
 export function DatabaseGate({ children }: { children: ReactNode }) {
   const location = useLocation();
+  const queryClient = useQueryClient();
   const isGateExemptRoute = isDatabaseGateExemptRoute(location.pathname);
-  const [reportedUnavailableAt, setReportedUnavailableAt] = useState<number | null>(null);
+  const [reportedFailure, setReportedFailure] = useState<{
+    at: number;
+    failure: DatabaseOperationalFailure;
+  } | null>(null);
   const database = useDatabaseStatus({ enabled: !isGateExemptRoute });
   const databaseReady = database.data?.status === "ok";
   const persistence = usePersistenceStatus({
@@ -45,29 +55,41 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
   const recover = useRecoverPersistence();
 
   useEffect(() => {
-    const handleDatabaseUnavailable = () => setReportedUnavailableAt(Date.now());
+    const handleDatabaseUnavailable = (event: Event) => {
+      const failure = (event as CustomEvent<DatabaseOperationalFailure>).detail;
+      const at = Date.now();
+      setReportedFailure({ at, failure });
+      if (failure.kind === "database") {
+        queryClient.setQueryData(queryKeys.databaseStatus, failure.database);
+      } else {
+        queryClient.setQueryData(queryKeys.persistenceStatus, (current: unknown) => ({
+          ...(typeof current === "object" && current !== null ? current : {}),
+          ...failure.persistence,
+        }));
+      }
+    };
     window.addEventListener(DATABASE_UNAVAILABLE_EVENT, handleDatabaseUnavailable);
     return () =>
       window.removeEventListener(DATABASE_UNAVAILABLE_EVENT, handleDatabaseUnavailable);
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     if (
-      reportedUnavailableAt === null ||
+      reportedFailure === null ||
       database.data?.status !== "ok" ||
-      database.dataUpdatedAt <= reportedUnavailableAt ||
+      database.dataUpdatedAt <= reportedFailure.at ||
       !persistence.data?.ready ||
-      persistence.dataUpdatedAt <= reportedUnavailableAt
+      persistence.dataUpdatedAt <= reportedFailure.at
     ) {
       return;
     }
-    setReportedUnavailableAt(null);
+    setReportedFailure(null);
   }, [
     database.data?.status,
     database.dataUpdatedAt,
     persistence.data?.ready,
     persistence.dataUpdatedAt,
-    reportedUnavailableAt,
+    reportedFailure,
   ]);
 
   useEffect(() => {
@@ -93,16 +115,34 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
     const databaseResult = await database.refetch();
     if (databaseResult.data?.status !== "ok") return;
 
-    const persistenceResult = await persistence.refetch();
-    if (persistenceResult.data?.ready) setReportedUnavailableAt(null);
+    let persistenceResult = await persistence.refetch();
+    if (!persistenceResult.data?.ready) {
+      try {
+        await recover.mutateAsync();
+      } catch {
+        return;
+      }
+      persistenceResult = await persistence.refetch();
+    }
+    if (persistenceResult.data?.ready) setReportedFailure(null);
   };
 
-  if (reportedUnavailableAt !== null) {
+  if (reportedFailure !== null) {
+    const reportedStatus: DatabaseNoticeStatus =
+      reportedFailure.failure.kind === "persistence"
+        ? "persistence"
+        : noticeStatusForDatabase(reportedFailure.failure.database.status);
+    const reasonCode =
+      reportedFailure.failure.kind === "persistence"
+        ? reportedFailure.failure.persistence.reason_code
+        : reportedFailure.failure.database.check;
     return (
       <DatabaseUnavailableNotice
         returnTo={returnTo}
         onRetry={() => void retry()}
         isRetrying={database.isFetching || persistence.isFetching || recover.isPending}
+        status={reportedStatus}
+        reasonCode={reasonCode}
       />
     );
   }
@@ -114,6 +154,12 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
         returnTo={returnTo}
         onRetry={() => void retry()}
         isRetrying={database.isFetching}
+        status={
+          database.isError
+            ? "check_failed"
+            : noticeStatusForDatabase(database.data?.status)
+        }
+        reasonCode={database.data?.check}
       />
     );
   }
@@ -127,6 +173,8 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
         returnTo={returnTo}
         onRetry={() => void retry()}
         isRetrying={persistence.isFetching || recover.isPending}
+        status="persistence"
+        reasonCode={persistence.data?.reason_code}
       />
     );
   }
@@ -143,6 +191,14 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
       {children}
     </>
   );
+}
+
+function noticeStatusForDatabase(
+  status: "ok" | "not_configured" | "setup_required" | "unreachable" | undefined
+): DatabaseNoticeStatus {
+  return status === "not_configured" || status === "setup_required" || status === "unreachable"
+    ? status
+    : "check_failed";
 }
 
 function GateChecking({ labelKey = "dbGate.checking" }: { labelKey?: I18nKey }) {

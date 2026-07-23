@@ -175,6 +175,8 @@ export interface SchemaObjectPage {
   items: SchemaObjectSummary[];
   next_cursor: string | null;
   total: number | null;
+  table_count?: number;
+  view_count?: number;
   catalog_version: number;
 }
 
@@ -193,6 +195,9 @@ export interface SchemaRefreshJob {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  phase?: "queued" | "scanning" | "fetching" | "persisting" | "done";
+  processed_objects?: number;
+  total_objects?: number;
   scanned_objects: number;
   changed_objects: number;
   deleted_objects: number;
@@ -561,97 +566,126 @@ export interface SimilarHistoryData {
   items: SimilarHistoryItem[];
 }
 
-export interface CompareData {
-  question: string;
-  results: PreviewData[];
-  execution_results: CompareExecutionData[];
-  error_rate: number;
-  recommendation: string;
+export type QualityEvaluationEngine = Exclude<Nl2SqlEngine, "auto">;
+export type QualityEvaluationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "completed_with_errors"
+  | "failed";
+export type QualityEvaluationVerdict =
+  | "correct"
+  | "incorrect"
+  | "uncertain"
+  | "not_analyzed";
+
+export interface QualityEvaluationEngineCapability {
+  engine: QualityEvaluationEngine;
+  label: string;
+  available: boolean;
+  reason: string;
 }
 
-export interface CompareRecord {
-  id: string;
-  created_at: string;
+export interface QualityEvaluationCapabilities {
+  engines: QualityEvaluationEngineCapability[];
+  judge: {
+    available: boolean;
+    reason: string;
+    provider: string;
+  };
+  limits: {
+    max_file_bytes: number;
+    max_cases: number;
+    max_attempts: number;
+    min_repeat_count: number;
+    max_repeat_count: number;
+  };
+}
+
+export interface QualityEvaluationEngineSummary {
+  engine: QualityEvaluationEngine;
+  total_attempts: number;
+  generation_successes: number;
+  generation_success_rate: number;
+  correct: number;
+  incorrect: number;
+  uncertain: number;
+  not_analyzed: number;
+  normalized_sql_consistency: number;
+  error_count: number;
+}
+
+export interface QualityEvaluationJobSummary {
+  job_id: string;
   profile_id: string;
   profile_name: string;
-  question: string;
-  engines: Nl2SqlEngine[];
-  execute: boolean;
-  report: string;
-  comparison: CompareData;
-}
-
-export interface CompareHistoryData {
-  items: CompareRecord[];
-}
-
-export interface CompareExecutionData {
-  engine: Nl2SqlEngine;
-  executed: boolean;
-  row_count: number;
+  engines: QualityEvaluationEngine[];
+  repeat_count: number;
+  case_count: number;
+  total_attempts: number;
+  completed_attempts: number;
+  success_count: number;
+  error_count: number;
+  status: QualityEvaluationStatus;
+  current_case_id: string;
+  current_engine?: QualityEvaluationEngine | null;
+  current_repetition: number;
+  engine_summaries: QualityEvaluationEngineSummary[];
   error_message: string;
-  results?: QueryResults | null;
-  elapsed_ms?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
 }
 
-export interface EvaluateData {
-  evaluation_suite: string;
-  total_cases: number;
-  executable_rate: number;
-  select_only_rate: number;
-  findings: string[];
+export interface QualityEvaluationJobPage {
+  items: QualityEvaluationJobSummary[];
+  next_cursor?: string | null;
+  total: number;
 }
 
-export interface SyntheticCase {
+export interface QualityEvaluationJudge {
+  verdict: Exclude<QualityEvaluationVerdict, "not_analyzed">;
+  confidence: number;
+  summary: string;
+  differences: string[];
+  risks: string[];
+  correction_suggestion: string;
+}
+
+export interface QualityEvaluationResult {
+  result_id: string;
+  job_id: string;
+  case_no: number;
+  case_id: string;
+  excel_row: number;
   question: string;
   expected_sql: string;
-  profile_id: string;
-}
-
-export interface SyntheticCasesData {
-  cases: SyntheticCase[];
-}
-
-export interface EvaluationSet {
-  id: string;
-  name: string;
-  description: string;
-  profile_id: string;
-  profile_name: string;
-  engine: Nl2SqlEngine;
-  cases: SyntheticCase[];
+  engine: QualityEvaluationEngine;
+  repetition_no: number;
+  generated_sql: string;
+  normalized_sql: string;
+  deterministic_analysis: {
+    is_safe: boolean;
+    is_select_only: boolean;
+    referenced_objects: string[];
+    structure_summary: string;
+    risk_findings: string[];
+  };
+  generation_elapsed_ms: number;
+  judge_elapsed_ms: number;
+  total_elapsed_ms: number;
+  verdict: QualityEvaluationVerdict;
+  judge?: QualityEvaluationJudge | null;
+  generation_error: string;
+  judge_error: string;
   created_at: string;
-  updated_at: string;
-  archived: boolean;
 }
 
-export interface EvaluationSetsData {
-  items: EvaluationSet[];
-}
-
-export interface EvaluationSetPayload {
-  name: string;
-  description: string;
-  profile_id: string;
-  engine: Nl2SqlEngine;
-  cases: SyntheticCase[];
-}
-
-export interface EvaluationRunRecord {
-  id: string;
-  created_at: string;
-  evaluation_set_id: string;
-  evaluation_set_name: string;
-  profile_id: string;
-  profile_name: string;
-  engine: Nl2SqlEngine;
-  cases: SyntheticCase[];
-  result: EvaluateData;
-  report: string;
-}
-
-export interface EvaluationRunsData {
-  items: EvaluationRunRecord[];
+export interface QualityEvaluationResultPage {
+  items: QualityEvaluationResult[];
+  next_cursor?: string | null;
+  total: number;
 }
 
 export interface ReverseSqlData {
@@ -729,6 +763,7 @@ export interface CommentApplyData {
   executed: boolean;
   runtime: string;
   statements: CommentApplyStatement[];
+  schema_refresh_job_id?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -767,6 +802,7 @@ export interface AnnotationApplyData {
   executed: boolean;
   runtime: string;
   statements: AnnotationApplyStatement[];
+  schema_refresh_job_id?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -775,56 +811,6 @@ export interface DiagnosticCheck {
   name: string;
   status: string;
   message: string;
-}
-
-export interface DiagnosticReadiness {
-  area: string;
-  label: string;
-  status: string;
-  summary: string;
-  next_action: string;
-  related_checks: string[];
-}
-
-export interface DiagnosticSmokeCheck {
-  id: string;
-  label: string;
-  category: string;
-  status: string;
-  method: string;
-  endpoint: string;
-  request_hint: string;
-  command: string;
-  expected: string;
-  next_action: string;
-  related_readiness: string[];
-}
-
-export interface DiagnosticConfigVar {
-  name: string;
-  status: string;
-  required: boolean;
-  note: string;
-}
-
-export interface DiagnosticConfigGuide {
-  id: string;
-  label: string;
-  status: string;
-  summary: string;
-  next_action: string;
-  required_env_vars: DiagnosticConfigVar[];
-  optional_env_vars: DiagnosticConfigVar[];
-  env_template: string;
-  smoke_command: string;
-  related_readiness: string[];
-}
-
-export interface DiagnosticsData {
-  checks: DiagnosticCheck[];
-  readiness?: DiagnosticReadiness[];
-  smoke_checks?: DiagnosticSmokeCheck[];
-  config_guides?: DiagnosticConfigGuide[];
 }
 
 export interface AssetRefreshData {
@@ -837,6 +823,39 @@ export interface AssetRefreshData {
   warning: string;
   asset_names: Record<string, string>;
   engine_meta: Record<string, unknown>;
+}
+
+export type ProfileSyncJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type ProfileSyncJobPhase =
+  | "queued"
+  | "syncing_oracle_profile"
+  | "rebuilding_agent_assets"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface ProfileSyncJobData {
+  job_id: string;
+  profile_id: string;
+  profile_etag: string;
+  status: ProfileSyncJobStatus;
+  phase: ProfileSyncJobPhase;
+  rebuild_agent_assets: boolean;
+  oracle_result?: SelectAiDbProfileMutationData | null;
+  agent_result?: AssetRefreshData | null;
+  error_code: string;
+  error_message_ja: string;
+  retry_of_job_id?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface AssetCleanupData {
@@ -861,6 +880,7 @@ export interface DbAdminObjectSummary {
 
 export interface DbAdminObjectDetail extends DbAdminObjectSummary {
   columns: SchemaColumn[];
+  constraints?: string[];
   ddl: string;
   warnings: string[];
 }
@@ -869,6 +889,19 @@ export interface DbAdminObjectsData {
   runtime: string;
   items: DbAdminObjectSummary[];
   refreshed_at: string;
+  warnings: string[];
+}
+
+export interface DbAdminObjectPage {
+  runtime: string;
+  owner: string;
+  items: DbAdminObjectSummary[];
+  total: number;
+  table_count: number;
+  view_count: number;
+  next_cursor: string | null;
+  refreshed_at: string;
+  catalog_version: number;
   warnings: string[];
 }
 
@@ -890,6 +923,7 @@ export interface DbAdminExecuteData {
   statements: DbAdminStatementResult[];
   committed: boolean;
   rolled_back: boolean;
+  schema_refresh_job_id?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -913,6 +947,7 @@ export interface SampleDataMutationData {
   statements: DbAdminStatementResult[];
   warnings: string[];
   profile_id: string;
+  schema_refresh_job_id?: string;
   timing: TimingEnvelope;
 }
 
@@ -926,6 +961,7 @@ export interface DbAdminImportTabularData {
   executed: boolean;
   ddl: string;
   insert_sql: string;
+  schema_refresh_job_id?: string;
   warnings: string[];
   sample_rows: Array<Record<string, string | null>>;
   timing: TimingEnvelope;

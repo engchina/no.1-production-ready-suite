@@ -1,7 +1,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiGetWithMetadata, apiPost } from "@/lib/api";
+import { ApiError, apiGet, apiGetWithMetadata, apiPost } from "@/lib/api";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import type {
+  DbAdminObjectPage,
   Nl2SqlProfile,
   ProfileSummaryPage,
   SchemaCatalogHead,
@@ -10,8 +12,21 @@ import type {
   SchemaObjectDetail,
   SchemaRefreshJob,
 } from "./types";
+import {
+  filterUserVisibleCatalog,
+  filterUserVisibleDbAdminObjectPage,
+  filterUserVisibleSchemaObjectPage,
+  isUserVisibleObjectName,
+} from "./objectVisibility";
+import type { ProfileOntologyViewData } from "./ontology/types";
 
 let legacyCatalogOverride: SchemaCatalog | null = null;
+
+const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
+
+export function isLegacyCompatibilityError(error: unknown): boolean {
+  return error instanceof ApiError && LEGACY_COMPATIBILITY_STATUSES.has(error.status);
+}
 
 function profileSummary(profile: Nl2SqlProfile) {
   return {
@@ -31,15 +46,25 @@ function profileSummary(profile: Nl2SqlProfile) {
 }
 
 async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
-  return legacyCatalogOverride ?? apiGet<SchemaCatalog>("/api/schema/catalog", { signal });
+  if (legacyCatalogOverride) return filterUserVisibleCatalog(legacyCatalogOverride);
+  return filterUserVisibleCatalog(
+    await apiGet<SchemaCatalog>("/api/schema/catalog", {
+      signal,
+      timeoutMs: API_TIMEOUT_MS.interactiveList,
+    })
+  );
 }
 
 export const nl2sqlIncrementalKeys = {
   profiles: (query: string) => ["nl2sql", "profiles", "search", query] as const,
   profile: (profileId: string) => ["nl2sql", "profiles", "detail", profileId] as const,
+  profileOntologyView: (profileId: string) =>
+    ["nl2sql", "profiles", "ontology-view", profileId] as const,
   schemaHead: ["schema", "catalog", "head"] as const,
-  schemaObjects: (query: string, objectType: string, profileId: string) =>
-    ["schema", "objects", query, objectType, profileId] as const,
+  schemaObjects: (query: string, objectType: string, profileId: string, rowState: string) =>
+    ["schema", "objects", query, objectType, profileId, rowState] as const,
+  dbAdminObjects: (query: string, objectType: string, rowState: string) =>
+    ["nl2sql", "db-admin", "objects", query, objectType, rowState] as const,
   schemaRefreshJob: (jobId: string) => ["schema", "refresh-job", jobId] as const,
 };
 
@@ -52,10 +77,13 @@ export function useProfileSummaries(query: string) {
       if (pageParam) params.set("cursor", pageParam);
       return apiGet<ProfileSummaryPage>(`/api/nl2sql/profiles/search?${params}`, {
         signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
       }).catch(
-        async () => {
+        async (error: unknown) => {
+          if (!isLegacyCompatibilityError(error)) throw error;
           const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", {
             signal,
+            timeoutMs: API_TIMEOUT_MS.interactiveList,
           });
           const normalizedQuery = query.trim().toLowerCase();
           const items = profiles
@@ -82,10 +110,12 @@ export function useProfileDetail(profileId: string) {
     queryFn: async ({ signal }) => {
       const response = await apiGetWithMetadata<Nl2SqlProfile>(
         `/api/nl2sql/profiles/${encodeURIComponent(profileId)}`,
-        { signal }
-      ).catch(async () => {
+        { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+      ).catch(async (error: unknown) => {
+        if (!isLegacyCompatibilityError(error)) throw error;
         const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", {
           signal,
+          timeoutMs: API_TIMEOUT_MS.interactiveList,
         });
         const profile = profiles.find((item) => item.id === profileId);
         if (!profile) throw new Error("指定された profile が見つかりません。");
@@ -99,11 +129,29 @@ export function useProfileDetail(profileId: string) {
   });
 }
 
+export function useProfileOntologyView(profileId: string) {
+  return useQuery({
+    queryKey: nl2sqlIncrementalKeys.profileOntologyView(profileId),
+    queryFn: ({ signal }) =>
+      apiGet<ProfileOntologyViewData>(
+        `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-view`,
+        { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
+      ),
+    enabled: Boolean(profileId),
+    staleTime: 5_000,
+    retry: false,
+  });
+}
+
 export function useSchemaCatalogHead() {
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.schemaHead,
     queryFn: ({ signal }) =>
-      apiGet<SchemaCatalogHead>("/api/schema/catalog/head", { signal }).catch(async () => {
+      apiGet<SchemaCatalogHead>("/api/schema/catalog/head", {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
+      }).catch(async (error: unknown) => {
+        if (!isLegacyCompatibilityError(error)) throw error;
         const catalog = await legacyCatalog(signal);
         return {
           catalog_version: 0,
@@ -119,9 +167,14 @@ export function useSchemaCatalogHead() {
   });
 }
 
-export function useSchemaObjects(query: string, objectType: string, profileId = "") {
+export function useSchemaObjects(
+  query: string,
+  objectType: string,
+  profileId = "",
+  rowState = ""
+) {
   return useInfiniteQuery({
-    queryKey: nl2sqlIncrementalKeys.schemaObjects(query.trim(), objectType, profileId),
+    queryKey: nl2sqlIncrementalKeys.schemaObjects(query.trim(), objectType, profileId, rowState),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({
@@ -131,12 +184,18 @@ export function useSchemaObjects(query: string, objectType: string, profileId = 
       });
       if (pageParam) params.set("cursor", pageParam);
       if (profileId) params.set("profile_id", profileId);
-      return apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, { signal }).catch(async () => {
+      if (rowState) params.set("row_state", rowState);
+      return apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
+      }).then(filterUserVisibleSchemaObjectPage).catch(async (error: unknown) => {
+        if (!isLegacyCompatibilityError(error)) throw error;
         const catalog = await legacyCatalog(signal);
         const normalizedQuery = query.trim().toLowerCase();
         const items = catalog.tables
           .filter(
             (table) =>
+              isUserVisibleObjectName(table.table_name) &&
               (!objectType || table.table_type.toUpperCase() === objectType.toUpperCase()) &&
               (!normalizedQuery ||
                 `${table.owner} ${table.table_name} ${table.logical_name} ${table.comment}`
@@ -166,6 +225,30 @@ export function useSchemaObjects(query: string, objectType: string, profileId = 
   });
 }
 
+export function useDbAdminObjects(query: string, objectType: string, rowState: string) {
+  return useInfiniteQuery({
+    queryKey: nl2sqlIncrementalKeys.dbAdminObjects(query.trim(), objectType, rowState),
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams({
+        limit: "100",
+        q: query.trim(),
+        type: objectType || "all",
+        row_state: rowState || "all",
+      });
+      if (pageParam) params.set("cursor", pageParam);
+      return apiGet<DbAdminObjectPage>(`/api/nl2sql/db-admin/objects?${params}`, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
+      }).then(filterUserVisibleDbAdminObjectPage);
+    },
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    staleTime: 5_000,
+    placeholderData: (previous) => previous,
+    retry: false,
+  });
+}
+
 export async function getSchemaObjectSnapshot(
   owner: string,
   objectType: string,
@@ -184,8 +267,10 @@ export async function getSchemaObjectSnapshot(
       if (cursor) params.set("cursor", cursor);
       const page = await apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
         signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
       });
       for (const object of page.items) {
+        if (!isUserVisibleObjectName(object.object_name)) continue;
         names.add(`${object.owner}.${object.object_name}`.toUpperCase());
       }
       const next = page.next_cursor ?? "";
@@ -194,11 +279,13 @@ export async function getSchemaObjectSnapshot(
       cursor = next;
     } while (cursor);
     return [...names].sort();
-  } catch {
+  } catch (error) {
+    if (!isLegacyCompatibilityError(error)) throw error;
     const catalog = await legacyCatalog(signal);
     return catalog.tables
       .filter(
         (table) =>
+          isUserVisibleObjectName(table.table_name) &&
           table.owner.toUpperCase() === owner.trim().toUpperCase() &&
           (objectType.toUpperCase() === "VIEW"
             ? ["VIEW", "MATERIALIZED VIEW"].includes(table.table_type.toUpperCase())
@@ -216,8 +303,9 @@ export async function getSchemaObjectDetail(
 ) {
   return apiGet<SchemaObjectDetail>(
     `/api/schema/objects/${encodeURIComponent(owner)}/${encodeURIComponent(objectName)}`,
-    { signal }
-  ).catch(async () => {
+    { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
+  ).catch(async (error: unknown) => {
+    if (!isLegacyCompatibilityError(error)) throw error;
     const catalog = await legacyCatalog(signal);
     const table = catalog.tables.find(
       (item) =>
@@ -239,11 +327,17 @@ export async function getSchemaObjectDetail(
 }
 
 export function useStartSchemaRefresh() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs").catch(async () => {
-        legacyCatalogOverride = await apiPost<SchemaCatalog>("/api/schema/refresh", {});
+      apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+        timeoutMs: API_TIMEOUT_MS.jobControl,
+      }).catch(async (error: unknown) => {
+        if (!isLegacyCompatibilityError(error)) throw error;
+        legacyCatalogOverride = filterUserVisibleCatalog(
+          await apiPost<SchemaCatalog>("/api/schema/refresh", {}, {
+            timeoutMs: API_TIMEOUT_MS.jobControl,
+          })
+        );
         return {
           job_id: "",
           status: "done" as const,
@@ -255,10 +349,6 @@ export function useStartSchemaRefresh() {
           error_code: "",
         };
       }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
-      void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
-    },
   });
 }
 
@@ -267,16 +357,46 @@ export function useSchemaRefreshJob(jobId: string) {
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.schemaRefreshJob(jobId),
     queryFn: ({ signal }) =>
-      apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, { signal }),
+      apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.jobControl,
+      }),
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (status === "done") {
         void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
+        void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
         void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
       }
       return status === "pending" || status === "running" ? 1_000 : false;
     },
     retry: false,
   });
+}
+
+export async function waitForSchemaRefreshJob(jobId: string, signal?: AbortSignal) {
+  let job = await apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, {
+    signal,
+    timeoutMs: API_TIMEOUT_MS.jobControl,
+  });
+  while (job.status === "pending" || job.status === "running") {
+    await new Promise<void>((resolve, reject) => {
+      const timeoutId = window.setTimeout(resolve, 1_000);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          window.clearTimeout(timeoutId);
+          reject(signal.reason);
+        },
+        { once: true }
+      );
+    });
+    job = await apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, {
+      signal,
+      timeoutMs: API_TIMEOUT_MS.jobControl,
+    });
+  }
+  if (job.status === "error") throw new Error(job.error_code || "schema_refresh_failed");
+  return job;
 }

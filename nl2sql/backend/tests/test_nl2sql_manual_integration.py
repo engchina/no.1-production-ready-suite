@@ -323,7 +323,7 @@ def test_manual_integration_execute_feedback_index_smoke(
     assert "ORACLE_PASSWORD" not in output
 
 
-def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
+def test_manual_integration_full_smoke_runs_supporting_checks_and_jobs(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -342,8 +342,6 @@ def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
             "--full-smoke",
             "--timeout",
             "5",
-            "--synthetic-limit",
-            "1",
         ]
     )
 
@@ -351,11 +349,10 @@ def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
     output = capsys.readouterr().out
     assert "[ok] refresh_enterprise_ai_direct:" in output
     assert "[ok] diagnostics_after_refresh:" in output
-    assert "[ok] support_synthetic_evaluation:" in output
-    assert "[ok] support_evaluation_sets:" in output
+    assert "[ok] support_comments:" in output
+    assert "[ok] support_feedback_index:" in output
     assert "[ok] preview_enterprise_ai_direct:" in output
     assert "[ok] job_enterprise_ai_direct:" in output
-    assert "[ok] compare_engines:" in output
     assert "ORACLE_PASSWORD" not in output
 
 
@@ -417,9 +414,9 @@ def test_manual_integration_release_gate_expands_production_gate_steps(
     monkeypatch.setattr(
         script,
         "_supporting_features",
-        lambda *, profile_id, engine, synthetic_limit: [
-            script.StepResult(name="support_synthetic_evaluation", ok=True, message="cases=1"),
-            script.StepResult(name="support_evaluation_sets", ok=True, message="archived=True"),
+        lambda: [
+            script.StepResult(name="support_comments", ok=True, message="suggestions=1"),
+            script.StepResult(name="support_feedback_index", ok=True, message="status=ready"),
         ],
     )
     monkeypatch.setattr(
@@ -439,14 +436,6 @@ def test_manual_integration_release_gate_expands_production_gate_steps(
             name=f"job_{kwargs['engine'].value}", ok=True, message="status=done"
         ),
     )
-    monkeypatch.setattr(
-        script,
-        "_compare_smoke",
-        lambda **kwargs: script.StepResult(
-            name="compare_engines", ok=True, message="error_rate=0.0"
-        ),
-    )
-
     exit_code = script.main(
         [
             "--release-gate",
@@ -466,10 +455,9 @@ def test_manual_integration_release_gate_expands_production_gate_steps(
     assert "[ok] refresh_select_ai_agent:" in output
     assert "[ok] refresh_select_ai:" in output
     assert "[ok] diagnostics_after_refresh:" in output
-    assert "[ok] support_evaluation_sets:" in output
+    assert "[ok] support_feedback_index:" in output
     assert "[ok] preview_select_ai_agent:" in output
     assert "[ok] job_select_ai:" in output
-    assert "[ok] compare_engines:" in output
     assert "[ok] json_report:" in output
     assert diagnostics_calls[0]["require_oracle"] is True
     assert diagnostics_calls[0]["require_oracle_persistence"] is True
@@ -493,7 +481,6 @@ def test_manual_integration_release_gate_expands_production_gate_steps(
         "diagnostics_after_refresh",
         "preview_select_ai_agent",
         "job_select_ai",
-        "compare_engines",
     }
     assert "ORACLE_PASSWORD" not in output
 
@@ -532,8 +519,6 @@ def test_manual_integration_supporting_features_smoke(
             "社員一覧を確認したい",
             "--import-sample-data",
             "--check-supporting-features",
-            "--synthetic-limit",
-            "2",
         ]
     )
 
@@ -541,8 +526,6 @@ def test_manual_integration_supporting_features_smoke(
     output = capsys.readouterr().out
     assert "[ok] support_comments:" in output
     assert "[ok] support_comment_sql_generation:" in output
-    assert "[ok] support_synthetic_evaluation:" in output
-    assert "[ok] support_evaluation_sets:" in output
     assert "[ok] support_feedback_index:" in output
     assert "ORACLE_PASSWORD" not in output
 

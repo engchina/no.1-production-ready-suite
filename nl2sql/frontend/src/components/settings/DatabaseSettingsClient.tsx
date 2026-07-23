@@ -52,6 +52,8 @@ import {
   useDatabaseStatus,
   useDatabaseSettings,
   useDownloadDatabaseWallet,
+  usePersistenceStatus,
+  useRecoverPersistence,
   useSchemaOwners,
   useStartAdb,
   useStopAdb,
@@ -438,17 +440,42 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
   const info = infoQuery.data;
   const lifecycle = info?.lifecycle_state ?? null;
   const databaseStatus = useDatabaseStatus({ enabled: lifecycle === "AVAILABLE" });
+  const persistenceStatus = usePersistenceStatus({
+    enabled: lifecycle === "AVAILABLE" && databaseStatus.data?.status === "ok",
+  });
+  const recoverPersistence = useRecoverPersistence();
   const returnTo = safeReturnTo(location.state);
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
   const canStop = lifecycle === "AVAILABLE";
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
   const busy = saveSettings.isPending || start.isPending || stop.isPending;
+  const operationalReady =
+    databaseStatus.data?.status === "ok" && persistenceStatus.data?.ready === true;
 
   useEffect(() => {
     if (lifecycle !== "AVAILABLE") return;
     void queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });
   }, [lifecycle, queryClient]);
+
+  useEffect(() => {
+    if (
+      lifecycle !== "AVAILABLE" ||
+      databaseStatus.data?.status !== "ok" ||
+      !persistenceStatus.data ||
+      persistenceStatus.data.ready ||
+      recoverPersistence.isPending ||
+      recoverPersistence.isError
+    ) {
+      return;
+    }
+    recoverPersistence.mutate();
+  }, [
+    databaseStatus.data?.status,
+    lifecycle,
+    persistenceStatus.data,
+    recoverPersistence,
+  ]);
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -605,11 +632,91 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
 
         {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
 
+        {lifecycle === "AVAILABLE" ? (
+          <section className="space-y-2" aria-labelledby="database-operational-status">
+            <h3 id="database-operational-status" className="text-sm font-semibold text-foreground">
+              {t("settings.adb.operational.title")}
+            </h3>
+            <div className="grid gap-2 sm:grid-cols-2" aria-live="polite">
+              <OperationalStatusRow
+                label={t("settings.adb.operational.sql")}
+                value={
+                  databaseStatus.isPending
+                    ? t("settings.adb.operational.checking")
+                    : databaseStatus.data?.status === "ok"
+                      ? t("settings.adb.operational.available")
+                      : t("settings.adb.operational.unavailable")
+                }
+                tone={
+                  databaseStatus.isPending
+                    ? "muted"
+                    : databaseStatus.data?.status === "ok"
+                      ? "ok"
+                      : "warning"
+                }
+              />
+              <OperationalStatusRow
+                label={t("settings.adb.operational.persistence")}
+                value={
+                  recoverPersistence.isPending
+                    ? t("settings.adb.operational.recovering")
+                    : persistenceStatus.isPending && databaseStatus.data?.status === "ok"
+                      ? t("settings.adb.operational.checking")
+                      : persistenceStatus.data?.ready
+                        ? t("settings.adb.operational.available")
+                        : databaseStatus.data?.status === "ok"
+                          ? t("settings.adb.operational.unavailableWithCode", {
+                              code: persistenceStatus.data?.reason_code ?? "unknown",
+                            })
+                          : t("settings.adb.operational.waitingForSql")
+                }
+                tone={
+                  recoverPersistence.isPending ||
+                  (persistenceStatus.isPending && databaseStatus.data?.status === "ok")
+                    ? "muted"
+                    : persistenceStatus.data?.ready
+                      ? "ok"
+                      : databaseStatus.data?.status === "ok"
+                        ? "danger"
+                        : "muted"
+                }
+              />
+            </div>
+            {databaseStatus.data?.status === "ok" && !persistenceStatus.data?.ready ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="md"
+                  variant="secondary"
+                  loading={recoverPersistence.isPending}
+                  onClick={() => {
+                    recoverPersistence.reset();
+                    recoverPersistence.mutate();
+                  }}
+                >
+                  <RefreshCw size={15} aria-hidden />
+                  {t("settings.adb.operational.retryPersistence")}
+                </Button>
+                {recoverPersistence.isError ? (
+                  <FormStatus
+                    tone="danger"
+                    message={
+                      recoverPersistence.error instanceof ApiError
+                        ? recoverPersistence.error.message
+                        : t("settings.adb.operational.recoveryFailed")
+                    }
+                  />
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         {lifecycle === "AVAILABLE" && databaseStatus.data?.status === "unreachable" ? (
           <FormStatus tone="warning" message={t("settings.adb.connectionStillUnavailable")} />
         ) : null}
 
-        {returnTo && databaseStatus.data?.status === "ok" ? (
+        {returnTo && operationalReady ? (
           <Link
             to={returnTo}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -645,6 +752,36 @@ function AdbInfoPanel({ info }: { info: AdbInfoData }) {
   );
 }
 
+function OperationalStatusRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "warning" | "danger" | "muted";
+}) {
+  const Icon = tone === "ok" ? CheckCircle2 : tone === "danger" ? XCircle : AlertCircle;
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-start gap-2 rounded-md border px-3 py-2 text-sm",
+        tone === "ok" && "border-success/30 bg-success-bg/50 text-success",
+        tone === "warning" && "border-warning/30 bg-warning-bg/60 text-warning",
+        tone === "danger" && "border-danger/30 bg-danger-bg/50 text-danger",
+        tone === "muted" && "border-border bg-card text-muted"
+      )}
+      role={tone === "danger" ? "alert" : "status"}
+    >
+      <Icon size={16} className="mt-0.5 shrink-0" aria-hidden />
+      <span className="min-w-0">
+        <span className="font-medium text-current">{label}</span>
+        <span className="block break-words text-xs leading-relaxed">{value}</span>
+      </span>
+    </div>
+  );
+}
+
 function AdbLifecycleBadge({ state }: { state: string | null }) {
   const tone = adbLifecycleTone(state);
   const Icon = tone === "ok" ? CheckCircle2 : tone === "danger" ? XCircle : AlertCircle;
@@ -660,7 +797,7 @@ function AdbLifecycleBadge({ state }: { state: string | null }) {
     >
       <Icon size={16} aria-hidden />
       <span>
-        {t("settings.adb.field.status")}: {adbLifecycleLabel(state)}
+        {t("settings.adb.operational.lifecycle")}: {adbLifecycleLabel(state)}
       </span>
     </div>
   );

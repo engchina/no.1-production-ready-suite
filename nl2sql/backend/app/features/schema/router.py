@@ -69,12 +69,15 @@ def search_objects(
     q: str = "",
     owner: str = "",
     type: str = "",  # noqa: A002 - public query parameter name
+    row_state: str = "",
     profile_id: str | None = None,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[SchemaObjectPage] | Response:
     """Schema picker 用 keyset page。"""
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
+    if row_state not in {"", "all", "with_rows", "empty_rows", "unknown_rows"}:
+        raise HTTPException(status_code=422, detail="row_state が不正です。")
     page = nl2sql_service.search_schema_objects(
         cursor=cursor,
         limit=limit,
@@ -82,6 +85,7 @@ def search_objects(
         owner=owner,
         object_type=type,
         profile_id=profile_id,
+        row_state=row_state,
     )
     quoted_etag = f'"schema-{page.catalog_version}"'
     if if_none_match == quoted_etag:

@@ -138,6 +138,23 @@ async function dragDividerToEdge(page: Page, pane: Locator, divider: Locator, ed
   await page.mouse.up();
 }
 
+async function expectSplitPaneReservedTrack(page: Page, edge: "left" | "right") {
+  const pane = page.getByTestId("fixed-split-pane-history-management-list");
+  const left = await page.getByTestId("fixed-split-pane-history-management-list-left").boundingBox();
+  const divider = await page.getByTestId("fixed-split-pane-history-management-list-divider").boundingBox();
+  const right = await page.getByTestId("fixed-split-pane-history-management-list-right").boundingBox();
+  expect(left).not.toBeNull();
+  expect(divider).not.toBeNull();
+  expect(right).not.toBeNull();
+  expect(left!.width).toBeGreaterThanOrEqual(319);
+  expect(right!.width).toBeGreaterThanOrEqual(319);
+  expect(left!.x + left!.width).toBeLessThanOrEqual(divider!.x + 1);
+  expect(divider!.x + divider!.width).toBeLessThanOrEqual(right!.x + 1);
+  const fraction = Number(await pane.getAttribute("data-split-left-fraction"));
+  if (edge === "left") expect(fraction).toBeLessThanOrEqual(0.5);
+  else expect(fraction).toBeGreaterThanOrEqual(0.5);
+}
+
 async function expectDenseLayoutContained(page: Page) {
   await expect.poll(() => hasDocumentHorizontalScroll(page)).toBe(false);
   const row = historyRows(page).first();
@@ -230,20 +247,20 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
   await expect(divider).toBeVisible();
 
   await dragDividerToEdge(page, pane, divider, "left");
-  await expect.poll(async () => Number(await pane.getAttribute("data-split-left-fraction"))).toBeLessThanOrEqual(0.251);
+  await expectSplitPaneReservedTrack(page, "left");
   await expectDenseLayoutContained(page);
 
   await dragDividerToEdge(page, pane, divider, "right");
-  await expect.poll(async () => Number(await pane.getAttribute("data-split-left-fraction"))).toBeGreaterThanOrEqual(0.749);
+  await expectSplitPaneReservedTrack(page, "right");
   await expectDenseLayoutContained(page);
 
   for (const width of [1440, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await dragDividerToEdge(page, pane, divider, "left");
-    await expect.poll(async () => Number(await pane.getAttribute("data-split-left-fraction"))).toBeLessThanOrEqual(0.251);
+    await expectSplitPaneReservedTrack(page, "left");
     await expectDenseLayoutContained(page);
     await dragDividerToEdge(page, pane, divider, "right");
-    await expect.poll(async () => Number(await pane.getAttribute("data-split-left-fraction"))).toBeGreaterThanOrEqual(0.749);
+    await expectSplitPaneReservedTrack(page, "right");
     await expectDenseLayoutContained(page);
   }
 

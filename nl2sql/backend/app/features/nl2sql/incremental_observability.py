@@ -53,9 +53,38 @@ SCHEMA_REFRESH_SECONDS = Histogram(
     ("status",),
     buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 300, 900),
 )
+SCHEMA_REFRESH_PENDING_AGE_SECONDS = Gauge(
+    "nl2sql_schema_refresh_pending_age_seconds",
+    "最古の pending Schema refresh job の経過秒数。",
+)
+SCHEMA_REFRESH_PHASE_SECONDS = Histogram(
+    "nl2sql_schema_refresh_phase_duration_seconds",
+    "Schema refresh の固定 phase 別処理時間。",
+    ("phase",),
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 300),
+)
+SCHEMA_REFRESH_ERRORS = Counter(
+    "nl2sql_schema_refresh_errors_total",
+    "Schema refresh job の安定 error code 別失敗数。",
+    ("error_code",),
+)
 MIGRATION_OUTBOX_LAG = Gauge(
     "nl2sql_migration_outbox_lag",
     "未処理 migration outbox row 数。",
+)
+PERSISTENCE_FAILURES = Counter(
+    "nl2sql_persistence_failures_total",
+    "Incremental repository failure の operation / 分類別件数。",
+    ("operation", "category"),
+)
+PERSISTENCE_RECOVERIES = Counter(
+    "nl2sql_persistence_recoveries_total",
+    "Persistence circuit の回復試行結果。",
+    ("outcome",),
+)
+PERSISTENCE_CIRCUIT_STATE = Gauge(
+    "nl2sql_persistence_circuit_state",
+    "Persistence circuit state。closed=0, open=1, half_open=2。",
 )
 
 _ready_lock = threading.Lock()
@@ -95,6 +124,18 @@ def record_token_lag(namespace: str, lag: int) -> None:
 
 def record_outbox_lag(lag: int) -> None:
     MIGRATION_OUTBOX_LAG.set(max(0, lag))
+
+
+def record_persistence_failure(operation: str, category: str) -> None:
+    PERSISTENCE_FAILURES.labels(operation=operation, category=category).inc()
+
+
+def record_persistence_recovery(outcome: str) -> None:
+    PERSISTENCE_RECOVERIES.labels(outcome=outcome).inc()
+
+
+def set_persistence_circuit_state(state: str) -> None:
+    PERSISTENCE_CIRCUIT_STATE.set({"closed": 0, "open": 1, "half_open": 2}.get(state, 1))
 
 
 @contextmanager

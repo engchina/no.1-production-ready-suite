@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectManagementStatusBar,
@@ -16,7 +17,16 @@ import {
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
-import type { AnalyzeData, Nl2SqlProfile, ReverseSqlData, SchemaCatalog, SchemaTable } from "../types";
+import type {
+  AnalyzeData,
+  Nl2SqlProfile,
+  ProfileSummary,
+  ProfileSummaryPage,
+  ReverseSqlData,
+  SchemaObjectDetail,
+  SchemaObjectPage,
+  SchemaTable,
+} from "../types";
 
 type ReverseMode = "standard" | "deep" | "";
 
@@ -24,8 +34,9 @@ type ReverseMode = "standard" | "deep" | "";
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 
 export function SqlToQuestionPage() {
-  const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<Nl2SqlProfile | null>(null);
+  const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [sql, setSql] = useState("");
   const [useGlossary, setUseGlossary] = useState(true);
@@ -37,17 +48,8 @@ export function SqlToQuestionPage() {
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const loadSequence = useRef(0);
+  const detailSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
-
-  const selectedProfile = useMemo(
-    () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
-    [profiles, selectedProfileId]
-  );
-
-  const schemaTables = useMemo(
-    () => filteredSchemaTables(catalog, selectedProfile),
-    [catalog, selectedProfile]
-  );
 
   const loadReferenceData = useCallback(async () => {
     const sequence = loadSequence.current + 1;
@@ -56,17 +58,16 @@ export function SqlToQuestionPage() {
     setLoadError("");
     try {
       await runScopedRequest(async (signal) => {
-        const [profileData, schemaData] = await Promise.all([
-          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
-          apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
-        ]);
+        const profilePage = await apiGet<ProfileSummaryPage>(
+          "/api/nl2sql/profiles/search?limit=100",
+          { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+        );
         if (signal.aborted || sequence !== loadSequence.current) return;
-        setProfiles(profileData);
-        setCatalog(schemaData);
+        setProfiles(profilePage.items);
         setSelectedProfileId((current) =>
-          profileData.some((profile) => profile.id === current)
+          profilePage.items.some((profile) => profile.id === current)
             ? current
-            : (profileData[0]?.id ?? "")
+            : (profilePage.items[0]?.id ?? "")
         );
       });
     } catch (err) {
@@ -78,6 +79,58 @@ export function SqlToQuestionPage() {
       if (sequence === loadSequence.current) setLoading(false);
     }
   }, [abortAll, runScopedRequest]);
+
+  useEffect(() => {
+    if (!selectedProfileId) {
+      setSelectedProfile(null);
+      setSchemaTables([]);
+      return;
+    }
+    const sequence = detailSequence.current + 1;
+    detailSequence.current = sequence;
+    void runScopedRequest(async (signal) => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const params = new URLSearchParams({ limit: "100", profile_id: selectedProfileId });
+        const [profile, page] = await Promise.all([
+          apiGet<Nl2SqlProfile>(`/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}`, {
+            signal,
+            timeoutMs: API_TIMEOUT_MS.interactiveList,
+          }),
+          apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
+            signal,
+            timeoutMs: API_TIMEOUT_MS.interactiveList,
+          }),
+        ]);
+        const visibleDetails = await Promise.all(
+          page.items.slice(0, 8).map((item) =>
+            apiGet<SchemaObjectDetail>(
+              `/api/schema/objects/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.object_name)}`,
+              { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
+            )
+          )
+        );
+        if (signal.aborted || sequence !== detailSequence.current) return;
+        const detailsByName = new Map(
+          visibleDetails.map((detail) => [detail.table.table_name.toUpperCase(), detail.table])
+        );
+        setSelectedProfile(profile);
+        setSchemaTables(
+          page.items.map(
+            (item) =>
+              detailsByName.get(item.object_name.toUpperCase()) ?? schemaSummaryTable(item)
+          )
+        );
+      } catch (error) {
+        if (!isAbortError(error) && sequence === detailSequence.current) {
+          setLoadError(actionableError(error, t("sqlToQuestion.error.load")));
+        }
+      } finally {
+        if (sequence === detailSequence.current) setLoading(false);
+      }
+    });
+  }, [runScopedRequest, selectedProfileId]);
 
   useEffect(() => {
     void loadReferenceData();
@@ -446,23 +499,18 @@ function actionableError(error: unknown, fallback: string) {
   return `${message} ${t("sqlToQuestion.error.retryHint")}`;
 }
 
-function filteredSchemaTables(catalog: SchemaCatalog | null, profile: Nl2SqlProfile | null) {
-  if (!catalog) return [];
-  const allowed = new Set(
-    [...(profile?.allowed_tables ?? []), ...(profile?.allowed_views ?? [])].map((table) =>
-      table.replaceAll('"', "").toUpperCase()
-    )
-  );
-  return catalog.tables.filter(
-    (table) => {
-      const qualifiedName = (table.qualified_name || `${table.owner}.${table.table_name}`).toUpperCase();
-      return (
-        allowed.size === 0 ||
-        allowed.has(qualifiedName) ||
-        allowed.has(table.table_name.replaceAll('"', "").toUpperCase())
-      );
-    }
-  );
+function schemaSummaryTable(item: SchemaObjectPage["items"][number]): SchemaTable {
+  return {
+    table_name: item.object_name,
+    qualified_name: `${item.owner}.${item.object_name}`,
+    logical_name: item.logical_name,
+    owner: item.owner,
+    table_type: item.object_type,
+    comment: item.comment,
+    row_count: item.row_count,
+    columns: [],
+    constraints: [],
+  };
 }
 
 function analysisToStructureText(analysis: AnalyzeData) {

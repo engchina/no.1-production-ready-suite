@@ -32,6 +32,10 @@ from .models import (
     SchemaViewDependency,
 )
 from .object_identity import parse_object_identity, qualified_object_name
+from .object_visibility import (
+    filter_user_visible_catalog,
+    is_user_visible_object_name,
+)
 
 
 class OracleAdapterError(RuntimeError):
@@ -140,7 +144,7 @@ def _normalize_select_ai_object_list(value: Any) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for item in _select_ai_object_list_items(value, candidate_scope=False):
         name = _select_ai_object_name(item)
-        if not name:
+        if not is_user_visible_object_name(name):
             continue
         record = dict(item) if isinstance(item, dict) else {"name": name}
         record.setdefault("name", name)
@@ -422,7 +426,18 @@ class OracleNl2SqlAdapter:
         except Exception as exc:  # oracledb.DatabaseError/OperationalError 等を統一契約に変換
             raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
         try:
-            yield conn
+            # python-oracledb call_timeout は 1 round-trip 単位の millisecond。
+            # 0 (無期限) を避け、DBMS_CLOUD_AI/Agent PL/SQL が worker を占有し続けないようにする。
+            call_timeout_ms = int(max(1.0, self.settings.nl2sql_oracle_call_timeout_seconds) * 1000)
+            if hasattr(conn, "call_timeout"):
+                conn.call_timeout = call_timeout_ms
+            try:
+                yield conn
+            except Exception:
+                rollback = getattr(conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                raise
         finally:
             conn.close()
 
@@ -485,7 +500,10 @@ class OracleNl2SqlAdapter:
               ON cc.owner = c.owner
              AND cc.table_name = c.table_name
              AND cc.column_name = c.column_name
-            WHERE {owner_filter}{target_filter}
+            WHERE {owner_filter}
+              AND c.table_name NOT LIKE '%$%'
+              AND c.table_name NOT LIKE '%#%'
+              {target_filter}
             ORDER BY c.owner, c.table_name, c.column_id
         """
         tables: dict[str, SchemaTable] = {}
@@ -527,11 +545,11 @@ class OracleNl2SqlAdapter:
             # object detail 展開時に fetch_metadata_sample_values から遅延取得する。
             if include_samples:
                 self._load_sample_values(cursor, tables)
-        catalog = SchemaCatalog(
+        catalog = filter_user_visible_catalog(SchemaCatalog(
             refreshed_at=datetime.now(UTC).isoformat(),
             tables=list(tables.values()),
             view_dependencies=view_dependencies,
-        )
+        ))
         catalog.schema_fingerprint = self._schema_fingerprint(catalog)
         return catalog
 
@@ -553,6 +571,8 @@ class OracleNl2SqlAdapter:
             JOIN all_users u ON u.username = o.owner
             WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND o.status = 'VALID'
+              AND o.object_name NOT LIKE '%$%'
+              AND o.object_name NOT LIKE '%#%'
             GROUP BY o.owner, NVL(u.oracle_maintained, 'N')
             ORDER BY o.owner
         """
@@ -626,6 +646,8 @@ class OracleNl2SqlAdapter:
             WHERE {owner_filter}
               AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND o.status = 'VALID'
+              AND o.object_name NOT LIKE '%$%'
+              AND o.object_name NOT LIKE '%#%'
             ORDER BY o.owner, o.object_name
         """
         with self.connection() as conn, conn.cursor() as cursor:
@@ -939,16 +961,24 @@ class OracleNl2SqlAdapter:
         return samples, warnings
 
     def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
-        with self.user_data_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql)
-            columns = [description[0] for description in cursor.description or []]
-            rows: list[dict[str, Any]] = []
-            fetched_rows = cursor.fetchmany(max_rows) if max_rows else cursor.fetchall()
-            for row in fetched_rows:
-                rows.append(
-                    {columns[index]: _coerce_result_value(value) for index, value in enumerate(row)}
-                )
-        return QueryResults(columns=columns, rows=rows, total=len(rows))
+        try:
+            with self.user_data_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(sql)
+                columns = [description[0] for description in cursor.description or []]
+                rows: list[dict[str, Any]] = []
+                fetched_rows = cursor.fetchmany(max_rows) if max_rows else cursor.fetchall()
+                for row in fetched_rows:
+                    rows.append(
+                        {
+                            columns[index]: _coerce_result_value(value)
+                            for index, value in enumerate(row)
+                        }
+                    )
+            return QueryResults(columns=columns, rows=rows, total=len(rows))
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            raise OracleAdapterError(f"SELECT の実行に失敗しました: {exc}") from exc
 
     def explain_select(self, sql: str) -> ExplainPlanData:
         """Oracle PLAN_TABLE から cost/cardinality と full scan を要約する。"""
@@ -1027,6 +1057,7 @@ class OracleNl2SqlAdapter:
                 FROM user_views v
                 LEFT JOIN user_tab_comments c ON c.table_name = v.view_name
                 WHERE v.view_name NOT LIKE '%$%'
+                  AND v.view_name NOT LIKE '%#%'
                 ORDER BY v.view_name
             """
         else:
@@ -1035,6 +1066,7 @@ class OracleNl2SqlAdapter:
                 FROM user_tables t
                 LEFT JOIN user_tab_comments c ON c.table_name = t.table_name
                 WHERE t.table_name NOT LIKE '%$%'
+                  AND t.table_name NOT LIKE '%#%'
                 ORDER BY t.table_name
             """
         with self.connection() as conn, conn.cursor() as cursor:
@@ -1049,6 +1081,7 @@ class OracleNl2SqlAdapter:
                 "comment": _coerce_text(row[3]) if len(row) > 3 else "",
             }
             for row in rows
+            if is_user_visible_object_name(str(row[0] or ""))
         ]
 
     def get_db_admin_object_detail(
@@ -2359,13 +2392,23 @@ class OracleNl2SqlAdapter:
         allowed_tables: list[str],
         row_limit: int | None,
         description: str = "",
+        refresh_profile: bool = True,
     ) -> dict[str, Any]:
         """Create or replace Oracle Select AI Agent profile/tool/agent/task/team assets."""
-        profile_meta = self.refresh_select_ai_profile(
-            profile_name=profile_name,
-            allowed_tables=allowed_tables,
-            row_limit=row_limit,
-            description=description,
+        profile_meta = (
+            self.refresh_select_ai_profile(
+                profile_name=profile_name,
+                allowed_tables=allowed_tables,
+                row_limit=row_limit,
+                description=description,
+            )
+            if refresh_profile
+            else {
+                "runtime": "oracle",
+                "package": "DBMS_CLOUD_AI",
+                "profile_name": profile_name,
+                "reused": True,
+            }
         )
         profile_attributes = self._select_ai_profile_attributes(
             allowed_tables=allowed_tables,
@@ -2755,11 +2798,12 @@ class OracleNl2SqlAdapter:
         except Exception as exc:
             raise OracleAdapterError(f"Oracle SQL 実行に失敗しました: {exc}") from exc
 
-    def _drop_best_effort(self, cursor: Any, sql: str, params: dict[str, Any]) -> None:
+    def _drop_best_effort(self, cursor: Any, sql: str, params: dict[str, Any]) -> bool:
         try:
             cursor.execute(sql, params)
         except Exception:
-            return
+            return False
+        return True
 
     def _drop_cloud_ai_profile_best_effort(self, cursor: Any, profile_name: str) -> None:
         for sql, params in [
@@ -2799,7 +2843,8 @@ class OracleNl2SqlAdapter:
                 {"name": profile_name},
             ),
         ]:
-            self._drop_best_effort(cursor, sql, params)
+            if self._drop_best_effort(cursor, sql, params):
+                break
 
     def _drop_sql_translator_profile_best_effort(self, cursor: Any, profile_name: str) -> None:
         for sql, params in [

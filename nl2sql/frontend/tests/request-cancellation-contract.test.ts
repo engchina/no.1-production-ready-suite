@@ -13,16 +13,77 @@ function sourceFiles(directory: URL): URL[] {
   });
 }
 
-test("API helpers propagate AbortSignal", () => {
+test("API helpers propagate cancellation and optional timeout signals", () => {
   const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(apiSource, /timeoutMs\?: number/u);
+  assert.match(apiSource, /AbortSignal\.timeout\(options\.timeoutMs\)/u);
+  assert.match(apiSource, /isAbortError\(cause\) \|\| isTimeoutError\(cause\)/u);
 
   for (const helper of ["apiGet", "apiGetWithMetadata", "apiPost", "apiPatch", "apiDelete"]) {
     const declaration = new RegExp(
-      String.raw`function ${helper}[\s\S]*?options: ApiRequestOptions = \{\}[\s\S]*?signal: options\.signal`,
+      String.raw`function ${helper}[\s\S]*?options: ApiRequestOptions = \{\}[\s\S]*?signal: requestSignal\(options\)`,
       "u"
     );
-    assert.match(apiSource, declaration, `${helper} must accept and forward signal`);
+    assert.match(apiSource, declaration, `${helper} must combine cancellation and timeout signals`);
   }
+});
+
+test("table and view base detail requests use the shared 15 second state machine", () => {
+  const hookSource = readFileSync(
+    new URL("../src/features/nl2sql/useDbObjectDetailRequest.ts", import.meta.url),
+    "utf8",
+  );
+  const tableSource = readFileSync(
+    new URL("../src/features/nl2sql/pages/TableManagementPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const viewSource = readFileSync(
+    new URL("../src/features/nl2sql/pages/ViewManagementPage.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(hookSource, /DB_OBJECT_DETAIL_TIMEOUT_MS = API_TIMEOUT_MS\.interactiveDetail/u);
+  assert.match(hookSource, /controllerRef\.current\?\.abort\(\)/u);
+  assert.match(hookSource, /sequence === sequenceRef\.current/u);
+  assert.match(tableSource, /useDbObjectDetailRequest\(/u);
+  assert.match(viewSource, /useDbObjectDetailRequest\(/u);
+});
+
+test("interactive schema fallbacks are restricted to compatibility statuses", () => {
+  const source = readFileSync(
+    new URL("../src/features/nl2sql/incrementalQueries.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /new Set\(\[404, 410, 501\]\)/u);
+  assert.match(source, /if \(!isLegacyCompatibilityError\(error\)\) throw error/u);
+  assert.match(source, /timeoutMs: API_TIMEOUT_MS\.interactiveList/u);
+  assert.match(source, /timeoutMs: API_TIMEOUT_MS\.jobControl/u);
+});
+
+test("data management refresh uses the paged read model and durable schema job", () => {
+  const source = readFileSync(
+    new URL("../src/features/nl2sql/pages/DataManagementPage.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /useDbAdminObjects\(/u);
+  assert.match(source, /useStartSchemaRefresh\(\)/u);
+  assert.doesNotMatch(source, /\/api\/schema\/catalog["']/u);
+  assert.doesNotMatch(source, /\/api\/schema\/refresh["']/u);
+  assert.doesNotMatch(source, /Promise\.all\(\[\s*refreshSchema/u);
+  for (const state of [
+    "previewLoadingObject",
+    "exportLoading",
+    "csvUploading",
+    "syntheticLoading",
+    "schemaJobError",
+  ]) {
+    assert.match(source, new RegExp(String.raw`const \[${state},`, "u"));
+  }
+  assert.match(source, /previewRequestSequence = useRef\(0\)/u);
+  assert.match(source, /sequence !== previewRequestSequence\.current/u);
+  assert.match(source, /onLoadMore=\{\(\) => void baseObjectsQuery\.fetchNextPage\(\)\}/u);
+  assert.doesNotMatch(source, /activeView !== "csv"[\s\S]{0,200}fetchNextPage/u);
 });
 
 test("direct API calls in useEffect include cancellation", () => {

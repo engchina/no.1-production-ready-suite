@@ -795,7 +795,7 @@ export function StatementRunnerCard({
   confirmationTitle?: string;
   executeOnly?: boolean;
   framed?: boolean;
-  onExecuted?: () => void | Promise<void>;
+  onExecuted?: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   const [sql, setSql] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -822,7 +822,7 @@ export function StatementRunnerCard({
       });
       setResult(data);
       if (data.executed) {
-        await onExecuted?.();
+        await onExecuted?.(data);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dbAdmin.error.statements"));

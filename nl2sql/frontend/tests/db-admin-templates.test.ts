@@ -9,7 +9,7 @@ import {
   buildUpdateTemplate,
 } from "../src/features/nl2sql/sqlTemplates.ts";
 import { buildMetadataInputTexts } from "../src/features/nl2sql/metadataSql.ts";
-import type { DbAdminObjectDetail, SchemaCatalog } from "../src/features/nl2sql/types.ts";
+import type { DbAdminObjectDetail } from "../src/features/nl2sql/types.ts";
 
 const detail: DbAdminObjectDetail = {
   name: "ORDERS",
@@ -75,31 +75,15 @@ test("buildMergeTemplate produces matched and not-matched branches", () => {
 });
 
 test("buildMetadataInputTexts builds structure constraints and samples", () => {
-  const catalog: SchemaCatalog = {
-    refreshed_at: "2026-07-10T00:00:00Z",
-    tables: [
-      {
-        table_name: "ORDERS",
-        logical_name: "注文",
-        owner: "ADMIN",
-        table_type: "table",
-        comment: "注文",
-        row_count: 2,
-        constraints: ["PK_ORDERS P(ORDER_ID)", "FK_ORDERS_CUSTOMER R(CUSTOMER_ID)"],
-        columns: [
-          {
-            column_name: "ORDER_ID",
-            logical_name: "注文ID",
-            data_type: "NUMBER",
-            nullable: false,
-            comment: "注文ID",
-            sample_values: ["100", "101"],
-          },
-        ],
-      },
+  const metadataDetail: DbAdminObjectDetail = {
+    ...detail,
+    constraints: ["PK_ORDERS P(ORDER_ID)", "FK_ORDERS_CUSTOMER R(CUSTOMER_ID)"],
+    columns: [
+      { ...detail.columns[0], sample_values: ["100", "101"] },
+      detail.columns[1],
     ],
   };
-  const texts = buildMetadataInputTexts([detail], catalog, 1);
+  const texts = buildMetadataInputTexts([metadataDetail], 1);
   assert.match(texts.structureText, /OBJECT: ORDERS/);
   assert.match(texts.primaryKeyText, /PK_ORDERS/);
   assert.match(texts.foreignKeyText, /FK_ORDERS_CUSTOMER/);

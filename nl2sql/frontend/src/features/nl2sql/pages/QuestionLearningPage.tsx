@@ -15,10 +15,14 @@ import {
 import { useSearchParams } from "react-router-dom";
 
 import {
+  buttonVariants,
   Button,
   EmptyState,
+  ErrorState,
+  FormStatus,
   PageHeader,
   Pagination,
+  SelectField,
   StatusBadge,
   toast,
   usePagination,
@@ -33,6 +37,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { FileInputControl } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
   DbManagementSearchField,
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
@@ -60,6 +65,22 @@ const controlClass =
 const linkButtonClass =
   "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring/40";
 const TRAINING_DATA_PAGE_SIZE = 10;
+const CANDIDATE_PAGE_SIZE = 20;
+const CANDIDATE_STATUS_VALUES = [
+  "all",
+  "pending",
+  "added",
+  "already_covered",
+  "conflict",
+  "profile_missing",
+  "source_changed",
+] as const;
+
+interface CandidateFilters {
+  search: string;
+  status: string;
+  profileId: string;
+}
 
 export function QuestionClassifierModelsPage() {
   const confirm = useConfirm();
@@ -79,6 +100,9 @@ export function QuestionClassifierModelsPage() {
   const [candidateCursor, setCandidateCursor] = useState("");
   const [candidateCursorStack, setCandidateCursorStack] = useState<string[]>([]);
   const [candidatePage, setCandidatePage] = useState(1);
+  const [candidateHasActiveFilters, setCandidateHasActiveFilters] = useState(false);
+  const [candidateError, setCandidateError] = useState("");
+  const [candidateActionError, setCandidateActionError] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
   const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
@@ -112,6 +136,7 @@ export function QuestionClassifierModelsPage() {
     loadSequence.current = sequence;
     setLoading("load");
     setMessage("");
+    setCandidateError("");
     try {
       await runScopedRequest(async (signal) => {
         const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
@@ -121,7 +146,7 @@ export function QuestionClassifierModelsPage() {
             signal,
           }),
           apiGet<ClassifierTrainingCandidatesData>(
-            `/api/nl2sql/classifier/training-candidates?limit=20${focusedCandidateHistoryId ? `&history_id=${encodeURIComponent(focusedCandidateHistoryId)}` : ""}`,
+            `/api/nl2sql/classifier/training-candidates?limit=${CANDIDATE_PAGE_SIZE}${focusedCandidateHistoryId ? `&history_id=${encodeURIComponent(focusedCandidateHistoryId)}` : ""}`,
             { signal }
           ),
         ]);
@@ -130,6 +155,7 @@ export function QuestionClassifierModelsPage() {
         setClassifierStatus(classifierData);
         setClassifierTrainingData(trainingData);
         setCandidates(candidateData);
+        setCandidateHasActiveFilters(false);
         if (announce) toast.success(t("common.action.refreshed"));
       });
     } catch (err) {
@@ -163,22 +189,34 @@ export function QuestionClassifierModelsPage() {
     }
   };
 
-  const loadCandidates = async (cursor = "", direction: "reset" | "next" | "prev" = "reset") => {
+  const loadCandidates = async (
+    cursor = "",
+    direction: "reset" | "next" | "prev" = "reset",
+    filters: CandidateFilters = {
+      search: candidateSearch,
+      status: candidateStatus,
+      profileId: candidateProfileId,
+    }
+  ) => {
     setLoading("candidates-load");
-    setMessage("");
+    setCandidateError("");
+    setCandidateActionError("");
     try {
       const params = new URLSearchParams({
-        limit: "20",
-        status: candidateStatus,
+        limit: String(CANDIDATE_PAGE_SIZE),
+        status: filters.status,
       });
       if (cursor) params.set("cursor", cursor);
-      if (candidateProfileId) params.set("profile_id", candidateProfileId);
-      if (candidateSearch.trim()) params.set("q", candidateSearch.trim());
+      if (filters.profileId) params.set("profile_id", filters.profileId);
+      if (filters.search.trim()) params.set("q", filters.search.trim());
       if (focusedCandidateHistoryId) params.set("history_id", focusedCandidateHistoryId);
       const data = await apiGet<ClassifierTrainingCandidatesData>(
         `/api/nl2sql/classifier/training-candidates?${params.toString()}`
       );
       setCandidates(data);
+      setCandidateHasActiveFilters(
+        Boolean(filters.search.trim()) || filters.status !== "all" || Boolean(filters.profileId)
+      );
       setSelectedCandidates(new Set());
       if (direction === "reset") {
         setCandidateCursor("");
@@ -189,10 +227,18 @@ export function QuestionClassifierModelsPage() {
         setCandidatePage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("qcm.candidates.error.load"));
+      setCandidateError(err instanceof Error ? err.message : t("qcm.candidates.error.load"));
     } finally {
       setLoading("");
     }
+  };
+
+  const resetCandidateFilters = () => {
+    const filters: CandidateFilters = { search: "", status: "all", profileId: "" };
+    setCandidateSearch(filters.search);
+    setCandidateStatus(filters.status);
+    setCandidateProfileId(filters.profileId);
+    void loadCandidates("", "reset", filters);
   };
 
   const goToNextCandidatePage = () => {
@@ -219,7 +265,7 @@ export function QuestionClassifierModelsPage() {
     });
     if (!ok) return;
     setLoading("candidates-import");
-    setMessage("");
+    setCandidateActionError("");
     try {
       const data = await apiPost<ClassifierFeedbackImportData>(
         "/api/nl2sql/classifier/training-data/from-feedback",
@@ -239,7 +285,7 @@ export function QuestionClassifierModelsPage() {
       await loadCandidates();
       toast.success(t("qcm.candidates.added", { count: data.imported_count }));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("qcm.candidates.error.add"));
+      setCandidateActionError(err instanceof Error ? err.message : t("qcm.candidates.error.add"));
     } finally {
       setLoading("");
     }
@@ -498,10 +544,14 @@ export function QuestionClassifierModelsPage() {
               page={candidatePage}
               canGoPrevious={candidateCursorStack.length > 0}
               loading={loading}
+              error={candidateError}
+              actionError={candidateActionError}
+              hasActiveFilters={candidateHasActiveFilters}
               onSearchChange={setCandidateSearch}
               onStatusChange={setCandidateStatus}
               onProfileFilterChange={setCandidateProfileId}
               onApplyFilters={() => void loadCandidates()}
+              onResetFilters={resetCandidateFilters}
               onSelectionChange={setSelectedCandidates}
               onProfileOverrideChange={(historyId, value) =>
                 setCandidateProfileOverrides((current) => ({ ...current, [historyId]: value }))
@@ -1003,10 +1053,14 @@ function TrainingCandidatesPanel({
   page,
   canGoPrevious,
   loading,
+  error,
+  actionError,
+  hasActiveFilters,
   onSearchChange,
   onStatusChange,
   onProfileFilterChange,
   onApplyFilters,
+  onResetFilters,
   onSelectionChange,
   onProfileOverrideChange,
   onAddSelected,
@@ -1023,10 +1077,14 @@ function TrainingCandidatesPanel({
   page: number;
   canGoPrevious: boolean;
   loading: string;
+  error: string;
+  actionError: string;
+  hasActiveFilters: boolean;
   onSearchChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   onProfileFilterChange: (value: string) => void;
   onApplyFilters: () => void;
+  onResetFilters: () => void;
   onSelectionChange: (value: Set<string>) => void;
   onProfileOverrideChange: (historyId: string, value: string) => void;
   onAddSelected: () => void;
@@ -1034,10 +1092,34 @@ function TrainingCandidatesPanel({
   onNext: () => void;
 }) {
   const activeProfiles = profiles.filter((profile) => !profile.archived);
-  const selectable = (data?.items ?? []).filter(
-    (item) => item.status === "pending" || (item.status === "profile_missing" && profileOverrides[item.history_id])
+  const items = data?.items ?? [];
+  const profileOptions = activeProfiles.map((profile) => ({
+    value: profile.id,
+    label: profile.name,
+    description: profile.id,
+  }));
+  const selectable = items.filter((item) =>
+    item.status === "pending" ||
+    (item.status === "profile_missing" && profileOverrides[item.history_id])
   );
   const allSelected = selectable.length > 0 && selectable.every((item) => selected.has(item.history_id));
+  const someSelected = selectable.some((item) => selected.has(item.history_id));
+  const selectPageCheckboxRef = useRef<HTMLInputElement>(null);
+  const isLoading = loading === "candidates-load" || (loading === "load" && data === null);
+  const totalPages = Math.max(
+    1,
+    Math.ceil((data?.total ?? 0) / CANDIDATE_PAGE_SIZE),
+    page + (data?.next_cursor ? 1 : 0)
+  );
+  const pageStart = items.length > 0 ? (page - 1) * CANDIDATE_PAGE_SIZE + 1 : 0;
+  const pageEnd = items.length > 0 ? pageStart + items.length - 1 : 0;
+
+  useEffect(() => {
+    if (selectPageCheckboxRef.current) {
+      selectPageCheckboxRef.current.indeterminate = someSelected && !allSelected;
+    }
+  }, [allSelected, someSelected]);
+
   const toggleAll = () => {
     const next = new Set(selected);
     if (allSelected) selectable.forEach((item) => next.delete(item.history_id));
@@ -1051,18 +1133,7 @@ function TrainingCandidatesPanel({
         icon={ListChecks}
         title={t("qcm.candidates.title")}
         description={t("qcm.candidates.hint")}
-        action={
-          <Button
-            type="button"
-            size="sm"
-            loading={loading === "candidates-import"}
-            disabled={selected.size === 0}
-            onClick={onAddSelected}
-          >
-            <CheckSquare size={15} aria-hidden="true" />
-            <span>{t("qcm.candidates.addSelectedWithCount", { count: selected.size })}</span>
-          </Button>
-        }
+        action={<StatusBadge variant="info" label={t("qcm.candidates.matches", { count: data?.total ?? 0 })} />}
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -1071,106 +1142,255 @@ function TrainingCandidatesPanel({
         <CompactFact label={t("qcm.candidates.attention")} value={formatNumber(data?.attention_count ?? 0)} />
       </div>
 
-      <section className="grid gap-3 rounded-md border border-border bg-background p-3 lg:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] lg:items-end">
-        <label className={fieldClass}>
-          <span>{t("qcm.candidates.search")}</span>
-          <input value={search} onChange={(event) => onSearchChange(event.currentTarget.value)} className={controlClass} />
-        </label>
-        <label className={fieldClass}>
-          <span>{t("qcm.candidates.statusFilter")}</span>
-          <select value={status} onChange={(event) => onStatusChange(event.currentTarget.value)} className={controlClass}>
-            {[
-              "all",
-              "pending",
-              "added",
-              "already_covered",
-              "conflict",
-              "profile_missing",
-              "source_changed",
-            ].map((value) => <option key={value} value={value}>{t(`qcm.candidates.status.${value}`)}</option>)}
-          </select>
-        </label>
-        <label className={fieldClass}>
-          <span>{t("nl2sql.profile.label")}</span>
-          <select value={profileId} onChange={(event) => onProfileFilterChange(event.currentTarget.value)} className={controlClass}>
-            <option value="">{t("qcm.candidates.allProfiles")}</option>
-            {activeProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-          </select>
-        </label>
-        <Button type="button" variant="secondary" size="sm" loading={loading === "candidates-load"} onClick={onApplyFilters}>
+      <form
+        className="grid gap-3 rounded-md border border-border bg-background p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end"
+        data-testid="qcm-candidate-filters"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onApplyFilters();
+        }}
+      >
+        <DbManagementSearchField
+          label={t("qcm.candidates.search")}
+          placeholder={t("qcm.candidates.searchPlaceholder")}
+          value={search}
+          onChange={onSearchChange}
+        />
+        <SelectField
+          id="qcm-candidate-status-filter"
+          label={t("qcm.candidates.statusFilter")}
+          value={status}
+          options={CANDIDATE_STATUS_VALUES.map((value) => ({
+            value,
+            label: t(`qcm.candidates.status.${value}`),
+          }))}
+          onValueChange={onStatusChange}
+          buttonClassName="h-11"
+        />
+        <SelectField
+          id="qcm-candidate-profile-filter"
+          label={t("nl2sql.profile.label")}
+          value={profileId}
+          options={[
+            { value: "", label: t("qcm.candidates.allProfiles") },
+            ...profileOptions,
+          ]}
+          onValueChange={onProfileFilterChange}
+          buttonClassName="h-11"
+        />
+        {/* 入力と同じ行の送信操作なので、Button spec の許容例に従い入力高 44px に揃える。 */}
+        <Button
+          type="submit"
+          variant="secondary"
+          size="lg"
+          className="h-11 w-full whitespace-nowrap md:w-auto"
+          loading={loading === "candidates-load"}
+        >
           <RefreshCw size={15} aria-hidden="true" />
           <span>{t("qcm.candidates.applyFilters")}</span>
         </Button>
-      </section>
+      </form>
 
-      {(data?.items.length ?? 0) > 0 ? (
+      {isLoading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix="qcm-candidates"
+          ariaLabel={t("qcm.candidates.loading")}
+          variant="list"
+          rows={3}
+        />
+      ) : error ? (
+        <ErrorState
+          message={error}
+          onRetry={onApplyFilters}
+          retryLabel={t("learning.action.refresh")}
+        />
+      ) : items.length > 0 ? (
         <div className="grid gap-3">
-          <label className="flex min-h-11 items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground">
-            <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40" />
-            <span>{t("qcm.candidates.selectPage", { count: selectable.length })}</span>
-          </label>
-          {data?.items.map((item) => {
-            const override = profileOverrides[item.history_id] || item.profile_id;
-            const canSelect = item.status === "pending" || (item.status === "profile_missing" && Boolean(profileOverrides[item.history_id]));
-            return (
-              <article key={item.history_id} data-testid="qcm-training-candidate" className="grid gap-3 rounded-md border border-border bg-card p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <label className="flex min-w-0 flex-1 items-start gap-3">
-                    <input
-                      type="checkbox"
-                      aria-label={t("qcm.candidates.select", { question: item.question })}
-                      checked={selected.has(item.history_id)}
-                      disabled={!canSelect}
-                      onChange={(event) => {
-                        const next = new Set(selected);
-                        if (event.currentTarget.checked) next.add(item.history_id);
-                        else next.delete(item.history_id);
-                        onSelectionChange(next);
-                      }}
-                      className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-                    />
-                    <span className="min-w-0 break-words font-semibold leading-6 text-foreground">{item.question}</span>
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    <StatusBadge variant={item.status === "pending" ? "success" : item.status === "conflict" || item.status === "profile_missing" || item.status === "source_changed" ? "warning" : "neutral"} label={candidateStatusLabel(item.status)} />
-                    <StatusBadge variant="info" label={item.profile_name || item.profile_id || "-"} />
-                  </div>
-                </div>
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_18rem]">
-                  <div className="grid gap-2 text-sm">
-                    {item.feedback_comment && <p className="rounded-md border border-primary/20 bg-primary/10 px-3 py-2 text-foreground">{item.feedback_comment}</p>}
-                    <p className="text-xs text-muted">{formatDateTime(item.created_at)}</p>
-                    {item.conflict_profile_ids.length > 0 && <p className="text-sm text-warning">{t("qcm.candidates.conflicts", { profiles: item.conflict_profile_ids.join(", ") })}</p>}
-                  </div>
-                  {(item.status === "pending" || item.status === "profile_missing") && (
-                    <label className={fieldClass}>
-                      <span>{t("qcm.candidates.confirmProfile")}</span>
-                      <select value={override} onChange={(event) => onProfileOverrideChange(item.history_id, event.currentTarget.value)} className={controlClass}>
-                        {!override && <option value="">{t("qcm.candidates.selectProfile")}</option>}
-                        {activeProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} ({profile.id})</option>)}
-                      </select>
-                    </label>
-                  )}
-                </div>
-                <div>
-                  <a className={linkButtonClass} href={`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`}>
-                    <Link2 size={15} aria-hidden="true" />
-                    <span>{t("qcm.candidates.openFeedback")}</span>
-                  </a>
-                </div>
-              </article>
-            );
-          })}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
-            <span className="text-sm text-muted">{t("qcm.candidates.page", { page, total: data?.total ?? 0 })}</span>
-            <div className="flex gap-2">
-              <Button type="button" variant="secondary" size="sm" disabled={!canGoPrevious} onClick={onPrevious}>{t("qcm.training.pagination.prev")}</Button>
-              <Button type="button" variant="secondary" size="sm" disabled={!data?.next_cursor} onClick={onNext}>{t("qcm.training.pagination.next")}</Button>
+          <div
+            className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
+            data-testid="qcm-candidate-bulk-actions"
+          >
+            <label className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 text-sm font-medium text-foreground">
+              <input
+                ref={selectPageCheckboxRef}
+                type="checkbox"
+                checked={allSelected}
+                disabled={selectable.length === 0}
+                onChange={toggleAll}
+                className="h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
+              />
+              <span className="break-words">{t("qcm.candidates.selectPage", { count: selectable.length })}</span>
+            </label>
+            <div className="flex min-w-0 flex-col gap-2 sm:items-end">
+              <FormStatus tone="danger" message={actionError} className="max-w-xl" />
+              <Button
+                type="button"
+                size="sm"
+                className="min-h-11 w-full whitespace-nowrap sm:min-h-8 sm:w-auto"
+                loading={loading === "candidates-import"}
+                disabled={selected.size === 0}
+                onClick={onAddSelected}
+              >
+                <CheckSquare size={15} aria-hidden="true" />
+                <span>{t("qcm.candidates.addSelectedWithCount", { count: selected.size })}</span>
+              </Button>
             </div>
           </div>
+
+          <ul
+            className="divide-y divide-border/70 rounded-md border border-border bg-card"
+            aria-label={t("qcm.candidates.listAria")}
+            data-testid="qcm-candidate-list"
+          >
+            {items.map((item) => {
+              const override = profileOverrides[item.history_id] || item.profile_id;
+              const canSelect =
+                item.status === "pending" ||
+                (item.status === "profile_missing" && Boolean(profileOverrides[item.history_id]));
+              const fallbackProfileOption =
+                override && !profileOptions.some((option) => option.value === override)
+                  ? [{ value: override, label: item.profile_name || override, description: override }]
+                  : [];
+              const itemProfileOptions = [
+                ...(!override ? [{ value: "", label: t("qcm.candidates.selectProfile") }] : []),
+                ...fallbackProfileOption,
+                ...profileOptions,
+              ];
+              const resolvedProfileName =
+                activeProfiles.find((profile) => profile.id === override)?.name ||
+                item.profile_name ||
+                item.profile_id ||
+                "-";
+              const selectedItem = selected.has(item.history_id);
+              const statusVariant =
+                item.status === "pending"
+                  ? "success"
+                  : item.status === "conflict" || item.status === "profile_missing" || item.status === "source_changed"
+                    ? "warning"
+                    : "neutral";
+              return (
+                <li
+                  key={item.history_id}
+                  data-testid="qcm-training-candidate"
+                  className={`grid min-w-0 gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
+                    selectedItem
+                      ? "border-l-primary bg-primary/10"
+                      : "border-l-transparent hover:bg-background"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-start gap-1">
+                    <label
+                      className={`flex h-11 w-11 shrink-0 items-start justify-center rounded-md pt-1 ${
+                        canSelect ? "cursor-pointer hover:bg-background" : "cursor-not-allowed opacity-50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={t("qcm.candidates.select", { question: item.question })}
+                        checked={selectedItem}
+                        disabled={!canSelect}
+                        onChange={(event) => {
+                          const next = new Set(selected);
+                          if (event.currentTarget.checked) next.add(item.history_id);
+                          else next.delete(item.history_id);
+                          onSelectionChange(next);
+                        }}
+                        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                      />
+                    </label>
+                    <div className="min-w-0 pt-0.5">
+                      <h3 className="break-words text-sm font-semibold leading-6 text-foreground [overflow-wrap:anywhere]">
+                        {item.question}
+                      </h3>
+                      {item.feedback_comment && (
+                        <p className="mt-1 break-words border-l-2 border-primary/30 pl-2 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
+                          {item.feedback_comment}
+                        </p>
+                      )}
+                      <p className="mt-1 font-mono text-xs tabular-nums text-muted">
+                        {formatDateTime(item.created_at)}
+                      </p>
+                      {item.conflict_profile_ids.length > 0 && (
+                        <p className="mt-1 break-words text-sm text-warning [overflow-wrap:anywhere]">
+                          {t("qcm.candidates.conflicts", { profiles: item.conflict_profile_ids.join(", ") })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap content-start gap-2 xl:pt-1">
+                    <StatusBadge variant={statusVariant} label={candidateStatusLabel(item.status)} />
+                  </div>
+
+                  {(item.status === "pending" || item.status === "profile_missing") && (
+                    <SelectField
+                      id={`qcm-candidate-profile-${item.history_id}`}
+                      label={t("qcm.candidates.confirmProfile")}
+                      value={override}
+                      options={itemProfileOptions}
+                      onValueChange={(value) => onProfileOverrideChange(item.history_id, value)}
+                      placeholder={t("qcm.candidates.selectProfile")}
+                      className="min-w-0"
+                      buttonClassName="h-11"
+                    />
+                  )}
+                  {item.status !== "pending" && item.status !== "profile_missing" && (
+                    <div className="grid min-w-0 content-start gap-1 xl:pt-1">
+                      <p className="text-xs font-medium text-muted">{t("nl2sql.profile.label")}</p>
+                      <div className="min-w-0">
+                        <StatusBadge variant="info" label={resolvedProfileName} />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="min-w-0 xl:justify-self-end xl:pt-1">
+                    <a
+                      className={`${buttonVariants({ variant: "secondary", size: "sm" })} min-h-11 w-full whitespace-nowrap sm:min-h-8 sm:w-auto`}
+                      href={`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`}
+                    >
+                      <Link2 size={15} aria-hidden="true" />
+                      <span>{t("qcm.candidates.openFeedback")}</span>
+                    </a>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={(nextPage) => {
+              if (nextPage > page && data?.next_cursor) onNext();
+              if (nextPage < page && canGoPrevious) onPrevious();
+            }}
+            summary={t("qcm.candidates.pagination.range", {
+              start: pageStart,
+              end: pageEnd,
+              total: data?.total ?? 0,
+            })}
+            pageIndicator={t("qcm.candidates.pagination.page", { page, total: totalPages })}
+            prevLabel={t("qcm.training.pagination.prev")}
+            nextLabel={t("qcm.training.pagination.next")}
+            ariaLabel={t("qcm.candidates.pagination.label")}
+            testId="qcm-candidate-pagination"
+            className="rounded-md border border-border bg-background p-3"
+          />
         </div>
       ) : (
-        <EmptyState title={t("qcm.candidates.emptyTitle")} hint={t("qcm.candidates.emptyHint")} />
+        <div className="rounded-md border border-border bg-background p-3">
+          <EmptyState
+            title={hasActiveFilters ? t("qcm.candidates.noResultsTitle") : t("qcm.candidates.emptyTitle")}
+            hint={hasActiveFilters ? t("qcm.candidates.noResultsHint") : t("qcm.candidates.emptyHint")}
+            action={
+              hasActiveFilters ? (
+                <Button type="button" variant="secondary" size="sm" onClick={onResetFilters}>
+                  {t("qcm.candidates.resetFilters")}
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
       )}
     </div>
   );

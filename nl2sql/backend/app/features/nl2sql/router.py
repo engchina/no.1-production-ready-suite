@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated
 
@@ -19,6 +20,7 @@ from fastapi import (
 from pr_backend_core import ApiResponse
 
 from app.api.concurrency import run_sync_io
+from app.settings import get_settings
 
 from .incremental_store import IncrementalVersionConflict
 from .models import (
@@ -53,9 +55,6 @@ from .models import (
     CommentApplyRequest,
     CommentSuggestionData,
     CommentSuggestionRequest,
-    CompareData,
-    CompareHistoryData,
-    CompareRequest,
     DbAdminAiAnalysisData,
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadData,
@@ -71,16 +70,11 @@ from .models import (
     DbAdminJoinWhereData,
     DbAdminJoinWhereRequest,
     DbAdminObjectDetail,
+    DbAdminObjectPage,
     DbAdminObjectsData,
     DbAdminStatementsRequest,
     DemoLearningData,
     DiagnosticsData,
-    EvaluateData,
-    EvaluateRequest,
-    EvaluationRunsData,
-    EvaluationSet,
-    EvaluationSetsData,
-    EvaluationSetUpsertRequest,
     ExecuteRequest,
     FeedbackClearData,
     FeedbackData,
@@ -101,6 +95,7 @@ from .models import (
     MetadataSqlGenerateRequest,
     MetadataSqlSampleData,
     MetadataSqlSampleRequest,
+    Nl2SqlEngine,
     Nl2SqlProfile,
     PersistenceStatusData,
     PreviewData,
@@ -110,6 +105,8 @@ from .models import (
     ProfileRecommendationRequest,
     ProfileSelectAiProfileRequest,
     ProfileSummaryPage,
+    ProfileSyncJobData,
+    ProfileSyncJobRequest,
     ProfileUpsertRequest,
     QueryResults,
     RepairData,
@@ -137,14 +134,30 @@ from .models import (
     SelectAiProfilesImportRequest,
     SimilarHistoryData,
     SimilarHistoryRequest,
-    SyntheticCasesData,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
     SyntheticDataOperationStatusData,
     SyntheticDataResultsData,
 )
-from .service import is_select_only as _is_select_only
-from .service import nl2sql_service
+from .quality_evaluation_models import (
+    QualityEvaluationCapabilities,
+    QualityEvaluationJobPage,
+    QualityEvaluationJobSummary,
+    QualityEvaluationResultPage,
+)
+from .quality_evaluation_service import (
+    QualityEvaluationValidationError,
+    quality_evaluation_service,
+)
+from .service import (
+    DefaultProfileDeleteForbidden,
+    nl2sql_service,
+)
+from .service import (
+    is_select_only as _is_select_only,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _require_persistence() -> None:
@@ -302,7 +315,6 @@ def create_profile(
         stored = nl2sql_service.create_profile(profile)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _materialize_incremental_profile_view(stored.id)
     if stored.etag:
         response.headers["ETag"] = f'"{stored.etag}"'
     return ApiResponse(data=stored)
@@ -338,17 +350,7 @@ def update_profile(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if updated.etag:
         response.headers["ETag"] = f'"{updated.etag}"'
-    _materialize_incremental_profile_view(updated.id)
     return ApiResponse(data=updated)
-
-
-def _materialize_incremental_profile_view(profile_id: str) -> None:
-    if not nl2sql_service.uses_incremental_store:
-        return
-    # Local import avoids router construction cycles while keeping mutation-time materialization.
-    from .ontology_router import ontology_runtime
-
-    ontology_runtime.materialize_profile_view(profile_id)
 
 
 @router.delete("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
@@ -360,12 +362,31 @@ def delete_profile(
     try:
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
-        return ApiResponse(
-            data=nl2sql_service.delete_profile(
-                profile_id,
-                expected_etag=if_match.strip('"') if if_match else None,
-            )
+        deleted = nl2sql_service.delete_profile(
+            profile_id,
+            expected_etag=if_match.strip('"') if if_match else None,
         )
+        # Profile/view の DB transaction が確定してから job と runtime cache を片付ける。
+        # build worker は proposal 書込直前にも Profile の存在を確認する。
+        from .ontology_router import ontology_build_service, ontology_runtime
+        from .profile_sync import profile_sync_service
+
+        for cleanup in (
+            ontology_build_service.cancel_profile_jobs,
+            profile_sync_service.cancel_for_profile,
+            ontology_runtime.delete_profile_state,
+        ):
+            try:
+                cleanup(profile_id)
+            except Exception:
+                # Profile/view transaction は既に commit 済み。worker の存在再確認と
+                # FK cascade が再生成を防ぐため、cleanup 障害で成功済み削除を 500 にしない。
+                logger.warning(
+                    "profile_delete_post_commit_cleanup_failed",
+                    exc_info=True,
+                    extra={"profile_id": profile_id, "cleanup": cleanup.__name__},
+                )
+        return ApiResponse(data=deleted)
     except IncrementalVersionConflict as exc:
         raise HTTPException(
             status_code=409,
@@ -375,6 +396,14 @@ def delete_profile(
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
+    except DefaultProfileDeleteForbidden as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEFAULT_PROFILE_DELETE_FORBIDDEN",
+                "message": "default Profile は削除できません。",
+            },
         ) from exc
 
 
@@ -503,9 +532,7 @@ def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
 def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     """archive 済みの NL2SQL profile を復元する。"""
     try:
-        profile = nl2sql_service.restore_profile(profile_id)
-        _materialize_incremental_profile_view(profile.id)
-        return ApiResponse(data=profile)
+        return ApiResponse(data=nl2sql_service.restore_profile(profile_id))
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
@@ -527,6 +554,70 @@ def upsert_profile_select_ai_profile(
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+
+
+@router.post(
+    "/profiles/{profile_id}/oracle-sync-jobs",
+    response_model=ApiResponse[ProfileSyncJobData],
+    status_code=202,
+)
+def create_profile_oracle_sync_job(
+    profile_id: str,
+    req: ProfileSyncJobRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ApiResponse[ProfileSyncJobData]:
+    """保存済み業務 Profile の Oracle 反映を永続 queue へ投入する。"""
+
+    from .profile_sync import profile_sync_service
+
+    try:
+        return ApiResponse(
+            data=profile_sync_service.start(
+                profile_id,
+                req,
+                idempotency_key=idempotency_key,
+            )
+        )
+    except (KeyError, ValueError) as exc:
+        message = str(exc)
+        status_code = 404 if "見つかりません" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.get(
+    "/oracle-sync-jobs/{job_id}",
+    response_model=ApiResponse[ProfileSyncJobData],
+)
+def get_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
+    """Oracle Profile 同期 job の進捗を返す。"""
+
+    from .profile_sync import profile_sync_service
+
+    job = profile_sync_service.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="指定された同期 job が見つかりません。")
+    return ApiResponse(data=job)
+
+
+@router.post(
+    "/oracle-sync-jobs/{job_id}/retry",
+    response_model=ApiResponse[ProfileSyncJobData],
+    status_code=202,
+)
+def retry_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
+    """失敗した Oracle Profile 同期 job を最新版 Profile で再試行する。"""
+
+    from .profile_sync import profile_sync_service
+
+    try:
+        return ApiResponse(data=profile_sync_service.retry(job_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="指定された同期 job が見つかりません。",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/select-ai/profiles/refresh", response_model=ApiResponse[AssetRefreshData])
@@ -1105,67 +1196,120 @@ def repair(req: RepairRequest) -> ApiResponse[RepairData]:
     )
 
 
-@router.post("/evaluate", response_model=ApiResponse[EvaluateData])
-def evaluate(req: EvaluateRequest) -> ApiResponse[EvaluateData]:
-    """Deterministic NL2SQL 評価。外部 LLM-as-judge は使わない。"""
-    return ApiResponse(data=nl2sql_service.evaluate(req))
+@router.get(
+    "/quality-evaluations/capabilities",
+    response_model=ApiResponse[QualityEvaluationCapabilities],
+)
+def quality_evaluation_capabilities() -> ApiResponse[QualityEvaluationCapabilities]:
+    """実行 engine / Judge の readiness と Excel 制限を返す。"""
+    return ApiResponse(data=quality_evaluation_service.capabilities())
 
 
-@router.get("/evaluation-runs", response_model=ApiResponse[EvaluationRunsData])
-def evaluation_runs(limit: int = 20) -> ApiResponse[EvaluationRunsData]:
-    """保存済み deterministic NL2SQL 評価実行 record の最近分を返す。"""
-    return ApiResponse(data=nl2sql_service.list_evaluation_runs(limit=max(1, min(limit, 100))))
-
-
-@router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
-def evaluation_sets(include_archived: bool = False) -> ApiResponse[EvaluationSetsData]:
-    """保存済み NL2SQL 評価セットを返す。"""
-    return ApiResponse(data=nl2sql_service.list_evaluation_sets(include_archived=include_archived))
-
-
-@router.post("/evaluation-sets", response_model=ApiResponse[EvaluationSet])
-def create_evaluation_set(req: EvaluationSetUpsertRequest) -> ApiResponse[EvaluationSet]:
-    """NL2SQL 評価セットを作成する。"""
-    return ApiResponse(data=nl2sql_service.create_evaluation_set(req))
-
-
-@router.patch("/evaluation-sets/{evaluation_set_id}", response_model=ApiResponse[EvaluationSet])
-def update_evaluation_set(
-    evaluation_set_id: str, req: EvaluationSetUpsertRequest
-) -> ApiResponse[EvaluationSet]:
-    """NL2SQL 評価セットを更新する。"""
-    try:
-        return ApiResponse(data=nl2sql_service.update_evaluation_set(evaluation_set_id, req))
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=404, detail="指定された評価セットが見つかりません。"
-        ) from exc
+@router.get("/quality-evaluations/template.xlsx")
+def quality_evaluation_template() -> Response:
+    """日本語ヘッダーの入力テンプレートを返す。"""
+    return Response(
+        content=quality_evaluation_service.template_workbook(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="nl2sql_quality_evaluation_template.xlsx"'
+            )
+        },
+    )
 
 
 @router.post(
-    "/evaluation-sets/{evaluation_set_id}/archive",
-    response_model=ApiResponse[EvaluationSet],
+    "/quality-evaluations",
+    response_model=ApiResponse[QualityEvaluationJobSummary],
+    status_code=202,
 )
-def archive_evaluation_set(evaluation_set_id: str) -> ApiResponse[EvaluationSet]:
-    """NL2SQL 評価セットを archive する。"""
+async def create_quality_evaluation(
+    request: Request,
+    profile_id: Annotated[str, Form()],
+    engines: Annotated[list[Nl2SqlEngine], Form()],
+    repeat_count: Annotated[int, Form()],
+    file: Annotated[UploadFile, File()],
+) -> ApiResponse[QualityEvaluationJobSummary]:
+    """Excel 入力を検証し、永続品質評価 job を投入する。"""
+    maximum = get_settings().nl2sql_quality_evaluation_max_file_bytes
+    content = await file.read(maximum + 1)
+    principal = getattr(request.state, "principal", None)
+    actor_user_id = str(getattr(principal, "user_id", ""))
     try:
-        return ApiResponse(data=nl2sql_service.archive_evaluation_set(evaluation_set_id))
-    except KeyError as exc:
+        data = await run_sync_io(
+            quality_evaluation_service.submit,
+            profile_id=profile_id,
+            engines=engines,
+            repeat_count=repeat_count,
+            content=content,
+            filename=file.filename or "evaluation.xlsx",
+            actor_user_id=actor_user_id,
+        )
+        return ApiResponse(data=data)
+    except QualityEvaluationValidationError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された評価セットが見つかりません。"
+            status_code=422,
+            detail={"code": "QUALITY_EVALUATION_VALIDATION_ERROR", "errors": exc.errors},
         ) from exc
 
 
-@router.post("/compare", response_model=ApiResponse[CompareData])
-def compare(req: CompareRequest) -> ApiResponse[CompareData]:
-    """同一質問を複数 engine で preview し、SQL・安全性・時間を比較する。"""
-    return ApiResponse(data=nl2sql_service.compare_engines(req))
+@router.get(
+    "/quality-evaluations",
+    response_model=ApiResponse[QualityEvaluationJobPage],
+)
+def list_quality_evaluations(
+    cursor: str | None = None, limit: int = 20
+) -> ApiResponse[QualityEvaluationJobPage]:
+    """最近の品質評価 job をページ取得する。"""
+    try:
+        return ApiResponse(data=quality_evaluation_service.list_jobs(cursor=cursor, limit=limit))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/compare-history", response_model=ApiResponse[CompareHistoryData])
-def compare_history(limit: int = 20) -> ApiResponse[CompareHistoryData]:
-    """保存済み engine 比較 record の最近分を返す。"""
-    return ApiResponse(data=nl2sql_service.list_compare_records(limit=max(1, min(limit, 50))))
+@router.get(
+    "/quality-evaluations/{job_id}/results",
+    response_model=ApiResponse[QualityEvaluationResultPage],
+)
+def quality_evaluation_results(
+    job_id: str, cursor: str | None = None, limit: int = 25
+) -> ApiResponse[QualityEvaluationResultPage]:
+    """品質評価結果の明細をページ取得する。"""
+    try:
+        return ApiResponse(
+            data=quality_evaluation_service.list_results(
+                job_id=job_id, cursor=cursor, limit=limit
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/quality-evaluations/{job_id}/results.xlsx")
+def quality_evaluation_results_xlsx(job_id: str) -> Response:
+    """完了した品質評価の全結果を Excel で返す。"""
+    try:
+        filename, content = quality_evaluation_service.results_workbook(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/quality-evaluations/{job_id}",
+    response_model=ApiResponse[QualityEvaluationJobSummary],
+)
+def get_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+    """品質評価 job の進捗と集計を返す。"""
+    try:
+        return ApiResponse(data=quality_evaluation_service.get_job(job_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/reverse", response_model=ApiResponse[ReverseSqlData])
@@ -1234,6 +1378,37 @@ def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationAppl
 def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
     """DB admin table 一覧を返す。"""
     return ApiResponse(data=nl2sql_service.list_db_admin_tables())
+
+
+@router.get("/db-admin/objects", response_model=ApiResponse[DbAdminObjectPage])
+def db_admin_objects(
+    response: Response,
+    cursor: str | None = None,
+    limit: int = 50,
+    q: str = "",
+    type: str = "all",  # noqa: A002 - public query parameter name
+    row_state: str = "all",
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> ApiResponse[DbAdminObjectPage] | Response:
+    """データ管理向け軽量 object page。全量 Catalog/CLOB は読み込まない。"""
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
+    if type not in {"all", "table", "view"}:
+        raise HTTPException(status_code=422, detail="type が不正です。")
+    if row_state not in {"all", "with_rows", "empty_rows", "unknown_rows"}:
+        raise HTTPException(status_code=422, detail="row_state が不正です。")
+    page = nl2sql_service.list_db_admin_objects_page(
+        cursor=cursor,
+        limit=limit,
+        query=q,
+        object_type=type,
+        row_state=row_state,
+    )
+    quoted_etag = f'"schema-{page.catalog_version}"'
+    if if_none_match == quoted_etag:
+        return Response(status_code=304, headers={"ETag": quoted_etag})
+    response.headers["ETag"] = quoted_etag
+    return ApiResponse(data=page)
 
 
 @router.get("/db-admin/tables/{table_name}", response_model=ApiResponse[DbAdminObjectDetail])
@@ -1370,14 +1545,6 @@ def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-@router.post("/synthetic-cases", response_model=ApiResponse[SyntheticCasesData])
-def synthetic_cases(
-    profile_id: str | None = None, limit: int = 6
-) -> ApiResponse[SyntheticCasesData]:
-    """Synthetic NL2SQL 評価ケースを生成する。"""
-    return ApiResponse(data=nl2sql_service.synthetic_cases(profile_id=profile_id, limit=limit))
 
 
 @router.post("/synthetic-data/generate", response_model=ApiResponse[SyntheticDataOperationData])

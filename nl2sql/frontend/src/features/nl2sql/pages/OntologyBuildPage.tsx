@@ -1,41 +1,56 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Banner, Button, EmptyState, PageHeader } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  Button,
+  EmptyState,
+  PageHeader,
+  StatusBadge,
+  toast,
+} from "@engchina/production-ready-ui";
 
-import { apiGet, apiPatch, isAbortError } from "@/lib/api";
+import { ErrorState } from "@/components/StateViews";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
+  DbManagementLoadingSkeleton,
+  DbObjectManagementPanelShell,
+  DbObjectPanelHeader,
+} from "../components/DbObjectManagementShared";
+import {
+  nl2sqlIncrementalKeys,
   useProfileDetail,
+  useProfileOntologyView,
   useProfileSummaries,
   useSchemaRefreshJob,
   useStartSchemaRefresh,
 } from "../incrementalQueries";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
-import { OntologyUsagePanel } from "../ontology/OntologyUsagePanel";
+import { OntologyMermaidPanel } from "../ontology/OntologyMermaidPanel";
 import { ProfileOntologyEditor } from "../ontology/ProfileOntologyEditor";
 import { createOntologyRevisionDraft } from "../ontology/api";
-import {
-  EMPTY_PROFILE_ONTOLOGY_DRAFT,
-  type ProfileOntologyDraftPayload,
-  type ProfileOntologyDraftState,
+import type {
+  ProfileOntologyDraftPayload,
+  ProfileOntologyDraftState,
 } from "../ontology/ProfileOntologyEditorCore";
-import type { OntologyGraph, OntologyNode, ProfileOntologyView } from "../ontology/types";
+import type {
+  OntologyNode,
+  ProfileOntologyViewData,
+} from "../ontology/types";
 
 /**
- * オントロジー構築（旧: 業務プロファイル編集の末尾セクション）を独立ページ化。
- * 上部でプロファイルを選び（`?profile=` 同期）、AI 構築→承認→公開と物理・業務モデル編集を行う。
- * データ供給（ontology-view 取得 / draft 保存 / スキーマ更新）は旧 ProfileManagementPage から移設。
+ * AI 構築、提案レビュー、業務モデル編集、技術表現を一続きで扱う単一ページ。
+ * 旧 tab URL は profile だけを残す正規 URL へ置き換える。
  */
 export function OntologyBuildPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [ontologyDraft, setOntologyDraft] = useState<ProfileOntologyDraftState>({ nodes: {}, edges: {} });
-  const [ontologyGraph, setOntologyGraph] = useState<OntologyGraph | null>(null);
-  const [profileOntologyView, setProfileOntologyView] = useState<ProfileOntologyView | null>(null);
-  const [ontologyWarnings, setOntologyWarnings] = useState<string[]>([]);
-  const [ontologyViewNonce, setOntologyViewNonce] = useState(0);
   const [refreshJobId, setRefreshJobId] = useState("");
-  const [error, setError] = useState("");
+  const [pageError, setPageError] = useState("");
+  const [materializingOntologyView, setMaterializingOntologyView] = useState(false);
+  const queryClient = useQueryClient();
 
   const profilesQuery = useProfileSummaries("");
   const activeProfiles = useMemo(
@@ -43,8 +58,6 @@ export function OntologyBuildPage() {
     [profilesQuery.data]
   );
   const profileParam = searchParams.get("profile");
-  const tabParam = searchParams.get("tab");
-  const activeTab = tabParam === "model" || tabParam === "usage" ? tabParam : "build";
   const selectedProfileSummary = useMemo(() => {
     if (activeProfiles.length === 0) return null;
     if (!profileParam) return activeProfiles[0];
@@ -55,18 +68,52 @@ export function OntologyBuildPage() {
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
   const profileDetailQuery = useProfileDetail(selectedProfileId);
+  const ontologyViewQuery = useProfileOntologyView(selectedProfileId);
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
+  const ontologyView = ontologyViewQuery.data?.profile_ontology_view;
+  const ontologyGraph = ontologyViewQuery.data?.ontology_graph ?? null;
+  const ontologyWarnings = ontologyViewQuery.data?.warnings_ja ?? [];
+  const ontologyViewMaterialized = Boolean(ontologyViewQuery.data?.materialized);
+  const ontologyViewStale = Boolean(ontologyViewQuery.data?.stale);
   const startSchemaRefresh = useStartSchemaRefresh();
   const schemaRefreshJobQuery = useSchemaRefreshJob(refreshJobId);
   const schemaRefreshStatus = schemaRefreshJobQuery.isError
     ? "error"
     : (schemaRefreshJobQuery.data?.status ?? "");
   const refreshing =
-    startSchemaRefresh.isPending || schemaRefreshStatus === "pending" || schemaRefreshStatus === "running";
+    startSchemaRefresh.isPending ||
+    schemaRefreshStatus === "pending" ||
+    schemaRefreshStatus === "running";
+
+  const ontologyDraft = useMemo<ProfileOntologyDraftState>(
+    () => ({
+      nodes: Object.fromEntries([
+        ...Object.entries(ontologyView?.table_usages_ja ?? {}).map(([nodeId, usage]) => [
+          nodeId,
+          { table_usage: usage },
+        ]),
+        ...(ontologyView?.draft_node_overrides ?? []).map((item) => [
+          item.node_id,
+          { business_name_ja: item.business_name_ja, table_usage: item.table_usage },
+        ]),
+      ]),
+      edges: Object.fromEntries(
+        (ontologyView?.draft_edge_overrides ?? []).map((item) => [
+          item.edge_id,
+          { cardinality: item.cardinality, allowed_path: item.allowed_path },
+        ])
+      ),
+    }),
+    [ontologyView]
+  );
 
   useEffect(() => {
-    if (profilesQuery.isError) setError(t("profiles.error.load"));
-  }, [profilesQuery.isError]);
+    if (!searchParams.has("tab")) return;
+    const next = new URLSearchParams();
+    const profileId = searchParams.get("profile");
+    if (profileId) next.set("profile", profileId);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (
@@ -79,87 +126,19 @@ export function OntologyBuildPage() {
     }
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage]);
 
-  useEffect(() => {
-    const targetId = selectedProfileId || null;
-    if (!targetId) {
-      setOntologyDraft({ nodes: {}, edges: {} });
-      setOntologyGraph(null);
-      setProfileOntologyView(null);
-      setOntologyWarnings([]);
-      return;
-    }
-    let cancelled = false;
-    const controller = new AbortController();
-    void apiGet<{
-      profile_ontology_view?: {
-        id?: string;
-        profile_id?: string;
-        ontology_revision_id?: string;
-        etag?: string;
-        activation_scenarios_ja?: string[];
-        activation_keywords?: string[];
-        scenario_version?: number;
-        table_usages_ja?: Record<string, string>;
-        draft_node_overrides?: Array<{
-          node_id: string;
-          business_name_ja?: string;
-          table_usage?: string;
-        }>;
-        draft_edge_overrides?: Array<{
-          edge_id: string;
-          cardinality?: ProfileOntologyDraftState["edges"][string]["cardinality"];
-          allowed_path?: boolean;
-        }>;
-      };
-      ontology_graph?: OntologyGraph;
-      warnings_ja?: string[];
-    }>(`/api/nl2sql/profiles/${encodeURIComponent(targetId)}/ontology-view`, {
-      signal: controller.signal,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        const view = data.profile_ontology_view;
-        setProfileOntologyView((view ?? null) as ProfileOntologyView | null);
-        setOntologyGraph(data.ontology_graph ?? null);
-        setOntologyWarnings(data.warnings_ja ?? []);
-        setOntologyDraft({
-          nodes: Object.fromEntries([
-            ...Object.entries(view?.table_usages_ja ?? {}).map(([nodeId, usage]) => [
-              nodeId,
-              { table_usage: usage },
-            ]),
-            ...(view?.draft_node_overrides ?? []).map((item) => [
-              item.node_id,
-              { business_name_ja: item.business_name_ja, table_usage: item.table_usage },
-            ]),
-          ]),
-          edges: Object.fromEntries(
-            (view?.draft_edge_overrides ?? []).map((item) => [
-              item.edge_id,
-              { cardinality: item.cardinality, allowed_path: item.allowed_path },
-            ])
-          ),
-        });
-      })
-      .catch((err) => {
-        if (cancelled || isAbortError(err)) return;
-        setOntologyGraph(null);
-        setProfileOntologyView(null);
-        setOntologyWarnings([]);
-        setOntologyDraft({ ...EMPTY_PROFILE_ONTOLOGY_DRAFT, nodes: {}, edges: {} });
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [selectedProfileId, ontologyViewNonce]);
+  const refreshOntologyView = async () => {
+    if (!selectedProfileId) return;
+    await queryClient.invalidateQueries({
+      queryKey: nl2sqlIncrementalKeys.profileOntologyView(selectedProfileId),
+    });
+  };
 
   const saveOntologyDraft = async (payload: ProfileOntologyDraftPayload) => {
     if (!selectedProfileId) throw new Error(t("profiles.empty.hint"));
     const path = `/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}/ontology-view`;
-    const current = await apiGet<{ etag?: string; profile_ontology_view?: { etag?: string } }>(path);
+    const current = await apiGet<ProfileOntologyViewData>(path);
     await apiPatch(path, {
-      base_etag: current.profile_ontology_view?.etag ?? current.etag ?? "",
+      base_etag: current.profile_ontology_view?.etag ?? "",
       table_usages_ja: payload.table_usage,
       allowed_path_ids: payload.allowed_path_ids,
       node_overrides: payload.node_overrides,
@@ -167,170 +146,235 @@ export function OntologyBuildPage() {
       physical_scope: payload.physical_scope,
       schema_fingerprint: payload.schema_fingerprint,
     });
+    await refreshOntologyView();
+  };
+
+  const materializeOntologyView = async () => {
+    if (!selectedProfileId) return;
+    setMaterializingOntologyView(true);
+    setPageError("");
+    try {
+      const data = await apiPost<ProfileOntologyViewData>(
+        `/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}/ontology-view/materialize`
+      );
+      queryClient.setQueryData(
+        nl2sqlIncrementalKeys.profileOntologyView(selectedProfileId),
+        data
+      );
+      toast.success(t("ontologyBuild.view.materializeSuccess"));
+    } catch (err) {
+      setPageError(
+        err instanceof Error ? err.message : t("ontologyBuild.view.materializeError")
+      );
+    } finally {
+      setMaterializingOntologyView(false);
+    }
   };
 
   const saveSemanticNode = async (node: OntologyNode) => {
     const revision = ontologyGraph?.revision;
-    if (!revision?.id || !revision.etag) throw new Error("Ontology revision を取得できません。");
+    if (!revision?.id || !revision.etag) {
+      throw new Error("Ontology revision を取得できません。");
+    }
     const draft = await createOntologyRevisionDraft(revision.id, revision.etag, [node]);
-    setOntologyGraph(draft);
+    queryClient.setQueryData<ProfileOntologyViewData>(
+      nl2sqlIncrementalKeys.profileOntologyView(selectedProfileId),
+      (current) => ({ ...current, ontology_graph: draft })
+    );
+    await refreshOntologyView();
   };
 
   const refreshSchema = async () => {
-    setError("");
+    setPageError("");
     try {
       const job = await startSchemaRefresh.mutateAsync();
       if (job.status === "done") {
-        await profilesQuery.refetch();
-        setOntologyViewNonce((nonce) => nonce + 1);
+        await Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
       } else {
         setRefreshJobId(job.job_id);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("profiles.error.load"));
+      setPageError(err instanceof Error ? err.message : t("profiles.error.load"));
     }
   };
 
   useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (job?.status === "done") {
-      void profilesQuery.refetch();
-      setOntologyViewNonce((nonce) => nonce + 1);
-    } else if (job?.status === "error" || schemaRefreshJobQuery.isError) {
-      setError(t("profiles.schemaRefresh.error"));
+    const status = schemaRefreshJobQuery.data?.status;
+    if (status === "done") {
+      void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
+    } else if (status === "error" || schemaRefreshJobQuery.isError) {
+      setPageError(t("profiles.schemaRefresh.error"));
     }
   }, [schemaRefreshJobQuery.data?.status, schemaRefreshJobQuery.isError]);
 
   const selectProfile = (id: string) => {
-    const next = new URLSearchParams(searchParams);
+    const next = new URLSearchParams();
     if (id) next.set("profile", id);
-    else next.delete("profile");
     setSearchParams(next, { replace: true });
   };
 
-  const selectTab = (tab: "build" | "model" | "usage") => {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", tab);
-    setSearchParams(next, { replace: true });
-  };
-
-  const saveScenarios = async (scenarios: string[], keywords: string[]) => {
-    if (!selectedProfileId) return;
-    const path = `/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}/ontology-view`;
-    const current = await apiGet<{ profile_ontology_view?: { etag?: string } }>(path);
-    await apiPatch(path, {
-      base_etag: current.profile_ontology_view?.etag ?? "",
-      activation_scenarios_ja: scenarios,
-      activation_keywords: keywords,
-    });
-    setOntologyViewNonce((nonce) => nonce + 1);
-  };
+  const workspaceLoading =
+    Boolean(selectedProfileId) && (profileDetailQuery.isLoading || ontologyViewQuery.isLoading);
+  const workspaceError = profileDetailQuery.isError || ontologyViewQuery.isError;
 
   return (
     <>
       <PageHeader title={t("nav.ontologyBuild")} subtitle={t("ontologyBuild.subtitle")} />
-      <main className="grid gap-4 p-4 lg:p-8">
-        {error ? <Banner severity="danger">{error}</Banner> : null}
-        <p className="text-sm text-muted" aria-live="polite" aria-atomic="true">
-          {schemaRefreshStatus ? t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`) : null}
-        </p>
+      <main className="grid min-w-0 gap-4 p-4 lg:p-8">
+        {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
+        {schemaRefreshStatus ? (
+          <p className="text-sm text-muted" aria-live="polite" aria-atomic="true">
+            {t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+          </p>
+        ) : null}
 
-        <section className="rounded-md border border-border bg-card p-4 shadow-sm">
-          <label className="grid gap-1 text-sm font-medium text-foreground sm:max-w-md">
-            <span>{t("ontologyBuild.profile.label")}</span>
-            <select
-              value={selectedProfileId}
-              onChange={(event) => selectProfile(event.currentTarget.value)}
-              disabled={activeProfiles.length === 0}
-              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
-              data-testid="ontology-build-profile-select"
+        <DbObjectManagementPanelShell
+          id="ontology-profile-panel"
+          role="region"
+          ariaLabel={t("ontologyBuild.profile.label")}
+          idPrefix="ontology-profile"
+        >
+          <DbObjectPanelHeader
+            icon={Target}
+            title={t("ontologyBuild.profile.label")}
+            description={t("ontologyBuild.profile.hint")}
+          />
+          {profilesQuery.isLoading ? (
+            <DbManagementLoadingSkeleton
+              idPrefix="ontology-profile"
+              ariaLabel={t("ontologyBuild.profile.loading")}
+              variant="compact"
+            />
+          ) : profilesQuery.isError ? (
+            <ErrorState
+              message={t("profiles.error.load")}
+              onRetry={() => void profilesQuery.refetch()}
+            />
+          ) : activeProfiles.length === 0 ? (
+            <EmptyState title={t("ontologyBuild.empty.title")} hint={t("ontologyBuild.empty.hint")} />
+          ) : (
+            <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,24rem)_auto]">
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                <span>{t("ontologyBuild.profile.selectLabel")}</span>
+                <select
+                  value={selectedProfileId}
+                  onChange={(event) => selectProfile(event.currentTarget.value)}
+                  className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  data-testid="ontology-build-profile-select"
+                >
+                  {activeProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {profilesQuery.hasNextPage ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={profilesQuery.isFetchingNextPage}
+                  onClick={() => void profilesQuery.fetchNextPage()}
+                >
+                  {t("profiles.action.loadMore")}
+                </Button>
+              ) : null}
+            </div>
+          )}
+          {selectedProfileId && !profilesQuery.isLoading && !profilesQuery.isError ? (
+            <div
+              className="grid gap-3 border-t border-border pt-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+              aria-live="polite"
+              aria-atomic="true"
+              data-testid="ontology-view-lifecycle"
             >
-              {activeProfiles.length === 0 ? (
-                <option value="">{t("ontologyBuild.profile.empty")}</option>
-              ) : (
-                activeProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))
-              )}
-            </select>
-            {profilesQuery.hasNextPage ? (
+              <div className="grid gap-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {t("ontologyBuild.view.title")}
+                  </h3>
+                  <StatusBadge
+                    variant={
+                      ontologyViewStale
+                        ? "warning"
+                        : ontologyViewMaterialized
+                          ? "success"
+                          : "neutral"
+                    }
+                    label={
+                      ontologyViewStale
+                        ? t("ontologyBuild.view.status.stale")
+                        : ontologyViewMaterialized
+                          ? t("ontologyBuild.view.status.current")
+                          : t("ontologyBuild.view.status.missing")
+                    }
+                  />
+                </div>
+                <p className="text-sm text-muted">
+                  {ontologyViewStale
+                    ? t("ontologyBuild.view.staleHint")
+                    : t("ontologyBuild.view.hint")}
+                </p>
+              </div>
               <Button
                 type="button"
                 variant="secondary"
-                size="sm"
-                loading={profilesQuery.isFetchingNextPage}
-                onClick={() => void profilesQuery.fetchNextPage()}
+                size="md"
+                loading={materializingOntologyView}
+                onClick={() => void materializeOntologyView()}
               >
-                {t("profiles.action.loadMore")}
+                {ontologyViewMaterialized
+                  ? t("ontologyBuild.view.rebuild")
+                  : t("ontologyBuild.view.build")}
               </Button>
-            ) : null}
-          </label>
-        </section>
+            </div>
+          ) : null}
+        </DbObjectManagementPanelShell>
 
-        {!profilesQuery.isLoading && activeProfiles.length === 0 ? (
-          <EmptyState title={t("ontologyBuild.empty.title")} hint={t("ontologyBuild.empty.hint")} />
-        ) : (
+        {workspaceLoading ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="ontology-workspace"
+            ariaLabel={t("ontologyBuild.workspace.loading")}
+            variant="detail"
+          />
+        ) : workspaceError ? (
+          <ErrorState
+            message={t("ontologyBuild.workspace.error")}
+            onRetry={() => {
+              void profileDetailQuery.refetch();
+              void ontologyViewQuery.refetch();
+            }}
+          />
+        ) : selectedProfileId ? (
           <>
-            <nav
-              className="flex flex-wrap gap-2 rounded-md border border-border bg-card p-2"
-              role="tablist"
-              aria-label={t("ontologyBuild.tabs.label")}
-            >
-              {(["build", "model", "usage"] as const).map((tab) => (
-                <Button
-                  key={tab}
-                  type="button"
-                  variant={activeTab === tab ? "primary" : "secondary"}
-                  size="sm"
-                  role="tab"
-                  aria-selected={activeTab === tab}
-                  onClick={() => selectTab(tab)}
-                >
-                  {t(`ontologyBuild.tabs.${tab}`)}
-                </Button>
-              ))}
-            </nav>
-
-            {activeTab === "build" ? (
-              <OntologyBuildSection
-                profileId={selectedProfileId || null}
-                onPublished={() => setOntologyViewNonce((nonce) => nonce + 1)}
-              />
-            ) : null}
-            {activeTab === "model" ? (
-              <ProfileOntologyEditor
-                graph={ontologyGraph}
-                profileId={selectedProfileId || "new-profile"}
-                selectedTables={selectedProfile?.allowed_tables ?? []}
-                selectedViews={selectedProfile?.allowed_views ?? []}
-                warnings={ontologyWarnings}
-                onRefreshSchema={selectedProfileId ? refreshSchema : undefined}
-                refreshingSchema={refreshing}
-                initialDraft={ontologyDraft}
-                onSaveDraft={selectedProfileId ? saveOntologyDraft : undefined}
-                onSaveSemanticNode={selectedProfileId ? saveSemanticNode : undefined}
-                labels={{
-                  inspectorTitle: t("profiles.ontology.inspector"),
-                  tableUsage: t("profiles.ontology.usage"),
-                  cardinality: t("profiles.ontology.cardinality"),
-                  allowedPath: t("profiles.ontology.allowedPath"),
-                  graphUnavailableTitle: t("profiles.ontology.emptyTitle"),
-                  graphUnavailable: t("profiles.ontology.emptyHint"),
-                }}
-              />
-            ) : null}
-            {activeTab === "usage" && selectedProfileId ? (
-              <OntologyUsagePanel
-                key={`${selectedProfileId}:${profileOntologyView?.scenario_version ?? 0}`}
-                profileId={selectedProfileId}
-                view={profileOntologyView}
-                onSaveScenarios={saveScenarios}
-              />
-            ) : null}
+            <OntologyBuildSection
+              profileId={selectedProfileId}
+              onPublished={() => void refreshOntologyView()}
+            />
+            <ProfileOntologyEditor
+              graph={ontologyGraph}
+              profileId={selectedProfileId}
+              selectedTables={selectedProfile?.allowed_tables ?? []}
+              selectedViews={selectedProfile?.allowed_views ?? []}
+              warnings={ontologyWarnings}
+              onRefreshSchema={refreshSchema}
+              refreshingSchema={refreshing}
+              initialDraft={ontologyDraft}
+              onSaveDraft={saveOntologyDraft}
+              onSaveSemanticNode={saveSemanticNode}
+              labels={{
+                inspectorTitle: t("profiles.ontology.inspector"),
+                tableUsage: t("profiles.ontology.usage"),
+                cardinality: t("profiles.ontology.cardinality"),
+                allowedPath: t("profiles.ontology.allowedPath"),
+                graphUnavailableTitle: t("profiles.ontology.emptyTitle"),
+                graphUnavailable: t("profiles.ontology.emptyHint"),
+              }}
+            />
+            <OntologyMermaidPanel profileId={selectedProfileId} />
           </>
-        )}
+        ) : null}
       </main>
     </>
   );

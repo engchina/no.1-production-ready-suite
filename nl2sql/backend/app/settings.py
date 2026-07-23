@@ -148,11 +148,23 @@ class Settings(BaseServiceSettings):
     nl2sql_ontology_graph_cache_max_revisions: int = 3
     nl2sql_ontology_graph_cache_max_megabytes: int = 256
     nl2sql_schema_refresh_worker_enabled: bool = True
+    # inprocess: local 開発用 thread、external: API は job 永続化だけを行う。
+    nl2sql_schema_refresh_worker_mode: str = "inprocess"
     nl2sql_schema_refresh_lease_seconds: float = 900.0
+    # 品質評価は local で inprocess、Oracle 運用で external worker を使う。
+    nl2sql_quality_evaluation_worker_mode: str = "inprocess"
+    nl2sql_quality_evaluation_worker_poll_seconds: float = 1.0
+    nl2sql_quality_evaluation_lease_seconds: float = 900.0
+    nl2sql_quality_evaluation_max_file_bytes: int = 10 * 1024 * 1024
+    nl2sql_quality_evaluation_max_cases: int = 100
+    nl2sql_quality_evaluation_max_attempts: int = 1000
     # Ontology worker / reasoning。production では external worker + Oracle RDF network を指定する。
     nl2sql_ontology_worker_mode: str = "inprocess"
     nl2sql_ontology_worker_poll_seconds: float = 1.0
     nl2sql_ontology_worker_claim_timeout_seconds: float = 900.0
+    # Oracle Profile 同期は永続 job で実行し、DB round-trip と job 全体を別々に制限する。
+    nl2sql_oracle_call_timeout_seconds: float = 120.0
+    nl2sql_profile_sync_job_timeout_seconds: float = 300.0
     nl2sql_ontology_reasoning_profile: str = "owl2rl"
     nl2sql_ontology_shacl_enabled: bool = True
     nl2sql_ontology_rdf_network_owner: str = ""

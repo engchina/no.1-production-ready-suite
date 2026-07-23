@@ -33,9 +33,6 @@ from app.features.nl2sql.models import (
     CommentApplyItem,
     CommentApplyRequest,
     CommentSuggestionRequest,
-    CompareRequest,
-    EvaluateRequest,
-    EvaluationSetUpsertRequest,
     FeedbackIndexRequest,
     JobCreateRequest,
     JobData,
@@ -47,7 +44,6 @@ from app.features.nl2sql.models import (
     SampleDataMutationRequest,
     SampleDataStep,
     SimilarHistoryRequest,
-    SyntheticCase,
     SyntheticDataGenerateRequest,
 )
 from app.features.nl2sql.service import nl2sql_service
@@ -528,66 +524,7 @@ def _job(
     return StepResult(name=f"job_{engine.value}", ok=ok, message=message)
 
 
-def _compare_smoke(
-    *,
-    engines: list[Nl2SqlEngine],
-    profile_id: str | None,
-    question: str,
-    allowed: AllowedObjects,
-    row_limit: int,
-    execute: bool,
-    require_oracle: bool,
-    require_enterprise_ai: bool,
-) -> StepResult:
-    try:
-        data = nl2sql_service.compare_engines(
-            CompareRequest(
-                question=question,
-                profile_id=profile_id,
-                allowed_objects=allowed,
-                row_limit=row_limit,
-                execute=execute,
-                engines=engines,
-            )
-        )
-    except Exception as exc:
-        return StepResult(name="compare_engines", ok=False, message=str(exc))
-    runtimes = [
-        str(result.engine_meta.get("runtime") or "deterministic") for result in data.results
-    ]
-    ok = bool(data.results) and all(result.is_safe for result in data.results)
-    if require_oracle:
-        ok = ok and all(
-            (
-                runtime == "oracle"
-                if result.engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
-                else True
-            )
-            for result, runtime in zip(data.results, runtimes, strict=False)
-        )
-    if require_enterprise_ai:
-        ok = ok and all(
-            (
-                runtime == "oci_enterprise_ai"
-                if result.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
-                else True
-            )
-            for result, runtime in zip(data.results, runtimes, strict=False)
-        )
-    executed = [item for item in data.execution_results if item.executed]
-    message = (
-        f"engines={','.join(result.engine.value for result in data.results)}; "
-        f"runtimes={','.join(runtimes) or '-'}; "
-        f"safe={sum(1 for result in data.results if result.is_safe)}/{len(data.results)}; "
-        f"execute={execute}; executed={len(executed)}/{len(data.execution_results)}; "
-        f"error_rate={data.error_rate}; recommendation={_one_line(data.recommendation, 120)}"
-    )
-    return StepResult(name="compare_engines", ok=ok, message=message)
-
-
-def _supporting_features(
-    *, profile_id: str | None, engine: Nl2SqlEngine, synthetic_limit: int
-) -> list[StepResult]:
+def _supporting_features() -> list[StepResult]:
     results: list[StepResult] = []
     try:
         comments = nl2sql_service.suggest_comments()
@@ -630,76 +567,6 @@ def _supporting_features(
         results.append(
             StepResult(name="support_comment_sql_generation", ok=False, message=str(exc))
         )
-
-    try:
-        synthetic = nl2sql_service.synthetic_cases(profile_id=profile_id, limit=synthetic_limit)
-        cases = [
-            {"question": item.question, "expected_sql": item.expected_sql}
-            for item in synthetic.cases
-        ]
-        evaluation = nl2sql_service.evaluate(EvaluateRequest(cases=cases, engine=engine))
-        results.append(
-            StepResult(
-                name="support_synthetic_evaluation",
-                ok=evaluation.total_cases == len(cases) and evaluation.executable_rate >= 0,
-                message=(
-                    f"cases={evaluation.total_cases}; "
-                    f"executable_rate={evaluation.executable_rate}; "
-                    f"select_only_rate={evaluation.select_only_rate}"
-                ),
-            )
-        )
-    except Exception as exc:
-        results.append(StepResult(name="support_synthetic_evaluation", ok=False, message=str(exc)))
-
-    try:
-        synthetic = nl2sql_service.synthetic_cases(
-            profile_id=profile_id, limit=max(synthetic_limit, 1)
-        )
-        created = nl2sql_service.create_evaluation_set(
-            EvaluationSetUpsertRequest(
-                name="manual integration temporary evaluation set",
-                description="Created and archived by nl2sql_manual_integration.py",
-                profile_id=profile_id,
-                engine=engine,
-                cases=[
-                    SyntheticCase(
-                        question=item.question,
-                        expected_sql=item.expected_sql,
-                        profile_id=item.profile_id,
-                    )
-                    for item in synthetic.cases[:1]
-                ],
-            )
-        )
-        listed = nl2sql_service.list_evaluation_sets().items
-        updated = nl2sql_service.update_evaluation_set(
-            created.id,
-            EvaluationSetUpsertRequest(
-                name=created.name,
-                description="Updated by nl2sql_manual_integration.py",
-                profile_id=created.profile_id,
-                engine=engine,
-                cases=created.cases,
-            ),
-        )
-        archived = nl2sql_service.archive_evaluation_set(created.id)
-        results.append(
-            StepResult(
-                name="support_evaluation_sets",
-                ok=(
-                    any(item.id == created.id for item in listed)
-                    and updated.updated_at >= created.updated_at
-                    and archived.archived
-                ),
-                message=(
-                    f"created={created.id[:8]}; cases={len(created.cases)}; "
-                    f"listed={len(listed)}; archived={archived.archived}"
-                ),
-            )
-        )
-    except Exception as exc:
-        results.append(StepResult(name="support_evaluation_sets", ok=False, message=str(exc)))
 
     try:
         status = nl2sql_service.feedback_index_status()
@@ -1526,8 +1393,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check-supporting-features",
         action="store_true",
         help=(
-            "Run non-mutating checks for comment suggestions, synthetic cases, "
-            "and deterministic evaluation."
+            "Run non-mutating checks for comment suggestions and feedback index status."
         ),
     )
     parser.add_argument(
@@ -1581,16 +1447,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="Run engine comparison smoke and persist a compare record.",
-    )
-    parser.add_argument(
         "--full-smoke",
         action="store_true",
         help=(
             "Run asset refresh, post-refresh diagnostics, previews, execute jobs, "
-            "supporting checks, and engine comparison in one command."
+            "supporting checks in one command."
         ),
     )
     parser.add_argument(
@@ -1622,12 +1483,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "Execute feedback vector index rebuild. Requires Oracle runtime and "
             "OCI GenAI embedding configuration."
         ),
-    )
-    parser.add_argument(
-        "--synthetic-limit",
-        type=int,
-        default=4,
-        help="Synthetic case limit for --check-supporting-features.",
     )
     parser.add_argument(
         "--require-oracle",
@@ -1719,7 +1574,6 @@ def main(argv: list[str] | None = None) -> int:
     execute_jobs = args.execute or args.full_smoke or release_gate
     check_supporting = args.check_supporting_features or args.full_smoke or release_gate
     check_legacy_absorption = args.check_legacy_absorption
-    compare_engines = args.compare or args.full_smoke or release_gate
     require_oracle = args.require_oracle or release_gate
     require_oracle_persistence = args.require_oracle_persistence or release_gate
     require_refreshed_assets = args.require_refreshed_assets or args.full_smoke or release_gate
@@ -1829,13 +1683,7 @@ def main(argv: list[str] | None = None) -> int:
         results.append(_seed_demo_learning())
 
     if check_supporting:
-        results.extend(
-            _supporting_features(
-                profile_id=profile_id,
-                engine=args.engines[0],
-                synthetic_limit=max(args.synthetic_limit, 0),
-            )
-        )
+        results.extend(_supporting_features())
 
     if check_legacy_absorption:
         results.extend(
@@ -1885,20 +1733,6 @@ def main(argv: list[str] | None = None) -> int:
                     require_enterprise_ai=args.require_enterprise_ai,
                 )
             )
-
-    if compare_engines:
-        results.append(
-            _compare_smoke(
-                engines=args.engines,
-                profile_id=profile_id,
-                question=args.question,
-                allowed=allowed,
-                row_limit=args.row_limit,
-                execute=execute_jobs,
-                require_oracle=require_oracle,
-                require_enterprise_ai=args.require_enterprise_ai,
-            )
-        )
 
     if args.execute_db_profile_drop:
         drop_results = _legacy_db_profile_smoke(

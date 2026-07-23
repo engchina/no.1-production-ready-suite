@@ -11,6 +11,7 @@ import {
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   ExecutionConfirmationField,
@@ -38,9 +39,13 @@ import type {
   DbAdminExecuteData,
   DbAdminImportTabularData,
   DbAdminObjectDetail,
+  DbAdminObjectPage,
   DbAdminObjectsData,
-  SchemaCatalog,
+  SchemaRefreshJob,
 } from "../types";
+import { waitForSchemaRefreshJob } from "../incrementalQueries";
+import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
+import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
@@ -218,8 +223,6 @@ function ImportWizard({
 
 export function TableManagementPage() {
   const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
-  const [selectedTableName, setSelectedTableName] = useState("");
-  const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [exactCountDone, setExactCountDone] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("list");
@@ -240,25 +243,21 @@ export function TableManagementPage() {
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const detailRequest = useDbObjectDetailRequest({
+    collectionPath: "/api/nl2sql/db-admin/tables",
+    loadErrorMessage: t("tableMgmt.error.detail"),
+    timeoutErrorMessage: t("dbAdmin.detail.timeout", { seconds: 15 }),
+  });
+  const {
+    selectedName: selectedTableName,
+    detail,
+    setDetail,
+  } = detailRequest;
 
   const fetchDetail = async (name: string) => {
-    setLoading(`detail-${name}`);
-    setMessage("");
-    setSelectedTableName(name);
-    setDetail(null);
     setDetailTab("columns");
     setExactCountDone(false);
-    try {
-      setDetail(
-        await apiGet<DbAdminObjectDetail>(
-          `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=0`,
-        ),
-      );
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("tableMgmt.error.load"));
-    } finally {
-      setLoading("");
-    }
+    await detailRequest.load(name);
   };
 
   // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
@@ -300,6 +299,7 @@ export function TableManagementPage() {
 
   const load = async (refreshSchema = false) => {
     const sequence = loadSequence.current + 1;
+    const detailVersionAtStart = detailRequest.requestVersion();
     loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
@@ -308,28 +308,36 @@ export function TableManagementPage() {
         // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
         // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
         if (refreshSchema) {
-          await apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal });
+          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+            signal,
+            timeoutMs: API_TIMEOUT_MS.jobControl,
+          });
+          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
         }
-        const tableData = await apiGet<DbAdminObjectsData>(
-          "/api/nl2sql/db-admin/tables",
-          { signal }
+        const page = filterUserVisibleDbAdminObjectPage(
+          await apiGet<DbAdminObjectPage>(
+            "/api/nl2sql/db-admin/objects?limit=100&type=table&row_state=all",
+            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+          )
         );
+        const tableData: DbAdminObjectsData = {
+          runtime: page.runtime,
+          items: page.items,
+          refreshed_at: page.refreshed_at,
+          warnings: page.warnings,
+        };
         if (signal.aborted || sequence !== loadSequence.current) return;
         setTables(tableData);
         const nextSelected =
           tableData.items.find((item) => item.name === selectedTableName)?.name ||
           tableData.items[0]?.name ||
           "";
-        setSelectedTableName(nextSelected);
-        setExactCountDone(false);
-        if (nextSelected) {
-          const nextDetail = await apiGet<DbAdminObjectDetail>(
-            `/api/nl2sql/db-admin/tables/${encodeURIComponent(nextSelected)}?include_ddl=0`,
-            { signal }
-          );
-          if (!signal.aborted && sequence === loadSequence.current) setDetail(nextDetail);
-        } else {
-          setDetail(null);
+        if (detailRequest.requestVersion() === detailVersionAtStart) {
+          if (nextSelected) {
+            void fetchDetail(nextSelected);
+          } else {
+            detailRequest.clear();
+          }
         }
       });
     } catch (err) {
@@ -349,6 +357,13 @@ export function TableManagementPage() {
       abortAll();
     };
   }, []);
+
+  const reloadAfterMutation = async (result: { schema_refresh_job_id?: string }) => {
+    if (result.schema_refresh_job_id) {
+      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+    }
+    await load();
+  };
 
   const filteredTables = useMemo(() => {
     const q = tableSearch.trim().toLowerCase();
@@ -411,7 +426,7 @@ export function TableManagementPage() {
       setImportResult(result);
       setImportStep("execute");
       if (result.executed) {
-        await load(true);
+        await reloadAfterMutation(result);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.import"));
@@ -461,7 +476,7 @@ export function TableManagementPage() {
         setDropTargetName("");
         setDropConfirmation("");
         toast.success(t("tableMgmt.drop.success", { name: dropped }));
-        await load(true);
+        await reloadAfterMutation(result);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.drop"));
@@ -488,7 +503,7 @@ export function TableManagementPage() {
         confirmationTitle={t("tableMgmt.create.executeTitle")}
         executeOnly
         framed={false}
-        onExecuted={() => load(true)}
+        onExecuted={reloadAfterMutation}
       />
     ) : activeView === "import" ? (
       <ImportWizard
@@ -602,6 +617,7 @@ export function TableManagementPage() {
                 title: t("tableMgmt.list.title"),
                 hint: t("tableMgmt.grid.hint"),
                 count: t("tableMgmt.grid.count", { count: filteredTables.length }),
+                loading: t("tableMgmt.list.loading"),
                 emptyTitle: t("tableMgmt.list.emptyTitle"),
                 emptyHint: t("tableMgmt.list.emptyHint"),
                 noResultsTitle: t("tableMgmt.list.noResultsTitle"),
@@ -628,11 +644,13 @@ export function TableManagementPage() {
               idPrefix="table-management"
               headingId="table-detail-heading"
               detail={detail}
-              loading={loading.startsWith("detail-") || (loading === "load" && !detail)}
+              loading={detailRequest.loading || (loading === "load" && !tables)}
+              error={detailRequest.error}
               exporting={loading === "table-export"}
               countingRows={loading === "count"}
               tab={detailTab}
               labels={{
+                loading: t("tableMgmt.detail.loading"),
                 tabsLabel: t("tableMgmt.detailTabs.label"),
                 columns: t("tableMgmt.detailTabs.columns"),
                 ddl: t("tableMgmt.detailTabs.ddl"),
@@ -643,6 +661,7 @@ export function TableManagementPage() {
                 drop: t("tableMgmt.grid.drop"),
               }}
               onTabChange={handleDetailTabChange}
+              onRetry={() => void fetchDetail(selectedTableName)}
               onExport={(name) => void downloadColumnsXlsx(name)}
               onExactCount={exactCountDone ? undefined : (name) => void handleExactCount(name)}
               onDrop={openDropDialog}

@@ -196,20 +196,6 @@ const databaseDependentScenarios: Scenario[] = [
       );
     },
   },
-  {
-    name: "NL2SQL 安全境界・Readiness",
-    path: "/settings/nl2sql-database",
-    heading: "NL2SQL 安全境界・Readiness",
-    setup: async (page, countRequest) => {
-      await page.route("**/api/schema/catalog", (route) => {
-        countRequest();
-        return fulfill(route, { refreshed_at: "2026-07-21T00:00:00Z", tables: [] });
-      });
-      await page.route("**/api/nl2sql/diagnostics", (route) =>
-        fulfill(route, { checks: [], readiness: [] })
-      );
-    },
-  },
 ];
 
 for (const scenario of databaseIndependentScenarios) {

@@ -6,6 +6,7 @@ export const FIXED_SPLIT_EQUAL_FRACTION = 0.5;
 export const FIXED_SPLIT_LEFT_WIDE_FRACTION = GOLDEN_RATIO / (GOLDEN_RATIO + 1);
 export const FIXED_SPLIT_RIGHT_WIDE_FRACTION = 1 / (GOLDEN_RATIO + 1);
 export const FIXED_SPLIT_DIVIDER_SIZE_PX = 14;
+export const FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX = 320;
 export const FIXED_SPLIT_KEYBOARD_STEP_PX = 24;
 export const FIXED_SPLIT_KEYBOARD_FAST_STEP_PX = 72;
 
@@ -41,6 +42,58 @@ export function nextFixedSplitRatio(current: FixedSplitRatio): FixedSplitRatio {
 export function clampFixedSplitFraction(value: number) {
   if (!Number.isFinite(value)) return FIXED_SPLIT_EQUAL_FRACTION;
   return Math.min(FIXED_SPLIT_MAX_FRACTION, Math.max(FIXED_SPLIT_MIN_FRACTION, value));
+}
+
+function nonNegativeWidth(value: number) {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+export function fixedSplitFractionBounds(
+  availableWidthPx: number,
+  minLeftPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
+  minRightPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX
+) {
+  if (!Number.isFinite(availableWidthPx) || availableWidthPx <= 0) {
+    return {
+      minFraction: FIXED_SPLIT_MIN_FRACTION,
+      maxFraction: FIXED_SPLIT_MAX_FRACTION,
+    };
+  }
+
+  const minFraction = Math.max(
+    FIXED_SPLIT_MIN_FRACTION,
+    nonNegativeWidth(minLeftPaneWidthPx) / availableWidthPx
+  );
+  const maxFraction = Math.min(
+    FIXED_SPLIT_MAX_FRACTION,
+    1 - nonNegativeWidth(minRightPaneWidthPx) / availableWidthPx
+  );
+
+  // 必要幅を確保できないコンテナは UI 側で単列化する。計測の瞬間的なずれでも
+  // 分割線が一方へ寄らないよう、境界が交差した場合は中央へ固定する。
+  if (minFraction > maxFraction) {
+    return {
+      minFraction: FIXED_SPLIT_EQUAL_FRACTION,
+      maxFraction: FIXED_SPLIT_EQUAL_FRACTION,
+    };
+  }
+
+  return { minFraction, maxFraction };
+}
+
+export function clampFixedSplitFractionToPaneWidths(
+  value: number,
+  availableWidthPx: number,
+  minLeftPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
+  minRightPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX
+) {
+  const fallbackValue = clampFixedSplitFraction(value);
+  const { minFraction, maxFraction } = fixedSplitFractionBounds(
+    availableWidthPx,
+    minLeftPaneWidthPx,
+    minRightPaneWidthPx
+  );
+  return Math.min(maxFraction, Math.max(minFraction, fallbackValue));
 }
 
 export function fixedSplitFractionForRatio(ratio: FixedSplitRatio) {
@@ -83,11 +136,22 @@ export function nextFixedSplitStateFromFraction(leftFraction: number): FixedSpli
   return fixedSplitStateForRatio(nextFixedSplitRatio(nearestFixedSplitRatio(leftFraction)));
 }
 
-export function adjustFixedSplitFraction(leftFraction: number, deltaPx: number, availableWidthPx: number) {
+export function adjustFixedSplitFraction(
+  leftFraction: number,
+  deltaPx: number,
+  availableWidthPx: number,
+  minLeftPaneWidthPx = 0,
+  minRightPaneWidthPx = 0
+) {
   if (!Number.isFinite(availableWidthPx) || availableWidthPx <= 0) {
     return clampFixedSplitFraction(leftFraction);
   }
-  return clampFixedSplitFraction(leftFraction + deltaPx / availableWidthPx);
+  return clampFixedSplitFractionToPaneWidths(
+    leftFraction + deltaPx / availableWidthPx,
+    availableWidthPx,
+    minLeftPaneWidthPx,
+    minRightPaneWidthPx
+  );
 }
 
 function parseStorageObject(value: FixedSplitStorageValue): FixedSplitPaneState | null {

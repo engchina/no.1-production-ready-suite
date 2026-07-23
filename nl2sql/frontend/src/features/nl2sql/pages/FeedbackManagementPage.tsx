@@ -693,10 +693,88 @@ export function FeedbackManagementPage() {
             labelledBy="feedback-management-tab-appFeedback"
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
-            splitId="feedback-management-app-feedback-split"
-            preferredWidePane="right"
+            splitId="feedback-management-app-feedback-history-left-v2"
+            preferredWidePane="left"
+            minLeftPaneWidthPx={640}
+            minRightPaneWidthPx={420}
           >
-            <section className="grid min-w-0 content-start gap-4">
+            <section
+              className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4"
+              data-testid="feedback-history-pane"
+            >
+              <DbObjectPanelHeader title={t("feedbackManagement.appFeedback.historyList")} icon={MessageSquareText} />
+              <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.search")}</span>
+                  <input
+                    value={feedbackSearch}
+                    onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
+                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
+                  />
+                </label>
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.filter")}</span>
+                  <select
+                    aria-label={t("feedbackManagement.appFeedback.filter")}
+                    value={feedbackFilter}
+                    onChange={(event) =>
+                      setFeedbackFilter(event.currentTarget.value as "all" | FeedbackRating | "unrated")
+                    }
+                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  >
+                    <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
+                    <option value="good">{t("nl2sql.feedback.good")}</option>
+                    <option value="bad">{t("nl2sql.feedback.bad")}</option>
+                    <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
+                  </select>
+                </label>
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <span>{t("feedbackManagement.appFeedback.profileFilter")}</span>
+                  <select
+                    aria-label={t("feedbackManagement.appFeedback.profileFilter")}
+                    value={appProfileFilter}
+                    onChange={(event) => setAppProfileFilter(event.currentTarget.value)}
+                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  >
+                    <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
+                    {appProfiles.filter((profile) => !profile.archived).map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <Button type="button" variant="secondary" size="sm" loading={loading === "app-feedback-load"} onClick={() => void refreshAppFeedback()}>
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
+                </Button>
+              </div>
+              <div className="grid min-w-0 gap-2">
+                {appFeedbackItems.length > 0 ? (
+                  appFeedbackItems.map((item) => (
+                    <FeedbackHistoryRow
+                      key={item.id}
+                      item={item}
+                      selected={selectedAppFeedback?.id === item.id}
+                      onSelect={() => setSelectedFeedbackId(item.id)}
+                    />
+                  ))
+                ) : (
+                  <EmptyState
+                    title={t("feedbackManagement.appFeedback.noMatchesTitle")}
+                    hint={t("feedbackManagement.appFeedback.noMatchesHint")}
+                  />
+                )}
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
+                <span className="text-sm text-muted">{t("feedbackManagement.appFeedback.page", { page: feedbackPage, total: feedbackTotal })}</span>
+                <div className="flex gap-2">
+                  <Button type="button" variant="secondary" size="sm" disabled={feedbackCursorStack.length === 0} onClick={previousAppFeedbackPage}>{t("qcm.training.pagination.prev")}</Button>
+                  <Button type="button" variant="secondary" size="sm" disabled={!feedbackNextCursor} onClick={nextAppFeedbackPage}>{t("qcm.training.pagination.next")}</Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="grid min-w-0 content-start gap-4" data-testid="app-feedback-editor-pane">
               <DbObjectPanelHeader
                 title={t("feedbackManagement.appFeedback.title")}
                 description={t("feedbackManagement.appFeedback.hint")}
@@ -704,13 +782,13 @@ export function FeedbackManagementPage() {
               />
               {history.length > 0 && selectedAppFeedback ? (
                 <>
-                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                     <span>{t("feedbackManagement.appFeedback.history")}</span>
                     <select
                       aria-label={t("feedbackManagement.appFeedback.history")}
                       value={selectedAppFeedback.id}
                       onChange={(event) => setSelectedFeedbackId(event.currentTarget.value)}
-                      className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
                       {history.map((item) => (
                         <option key={item.id} value={item.id}>
@@ -719,7 +797,7 @@ export function FeedbackManagementPage() {
                       ))}
                     </select>
                   </label>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid min-w-0 gap-3 sm:grid-cols-2">
                     <div className="rounded-md border border-border bg-card p-3">
                       <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.profile")}</p>
                       <p className="mt-1 break-words text-sm font-semibold text-foreground">{selectedAppFeedback.profile_name || selectedAppFeedback.profile_id || "-"}</p>
@@ -733,34 +811,34 @@ export function FeedbackManagementPage() {
                       )}
                     </div>
                   </div>
-                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                     <span>{t("feedbackManagement.appFeedback.generatedSql")}</span>
                     <textarea
                       value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
                       readOnly
                       rows={5}
-                      className="min-h-32 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+                      className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
                     />
                   </label>
-                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                     <span>{t("feedbackManagement.appFeedback.rating")}</span>
                     <select
                       aria-label={t("feedbackManagement.appFeedback.rating")}
                       value={feedbackRating}
                       onChange={(event) => setFeedbackRating(event.currentTarget.value as FeedbackRating)}
-                      className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
                       <option value="bad">{t("nl2sql.feedback.bad")}</option>
                     </select>
                   </label>
-                  <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                     <span>{t("nl2sql.feedback.comment")}</span>
                     <textarea
                       value={feedbackComment}
                       onChange={(event) => setFeedbackComment(event.currentTarget.value)}
                       rows={4}
-                      className="min-h-28 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                       placeholder={t("nl2sql.feedback.commentPlaceholder")}
                     />
                   </label>
@@ -798,78 +876,6 @@ export function FeedbackManagementPage() {
               )}
             </section>
 
-            <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4">
-              <DbObjectPanelHeader title={t("feedbackManagement.appFeedback.historyList")} icon={MessageSquareText} />
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end">
-                <label className="grid gap-1 text-sm font-medium text-foreground">
-                  <span>{t("feedbackManagement.appFeedback.search")}</span>
-                  <input
-                    value={feedbackSearch}
-                    onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
-                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-medium text-foreground">
-                  <span>{t("feedbackManagement.appFeedback.filter")}</span>
-                  <select
-                    aria-label={t("feedbackManagement.appFeedback.filter")}
-                    value={feedbackFilter}
-                    onChange={(event) =>
-                      setFeedbackFilter(event.currentTarget.value as "all" | FeedbackRating | "unrated")
-                    }
-                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                  >
-                    <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
-                    <option value="good">{t("nl2sql.feedback.good")}</option>
-                    <option value="bad">{t("nl2sql.feedback.bad")}</option>
-                    <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
-                  </select>
-                </label>
-                <label className="grid gap-1 text-sm font-medium text-foreground">
-                  <span>{t("feedbackManagement.appFeedback.profileFilter")}</span>
-                  <select
-                    aria-label={t("feedbackManagement.appFeedback.profileFilter")}
-                    value={appProfileFilter}
-                    onChange={(event) => setAppProfileFilter(event.currentTarget.value)}
-                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                  >
-                    <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
-                    {appProfiles.filter((profile) => !profile.archived).map((profile) => (
-                      <option key={profile.id} value={profile.id}>{profile.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <Button type="button" variant="secondary" size="sm" loading={loading === "app-feedback-load"} onClick={() => void refreshAppFeedback()}>
-                  <RefreshCw size={15} aria-hidden="true" />
-                  <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
-                </Button>
-              </div>
-              <div className="grid gap-2">
-                {appFeedbackItems.length > 0 ? (
-                  appFeedbackItems.map((item) => (
-                    <FeedbackHistoryRow
-                      key={item.id}
-                      item={item}
-                      selected={selectedAppFeedback?.id === item.id}
-                      onSelect={() => setSelectedFeedbackId(item.id)}
-                    />
-                  ))
-                ) : (
-                  <EmptyState
-                    title={t("feedbackManagement.appFeedback.noMatchesTitle")}
-                    hint={t("feedbackManagement.appFeedback.noMatchesHint")}
-                  />
-                )}
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
-                <span className="text-sm text-muted">{t("feedbackManagement.appFeedback.page", { page: feedbackPage, total: feedbackTotal })}</span>
-                <div className="flex gap-2">
-                  <Button type="button" variant="secondary" size="sm" disabled={feedbackCursorStack.length === 0} onClick={previousAppFeedbackPage}>{t("qcm.training.pagination.prev")}</Button>
-                  <Button type="button" variant="secondary" size="sm" disabled={!feedbackNextCursor} onClick={nextAppFeedbackPage}>{t("qcm.training.pagination.next")}</Button>
-                </div>
-              </div>
-            </section>
           </DbObjectManagementPanelShell>
         )}
 
@@ -1144,14 +1150,14 @@ function FeedbackHistoryRow({
     <button
       type="button"
       data-testid="feedback-history-row"
-      className={`grid gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-ring/40 ${
+      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-ring/40 ${
         selected ? "border-primary/40 bg-primary/10" : "border-border bg-card hover:bg-background"
       }`}
       onClick={onSelect}
     >
-      <span className="flex flex-wrap items-start justify-between gap-2">
-        <span className="font-semibold text-foreground">{item.question}</span>
-        <span className="flex flex-wrap gap-2">
+      <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <span className="min-w-0 break-words font-semibold text-foreground">{item.question}</span>
+        <span className="flex min-w-0 flex-wrap gap-2">
           <StatusBadge variant="neutral" label={engineLabel(item.engine)} />
           <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
           {item.profile_name && <StatusBadge variant="info" label={item.profile_name} />}

@@ -42,6 +42,9 @@ class _SchemaCursor:
     def execute(self, sql: str, _binds: dict[str, Any] | None = None) -> None:
         self.database.executed.append(" ".join(sql.split()))
 
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return []
+
 
 class _SchemaConnection:
     def __init__(self, database: _SchemaDatabase) -> None:
@@ -225,6 +228,29 @@ def test_memory_store_round_trips_graph_and_returns_detached_values() -> None:
     assert unchanged is not None
     assert unchanged["business_name"] == "顧客"
     assert unchanged["embedding"] == [0.25, 0.5]
+
+
+def test_oracle_object_node_lookup_filters_indexes_without_selecting_embedding() -> None:
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+
+    documents = store.list_documents(
+        "nodes",
+        {
+            "revision_id": "revision-published",
+            "node_type": "column",
+            "physical_id": stable_physical_id("table", "APP", "ORDERS"),
+        },
+        include_embedding=False,
+    )
+
+    assert documents == []
+    sql = database.executed[-1]
+    assert "SELECT PAYLOAD_JSON, VERSION_NO, ETAG FROM" in sql
+    assert "EMBEDDING" not in sql
+    assert "REVISION_ID = :filter_revision_id" in sql
+    assert "NODE_TYPE = :filter_node_type" in sql
+    assert "PHYSICAL_ID = :filter_physical_id" in sql
 
 
 def test_memory_atomic_save_rolls_back_entire_revision_switch_on_conflict() -> None:

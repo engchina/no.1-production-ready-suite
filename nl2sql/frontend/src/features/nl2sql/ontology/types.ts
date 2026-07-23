@@ -217,6 +217,27 @@ export interface ProfileOntologyView {
   activation_scenarios_ja?: string[];
   activation_keywords?: string[];
   scenario_version?: number;
+  source_profile_etag?: string;
+  source_profile_scope_fingerprint?: string;
+  table_usages_ja?: Record<string, string>;
+  draft_node_overrides?: Array<{
+    node_id: string;
+    business_name_ja?: string;
+    table_usage?: string;
+  }>;
+  draft_edge_overrides?: Array<{
+    edge_id: string;
+    cardinality?: OntologyCardinality;
+    allowed_path?: boolean;
+  }>;
+}
+
+export interface ProfileOntologyViewData {
+  profile_ontology_view?: ProfileOntologyView;
+  ontology_graph?: OntologyGraph;
+  materialized?: boolean;
+  stale?: boolean;
+  warnings_ja?: string[];
 }
 
 export interface IntentConcept {
@@ -539,26 +560,6 @@ export interface OntologyProfileRecommendation {
   selected_revision_id?: string;
   confirmed_at?: string | null;
   expires_at: string;
-}
-
-export interface OntologyContextSearchResult {
-  profile_id: string;
-  profile_view_id: string;
-  ontology_revision_id: string;
-  hits: Array<{
-    node: OntologyNode;
-    score: number;
-    matched_terms: string[];
-    sources: string[];
-    inference_source: string;
-  }>;
-  nodes: OntologyNode[];
-  edges: OntologyEdge[];
-  mermaid: string;
-  llm_markdown: string;
-  owl_turtle: string;
-  shacl_turtle: string;
-  context_hash: string;
 }
 
 export interface SqlArtifact {

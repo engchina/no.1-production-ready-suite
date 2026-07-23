@@ -4,27 +4,65 @@ import { Link } from "react-router-dom";
 import { Banner } from "@engchina/production-ready-ui";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
 const DATABASE_SETTINGS_TARGET = `${APP_ROUTES.settingsDatabase}#adb-management`;
+
+export type DatabaseNoticeStatus =
+  | "not_configured"
+  | "setup_required"
+  | "unreachable"
+  | "check_failed"
+  | "persistence";
+
+const NOTICE_COPY: Record<
+  DatabaseNoticeStatus,
+  { title: I18nKey; message: I18nKey }
+> = {
+  not_configured: {
+    title: "dbGate.notConfigured.title",
+    message: "dbGate.notConfigured.message",
+  },
+  setup_required: {
+    title: "dbGate.setupRequired.title",
+    message: "dbGate.setupRequired.message",
+  },
+  unreachable: {
+    title: "dbGate.unreachable.title",
+    message: "dbGate.unreachable.message",
+  },
+  check_failed: {
+    title: "dbGate.checkFailed.title",
+    message: "dbGate.checkFailed.message",
+  },
+  persistence: {
+    title: "dbGate.persistenceFailed.title",
+    message: "dbGate.persistenceFailed.message",
+  },
+};
 
 export function DatabaseUnavailableNotice({
   mode = "gate",
   returnTo,
   onRetry,
   isRetrying = false,
+  status = "unreachable",
+  reasonCode,
 }: {
   mode?: "gate" | "banner";
   returnTo?: string;
   onRetry: () => void;
   isRetrying?: boolean;
+  status?: DatabaseNoticeStatus;
+  reasonCode?: string | null;
 }) {
+  const copy = NOTICE_COPY[status];
   if (mode === "banner") {
     return (
       <Banner
         severity="warning"
-        title={t("dbGate.unreachable.title")}
+        title={t(copy.title)}
         action={
           <Button size="md" variant="secondary" onClick={onRetry} loading={isRetrying}>
             <RefreshCw size={15} aria-hidden />
@@ -51,12 +89,14 @@ export function DatabaseUnavailableNotice({
           id="database-unavailable-title"
           className="mt-5 text-lg font-semibold text-foreground"
         >
-          {t("dbGate.unreachable.title")}
+          {t(copy.title)}
         </h1>
         <NoticeContent
           returnTo={returnTo}
           onRetry={onRetry}
           isRetrying={isRetrying}
+          messageKey={copy.message}
+          reasonCode={reasonCode}
         />
       </section>
     </div>
@@ -67,16 +107,25 @@ function NoticeContent({
   returnTo,
   onRetry,
   isRetrying,
+  messageKey,
+  reasonCode,
 }: {
   returnTo?: string;
   onRetry: () => void;
   isRetrying: boolean;
+  messageKey: I18nKey;
+  reasonCode?: string | null;
 }) {
   return (
     <>
       <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
-        {t("dbGate.unreachable.message")}
+        {t(messageKey)}
       </p>
+      {reasonCode ? (
+        <p className="mt-2 text-xs text-muted" role="status">
+          {t("dbGate.reasonCode", { code: reasonCode })}
+        </p>
+      ) : null}
 
       <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
         <Link

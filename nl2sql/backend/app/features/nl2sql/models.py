@@ -201,6 +201,9 @@ class SchemaObjectPage(BaseModel):
     items: list[SchemaObjectSummary] = Field(default_factory=list)
     next_cursor: str | None = None
     total: int | None = None
+    table_count: int = 0
+    view_count: int = 0
+    refreshed_at: str = ""
     catalog_version: int = 0
 
 
@@ -294,6 +297,16 @@ class SchemaRefreshJobStatus(StrEnum):
     ERROR = "error"
 
 
+class SchemaRefreshPhase(StrEnum):
+    """Schema refresh の安定した進捗 phase。"""
+
+    QUEUED = "queued"
+    SCANNING = "scanning"
+    FETCHING = "fetching"
+    PERSISTING = "persisting"
+    DONE = "done"
+
+
 class SchemaRefreshJob(BaseModel):
     """非同期 schema refresh の公開契約。"""
 
@@ -306,6 +319,9 @@ class SchemaRefreshJob(BaseModel):
     heartbeat_at: str | None = None
     lease_expires_at: str | None = None
     attempt: int = 0
+    phase: SchemaRefreshPhase = SchemaRefreshPhase.QUEUED
+    processed_objects: int = 0
+    total_objects: int = 0
     scanned_objects: int = 0
     changed_objects: int = 0
     deleted_objects: int = 0
@@ -448,6 +464,7 @@ class DbAdminObjectDetail(BaseModel):
     row_count: int | None = None
     comment: str = ""
     columns: list[SchemaColumn] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
     ddl: str = ""
     warnings: list[str] = Field(default_factory=list)
 
@@ -458,6 +475,21 @@ class DbAdminObjectsData(BaseModel):
     runtime: str = "deterministic"
     items: list[DbAdminObjectSummary] = Field(default_factory=list)
     refreshed_at: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminObjectPage(BaseModel):
+    """管理画面向けの軽量・keyset page。Catalog/CLOB は読み込まない。"""
+
+    runtime: str = "deterministic"
+    owner: str = ""
+    items: list[DbAdminObjectSummary] = Field(default_factory=list)
+    total: int = 0
+    table_count: int = 0
+    view_count: int = 0
+    next_cursor: str | None = None
+    refreshed_at: str = ""
+    catalog_version: int = 0
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -500,6 +532,7 @@ class DbAdminExecuteData(BaseModel):
     statements: list[DbAdminStatementResult] = Field(default_factory=list)
     committed: bool = False
     rolled_back: bool = False
+    schema_refresh_job_id: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -533,6 +566,7 @@ class SampleDataMutationData(BaseModel):
     statements: list[DbAdminStatementResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     profile_id: str = "sql_assist_sample"
+    schema_refresh_job_id: str = ""
     timing: TimingEnvelope
 
 
@@ -1253,33 +1287,6 @@ class RepairData(BaseModel):
     executable_sql: str = ""
 
 
-class SyntheticCase(BaseModel):
-    """Synthetic / persisted NL2SQL evaluation case."""
-
-    question: str
-    expected_sql: str
-    profile_id: str = "default"
-
-
-class EvaluateRequest(BaseModel):
-    """Deterministic NL2SQL evaluation request."""
-
-    cases: list[dict[str, str]] = Field(default_factory=list)
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
-    profile_id: str | None = None
-    evaluation_set_id: str | None = None
-
-
-class EvaluateData(BaseModel):
-    """Evaluation response."""
-
-    evaluation_suite: str
-    total_cases: int
-    executable_rate: float
-    select_only_rate: float
-    findings: list[str]
-
-
 class AssetRefreshData(BaseModel):
     """Select AI / Agent asset refresh response."""
 
@@ -1379,6 +1386,53 @@ class SelectAiDbProfileMutationData(BaseModel):
     profile: SelectAiDbProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProfileSyncJobStatus(StrEnum):
+    """業務 Profile から Oracle asset へ反映する永続 job 状態。"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProfileSyncJobPhase(StrEnum):
+    """Oracle Profile 同期のユーザー向け進捗段階。"""
+
+    QUEUED = "queued"
+    SYNCING_ORACLE_PROFILE = "syncing_oracle_profile"
+    REBUILDING_AGENT_ASSETS = "rebuilding_agent_assets"
+    VERIFYING = "verifying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProfileSyncJobRequest(AdminExecutionConfirmation):
+    """Oracle Profile 同期を受け付ける要求。確認語は job へ保存しない。"""
+
+    rebuild_agent_assets: bool = False
+
+
+class ProfileSyncJobData(BaseModel):
+    """永続 Oracle Profile 同期 job。"""
+
+    job_id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    profile_etag: str = ""
+    status: ProfileSyncJobStatus = ProfileSyncJobStatus.QUEUED
+    phase: ProfileSyncJobPhase = ProfileSyncJobPhase.QUEUED
+    rebuild_agent_assets: bool = False
+    oracle_result: SelectAiDbProfileMutationData | None = None
+    agent_result: AssetRefreshData | None = None
+    error_code: str = ""
+    error_message_ja: str = ""
+    retry_of_job_id: str = ""
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
 
 
 class SelectAiProfilesExportData(BaseModel):
@@ -1563,112 +1617,6 @@ class AgentConversationsData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class CompareRequest(BaseModel):
-    """Select AI と Select AI Agent の比較 request."""
-
-    question: str = Field(min_length=1)
-    profile_id: str | None = None
-    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    row_limit: int | None = Field(default=None, ge=1, le=5000)
-    execute: bool = False
-    engines: list[Nl2SqlEngine] = Field(
-        default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
-    )
-
-
-class CompareExecutionData(BaseModel):
-    """Engine comparison execution result."""
-
-    engine: Nl2SqlEngine
-    executed: bool
-    row_count: int = 0
-    error_message: str = ""
-    results: QueryResults | None = None
-    elapsed_ms: int | None = None
-
-
-class CompareData(BaseModel):
-    """Engine comparison response."""
-
-    question: str
-    results: list[PreviewData]
-    execution_results: list[CompareExecutionData] = Field(default_factory=list)
-    error_rate: float = 0.0
-    recommendation: str
-
-
-class CompareRecord(BaseModel):
-    """Persisted engine comparison record for evaluation operations."""
-
-    id: str
-    created_at: str
-    profile_id: str = ""
-    profile_name: str = ""
-    question: str
-    engines: list[Nl2SqlEngine] = Field(default_factory=list)
-    execute: bool = False
-    report: str = ""
-    comparison: CompareData
-
-
-class CompareHistoryData(BaseModel):
-    """Recent engine comparison records."""
-
-    items: list[CompareRecord] = Field(default_factory=list)
-
-
-class EvaluationSet(BaseModel):
-    """Persisted deterministic NL2SQL evaluation set."""
-
-    id: str
-    name: str
-    description: str = ""
-    profile_id: str = "default"
-    profile_name: str = ""
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
-    cases: list[SyntheticCase] = Field(default_factory=list)
-    created_at: str
-    updated_at: str
-    archived: bool = False
-
-
-class EvaluationSetUpsertRequest(BaseModel):
-    """Evaluation set create/update request."""
-
-    name: str = Field(min_length=1)
-    description: str = ""
-    profile_id: str | None = None
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
-    cases: list[SyntheticCase] = Field(default_factory=list)
-
-
-class EvaluationSetsData(BaseModel):
-    """Evaluation set list response."""
-
-    items: list[EvaluationSet] = Field(default_factory=list)
-
-
-class EvaluationRunRecord(BaseModel):
-    """Persisted deterministic NL2SQL evaluation run result."""
-
-    id: str
-    created_at: str
-    evaluation_set_id: str = ""
-    evaluation_set_name: str = ""
-    profile_id: str = ""
-    profile_name: str = ""
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
-    cases: list[SyntheticCase] = Field(default_factory=list)
-    result: EvaluateData
-    report: str = ""
-
-
-class EvaluationRunsData(BaseModel):
-    """Recent evaluation run records."""
-
-    items: list[EvaluationRunRecord] = Field(default_factory=list)
-
-
 class ReverseSqlRequest(BaseModel):
     """SQL から自然言語説明を生成する request."""
 
@@ -1743,6 +1691,7 @@ class CommentApplyData(BaseModel):
     executed: bool = False
     runtime: str = "deterministic"
     statements: list[CommentApplyStatement] = Field(default_factory=list)
+    schema_refresh_job_id: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -1797,6 +1746,7 @@ class AnnotationApplyData(BaseModel):
     executed: bool = False
     runtime: str = "deterministic"
     statements: list[AnnotationApplyStatement] = Field(default_factory=list)
+    schema_refresh_job_id: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -1848,12 +1798,6 @@ class MetadataSqlGenerateData(BaseModel):
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
-
-
-class SyntheticCasesData(BaseModel):
-    """Synthetic cases response."""
-
-    cases: list[SyntheticCase]
 
 
 class SyntheticDataGenerateRequest(AdminExecutionConfirmation):
@@ -1998,6 +1942,8 @@ class PersistenceStatusData(BaseModel):
     reason_code: str | None = None
     checked_at: str
     state_backend: Literal["incremental", "legacy_snapshot"] = "legacy_snapshot"
+    circuit_state: Literal["closed", "open", "half_open"] = "closed"
+    retry_after_seconds: int = 0
 
 
 class CsvImportColumn(BaseModel):
@@ -2021,6 +1967,7 @@ class DbAdminImportTabularData(BaseModel):
     executed: bool
     ddl: str
     insert_sql: str
+    schema_refresh_job_id: str = ""
     warnings: list[str] = Field(default_factory=list)
     sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
     timing: TimingEnvelope

@@ -19,19 +19,24 @@ import {
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectPanelHeader,
   DbObjectStatusBar,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
+import { waitForSchemaRefreshJob } from "../incrementalQueries";
 
 // タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 import type {
   DbAdminObjectDetail,
+  DbAdminObjectPage,
+  DbAdminExecuteData,
   DbAdminObjectsData,
   DbAdminObjectSummary,
   DbAdminStatementPolicy,
@@ -40,8 +45,9 @@ import type {
   MetadataSqlSampleData,
   MetadataSqlSamplePayload,
   MetadataSqlTarget,
-  SchemaCatalog,
+  SchemaRefreshJob,
 } from "../types";
+import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
 
 type MetadataMode = "comment" | "annotation";
 type TargetFilter = "all" | "table" | "view";
@@ -79,9 +85,7 @@ export function AnnotationManagementPage() {
 
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const pageId = mode === "comment" ? "comment-management" : "annotation-management";
-  const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
-  const [views, setViews] = useState<DbAdminObjectsData | null>(null);
-  const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
+  const [objects, setObjects] = useState<DbAdminObjectPage | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
   const [sampleLimit, setSampleLimit] = useState(10);
@@ -91,6 +95,18 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [targetSearch, setTargetSearch] = useState("");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
+  const tables = useMemo<DbAdminObjectsData | null>(() => objects ? ({
+    runtime: objects.runtime,
+    items: objects.items.filter((item) => item.object_type === "table"),
+    refreshed_at: objects.refreshed_at,
+    warnings: objects.warnings,
+  }) : null, [objects]);
+  const views = useMemo<DbAdminObjectsData | null>(() => objects ? ({
+    runtime: objects.runtime,
+    items: objects.items.filter((item) => item.object_type === "view"),
+    refreshed_at: objects.refreshed_at,
+    warnings: objects.warnings,
+  }) : null, [objects]);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
@@ -108,8 +124,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     [selectedKeys]
   );
   const inputTexts = useMemo(
-    () => buildMetadataInputTexts(details, catalog, sampleLimit),
-    [catalog, details, sampleLimit]
+    () => buildMetadataInputTexts(details, sampleLimit),
+    [details, sampleLimit]
   );
   const policy: DbAdminStatementPolicy = mode === "comment" ? "comment_sql" : "annotation_sql";
   const stepIndex = generated ? 2 : details.length > 0 ? 1 : 0;
@@ -142,20 +158,30 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setMessage("");
     try {
       await runScopedRequest(async (signal) => {
-        const [tableData, viewData, catalogData] = await Promise.all([
-          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables", { signal }),
-          apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views", { signal }),
-          refreshSchema
-            ? apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal })
-            : apiGet<SchemaCatalog>("/api/schema/catalog", { signal }),
-        ]);
+        if (refreshSchema) {
+          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+            signal,
+            timeoutMs: API_TIMEOUT_MS.jobControl,
+          });
+          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
+        }
+        const objectData = filterUserVisibleDbAdminObjectPage(
+          await apiGet<DbAdminObjectPage>(
+            "/api/nl2sql/db-admin/objects?limit=100&type=all&row_state=all",
+            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+          )
+        );
         if (signal.aborted || sequence !== loadSequence.current) return;
-        setTables(tableData);
-        setViews(viewData);
-        setCatalog(catalogData);
+        setObjects(objectData);
         const availableKeys = new Set([
-          ...targetItemsFromObjects(tableData.items, "table").map((item) => item.key),
-          ...targetItemsFromObjects(viewData.items, "view").map((item) => item.key),
+          ...targetItemsFromObjects(
+            objectData.items.filter((item) => item.object_type === "table"),
+            "table"
+          ).map((item) => item.key),
+          ...targetItemsFromObjects(
+            objectData.items.filter((item) => item.object_type === "view"),
+            "view"
+          ).map((item) => item.key),
         ]);
         setSelectedKeys((current) => current.filter((key) => availableKeys.has(key)));
       });
@@ -176,6 +202,13 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       abortAll();
     };
   }, []);
+
+  const reloadAfterMutation = async (result: DbAdminExecuteData) => {
+    if (result.schema_refresh_job_id) {
+      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+    }
+    await load();
+  };
 
   const toggleTarget = (target: MetadataSqlTarget) => {
     const key = targetKey(target);
@@ -284,7 +317,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         <DbObjectStatusBar
           count={allTargets.length}
           runtime={metadataRuntime(tables, views)}
-          refreshedAt={catalog?.refreshed_at ?? ""}
+          refreshedAt={objects?.refreshed_at ?? ""}
           loading={loading}
           labels={{
             ariaLabel: t("metadataSql.status.label"),
@@ -329,8 +362,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
         <section id={`${pageId}-panel-input`} className={PANEL_CLASS}>
           <MetadataInputPanel
+            pageId={pageId}
             inputTexts={inputTexts}
             detailsReady={details.length > 0}
+            detailsLoading={loading === "details"}
             selectedCount={selectedTargets.length}
             sampleLimit={sampleLimit}
             sampleText={refreshedSampleText ?? inputTexts.sampleText}
@@ -347,10 +382,12 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
         <section id={`${pageId}-panel-execute`} className={PANEL_CLASS}>
           <MetadataExecutePanel
+            pageId={pageId}
             mode={mode}
             generated={generated}
+            loading={loading === "generate"}
             policy={policy}
-            onExecuted={() => load(true)}
+            onExecuted={reloadAfterMutation}
           />
         </section>
       </main>
@@ -444,7 +481,11 @@ function MetadataTargetGrid({
       </div>
 
       {loading ? (
-        <MetadataTargetListSkeleton pageId={pageId} />
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-target`}
+          ariaLabel={t("metadataSql.targets.loading")}
+          variant="list"
+        />
       ) : items.length === 0 ? (
         <EmptyState
           title={hasActiveFilter ? t("metadataSql.targets.noResultsTitle") : t("metadataSql.targets.emptyTitle")}
@@ -519,8 +560,10 @@ function MetadataTargetGrid({
 }
 
 function MetadataInputPanel({
+  pageId,
   inputTexts,
   detailsReady,
+  detailsLoading,
   selectedCount,
   sampleLimit,
   sampleText,
@@ -530,8 +573,10 @@ function MetadataInputPanel({
   onExtraTextChange,
   onGenerate,
 }: {
+  pageId: string;
   inputTexts: ReturnType<typeof buildMetadataInputTexts>;
   detailsReady: boolean;
+  detailsLoading: boolean;
   selectedCount: number;
   sampleLimit: number;
   sampleText: string;
@@ -563,60 +608,74 @@ function MetadataInputPanel({
         }
       />
 
-      {!detailsReady && (
-        <EmptyState title={t("metadataSql.input.emptyTitle")} hint={t("metadataSql.input.emptyHint")} />
-      )}
+      {detailsLoading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-input`}
+          ariaLabel={t("metadataSql.input.loading")}
+          variant="detail"
+        />
+      ) : (
+        <>
+          {!detailsReady && (
+            <EmptyState title={t("metadataSql.input.emptyTitle")} hint={t("metadataSql.input.emptyHint")} />
+          )}
 
-      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:w-44">
-            <span>{t("metadataSql.input.sampleLimit")}</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={sampleLimit}
-              onChange={(event) => {
-                const value = Number(event.currentTarget.value);
-                onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
-              }}
-              className="min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+          <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:w-44">
+                <span>{t("metadataSql.input.sampleLimit")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={sampleLimit}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
+                  }}
+                  className="min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                />
+              </label>
+              <StatusBadge variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            <MetadataTextarea label={t("metadataSql.input.structure")} value={inputTexts.structureText} rows={8} />
+            <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
+            <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
+            <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
+          </div>
+
+          <label className="grid gap-1 text-sm font-medium text-foreground">
+            <span>{t("metadataSql.input.extra")}</span>
+            <textarea
+              value={extraText}
+              onChange={(event) => onExtraTextChange(event.currentTarget.value)}
+              rows={6}
+              className="min-h-32 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
             />
           </label>
-          <StatusBadge variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
-        </div>
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-2">
-        <MetadataTextarea label={t("metadataSql.input.structure")} value={inputTexts.structureText} rows={8} />
-        <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
-        <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
-        <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
-      </div>
-
-      <label className="grid gap-1 text-sm font-medium text-foreground">
-        <span>{t("metadataSql.input.extra")}</span>
-        <textarea
-          value={extraText}
-          onChange={(event) => onExtraTextChange(event.currentTarget.value)}
-          rows={6}
-          className="min-h-32 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
-        />
-      </label>
+        </>
+      )}
     </div>
   );
 }
 
 function MetadataExecutePanel({
+  pageId,
   mode,
   generated,
+  loading,
   policy,
   onExecuted,
 }: {
+  pageId: string;
   mode: MetadataMode;
   generated: MetadataSqlGenerateData | null;
+  loading: boolean;
   policy: DbAdminStatementPolicy;
-  onExecuted: () => Promise<void>;
+  onExecuted: (result: DbAdminExecuteData) => Promise<void>;
 }) {
   return (
     <div className="grid gap-4">
@@ -631,29 +690,39 @@ function MetadataExecutePanel({
         }
       />
 
-      {!generated && (
-        <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-execute-result`}
+          ariaLabel={t("metadataSql.execute.loading")}
+          variant="detail"
+        />
+      ) : (
+        <>
+          {!generated && (
+            <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
+          )}
+
+          {generated?.warnings.map((warning) => (
+            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+              {warning}
+            </p>
+          ))}
+
+          <StatementRunnerCard
+            policy={policy}
+            title={t(mode === "comment" ? "metadataSql.comment.runner" : "metadataSql.annotation.runner")}
+            placeholder={t(
+              mode === "comment"
+                ? "metadataSql.comment.placeholder"
+                : "metadataSql.annotation.placeholder"
+            )}
+            initialSql={generated?.sql ?? ""}
+            executeOnly
+            framed={false}
+            onExecuted={onExecuted}
+          />
+        </>
       )}
-
-      {generated?.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
-          {warning}
-        </p>
-      ))}
-
-      <StatementRunnerCard
-        policy={policy}
-        title={t(mode === "comment" ? "metadataSql.comment.runner" : "metadataSql.annotation.runner")}
-        placeholder={t(
-          mode === "comment"
-            ? "metadataSql.comment.placeholder"
-            : "metadataSql.annotation.placeholder"
-        )}
-        initialSql={generated?.sql ?? ""}
-        executeOnly
-        framed={false}
-        onExecuted={onExecuted}
-      />
     </div>
   );
 }
@@ -695,21 +764,6 @@ function TargetSortButton({
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
     </button>
   );
-}
-
-function MetadataTargetListSkeleton({ pageId }: { pageId: string }) {
-  return (
-    <div className="grid gap-2" data-testid={`${pageId}-target-list-skeleton`}>
-      <SkeletonBlock className="h-11" />
-      {Array.from({ length: 8 }, (_, index) => (
-        <SkeletonBlock key={index} className="h-12" />
-      ))}
-    </div>
-  );
-}
-
-function SkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-muted/30 ${className}`} aria-hidden="true" />;
 }
 
 function targetItemsFromObjects(items: DbAdminObjectSummary[], objectType: MetadataSqlTarget["object_type"]) {

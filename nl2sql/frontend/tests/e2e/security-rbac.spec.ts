@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -300,9 +301,13 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   );
   await page.route("**/api/security/users", (route) => fulfill(route, users));
 
+  await page.setViewportSize({ width: 2048, height: 1000 });
   await page.goto("/settings/security/users");
 
   const listStyle = await topLevelPanelStyle(page, "list", "security-users");
+  const usersSplitPane = page.getByTestId("fixed-split-pane-security-users-list");
+  await expect(usersSplitPane).toHaveAttribute("data-split-layout", "split");
+  await expectSplitPaneReservedTrack(usersSplitPane);
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
   await expect(page.getByTestId("security-users-grid").locator("tbody tr")).toHaveCount(2);
   await page.getByTestId("security-users-search").fill("sales");
@@ -355,9 +360,13 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   );
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
 
+  await page.setViewportSize({ width: 2048, height: 1000 });
   await page.goto("/settings/security/roles");
 
   const listStyle = await topLevelPanelStyle(page, "list", "security-roles");
+  const rolesSplitPane = page.getByTestId("fixed-split-pane-security-roles-list");
+  await expect(rolesSplitPane).toHaveAttribute("data-split-layout", "split");
+  await expectSplitPaneReservedTrack(rolesSplitPane);
   const grid = page.getByTestId("security-roles-grid");
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();

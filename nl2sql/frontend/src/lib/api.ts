@@ -1,17 +1,23 @@
 import {
   confirmDatabaseUnavailable,
   isDatabaseReadinessRequest,
+  PERSISTENCE_RECOVERY_PATH,
+  reportDatabaseOperationalFailure,
   shouldConfirmDatabaseUnavailable,
+  type DatabaseOperationalFailure,
 } from "./database-load-error.ts";
 
 export interface ApiEnvelope<T> {
   data: T;
   error?: string;
+  error_code?: string;
   request_id?: string;
 }
 
 export interface ApiRequestOptions {
   signal?: AbortSignal;
+  timeoutMs?: number;
+  headers?: HeadersInit;
 }
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -20,10 +26,78 @@ export function isAbortError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
 }
 
+export function isTimeoutError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "TimeoutError";
+}
+
+function requestSignal(options: ApiRequestOptions): AbortSignal | undefined {
+  if (!options.timeoutMs || options.timeoutMs <= 0) return options.signal;
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
+  return options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+}
+
 function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
   const prefix = `${encodeURIComponent(name)}=`;
   const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
   return item ? decodeURIComponent(item.slice(prefix.length)) : null;
+}
+
+let inFlightPersistenceRecovery: Promise<boolean> | null = null;
+
+function recoverPersistenceForSafeRead(): Promise<boolean> {
+  if (inFlightPersistenceRecovery) return inFlightPersistenceRecovery;
+  let recovery: Promise<boolean>;
+  recovery = (async () => {
+    const headers = new Headers({ Accept: "application/json" });
+    const csrfToken = readCookie("nl2sql_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+    try {
+      const response = await fetch(PERSISTENCE_RECOVERY_PATH, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) return false;
+      const payload = (await response.json()) as {
+        data?: { ready?: unknown; writable?: unknown };
+      };
+      return payload.data?.ready === true && payload.data?.writable === true;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    if (inFlightPersistenceRecovery === recovery) inFlightPersistenceRecovery = null;
+  });
+  inFlightPersistenceRecovery = recovery;
+  return recovery;
+}
+
+function notifyAuthStatus(response: Response) {
+  if (typeof window === "undefined") return;
+  if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
+  if (response.status === 403) window.dispatchEvent(new CustomEvent("app-auth-forbidden"));
+}
+
+async function recoverAndRetrySafeRequest(
+  path: string,
+  method: string,
+  init: RequestInit,
+  failure: DatabaseOperationalFailure | null
+): Promise<Response | null> {
+  if (
+    failure?.kind !== "persistence" ||
+    (method !== "GET" && method !== "HEAD") ||
+    !(await recoverPersistenceForSafeRead())
+  ) {
+    return null;
+  }
+  try {
+    return await fetch(path, init);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -37,36 +111,63 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     const csrfToken = readCookie("nl2sql_csrf");
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
   }
+  const requestInit = { ...init, headers, credentials: "include" } satisfies RequestInit;
   let response: Response;
   try {
-    response = await fetch(path, { ...init, headers, credentials: "include" });
+    response = await fetch(path, requestInit);
   } catch (cause) {
-    if (isAbortError(cause)) throw cause;
-    if (!isDatabaseReadinessRequest(path)) await confirmDatabaseUnavailable();
+    if (isAbortError(cause) || isTimeoutError(cause)) throw cause;
+    if (!isDatabaseReadinessRequest(path)) {
+      let failure: DatabaseOperationalFailure | null = null;
+      await confirmDatabaseUnavailable(fetch, (next) => {
+        failure = next;
+      });
+      const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+      if (retried) {
+        notifyAuthStatus(retried);
+        return retried;
+      }
+      if (failure) reportDatabaseOperationalFailure(failure);
+    }
     throw cause;
   }
-  if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
-  if (response.status === 403) window.dispatchEvent(new CustomEvent("app-auth-forbidden"));
+  notifyAuthStatus(response);
   if (shouldConfirmDatabaseUnavailable(path, response.status)) {
-    await confirmDatabaseUnavailable();
+    let failure: DatabaseOperationalFailure | null = null;
+    await confirmDatabaseUnavailable(fetch, (next) => {
+      failure = next;
+    });
+    const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+    if (retried) {
+      notifyAuthStatus(retried);
+      return retried;
+    }
+    if (failure) reportDatabaseOperationalFailure(failure);
   }
   return response;
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as ApiEnvelope<T> & { error_messages?: unknown };
+  const payload = (await response.json()) as ApiEnvelope<T> & {
+    error_messages?: unknown;
+    detail?: unknown;
+  };
   if (!response.ok) {
     // 共通例外ハンドラは ApiResponse { error_messages: [...] } 形式で返す
     const errorMessages = payload.error_messages;
-    const message =
-      (Array.isArray(errorMessages) && errorMessages.length > 0
-        ? errorMessages.map(String).join(" ")
-        : "") ||
-      payload.error ||
-      (typeof payload === "object" && payload !== null && "detail" in payload
-        ? String((payload as { detail?: unknown }).detail)
-        : "API リクエストに失敗しました");
-    throw new ApiError(response.status, [message]);
+    const detailMessages =
+      typeof payload.detail === "object" && payload.detail !== null && "errors" in payload.detail
+        ? (payload.detail as { errors?: unknown }).errors
+        : undefined;
+    const messages = Array.isArray(detailMessages)
+      ? detailMessages.map(String)
+      : Array.isArray(errorMessages) && errorMessages.length > 0
+        ? errorMessages.map(String)
+        : [
+            payload.error ||
+              (payload.detail ? String(payload.detail) : "API リクエストに失敗しました"),
+          ];
+    throw new ApiError(response.status, messages, payload.error_code);
   }
   return payload.data;
 }
@@ -77,7 +178,7 @@ export interface ApiResponseMetadata<T> {
 }
 
 export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const response = await apiFetch(path, { signal: options.signal });
+  const response = await apiFetch(path, { signal: requestSignal(options) });
   return parseJson<T>(response);
 }
 
@@ -85,7 +186,7 @@ export async function apiGetWithMetadata<T>(
   path: string,
   options: ApiRequestOptions = {}
 ): Promise<ApiResponseMetadata<T>> {
-  const response = await apiFetch(path, { signal: options.signal });
+  const response = await apiFetch(path, { signal: requestSignal(options) });
   const data = await parseJson<T>(response);
   return { data, etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "" };
 }
@@ -95,11 +196,27 @@ export async function apiPost<T>(
   body?: unknown,
   options: ApiRequestOptions = {}
 ): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "application/json");
+  headers.set("Content-Type", "application/json");
   const response = await apiFetch(path, {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: options.signal,
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
+export async function apiPostForm<T>(
+  path: string,
+  body: FormData,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method: "POST",
+    body,
+    signal: requestSignal(options),
   });
   return parseJson<T>(response);
 }
@@ -114,7 +231,7 @@ export async function apiPatch<T>(
     method: "PATCH",
     headers: { Accept: "application/json", "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: options.signal,
+    signal: requestSignal(options),
   });
   return parseJson<T>(response);
 }
@@ -127,7 +244,7 @@ export async function apiDelete<T>(
   const response = await apiFetch(path, {
     method: "DELETE",
     headers: { Accept: "application/json", ...headers },
-    signal: options.signal,
+    signal: requestSignal(options),
   });
   return parseJson<T>(response);
 }
@@ -166,12 +283,16 @@ export interface PersistenceStatusData {
   snapshot_loaded: boolean;
   reason_code: string | null;
   checked_at: string;
+  state_backend?: "incremental" | "legacy_snapshot";
+  circuit_state?: "closed" | "open" | "half_open";
+  retry_after_seconds?: number;
 }
 
 export interface SettingsApiResponse<T> {
   data: T | null;
   error_messages: string[];
   warning_messages: string[];
+  error_code?: string;
 }
 
 export interface EnterpriseAiConfiguredModel {
@@ -478,12 +599,14 @@ export interface OciPrivateKeyUploadData {
 export class ApiError extends Error {
   readonly status: number;
   readonly messages: string[];
+  readonly errorCode?: string;
 
-  constructor(status: number, messages: string[]) {
+  constructor(status: number, messages: string[], errorCode?: string) {
     super(messages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    this.errorCode = errorCode;
   }
 }
 
@@ -498,6 +621,7 @@ async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApi
       data: payload.data ?? null,
       error_messages: errorMessages,
       warning_messages: payload.warning_messages ?? [],
+      error_code: payload.error_code,
     };
   } catch {
     return { data: null, error_messages: [], warning_messages: [] };
@@ -518,7 +642,8 @@ async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> 
       response.status,
       envelope.error_messages.length > 0
         ? envelope.error_messages
-        : [`APIエラー (${response.status})`]
+        : [`APIエラー (${response.status})`],
+      envelope.error_code
     );
   }
   return envelope.data as T;

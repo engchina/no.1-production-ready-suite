@@ -1,6 +1,8 @@
 import {
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,9 +14,12 @@ import {
 
 import {
   FIXED_SPLIT_DIVIDER_SIZE_PX,
+  FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
   FIXED_SPLIT_KEYBOARD_FAST_STEP_PX,
   FIXED_SPLIT_KEYBOARD_STEP_PX,
   adjustFixedSplitFraction,
+  clampFixedSplitFractionToPaneWidths,
+  fixedSplitFractionBounds,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
   fixedSplitStateForPreferredWidePane,
@@ -39,6 +44,8 @@ interface FixedSplitPaneProps {
   className?: string;
   leftClassName?: string;
   rightClassName?: string;
+  minLeftPaneWidthPx?: number;
+  minRightPaneWidthPx?: number;
 }
 
 function readStoredState(splitId: string, preferredWidePane: FixedSplitWidePane): FixedSplitPaneState {
@@ -66,8 +73,11 @@ export function FixedSplitPane({
   className,
   leftClassName,
   rightClassName,
+  minLeftPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
+  minRightPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
 }: FixedSplitPaneProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const hintId = useId();
   const dragStartXRef = useRef(0);
   const dragStartFractionRef = useRef(0.5);
   const dragAvailableWidthRef = useRef(1);
@@ -78,6 +88,10 @@ export function FixedSplitPane({
     readStoredState(splitId, preferredWidePane)
   );
   const [isDragging, setIsDragging] = useState(false);
+  const [rootWidth, setRootWidth] = useState(0);
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(min-width: 1280px)").matches
+  );
 
   useEffect(() => {
     setSplitState(readStoredState(splitId, preferredWidePane));
@@ -99,17 +113,61 @@ export function FixedSplitPane({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const updateWidth = () => setRootWidth(root.clientWidth);
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 1280px)");
+    const updateViewport = () => setIsDesktopViewport(mediaQuery.matches);
+    updateViewport();
+    mediaQuery.addEventListener("change", updateViewport);
+    return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
+
   const availableWidth = useCallback(() => {
     const rootWidth = rootRef.current?.clientWidth ?? 0;
     return Math.max(rootWidth - FIXED_SPLIT_DIVIDER_SIZE_PX, 1);
   }, []);
 
+  const measuredAvailableWidth = Math.max(rootWidth - FIXED_SPLIT_DIVIDER_SIZE_PX, 1);
+  const splitLayout =
+    isDesktopViewport &&
+    rootWidth >= minLeftPaneWidthPx + FIXED_SPLIT_DIVIDER_SIZE_PX + minRightPaneWidthPx;
+  const constrainedLeftFraction =
+    rootWidth > 0
+      ? clampFixedSplitFractionToPaneWidths(
+          splitState.leftFraction,
+          measuredAvailableWidth,
+          minLeftPaneWidthPx,
+          minRightPaneWidthPx
+        )
+      : splitState.leftFraction;
+  const fractionBounds = fixedSplitFractionBounds(
+    measuredAvailableWidth,
+    minLeftPaneWidthPx,
+    minRightPaneWidthPx
+  );
+
   const style = useMemo(
     () =>
       ({
-        "--fixed-split-columns": fixedSplitGridTemplateColumns(splitState.leftFraction),
+        "--fixed-split-columns": fixedSplitGridTemplateColumns(constrainedLeftFraction),
       }) as CSSProperties,
-    [splitState.leftFraction]
+    [constrainedLeftFraction]
   );
 
   const applyDragDocumentState = useCallback(() => {
@@ -137,10 +195,18 @@ export function FixedSplitPane({
   const adjustFraction = useCallback(
     (deltaPx: number) => {
       setSplitState((current) =>
-        fixedSplitStateForFraction(adjustFixedSplitFraction(current.leftFraction, deltaPx, availableWidth()))
+        fixedSplitStateForFraction(
+          adjustFixedSplitFraction(
+            current.leftFraction,
+            deltaPx,
+            availableWidth(),
+            minLeftPaneWidthPx,
+            minRightPaneWidthPx
+          )
+        )
       );
     },
-    [availableWidth]
+    [availableWidth, minLeftPaneWidthPx, minRightPaneWidthPx]
   );
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -155,7 +221,7 @@ export function FixedSplitPane({
 
     cleanupDragRef.current?.();
     dragStartXRef.current = event.clientX;
-    dragStartFractionRef.current = splitState.leftFraction;
+    dragStartFractionRef.current = constrainedLeftFraction;
     dragAvailableWidthRef.current = availableWidth();
     applyDragDocumentState();
     setIsDragging(true);
@@ -165,7 +231,9 @@ export function FixedSplitPane({
       const nextFraction = adjustFixedSplitFraction(
         dragStartFractionRef.current,
         deltaPx,
-        dragAvailableWidthRef.current
+        dragAvailableWidthRef.current,
+        minLeftPaneWidthPx,
+        minRightPaneWidthPx
       );
       setSplitState(fixedSplitStateForFraction(nextFraction));
     };
@@ -218,19 +286,25 @@ export function FixedSplitPane({
       style={style}
       data-testid={`fixed-split-pane-${splitId}`}
       data-split-ratio={fixedSplitValueText(splitState.ratio)}
-      data-split-left-fraction={splitState.leftFraction.toFixed(4)}
+      data-split-left-fraction={constrainedLeftFraction.toFixed(4)}
+      data-split-layout={splitLayout ? "split" : "stacked"}
     >
-      <div className={cn("min-w-0", leftClassName)} data-testid={`fixed-split-pane-${splitId}-left`}>
+      <div
+        className={cn("fixed-split-pane__panel fixed-split-pane__panel--left min-w-0", leftClassName)}
+        data-split-pane-side="left"
+        data-testid={`fixed-split-pane-${splitId}-left`}
+      >
         {left}
       </div>
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label={t("fixedSplitPane.separatorLabel")}
-        aria-valuemin={25}
-        aria-valuemax={75}
-        aria-valuenow={Math.round(splitState.leftFraction * 100)}
-        aria-valuetext={`${valueText(splitState.ratio)} ${Math.round(splitState.leftFraction * 100)}%`}
+        aria-describedby={hintId}
+        aria-valuemin={Math.ceil(fractionBounds.minFraction * 100)}
+        aria-valuemax={Math.floor(fractionBounds.maxFraction * 100)}
+        aria-valuenow={Math.round(constrainedLeftFraction * 100)}
+        aria-valuetext={`${valueText(splitState.ratio)} ${Math.round(constrainedLeftFraction * 100)}%`}
         tabIndex={0}
         className="fixed-split-pane__divider"
         data-dragging={isDragging ? "true" : "false"}
@@ -245,11 +319,15 @@ export function FixedSplitPane({
           <span className="fixed-split-pane__dot" />
           <span className="fixed-split-pane__dot" />
         </span>
-        <span className="fixed-split-pane__hint" aria-hidden="true">
+        <span id={hintId} className="sr-only">
           {t("fixedSplitPane.hint")}
         </span>
       </div>
-      <div className={cn("min-w-0", rightClassName)} data-testid={`fixed-split-pane-${splitId}-right`}>
+      <div
+        className={cn("fixed-split-pane__panel fixed-split-pane__panel--right min-w-0", rightClassName)}
+        data-split-pane-side="right"
+        data-testid={`fixed-split-pane-${splitId}-right`}
+      >
         {right}
       </div>
     </div>

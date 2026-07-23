@@ -20,7 +20,6 @@ export const ROUTE_PERMISSIONS: Record<string, string> = {
   [APP_ROUTES.feedbackManagement]: "evaluation.view",
   [APP_ROUTES.questionClassifierModels]: "evaluation.view",
   [APP_ROUTES.evaluation]: "evaluation.view",
-  [APP_ROUTES.nl2sqlSettingsDatabase]: "settings.database.view",
   [APP_ROUTES.settingsOci]: "settings.oci.view",
   [APP_ROUTES.settingsUploadStorage]: "settings.object_storage.view",
   [APP_ROUTES.settingsModel]: "settings.models.view",

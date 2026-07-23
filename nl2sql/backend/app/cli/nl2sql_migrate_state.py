@@ -23,9 +23,6 @@ logger = logging.getLogger(__name__)
 _COLLECTION_IDENTITIES: dict[str, str] = {
     "jobs": "job_id",
     "history": "id",
-    "compare_records": "id",
-    "evaluation_sets": "id",
-    "evaluation_runs": "id",
     "classifier_examples": "id",
     "admin_audit": "id",
 }

@@ -117,7 +117,7 @@ async function mockProfileManagement(page: Page) {
     fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
   );
   await page.route(
-    "**/api/nl2sql/select-ai/db-profiles?include_detail=true&business_profiles_only=true&include_archived_business_profiles=true",
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true",
     (route) => fulfillJson(route, { runtime: "deterministic", profiles: [], warnings: [] })
   );
   await page.route("**/api/nl2sql/select-ai/db-profiles?include_detail=true", (route) =>
@@ -306,7 +306,11 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await salesRow.getByRole("button", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expect(dialog.getByText("プロファイルを削除しますか")).toBeVisible();
-  await expect(dialog.getByText("「営業プロファイル」を業務プロファイル一覧から完全に削除します。")).toBeVisible();
+  await expect(
+    dialog.getByText(
+      "「営業プロファイル」とそのすべての Ontology view を完全に削除します。Oracle DBMS_CLOUD_AI Profile と監査履歴は削除されません。"
+    )
+  ).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   expect(api.deleteRequests()).toBe(0);
   await expect(page.getByText("営業プロファイル")).toBeVisible();

@@ -12,6 +12,8 @@ services:
       NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-deterministic}
       NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
       NL2SQL_ONTOLOGY_WORKER_MODE: ${NL2SQL_ONTOLOGY_WORKER_MODE:-inprocess}
+      NL2SQL_SCHEMA_REFRESH_WORKER_MODE: ${NL2SQL_SCHEMA_REFRESH_WORKER_MODE:-external}
+      NL2SQL_QUALITY_EVALUATION_WORKER_MODE: ${NL2SQL_QUALITY_EVALUATION_WORKER_MODE:-external}
     volumes:
       - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
     ports:
@@ -36,6 +38,30 @@ services:
       NL2SQL_ONTOLOGY_WORKER_MODE: external
     volumes:
       - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
+
+  schema-refresh-worker:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+    command: ["python", "-m", "app.cli.nl2sql_schema_refresh_worker", "--poll-seconds", "1"]
+    env_file:
+      - backend/.env.example
+    environment:
+      NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-oracle}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_SCHEMA_REFRESH_WORKER_MODE: external
+
+  quality-evaluation-worker:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+    command: ["python", "-m", "app.cli.nl2sql_quality_evaluation_worker"]
+    env_file:
+      - backend/.env.example
+    environment:
+      NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-oracle}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_QUALITY_EVALUATION_WORKER_MODE: external
 
   frontend:
     build:

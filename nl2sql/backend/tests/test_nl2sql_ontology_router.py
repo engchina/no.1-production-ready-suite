@@ -54,7 +54,7 @@ from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
-from app.features.nl2sql.ontology_store import InMemoryOntologyStore
+from app.features.nl2sql.ontology_store import InMemoryOntologyStore, stable_physical_id
 from app.main import app
 from app.settings import get_settings
 
@@ -228,6 +228,7 @@ def test_router_declares_complete_query_session_and_profile_view_api() -> None:
     assert "/nl2sql/query-sessions/{session_id}/execute" in declared_paths
     assert "/nl2sql/query-sessions/{session_id}/improvement-proposal" in declared_paths
     assert "/nl2sql/profiles/{profile_id}/ontology-view" in declared_paths
+    assert "/nl2sql/profiles/{profile_id}/ontology-view/materialize" in declared_paths
     assert "/nl2sql/ontology/revisions" in declared_paths
     assert "/nl2sql/ontology/revisions/current" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/drafts" in declared_paths
@@ -255,6 +256,154 @@ def test_ontology_revision_cache_keeps_active_and_latest_only(
     assert set(api._ontologies) == {active.revision.id, latest.revision.id}  # noqa: SLF001
 
 
+def test_column_business_names_reads_only_published_object_columns(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """詳細 lookup は全 graph ではなく published revision の対象列だけを読む。"""
+    api, store, legacy = runtime
+    draft = api.current_ontology()
+    published = api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+
+    def fail_full_catalog() -> SchemaCatalog:
+        raise AssertionError("object-level lookup must not load the schema catalog")
+
+    def fail_full_ontology() -> Any:
+        raise AssertionError("object-level lookup must not load the full ontology")
+
+    monkeypatch.setattr(legacy, "get_catalog", fail_full_catalog)
+    monkeypatch.setattr(api, "current_ontology", fail_full_ontology)
+    original_list = store.list_documents
+    calls: list[tuple[str, dict[str, Any], bool]] = []
+
+    def recording_list(
+        collection: Any,
+        filters: Any = None,
+        *,
+        include_embedding: bool = True,
+    ) -> list[dict[str, Any]]:
+        calls.append((str(collection), dict(filters or {}), include_embedding))
+        return original_list(
+            collection,
+            filters,
+            include_embedding=include_embedding,
+        )
+
+    monkeypatch.setattr(store, "list_documents", recording_list)
+
+    names = api.column_business_names(
+        owner="APP",
+        object_name="ORDERS",
+        object_type="table",
+    )
+
+    assert names == {
+        "AMOUNT": "受注金額",
+        "CUSTOMER_ID": "顧客 ID",
+        "ID": "受注 ID",
+    }
+    assert calls == [
+        ("revisions", {"status": "published"}, True),
+        (
+            "nodes",
+            {
+                "revision_id": published.revision.id,
+                "node_type": "column",
+                "physical_id": stable_physical_id("table", "APP", "ORDERS"),
+            },
+            False,
+        ),
+    ]
+
+
+def test_column_business_name_cache_is_revision_aware_and_resettable(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """同一 revision/object はキャッシュし、schema reset で確実に破棄する。"""
+    api, store, _legacy = runtime
+    draft = api.current_ontology()
+    published = api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+    physical_id = stable_physical_id("table", "APP", "ORDERS")
+
+    first = api.column_business_names(
+        owner="APP",
+        object_name="ORDERS",
+        object_type="table",
+    )
+    node_documents = store.list_documents(
+        "nodes",
+        {
+            "revision_id": published.revision.id,
+            "node_type": "column",
+            "physical_id": physical_id,
+        },
+    )
+    id_document = next(
+        item for item in node_documents if item["payload"]["metadata"]["column_name"] == "ID"
+    )
+    id_document["payload"]["business_name_ja"] = "受注番号"
+    store.save_document("nodes", id_document, expected_etag=str(id_document["etag"]))
+
+    cached = api.column_business_names(
+        owner="APP",
+        object_name="ORDERS",
+        object_type="table",
+    )
+    assert cached == first
+
+    api.reset_after_system_schema_change()
+    refreshed = api.column_business_names(
+        owner="APP",
+        object_name="ORDERS",
+        object_type="table",
+    )
+    assert refreshed["ID"] == "受注番号"
+    assert len(api._business_name_cache) == 1  # noqa: SLF001 - LRU cache contract
+    assert api._business_name_cache_max_objects == 512  # noqa: SLF001
+
+
+def test_column_business_names_does_not_wait_for_full_ontology_lock(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """全量 ontology の同期中でも object-level lookup は独立して完了する。"""
+    api, store, legacy = runtime
+    draft = api.current_ontology()
+    api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+    lookup = OntologyApiRuntime(legacy_service=legacy, store=store)
+    completed = threading.Event()
+    result: dict[str, str] = {}
+
+    def load_names() -> None:
+        result.update(
+            lookup.column_business_names(
+                owner="APP",
+                object_name="ORDERS",
+                object_type="table",
+            )
+        )
+        completed.set()
+
+    lookup._lock.acquire()  # noqa: SLF001 - full-ontology lock independence contract
+    worker = threading.Thread(target=load_names)
+    try:
+        worker.start()
+        assert completed.wait(timeout=1)
+    finally:
+        lookup._lock.release()  # noqa: SLF001
+        worker.join(timeout=1)
+
+    assert result["ID"] == "受注 ID"
+
+
 def test_profile_scenario_version_changes_for_keyword_only_update(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
@@ -271,6 +420,59 @@ def test_profile_scenario_version_changes_for_keyword_only_update(
 
     assert updated.activation_keywords == ["受注", "売上"]
     assert updated.scenario_version == current.scenario_version + 1
+
+
+def test_profile_view_is_materialized_only_explicitly_and_becomes_stale_after_profile_edit(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, store, legacy = runtime
+    preview, _ontology = api.profile_view("sales")
+
+    assert api.profile_view_persistence_state(preview) == (False, False)
+    assert store.list_documents("profile_views", {"profile_id": "sales"}) == []
+
+    materialized = api.materialize_profile_view("sales")
+    assert api.profile_view_persistence_state(materialized) == (True, False)
+    stored_before = store.get_document(
+        "profile_views",
+        {"profile_id": "sales", "revision_id": materialized.ontology_revision_id},
+    )
+    assert stored_before is not None
+
+    legacy.profile = legacy.profile.model_copy(
+        update={"etag": "profile-etag-2", "allowed_views": ["APP.ORDER_VIEW"]},
+        deep=True,
+    )
+    current_preview, _ontology = api.profile_view("sales")
+    assert api.profile_view_persistence_state(current_preview) == (True, True)
+    stored_after_edit = store.get_document(
+        "profile_views",
+        {"profile_id": "sales", "revision_id": materialized.ontology_revision_id},
+    )
+    assert stored_after_edit == stored_before
+
+    rebuilt = api.materialize_profile_view("sales")
+    assert rebuilt.source_profile_etag == "profile-etag-2"
+    assert api.profile_view_persistence_state(rebuilt) == (True, False)
+
+
+def test_profile_state_delete_removes_live_views_but_preserves_audit_documents(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, store, _legacy = runtime
+    api.materialize_profile_view("sales")
+    store.save_document(
+        "query_sessions",
+        {
+            "session_id": "audit-session-1",
+            "profile_id": "sales",
+            "payload": {"snapshot": True},
+        },
+    )
+
+    assert api.delete_profile_state("sales") == 1
+    assert store.list_documents("profile_views", {"profile_id": "sales"}) == []
+    assert store.get_document("query_sessions", {"session_id": "audit-session-1"}) is not None
 
 
 def test_published_revision_pins_queries_until_reviewed_draft_is_published(

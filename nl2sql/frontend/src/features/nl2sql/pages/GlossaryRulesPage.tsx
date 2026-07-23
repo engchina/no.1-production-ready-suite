@@ -24,6 +24,7 @@ import {
   downloadBlob,
 } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
   DbObjectPanelHeader,
@@ -171,6 +172,7 @@ export function GlossaryRulesPage() {
             exportLabel={t("glossary.globalTerms.export")}
             filename={legacyTermsFilename}
             busy={legacyBusy}
+            loading={loading && !lastLoadedAt}
             rows={legacyTerms}
             onImport={(file) => void importLegacyTerms(file)}
             onExport={() => void exportLegacyTerms()}
@@ -240,6 +242,7 @@ function GlobalMaterialPanel({
   exportLabel,
   filename,
   busy,
+  loading,
   rows,
   onImport,
   onExport,
@@ -252,6 +255,7 @@ function GlobalMaterialPanel({
   exportLabel: string;
   filename: string;
   busy: boolean;
+  loading: boolean;
   rows: Array<{ term: string; definition: string }>;
   onImport: (file: File) => void;
   onExport: () => void;
@@ -291,7 +295,16 @@ function GlobalMaterialPanel({
           <span>{exportLabel}</span>
         </Button>
       </div>
-      <GlobalPreviewTable rows={rows} />
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix="glossary-terms"
+          ariaLabel={t("glossary.globalTerms.loading")}
+          variant="list"
+          rows={6}
+        />
+      ) : (
+        <GlobalPreviewTable rows={rows} />
+      )}
     </section>
   );
 }
@@ -349,7 +362,10 @@ function GlobalPreviewTable({
                     >
                       {absoluteIndex + 1}
                     </td>
-                    <td className="px-3 py-2 align-top font-mono text-xs text-foreground [overflow-wrap:anywhere]">
+                    <td
+                      className="px-3 py-2 align-middle font-mono text-xs text-foreground [overflow-wrap:anywhere]"
+                      data-testid="glossary-term-preview-cell"
+                    >
                       {row.term}
                     </td>
                     <td className="min-w-0 px-3 py-2 align-top">

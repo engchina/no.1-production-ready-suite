@@ -6,8 +6,10 @@ import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/pr
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectDetailPanel,
   DbObjectGrid,
   DbObjectManagementPanelShell,
@@ -27,9 +29,13 @@ import type {
   DbAdminJoinWhereData,
   DbAdminJoinWherePromptProfile,
   DbAdminObjectDetail,
+  DbAdminObjectPage,
   DbAdminObjectsData,
-  SchemaCatalog,
+  SchemaRefreshJob,
 } from "../types";
+import { waitForSchemaRefreshJob } from "../incrementalQueries";
+import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
+import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "joinWhere";
 
@@ -153,7 +159,13 @@ function ViewJoinWherePanel({
         </div>
       </fieldset>
 
-      {result && (
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix="view-join-where-result"
+          ariaLabel={t("viewMgmt.joinWhere.loading")}
+          variant="detail"
+        />
+      ) : result ? (
         <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
@@ -198,15 +210,13 @@ function ViewJoinWherePanel({
             </details>
           ) : null}
         </section>
-      )}
+      ) : null}
     </div>
   );
 }
 
 export function ViewManagementPage() {
   const [views, setViews] = useState<DbAdminObjectsData | null>(null);
-  const [selectedViewName, setSelectedViewName] = useState("");
-  const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [viewSearch, setViewSearch] = useState("");
@@ -221,25 +231,21 @@ export function ViewManagementPage() {
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const detailRequest = useDbObjectDetailRequest({
+    collectionPath: "/api/nl2sql/db-admin/views",
+    loadErrorMessage: t("viewMgmt.error.detail"),
+    timeoutErrorMessage: t("dbAdmin.detail.timeout", { seconds: 15 }),
+  });
+  const {
+    selectedName: selectedViewName,
+    detail,
+    setDetail,
+  } = detailRequest;
 
   const fetchDetail = async (name: string) => {
-    setLoading(`detail-${name}`);
-    setMessage("");
-    setSelectedViewName(name);
-    setDetail(null);
     setDetailTab("columns");
     setJoinWhere(null);
-    try {
-      setDetail(
-        await apiGet<DbAdminObjectDetail>(
-          `/api/nl2sql/db-admin/views/${encodeURIComponent(name)}?include_ddl=0`,
-        ),
-      );
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("viewMgmt.error.load"));
-    } finally {
-      setLoading("");
-    }
+    await detailRequest.load(name);
   };
 
   // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
@@ -263,6 +269,7 @@ export function ViewManagementPage() {
 
   const load = async (refreshSchema = false) => {
     const sequence = loadSequence.current + 1;
+    const detailVersionAtStart = detailRequest.requestVersion();
     loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
     setMessage("");
@@ -271,28 +278,36 @@ export function ViewManagementPage() {
         // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
         // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
         if (refreshSchema) {
-          await apiPost<SchemaCatalog>("/api/schema/refresh", undefined, { signal });
+          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+            signal,
+            timeoutMs: API_TIMEOUT_MS.jobControl,
+          });
+          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
         }
-        const viewData = await apiGet<DbAdminObjectsData>(
-          "/api/nl2sql/db-admin/views",
-          { signal }
+        const page = filterUserVisibleDbAdminObjectPage(
+          await apiGet<DbAdminObjectPage>(
+            "/api/nl2sql/db-admin/objects?limit=100&type=view&row_state=all",
+            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+          )
         );
+        const viewData: DbAdminObjectsData = {
+          runtime: page.runtime,
+          items: page.items,
+          refreshed_at: page.refreshed_at,
+          warnings: page.warnings,
+        };
         if (signal.aborted || sequence !== loadSequence.current) return;
         setViews(viewData);
         const nextSelected =
           viewData.items.find((item) => item.name === selectedViewName)?.name ||
           viewData.items[0]?.name ||
           "";
-        setSelectedViewName(nextSelected);
-        setJoinWhere(null);
-        if (nextSelected) {
-          const nextDetail = await apiGet<DbAdminObjectDetail>(
-            `/api/nl2sql/db-admin/views/${encodeURIComponent(nextSelected)}?include_ddl=0`,
-            { signal }
-          );
-          if (!signal.aborted && sequence === loadSequence.current) setDetail(nextDetail);
-        } else {
-          setDetail(null);
+        if (detailRequest.requestVersion() === detailVersionAtStart) {
+          if (nextSelected) {
+            void fetchDetail(nextSelected);
+          } else {
+            detailRequest.clear();
+          }
         }
       });
     } catch (err) {
@@ -312,6 +327,13 @@ export function ViewManagementPage() {
       abortAll();
     };
   }, []);
+
+  const reloadAfterMutation = async (result: { schema_refresh_job_id?: string }) => {
+    if (result.schema_refresh_job_id) {
+      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+    }
+    await load();
+  };
 
   const filteredViews = useMemo(() => {
     const q = viewSearch.trim().toLowerCase();
@@ -361,7 +383,7 @@ export function ViewManagementPage() {
         setDropTargetName("");
         setDropConfirmation("");
         toast.success(t("viewMgmt.drop.success", { name: dropped }));
-        await load(true);
+        await reloadAfterMutation(result);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("viewMgmt.error.drop"));
@@ -406,7 +428,7 @@ export function ViewManagementPage() {
         confirmationTitle={t("viewMgmt.create.executeTitle")}
         executeOnly
         framed={false}
-        onExecuted={() => load(true)}
+        onExecuted={reloadAfterMutation}
       />
     ) : activeView === "joinWhere" ? (
       <ViewJoinWherePanel
@@ -495,6 +517,7 @@ export function ViewManagementPage() {
                 title: t("viewMgmt.list.title"),
                 hint: t("viewMgmt.grid.hint"),
                 count: t("viewMgmt.grid.count", { count: filteredViews.length }),
+                loading: t("viewMgmt.list.loading"),
                 emptyTitle: t("viewMgmt.list.emptyTitle"),
                 emptyHint: t("viewMgmt.list.emptyHint"),
                 noResultsTitle: t("viewMgmt.list.noResultsTitle"),
@@ -521,15 +544,18 @@ export function ViewManagementPage() {
               idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-detail-heading"
               detail={detail}
-              loading={loading.startsWith("detail-") || (loading === "load" && !detail)}
+              loading={detailRequest.loading || (loading === "load" && !views)}
+              error={detailRequest.error}
               tab={detailTab}
               labels={{
+                loading: t("viewMgmt.detail.loading"),
                 tabsLabel: t("viewMgmt.detailTabs.label"),
                 columns: t("viewMgmt.detailTabs.columns"),
                 ddl: t("viewMgmt.detailTabs.ddl"),
                 drop: t("viewMgmt.grid.drop"),
               }}
               onTabChange={handleDetailTabChange}
+              onRetry={() => void fetchDetail(selectedViewName)}
               onDrop={openDropDialog}
             />
             </DbObjectManagementPanelShell>

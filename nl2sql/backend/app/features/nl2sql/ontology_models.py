@@ -374,6 +374,10 @@ class ProfileOntologyView(OntologyContract):
     activation_scenarios_ja: list[str] = Field(default_factory=list)
     activation_keywords: list[str] = Field(default_factory=list)
     scenario_version: int = Field(default=1, ge=1)
+    # Profile mutation では view を更新しない。Ontology page が永続化した時点の
+    # Profile version/scope を保持し、read-only preview で stale を判定する。
+    source_profile_etag: str = ""
+    source_profile_scope_fingerprint: str = ""
 
 
 class MetricAggregation(StrEnum):
@@ -828,6 +832,7 @@ class OntologyBuildStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class OntologySourceStatus(StrEnum):

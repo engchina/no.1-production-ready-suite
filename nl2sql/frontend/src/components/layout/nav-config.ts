@@ -86,13 +86,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.feedbackManagement, labelKey: "nav.feedbackManagement", icon: MessageSquareText, permission: "evaluation.view" },
       { href: APP_ROUTES.questionClassifierModels, labelKey: "nav.questionClassifierModels", icon: BrainCircuit, permission: "evaluation.view" },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical, permission: "evaluation.view" },
-      {
-        href: APP_ROUTES.nl2sqlSettingsDatabase,
-        labelKey: "nav.nl2sqlSettingsDatabase",
-        sidebarLabelKey: "nav.nl2sqlSettingsDatabase.sidebar",
-        icon: Database,
-        permission: "settings.database.view",
-      },
     ],
   },
   {

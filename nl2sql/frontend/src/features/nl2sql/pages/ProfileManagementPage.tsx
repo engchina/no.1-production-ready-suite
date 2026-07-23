@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -47,13 +47,14 @@ import {
   useSchemaRefreshJob,
   useStartSchemaRefresh,
 } from "../incrementalQueries";
-import { BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL } from "../selectAiProfileUrls";
+import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import type {
   AssetRefreshData,
   Nl2SqlProfile,
   ProfileSummary,
   ProfileSelectAiConfig,
+  ProfileSyncJobData,
   ProfileUpsertPayload,
   SchemaObjectSummary,
   SchemaTable,
@@ -469,16 +470,18 @@ function ProfileList({
                           <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
                             <span>{t("profiles.action.select")}</span>
                           </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            size="sm"
-                            loading={deletingId === profile.id}
-                            onClick={() => onDelete(profile)}
-                          >
-                            <Trash2 size={15} aria-hidden="true" />
-                            <span>{t("profiles.action.delete")}</span>
-                          </Button>
+                          {profile.id !== "default" ? (
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              loading={deletingId === profile.id}
+                              onClick={() => onDelete(profile)}
+                            >
+                              <Trash2 size={15} aria-hidden="true" />
+                              <span>{t("profiles.action.delete")}</span>
+                            </Button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -886,6 +889,9 @@ function ProfileEditor({
   oracleConfirmation,
   rebuildAgentAssets,
   assetRefreshResults,
+  oracleSyncJob,
+  oracleSyncSubmissionError,
+  retryingOracleSync,
   deleting,
   onObjectFilterChange,
   onFormChange,
@@ -900,6 +906,7 @@ function ProfileEditor({
   onDelete,
   onOracleConfirmationChange,
   onRebuildAgentAssetsChange,
+  onRetryOracleSync,
   onBack,
 }: {
   selectedProfile: Nl2SqlProfile | null;
@@ -921,6 +928,9 @@ function ProfileEditor({
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
   assetRefreshResults: AssetRefreshData[];
+  oracleSyncJob: ProfileSyncJobData | null;
+  oracleSyncSubmissionError: string;
+  retryingOracleSync: boolean;
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
   onFormChange: (updater: (current: ProfileFormState) => ProfileFormState) => void;
@@ -935,6 +945,7 @@ function ProfileEditor({
   onDelete: () => void;
   onOracleConfirmationChange: (value: string) => void;
   onRebuildAgentAssetsChange: (value: boolean) => void;
+  onRetryOracleSync: () => void;
   onBack: () => void;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
@@ -956,7 +967,7 @@ function ProfileEditor({
         }
         description={t("profiles.editor.hint")}
         action={
-          selectedProfile ? (
+          selectedProfile && selectedProfile.id !== "default" ? (
             <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
               <Trash2 size={15} aria-hidden="true" />
               <span>{t("profiles.action.delete")}</span>
@@ -1101,6 +1112,12 @@ function ProfileEditor({
           <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.oraclePreview")}</h3>
           <p className="mt-1 text-sm text-muted">{t("profiles.oracle.hint")}</p>
         </div>
+        <OracleSyncStatusPanel
+          job={oracleSyncJob}
+          submissionError={oracleSyncSubmissionError}
+          retrying={retryingOracleSync}
+          onRetry={onRetryOracleSync}
+        />
         {oraclePreview ? (
           <OracleMutationResult result={oraclePreview} />
         ) : (
@@ -1219,6 +1236,73 @@ function AssetStatusPanel({ result }: { result: AssetRefreshData }) {
   );
 }
 
+function OracleSyncStatusPanel({
+  job,
+  submissionError,
+  retrying,
+  onRetry,
+}: {
+  job: ProfileSyncJobData | null;
+  submissionError: string;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  if (!job && !submissionError) return null;
+  const failed = job?.status === "failed" || Boolean(submissionError);
+  const statusVariant =
+    job?.status === "succeeded"
+      ? "success"
+      : failed
+        ? "danger"
+        : job?.status === "cancelled"
+          ? "warning"
+          : "info";
+  const message = submissionError || job?.error_message_ja || "";
+  const failureMessage = message
+    ? `${t("profiles.oracle.sync.failed")} ${message}`
+    : t("profiles.oracle.sync.failed");
+  return (
+    <section
+      className="grid gap-2 rounded-md border border-border bg-background p-3"
+      aria-live="polite"
+      aria-atomic="true"
+      data-testid="profile-oracle-sync-status"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusBadge
+          variant={statusVariant}
+          label={t(`profiles.oracle.sync.status.${job?.status ?? "failed"}`)}
+        />
+        {job ? (
+          <span className="text-sm text-muted">
+            {t(`profiles.oracle.sync.phase.${job.phase}`)}
+          </span>
+        ) : null}
+      </div>
+      {failed ? (
+        <PageNotice
+          notice={{
+            tone: "danger",
+            message: failureMessage,
+          }}
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={retrying}
+              onClick={onRetry}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("profiles.oracle.sync.retry")}</span>
+            </Button>
+          }
+        />
+      ) : null}
+    </section>
+  );
+}
+
 export function ProfileManagementPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1234,6 +1318,9 @@ export function ProfileManagementPage() {
   const [oracleConfirmation, setOracleConfirmation] = useState("");
   const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
   const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
+  const [oracleSyncJobId, setOracleSyncJobId] = useState("");
+  const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
+  const reportedOracleSyncJobId = useRef("");
   const [loading, setLoading] = useState("");
   // message は初回ロード失敗の常設 Banner 専用。保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
@@ -1256,8 +1343,17 @@ export function ProfileManagementPage() {
     : (schemaRefreshJobQuery.data?.status ?? "");
   const dbProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "business-profiles"],
-    queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_DETAIL_URL),
+    queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
     staleTime: 5_000,
+  });
+  const oracleSyncJobQuery = useQuery({
+    queryKey: ["nl2sql", "oracle-sync-job", oracleSyncJobId],
+    queryFn: () => apiGet<ProfileSyncJobData>(`/api/nl2sql/oracle-sync-jobs/${oracleSyncJobId}`),
+    enabled: Boolean(oracleSyncJobId),
+    refetchInterval: (query) => {
+      const status = (query.state.data as ProfileSyncJobData | undefined)?.status;
+      return status && ["succeeded", "failed", "cancelled"].includes(status) ? false : 1_000;
+    },
   });
   const profiles = useMemo(
     () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -1266,18 +1362,17 @@ export function ProfileManagementPage() {
   const profilesLoaded = !profilesQuery.isPending;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
   const dbProfiles = dbProfilesQuery.data ?? null;
+  const oracleSyncJob = oracleSyncJobQuery.data ?? null;
 
   const tableObjects = useMemo(
     () =>
       (tableObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [])
-        .filter((object) => !object.object_name.includes("$"))
         .map(schemaSummaryToTable),
     [tableObjectsQuery.data]
   );
   const viewObjects = useMemo(
     () =>
       (viewObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [])
-        .filter((object) => !object.object_name.includes("$"))
         .map(schemaSummaryToTable),
     [viewObjectsQuery.data]
   );
@@ -1321,6 +1416,9 @@ export function ProfileManagementPage() {
 
   const selectProfile = (profile: ProfileSummary) => {
     setMessage("");
+    setOracleSyncJobId("");
+    setOracleSyncSubmissionError("");
+    reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: profile.id });
   };
 
@@ -1376,6 +1474,28 @@ export function ProfileManagementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTargetKey]);
 
+  useEffect(() => {
+    const job = oracleSyncJobQuery.data;
+    if (!job || !["succeeded", "failed", "cancelled"].includes(job.status)) return;
+    if (reportedOracleSyncJobId.current === job.job_id) return;
+    reportedOracleSyncJobId.current = job.job_id;
+    if (job.status === "succeeded") {
+      if (job.oracle_result) setOraclePreview(job.oracle_result);
+      if (job.agent_result) {
+        setAssetRefreshResults((current) => [
+          job.agent_result as AssetRefreshData,
+          ...current.filter((item) => item.engine !== job.agent_result?.engine),
+        ]);
+      }
+      void queryClient.invalidateQueries({
+        queryKey: ["nl2sql", "select-ai", "business-profiles"],
+      });
+      toast.success(t("profiles.oracle.sync.succeeded"));
+    } else if (job.status === "failed") {
+      toast.error(t("profiles.oracle.sync.failed"));
+    }
+  }, [oracleSyncJobQuery.data, queryClient]);
+
   // 無効な id(削除済み等)の deep link は一覧へ縮退
   useEffect(() => {
     if (selectedProfileId && profileDetailQuery.isError) {
@@ -1419,6 +1539,9 @@ export function ProfileManagementPage() {
 
   const startNew = () => {
     setMessage("");
+    setOracleSyncJobId("");
+    setOracleSyncSubmissionError("");
+    reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: "new" });
   };
 
@@ -1485,9 +1608,10 @@ export function ProfileManagementPage() {
     }
     setNameError(false);
     setLoading("save");
+    let saved: Nl2SqlProfile;
     try {
       const payload = formToPayload(form);
-      const saved = selectedProfile
+      saved = selectedProfile
         ? await apiPatch<Nl2SqlProfile>(
             `/api/nl2sql/profiles/${selectedProfile.id}`,
             payload,
@@ -1498,37 +1622,80 @@ export function ProfileManagementPage() {
         profile: saved,
         etag: saved.etag ?? "",
       });
-      await queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
+      void queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
       setForm(profileToForm(normalizeProfile(saved)));
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
       }
-      // 保存と同時に Oracle DBMS_CLOUD_AI profile を再構築する(ADMIN_EXECUTE ゲート通過済み)。
-      const oracle = await apiPost<SelectAiDbProfileMutationData>(
-        `/api/nl2sql/profiles/${saved.id}/select-ai-profile`,
-        { confirmation: oracleConfirmation, reason: "ui-profile-management-select-ai-upsert" }
-      );
-      setOraclePreview(oracle);
-      // チェック時のみ Select AI Agent アセット(tool/agent/task/team)も作り直す。
-      if (rebuildAgentAssets) {
-        const asset = await apiPost<AssetRefreshData>(
-          `/api/nl2sql/select-ai-agent/assets/refresh?profile_id=${encodeURIComponent(saved.id)}`
-        );
-        setAssetRefreshResults((current) => [
-          asset,
-          ...current.filter((item) => item.engine !== asset.engine),
-        ]);
-      }
-      await dbProfilesQuery.refetch();
       toast.success(t("profiles.message.saved"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
+      setLoading("");
+      return;
+    }
+
+    try {
+      setOracleSyncSubmissionError("");
+      setOraclePreview(null);
+      const job = await apiPost<ProfileSyncJobData>(
+        `/api/nl2sql/profiles/${saved.id}/oracle-sync-jobs`,
+        {
+          confirmation: oracleConfirmation,
+          reason: "ui-profile-management-save",
+          rebuild_agent_assets: rebuildAgentAssets,
+        },
+        {
+          headers: {
+            "Idempotency-Key": `profile-save-${saved.id}-${saved.etag || "new"}`,
+          },
+        }
+      );
+      reportedOracleSyncJobId.current = "";
+      setOracleSyncJobId(job.job_id);
+      queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
+    } catch (err) {
+      setOracleSyncSubmissionError(
+        err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
+      );
+      toast.error(t("profiles.oracle.sync.savedButFailed"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const retryOracleSync = async () => {
+    const profileId = oracleSyncJob?.profile_id || selectedProfile?.id;
+    if (!profileId) return;
+    setLoading("retry-oracle-sync");
+    try {
+      const job = oracleSyncJob?.status === "failed"
+        ? await apiPost<ProfileSyncJobData>(
+            `/api/nl2sql/oracle-sync-jobs/${oracleSyncJob.job_id}/retry`
+          )
+        : await apiPost<ProfileSyncJobData>(
+            `/api/nl2sql/profiles/${profileId}/oracle-sync-jobs`,
+            {
+              confirmation: oracleConfirmation,
+              reason: "ui-profile-management-retry",
+              rebuild_agent_assets: rebuildAgentAssets,
+            },
+            { headers: { "Idempotency-Key": `profile-retry-${profileId}-${Date.now()}` } }
+          );
+      setOracleSyncSubmissionError("");
+      reportedOracleSyncJobId.current = "";
+      setOracleSyncJobId(job.job_id);
+      queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
+    } catch (err) {
+      setOracleSyncSubmissionError(
+        err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
+      );
     } finally {
       setLoading("");
     }
   };
 
   const deleteProfile = async (profile: Pick<Nl2SqlProfile, "id" | "name" | "etag">) => {
+    if (profile.id === "default") return;
     const ok = await confirm({
       title: t("profiles.delete.confirm.title"),
       description: t("profiles.delete.confirm.description", { name: profile.name }),
@@ -1585,6 +1752,9 @@ export function ProfileManagementPage() {
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
       assetRefreshResults={assetRefreshResults}
+      oracleSyncJob={oracleSyncJob}
+      oracleSyncSubmissionError={oracleSyncSubmissionError}
+      retryingOracleSync={loading === "retry-oracle-sync"}
       deleting={selectedProfile ? loading === `delete-profile-${selectedProfile.id}` : false}
       onObjectFilterChange={setObjectFilter}
       onFormChange={setForm}
@@ -1605,6 +1775,7 @@ export function ProfileManagementPage() {
       }}
       onOracleConfirmationChange={setOracleConfirmation}
       onRebuildAgentAssetsChange={setRebuildAgentAssets}
+      onRetryOracleSync={() => void retryOracleSync()}
       onBack={() => void backToList()}
     />
   );

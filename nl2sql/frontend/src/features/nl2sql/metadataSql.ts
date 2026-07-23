@@ -1,20 +1,15 @@
-import type { DbAdminObjectDetail, SchemaCatalog } from "./types";
+import type { DbAdminObjectDetail } from "./types";
 
 export function buildMetadataInputTexts(
   details: DbAdminObjectDetail[],
-  catalog: SchemaCatalog | null,
   sampleLimit: number
 ) {
   const structure: string[] = [];
   const primaryKeys: string[] = [];
   const foreignKeys: string[] = [];
   const samples: string[] = [];
-  const catalogByName = new Map(
-    (catalog?.tables ?? []).map((table) => [table.table_name.toUpperCase(), table])
-  );
 
   for (const detail of details) {
-    const catalogTable = catalogByName.get(detail.name.toUpperCase());
     structure.push(
       [
         `OBJECT: ${detail.name}`,
@@ -30,14 +25,14 @@ export function buildMetadataInputTexts(
       ].join("\n")
     );
 
-    const constraints = catalogTable?.constraints ?? [];
+    const constraints = detail.constraints ?? [];
     const pk = constraints.filter((constraint) => /\sP(\(|$)/.test(constraint));
     if (pk.length > 0) primaryKeys.push(`OBJECT: ${detail.name}\n${pk.join("\n")}`);
     const fk = constraints.filter((constraint) => /\sR(\(|$)/.test(constraint));
     if (fk.length > 0) foreignKeys.push(`OBJECT: ${detail.name}\n${fk.join("\n")}`);
 
-    if (sampleLimit > 0 && catalogTable) {
-      const sampleLines = catalogTable.columns
+    if (sampleLimit > 0) {
+      const sampleLines = detail.columns
         .map((column) => {
           const values = column.sample_values.slice(0, sampleLimit).join(", ");
           return values ? `${column.column_name}: ${values}` : "";

@@ -1,7 +1,6 @@
 import type {
   GraphPatch,
   OntologyBuildJob,
-  OntologyContextSearchResult,
   OntologyGraph,
   OntologyImprovementProposalRequest,
   OntologyProposal,
@@ -415,24 +414,6 @@ export function confirmOntologyProfileRecommendation(
     {
       selected_profile_id: selectedProfileId,
       selected_revision_id: selectedRevisionId,
-    },
-    options
-  );
-}
-
-export function searchOntologyContext(
-  profileId: string,
-  input: { question: string; ontologyRevisionId: string; topK?: number; maxHops?: number },
-  options?: RequestOptions
-): Promise<OntologyContextSearchResult> {
-  return request(
-    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-context/search`,
-    "POST",
-    {
-      question: input.question,
-      ontology_revision_id: input.ontologyRevisionId,
-      top_k: input.topK ?? 8,
-      max_hops: input.maxHops ?? 2,
     },
     options
   );

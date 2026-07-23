@@ -562,6 +562,8 @@ class OntologyStore(Protocol):
         self,
         collection: OntologyCollection,
         filters: Mapping[str, Any] | None = None,
+        *,
+        include_embedding: bool = True,
     ) -> list[dict[str, Any]]:
         """List detached documents using indexed equality filters."""
 
@@ -580,6 +582,13 @@ class OntologyStore(Protocol):
         documents: Sequence[tuple[Mapping[str, Any], str | None]],
     ) -> list[dict[str, Any]]:
         """Save multiple documents in one storage transaction."""
+
+    def delete_documents(
+        self,
+        collection: OntologyCollection,
+        filters: Mapping[str, Any],
+    ) -> int:
+        """Delete documents matching indexed equality filters and return the row count."""
 
     def search_node_embeddings(
         self,
@@ -622,6 +631,8 @@ class _ConvenienceMethods:
         self,
         collection: OntologyCollection,
         filters: Mapping[str, Any] | None = None,
+        *,
+        include_embedding: bool = True,
     ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
@@ -639,6 +650,13 @@ class _ConvenienceMethods:
         collection: OntologyCollection,
         documents: Sequence[tuple[Mapping[str, Any], str | None]],
     ) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def delete_documents(
+        self,
+        collection: OntologyCollection,
+        filters: Mapping[str, Any],
+    ) -> int:
         raise NotImplementedError
 
     def search_node_embeddings(
@@ -855,6 +873,8 @@ class InMemoryOntologyStore(_ConvenienceMethods):
         self,
         collection: OntologyCollection,
         filters: Mapping[str, Any] | None = None,
+        *,
+        include_embedding: bool = True,
     ) -> list[dict[str, Any]]:
         accepted_filters = _validate_filters(collection, filters)
         with self._lock:
@@ -864,7 +884,11 @@ class InMemoryOntologyStore(_ConvenienceMethods):
                 if all(document.get(field) == value for field, value in accepted_filters.items())
             ]
             documents.sort(key=lambda item: _document_identity(collection, item))
-            return [deserialize_json(canonical_json(document)) for document in documents]
+            detached = [deserialize_json(canonical_json(document)) for document in documents]
+            if not include_embedding:
+                for document in detached:
+                    document.pop("embedding", None)
+            return detached
 
     def save_document(
         self,
@@ -908,6 +932,24 @@ class InMemoryOntologyStore(_ConvenienceMethods):
                 deserialize_json(canonical_json(prepared))
                 for _key, prepared in prepared_documents
             ]
+
+    def delete_documents(
+        self,
+        collection: OntologyCollection,
+        filters: Mapping[str, Any],
+    ) -> int:
+        accepted_filters = _validate_filters(collection, filters)
+        if not accepted_filters:
+            raise ValueError("Ontology document delete requires at least one filter.")
+        with self._lock:
+            keys = [
+                key
+                for key, document in self._documents[collection].items()
+                if all(document.get(field) == value for field, value in accepted_filters.items())
+            ]
+            for key in keys:
+                self._documents[collection].pop(key, None)
+            return len(keys)
 
     def search_node_embeddings(
         self,
@@ -986,11 +1028,13 @@ class OracleOntologyStore(_ConvenienceMethods):
         self,
         collection: OntologyCollection,
         filters: Mapping[str, Any] | None = None,
+        *,
+        include_embedding: bool = True,
     ) -> list[dict[str, Any]]:
         accepted_filters = _validate_filters(collection, filters)
         spec = _SPECS[collection]
         select_columns = "PAYLOAD_JSON, VERSION_NO, ETAG"
-        if spec.has_embedding:
+        if spec.has_embedding and include_embedding:
             select_columns += ", EMBEDDING"
         sql = f"SELECT {select_columns} FROM {spec.table_name}"  # nosec B608
         binds: dict[str, Any] = {}
@@ -1001,7 +1045,10 @@ class OracleOntologyStore(_ConvenienceMethods):
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(sql, binds)
             rows = cursor.fetchall()
-        return [_decode_row(row, has_embedding=spec.has_embedding) for row in rows]
+        return [
+            _decode_row(row, has_embedding=spec.has_embedding and include_embedding)
+            for row in rows
+        ]
 
     def save_document(
         self,
@@ -1073,6 +1120,29 @@ class OracleOntologyStore(_ConvenienceMethods):
                     ) from exc
                 raise
         return prepared_documents
+
+    def delete_documents(
+        self,
+        collection: OntologyCollection,
+        filters: Mapping[str, Any],
+    ) -> int:
+        accepted_filters = _validate_filters(collection, filters)
+        if not accepted_filters:
+            raise ValueError("Ontology document delete requires at least one filter.")
+        spec = _SPECS[collection]
+        where_sql, binds = _where_clause(spec, accepted_filters)
+        sql = f"DELETE FROM {spec.table_name} WHERE {where_sql}"  # nosec B608
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(sql, binds)
+                deleted = int(getattr(cursor, "rowcount", 0) or 0)
+                connection.commit()
+            except Exception:
+                rollback = getattr(connection, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                raise
+        return deleted
 
     def search_node_embeddings(
         self,

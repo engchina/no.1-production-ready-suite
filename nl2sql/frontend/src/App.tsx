@@ -38,7 +38,6 @@ import { ProfileManagementPage } from "@/features/nl2sql/pages/ProfileManagement
 import { SampleDataPage } from "@/features/nl2sql/pages/SampleDataPage";
 import { TableManagementPage } from "@/features/nl2sql/pages/TableManagementPage";
 import { ViewManagementPage } from "@/features/nl2sql/pages/ViewManagementPage";
-import { DatabaseSettingsPage as Nl2SqlDatabaseSettingsPage } from "@/features/nl2sql/pages/SettingsPages";
 import { SqlAnalysisPage } from "@/features/nl2sql/pages/SqlAnalysisPage";
 import { SqlToQuestionPage } from "@/features/nl2sql/pages/SqlToQuestionPage";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -150,10 +149,6 @@ function AuthenticatedApplication() {
         <Route
           path={APP_ROUTES.legacyNl2sqlModelLearning}
           element={<Navigate to={`${APP_ROUTES.profiles}#profile-learning`} replace />}
-        />
-        <Route
-          path={APP_ROUTES.nl2sqlSettingsDatabase}
-          element={<Nl2SqlDatabaseSettingsPage />}
         />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
         <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />

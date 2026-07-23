@@ -15,6 +15,7 @@ import {
 import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { ErrorState } from "@/components/StateViews";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
@@ -35,6 +36,7 @@ export interface DbObjectGridLabels {
   title: string;
   hint: string;
   count: string;
+  loading: string;
   emptyTitle: string;
   emptyHint: string;
   noResultsTitle: string;
@@ -53,6 +55,7 @@ export interface DbObjectGridLabels {
 }
 
 export interface DbObjectDetailLabels {
+  loading: string;
   tabsLabel: string;
   columns: string;
   ddl: string;
@@ -110,8 +113,78 @@ export function rowCountLabel(rowCount?: number | null) {
   return rowCount == null ? "-" : t("dbAdmin.list.rows", { count: rowCount });
 }
 
+export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
+
 function SkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-muted/30 ${className}`} aria-hidden="true" />;
+  return (
+    <div
+      className={`animate-pulse rounded-md bg-muted/30 motion-reduce:animate-none ${className}`}
+      aria-hidden="true"
+      data-testid="db-management-skeleton-block"
+    />
+  );
+}
+
+/**
+ * データ準備系の管理画面で共有する読込スケルトン。
+ * detail はテーブル／ビュー詳細の既存寸法を正本として維持する。
+ */
+export function DbManagementLoadingSkeleton({
+  idPrefix,
+  ariaLabel,
+  variant = "detail",
+  rows = 8,
+}: {
+  idPrefix: string;
+  ariaLabel: string;
+  variant?: DbManagementLoadingSkeletonVariant;
+  rows?: number;
+}) {
+  if (variant === "list") {
+    return (
+      <div
+        className="grid gap-2"
+        role="status"
+        aria-busy="true"
+        aria-label={ariaLabel}
+        data-testid={`${idPrefix}-list-skeleton`}
+      >
+        <SkeletonBlock className="h-11" />
+        {Array.from({ length: rows }, (_, index) => (
+          <SkeletonBlock key={index} className="h-12" />
+        ))}
+      </div>
+    );
+  }
+
+  if (variant === "compact") {
+    return (
+      <div
+        className="grid gap-3"
+        role="status"
+        aria-busy="true"
+        aria-label={ariaLabel}
+        data-testid={`${idPrefix}-compact-skeleton`}
+      >
+        <SkeletonBlock className="h-10" />
+        <SkeletonBlock className="h-24" />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="grid gap-3"
+      role="status"
+      aria-busy="true"
+      aria-label={ariaLabel}
+      data-testid={`${idPrefix}-detail-skeleton`}
+    >
+      <SkeletonBlock className="h-[64px]" />
+      <SkeletonBlock className="h-[40px]" />
+      <SkeletonBlock className="h-[288px]" />
+    </div>
+  );
 }
 
 export function DbObjectManagementPanelShell({
@@ -122,6 +195,8 @@ export function DbObjectManagementPanelShell({
   className = "",
   splitId,
   preferredWidePane = "right",
+  minLeftPaneWidthPx,
+  minRightPaneWidthPx,
   role = "tabpanel",
   children,
 }: {
@@ -133,6 +208,8 @@ export function DbObjectManagementPanelShell({
   className?: string;
   splitId?: string;
   preferredWidePane?: FixedSplitWidePane;
+  minLeftPaneWidthPx?: number;
+  minRightPaneWidthPx?: number;
   /** タブ配下は "tabpanel"(既定)、タブ非連携の独立領域は "region"。 */
   role?: "tabpanel" | "region";
   children: ReactNode;
@@ -154,6 +231,8 @@ export function DbObjectManagementPanelShell({
         <FixedSplitPane
           splitId={splitPaneId}
           preferredWidePane={preferredWidePane}
+          minLeftPaneWidthPx={minLeftPaneWidthPx}
+          minRightPaneWidthPx={minRightPaneWidthPx}
           left={panelChildren[0]}
           right={panelChildren[1]}
         />
@@ -285,27 +364,6 @@ export function DbObjectStepIndicator({
         );
       })}
     </ol>
-  );
-}
-
-function DbObjectListSkeleton({ idPrefix }: { idPrefix: string }) {
-  return (
-    <div className="grid gap-2" data-testid={`${idPrefix}-list-skeleton`}>
-      <SkeletonBlock className="h-11" />
-      {Array.from({ length: 8 }, (_, index) => (
-        <SkeletonBlock key={index} className="h-12" />
-      ))}
-    </div>
-  );
-}
-
-function DbObjectDetailSkeleton({ idPrefix }: { idPrefix: string }) {
-  return (
-    <div className="grid gap-3" data-testid={`${idPrefix}-detail-skeleton`}>
-      <SkeletonBlock className="h-16" />
-      <SkeletonBlock className="h-10" />
-      <SkeletonBlock className="h-72" />
-    </div>
   );
 }
 
@@ -539,7 +597,11 @@ export function DbObjectGrid({
       </div>
 
       {loading ? (
-        <DbObjectListSkeleton idPrefix={idPrefix} />
+        <DbManagementLoadingSkeleton
+          idPrefix={idPrefix}
+          ariaLabel={labels.loading}
+          variant="list"
+        />
       ) : items.length === 0 ? (
         <EmptyState
           title={hasActiveFilter ? labels.noResultsTitle : labels.emptyTitle}
@@ -615,11 +677,13 @@ export function DbObjectDetailPanel({
   headingId,
   detail,
   loading,
+  error,
   exporting = false,
   countingRows = false,
   tab,
   labels,
   onTabChange,
+  onRetry,
   onExport,
   onExactCount,
   onDrop,
@@ -628,16 +692,37 @@ export function DbObjectDetailPanel({
   headingId: string;
   detail: DbAdminObjectDetail | null;
   loading: boolean;
+  error: string;
   exporting?: boolean;
   countingRows?: boolean;
   tab: DbObjectDetailTab;
   labels: DbObjectDetailLabels;
   onTabChange: (tab: DbObjectDetailTab) => void;
+  onRetry: () => void;
   onExport?: (name: string) => void;
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
-  if (loading) return <DbObjectDetailSkeleton idPrefix={idPrefix} />;
+  if (loading) {
+    return (
+      <DbManagementLoadingSkeleton
+        idPrefix={idPrefix}
+        ariaLabel={labels.loading}
+        variant="detail"
+      />
+    );
+  }
+
+  if (error) {
+    return (
+      <section
+        className="grid min-w-0 content-start rounded-md border border-border bg-background p-4"
+        data-testid={`${idPrefix}-detail-error`}
+      >
+        <ErrorState message={error} onRetry={onRetry} />
+      </section>
+    );
+  }
 
   if (!detail) {
     return (

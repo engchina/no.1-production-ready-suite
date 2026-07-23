@@ -14,7 +14,11 @@ import app.features.nl2sql.router as nl2sql_routes
 from app.clients.oracle import OracleConnectionTimeoutError
 from app.features.nl2sql.models import Nl2SqlProfile
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
-from app.features.nl2sql.service import Nl2SqlPersistenceUnavailable, Nl2SqlService
+from app.features.nl2sql.service import (
+    Nl2SqlPersistenceUnavailable,
+    Nl2SqlRepositoryOperationFailed,
+    Nl2SqlService,
+)
 from app.main import app
 from app.settings import get_settings
 
@@ -361,8 +365,34 @@ async def test_profile_api_returns_retryable_503_without_ghost_state(
     assert response.headers["Retry-After"] == "5"
     assert response.json()["data"] is None
     assert response.json()["error_messages"]
+    assert response.json()["error_code"] == "snapshot_save_failed"
     assert blocked_read.status_code == 503
     assert blocked_read.headers["Retry-After"] == "5"
     assert persistence.status_code == 200
     assert persistence.json()["data"]["ready"] is False
     assert {profile.id for profile in service.list_profiles(include_archived=True)} == baseline_ids
+
+
+@pytest.mark.asyncio
+async def test_repository_programming_error_returns_local_500_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Service:
+        def ensure_persistence_available(self) -> None:
+            return None
+
+        def list_db_admin_objects_page(self, **_kwargs: Any) -> None:
+            raise Nl2SqlRepositoryOperationFailed("schema_object_query_failed")
+
+    monkeypatch.setattr(nl2sql_routes, "nl2sql_service", Service())
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/nl2sql/db-admin/objects?limit=10")
+
+    assert response.status_code == 500
+    assert "Retry-After" not in response.headers
+    assert response.json()["error_code"] == "schema_object_query_failed"
+    assert "ORA-" not in response.text

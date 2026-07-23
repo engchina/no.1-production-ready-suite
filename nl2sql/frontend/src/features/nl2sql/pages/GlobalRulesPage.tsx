@@ -15,9 +15,9 @@ import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useRequestScope } from "@/lib/useRequestScope";
 import { FileInputControl, downloadBlob } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
   DbObjectManagementStatusBar,
   DbObjectPanelHeader,
@@ -38,41 +38,54 @@ export function GlobalRulesPage() {
   const [lastLoadedAt, setLastLoadedAt] = useState("");
   const [filename, setFilename] = useState("");
   const loadSequence = useRef(0);
-  const { abortAll, run: runScopedRequest } = useRequestScope();
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const initialLoadStartedRef = useRef(false);
+  const cleanupTimerRef = useRef<number | null>(null);
 
   const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
     setErrorText(null);
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     try {
-      await runScopedRequest(async (signal) => {
-        const data = await apiGet<LegacyLearningMaterialData>(
-          "/api/nl2sql/legacy-learning-material",
-          { signal }
-        );
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setRules(data.rules);
-        setLastLoadedAt(new Date().toISOString());
-        if (announce) {
-          toast.success(t("globalRules.message.serverLoaded"));
-        }
-      });
+      const data = await apiGet<LegacyLearningMaterialData>(
+        "/api/nl2sql/legacy-learning-material",
+        { signal: controller.signal }
+      );
+      if (controller.signal.aborted || sequence !== loadSequence.current) return;
+      setRules(data.rules);
+      setLastLoadedAt(new Date().toISOString());
+      if (announce) {
+        toast.success(t("globalRules.message.serverLoaded"));
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
       }
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.load"));
     } finally {
+      if (loadControllerRef.current === controller) loadControllerRef.current = null;
       if (sequence === loadSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
+    if (cleanupTimerRef.current !== null) {
+      window.clearTimeout(cleanupTimerRef.current);
+      cleanupTimerRef.current = null;
+    }
+    if (!initialLoadStartedRef.current) {
+      initialLoadStartedRef.current = true;
+      void load();
+    }
     return () => {
-      loadSequence.current += 1;
-      abortAll();
+      cleanupTimerRef.current = window.setTimeout(() => {
+        cleanupTimerRef.current = null;
+        loadSequence.current += 1;
+        loadControllerRef.current?.abort();
+      }, 0);
     };
   }, []);
 
@@ -180,7 +193,16 @@ export function GlobalRulesPage() {
                 <span>{t("globalRules.export")}</span>
               </Button>
             </div>
-            <RulesPreviewTable rules={rules} />
+            {loading && !lastLoadedAt ? (
+              <DbManagementLoadingSkeleton
+                idPrefix="global-rules"
+                ariaLabel={t("globalRules.loading")}
+                variant="list"
+                rows={6}
+              />
+            ) : (
+              <RulesPreviewTable rules={rules} />
+            )}
           </section>
         </DbObjectManagementPanelShell>
       </main>

@@ -195,6 +195,24 @@ def _wait_for_job(service: OntologyBuildService, job_id: str) -> Any:
     raise AssertionError("ontology build job did not finish")
 
 
+def test_profile_delete_cancels_queued_build_and_worker_cannot_restart_it(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    started = service.start("sales", business_text="販売業務")
+
+    assert service.cancel_profile_jobs("sales") == 1
+    cancelled = service.run_persisted(started.id)
+
+    assert cancelled.status == OntologyBuildStatus.CANCELLED
+    assert all(step.status == OntologyBuildStepStatus.SKIPPED for step in cancelled.steps)
+    assert store.list_documents("proposals", {"profile_id": "sales"}) == []
+
+
 @pytest.fixture
 def harness() -> tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService]:
     store = InMemoryOntologyStore()

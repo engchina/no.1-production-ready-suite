@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,9 +41,13 @@ from app.features.nl2sql.models import (
     SchemaViewDependency,
 )
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
-from app.features.nl2sql.service import Nl2SqlPersistenceUnavailable, Nl2SqlService
+from app.features.nl2sql.service import (
+    Nl2SqlPersistenceUnavailable,
+    Nl2SqlRepositoryOperationFailed,
+    Nl2SqlService,
+)
 from app.features.nl2sql.store import MemoryNl2SqlStore
-from app.settings import Settings
+from app.settings import Settings, get_settings
 
 
 def _profile(index: int) -> Nl2SqlProfile:
@@ -105,6 +111,7 @@ class _ScriptedOracleCursor:
         return None
 
     def execute(self, _sql: str, _binds: Any = None) -> None:
+        self._connection.executed.append((_sql, _binds))
         if not self._result_sets:
             raise AssertionError("scripted result set is missing")
         self._current = list(self._result_sets.pop(0))
@@ -131,6 +138,7 @@ class _ScriptedOracleCursor:
 class _ScriptedOracleConnection:
     def __init__(self, result_sets: list[list[tuple[Any, ...]]]) -> None:
         self.closed = False
+        self.executed: list[tuple[str, Any]] = []
         self._cursor = _ScriptedOracleCursor(self, result_sets)
 
     def cursor(self) -> _ScriptedOracleCursor:
@@ -175,12 +183,186 @@ def _incremental_service(
     return service
 
 
+def test_incremental_legacy_learning_material_is_restored_lazily_after_restart() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    first = _incremental_service(repository)
+    first.import_legacy_terms(
+        filename="terms.csv",
+        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+    )
+    first.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\nSELECT のみ\n".encode(),
+    )
+
+    restarted = _incremental_service(repository)
+
+    assert restarted._legacy_learning_material.glossary == {}  # noqa: SLF001
+    material = restarted.get_legacy_learning_material()
+    assert material.glossary == {"売上": "INVOICES.TOTAL_AMOUNT"}
+    assert material.rules == ["SELECT のみ"]
+
+
+def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "singletons",
+        "legacy_learning_material",
+        {
+            "value": {
+                "glossary": {"売上": "INVOICES.TOTAL_AMOUNT"},
+                "rules": ["SELECT のみ"],
+            }
+        },
+    )
+    feedback_config = {
+        "value": {"similarity_threshold": 0.75, "match_limit": 7}
+    }
+    repository.put_document(
+        "singletons",
+        "feedback_search_config",
+        feedback_config,
+    )
+
+    terms_service = _incremental_service(repository)
+    terms = terms_service.import_legacy_terms(
+        filename="terms.csv",
+        content="TERM,DEFINITION\n粗利,INVOICES.PROFIT\n".encode(),
+    )
+    assert terms.glossary == {"粗利": "INVOICES.PROFIT"}
+    assert terms.rules == ["SELECT のみ"]
+    assert repository.get_document(
+        "singletons", "feedback_search_config"
+    ) == feedback_config
+
+    rules_service = _incremental_service(repository)
+    rules = rules_service.import_legacy_rules(
+        filename="rules.csv",
+        content="RULE\n集計時は NULL を除外する\n".encode(),
+    )
+    assert rules.glossary == {"粗利": "INVOICES.PROFIT"}
+    assert rules.rules == ["集計時は NULL を除外する"]
+    assert repository.get_document(
+        "singletons", "feedback_search_config"
+    ) == feedback_config
+
+
+def test_incremental_generation_context_loads_global_material_without_page_read() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "singletons",
+        "legacy_learning_material",
+        {
+            "value": {
+                "glossary": {"売上": "INVOICES.TOTAL_AMOUNT"},
+                "rules": ["SELECT のみ"],
+            }
+        },
+    )
+    service = _incremental_service(repository)
+    profile = Nl2SqlProfile(
+        id="billing",
+        name="請求管理",
+        glossary={"請求": "INVOICES"},
+        sql_rules=["上限 100 件"],
+    )
+
+    assert service._effective_glossary(profile) == {  # noqa: SLF001
+        "売上": "INVOICES.TOTAL_AMOUNT",
+        "請求": "INVOICES",
+    }
+    assert service._effective_sql_rules(profile) == [  # noqa: SLF001
+        "SELECT のみ",
+        "上限 100 件",
+    ]
+
+
+def test_incremental_legacy_material_missing_document_returns_empty() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+
+    material = service.get_legacy_learning_material()
+
+    assert material.glossary == {}
+    assert material.rules == []
+    assert repository.get_document(
+        "singletons", "legacy_learning_material"
+    ) is None
+
+
+def test_incremental_legacy_material_invalid_document_is_operation_failure() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "singletons",
+        "legacy_learning_material",
+        {"value": {"glossary": [], "rules": "invalid"}},
+    )
+    service = _incremental_service(repository)
+
+    with pytest.raises(Nl2SqlRepositoryOperationFailed) as exc_info:
+        service.get_legacy_learning_material()
+
+    assert exc_info.value.reason_code == "legacy_learning_material_query_failed"
+
+
+def test_incremental_legacy_material_connection_failure_is_unavailable() -> None:
+    class FailingReadRepository(MemoryIncrementalNl2SqlRepository):
+        def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
+            del collection, entity_id
+            raise RuntimeError("ORA-12541: listener unavailable")
+
+    service = _incremental_service(FailingReadRepository(seed_default=False))
+
+    with pytest.raises(Nl2SqlPersistenceUnavailable) as exc_info:
+        service.get_legacy_learning_material()
+
+    assert exc_info.value.reason_code == "oracle_connection_unavailable"
+
+
+def test_incremental_legacy_import_rolls_back_memory_when_save_fails() -> None:
+    class FailingWriteRepository(MemoryIncrementalNl2SqlRepository):
+        fail_write = False
+
+        def put_document(self, *args: Any, **kwargs: Any) -> None:
+            if self.fail_write:
+                raise RuntimeError("singleton write failed")
+            super().put_document(*args, **kwargs)
+
+    repository = FailingWriteRepository(seed_default=False)
+    repository.put_document(
+        "singletons",
+        "legacy_learning_material",
+        {
+            "value": {
+                "glossary": {"売上": "INVOICES.TOTAL_AMOUNT"},
+                "rules": ["SELECT のみ"],
+            }
+        },
+    )
+    service = _incremental_service(repository)
+    repository.fail_write = True
+
+    with pytest.raises(Nl2SqlRepositoryOperationFailed):
+        service.import_legacy_terms(
+            filename="terms.csv",
+            content="TERM,DEFINITION\n粗利,INVOICES.PROFIT\n".encode(),
+        )
+
+    assert service._legacy_learning_material.glossary == {  # noqa: SLF001
+        "売上": "INVOICES.TOTAL_AMOUNT"
+    }
+    assert service._legacy_learning_material.rules == ["SELECT のみ"]  # noqa: SLF001
+
+
 def test_incremental_migrations_backfill_before_not_null_constraints() -> None:
     migration_root = Path(__file__).resolve().parents[1] / "migrations"
     state_ddl = (migration_root / "003_incremental_nl2sql_state.sql").read_text(
         encoding="utf-8"
     )
     lease_ddl = (migration_root / "006_incremental_job_leases.sql").read_text(
+        encoding="utf-8"
+    )
+    lifecycle_ddl = (migration_root / "007_profile_ontology_lifecycle.sql").read_text(
         encoding="utf-8"
     )
 
@@ -197,6 +379,90 @@ def test_incremental_migrations_backfill_before_not_null_constraints() -> None:
     assert lease_ddl.index(lease_add) < lease_ddl.index(lease_backfill)
     assert lease_ddl.index(lease_backfill) < lease_ddl.index(lease_constraint)
     assert "WORKER_ID VARCHAR2(256) DEFAULT '' NOT NULL" not in lease_ddl
+    assert lifecycle_ddl.count("ON DELETE CASCADE") == 2
+    assert lifecycle_ddl.index("DELETE FROM NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS") < (
+        lifecycle_ddl.index("ALTER TABLE NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS")
+    )
+
+
+class _ProfileDeleteCursor:
+    def __init__(self, connection: _ProfileDeleteConnection) -> None:
+        self.connection = connection
+        self._row: tuple[str] | None = None
+
+    def __enter__(self) -> _ProfileDeleteCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, binds: Any = None) -> None:
+        normalized = " ".join(sql.split())
+        self.connection.executed.append((normalized, binds))
+        if self.connection.fail_on and self.connection.fail_on in normalized:
+            raise RuntimeError("scripted delete failure")
+        self._row = ("etag-1",) if "SELECT ETAG" in normalized else None
+
+    def fetchone(self) -> tuple[str] | None:
+        return self._row
+
+
+class _ProfileDeleteConnection:
+    def __init__(self, *, fail_on: str = "") -> None:
+        self.fail_on = fail_on
+        self.executed: list[tuple[str, Any]] = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self) -> _ProfileDeleteCursor:
+        return _ProfileDeleteCursor(self)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _profile_delete_repository(
+    *, fail_on: str = ""
+) -> tuple[OracleIncrementalNl2SqlRepository, _ProfileDeleteConnection]:
+    connection = _ProfileDeleteConnection(fail_on=fail_on)
+
+    @contextmanager
+    def connect() -> Iterator[_ProfileDeleteConnection]:
+        yield connection
+
+    return OracleIncrementalNl2SqlRepository(connection_factory=connect), connection
+
+
+def test_oracle_profile_delete_removes_all_view_revisions_in_same_transaction() -> None:
+    repository, connection = _profile_delete_repository()
+
+    repository.delete_profile("profile-1", expected_etag="etag-1")
+
+    sql = [statement for statement, _binds in connection.executed]
+    assert "NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS" in sql[1]
+    assert "NL2SQL_ONTOLOGY_PROFILE_VIEWS" in sql[2]
+    assert sql[3].startswith("DELETE FROM NL2SQL_PROFILES")
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+
+
+def test_oracle_profile_delete_rolls_back_before_parent_delete_on_view_failure() -> None:
+    repository, connection = _profile_delete_repository(
+        fail_on="NL2SQL_ONTOLOGY_PROFILE_VIEWS"
+    )
+
+    with pytest.raises(RuntimeError, match="scripted delete failure"):
+        repository.delete_profile("profile-1", expected_etag="etag-1")
+
+    assert not any(
+        statement.startswith("DELETE FROM NL2SQL_PROFILES")
+        for statement, _binds in connection.executed
+    )
+    assert connection.commits == 0
+    assert connection.rollbacks == 1
 
 
 def test_snapshot_cut_materializes_oracle_lob_before_connection_closes() -> None:
@@ -479,6 +745,25 @@ def test_oracle_refresh_job_lob_is_materialized_before_connection_closes() -> No
     assert connections[0].closed is True
 
 
+def test_oracle_refresh_job_submission_coalesces_active_job_atomically() -> None:
+    active = SchemaRefreshJob(
+        job_id="active-refresh",
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+    candidate = SchemaRefreshJob(
+        job_id="candidate-refresh",
+        created_at="2026-07-21T00:00:00+00:00",
+    )
+    repository, connections = _oracle_repository(
+        [[], [(_LobPayload(active.model_dump_json()),)]]
+    )
+
+    submitted = repository.submit_refresh_job(candidate)
+
+    assert submitted.job_id == active.job_id
+    assert connections[0].closed is True
+
+
 def test_profile_repository_uses_cursor_summary_and_etag_conflict() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     for index in range(120):
@@ -555,7 +840,7 @@ def test_cache_is_used_only_inside_ttl_when_change_token_store_is_unreachable() 
 
         def get_change_token(self, namespace: str) -> int:
             if self.fail_token:
-                raise RuntimeError("database unavailable")
+                raise RuntimeError("ORA-12514: listener does not know service")
             return super().get_change_token(namespace)
 
     repository = FailingTokenRepository(seed_default=False)
@@ -661,6 +946,268 @@ async def test_schema_api_supports_page_and_detail_etag(
     assert page_304.status_code == 304
     assert detail.status_code == 200
     assert detail_304.status_code == 304
+
+
+def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Response
+
+    from app.features.nl2sql import router as nl2sql_router
+
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    monkeypatch.setattr(get_settings(), "oracle_user", "APP")
+    catalog = SchemaCatalog(
+        refreshed_at="2026-07-22T00:00:00+00:00",
+        tables=[
+            _table("ORDERS").model_copy(update={"row_count": 10}),
+            _table("EMPTY_ORDERS").model_copy(update={"row_count": 0}),
+            _table("V_ORDERS").model_copy(
+                update={"table_type": "VIEW", "row_count": None}
+            ),
+        ],
+    )
+    manifest = {
+        (table.owner, table.table_name): "v1" for table in catalog.tables
+    }
+    repository.apply_schema_refresh(
+        catalog=catalog,
+        manifest=manifest,
+        changed_keys=set(manifest),
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+    monkeypatch.setattr(
+        service,
+        "get_catalog",
+        lambda: pytest.fail("lightweight object page must not load full catalog"),
+    )
+    monkeypatch.setattr(
+        service,
+        "get_catalog_head",
+        lambda: pytest.fail("object page metadata must come from the same read-model query"),
+    )
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    response = Response()
+    result = nl2sql_router.db_admin_objects(
+        response=response,
+        limit=1,
+        type="table",
+        row_state="with_rows",
+    )
+    etag = response.headers["etag"]
+    not_modified = nl2sql_router.db_admin_objects(
+        response=Response(),
+        limit=1,
+        type="table",
+        row_state="with_rows",
+        if_none_match=etag,
+    )
+
+    assert not isinstance(result, Response)
+    data = result.data
+    assert data is not None
+    assert [item.name for item in data.items] == ["ORDERS"]
+    assert data.total == 1
+    assert data.table_count == 1
+    assert data.view_count == 0
+    assert data.catalog_version == 1
+    assert isinstance(not_modified, Response)
+    assert not_modified.status_code == 304
+
+
+def test_schema_query_programming_error_does_not_close_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Repository(MemoryIncrementalNl2SqlRepository):
+        def search_schema_objects(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("ORA-00937: not a single-group group function")
+
+    service = _incremental_service(Repository(seed_default=False))
+    monkeypatch.setattr(get_settings(), "oracle_user", "APP")
+
+    with pytest.raises(Nl2SqlRepositoryOperationFailed) as error:
+        service.list_db_admin_objects_page(
+            cursor=None,
+            limit=10,
+            query="",
+            object_type="all",
+            row_state="all",
+        )
+
+    assert error.value.reason_code == "schema_object_query_failed"
+    status = service.persistence_status()
+    assert status.ready is True
+    assert status.writable is True
+    assert status.circuit_state == "closed"
+
+
+def test_connection_failure_opens_circuit_and_next_probe_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Repository(MemoryIncrementalNl2SqlRepository):
+        fail_search = True
+        check_calls = 0
+
+        def search_schema_objects(self, **kwargs: Any) -> Any:
+            if self.fail_search:
+                raise RuntimeError("ORA-12514: listener does not know service")
+            return super().search_schema_objects(**kwargs)
+
+        def check(self) -> tuple[bool, str]:
+            self.check_calls += 1
+            return True, "ready"
+
+    repository = Repository(seed_default=False)
+    catalog = SchemaCatalog(refreshed_at="now", tables=[_table("ORDERS")])
+    repository.apply_schema_refresh(
+        catalog=catalog,
+        manifest={("APP", "ORDERS"): "v1"},
+        changed_keys={("APP", "ORDERS")},
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+    monkeypatch.setattr(get_settings(), "oracle_user", "APP")
+
+    with pytest.raises(Nl2SqlPersistenceUnavailable) as error:
+        service.list_db_admin_objects_page(
+            cursor=None,
+            limit=10,
+            query="",
+            object_type="all",
+            row_state="all",
+        )
+    assert error.value.reason_code == "oracle_connection_unavailable"
+    assert service.persistence_status().circuit_state == "open"
+
+    repository.fail_search = False
+    service._persistence_retry_at = 0.0  # noqa: SLF001 - half-open contract
+    service.ensure_persistence_available()
+    page = service.list_db_admin_objects_page(
+        cursor=None,
+        limit=10,
+        query="",
+        object_type="all",
+        row_state="all",
+    )
+
+    assert repository.check_calls == 1
+    assert [item.name for item in page.items] == ["ORDERS"]
+    assert service.persistence_status().circuit_state == "closed"
+
+
+def test_half_open_recovery_probe_is_singleflight() -> None:
+    class Repository(MemoryIncrementalNl2SqlRepository):
+        def __init__(self) -> None:
+            super().__init__(seed_default=False)
+            self.check_calls = 0
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def check(self) -> tuple[bool, str]:
+            self.check_calls += 1
+            self.entered.set()
+            assert self.release.wait(timeout=1)
+            return True, "ready"
+
+    repository = Repository()
+    service = _incremental_service(repository)
+    service._mark_persistence_unavailable("oracle_connection_unavailable")  # noqa: SLF001
+    service._persistence_retry_at = 0.0  # noqa: SLF001
+
+    def attempt() -> str:
+        try:
+            service.ensure_persistence_available()
+        except Nl2SqlPersistenceUnavailable:
+            return "unavailable"
+        return "ready"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        first = executor.submit(attempt)
+        assert repository.entered.wait(timeout=1)
+        followers = [executor.submit(attempt) for _ in range(7)]
+        follower_results = [future.result(timeout=1) for future in followers]
+        repository.release.set()
+        first_result = first.result(timeout=1)
+
+    assert first_result == "ready"
+    assert follower_results == ["unavailable"] * 7
+    assert repository.check_calls == 1
+
+
+def test_half_open_probe_keeps_migration_required_distinct() -> None:
+    class Repository(MemoryIncrementalNl2SqlRepository):
+        def check(self) -> tuple[bool, str]:
+            return False, "migration 6 is required"
+
+    service = _incremental_service(Repository(seed_default=False))
+    service._mark_persistence_unavailable("oracle_connection_unavailable")  # noqa: SLF001
+    service._persistence_retry_at = 0.0  # noqa: SLF001
+
+    with pytest.raises(Nl2SqlPersistenceUnavailable) as error:
+        service.ensure_persistence_available()
+
+    assert error.value.reason_code == "incremental_migration_required"
+    assert service.persistence_status().reason_code == "incremental_migration_required"
+
+
+def test_schema_refresh_submission_coalesces_active_job_without_running_inline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+    called = 0
+
+    def fail_if_run(_job_id: str | None) -> bool:
+        nonlocal called
+        called += 1
+        return False
+
+    monkeypatch.setattr(service, "_run_schema_refresh_job", fail_if_run)
+    first = service.start_schema_refresh_job(dispatch=False)
+    second = service.start_schema_refresh_job(dispatch=False)
+
+    assert first.job_id == second.job_id
+    assert first.status == SchemaRefreshJobStatus.PENDING
+    assert called == 0
+
+
+def test_twenty_object_reads_do_not_wait_for_schema_refresh_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    catalog = SchemaCatalog(refreshed_at="now", tables=[_table("ORDERS")])
+    repository.apply_schema_refresh(
+        catalog=catalog,
+        manifest={("APP", "ORDERS"): "v1"},
+        changed_keys={("APP", "ORDERS")},
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+    monkeypatch.setattr(get_settings(), "oracle_user", "APP")
+    assert service._schema_refresh_lock.acquire(blocking=False)  # noqa: SLF001
+    try:
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [
+                executor.submit(
+                    service.list_db_admin_objects_page,
+                    cursor=None,
+                    limit=10,
+                    query="",
+                    object_type="all",
+                    row_state="all",
+                )
+                for _ in range(10)
+            ] + [
+                executor.submit(service.get_schema_object, "APP", "ORDERS")
+                for _ in range(10)
+            ]
+            results = [future.result(timeout=1) for future in futures]
+    finally:
+        service._schema_refresh_lock.release()  # noqa: SLF001
+
+    assert len(results) == 20
+    assert all(result is not None for result in results)
 
 
 class _RefreshAdapter:
@@ -883,6 +1430,69 @@ def test_incremental_readiness_is_one_scalar_query_and_reads_no_clob() -> None:
     assert len(cursor.executed) == 1
     assert "NL2SQL_SCHEMA_MIGRATIONS" in cursor.executed[0]
     assert "CLOB" not in cursor.executed[0].upper()
+
+
+def test_oracle_schema_object_search_aggregates_before_joining_catalog_head() -> None:
+    repository, connections = _oracle_repository(
+        [
+            [
+                (
+                    "APP",
+                    "ORDERS",
+                    "TABLE",
+                    "受注",
+                    "",
+                    10,
+                    3,
+                    "2026-07-22T00:00:00+00:00",
+                )
+            ],
+            [(1, 1, 0, 7, "2026-07-22T00:00:00+00:00")],
+        ],
+        [[], [(0, None, None, None, None)]],
+    )
+
+    page = repository.search_schema_objects(
+        cursor=None,
+        limit=10,
+        query="受注",
+        owner="APP",
+        object_type="TABLE",
+        allowed_names=None,
+        row_state="with_rows",
+    )
+    empty = repository.search_schema_objects(
+        cursor=None,
+        limit=10,
+        query="missing",
+        owner="APP",
+        object_type="",
+        allowed_names=None,
+        row_state="all",
+    )
+
+    assert [item.object_name for item in page.items] == ["ORDERS"]
+    assert (page.total, page.table_count, page.view_count, page.catalog_version) == (
+        1,
+        1,
+        0,
+        7,
+    )
+    assert (empty.total, empty.table_count, empty.view_count, empty.catalog_version) == (
+        0,
+        0,
+        0,
+        0,
+    )
+    aggregate_sql = connections[0].executed[1][0]
+    assert "FROM (SELECT COUNT(*) TOTAL_COUNT" in aggregate_sql
+    assert "LEFT JOIN NL2SQL_SCHEMA_CATALOG_HEAD" in aggregate_sql
+    assert "(SELECT h.CATALOG_VERSION" not in aggregate_sql
+    assert connections[0].executed[1][1] == {
+        "owner": "APP",
+        "object_type": "TABLE",
+        "query": "%受注%",
+    }
 
 
 def test_legacy_snapshot_migration_validates_aggregate_ids_and_payloads() -> None:
