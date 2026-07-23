@@ -1,13 +1,13 @@
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
 import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 import { useAuth } from "@/features/security/AuthProvider";
 import {
   ApiError,
@@ -44,13 +44,24 @@ function operationSuccessMessage(result: SystemTablesOperationData): string {
   return t(systemTableOperationMessageKey(result.operation));
 }
 
+function previousFailureDetail(errorCode: string | null): string {
+  if (errorCode === "ORA-00054") {
+    return t("settings.database.systemTables.previousFailureLockDetail");
+  }
+  return t("settings.database.systemTables.previousFailureDetail", {
+    code: errorCode ?? "-",
+  });
+}
+
 /** Versioned NL2SQL system table の状態と明示 DDL 操作。 */
 export function SystemTablesCard() {
-  const confirm = useConfirm();
   const { hasPermission } = useAuth();
   const statusQuery = useSystemTablesStatus();
   const operation = useInitializeSystemTables();
   const [operationError, setOperationError] = useState("");
+  const operationErrorRef = useRef<HTMLDivElement>(null);
+  const [recreateConfirmation, setRecreateConfirmation] = useState("");
+  const recreateConfirmed = recreateConfirmation.trim() === RECREATE_CONFIRMATION;
 
   const data = statusQuery.data;
   const mayExecute = hasPermission("settings.database.sql_execute");
@@ -59,6 +70,12 @@ export function SystemTablesCard() {
     operation.isPending,
     data?.operation_state.status
   );
+
+  useEffect(() => {
+    if (operationError) {
+      operationErrorRef.current?.focus();
+    }
+  }, [operationError]);
 
   const execute = (recreate: boolean) => {
     if (busy) return;
@@ -71,31 +88,19 @@ export function SystemTablesCard() {
       {
         onSuccess: (result) => {
           toast.success(operationSuccessMessage(result));
+          if (recreate) setRecreateConfirmation("");
         },
         onError: (cause) => {
-          const message =
-            cause instanceof ApiError
-              ? cause.message
-              : t("settings.database.systemTables.error.operation");
+          if (cause instanceof ApiError) {
+            setOperationError(cause.message);
+            return;
+          }
           setOperationError(
-            `${message} ${t("settings.database.systemTables.error.recovery")}`
+            `${t("settings.database.systemTables.error.operation")} ${t("settings.database.systemTables.error.recovery")}`
           );
         },
       }
     );
-  };
-
-  const recreate = async () => {
-    if (busy) return;
-    const accepted = await confirm({
-      title: t("settings.database.systemTables.recreate.title"),
-      description: t("settings.database.systemTables.recreate.description"),
-      confirmLabel: t("settings.database.systemTables.action.recreate"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
-      dismissOnOverlay: false,
-    });
-    if (accepted) execute(true);
   };
 
   const refreshStatus = async () => {
@@ -181,25 +186,13 @@ export function SystemTablesCard() {
               </Banner>
             ) : null}
 
-            {data.operation_state.status === "failed" ? (
-              <Banner
-                severity="danger"
-                title={t("settings.database.systemTables.previousFailure")}
-              >
-                {t("settings.database.systemTables.previousFailureDetail", {
-                  code: data.operation_state.last_error_code ?? "-",
-                })}
-              </Banner>
-            ) : null}
-
-            {!mayExecute ? (
-              <Banner severity="info">
-                {t("settings.database.systemTables.readOnly")}
-              </Banner>
-            ) : null}
-
             {operationError ? (
-              <div>
+              <div
+                ref={operationErrorRef}
+                tabIndex={-1}
+                data-testid="system-tables-operation-error"
+                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
                 <Banner
                   severity="danger"
                   title={t("settings.database.systemTables.error.operationTitle")}
@@ -207,6 +200,19 @@ export function SystemTablesCard() {
                   {operationError}
                 </Banner>
               </div>
+            ) : data.operation_state.status === "failed" ? (
+              <Banner
+                severity="danger"
+                title={t("settings.database.systemTables.previousFailure")}
+              >
+                {previousFailureDetail(data.operation_state.last_error_code)}
+              </Banner>
+            ) : null}
+
+            {!mayExecute ? (
+              <Banner severity="info">
+                {t("settings.database.systemTables.readOnly")}
+              </Banner>
             ) : null}
 
             <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -248,16 +254,31 @@ export function SystemTablesCard() {
                     </p>
                   </div>
                 </div>
-                <Button
-                  size="md"
-                  variant="danger"
-                  onClick={() => void recreate()}
-                  loading={operation.isPending && operation.variables?.recreate === true}
+                <ExecutionConfirmationField
+                  value={recreateConfirmation}
+                  onChange={setRecreateConfirmation}
+                  confirmed={recreateConfirmed}
+                  placeholder={RECREATE_CONFIRMATION}
+                  expectedLabel={RECREATE_CONFIRMATION}
+                  helper={t("dbAdmin.confirmation.helper.danger", {
+                    phrase: RECREATE_CONFIRMATION,
+                  })}
+                  tone="danger"
                   disabled={busy}
-                >
-                  <RotateCcw size={16} aria-hidden />
-                  {t("settings.database.systemTables.action.recreate")}
-                </Button>
+                  actions={
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      className="w-full sm:w-auto"
+                      onClick={() => execute(true)}
+                      loading={operation.isPending && operation.variables?.recreate === true}
+                      disabled={busy || !recreateConfirmed}
+                    >
+                      <RotateCcw size={15} aria-hidden />
+                      {t("settings.database.systemTables.action.recreate")}
+                    </Button>
+                  }
+                />
               </section>
             ) : null}
           </>

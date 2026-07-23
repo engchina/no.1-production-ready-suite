@@ -12,19 +12,20 @@ import {
 import {
   Button,
   EmptyState,
-  PageHeader,
   StatusBadge,
+  toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementLoadingSkeleton,
   DbObjectPanelHeader,
-  DbObjectStatusBar,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
@@ -151,7 +152,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       });
   }, [allTargets, targetFilter, targetSearch, targetSort]);
 
-  const load = async (refreshSchema = false) => {
+  const load = async (refreshSchema = false, announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(refreshSchema ? "schema-refresh" : "load");
@@ -185,6 +186,11 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         ]);
         setSelectedKeys((current) => current.filter((key) => availableKeys.has(key)));
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(
+          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
+        );
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
@@ -302,6 +308,31 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             ? "metadataSql.comment.subtitle"
             : "metadataSql.annotation.subtitle"
         )}
+        meta={
+          objects?.refreshed_at
+            ? t("common.schemaRefreshedAt", {
+                date: formatDateTime(objects.refreshed_at),
+              })
+            : undefined
+        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(false, true),
+            loading: loading === "load",
+          },
+          {
+            id: "schema-refresh",
+            kind: "utility",
+            label: t("common.action.schemaRefresh"),
+            icon: RefreshCw,
+            onClick: () => load(true, true),
+            loading: loading === "schema-refresh",
+          },
+        ]}
       />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
@@ -312,23 +343,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               <span>{t("tableMgmt.action.refresh")}</span>
             </Button>
           }
-        />
-
-        <DbObjectStatusBar
-          count={allTargets.length}
-          runtime={metadataRuntime(tables, views)}
-          refreshedAt={objects?.refreshed_at ?? ""}
-          loading={loading}
-          labels={{
-            ariaLabel: t("metadataSql.status.label"),
-            count: t("metadataSql.status.targets"),
-            runtime: t("tableMgmt.metric.runtime"),
-            refreshedAt: t("tableMgmt.metric.schemaRefreshed"),
-            refresh: t("tableMgmt.action.refresh"),
-            schemaRefresh: t("tableMgmt.action.schemaRefresh"),
-          }}
-          onRefresh={() => void load()}
-          onSchemaRefresh={() => void load(true)}
         />
 
         <DbObjectStepIndicator
@@ -436,6 +450,10 @@ function MetadataTargetGrid({
         description={t("metadataSql.targets.hint")}
         action={
           <>
+            <StatusBadge
+              variant="neutral"
+              label={t("command.count", { count: items.length })}
+            />
             <StatusBadge variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
             <Button
               type="button"
@@ -790,13 +808,6 @@ function targetSortValue(item: MetadataTargetItem, key: TargetSortKey) {
 
 function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {
   return objectType === "view" ? t("metadataSql.targets.type.view") : t("metadataSql.targets.type.table");
-}
-
-function metadataRuntime(tables: DbAdminObjectsData | null, views: DbAdminObjectsData | null) {
-  if (tables?.runtime && views?.runtime && tables.runtime !== views.runtime) {
-    return `${tables.runtime} / ${views.runtime}`;
-  }
-  return tables?.runtime ?? views?.runtime ?? "deterministic";
 }
 
 function targetKey(target: MetadataSqlTarget) {

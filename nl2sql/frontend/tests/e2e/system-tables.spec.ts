@@ -1,15 +1,26 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { systemAdminMe } from "./_helpers/database-gate";
 
-function envelope(data: unknown, errors: string[] = []) {
-  return { data, error_messages: errors, warning_messages: [] };
+function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
+  return {
+    data,
+    error_messages: errors,
+    warning_messages: [],
+    ...(errorCode ? { error_code: errorCode } : {}),
+  };
 }
 
-async function fulfill(route: Route, data: unknown, status = 200, errors: string[] = []) {
+async function fulfill(
+  route: Route,
+  data: unknown,
+  status = 200,
+  errors: string[] = [],
+  errorCode?: string
+) {
   await route.fulfill({
     status,
     contentType: "application/json",
-    body: JSON.stringify(envelope(data, errors)),
+    body: JSON.stringify(envelope(data, errors, errorCode)),
   });
 }
 
@@ -75,28 +86,46 @@ function systemTableRows(status: SchemaStatus, count: number) {
 
 function systemTables(
   status: SchemaStatus,
-  options: { operationStatus?: string; tableCount?: number } = {}
+  options: {
+    operationStatus?: string;
+    tableCount?: number;
+    lastErrorCode?: string;
+  } = {}
 ) {
   const ready = status === "ready";
-  const missingCount = status === "missing" ? 49 : status === "partial" ? 2 : 0;
+  const missingCount = status === "missing" ? 53 : status === "partial" ? 4 : 0;
   const operationStatus = options.operationStatus ?? "idle";
+  const missingObjects =
+    status === "partial"
+      ? [
+          { name: "NL2SQL_EVALUATION_JOBS", object_type: "TABLE" },
+          { name: "NL2SQL_EVALUATION_RESULTS", object_type: "TABLE" },
+          { name: "IX_NL2SQL_EVAL_JOB_STATE", object_type: "INDEX" },
+          { name: "IX_NL2SQL_EVAL_JOB_LEASE", object_type: "INDEX" },
+        ]
+      : Array.from({ length: missingCount }, (_, index) => ({
+          name: `NL2SQL_MISSING_${index + 1}`,
+          object_type: "TABLE",
+        }));
   return {
     status,
-    schema_head: 6,
-    applied_versions: ready ? [0, 1, 2, 3, 5, 6] : [0, 1, 2, 3],
-    pending_versions: ready ? [] : [5, 6],
-    expected_object_count: 49,
-    existing_object_count: 49 - missingCount,
-    missing_objects: Array.from({ length: missingCount }, (_, index) => ({
-      name: `NL2SQL_MISSING_${index + 1}`,
-      object_type: "TABLE",
-    })),
+    schema_head: 8,
+    applied_versions: ready ? [0, 1, 2, 3, 5, 6, 7, 8] : [0, 1, 2, 3, 5, 6],
+    pending_versions: ready ? [] : [7, 8],
+    expected_object_count: 53,
+    existing_object_count: 53 - missingCount,
+    expected_table_count: 28,
+    existing_table_count: ready ? 28 : Math.max(0, 28 - missingCount),
+    missing_objects: missingObjects,
     tables: systemTableRows(status, options.tableCount ?? 2),
     operation_state: {
       status: operationStatus,
       operation_kind: operationStatus === "running" ? "initialize" : null,
       lease_expires_at: operationStatus === "running" ? "2026-07-19T00:02:00Z" : null,
-      last_error_code: operationStatus === "failed" ? "ORA-00600" : null,
+      last_error_code:
+        operationStatus === "failed"
+          ? (options.lastErrorCode ?? "ORA-00600")
+          : null,
       schema_epoch: 7,
       updated_at: "2026-07-19T00:00:00Z",
     },
@@ -282,9 +311,9 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "initialized",
-      applied_versions: [0, 1, 2, 3, 5, 6],
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
       dropped_object_count: 0,
-      created_object_count: 49,
+      created_object_count: 53,
     });
   });
 
@@ -297,6 +326,15 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(card.getByRole("button", { name: "状態を再取得" })).toBeDisabled();
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
+  await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
+  await card.getByText("システムテーブルの詳細を表示").click();
+  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8/)).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "通知" })
+      .getByRole("status")
+      .filter({ hasText: "システムテーブルを初期作成しました。" })
+  ).toHaveCount(1);
   expect(requestCount).toBe(1);
   expect(requestBody).toEqual({ recreate: false });
 });
@@ -309,7 +347,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
     fulfill(route, {
       ...systemTables("ready"),
       operation: "no_op",
-      applied_versions: [],
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
       dropped_object_count: 0,
       created_object_count: 0,
     })
@@ -353,7 +391,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   await expect(toastStatus).toHaveCount(0);
 });
 
-test("全再作成は danger 確認、Esc・遮罩保護・焦点復帰を満たす", async ({ page }) => {
+test("全再作成は実行確認語の完全一致まで実行できない", async ({ page }) => {
   let recreateRequests = 0;
   let requestBody: unknown = null;
   await page.route("**/api/settings/database/system-tables", (route) =>
@@ -365,35 +403,37 @@ test("全再作成は danger 確認、Esc・遮罩保護・焦点復帰を満た
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "recreated",
-      applied_versions: [0, 1, 2, 3, 5, 6],
-      dropped_object_count: 48,
-      created_object_count: 48,
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
+      dropped_object_count: 52,
+      created_object_count: 52,
     });
   });
 
   await page.goto("/settings/database#system-tables");
-  const trigger = page.locator("#system-tables").getByRole("button", { name: "すべて再作成" });
-  await trigger.focus();
-  await trigger.click();
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("認証/RBAC/DeepSec");
-  await expect(dialog).toContainText("ユーザー業務表");
+  const card = page.locator("#system-tables");
+  const trigger = card.getByRole("button", { name: "すべて再作成" });
+  const confirmationField = card.getByTestId("execution-confirmation-field");
+  const field = card.getByRole("textbox", { name: "実行確認語" });
 
-  await page.locator(".fixed.inset-0").click({ position: { x: 4, y: 4 } });
-  await expect(dialog).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
-  await expect(trigger).toBeFocused();
+  // 未入力・不一致(ADMIN_EXECUTE を含む)では実行できない。
+  await expect(trigger).toBeDisabled();
+  await field.fill("ADMIN_EXECUTE");
+  await expect(confirmationField.getByText("不一致")).toBeVisible();
+  await expect(trigger).toBeDisabled();
   expect(recreateRequests).toBe(0);
 
+  await field.fill("RECREATE_NL2SQL_SYSTEM_TABLES");
+  await expect(confirmationField.getByText("確認済み")).toBeVisible();
+  await expect(trigger).toBeEnabled();
   await trigger.click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "すべて再作成" }).click();
   await expect(page.getByText("システムテーブルをすべて再作成しました。")).toBeVisible();
   expect(recreateRequests).toBe(1);
   expect(requestBody).toEqual({
     recreate: true,
     confirmation: "RECREATE_NL2SQL_SYSTEM_TABLES",
   });
+  // 成功後は確認語がクリアされ再度実行不可に戻る。
+  await expect(trigger).toBeDisabled();
 });
 
 test("SQL 実行権限がない利用者は状態のみ閲覧できる", async ({ page }) => {
@@ -418,15 +458,26 @@ test("SQL 実行権限がない利用者は状態のみ閲覧できる", async (
 
 test("接続・操作失敗を操作領域で通知し、復旧方法を提示する", async ({ page }) => {
   let loadFails = true;
-  const longFailureDetail = `実行中の schema refresh job があります。${"状態競合の原因を確認するための長い識別情報".repeat(24)}`;
+  let operationFailed = false;
+  const longFailureDetail =
+    `Oracle の対象オブジェクトのロックが 30 秒以内に解放されませんでした (ORA-00054)。` +
+    `${"状態競合の原因を確認するための長い識別情報".repeat(24)}` +
+    "実行中の schema refresh、Ontology、品質評価 job を完了または停止してから、状態を再取得して再試行してください。";
   await page.route("**/api/settings/database/system-tables", (route) =>
     loadFails
       ? fulfill(route, null, 503, ["Oracle に接続できませんでした (ORA-12514)。"])
-      : fulfill(route, systemTables("partial"))
+      : fulfill(
+          route,
+          systemTables("partial", {
+            operationStatus: operationFailed ? "failed" : "idle",
+            lastErrorCode: "ORA-00054",
+          })
+        )
   );
-  await page.route("**/api/settings/database/system-tables/initialize", (route) =>
-    fulfill(route, null, 409, [longFailureDetail])
-  );
+  await page.route("**/api/settings/database/system-tables/initialize", (route) => {
+    operationFailed = true;
+    return fulfill(route, null, 409, [longFailureDetail], "ORA-00054");
+  });
 
   await page.goto("/settings/database#system-tables");
   const card = page.locator("#system-tables");
@@ -457,10 +508,17 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   await expect(
     card.locator("span").filter({ hasText: /^一部不足$/ }).first()
   ).toBeVisible();
-  await card.getByRole("button", { name: "作成・更新" }).click();
-  const operationAlert = page.getByRole("alert");
-  await expect(operationAlert).toContainText("実行中の schema refresh job");
-  await expect(operationAlert).toContainText("状態を再取得してから再試行");
+  const initialize = card.getByRole("button", { name: "作成・更新" });
+  await initialize.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("system-tables-operation-error")).toBeFocused();
+  const operationAlert = card.getByRole("alert");
+  await expect(operationAlert).toHaveCount(1);
+  await expect(operationAlert).toContainText("ORA-00054");
+  await expect(operationAlert).toContainText("30 秒以内に解放されませんでした");
+  await expect(operationAlert).toContainText("schema refresh、Ontology、品質評価 job");
+  await expect(operationAlert).toContainText("状態を再取得して再試行");
+  await expect(operationAlert).not.toContainText("前回の操作が完了していません");
   await expect(operationAlert.locator("[data-message-sentence]")).not.toHaveCount(0);
   await expectNoPageOverflow(page);
 });

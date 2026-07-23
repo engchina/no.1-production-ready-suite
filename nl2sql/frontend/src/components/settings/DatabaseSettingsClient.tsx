@@ -369,15 +369,6 @@ export function DatabaseSettingsClient() {
             description: t("settings.database.env.description"),
             value: envPreview,
           }}
-          operation={{
-            description: t("settings.database.ops.description"),
-            notes: [
-              t("settings.database.ops.nonBlockingSave"),
-              t("settings.database.ops.env"),
-              t("settings.database.ops.vector"),
-              t("settings.database.ops.pool"),
-            ],
-          }}
         />
       </div>
     </div>
@@ -743,7 +734,7 @@ function safeReturnTo(state: unknown): string | null {
 
 function AdbInfoPanel({ info }: { info: AdbInfoData }) {
   const known = info.status === "success" || info.status === "accepted";
-  // ReadinessBadge と同様、自己完結したステータスバーを余分なパネルで囲まない。
+  // 自己完結したステータスバーを余分なパネルで囲まない。
   return (
     <div className="space-y-2">
       <AdbLifecycleBadge state={info.lifecycle_state} />
@@ -1176,11 +1167,6 @@ function WalletUploadField({
           <span>{t("settings.database.wallet.location")}:</span>{" "}
           <span className="break-all text-foreground">{settings.wallet_dir || "—"}</span>
         </p>
-        <StatusLine
-          label={t("settings.database.status.readiness")}
-          value={readinessLabel(settings.readiness)}
-          ok={settings.readiness === "ok"}
-        />
       </div>
     </div>
   );
@@ -1252,7 +1238,6 @@ function StatusPanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <ReadinessBadge readiness={settings.readiness} />
         <MetadataRow
           label={t("settings.database.status.authMethod")}
           value={authMethodLabel(settings)}
@@ -1321,7 +1306,6 @@ function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestR
           <p className="font-medium">{result.message}</p>
           <p className="mt-1 text-xs text-muted">
             {t("settings.database.test.meta", {
-              readiness: readinessLabel(result.readiness),
               elapsed: result.elapsed_ms,
               checkedAt: formatDateTime(result.checked_at),
             })}
@@ -1339,28 +1323,6 @@ function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestR
           ) : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function ReadinessBadge({ readiness }: { readiness: string }) {
-  const ok = readiness === "ok";
-  const warning = readiness === "missing" || readiness === "missing_credentials";
-  const Icon = ok ? CheckCircle2 : warning ? AlertCircle : XCircle;
-
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        ok && "border-success/30 bg-success-bg/50 text-success",
-        warning && "border-warning/30 bg-warning-bg/60 text-warning",
-        !ok && !warning && "border-danger/30 bg-danger-bg/50 text-danger"
-      )}
-    >
-      <Icon size={16} aria-hidden />
-      <span>
-        {t("settings.database.status.readiness")}: {readinessLabel(readiness)}
-      </span>
     </div>
   );
 }
@@ -1466,23 +1428,4 @@ function focusFirstInvalid(
 ) {
   if (errors.user) refs.user.current?.focus();
   else if (errors.password) refs.password.current?.focus();
-}
-
-function readinessLabel(readiness: string): string {
-  switch (readiness) {
-    case "ok":
-      return t("settings.database.readiness.ok");
-    case "missing":
-      return t("settings.database.readiness.missing");
-    case "missing_credentials":
-      return t("settings.database.readiness.missingCredentials");
-    case "invalid":
-      return t("settings.database.readiness.invalid");
-    case "wallet_not_found":
-      return t("settings.database.readiness.walletNotFound");
-    case "error":
-      return t("settings.database.readiness.error");
-    default:
-      return readiness || t("settings.database.readiness.unknown");
-  }
 }

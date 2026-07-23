@@ -7075,9 +7075,13 @@ class Nl2SqlService:
         if not safe_objects:
             message = "synthetic data の対象にできる table がありません。"
         if safe_objects:
+            # 単一テーブル指定(table_name)は対象名の入力を必須にする。複数テーブル
+            # 指定(object_list)は単一の対象名が存在しないため ADMIN_EXECUTE で確認
+            # する。判定はユーザーが確認した時点の request の形に合わせる(skip に
+            # よる絞り込み後の件数では変えない)。
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
-                target=safe_table_name or "ADMIN_EXECUTE",
+                target=safe_table_name if request.table_name.strip() else "ADMIN_EXECUTE",
             )
             if confirmation_error:
                 status = "confirmation_required"
@@ -9134,12 +9138,15 @@ class Nl2SqlService:
         return content.decode("utf-8-sig", errors="replace"), "", warnings
 
     def _admin_confirmation_error(self, *, confirmation: str, target: str) -> str:
+        # 対象名 target を要求する操作は対象名の完全一致のみ受理する。
+        # ADMIN_EXECUTE をマスターワードとして代替させると、対象を意識させる
+        # 確認の意味が失われるため迂回を許可しない。
         normalized = confirmation.strip()
-        if normalized in {target, "ADMIN_EXECUTE"}:
+        if normalized == target:
             return ""
         if target == "ADMIN_EXECUTE":
             return "実行には confirmation=ADMIN_EXECUTE が必要です。"
-        return f"実行には confirmation={target} または ADMIN_EXECUTE が必要です。"
+        return f"実行には confirmation={target} が必要です。(ADMIN_EXECUTE では代替できません)"
 
     def _record_admin_audit(
         self,
@@ -9218,13 +9225,18 @@ class Nl2SqlService:
         if request.attributes_override:
             attributes = {**attributes, **request.attributes_override}
         profile_name = self._select_ai_profile_name(profile)
+        # Oracle profile 名は機械導出でありユーザーが入力しないため、この wrapper が
+        # ユーザー境界として ADMIN_EXECUTE を受理し、内部委譲時に導出名へ変換する。
+        confirmation = request.confirmation.strip()
+        if confirmation == "ADMIN_EXECUTE":
+            confirmation = profile_name
         return self.upsert_select_ai_db_profile(
             SelectAiDbProfileUpsertRequest(
                 profile_name=profile_name,
                 attributes=attributes,
                 description="",
                 category=profile.category or profile.name,
-                confirmation=request.confirmation,
+                confirmation=confirmation,
                 reason=request.reason,
             )
         )

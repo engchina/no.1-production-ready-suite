@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -14,7 +16,6 @@ import {
   DbObjectGrid,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
-  DbObjectStatusBar,
   DbObjectStepIndicator,
   DropDbObjectDialog,
   dbObjectSortValue,
@@ -239,7 +240,6 @@ export function ViewManagementPage() {
   const {
     selectedName: selectedViewName,
     detail,
-    setDetail,
   } = detailRequest;
 
   const fetchDetail = async (name: string) => {
@@ -252,22 +252,10 @@ export function ViewManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    const name = detail.name;
-    void (async () => {
-      try {
-        const full = await apiGet<DbAdminObjectDetail>(
-          `/api/nl2sql/db-admin/views/${encodeURIComponent(name)}?include_ddl=1`,
-        );
-        setDetail((current) =>
-          current && current.name === name ? { ...current, ddl: full.ddl } : current,
-        );
-      } catch {
-        // DDL 取得失敗時は既存の "-" 表示のまま
-      }
-    })();
+    void detailRequest.loadDdl(detail.name);
   };
 
-  const load = async (refreshSchema = false) => {
+  const load = async (refreshSchema = false, announce = false) => {
     const sequence = loadSequence.current + 1;
     const detailVersionAtStart = detailRequest.requestVersion();
     loadSequence.current = sequence;
@@ -310,6 +298,11 @@ export function ViewManagementPage() {
           }
         }
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(
+          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
+        );
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
@@ -446,7 +439,53 @@ export function ViewManagementPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.viewManagement")} subtitle={t("viewMgmt.subtitle")} />
+      <PageHeader
+        title={t("nav.viewManagement")}
+        subtitle={t("viewMgmt.subtitle")}
+        meta={
+          views?.refreshed_at
+            ? t("common.schemaRefreshedAt", { date: formatDateTime(views.refreshed_at) })
+            : undefined
+        }
+        actionsAriaLabel={t("viewMgmt.tabs.label")}
+        actionsTestId="view-management-actions"
+        actions={
+          activeView === "list"
+            ? [
+                {
+                  id: "create-view",
+                  kind: "primary",
+                  label: t("viewMgmt.create.title"),
+                  icon: Code2,
+                  onClick: () => setActiveView("create"),
+                },
+                {
+                  id: "extract-view-conditions",
+                  kind: "secondary",
+                  label: t("viewMgmt.joinWhere.title"),
+                  icon: Sparkles,
+                  onClick: () => setActiveView("joinWhere"),
+                },
+                {
+                  id: "refresh-view-list",
+                  kind: "utility",
+                  label: t("common.action.refresh"),
+                  icon: RefreshCw,
+                  loading: loading === "load",
+                  onClick: () => void load(false, true),
+                },
+                {
+                  id: "refresh-view-schema",
+                  kind: "utility",
+                  label: t("common.action.schemaRefresh"),
+                  icon: RefreshCw,
+                  loading: loading === "schema-refresh",
+                  onClick: () => void load(true, true),
+                },
+              ]
+            : []
+        }
+      />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
           notice={
@@ -461,40 +500,8 @@ export function ViewManagementPage() {
             </Button>
           }
         />
-
-        <DbObjectStatusBar
-          count={views?.items.length ?? 0}
-          runtime={views?.runtime ?? "deterministic"}
-          refreshedAt={views?.refreshed_at ?? ""}
-          loading={loading}
-          labels={{
-            ariaLabel: t("viewMgmt.toolbar.status"),
-            count: t("viewMgmt.metric.views"),
-            runtime: t("tableMgmt.metric.runtime"),
-            refreshedAt: t("tableMgmt.metric.schemaRefreshed"),
-            refresh: t("viewMgmt.action.refresh"),
-            schemaRefresh: t("viewMgmt.action.schemaRefresh"),
-          }}
-          onRefresh={() => void load()}
-          onSchemaRefresh={() => void load(true)}
-        />
-
         {activeView === "list" ? (
           <>
-            <div
-              className="flex flex-wrap items-center justify-end gap-2"
-              data-testid="view-management-actions"
-              aria-label={t("viewMgmt.tabs.label")}
-            >
-              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("create")}>
-                <Code2 size={15} aria-hidden="true" />
-                <span>{t("viewMgmt.create.title")}</span>
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("joinWhere")}>
-                <Sparkles size={15} aria-hidden="true" />
-                <span>{t("viewMgmt.joinWhere.title")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id="view-management-panel-list"
               role="region"
@@ -545,10 +552,12 @@ export function ViewManagementPage() {
               headingId="view-detail-heading"
               detail={detail}
               loading={detailRequest.loading || (loading === "load" && !views)}
+              ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
               tab={detailTab}
               labels={{
                 loading: t("viewMgmt.detail.loading"),
+                ddlLoading: t("viewMgmt.detail.ddlLoading"),
                 tabsLabel: t("viewMgmt.detailTabs.label"),
                 columns: t("viewMgmt.detailTabs.columns"),
                 ddl: t("viewMgmt.detailTabs.ddl"),

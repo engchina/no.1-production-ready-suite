@@ -1409,3 +1409,60 @@ def test_extract_join_where_unconfigured_keeps_selected_prompt_profile() -> None
     assert result.source == "deterministic"
     assert result.prompt_profile == "sql_structure"
     assert result.warnings
+
+
+def test_named_target_confirmation_rejects_admin_execute_master_word() -> None:
+    """対象名確認を要求する操作は ADMIN_EXECUTE では迂回できない。"""
+    from app.features.nl2sql.models import (
+        DbAdminDropTableRequest,
+        SyntheticDataGenerateRequest,
+    )
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    table = service._catalog.tables[0]
+
+    dropped = service.drop_db_admin_table(
+        DbAdminDropTableRequest(table_name=table.table_name, confirmation="ADMIN_EXECUTE")
+    )
+    assert dropped.executed is False
+    assert dropped.statements[0].status == "confirmation_required"
+    assert any("ADMIN_EXECUTE では代替できません" in warning for warning in dropped.warnings)
+
+    view_dropped = service.drop_db_admin_view(
+        DbAdminDropViewRequest(view_name="V_EMP_DEPT", confirmation="ADMIN_EXECUTE")
+    )
+    assert view_dropped.executed is False
+    assert view_dropped.statements[0].status == "confirmation_required"
+
+    import base64
+
+    csv_text = f"{table.columns[0].column_name}\n1\n"
+    uploaded = service.upload_db_admin_csv(
+        DbAdminCsvUploadRequest(
+            table_name=table.table_name,
+            content_base64=base64.b64encode(csv_text.encode()).decode(),
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert uploaded.executed is False
+    assert any("ADMIN_EXECUTE では代替できません" in warning for warning in uploaded.warnings)
+
+    synthetic = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            table_name=table.table_name,
+            row_count=5,
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert synthetic.status == "confirmation_required"
+
+    # 対象名の完全一致は通過し、非 Oracle runtime のため requires_oracle まで進む。
+    synthetic_named = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            table_name=table.table_name,
+            row_count=5,
+            confirmation=table.table_name,
+        )
+    )
+    assert synthetic_named.status == "requires_oracle"

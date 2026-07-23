@@ -1,6 +1,7 @@
 // 関係グラフの force-directed(neo4j 風)レイアウト。
 // d3-force は初期配置(phyllotaxis)も jiggle も決定論のため、同じグラフは常に同じ座標になる。
 // UI の外で同期 tick するので、コンポーネントは結果の Map を描画するだけでよい。
+import dagre from "@dagrejs/dagre";
 import {
   forceCollide,
   forceLink,
@@ -59,6 +60,40 @@ export function layoutOntologyGraph(graph: OntologyGraph): Map<string, GraphPoin
   simulation.tick(SIMULATION_TICKS);
 
   return new Map(nodes.map((node) => [node.id, { x: node.x ?? 0, y: node.y ?? 0 }]));
+}
+
+// ER 図のような「エンティティ+関係」には force より階層(layered)配置の方が読みやすい。
+// dagre は同期・決定論なので useMemo でそのまま使える(React Flow のノード実寸で配置)。
+export function layoutOntologyGraphLayered(
+  graph: OntologyGraph,
+  options: { nodeWidth?: number; nodeHeight?: number } = {}
+): Map<string, GraphPoint> {
+  if (graph.nodes.length === 0) return new Map();
+  const nodeWidth = options.nodeWidth ?? 200;
+  const nodeHeight = options.nodeHeight ?? 64;
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setGraph({ rankdir: "LR", nodesep: 28, ranksep: 90, marginx: 16, marginy: 16 });
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const node of graph.nodes) {
+    dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+  }
+  for (const edge of graph.edges) {
+    if (nodeIds.has(edge.source_node_id) && nodeIds.has(edge.target_node_id)) {
+      dagreGraph.setEdge(edge.source_node_id, edge.target_node_id);
+    }
+  }
+  dagre.layout(dagreGraph);
+  return new Map(
+    graph.nodes.map((node) => {
+      const placed = dagreGraph.node(node.id);
+      // dagre は中心座標を返す。React Flow は左上原点なので変換する。
+      return [
+        node.id,
+        { x: (placed?.x ?? 0) - nodeWidth / 2, y: (placed?.y ?? 0) - nodeHeight / 2 },
+      ];
+    })
+  );
 }
 
 // SVG viewBox など固定領域向けに、レイアウト結果を領域内へ平行移動・縮小(拡大はしない)する。

@@ -17,13 +17,13 @@ import {
   DataTable,
   EmptyState,
   FormStatus,
-  PageHeader,
   StatusBadge,
   toast,
   type DataTableColumn,
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -34,7 +34,6 @@ import {
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityManagementPanelShell,
-  SecurityManagementStatusBar,
   SecurityPanelHeader,
   SecuritySearchField,
   securityFilteredCount,
@@ -98,9 +97,6 @@ export function SecurityUsersPage() {
 
   const selectedUser = users.find((user) => user.user_id === selectedId) ?? null;
   const editingUser = users.find((user) => user.user_id === editingId) ?? null;
-  const activeUsers = users.filter((user) => user.status === "ACTIVE").length;
-  const lockedUsers = users.filter((user) => Boolean(user.locked_until)).length;
-
   const roleNames = (user: SecurityUser) =>
     user.role_ids.map((id) => roleNameById.get(id) ?? id).filter(Boolean);
 
@@ -129,7 +125,7 @@ export function SecurityUsersPage() {
       });
   }, [roleNameById, search, sort, users]);
 
-  const load = async () => {
+  const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -150,6 +146,9 @@ export function SecurityUsersPage() {
             : userRows[0]?.user_id ?? null
         );
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(t("common.action.refreshed"));
+      }
     } catch (cause) {
       if (isAbortError(cause)) {
         return;
@@ -411,44 +410,42 @@ export function SecurityUsersPage() {
   return (
     <>
       <PageHeader
-        className="px-4 sm:px-8"
         title={t("nav.securityUsers")}
         subtitle={t("security.users.subtitle")}
+        actions={
+          activeView === "list"
+            ? [
+                ...(canManage
+                  ? [
+                      {
+                        id: "create-user",
+                        kind: "primary" as const,
+                        label: t("security.common.create"),
+                        icon: Plus,
+                        onClick: startCreate,
+                      },
+                    ]
+                  : []),
+                {
+                  id: "refresh",
+                  kind: "utility",
+                  label: t("common.action.refresh"),
+                  icon: RefreshCw,
+                  onClick: () => load(true),
+                  loading,
+                },
+              ]
+            : []
+        }
+        actionsAriaLabel={t("security.users.actionsLabel")}
+        actionsTestId="security-users-actions"
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
         {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
 
-        <SecurityManagementStatusBar
-          ariaLabel={t("security.users.statusBar")}
-          metrics={[
-            { label: t("security.users.metric.total"), value: String(users.length), emphasis: true, testId: "security-users-metric-total" },
-            { label: t("security.users.metric.active"), value: String(activeUsers), testId: "security-users-metric-active" },
-            { label: t("security.users.metric.locked"), value: String(lockedUsers), testId: "security-users-metric-locked" },
-          ]}
-          actions={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("security.common.reload")}</span>
-            </Button>
-          }
-        />
-
         {activeView === "list" ? (
-          <>
-            {canManage ? (
-              <div
-                className="flex flex-wrap items-center justify-end gap-2"
-                data-testid="security-users-actions"
-                aria-label={t("security.users.actionsLabel")}
-              >
-                <Button type="button" size="sm" onClick={startCreate}>
-                  <Plus size={15} aria-hidden="true" />
-                  <span>{t("security.common.create")}</span>
-                </Button>
-              </div>
-            ) : null}
-            <SecurityManagementPanelShell
+          <SecurityManagementPanelShell
               id="security-users-panel-list"
               idPrefix="security-users"
               ariaLabel={t("security.users.workspaceLabel")}
@@ -497,7 +494,6 @@ export function SecurityUsersPage() {
                 onToggleStatus={(user) => void handleToggleStatus(user)}
               />
             </SecurityManagementPanelShell>
-          </>
         ) : (
           <>
             <div>

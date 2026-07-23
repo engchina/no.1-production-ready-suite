@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Play, X } from "lucide-react";
 
-import { Button, PageHeader } from "@engchina/production-ready-ui";
+import { Button } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { Banner } from "@/components/ui/banner";
 import { useAuth } from "@/features/security/AuthProvider";

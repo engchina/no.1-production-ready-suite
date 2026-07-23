@@ -1,15 +1,12 @@
 "use client";
 
 import {
-  AlertCircle,
-  CheckCircle2,
   Cloud,
   HardDrive,
   Save,
   ShieldCheck,
-  XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
@@ -54,7 +51,6 @@ const EMPTY_FORM: UploadStorageForm = {
 
 const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-nl2sql";
 const DEFAULT_OBJECT_STORAGE_BUCKET = "nl2sql-originals";
-const OBJECT_STORAGE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** ドキュメントアップロード原本の保存先設定。 */
 export function UploadStorageSettingsClient() {
@@ -96,11 +92,6 @@ export function UploadStorageSettingsClient() {
       },
     });
   }
-
-  const operationWarnings = useMemo(
-    () => Object.values(validateForm(form, objectStorageNamespace)),
-    [form, objectStorageNamespace]
-  );
 
   if (query.isPending) {
     return (
@@ -236,16 +227,6 @@ export function UploadStorageSettingsClient() {
             description: t("settings.uploadStorage.env.description"),
             value: envPreview,
           }}
-          operation={{
-            description: t("settings.uploadStorage.ops.description"),
-            notes: [
-              t("settings.uploadStorage.ops.nonBlockingSave"),
-              t("settings.uploadStorage.ops.runtime"),
-              t("settings.uploadStorage.ops.local"),
-              t("settings.uploadStorage.ops.oci"),
-            ],
-            warnings: operationWarnings,
-          }}
         />
       </div>
     </div>
@@ -360,7 +341,6 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <ReadinessBadge readiness={settings.readiness} />
         <MetadataRow
           label={t("settings.uploadStorage.status.backend")}
           value={backendLabel(settings.backend)}
@@ -387,28 +367,6 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
         />
       </CardContent>
     </Card>
-  );
-}
-
-function ReadinessBadge({ readiness }: { readiness: string }) {
-  const ok = readiness === "ok";
-  const warning = readiness === "missing" || readiness === "missing_credentials";
-  const Icon = ok ? CheckCircle2 : warning ? AlertCircle : XCircle;
-
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        ok && "border-success/30 bg-success-bg/50 text-success",
-        warning && "border-warning/30 bg-warning-bg/60 text-warning",
-        !ok && !warning && "border-danger/30 bg-danger-bg/50 text-danger"
-      )}
-    >
-      <Icon size={16} aria-hidden />
-      <span>
-        {t("settings.uploadStorage.status.readiness")}: {readinessLabel(readiness)}
-      </span>
-    </div>
   );
 }
 
@@ -463,31 +421,6 @@ function buildUploadStorageEnvFile(
   ].join("\n");
 }
 
-function validateForm(
-  form: UploadStorageForm,
-  objectStorageNamespace: string
-): FieldErrors {
-  const errors: FieldErrors = {};
-  if (form.backend === "local" && !form.localStorageDir.trim()) {
-    errors.localStorageDir = t("settings.uploadStorage.validation.localStorageDir");
-  }
-  if (form.backend === "oci") {
-    if (!objectStorageNamespace.trim()) {
-      errors.objectStorageNamespace = t(
-        "settings.uploadStorage.validation.objectStorageNamespace"
-      );
-    } else if (!OBJECT_STORAGE_NAME_PATTERN.test(objectStorageNamespace.trim())) {
-      errors.objectStorageNamespace = t("settings.uploadStorage.validation.objectStorageName");
-    }
-    if (!form.objectStorageBucket.trim()) {
-      errors.objectStorageBucket = t("settings.uploadStorage.validation.required");
-    } else if (!OBJECT_STORAGE_NAME_PATTERN.test(form.objectStorageBucket.trim())) {
-      errors.objectStorageBucket = t("settings.uploadStorage.validation.objectStorageName");
-    }
-  }
-  return errors;
-}
-
 function resolveObjectStorageNamespace(settings: UploadStorageSettingsData): string {
   const runtimeNamespace = settings.object_storage_namespace.trim();
   if (runtimeNamespace) return runtimeNamespace;
@@ -498,23 +431,4 @@ function backendLabel(backend: UploadStorageBackend): string {
   return backend === "oci"
     ? t("settings.uploadStorage.backend.oci")
     : t("settings.uploadStorage.backend.local");
-}
-
-function readinessLabel(readiness: string): string {
-  switch (readiness) {
-    case "ok":
-      return t("settings.uploadStorage.readiness.ok");
-    case "missing":
-      return t("settings.uploadStorage.readiness.missing");
-    case "missing_credentials":
-      return t("settings.uploadStorage.readiness.missingCredentials");
-    case "invalid":
-      return t("settings.uploadStorage.readiness.invalid");
-    case "wallet_not_found":
-      return t("settings.uploadStorage.readiness.walletNotFound");
-    case "error":
-      return t("settings.uploadStorage.readiness.error");
-    default:
-      return readiness || t("settings.uploadStorage.readiness.unknown");
-  }
 }

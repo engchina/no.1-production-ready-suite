@@ -3,13 +3,14 @@ import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
   Button,
-  PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -26,7 +27,6 @@ import {
   DbObjectGrid,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
-  DbObjectStatusBar,
   DbObjectStepIndicator,
   DropDbObjectDialog,
   dbObjectSortValue,
@@ -264,19 +264,7 @@ export function TableManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    const name = detail.name;
-    void (async () => {
-      try {
-        const full = await apiGet<DbAdminObjectDetail>(
-          `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=1`,
-        );
-        setDetail((current) =>
-          current && current.name === name ? { ...current, ddl: full.ddl } : current,
-        );
-      } catch {
-        // DDL 取得失敗時は既存の "-" 表示のまま
-      }
-    })();
+    void detailRequest.loadDdl(detail.name);
   };
 
   // 行数バッジは既定で num_rows 統計(一覧と統一・高速)。正確な件数は明示操作で COUNT(*)。
@@ -297,7 +285,7 @@ export function TableManagementPage() {
     }
   };
 
-  const load = async (refreshSchema = false) => {
+  const load = async (refreshSchema = false, announce = false) => {
     const sequence = loadSequence.current + 1;
     const detailVersionAtStart = detailRequest.requestVersion();
     loadSequence.current = sequence;
@@ -340,6 +328,11 @@ export function TableManagementPage() {
           }
         }
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(
+          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
+        );
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
@@ -546,6 +539,49 @@ export function TableManagementPage() {
       <PageHeader
         title={t("nav.tableManagement")}
         subtitle={t("tableMgmt.subtitle")}
+        meta={
+          tables?.refreshed_at
+            ? t("common.schemaRefreshedAt", { date: formatDateTime(tables.refreshed_at) })
+            : undefined
+        }
+        actionsAriaLabel={t("tableMgmt.tabs.label")}
+        actionsTestId="table-management-actions"
+        actions={
+          activeView === "list"
+            ? [
+                {
+                  id: "create-table",
+                  kind: "primary",
+                  label: t("tableMgmt.create.title"),
+                  icon: Code2,
+                  onClick: () => setActiveView("create"),
+                },
+                {
+                  id: "import-table",
+                  kind: "secondary",
+                  label: t("dataTools.dbAdmin.importTitle"),
+                  icon: Upload,
+                  onClick: () => setActiveView("import"),
+                },
+                {
+                  id: "refresh-table-list",
+                  kind: "utility",
+                  label: t("common.action.refresh"),
+                  icon: RefreshCw,
+                  loading: loading === "load",
+                  onClick: () => void load(false, true),
+                },
+                {
+                  id: "refresh-table-schema",
+                  kind: "utility",
+                  label: t("common.action.schemaRefresh"),
+                  icon: RefreshCw,
+                  loading: loading === "schema-refresh",
+                  onClick: () => void load(true, true),
+                },
+              ]
+            : []
+        }
       />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
@@ -561,40 +597,8 @@ export function TableManagementPage() {
             </Button>
           }
         />
-
-        <DbObjectStatusBar
-          count={tables?.items.length ?? 0}
-          runtime={tables?.runtime ?? "deterministic"}
-          refreshedAt={tables?.refreshed_at ?? ""}
-          loading={loading}
-          labels={{
-            ariaLabel: t("tableMgmt.toolbar.status"),
-            count: t("tableMgmt.metric.tables"),
-            runtime: t("tableMgmt.metric.runtime"),
-            refreshedAt: t("tableMgmt.metric.schemaRefreshed"),
-            refresh: t("tableMgmt.action.refresh"),
-            schemaRefresh: t("tableMgmt.action.schemaRefresh"),
-          }}
-          onRefresh={() => void load()}
-          onSchemaRefresh={() => void load(true)}
-        />
-
         {activeView === "list" ? (
           <>
-            <div
-              className="flex flex-wrap items-center justify-end gap-2"
-              data-testid="table-management-actions"
-              aria-label={t("tableMgmt.tabs.label")}
-            >
-              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("create")}>
-                <Code2 size={15} aria-hidden="true" />
-                <span>{t("tableMgmt.create.title")}</span>
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("import")}>
-                <Upload size={15} aria-hidden="true" />
-                <span>{t("dataTools.dbAdmin.importTitle")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id="table-management-panel-list"
               role="region"
@@ -645,12 +649,14 @@ export function TableManagementPage() {
               headingId="table-detail-heading"
               detail={detail}
               loading={detailRequest.loading || (loading === "load" && !tables)}
+              ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
               exporting={loading === "table-export"}
               countingRows={loading === "count"}
               tab={detailTab}
               labels={{
                 loading: t("tableMgmt.detail.loading"),
+                ddlLoading: t("tableMgmt.detail.ddlLoading"),
                 tabsLabel: t("tableMgmt.detailTabs.label"),
                 columns: t("tableMgmt.detailTabs.columns"),
                 ddl: t("tableMgmt.detailTabs.ddl"),

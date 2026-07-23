@@ -5,16 +5,17 @@ import { useSearchParams } from "react-router-dom";
 import {
   Banner,
   Button,
-  PageHeader,
+  StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { useAuth } from "@/features/security/AuthProvider";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { formatNumber } from "@/lib/format";
-import { DbObjectManagementStatusBar, DbObjectPanelHeader } from "./components/DbObjectManagementShared";
+import { formatDateTime } from "@/lib/format";
+import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
@@ -163,6 +164,7 @@ function ExecutableNl2SqlWorkbench() {
   const [detecting, setDetecting] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
+  const reportedSchemaRefreshJob = useRef("");
 
   useLayoutEffect(() => {
     const textarea = questionTextareaRef.current;
@@ -216,24 +218,46 @@ function ExecutableNl2SqlWorkbench() {
   // 画面 entry は summary/object page だけを独立取得する。refresh は persistent job を投入し、
   // 前 catalog を表示したまま job 完了時の query invalidation を待つ。
   const loadCatalog = useCallback(
-    async (refresh = false) => {
+    async (refresh = false, announce = false) => {
       try {
         if (refresh) {
           const job = await startSchemaRefresh.mutateAsync();
+          reportedSchemaRefreshJob.current = "";
           setSchemaRefreshJobId(job.job_id);
           return;
         }
-        await Promise.allSettled([
+        const results = await Promise.allSettled([
           schemaObjectsQuery.refetch(),
           schemaHeadQuery.refetch(),
           profilesQuery.refetch(),
         ]);
+        if (
+          announce &&
+          results.every(
+            (result) => result.status === "fulfilled" && !result.value.isError
+          )
+        ) {
+          toast.success(t("common.action.refreshed"));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
       }
     },
     [profilesQuery, schemaHeadQuery, schemaObjectsQuery, startSchemaRefresh]
   );
+
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job || !["done", "error"].includes(job.status)) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (reportedSchemaRefreshJob.current === reportKey) return;
+    reportedSchemaRefreshJob.current = reportKey;
+    if (job.status === "done") {
+      toast.success(t("common.action.schemaRefreshed"));
+    } else {
+      toast.error(t("profiles.schemaRefresh.error"));
+    }
+  }, [schemaRefreshJobQuery.data]);
 
   const refreshHistory = useCallback(async () => {
     const historyData = await apiGet<HistoryData>("/api/nl2sql/history");
@@ -692,47 +716,57 @@ function ExecutableNl2SqlWorkbench() {
 
   return (
     <>
-      <PageHeader title={t("nav.query")} subtitle={t("page.query.subtitle")} />
+      <PageHeader
+        title={t("nav.query")}
+        subtitle={t("page.query.subtitle")}
+        status={
+          schemaRefreshStatus ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaRefreshStatus === "done"
+                    ? "success"
+                    : schemaRefreshStatus === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+              />
+            </span>
+          ) : undefined
+        }
+        meta={
+          catalog.refreshed_at
+            ? t("common.schemaRefreshedAt", {
+                date: formatDateTime(catalog.refreshed_at),
+              })
+            : undefined
+        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => loadCatalog(false, true),
+            loading: loadingCatalog,
+            disabled: active,
+          },
+          {
+            id: "schema-refresh",
+            kind: "utility",
+            label: t("common.action.schemaRefresh"),
+            icon: RefreshCw,
+            onClick: () => loadCatalog(true),
+            loading:
+              schemaRefreshStatus === "pending" ||
+              schemaRefreshStatus === "running",
+            disabled: active,
+          },
+        ]}
+      />
 
       <div className="grid gap-4 p-4 lg:p-8">
-        <DbObjectManagementStatusBar
-          ariaLabel={t("nl2sql.workspace.statusLabel")}
-          metrics={[
-            {
-              label: t("nl2sql.workspace.availableTables"),
-              value: formatNumber(schemaHeadQuery.data?.object_count ?? catalog.tables.length),
-              emphasis: true,
-            },
-            {
-              label: t("nl2sql.workspace.selectedTables"),
-              value: t("nl2sql.workspace.tableCount", { count: selection.tableNames.length }),
-            },
-          ]}
-          metricColumnsClass="sm:grid-cols-2"
-          actions={
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="text-xs text-muted" aria-live="polite" aria-atomic="true">
-                {schemaRefreshStatus
-                  ? t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)
-                  : ""}
-              </span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={
-                  schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
-                }
-                disabled={active}
-                onClick={() => void loadCatalog(true)}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("nl2sql.action.refresh")}</span>
-              </Button>
-            </div>
-          }
-        />
-
         <PageNotice
           notice={error ? { tone: "danger", message: `${error} ${t("nl2sql.error.retryHint")}` } : null}
           action={
@@ -1025,6 +1059,10 @@ function ExecutableNl2SqlWorkbench() {
                         catalog={catalog}
                         loading={loadingCatalog}
                         disabled={active}
+                        availableTableCount={
+                          schemaHeadQuery.data?.object_count ?? catalog.tables.length
+                        }
+                        selectedTableCount={selection.tableNames.length}
                         insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"

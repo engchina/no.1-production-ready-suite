@@ -4,22 +4,20 @@ import { Download, Layers3, RefreshCw } from "lucide-react";
 import {
   Button,
   EmptyState,
-  PageHeader,
   Pagination,
   StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { FileInputControl, downloadBlob } from "../components/DbAdminShared";
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectPanelHeader,
 } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
@@ -123,29 +121,21 @@ export function GlobalRulesPage() {
 
   return (
     <>
-      <PageHeader title={t("globalRules.title")} subtitle={t("globalRules.subtitle")} />
+      <PageHeader
+        title={t("globalRules.title")}
+        subtitle={t("globalRules.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading,
+          },
+        ]}
+      />
       <main className="grid gap-4 p-4 lg:p-8">
-        <DbObjectManagementStatusBar
-          ariaLabel={t("globalRules.status.label")}
-          metricColumnsClass="sm:grid-cols-2 xl:grid-cols-3"
-          metrics={[
-            { label: t("globalRules.status.count"), value: formatNumber(rules.length), emphasis: true },
-            { label: t("globalRules.status.lastLoaded"), value: formatDateTime(lastLoadedAt) },
-          ]}
-          actions={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loading}
-              onClick={() => void load(true)}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("glossary.action.refresh")}</span>
-            </Button>
-          }
-        />
-
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell

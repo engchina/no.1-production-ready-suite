@@ -22,6 +22,7 @@ backend/.env.*
 # --- test artifacts ---
 backend/reports/
 frontend/test-results/
+/test-results/
 frontend/playwright-report/
 playwright-report/
 

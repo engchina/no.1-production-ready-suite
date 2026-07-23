@@ -2,7 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Code2, DatabaseZap, Link2, MessageSquareText, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  buttonVariants,
+  EmptyState,
+  Pagination,
+  StatusBadge,
+  toast,
+} from "@engchina/production-ready-ui";
+
+import { PageHeader } from "@/components/PageHeader";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -13,7 +22,6 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
   type DbObjectTab,
@@ -40,6 +48,8 @@ import type {
 import { formatElapsed } from "../useOperationTimer";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
+
+const APP_FEEDBACK_PAGE_SIZE = 20;
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "entries", label: t("feedbackManagement.tabs.entries"), icon: MessageSquareText },
@@ -125,8 +135,17 @@ export function FeedbackManagementPage() {
           item.feedback_comment.toLowerCase().includes(q)
         );
       })
-      .slice(0, 20);
+      .slice(0, APP_FEEDBACK_PAGE_SIZE);
   }, [feedbackFilter, feedbackSearch, history]);
+  const feedbackTotalPages = Math.max(
+    1,
+    Math.ceil(feedbackTotal / APP_FEEDBACK_PAGE_SIZE),
+    feedbackPage + (feedbackNextCursor ? 1 : 0)
+  );
+  const feedbackPageStart =
+    history.length > 0 ? (feedbackPage - 1) * APP_FEEDBACK_PAGE_SIZE + 1 : 0;
+  const feedbackPageEnd =
+    history.length > 0 ? feedbackPageStart + history.length - 1 : 0;
   const selectedAppFeedback = useMemo(
     () => history.find((item) => item.id === selectedFeedbackId) ?? history[0] ?? null,
     [history, selectedFeedbackId]
@@ -139,7 +158,10 @@ export function FeedbackManagementPage() {
     );
 
   const fetchAppFeedback = (cursor = "", signal?: AbortSignal) => {
-    const params = new URLSearchParams({ limit: "20", rating: feedbackFilter });
+    const params = new URLSearchParams({
+      limit: String(APP_FEEDBACK_PAGE_SIZE),
+      rating: feedbackFilter,
+    });
     if (cursor) params.set("cursor", cursor);
     if (appProfileFilter) params.set("profile_id", appProfileFilter);
     if (feedbackSearch.trim()) params.set("q", feedbackSearch.trim());
@@ -477,44 +499,19 @@ export function FeedbackManagementPage() {
       <PageHeader
         title={t("nav.feedbackManagement")}
         subtitle={t("feedbackManagement.subtitle")}
-        actions={
-          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load(true)}>
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("feedbackManagement.action.reload")}</span>
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading: loading === "load",
+          },
+        ]}
       />
 
       <main className="grid gap-4 p-4 lg:p-8">
-        <DbObjectManagementStatusBar
-          ariaLabel={t("feedbackManagement.status.aria")}
-          metricColumnsClass="sm:grid-cols-4"
-          metrics={[
-            {
-              label: t("feedbackManagement.metric.entries"),
-              value: String(feedback?.total ?? selectAiFeedbackItems.length),
-              emphasis: true,
-              testId: "feedback-management-entry-count",
-            },
-            { label: t("feedbackManagement.metric.appFeedback"), value: String(feedbackTotal) },
-            { label: t("feedbackManagement.metric.indexed"), value: String(feedbackEntries?.indexed_count ?? 0) },
-            { label: t("feedbackManagement.metric.profile"), value: profileName || "-" },
-          ]}
-          actions={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loading === "feedback"}
-              disabled={!profileName.trim()}
-              onClick={() => void refreshSelectAiFeedback(profileName, true)}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("feedbackManagement.action.refresh")}</span>
-            </Button>
-          }
-        />
-
         <PageNotice notice={message ? { tone: "danger", message } : null} />
 
         <DbObjectManagementTabs
@@ -541,12 +538,18 @@ export function FeedbackManagementPage() {
                 icon={MessageSquareText}
                 action={
                   <>
+                    <span data-testid="feedback-management-entry-count">
+                      <StatusBadge
+                        variant="neutral"
+                        label={`${t("feedbackManagement.metric.entries")} ${feedback?.total ?? selectAiFeedbackItems.length}`}
+                      />
+                    </span>
                     {profileSelect}
                     <Button
                       type="button"
                       variant="secondary"
-                      size="sm"
-                      className="min-h-11"
+                      size="lg"
+                      className="h-[44px] w-full whitespace-nowrap sm:w-auto"
                       loading={loading === "feedback"}
                       disabled={!profileName.trim()}
                       onClick={() => void refreshSelectAiFeedback()}
@@ -666,7 +669,10 @@ export function FeedbackManagementPage() {
                 onChange={(value) => setMatchLimit(Math.round(clamp(value, 1, 5)))}
               />
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div
+              className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"
+              data-testid="feedback-vector-index-actions"
+            >
               <div className="flex flex-wrap gap-2">
                 <StatusBadge variant="neutral" label={feedback?.runtime ?? dbProfiles?.runtime ?? "-"} />
                 {feedback?.index_name && <StatusBadge variant="info" label={feedback.index_name} />}
@@ -675,12 +681,13 @@ export function FeedbackManagementPage() {
               <Button
                 type="button"
                 variant="primary"
-                size="sm"
+                size="lg"
+                className="w-full whitespace-nowrap sm:w-auto"
                 loading={loading === "vector-index"}
                 disabled={!profileName.trim()}
                 onClick={() => void updateVectorIndex()}
               >
-                <Save size={15} aria-hidden="true" />
+                <Save size={16} aria-hidden="true" />
                 <span>{t("feedbackManagement.index.update")}</span>
               </Button>
             </div>
@@ -702,14 +709,30 @@ export function FeedbackManagementPage() {
               className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4"
               data-testid="feedback-history-pane"
             >
-              <DbObjectPanelHeader title={t("feedbackManagement.appFeedback.historyList")} icon={MessageSquareText} />
-              <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end">
+              <DbObjectPanelHeader
+                title={t("feedbackManagement.appFeedback.historyList")}
+                icon={MessageSquareText}
+                action={
+                  <StatusBadge
+                    variant="neutral"
+                    label={`${t("feedbackManagement.metric.appFeedback")} ${feedbackTotal}`}
+                  />
+                }
+              />
+              <form
+                className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end"
+                data-testid="feedback-app-filters"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void refreshAppFeedback();
+                }}
+              >
                 <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
                   <span>{t("feedbackManagement.appFeedback.search")}</span>
                   <input
                     value={feedbackSearch}
                     onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
-                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                     placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
                   />
                 </label>
@@ -721,7 +744,7 @@ export function FeedbackManagementPage() {
                     onChange={(event) =>
                       setFeedbackFilter(event.currentTarget.value as "all" | FeedbackRating | "unrated")
                     }
-                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
                     <option value="good">{t("nl2sql.feedback.good")}</option>
@@ -735,7 +758,7 @@ export function FeedbackManagementPage() {
                     aria-label={t("feedbackManagement.appFeedback.profileFilter")}
                     value={appProfileFilter}
                     onChange={(event) => setAppProfileFilter(event.currentTarget.value)}
-                    className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                   >
                     <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
                     {appProfiles.filter((profile) => !profile.archived).map((profile) => (
@@ -743,11 +766,18 @@ export function FeedbackManagementPage() {
                     ))}
                   </select>
                 </label>
-                <Button type="button" variant="secondary" size="sm" loading={loading === "app-feedback-load"} onClick={() => void refreshAppFeedback()}>
-                  <RefreshCw size={15} aria-hidden="true" />
+                {/* 入力と同じ行の送信操作なので、Button spec の許容例に従い入力高 44px に揃える。 */}
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="lg"
+                  className="h-[44px] w-full whitespace-nowrap md:w-auto"
+                  loading={loading === "app-feedback-load"}
+                >
+                  <RefreshCw size={16} aria-hidden="true" />
                   <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
                 </Button>
-              </div>
+              </form>
               <div className="grid min-w-0 gap-2">
                 {appFeedbackItems.length > 0 ? (
                   appFeedbackItems.map((item) => (
@@ -765,13 +795,29 @@ export function FeedbackManagementPage() {
                   />
                 )}
               </div>
-              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
-                <span className="text-sm text-muted">{t("feedbackManagement.appFeedback.page", { page: feedbackPage, total: feedbackTotal })}</span>
-                <div className="flex gap-2">
-                  <Button type="button" variant="secondary" size="sm" disabled={feedbackCursorStack.length === 0} onClick={previousAppFeedbackPage}>{t("qcm.training.pagination.prev")}</Button>
-                  <Button type="button" variant="secondary" size="sm" disabled={!feedbackNextCursor} onClick={nextAppFeedbackPage}>{t("qcm.training.pagination.next")}</Button>
-                </div>
-              </div>
+              <Pagination
+                page={feedbackPage}
+                totalPages={feedbackTotalPages}
+                onPageChange={(nextPage) => {
+                  if (nextPage > feedbackPage && feedbackNextCursor) nextAppFeedbackPage();
+                  if (nextPage < feedbackPage && feedbackCursorStack.length > 0) {
+                    previousAppFeedbackPage();
+                  }
+                }}
+                summary={t("feedbackManagement.appFeedback.pagination.range", {
+                  start: feedbackPageStart,
+                  end: feedbackPageEnd,
+                  total: feedbackTotal,
+                })}
+                pageIndicator={t("feedbackManagement.appFeedback.pagination.page", {
+                  page: feedbackPage,
+                  total: feedbackTotalPages,
+                })}
+                prevLabel={t("feedbackManagement.appFeedback.pagination.prev")}
+                nextLabel={t("feedbackManagement.appFeedback.pagination.next")}
+                ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
+                testId="app-feedback-pagination"
+              />
             </section>
 
             <section className="grid min-w-0 content-start gap-4" data-testid="app-feedback-editor-pane">
@@ -842,30 +888,42 @@ export function FeedbackManagementPage() {
                       placeholder={t("nl2sql.feedback.commentPlaceholder")}
                     />
                   </label>
-                  <div className="flex flex-wrap gap-2">
+                  <div
+                    className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center"
+                    data-testid="feedback-app-actions"
+                  >
                     <Button
                       type="button"
-                      size="sm"
+                      variant="primary"
+                      size="lg"
+                      className="w-full whitespace-nowrap sm:w-auto"
                       loading={loading === "app-feedback"}
                       disabled={loading === "app-feedback"}
                       onClick={() => void saveAppFeedback()}
                     >
-                      <Save size={15} aria-hidden="true" />
+                      <Save size={16} aria-hidden="true" />
                       <span>{t("feedbackManagement.appFeedback.save")}</span>
-                    </Button>
-                    <Button type="button" variant="danger" size="sm" loading={loading === "app-feedback-clear"} onClick={() => void clearAppFeedback()}>
-                      <Trash2 size={15} aria-hidden="true" />
-                      <span>{t("feedbackManagement.appFeedback.clear")}</span>
                     </Button>
                     {selectedAppFeedback.feedback_rating === "good" && (
                       <a
                         href={`${APP_ROUTES.questionClassifierModels}?tab=candidates&history_id=${encodeURIComponent(selectedAppFeedback.id)}`}
-                        className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
+                        className={`${buttonVariants({ variant: "secondary", size: "lg" })} w-full whitespace-nowrap sm:w-auto`}
                       >
-                        <Link2 size={15} aria-hidden="true" />
+                        <Link2 size={16} aria-hidden="true" />
                         <span>{t("feedbackManagement.appFeedback.openCandidate")}</span>
                       </a>
                     )}
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="lg"
+                      className="w-full whitespace-nowrap sm:ml-auto sm:w-auto"
+                      loading={loading === "app-feedback-clear"}
+                      onClick={() => void clearAppFeedback()}
+                    >
+                      <Trash2 size={16} aria-hidden="true" />
+                      <span>{t("feedbackManagement.appFeedback.clear")}</span>
+                    </Button>
                   </div>
                 </>
               ) : (
@@ -971,37 +1029,45 @@ export function FeedbackManagementPage() {
                       />
                     </label>
                   </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    loading={loading === "feedback-config"}
-                    disabled={!feedbackConfig}
-                    onClick={() => void saveFeedbackConfig()}
-                  >
-                    <Save size={15} aria-hidden="true" />
-                    <span>{t("feedbackManagement.similarityIndex.saveConfig")}</span>
-                  </Button>
+                  <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="lg"
+                      className="w-full whitespace-nowrap sm:w-auto"
+                      loading={loading === "feedback-config"}
+                      disabled={!feedbackConfig}
+                      onClick={() => void saveFeedbackConfig()}
+                    >
+                      <Save size={16} aria-hidden="true" />
+                      <span>{t("feedbackManagement.similarityIndex.saveConfig")}</span>
+                    </Button>
+                  </div>
                 </section>
-                <div className="flex flex-wrap gap-2">
+                <div
+                  className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center"
+                  data-testid="feedback-similarity-index-actions"
+                >
                   <Button
                     type="button"
-                    size="sm"
+                    size="lg"
                     variant="secondary"
+                    className="w-full whitespace-nowrap sm:w-auto"
                     loading={loading === "feedback-index"}
                     onClick={() => void rebuildFeedbackIndex()}
                   >
-                    <RefreshCw size={15} aria-hidden="true" />
+                    <RefreshCw size={16} aria-hidden="true" />
                     <span>{t("feedbackManagement.similarityIndex.rebuild")}</span>
                   </Button>
                   <Button
                     type="button"
-                    size="sm"
+                    size="lg"
                     variant="danger"
+                    className="w-full whitespace-nowrap sm:ml-auto sm:w-auto"
                     loading={loading === "feedback-index-clear"}
                     onClick={() => void clearFeedbackIndex()}
                   >
-                    <Trash2 size={15} aria-hidden="true" />
+                    <Trash2 size={16} aria-hidden="true" />
                     <span>{t("feedbackManagement.similarityIndex.clear")}</span>
                   </Button>
                 </div>
@@ -1073,7 +1139,7 @@ function ProfileSelect({
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-[44px] rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>

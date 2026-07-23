@@ -65,11 +65,6 @@ function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
         rerank_model: "cohere.rerank-v4.0-fast",
       },
     },
-    checks: {
-      enterprise_ai: "ok",
-      generative_ai: "ok",
-      embedding_dim: "ok",
-    },
     model_settings_file: "runtime-settings",
     source: "runtime",
     secret_source: "environment",
@@ -267,6 +262,11 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeTruthy();
 }
 
+async function expectNoOperationsMemoOrReadiness(page: Page) {
+  await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
+  await expect(page.getByText(/readiness/i)).toHaveCount(0);
+}
+
 async function expectNl2sqlShellFillsViewport(page: Page) {
   await expect
     .poll(() =>
@@ -422,6 +422,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
   await expect(page.getByLabel("ユーザー OCID")).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
   await expectOciConfigFieldsAboveOcidFields(page);
   await expectNl2sqlShellFillsViewport(page);
   await expectNoExcessBottomWhitespace(page);
@@ -433,6 +434,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
     "/u01/production-ready-nl2sql"
   );
+  await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
   await expect(page.getByLabel("Object Storage バケット")).toHaveValue("nl2sql-originals");
   await expectNoHorizontalOverflow(page);
@@ -441,6 +443,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "モデル設定" }).first()).toBeVisible();
   await expect(page.getByText("OCI Enterprise AI", { exact: true })).toBeVisible();
   await expect(page.getByText("OCI Generative AI", { exact: true })).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
   await expectNoHorizontalOverflow(page);
 
   await page.goto("/settings/database");
@@ -452,9 +455,64 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(
     page.getByText(/データベース接続ユーザーの権限がシステム上限/)
   ).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
+  await page.getByRole("button", { name: "DB接続テスト" }).click();
+  await expect(page.getByText("入力値の形式のみ確認します。")).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("非正常な readiness 値も設定画面には表示しない", async ({ page }) => {
+  await page.unroute("**/api/settings/upload-storage");
+  await page.route("**/api/settings/upload-storage", (route) =>
+    fulfillJson(route, {
+      backend: "local",
+      local_storage_dir: "/u01/production-ready-nl2sql",
+      object_storage_region: "ap-osaka-1",
+      object_storage_namespace: "exampletenancy",
+      object_storage_bucket: "nl2sql-originals",
+      readiness: "missing_credentials",
+      max_upload_bytes: 104857600,
+      config_source: "runtime",
+    })
+  );
+
+  await page.goto("/settings/upload-storage");
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toBeVisible();
+  await expect(
+    page.getByText("backend/.env + 現在のプロセス設定", { exact: true })
+  ).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
+
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", (route) =>
+    fulfillJson(route, databaseSettingsFixture({ readiness: "invalid" }))
+  );
+  await page.unroute("**/api/settings/database/test");
+  await page.route("**/api/settings/database/test", (route) =>
+    fulfillJson(route, {
+      status: "failed",
+      readiness: "error",
+      message: "接続設定を確認してください。",
+      elapsed_ms: 3,
+      troubleshooting: ["DSN と Wallet を確認してください。"],
+      details: { network_call: false },
+      checked_at: "2026-06-21T10:00:00.000Z",
+      error_type: "InvalidConfiguration",
+    })
+  );
+
+  await page.goto("/settings/database");
+  await expect(page.getByRole("heading", { name: "接続状態" })).toBeVisible();
+  await expect(page.getByText("現在の接続ユーザー")).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
+  await page.getByRole("button", { name: "DB接続テスト" }).click();
+  await expect(page.getByText("接続設定を確認してください。")).toBeVisible();
+  await expect(page.getByText("所要時間: 3 ms")).toBeVisible();
+  await expectNoOperationsMemoOrReadiness(page);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -470,11 +528,6 @@ test("モデル API Key を .env に新規保存して削除でき、JSON previe
         ...modelSettingsFixture().settings.enterprise_ai,
         has_api_key: false,
       },
-    },
-    checks: {
-      enterprise_ai: "missing",
-      generative_ai: "ok",
-      embedding_dim: "ok",
     },
     secret_source: "missing",
   });
@@ -522,7 +575,7 @@ test("モデル API Key を .env に新規保存して削除でき、JSON previe
   await page.getByLabel("保存済み API key を削除する").check();
   await page.getByRole("button", { name: "モデル設定: 保存" }).click();
   expect((requests[1].enterprise_ai as Record<string, unknown>).clear_api_key).toBe(true);
-  await expect(page.getByText("API Key 保存先: 未設定")).toBeVisible();
+  await expect(page.getByText("未設定", { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -547,7 +600,6 @@ test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key 
   await page.goto("/settings/model");
   await expect(page.getByText("旧 JSON に API Key が残っています")).toBeVisible();
   await expect(page.getByText(/原因: v1 の model-settings.json/)).toBeVisible();
-  await expect(page.getByText("API Key 保存先: 旧 JSON（移行が必要）")).toBeVisible();
   await page.getByRole("button", { name: "モデル設定: 保存" }).click();
 
   expect(savedRequests).toHaveLength(1);
@@ -556,7 +608,7 @@ test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key 
   expect(enterprise.has_api_key).toBe(true);
   expect(enterprise.clear_api_key).toBe(false);
   await expect(page.getByText("旧 JSON に API Key が残っています")).toHaveCount(0);
-  await expect(page.getByText("API Key 保存先: backend/.env")).toBeVisible();
+  await expect(page.getByText("保存済み", { exact: true })).toBeVisible();
 });
 
 test("Wallet 不足時はページ表示ごとに OCI 自動取得を一度だけ実行する", async ({ page }) => {

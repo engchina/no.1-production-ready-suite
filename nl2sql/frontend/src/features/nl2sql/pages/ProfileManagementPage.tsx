@@ -17,15 +17,14 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   EmptyState,
-  PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useSchemaOwners } from "@/lib/queries";
 import {
@@ -33,7 +32,7 @@ import {
 } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
-  DbObjectManagementStatusBar,
+  DbObjectManagementPanelShell,
   DbObjectPanelHeader,
 } from "../components/DbObjectManagementShared";
 import { engineLabel } from "../labels";
@@ -65,8 +64,6 @@ import type {
 type ActiveView = "list" | "editor";
 type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
-
-const panelClass = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 
 function filterProfileObjects(objects: SchemaTable[], query: string) {
   const normalized = query.trim().toLowerCase();
@@ -294,72 +291,6 @@ function updateSelectAiConfig(
   }));
 }
 
-function StatusBar({
-  profileCount,
-  objectCount,
-  oracleProfileCount,
-  runtime,
-  loading,
-  onRefresh,
-  schemaRefreshStatus,
-  onSchemaRefresh,
-}: {
-  profileCount: number;
-  objectCount: number;
-  oracleProfileCount: number;
-  runtime: string;
-  loading: boolean;
-  onRefresh: () => void;
-  schemaRefreshStatus: string;
-  onSchemaRefresh: () => void;
-}) {
-  return (
-    <DbObjectManagementStatusBar
-      ariaLabel={t("profiles.status.label")}
-      metricColumnsClass="sm:grid-cols-3 lg:grid-cols-4"
-      metrics={[
-        { label: t("profiles.metric.profiles"), value: formatNumber(profileCount), emphasis: true },
-        { label: t("profiles.metric.objects"), value: formatNumber(objectCount), emphasis: true },
-        { label: t("profiles.metric.oracleProfiles"), value: formatNumber(oracleProfileCount), emphasis: true },
-        { label: t("profiles.oracle.runtime"), value: runtime },
-      ]}
-      actions={
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className="sr-only" aria-live="polite" aria-atomic="true">
-            {schemaRefreshStatus}
-          </span>
-          {schemaRefreshStatus && (
-            <StatusBadge
-              variant={
-                schemaRefreshStatus === "done"
-                  ? "success"
-                  : schemaRefreshStatus === "error"
-                    ? "danger"
-                    : "info"
-              }
-              label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
-            />
-          )}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            loading={schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"}
-            onClick={onSchemaRefresh}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("profiles.schemaRefresh.action")}</span>
-          </Button>
-          <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("profiles.action.refresh")}</span>
-          </Button>
-        </div>
-      }
-    />
-  );
-}
-
 function ProfileList({
   profiles,
   loading,
@@ -369,7 +300,6 @@ function ProfileList({
   onSortChange,
   onSelect,
   onDelete,
-  onCreateNew,
   deletingId,
   hasNextPage,
   loadingNextPage,
@@ -383,7 +313,6 @@ function ProfileList({
   onSortChange: (key: SortKey) => void;
   onSelect: (profile: ProfileSummary) => void;
   onDelete: (profile: ProfileSummary) => void;
-  onCreateNew: () => void;
   deletingId: string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
@@ -397,13 +326,7 @@ function ProfileList({
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
         action={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <StatusBadge variant="info" label={t("profiles.objects.count", { count: profiles.length })} />
-            <Button type="button" variant="primary" size="sm" onClick={onCreateNew}>
-              <Plus size={15} aria-hidden="true" />
-              <span>{t("profiles.action.new")}</span>
-            </Button>
-          </div>
+          <StatusBadge variant="info" label={t("profiles.objects.count", { count: profiles.length })} />
         }
       />
       <div className="grid gap-2 rounded-md border border-border bg-background p-3">
@@ -907,7 +830,6 @@ function ProfileEditor({
   onOracleConfirmationChange,
   onRebuildAgentAssetsChange,
   onRetryOracleSync,
-  onBack,
 }: {
   selectedProfile: Nl2SqlProfile | null;
   form: ProfileFormState;
@@ -946,17 +868,10 @@ function ProfileEditor({
   onOracleConfirmationChange: (value: string) => void;
   onRebuildAgentAssetsChange: (value: boolean) => void;
   onRetryOracleSync: () => void;
-  onBack: () => void;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
   return (
     <section className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
-      <div className="justify-self-start">
-        <Button type="button" variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft size={15} aria-hidden="true" />
-          <span>{t("profiles.action.backToList")}</span>
-        </Button>
-      </div>
       <DbObjectPanelHeader
         headingId="profile-editor-heading"
         icon={FileJson}
@@ -1361,7 +1276,6 @@ export function ProfileManagementPage() {
   );
   const profilesLoaded = !profilesQuery.isPending;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
-  const dbProfiles = dbProfilesQuery.data ?? null;
   const oracleSyncJob = oracleSyncJobQuery.data ?? null;
 
   const tableObjects = useMemo(
@@ -1422,7 +1336,7 @@ export function ProfileManagementPage() {
     setSearchParams({ profile: profile.id });
   };
 
-  const load = async () => {
+  const load = async (announce = false) => {
     setLoading("load");
     setMessage("");
     const results = await Promise.allSettled([
@@ -1433,8 +1347,13 @@ export function ProfileManagementPage() {
       schemaOwnersQuery.refetch(),
       dbProfilesQuery.refetch(),
     ]);
-    if (results.every((result) => result.status === "rejected")) {
+    const succeeded = results.every(
+      (result) => result.status === "fulfilled" && !result.value.isError
+    );
+    if (!succeeded) {
       setMessage(t("profiles.error.load"));
+    } else if (announce) {
+      toast.success(t("common.action.refreshed"));
     }
     setLoading("");
   };
@@ -1776,7 +1695,6 @@ export function ProfileManagementPage() {
       onOracleConfirmationChange={setOracleConfirmation}
       onRebuildAgentAssetsChange={setRebuildAgentAssets}
       onRetryOracleSync={() => void retryOracleSync()}
-      onBack={() => void backToList()}
     />
   );
 
@@ -1785,6 +1703,54 @@ export function ProfileManagementPage() {
       <PageHeader
         title={t("nav.profiles")}
         subtitle={t("profiles.subtitle")}
+        status={
+          activeView === "list" && schemaRefreshStatus ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaRefreshStatus === "done"
+                    ? "success"
+                    : schemaRefreshStatus === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+              />
+            </span>
+          ) : undefined
+        }
+        actions={
+          activeView === "list"
+            ? [
+                {
+                  id: "create-profile",
+                  kind: "primary",
+                  label: t("profiles.action.new"),
+                  icon: Plus,
+                  onClick: startNew,
+                },
+                {
+                  id: "refresh",
+                  kind: "utility",
+                  label: t("common.action.refresh"),
+                  icon: RefreshCw,
+                  onClick: () => load(true),
+                  loading: loading === "load" || profilesQuery.isFetching,
+                },
+                {
+                  id: "schema-refresh",
+                  kind: "utility",
+                  label: t("common.action.schemaRefresh"),
+                  icon: RefreshCw,
+                  onClick: runSchemaRefresh,
+                  loading:
+                    schemaRefreshStatus === "pending" ||
+                    schemaRefreshStatus === "running",
+                },
+              ]
+            : []
+        }
+        actionsTestId="profile-management-actions"
       />
 
       <main className="grid gap-4 p-4 lg:p-8">
@@ -1799,21 +1765,11 @@ export function ProfileManagementPage() {
         />
 
         {activeView === "list" ? (
-          <>
-            <StatusBar
-              profileCount={profilesQuery.data?.pages[0]?.total ?? profiles.length}
-              objectCount={schemaHeadQuery.data?.object_count ?? 0}
-              oracleProfileCount={dbProfiles?.profiles.length ?? 0}
-              runtime={dbProfiles?.runtime ?? "deterministic"}
-              loading={loading === "load" || profilesQuery.isFetching}
-              onRefresh={() => void load()}
-              schemaRefreshStatus={schemaRefreshStatus}
-              onSchemaRefresh={() => void runSchemaRefresh()}
-            />
-            <section
+          <DbObjectManagementPanelShell
               id="profile-management-panel-list"
-              aria-label={t("profiles.workspace.label")}
-              className={panelClass}
+              role="region"
+              idPrefix="profile-management"
+              ariaLabel={t("profiles.workspace.label")}
             >
               <ProfileList
                 profiles={filteredProfiles}
@@ -1824,34 +1780,41 @@ export function ProfileManagementPage() {
                 onSortChange={toggleSort}
                 onSelect={selectProfile}
                 onDelete={(profile) => void deleteProfile(profile)}
-                onCreateNew={startNew}
                 deletingId={loading.startsWith("delete-profile-") ? loading.replace("delete-profile-", "") : ""}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
                 onLoadMore={() => void profilesQuery.fetchNextPage()}
               />
-            </section>
-          </>
+            </DbObjectManagementPanelShell>
         ) : (
-          <section
-            id="profile-management-panel-editor"
-            aria-label={selectedProfile ? t("profiles.editor.edit") : t("profiles.editor.new")}
-            className={panelClass}
-          >
-            {selectedProfile || profileParam === "new" ? (
-              editor
-            ) : (
-              <div
-                className="grid gap-2"
-                data-testid="profile-editor-skeleton"
-                aria-label={t("profiles.detail.loading")}
-              >
-                {Array.from({ length: 6 }, (_, index) => (
-                  <div key={index} className="h-12 animate-pulse rounded-md bg-muted/30" />
-                ))}
-              </div>
-            )}
-          </section>
+          <>
+            <div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => void backToList()}>
+                <ArrowLeft size={15} aria-hidden="true" />
+                <span>{t("profiles.action.backToList")}</span>
+              </Button>
+            </div>
+            <DbObjectManagementPanelShell
+              id="profile-management-panel-editor"
+              role="region"
+              idPrefix="profile-management"
+              ariaLabel={selectedProfile ? t("profiles.editor.edit") : t("profiles.editor.new")}
+            >
+              {selectedProfile || profileParam === "new" ? (
+                editor
+              ) : (
+                <div
+                  className="grid gap-2"
+                  data-testid="profile-editor-skeleton"
+                  aria-label={t("profiles.detail.loading")}
+                >
+                  {Array.from({ length: 6 }, (_, index) => (
+                    <div key={index} className="h-12 animate-pulse rounded-md bg-muted/30" />
+                  ))}
+                </div>
+              )}
+            </DbObjectManagementPanelShell>
+          </>
         )}
       </main>
     </>

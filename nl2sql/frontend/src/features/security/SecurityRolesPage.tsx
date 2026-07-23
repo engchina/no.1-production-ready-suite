@@ -7,13 +7,13 @@ import {
   DataTable,
   EmptyState,
   FormStatus,
-  PageHeader,
   StatusBadge,
   toast,
   type DataTableColumn,
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -23,7 +23,6 @@ import {
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityManagementPanelShell,
-  SecurityManagementStatusBar,
   SecurityPanelHeader,
   SecuritySearchField,
   securityFilteredCount,
@@ -90,9 +89,6 @@ export function SecurityRolesPage() {
 
   const selectedRole = roles.find((role) => role.role_id === selectedId) ?? null;
   const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
-  const builtinRoles = roles.filter((role) => role.is_built_in).length;
-  const archivedRoles = roles.filter((role) => role.archived).length;
-
   const permissionByCode = useMemo(
     () => new Map(permissions.map((permission) => [permission.code, permission])),
     [permissions]
@@ -137,7 +133,7 @@ export function SecurityRolesPage() {
       });
   }, [permissionByCode, roles, search, sort]);
 
-  const load = async () => {
+  const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -158,6 +154,9 @@ export function SecurityRolesPage() {
             : roleRows[0]?.role_id ?? null
         );
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(t("common.action.refreshed"));
+      }
     } catch (cause) {
       if (isAbortError(cause)) {
         return;
@@ -388,44 +387,42 @@ export function SecurityRolesPage() {
   return (
     <>
       <PageHeader
-        className="px-4 sm:px-8"
         title={t("nav.securityRoles")}
         subtitle={t("security.roles.subtitle")}
+        actions={
+          activeView === "list"
+            ? [
+                ...(canManage
+                  ? [
+                      {
+                        id: "create-role",
+                        kind: "primary" as const,
+                        label: t("security.common.create"),
+                        icon: Plus,
+                        onClick: startCreate,
+                      },
+                    ]
+                  : []),
+                {
+                  id: "refresh",
+                  kind: "utility",
+                  label: t("common.action.refresh"),
+                  icon: RefreshCw,
+                  onClick: () => load(true),
+                  loading,
+                },
+              ]
+            : []
+        }
+        actionsAriaLabel={t("security.roles.actionsLabel")}
+        actionsTestId="security-roles-actions"
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
         {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
 
-        <SecurityManagementStatusBar
-          ariaLabel={t("security.roles.statusBar")}
-          metrics={[
-            { label: t("security.roles.metric.total"), value: String(roles.length), emphasis: true, testId: "security-roles-metric-total" },
-            { label: t("security.roles.metric.builtIn"), value: String(builtinRoles), testId: "security-roles-metric-built-in" },
-            { label: t("security.roles.metric.archived"), value: String(archivedRoles), testId: "security-roles-metric-archived" },
-          ]}
-          actions={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("security.common.reload")}</span>
-            </Button>
-          }
-        />
-
         {activeView === "list" ? (
-          <>
-            {canManage ? (
-              <div
-                className="flex flex-wrap items-center justify-end gap-2"
-                data-testid="security-roles-actions"
-                aria-label={t("security.roles.actionsLabel")}
-              >
-                <Button type="button" size="sm" onClick={startCreate}>
-                  <Plus size={15} aria-hidden="true" />
-                  <span>{t("security.common.create")}</span>
-                </Button>
-              </div>
-            ) : null}
-            <SecurityManagementPanelShell
+          <SecurityManagementPanelShell
               id="security-roles-panel-list"
               idPrefix="security-roles"
               ariaLabel={t("security.roles.workspaceLabel")}
@@ -473,7 +470,6 @@ export function SecurityRolesPage() {
                 onArchive={(role) => void handleArchive(role)}
               />
             </SecurityManagementPanelShell>
-          </>
         ) : (
           <>
             <div>

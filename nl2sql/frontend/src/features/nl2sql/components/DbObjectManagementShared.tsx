@@ -56,6 +56,7 @@ export interface DbObjectGridLabels {
 
 export interface DbObjectDetailLabels {
   loading: string;
+  ddlLoading: string;
   tabsLabel: string;
   columns: string;
   ddl: string;
@@ -677,6 +678,7 @@ export function DbObjectDetailPanel({
   headingId,
   detail,
   loading,
+  ddlLoading = false,
   error,
   exporting = false,
   countingRows = false,
@@ -692,6 +694,7 @@ export function DbObjectDetailPanel({
   headingId: string;
   detail: DbAdminObjectDetail | null;
   loading: boolean;
+  ddlLoading?: boolean;
   error: string;
   exporting?: boolean;
   countingRows?: boolean;
@@ -703,11 +706,11 @@ export function DbObjectDetailPanel({
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
-  if (loading) {
+  if (loading || ddlLoading) {
     return (
       <DbManagementLoadingSkeleton
         idPrefix={idPrefix}
-        ariaLabel={labels.loading}
+        ariaLabel={ddlLoading ? labels.ddlLoading : labels.loading}
         variant="detail"
       />
     );

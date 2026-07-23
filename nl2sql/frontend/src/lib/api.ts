@@ -257,7 +257,6 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
 export type ModelSettingsSecretSource = "environment" | "legacy_json" | "missing";
 export type ModelSettingsTestStatus = "success" | "failed";
 export type ModelSettingsTestTargetType =
@@ -334,7 +333,6 @@ export interface ModelSettingsPayload {
 
 export interface ModelSettingsData {
   settings: ModelSettingsPayload;
-  checks: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
   model_settings_file: string;
   source: "runtime";
   secret_source: ModelSettingsSecretSource;
@@ -680,8 +678,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  checkModelSettings: (body: ModelSettingsPayload) =>
-    settingsRequest<ModelSettingsData>("/api/settings/model/check", jsonBody(body)),
   testModelSettings: (body: ModelSettingsTestRequest) =>
     settingsRequest<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
 

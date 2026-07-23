@@ -27,6 +27,7 @@ from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from starlette.responses import JSONResponse
 
 from app.api.concurrency import run_sync_io
 from app.clients.oci_auth import (
@@ -59,7 +60,6 @@ from app.schemas.settings import (
     EnterpriseAiModelEntrySettings,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
-    ModelSettingsCheckStatus,
     ModelSettingsData,
     ModelSettingsPayload,
     ModelSettingsTestRequest,
@@ -204,11 +204,6 @@ def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSet
     return ApiResponse(data=_model_settings_data(_model_payload(settings), settings))
 
 
-@router.post("/model/check", response_model=ApiResponse[ModelSettingsData])
-def check_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
-    return ApiResponse(data=_model_settings_data(payload, get_settings()))
-
-
 @router.post("/model/test", response_model=ApiResponse[ModelSettingsTestResult])
 async def test_model_settings(
     request: ModelSettingsTestRequest,
@@ -266,7 +261,7 @@ def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
 def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
     request: Request,
-) -> ApiResponse[SystemTablesOperationData]:
+) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
     """明示操作として system table を作成・更新または全再作成する。"""
 
     operation_name = "recreate" if payload.recreate else "initialize"
@@ -282,7 +277,17 @@ def initialize_system_tables(
             "FAILURE",
             exc.code,
         )
-        raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
+        headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=headers,
+            content={
+                "data": None,
+                "error_messages": [exc.public_message],
+                "warning_messages": [],
+                "error_code": exc.code,
+            },
+        )
     try:
         reset_system_schema_runtime(
             schema_epoch=int(data["operation_state"]["schema_epoch"]),
@@ -793,14 +798,9 @@ def _ensure_model_settings_directory(path: Path) -> None:
 
 
 def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> ModelSettingsData:
-    """payload と静的チェック結果を API data へ変換する。"""
+    """payload を API data へ変換する。"""
     return ModelSettingsData(
         settings=_public_model_settings_payload(payload),
-        checks={
-            "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
-            "generative_ai": _generative_ai_status(payload.generative_ai),
-            "embedding_dim": _embedding_dim_status(payload.generative_ai),
-        },
         model_settings_file=settings.model_settings_file,
         source="runtime",
         secret_source=settings.model_secret_source,
@@ -839,62 +839,9 @@ def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettin
     )
 
 
-def _enterprise_ai_status(
-    settings: EnterpriseAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Enterprise AI の必須設定が揃っているか確認する。"""
-    required = (settings.endpoint, settings.project_ocid, settings.api_path)
-    if not all(_is_present(value) for value in required):
-        return "missing"
-    if not settings.endpoint.startswith(("http://", "https://")):
-        return "invalid"
-    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
-        return "invalid"
-    if not settings.api_path.startswith(("/", "http://", "https://")):
-        return "invalid"
-    if not _secret_is_available(settings):
-        return "missing"
-    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
-    if len(model_ids) != len(settings.models):
-        return "missing"
-    if len(model_ids) != len(set(model_ids)):
-        return "invalid"
-    if not model_ids or not _is_present(settings.default_model_id):
-        return "missing"
-    if settings.default_model_id not in model_ids:
-        return "invalid"
-    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
-        return "missing"
-    return "ok"
-
-
-def _generative_ai_status(
-    settings: GenerativeAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Generative AI の必須設定が揃っているか確認する。"""
-    if _embedding_dim_status(settings) == "invalid":
-        return "invalid"
-    required = (settings.embedding_model, settings.rerank_model)
-    return "ok" if all(_is_present(value) for value in required) else "missing"
-
-
-def _embedding_dim_status(
-    settings: GenerativeAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Oracle 26ai VECTOR 列と embedding 次元の互換性を確認する。"""
-    return "ok" if settings.embedding_dim == 1536 else "invalid"
-
-
 def _is_present(value: str) -> bool:
     """空白のみの値を未設定として扱う。"""
     return bool(value.strip())
-
-
-def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
-    """新規入力または保存済み Enterprise AI API key があるか確認する。"""
-    if settings.clear_api_key:
-        return False
-    return _is_present(settings.api_key) or settings.has_api_key
 
 
 def _model_test_candidate_settings(

@@ -24,4 +24,4 @@ COPY ${APP_DIR}/backend/ ./
 EXPOSE 8000
 CMD ["uv", "run", "gunicorn", "app.main:app", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000", "--workers", "2"]
+     "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60"]

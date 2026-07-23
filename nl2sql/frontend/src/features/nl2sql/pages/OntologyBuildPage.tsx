@@ -7,11 +7,11 @@ import {
   Banner,
   Button,
   EmptyState,
-  PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -28,8 +28,14 @@ import {
   useSchemaRefreshJob,
   useStartSchemaRefresh,
 } from "../incrementalQueries";
+import {
+  classifyOntologyWorkspaceError,
+  ontologyWorkspaceErrorPresentation,
+} from "../ontologyWorkspaceError";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
+import { OntologyInterchangeSection } from "../ontology/OntologyInterchangeSection";
 import { OntologyMermaidPanel } from "../ontology/OntologyMermaidPanel";
+import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
 import { ProfileOntologyEditor } from "../ontology/ProfileOntologyEditor";
 import { createOntologyRevisionDraft } from "../ontology/api";
 import type {
@@ -50,6 +56,7 @@ export function OntologyBuildPage() {
   const [refreshJobId, setRefreshJobId] = useState("");
   const [pageError, setPageError] = useState("");
   const [materializingOntologyView, setMaterializingOntologyView] = useState(false);
+  const [proposalsRefreshToken, setProposalsRefreshToken] = useState(0);
   const queryClient = useQueryClient();
 
   const profilesQuery = useProfileSummaries("");
@@ -215,7 +222,16 @@ export function OntologyBuildPage() {
 
   const workspaceLoading =
     Boolean(selectedProfileId) && (profileDetailQuery.isLoading || ontologyViewQuery.isLoading);
-  const workspaceError = profileDetailQuery.isError || ontologyViewQuery.isError;
+  const workspaceFailure = classifyOntologyWorkspaceError(
+    profileDetailQuery.error,
+    ontologyViewQuery.error
+  );
+  const workspaceErrorPresentation = workspaceFailure
+    ? ontologyWorkspaceErrorPresentation(workspaceFailure)
+    : null;
+  const workspaceErrorMessage = workspaceErrorPresentation
+    ? t(workspaceErrorPresentation.key, workspaceErrorPresentation.params)
+    : "";
 
   return (
     <>
@@ -338,9 +354,9 @@ export function OntologyBuildPage() {
             ariaLabel={t("ontologyBuild.workspace.loading")}
             variant="detail"
           />
-        ) : workspaceError ? (
+        ) : workspaceFailure ? (
           <ErrorState
-            message={t("ontologyBuild.workspace.error")}
+            message={workspaceErrorMessage}
             onRetry={() => {
               void profileDetailQuery.refetch();
               void ontologyViewQuery.refetch();
@@ -351,6 +367,11 @@ export function OntologyBuildPage() {
             <OntologyBuildSection
               profileId={selectedProfileId}
               onPublished={() => void refreshOntologyView()}
+              proposalsRefreshToken={proposalsRefreshToken}
+            />
+            <OntologyInterchangeSection
+              profileId={selectedProfileId}
+              onProposalsRegistered={() => setProposalsRefreshToken((token) => token + 1)}
             />
             <ProfileOntologyEditor
               graph={ontologyGraph}
@@ -372,6 +393,7 @@ export function OntologyBuildPage() {
                 graphUnavailable: t("profiles.ontology.emptyHint"),
               }}
             />
+            <OntologyQueryPlayground graph={ontologyGraph} />
             <OntologyMermaidPanel profileId={selectedProfileId} />
           </>
         ) : null}

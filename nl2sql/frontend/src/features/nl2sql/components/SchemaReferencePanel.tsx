@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Button, Skeleton } from "@engchina/production-ready-ui";
+import { Button, Skeleton, StatusBadge } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import {
@@ -26,6 +26,8 @@ export function SchemaReferencePanel({
   catalog,
   loading,
   disabled,
+  availableTableCount,
+  selectedTableCount,
   insertMode = "logical",
   allowedTableNames = null,
   listMaxHeightClass = "max-h-72",
@@ -42,6 +44,8 @@ export function SchemaReferencePanel({
   catalog: SchemaCatalog | null;
   loading: boolean;
   disabled?: boolean;
+  availableTableCount?: number;
+  selectedTableCount?: number;
   insertMode?: SchemaInsertMode;
   /** 非 null のとき、この表名集合（正規化比較）に絞り込む。null は全表表示。 */
   allowedTableNames?: string[] | null;
@@ -124,13 +128,29 @@ export function SchemaReferencePanel({
       aria-label={t("nl2sql.schema.title")}
       data-testid="nl2sql-schema-reference"
     >
-      <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
-        <Table2 size={15} className="shrink-0" aria-hidden="true" />
-        <span>{t("nl2sql.schema.title")}</span>
-        <span className="min-w-0 truncate text-xs font-normal text-muted">
-          {t("nl2sql.schema.insertHint")}
-        </span>
-      </p>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+          <Table2 size={15} className="shrink-0" aria-hidden="true" />
+          <span>{t("nl2sql.schema.title")}</span>
+          <span className="min-w-0 truncate text-xs font-normal text-muted">
+            {t("nl2sql.schema.insertHint")}
+          </span>
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {typeof availableTableCount === "number" ? (
+            <StatusBadge
+              variant="neutral"
+              label={`${t("nl2sql.workspace.availableTables")} ${availableTableCount}`}
+            />
+          ) : null}
+          {typeof selectedTableCount === "number" ? (
+            <StatusBadge
+              variant="info"
+              label={`${t("nl2sql.workspace.selectedTables")} ${selectedTableCount}`}
+            />
+          ) : null}
+        </div>
+      </div>
 
       <span className="relative min-w-0 max-w-full">
         <Search

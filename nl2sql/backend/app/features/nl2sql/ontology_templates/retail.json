@@ -1,0 +1,78 @@
+{
+  "id": "retail",
+  "metadata": {
+    "name_ja": "小売",
+    "description_ja": "顧客・商品・注文を中心とした小売/EC 業務の出発点テンプレート。",
+    "icon": "🛍️",
+    "category": "業種",
+    "tags": ["小売", "EC", "受注"]
+  },
+  "entities": [
+    {
+      "key": "customer",
+      "business_name_ja": "顧客",
+      "description_ja": "商品を購入する主体。主識別子は顧客ID。",
+      "aliases": ["得意先", "カスタマー", "customer"],
+      "object_name_hint": "CUSTOMERS"
+    },
+    {
+      "key": "product",
+      "business_name_ja": "商品",
+      "description_ja": "販売対象の品目。主識別子は商品ID。",
+      "aliases": ["品目", "アイテム", "product"],
+      "object_name_hint": "PRODUCTS"
+    },
+    {
+      "key": "order",
+      "business_name_ja": "注文",
+      "description_ja": "顧客からの受注ヘッダ。主識別子は注文ID。",
+      "aliases": ["受注", "オーダー", "order"],
+      "object_name_hint": "ORDERS"
+    },
+    {
+      "key": "order_item",
+      "business_name_ja": "注文明細",
+      "description_ja": "注文に含まれる商品ごとの明細行。",
+      "aliases": ["受注明細", "明細"],
+      "object_name_hint": "ORDER_ITEMS"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "customer",
+      "target": "order",
+      "relationship_name_ja": "注文する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の顧客は複数の注文を持つ。",
+      "join_hints": [{ "left_column": "CUSTOMER_ID", "right_column": "CUSTOMER_ID" }]
+    },
+    {
+      "source": "order",
+      "target": "order_item",
+      "relationship_name_ja": "明細を含む",
+      "cardinality": "one_to_many",
+      "description_ja": "1 件の注文は複数の明細行を含む。",
+      "join_hints": [{ "left_column": "ORDER_ID", "right_column": "ORDER_ID" }]
+    },
+    {
+      "source": "product",
+      "target": "order_item",
+      "relationship_name_ja": "明細に含まれる",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの商品は複数の注文明細に現れる。",
+      "join_hints": [{ "left_column": "PRODUCT_ID", "right_column": "PRODUCT_ID" }]
+    }
+  ],
+  "terms": [
+    {
+      "business_name_ja": "客単価",
+      "description_ja": "売上高 ÷ 購入顧客数。",
+      "aliases": ["平均購入額"]
+    },
+    {
+      "business_name_ja": "リピート率",
+      "description_ja": "2 回以上購入した顧客の割合。",
+      "aliases": ["再購入率"]
+    }
+  ]
+}

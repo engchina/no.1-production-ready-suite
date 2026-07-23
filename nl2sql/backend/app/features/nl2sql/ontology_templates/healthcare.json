@@ -1,0 +1,78 @@
+{
+  "id": "healthcare",
+  "metadata": {
+    "name_ja": "医療",
+    "description_ja": "患者・受診・処方を中心とした医療業務の出発点テンプレート。",
+    "icon": "🏥",
+    "category": "業種",
+    "tags": ["医療", "受診", "処方"]
+  },
+  "entities": [
+    {
+      "key": "patient",
+      "business_name_ja": "患者",
+      "description_ja": "診療対象の患者。主識別子は患者ID。",
+      "aliases": ["受診者", "patient"],
+      "object_name_hint": "PATIENTS"
+    },
+    {
+      "key": "encounter",
+      "business_name_ja": "受診",
+      "description_ja": "外来・入院などの受診記録。主識別子は受診ID。",
+      "aliases": ["診察", "来院"],
+      "object_name_hint": "ENCOUNTERS"
+    },
+    {
+      "key": "prescription",
+      "business_name_ja": "処方",
+      "description_ja": "受診に対して発行された処方。",
+      "aliases": ["処方箋"],
+      "object_name_hint": "PRESCRIPTIONS"
+    },
+    {
+      "key": "doctor",
+      "business_name_ja": "医師",
+      "description_ja": "診療を行う医師。主識別子は医師ID。",
+      "aliases": ["ドクター", "担当医"],
+      "object_name_hint": "DOCTORS"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "patient",
+      "target": "encounter",
+      "relationship_name_ja": "受診する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の患者は複数回受診する。",
+      "join_hints": [{ "left_column": "PATIENT_ID", "right_column": "PATIENT_ID" }]
+    },
+    {
+      "source": "doctor",
+      "target": "encounter",
+      "relationship_name_ja": "診療する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の医師は複数の受診を担当する。",
+      "join_hints": [{ "left_column": "DOCTOR_ID", "right_column": "DOCTOR_ID" }]
+    },
+    {
+      "source": "encounter",
+      "target": "prescription",
+      "relationship_name_ja": "処方を発行する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 回の受診で複数の処方が発行され得る。",
+      "join_hints": [{ "left_column": "ENCOUNTER_ID", "right_column": "ENCOUNTER_ID" }]
+    }
+  ],
+  "terms": [
+    {
+      "business_name_ja": "再診率",
+      "description_ja": "初診後に再受診した患者の割合。",
+      "aliases": ["リピート受診率"]
+    },
+    {
+      "business_name_ja": "平均在院日数",
+      "description_ja": "入院患者の平均入院日数。",
+      "aliases": ["在院日数"]
+    }
+  ]
+}

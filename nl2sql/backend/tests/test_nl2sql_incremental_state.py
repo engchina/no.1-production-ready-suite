@@ -647,6 +647,9 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     service._profile_cache.put(profile.id, profile)  # noqa: SLF001
     service._cache_token_checked_at["profiles"] = time.monotonic()  # noqa: SLF001
     service._cache_token_poll_seconds = 60.0  # noqa: SLF001
+    # similar-history 経路の glossary 読込が追加接続を消費しないようキャッシュを温める
+    service._legacy_learning_material_loaded = True  # noqa: SLF001
+    service._legacy_learning_material_checked_at = time.monotonic()  # noqa: SLF001
     service._deepsec_enabled = False  # noqa: SLF001
     monkeypatch.setattr(service._embedding_client, "is_configured", lambda: False)
     monkeypatch.setattr(service, "list_profiles", lambda include_archived=False: [profile])
@@ -869,11 +872,6 @@ async def test_profile_api_supports_summary_detail_etag_and_conflict(
     stored = repository.save_profile(_profile(7), expected_etag=None)
     service = _incremental_service(repository)
     monkeypatch.setattr(profile_router, "nl2sql_service", service)
-    monkeypatch.setattr(
-        profile_router,
-        "_materialize_incremental_profile_view",
-        lambda _profile_id: None,
-    )
     app = FastAPI()
     app.include_router(profile_router.router, prefix="/api")
 

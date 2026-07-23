@@ -316,6 +316,52 @@ def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
     assert any(set(node["aliases"]) >= {"注文", "オーダー"} for node in node_upserts)
 
 
+def test_convert_extraction_warns_on_unknown_cardinality(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """cardinality 未確定(unknown)の関係候補は提案化しつつ warning を付ける。"""
+
+    from app.features.nl2sql.ontology_build import convert_extraction_to_proposals
+    from app.features.nl2sql.ontology_models import OntologyBuildExtraction
+
+    runtime, _store, _legacy = harness
+    view, ontology = runtime.profile_view("sales")
+    extraction = OntologyBuildExtraction.model_validate(
+        {
+            "relationships": [
+                {
+                    "source_object": "APP.ORDERS",
+                    "target_object": "APP.CUSTOMERS",
+                    "relationship_name_ja": "顧客を参照",
+                    "cardinality": "unknown",
+                    "join_conditions": [
+                        {"left": "APP.ORDERS.CUSTOMER_ID", "right": "APP.CUSTOMERS.ID"}
+                    ],
+                }
+            ]
+        }
+    )
+    drafts, warnings = convert_extraction_to_proposals(
+        extraction,
+        ontology=ontology,
+        view=view,
+        job_id="job-1",
+        inferred_by="test",
+    )
+    assert any(draft.kind == OntologyProposalKind.RELATIONSHIP for draft in drafts)
+    assert any("cardinality が未確定" in warning for warning in warnings)
+
+
+def test_extraction_prompt_contains_playground_rules() -> None:
+    """Playground 由来の抽出ルール(名詞/動詞・cardinality 必須・主識別子)を明文化する。"""
+
+    from app.features.nl2sql.ontology_build import _EXTRACTION_SYSTEM_PROMPT
+
+    assert "名詞をエンティティ候補" in _EXTRACTION_SYSTEM_PROMPT
+    assert "one_to_one / one_to_many / many_to_one / many_to_many" in _EXTRACTION_SYSTEM_PROMPT
+    assert "主識別子" in _EXTRACTION_SYSTEM_PROMPT
+
+
 def test_build_job_fails_gracefully_without_enterprise_ai(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
@@ -345,6 +391,144 @@ def test_build_job_survives_invalid_llm_json(
     assert text_step.status == OntologyBuildStepStatus.FAILED
     assert any("抽出に失敗" in warning for warning in finished.warnings_ja)
     assert finished.proposal_ids == []
+
+
+def test_list_profile_jobs_returns_newest_first_with_limit(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    first = service.start("sales", business_text="一件目")
+    second = service.start("sales", business_text="二件目")
+    third = service.start("sales", business_text="三件目")
+
+    jobs = service.list_profile_jobs("sales", limit=2)
+    assert [job.id for job in jobs] == [third.id, second.id]
+    all_jobs = service.list_profile_jobs("sales", limit=10)
+    assert [job.id for job in all_jobs] == [third.id, second.id, first.id]
+
+
+def test_cancel_single_job_is_idempotent_and_blocks_worker(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="販売業務")
+
+    cancelled = service.cancel(job.id)
+    assert cancelled.status == OntologyBuildStatus.CANCELLED
+    assert any("利用者の操作" in event.message_ja for event in cancelled.events)
+    # CANCELLED への再キャンセルは no-op 成功
+    assert service.cancel(job.id).status == OntologyBuildStatus.CANCELLED
+    # worker が後から実行しても cancelled のまま(proposal 生成なし)
+    result = service.run_persisted(job.id)
+    assert result.status == OntologyBuildStatus.CANCELLED
+    assert store.list_documents("proposals", {"profile_id": "sales"}) == []
+
+
+def test_cancel_finished_or_missing_job_raises(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    from app.features.nl2sql.ontology_service import (
+        OntologyNotFoundError,
+        OntologyStateConflictError,
+    )
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="販売業務")
+    _wait_for_job(service, job.id)
+
+    with pytest.raises(OntologyStateConflictError):
+        service.cancel(job.id)
+    with pytest.raises(OntologyNotFoundError):
+        service.cancel("ontology_build_missing")
+
+
+def test_retry_reuses_persisted_inputs_and_toggles(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, legacy = harness
+    # 1 回目は Enterprise AI 未設定で失敗させる
+    service = OntologyBuildService(runtime)
+    failed = service.start(
+        "sales",
+        business_text="受注は顧客に紐づく。",
+        run_schema_naming=False,
+    )
+    finished = _wait_for_job(service, failed.id)
+    assert finished.status == OntologyBuildStatus.FAILED
+
+    # 設定を直して retry → 保存済み入力(業務テキスト・トグル)で新規 job が成功する
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    retried = service.retry(failed.id)
+    assert retried.id != failed.id
+    result = _wait_for_job(service, retried.id)
+    assert result.status == OntologyBuildStatus.SUCCEEDED
+    step_names = {step.name for step in result.steps}
+    assert OntologyBuildStepName.SCHEMA_NAMING not in step_names
+    assert OntologyBuildStepName.TEXT_EXTRACTION in step_names
+    # 二度押しは idempotency で同じ再実行 job に合流する
+    assert service.retry(failed.id).id == retried.id
+
+
+def test_retry_rejects_non_terminal_and_missing_jobs(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql.ontology_service import (
+        OntologyNotFoundError,
+        OntologyStateConflictError,
+    )
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    queued = service.start("sales", business_text="販売業務")
+
+    with pytest.raises(OntologyStateConflictError):
+        service.retry(queued.id)
+    with pytest.raises(OntologyNotFoundError):
+        service.retry("ontology_build_missing")
+
+
+def test_get_prefers_store_in_external_worker_mode(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API プロセスの古い in-memory コピーではなく worker が書いた store 進捗を返す。"""
+
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="販売業務")
+
+    # worker 側の進捗書込を模擬(store の status を running へ)
+    document = store.get_document("jobs", {"job_id": job.id})
+    assert document is not None
+    payload = dict(document["payload"])
+    payload["status"] = OntologyBuildStatus.RUNNING.value
+    store.save_document(
+        "jobs",
+        {
+            **{k: v for k, v in document.items() if k not in {"etag", "created_at", "updated_at"}},
+            "status": OntologyBuildStatus.RUNNING.value,
+            "payload": payload,
+        },
+        expected_etag=str(document["etag"]),
+    )
+
+    refreshed = service.get(job.id)
+    assert refreshed is not None
+    assert refreshed.status == OntologyBuildStatus.RUNNING
 
 
 def test_start_rejects_unknown_profile(

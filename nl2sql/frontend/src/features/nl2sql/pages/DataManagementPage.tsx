@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
+import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -20,7 +22,6 @@ import {
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
@@ -175,9 +176,13 @@ export function DataManagementPage() {
     () => selectAiDbProfiles?.profiles.find((profile) => profile.name === syntheticProfileName) ?? null,
     [selectAiDbProfiles, syntheticProfileName]
   );
-  const csvConfirmed = csvConfirmation.trim() === "ADMIN_EXECUTE";
+  // 対象名確認: CSV は選択テーブル名、synthetic は単一テーブル指定時のみ対象名
+  // (複数テーブル指定は単一対象名が無いため ADMIN_EXECUTE)。backend の検証と一致させる。
+  const csvConfirmed = Boolean(csvTable.trim()) && csvConfirmation.trim() === csvTable.trim();
   const canUploadCsv = Boolean(csvTable && csvBase64 && csvConfirmed);
-  const syntheticDataConfirmed = syntheticConfirmation.trim() === "ADMIN_EXECUTE";
+  const syntheticExpectedConfirmation =
+    syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
+  const syntheticDataConfirmed = syntheticConfirmation.trim() === syntheticExpectedConfirmation;
   const canGenerateSyntheticData = Boolean(
     syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed
   );
@@ -236,9 +241,15 @@ export function DataManagementPage() {
     }
   }, [schemaJobQuery.data]);
 
-  const refreshObjects = async () => {
+  const refreshObjects = async (announce = false) => {
     setSchemaJobError("");
-    await Promise.all([baseObjectsQuery.refetch(), previewObjectsQuery.refetch()]);
+    const results = await Promise.all([
+      baseObjectsQuery.refetch(),
+      previewObjectsQuery.refetch(),
+    ]);
+    if (announce && results.every((result) => !result.isError)) {
+      toast.success(t("common.action.refreshed"));
+    }
   };
 
   const submitSchemaRefresh = async () => {
@@ -494,20 +505,60 @@ export function DataManagementPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.dataManagement")} subtitle={t("dataMgmt.subtitle")} />
+      <PageHeader
+        title={t("nav.dataManagement")}
+        subtitle={t("dataMgmt.subtitle")}
+        meta={
+          firstObjectPage?.refreshed_at
+            ? t("common.schemaRefreshedAt", {
+                date: formatDateTime(firstObjectPage.refreshed_at),
+              })
+            : undefined
+        }
+        status={
+          schemaJob ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaJob.status === "done"
+                    ? "success"
+                    : schemaJob.status === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={schemaJobLabel(schemaJob)}
+              />
+            </span>
+          ) : undefined
+        }
+        actions={[
+          {
+            id: "refresh-data",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            loading: baseObjectsQuery.isFetching || previewObjectsQuery.isFetching,
+            onClick: () => void refreshObjects(true),
+          },
+          {
+            id: "refresh-data-schema",
+            kind: "utility",
+            label: t("common.action.schemaRefresh"),
+            icon: RefreshCw,
+            loading: schemaRefreshing,
+            disabled: schemaRefreshing,
+            onClick: () => void submitSchemaRefresh(),
+          },
+        ]}
+        actionsTestId="data-management-actions"
+      />
       <main className="grid gap-4 p-4 lg:p-8">
-        <DataStatusBar
-          tableCount={firstObjectPage?.table_count ?? null}
-          viewCount={firstObjectPage?.view_count ?? null}
-          profileCount={selectAiDbProfiles ? selectAiDbProfiles.profiles.length : null}
-          runtime={firstObjectPage?.runtime ?? null}
-          refreshedAt={firstObjectPage?.refreshed_at ?? ""}
-          objectRefreshing={baseObjectsQuery.isFetching || previewObjectsQuery.isFetching}
-          schemaRefreshing={schemaRefreshing}
-          schemaJob={schemaJob}
-          schemaError={visibleSchemaJobError}
-          onRefresh={() => void refreshObjects()}
-          onSchemaRefresh={() => void submitSchemaRefresh()}
+        <PageNotice
+          notice={
+            visibleSchemaJobError
+              ? { tone: "danger", message: visibleSchemaJobError }
+              : null
+          }
         />
 
         <DbObjectManagementTabs
@@ -725,70 +776,6 @@ export function DataManagementPage() {
         )}
       </main>
     </>
-  );
-}
-
-function DataStatusBar({
-  tableCount,
-  viewCount,
-  profileCount,
-  runtime,
-  refreshedAt,
-  objectRefreshing,
-  schemaRefreshing,
-  schemaJob,
-  schemaError,
-  onRefresh,
-  onSchemaRefresh,
-}: {
-  tableCount: number | null;
-  viewCount: number | null;
-  profileCount: number | null;
-  runtime: string | null;
-  refreshedAt: string;
-  objectRefreshing: boolean;
-  schemaRefreshing: boolean;
-  schemaJob: SchemaRefreshJob | null;
-  schemaError: string;
-  onRefresh: () => void;
-  onSchemaRefresh: () => void;
-}) {
-  return (
-    <DbObjectManagementStatusBar
-      ariaLabel={t("dataMgmt.toolbar.status")}
-      metricColumnsClass="sm:grid-cols-2 lg:grid-cols-5"
-      metrics={[
-        { label: t("tableMgmt.metric.tables"), value: tableCount === null ? "—" : formatNumber(tableCount), emphasis: true },
-        { label: t("dataMgmt.metric.views"), value: viewCount === null ? "—" : formatNumber(viewCount), emphasis: true },
-        { label: t("dataTools.metric.profiles"), value: profileCount === null ? "—" : formatNumber(profileCount), emphasis: true },
-        { label: t("tableMgmt.metric.runtime"), value: runtime ?? "—" },
-        { label: t("tableMgmt.metric.schemaRefreshed"), value: refreshedAt ? formatDateTime(refreshedAt) : "—" },
-      ]}
-      actions={
-        <>
-          {(schemaJob || schemaError) && (
-            <span className={schemaError ? "text-xs text-danger" : "text-xs text-muted"} aria-live="polite">
-              {schemaError || schemaJobLabel(schemaJob)}
-            </span>
-          )}
-          <Button type="button" variant="secondary" size="sm" loading={objectRefreshing} onClick={onRefresh}>
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("tableMgmt.action.refresh")}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            loading={schemaRefreshing}
-            disabled={schemaRefreshing}
-            onClick={onSchemaRefresh}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("tableMgmt.action.schemaRefresh")}</span>
-          </Button>
-        </>
-      }
-    />
   );
 }
 
@@ -1333,14 +1320,19 @@ function CsvUploadWorkspace({
           value={confirmation}
           onChange={onConfirmationChange}
           confirmed={confirmed}
-          placeholder="ADMIN_EXECUTE"
-          expectedLabel="ADMIN_EXECUTE"
-          helper={t("dataMgmt.csv.executeHint")}
-          tone="danger"
+          placeholder={table}
+          expectedLabel={table || "-"}
+          helper={t(
+            mode === "truncate_insert"
+              ? "dbAdmin.confirmation.helper.danger"
+              : "dbAdmin.confirmation.helper.execute",
+            { phrase: table || "-" }
+          )}
+          tone={mode === "truncate_insert" ? "danger" : "neutral"}
           actions={
             <Button
               type="button"
-              variant="danger"
+              variant={mode === "truncate_insert" ? "danger" : "primary"}
               size="sm"
               className="w-full sm:w-auto"
               loading={loading}
@@ -1487,6 +1479,9 @@ function SyntheticWorkspace({
 }) {
   const activeStep = syntheticDataResults ? 3 : syntheticData || syntheticDataStatus ? 1 : 0;
   const operationId = syntheticData?.operation_id.trim() ?? "";
+  // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
+  const syntheticExpectedConfirmation =
+    syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const resultTableOptions = syntheticAvailableTables;
   const hasValidResultTable = resultTableOptions.includes(syntheticResultTable);
 
@@ -1662,9 +1657,11 @@ function SyntheticWorkspace({
             value={syntheticConfirmation}
             onChange={onSyntheticConfirmationChange}
             confirmed={syntheticDataConfirmed}
-            placeholder="ADMIN_EXECUTE"
-            expectedLabel="ADMIN_EXECUTE"
-            helper={t("dbAdmin.confirmation.adminHelper")}
+            placeholder={syntheticExpectedConfirmation}
+            expectedLabel={syntheticExpectedConfirmation}
+            helper={t("dbAdmin.confirmation.helper.danger", {
+              phrase: syntheticExpectedConfirmation,
+            })}
             tone="danger"
             actions={
               <Button

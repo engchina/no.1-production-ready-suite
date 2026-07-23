@@ -1871,7 +1871,11 @@ def test_service_select_ai_feedback_missing_table_returns_warning() -> None:
 
     assert entries.runtime == "oracle"
     assert entries.items == []
-    assert "feedback vector table" in " ".join(entries.warnings)
+    assert entries.warnings == [
+        "Select AI feedback vector table が未作成です。"
+        "feedback vector index を再構築してください。"
+    ]
+    assert "DEFAULT_FEEDBACK_VECINDEX$VECTAB" not in " ".join(entries.warnings)
 
     deleted = service.delete_select_ai_feedback(
         SelectAiFeedbackDeleteRequest(profile_name="default", sql_text="select ai showsql x")

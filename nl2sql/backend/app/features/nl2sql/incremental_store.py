@@ -41,6 +41,7 @@ from .object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_object_name,
 )
+from .oracle_lob import configure_clob_fetch_as_text
 
 PROFILE_NAMESPACE = "profiles"
 SCHEMA_NAMESPACE = "schema"
@@ -1061,6 +1062,7 @@ class OracleIncrementalNl2SqlRepository:
     def load_catalog(self) -> SchemaCatalog:
         head = self.get_catalog_head()
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(
                 "SELECT OWNER_NAME, OBJECT_NAME, OBJECT_TYPE, LOGICAL_NAME, COMMENTS, "
                 "ROW_COUNT FROM NL2SQL_SCHEMA_OBJECTS ORDER BY OWNER_NAME, OBJECT_NAME"
@@ -1724,6 +1726,7 @@ class OracleIncrementalNl2SqlRepository:
     def _load_catalog_subset(self, owner: str, object_name: str) -> SchemaCatalog:
         binds = {"owner": owner, "object_name": object_name}
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(
                 "SELECT OWNER_NAME, OBJECT_NAME, OBJECT_TYPE, LOGICAL_NAME, COMMENTS, "
                 "ROW_COUNT FROM NL2SQL_SCHEMA_OBJECTS WHERE OWNER_NAME = :owner "

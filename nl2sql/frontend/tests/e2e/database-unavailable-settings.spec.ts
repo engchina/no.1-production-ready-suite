@@ -25,6 +25,18 @@ async function fulfill(route: Route, data: unknown, status = 200) {
   });
 }
 
+async function clickPageHeaderAction(page: Page, testId: string, name: string) {
+  const actions = page.getByTestId(testId);
+  await expect(actions).toBeVisible();
+  const visibleButton = actions.getByRole("button", { name, exact: true });
+  if (await visibleButton.isVisible()) {
+    await visibleButton.click();
+    return;
+  }
+  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
 async function mockAuthenticatedGate(page: Page, databaseUnavailable: () => boolean) {
   await page.route("**/api/auth/me", (route) => fulfill(route, systemAdminMe));
   await page.route("**/api/ready/database", (route) =>
@@ -288,7 +300,7 @@ test("稼働中の読込5xxでDB停止を確認した場合も表示中ページ
 
   unavailable = true;
   rolesFail = true;
-  await page.getByRole("button", { name: "再読込" }).click();
+  await clickPageHeaderAction(page, "security-roles-actions", "表示を更新");
 
   await expectFullPageGate(page);
   await expect(page.getByRole("heading", { name: "ロール・権限管理" })).toHaveCount(0);

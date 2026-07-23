@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
+from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,16 @@ _IGNORED_APPLY_CODES = frozenset(
 )
 _IGNORED_DROP_CODES = frozenset({"ORA-00942", "ORA-01418", "ORA-02289"})
 _ACTIVE_JOB_STATES = ("ACCEPTED", "PENDING", "QUEUED", "RUNNING", "PROCESSING")
+_CREATE_OBJECT_PATTERN = re.compile(
+    r"\bCREATE\s+(?:UNIQUE\s+|VECTOR\s+)?"
+    r"(TABLE|INDEX|SEQUENCE)\s+([A-Z][A-Z0-9_$#]*)",
+    flags=re.IGNORECASE,
+)
+_ADD_CONSTRAINT_PATTERN = re.compile(
+    r"^\s*ALTER\s+TABLE\s+([A-Z][A-Z0-9_$#]*)\s+"
+    r"ADD\s+CONSTRAINT\s+([A-Z][A-Z0-9_$#]*)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +62,29 @@ class MigrationArtifact:
     @property
     def checksum(self) -> str:
         return hashlib.sha256(self.path.read_bytes()).hexdigest()
+
+    @property
+    def created_objects(self) -> frozenset[tuple[str, str]]:
+        """この artifact が所有する CREATE object を決定論的に抽出する。"""
+
+        return frozenset(
+            (name.upper(), object_type.upper())
+            for object_type, name in _CREATE_OBJECT_PATTERN.findall(
+                self.path.read_text(encoding="utf-8")
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedForeignKey:
+    """再試行時に定義まで検証する system schema の外部キー。"""
+
+    name: str
+    table_name: str
+    columns: tuple[str, ...]
+    referenced_table_name: str
+    referenced_columns: tuple[str, ...]
+    delete_rule: str = "CASCADE"
 
 
 MIGRATIONS: tuple[MigrationArtifact, ...] = (
@@ -161,6 +195,26 @@ PRESERVED_TABLES = frozenset(
     }
 )
 
+MANAGED_FOREIGN_KEYS: tuple[ManagedForeignKey, ...] = (
+    ManagedForeignKey(
+        name="FK_NL2SQL_ONT_VIEW_REV_PROFILE",
+        table_name="NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS",
+        columns=("PROFILE_ID",),
+        referenced_table_name="NL2SQL_PROFILES",
+        referenced_columns=("PROFILE_ID",),
+    ),
+    ManagedForeignKey(
+        name="FK_NL2SQL_ONT_VIEW_PROFILE",
+        table_name="NL2SQL_ONTOLOGY_PROFILE_VIEWS",
+        columns=("PROFILE_ID",),
+        referenced_table_name="NL2SQL_PROFILES",
+        referenced_columns=("PROFILE_ID",),
+    ),
+)
+_MANAGED_FOREIGN_KEYS_BY_NAME = {
+    constraint.name: constraint for constraint in MANAGED_FOREIGN_KEYS
+}
+
 
 class SystemSchemaError(RuntimeError):
     """secret や SQL を含めない schema operation error。"""
@@ -185,7 +239,8 @@ class SystemSchemaActiveJobsError(SystemSchemaError):
     def __init__(self) -> None:
         super().__init__(
             "SCHEMA_JOBS_RUNNING",
-            "実行中の schema refresh または Ontology job があります。完了後に再実行してください。",
+            "実行中の schema refresh、Ontology、または品質評価 job があります。"
+            "完了または停止してから再実行してください。",
             status_code=409,
         )
 
@@ -259,9 +314,16 @@ class SystemSchemaManager:
         connection_factory: Callable[[], AbstractContextManager[Any]] | None = None,
         *,
         lease_seconds: int = 900,
+        ddl_lock_timeout_seconds: int | None = None,
     ) -> None:
         self._connection_factory = connection_factory or self._default_connection
         self._lease_seconds = lease_seconds
+        configured_timeout = (
+            get_settings().nl2sql_system_schema_ddl_lock_timeout_seconds
+            if ddl_lock_timeout_seconds is None
+            else ddl_lock_timeout_seconds
+        )
+        self._ddl_lock_timeout_seconds = max(0, min(120, int(configured_timeout)))
 
     @staticmethod
     @contextmanager
@@ -313,14 +375,17 @@ class SystemSchemaManager:
                     return {
                         **self._status_on(connection),
                         "operation": "no_op",
-                        "applied_versions": [],
                         "dropped_object_count": 0,
                         "created_object_count": 0,
                     }
+                self._configure_ddl_lock_timeout(connection)
                 if recreate:
                     self._assert_no_active_jobs(connection)
                     dropped_count = self._drop_managed_objects(connection, owner)
-                for migration in MIGRATIONS:
+                    migrations_to_apply = list(MIGRATIONS)
+                else:
+                    migrations_to_apply = self._plan_migrations(before)
+                for migration in migrations_to_apply:
                     self._heartbeat(connection, owner)
                     self._apply_migration(connection, migration)
                     applied_versions.append(migration.version)
@@ -352,7 +417,6 @@ class SystemSchemaManager:
                 return {
                     **after,
                     "operation": operation,
-                    "applied_versions": applied_versions,
                     "dropped_object_count": dropped_count,
                     "created_object_count": (
                         int(after["existing_object_count"]) - 1
@@ -382,11 +446,47 @@ class SystemSchemaManager:
                     "exception_type": type(exc).__name__,
                 },
             )
+            if code == "ORA-00054":
+                raise SystemSchemaError(
+                    code,
+                    "Oracle の対象オブジェクトのロックが "
+                    f"{self._ddl_lock_timeout_seconds} 秒以内に解放されませんでした "
+                    "(ORA-00054)。実行中の schema refresh、Ontology、品質評価 job "
+                    "を完了または停止してから、状態を再取得して再試行してください。",
+                    status_code=409,
+                ) from exc
             raise SystemSchemaError(
                 code,
                 f"システムテーブル操作に失敗しました ({code})。"
                 "状態を再取得して再試行してください。",
             ) from exc
+
+    def _plan_migrations(self, status: dict[str, Any]) -> list[MigrationArtifact]:
+        """未適用/checksum 不一致と欠損 object の所有 migration だけを選ぶ。"""
+
+        pending_versions = {int(version) for version in status["pending_versions"]}
+        missing_objects = {
+            (str(item["name"]).upper(), str(item["object_type"]).upper())
+            for item in status["missing_objects"]
+        }
+        owned_objects = frozenset(
+            object_key
+            for migration in MIGRATIONS
+            for object_key in migration.created_objects
+        )
+        uncovered = missing_objects - owned_objects
+        if uncovered:
+            labels = ", ".join(f"{kind}:{name}" for name, kind in sorted(uncovered))
+            raise SystemSchemaError(
+                "SCHEMA_MIGRATION_MANIFEST_INCOMPLETE",
+                f"不足オブジェクトに対応する migration がありません ({labels})。",
+            )
+        return [
+            migration
+            for migration in MIGRATIONS
+            if migration.version in pending_versions
+            or bool(migration.created_objects.intersection(missing_objects))
+        ]
 
     def _status_on(self, connection: Any) -> dict[str, Any]:
         objects = self._load_objects(connection)
@@ -534,6 +634,7 @@ class SystemSchemaManager:
             objects = self._load_objects(connection)
             if (CONTROL_TABLE, "TABLE") in objects and (MIGRATION_TABLE, "TABLE") in objects:
                 return
+            self._configure_ddl_lock_timeout(connection)
             self._apply_migration(connection, MIGRATIONS[0])
 
     def _claim_lease(self, owner: str, operation_kind: str) -> None:
@@ -634,14 +735,37 @@ class SystemSchemaManager:
             )
             connection.commit()
 
+    def _configure_ddl_lock_timeout(self, connection: Any) -> None:
+        """system schema 専用 session に bounded DDL wait を設定する。"""
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER SESSION SET DDL_LOCK_TIMEOUT = "
+                f"{self._ddl_lock_timeout_seconds}"  # nosec B608 - bounded integer
+            )
+
     def _apply_migration(self, connection: Any, migration: MigrationArtifact) -> None:
         statements = split_migration_sql(migration.path.read_text(encoding="utf-8"))
         with connection.cursor() as cursor:
             for statement in statements:
+                foreign_key = self._managed_foreign_key_for_statement(statement)
+                if foreign_key is not None:
+                    state = self._foreign_key_state(connection, foreign_key)
+                    if state == "matching":
+                        continue
+                    if state == "mismatch":
+                        raise self._foreign_key_mismatch_error(foreign_key)
                 try:
                     cursor.execute(statement)
                 except Exception as exc:
-                    if oracle_error_code(exc) in _IGNORED_APPLY_CODES:
+                    code = oracle_error_code(exc)
+                    if foreign_key is not None and code in {"ORA-02264", "ORA-02275"}:
+                        state = self._foreign_key_state(connection, foreign_key)
+                        if state == "matching":
+                            continue
+                        if state == "mismatch":
+                            raise self._foreign_key_mismatch_error(foreign_key) from exc
+                    if code in _IGNORED_APPLY_CODES:
                         continue
                     raise
             cursor.execute(
@@ -671,9 +795,123 @@ class SystemSchemaManager:
             )
             connection.commit()
 
+    @staticmethod
+    def _managed_foreign_key_for_statement(
+        statement: str,
+    ) -> ManagedForeignKey | None:
+        match = _ADD_CONSTRAINT_PATTERN.search(statement)
+        if match is None:
+            return None
+        table_name, constraint_name = (value.upper() for value in match.groups())
+        foreign_key = _MANAGED_FOREIGN_KEYS_BY_NAME.get(constraint_name)
+        if foreign_key is None:
+            return None
+        if foreign_key.table_name != table_name:
+            raise SystemSchemaError(
+                "SCHEMA_CONSTRAINT_MISMATCH",
+                f"外部キー {constraint_name} の対象テーブル定義が一致しません。",
+                status_code=409,
+            )
+        return foreign_key
+
+    def _foreign_key_state(
+        self,
+        connection: Any,
+        expected: ManagedForeignKey,
+    ) -> Literal["missing", "matching", "mismatch"]:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT child.TABLE_NAME,
+                       child.CONSTRAINT_TYPE,
+                       child.DELETE_RULE,
+                       parent.TABLE_NAME,
+                       child.STATUS,
+                       child.VALIDATED,
+                       child.DEFERRABLE,
+                       child.DEFERRED
+                  FROM USER_CONSTRAINTS child
+                  LEFT JOIN USER_CONSTRAINTS parent
+                    ON parent.OWNER = child.R_OWNER
+                   AND parent.CONSTRAINT_NAME = child.R_CONSTRAINT_NAME
+                 WHERE child.CONSTRAINT_NAME = :constraint_name
+                """,
+                {"constraint_name": expected.name},
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return "missing"
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COLUMN_NAME
+                  FROM USER_CONS_COLUMNS
+                 WHERE CONSTRAINT_NAME = :constraint_name
+                 ORDER BY POSITION
+                """,
+                {"constraint_name": expected.name},
+            )
+            columns = tuple(str(item[0]).upper() for item in cursor.fetchall())
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT referenced_column.COLUMN_NAME
+                  FROM USER_CONSTRAINTS child
+                  JOIN USER_CONS_COLUMNS referenced_column
+                    ON referenced_column.OWNER = child.R_OWNER
+                   AND referenced_column.CONSTRAINT_NAME = child.R_CONSTRAINT_NAME
+                 WHERE child.CONSTRAINT_NAME = :constraint_name
+                 ORDER BY referenced_column.POSITION
+                """,
+                {"constraint_name": expected.name},
+            )
+            referenced_columns = tuple(
+                str(item[0]).upper() for item in cursor.fetchall()
+            )
+        actual = (
+            str(row[0]).upper(),
+            str(row[1]).upper(),
+            str(row[2]).upper(),
+            str(row[3]).upper() if row[3] else "",
+            str(row[4]).upper(),
+            str(row[5]).upper(),
+            str(row[6]).upper(),
+            str(row[7]).upper(),
+            columns,
+            referenced_columns,
+        )
+        wanted = (
+            expected.table_name,
+            "R",
+            expected.delete_rule,
+            expected.referenced_table_name,
+            "ENABLED",
+            "VALIDATED",
+            "NOT DEFERRABLE",
+            "IMMEDIATE",
+            expected.columns,
+            expected.referenced_columns,
+        )
+        return "matching" if actual == wanted else "mismatch"
+
+    @staticmethod
+    def _foreign_key_mismatch_error(
+        foreign_key: ManagedForeignKey,
+    ) -> SystemSchemaError:
+        return SystemSchemaError(
+            "SCHEMA_CONSTRAINT_MISMATCH",
+            f"外部キー {foreign_key.name} は存在しますが、期待する定義と一致しません。"
+            "Oracle の制約定義を確認してから再試行してください。",
+            status_code=409,
+        )
+
     def _assert_no_active_jobs(self, connection: Any) -> None:
         objects = self._load_objects(connection)
-        for table_name in ("NL2SQL_SCHEMA_REFRESH_JOBS", "NL2SQL_ONTOLOGY_JOBS"):
+        for table_name in (
+            "NL2SQL_SCHEMA_REFRESH_JOBS",
+            "NL2SQL_ONTOLOGY_JOBS",
+            "NL2SQL_EVALUATION_JOBS",
+        ):
             if (table_name, "TABLE") not in objects:
                 continue
             placeholders, binds = _bind_list("job_state_", _ACTIVE_JOB_STATES)
@@ -729,11 +967,13 @@ system_schema_manager = SystemSchemaManager()
 __all__ = [
     "CONTROL_TABLE",
     "DOMAIN_TABLES",
+    "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
     "MANAGED_OBJECTS",
     "MANAGED_SEQUENCES",
     "MANAGED_TABLES",
     "MIGRATIONS",
+    "ManagedForeignKey",
     "PRESERVED_TABLES",
     "RECREATE_CONFIRMATION",
     "SystemSchemaActiveJobsError",

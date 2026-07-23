@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
-import { Button, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
@@ -14,7 +15,6 @@ import {
 } from "../components/DbAdminShared";
 import {
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
   type DbObjectTab,
@@ -35,51 +35,28 @@ function joinSql(statements: string[]) {
   return statements.join(";\n\n");
 }
 
-function SampleStatusBar({
-  sampleInfo,
-  loading,
-  onRefresh,
-}: {
-  sampleInfo: SampleDataInfo | null;
-  loading: string;
-  onRefresh: () => void;
-}) {
-  return (
-    <DbObjectManagementStatusBar
-      ariaLabel={t("dataTools.sample.status")}
-      metrics={[
-        {
-          label: t("dataTools.sample.metric.objects"),
-          value: formatNumber(sampleInfo?.objects.length ?? 0),
-          testId: "sample-data-object-count",
-          emphasis: true,
-        },
-        {
-          label: t("dataTools.sample.metric.imported"),
-          value: formatNumber(sampleInfo?.imported_objects.length ?? 0),
-          testId: "sample-data-imported-count",
-          emphasis: true,
-        },
-        {
-          label: t("dataTools.sample.metric.runtime"),
-          value: sampleInfo?.runtime ?? "deterministic",
-          testId: "sample-data-runtime",
-        },
-      ]}
-      actions={
-        <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={onRefresh}>
-          <RefreshCw size={15} aria-hidden="true" />
-          <span>{t("dataTools.sample.refresh")}</span>
-        </Button>
-      }
-    />
-  );
-}
-
 function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null }) {
   return (
     <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
-      <p className="font-semibold text-foreground">{t("dataTools.sample.objects")}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-semibold text-foreground">{t("dataTools.sample.objects")}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="sr-only" data-testid="sample-data-object-count">
+            {formatNumber(sampleInfo?.objects.length ?? 0)}
+          </span>
+          <StatusBadge
+            variant="neutral"
+            label={`${t("dataTools.sample.metric.objects")} ${formatNumber(sampleInfo?.objects.length ?? 0)}`}
+          />
+          <span className="sr-only" data-testid="sample-data-imported-count">
+            {formatNumber(sampleInfo?.imported_objects.length ?? 0)}
+          </span>
+          <StatusBadge
+            variant="success"
+            label={`${t("dataTools.sample.metric.imported")} ${formatNumber(sampleInfo?.imported_objects.length ?? 0)}`}
+          />
+        </div>
+      </div>
       <div className="flex flex-wrap gap-2">
         {(sampleInfo?.objects ?? []).map((objectName) => (
           <StatusBadge
@@ -129,7 +106,7 @@ export function SampleDataPage() {
     return joinSql(steps.flatMap((step) => sampleInfo.sql[step] ?? []));
   }, [activeAction, sampleInfo, sampleStep]);
 
-  const load = async () => {
+  const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading("load");
@@ -139,6 +116,9 @@ export function SampleDataPage() {
         const data = await apiGet<SampleDataInfo>("/api/nl2sql/sample-data", { signal });
         if (!signal.aborted && sequence === loadSequence.current) setSampleInfo(data);
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(t("common.action.refreshed"));
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
@@ -202,7 +182,20 @@ export function SampleDataPage() {
 
   return (
     <>
-      <PageHeader title={t("sampleData.title")} subtitle={t("sampleData.subtitle")} />
+      <PageHeader
+        title={t("sampleData.title")}
+        subtitle={t("sampleData.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading: loading === "load",
+          },
+        ]}
+      />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
@@ -213,8 +206,6 @@ export function SampleDataPage() {
             </Button>
           }
         />
-
-        <SampleStatusBar sampleInfo={sampleInfo} loading={loading} onRefresh={() => void load()} />
 
         <DbObjectManagementTabs
           activeView={activeAction}

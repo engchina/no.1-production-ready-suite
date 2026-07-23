@@ -24,8 +24,10 @@ interface DbObjectDetailRequestState {
   detail: DbAdminObjectDetail | null;
   setDetail: Dispatch<SetStateAction<DbAdminObjectDetail | null>>;
   loading: boolean;
+  ddlLoading: boolean;
   error: string;
   load: (name: string) => Promise<void>;
+  loadDdl: (name: string) => Promise<void>;
   clear: () => void;
   requestVersion: () => number;
 }
@@ -39,7 +41,7 @@ function detailLoadError(cause: unknown, fallback: string): string {
  * テーブル/ビュー詳細の共通 request state。
  *
  * request sequence と AbortController の両方で latest-selection-wins を保証し、
- * page-level 操作の loading/error state から詳細 state を分離する。
+ * DDL の後追い取得も含めて page-level 操作の loading/error state から分離する。
  */
 export function useDbObjectDetailRequest({
   collectionPath,
@@ -49,17 +51,22 @@ export function useDbObjectDetailRequest({
   const [selectedName, setSelectedName] = useState("");
   const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [ddlLoading, setDdlLoading] = useState(false);
   const [error, setError] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
+  const ddlControllerRef = useRef<{ name: string; controller: AbortController } | null>(null);
   const sequenceRef = useRef(0);
 
   const clear = useCallback(() => {
     sequenceRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
+    ddlControllerRef.current?.controller.abort();
+    ddlControllerRef.current = null;
     setSelectedName("");
     setDetail(null);
     setLoading(false);
+    setDdlLoading(false);
     setError("");
   }, []);
 
@@ -68,12 +75,15 @@ export function useDbObjectDetailRequest({
       const sequence = sequenceRef.current + 1;
       sequenceRef.current = sequence;
       controllerRef.current?.abort();
+      ddlControllerRef.current?.controller.abort();
+      ddlControllerRef.current = null;
       const controller = new AbortController();
       controllerRef.current = controller;
       setSelectedName(name);
       setDetail(null);
       setError("");
       setLoading(true);
+      setDdlLoading(false);
       try {
         const nextDetail = await apiGet<DbAdminObjectDetail>(
           `${collectionPath}/${encodeURIComponent(name)}?include_ddl=0`,
@@ -104,10 +114,47 @@ export function useDbObjectDetailRequest({
     [collectionPath, loadErrorMessage, timeoutErrorMessage],
   );
 
+  const loadDdl = useCallback(
+    async (name: string) => {
+      if (!detail || detail.name !== name || detail.ddl || ddlControllerRef.current?.name === name) {
+        return;
+      }
+      const sequence = sequenceRef.current + 1;
+      sequenceRef.current = sequence;
+      ddlControllerRef.current?.controller.abort();
+      const controller = new AbortController();
+      ddlControllerRef.current = { name, controller };
+      setDdlLoading(true);
+      try {
+        const nextDetail = await apiGet<DbAdminObjectDetail>(
+          `${collectionPath}/${encodeURIComponent(name)}?include_ddl=1`,
+          {
+            signal: controller.signal,
+            timeoutMs: DB_OBJECT_DETAIL_TIMEOUT_MS,
+          },
+        );
+        if (sequence === sequenceRef.current && !controller.signal.aborted) {
+          setDetail((current) =>
+            current && current.name === name ? { ...current, ddl: nextDetail.ddl } : current,
+          );
+        }
+      } catch {
+        // DDL 取得失敗時は従来どおり空表示へ戻し、タブを開き直すと再試行できる。
+      } finally {
+        if (sequence === sequenceRef.current) {
+          ddlControllerRef.current = null;
+          setDdlLoading(false);
+        }
+      }
+    },
+    [collectionPath, detail],
+  );
+
   useEffect(
     () => () => {
       sequenceRef.current += 1;
       controllerRef.current?.abort();
+      ddlControllerRef.current?.controller.abort();
     },
     [],
   );
@@ -119,8 +166,10 @@ export function useDbObjectDetailRequest({
     detail,
     setDetail,
     loading,
+    ddlLoading,
     error,
     load,
+    loadDdl,
     clear,
     requestVersion,
   };

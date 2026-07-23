@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Ban,
   Check,
   Loader2,
+  RotateCcw,
   Sparkles,
   UploadCloud,
   X,
@@ -10,6 +12,7 @@ import {
 import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
@@ -23,12 +26,15 @@ import {
   acceptOntologyProposal,
   acceptOntologyProposalsBatch,
   ApiError,
+  cancelOntologyBuildJob,
   getOntologyBuildJob,
   getOntologyPublishJob,
+  listOntologyBuildJobs,
   listOntologyRevisions,
   listProfileOntologyProposals,
   publishOntologyRevision,
   rejectOntologyProposal,
+  retryOntologyBuildJob,
   startOntologyBuild,
 } from "./api";
 import type {
@@ -78,9 +84,15 @@ function proposalStatusVariant(status: OntologyProposal["status"]) {
 export interface OntologyBuildSectionProps {
   profileId: string | null;
   onPublished?: () => void;
+  /** 外部(テンプレート適用/RDF import)で提案が増えたときに増分して提案一覧を再読込する。 */
+  proposalsRefreshToken?: number;
 }
 
-export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSectionProps) {
+export function OntologyBuildSection({
+  profileId,
+  onPublished,
+  proposalsRefreshToken,
+}: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useState("");
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
@@ -88,12 +100,14 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   const [runQa, setRunQa] = useState(true);
   const [runText, setRunText] = useState(true);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
+  const [jobHistory, setJobHistory] = useState<OntologyBuildJob[]>([]);
   const [proposals, setProposals] = useState<OntologyProposal[]>([]);
   const [proposalsLoading, setProposalsLoading] = useState(false);
   const [proposalsError, setProposalsError] = useState("");
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
   const [publishJob, setPublishJob] = useState<OntologyPublishJob | null>(null);
   const { notice, showNotice, clearNotice } = usePageNotice();
+  const confirm = useConfirm();
   const [busy, setBusy] = useState("");
   // 承認/却下は行単位の busy(他の行の操作をブロックしない)
   const [reviewBusyIds, setReviewBusyIds] = useState<ReadonlySet<string>>(new Set());
@@ -188,6 +202,7 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
   useEffect(() => {
     profileIdRef.current = profileId;
     setJob(null);
+    setJobHistory([]);
     setProposals([]);
     setDraftRevision(null);
     setPublishJob(null);
@@ -201,9 +216,35 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
     if (profileId) {
       void refreshProposals(profileId, controller.signal);
       void detectPendingDraft(controller.signal);
+      // リロード/プロファイル切替後も直近 job を復元する(実行中なら進捗追跡を再開)
+      listOntologyBuildJobs(profileId, 5, { signal: controller.signal })
+        .then((jobs) => {
+          if (controller.signal.aborted) return;
+          setJobHistory(jobs);
+          const latest = jobs[0];
+          if (!latest) return;
+          if (latest.status === "queued" || latest.status === "running") {
+            setJob(latest);
+          } else if (latest.status === "failed" || latest.status === "cancelled") {
+            // 終端カード(+再実行ボタン)を復元するが、完了トーストは再通知しない
+            terminalHandledRef.current = latest.id;
+            setJob(latest);
+          }
+        })
+        .catch(() => {
+          // 履歴は補助情報のため取得失敗で画面を止めない(新規実行は可能)
+        });
     }
     return () => controller.abort();
   }, [detectPendingDraft, profileId, refreshProposals]);
+
+  // 外部トリガー(テンプレート適用/RDF import)による提案一覧のみの再読込(フォームは保持)。
+  useEffect(() => {
+    if (!profileId || !proposalsRefreshToken) return;
+    const controller = new AbortController();
+    void refreshProposals(profileId, controller.signal);
+    return () => controller.abort();
+  }, [proposalsRefreshToken, profileId, refreshProposals]);
 
   // job ポーリング(1s)。完了で停止し、提案一覧を更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
@@ -222,10 +263,16 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           if (cancelled) return; // 古い応答で新しい状態を上書きしない
           pollFailureCountRef.current = 0;
           setJob(next);
-          const terminal = next.status === "succeeded" || next.status === "failed";
+          const terminal =
+            next.status === "succeeded" ||
+            next.status === "failed" ||
+            next.status === "cancelled";
           if (terminal && terminalHandledRef.current !== jobId) {
             terminalHandledRef.current = jobId;
             void refreshProposals(profileId);
+            void listOntologyBuildJobs(profileId, 5)
+              .then(setJobHistory)
+              .catch(() => {});
             if (next.status === "succeeded") {
               const count = next.proposal_ids.length;
               toast.success(
@@ -233,6 +280,8 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
                   ? t("profiles.ontologyBuild.jobSucceededEmpty")
                   : t("profiles.ontologyBuild.jobSucceeded", { count })
               );
+            } else if (next.status === "cancelled") {
+              showNotice("info", t("profiles.ontologyBuild.cancelled"));
             } else if (next.error_message_ja) {
               showNotice(
                 "danger",
@@ -361,6 +410,59 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           : err instanceof Error
             ? err.message
             : t("profiles.ontologyBuild.error.start")
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const cancelBuild = async () => {
+    const targetJobId = jobId;
+    if (!targetJobId) return;
+    const ok = await confirm({
+      title: t("profiles.ontologyBuild.cancelConfirm.title"),
+      description: t("profiles.ontologyBuild.cancelConfirm.description"),
+      confirmLabel: t("profiles.ontologyBuild.cancelConfirm.confirm"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+    setBusy("cancel");
+    try {
+      // 自前の中止はポーリング側で二重通知しない
+      terminalHandledRef.current = targetJobId;
+      const next = await cancelOntologyBuildJob(targetJobId);
+      setJob(next);
+      showNotice("info", t("profiles.ontologyBuild.cancelled"));
+      if (profileId) {
+        void listOntologyBuildJobs(profileId, 5)
+          .then(setJobHistory)
+          .catch(() => {});
+      }
+    } catch (err) {
+      showNotice(
+        "danger",
+        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.cancel")
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const retryBuild = async () => {
+    const failedJob = job;
+    if (!failedJob) return;
+    setBusy("retry");
+    clearNotice();
+    try {
+      const next = await retryOntologyBuildJob(failedJob.id);
+      terminalHandledRef.current = null;
+      setJob(next);
+      toast.success(t("profiles.ontologyBuild.retryStarted"));
+    } catch (err) {
+      showNotice(
+        "danger",
+        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.retry")
       );
     } finally {
       setBusy("");
@@ -610,16 +712,56 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
           data-testid="ontology-build-steps"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-sm font-semibold text-foreground">
-              {t("profiles.ontologyBuild.stepsTitle")}
-            </h4>
-            {job.started_at ? (
-              <span className="text-xs tabular-nums text-muted">
-                {t("profiles.ontologyBuild.elapsed", {
-                  time: formatElapsed(job.started_at, job.finished_at, nowTick),
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h4 className="text-sm font-semibold text-foreground">
+                {t("profiles.ontologyBuild.stepsTitle")}
+              </h4>
+              <span className="text-xs tabular-nums text-muted" data-testid="ontology-build-step-progress">
+                {t("profiles.ontologyBuild.stepProgress", {
+                  done: job.steps.filter((step) =>
+                    ["succeeded", "skipped", "failed"].includes(step.status)
+                  ).length,
+                  total: job.steps.length,
                 })}
               </span>
-            ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {job.started_at ? (
+                <span className="text-xs tabular-nums text-muted">
+                  {t("profiles.ontologyBuild.elapsed", {
+                    time: formatElapsed(job.started_at, job.finished_at, nowTick),
+                  })}
+                </span>
+              ) : null}
+              {jobRunning ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  loading={busy === "cancel"}
+                  disabled={busy === "cancel"}
+                  onClick={() => void cancelBuild()}
+                  data-testid="ontology-build-cancel"
+                >
+                  <Ban size={14} aria-hidden="true" />
+                  <span>{t("profiles.ontologyBuild.cancel")}</span>
+                </Button>
+              ) : null}
+              {job.status === "failed" || job.status === "cancelled" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "retry"}
+                  disabled={busy === "retry"}
+                  onClick={() => void retryBuild()}
+                  data-testid="ontology-build-retry"
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                  <span>{t("profiles.ontologyBuild.retry")}</span>
+                </Button>
+              ) : null}
+            </div>
           </div>
           <ul className="grid gap-2">
             {job.steps.map((step) => {
@@ -725,6 +867,55 @@ export function OntologyBuildSection({ profileId, onPublished }: OntologyBuildSe
             </ul>
           ) : null}
         </section>
+      ) : null}
+
+      {jobHistory.length > 0 ? (
+        <details
+          className="rounded-md border border-border bg-background p-2 text-sm"
+          data-testid="ontology-build-history"
+        >
+          <summary className="cursor-pointer font-semibold text-foreground">
+            {t("profiles.ontologyBuild.historyTitle")} ({jobHistory.length})
+          </summary>
+          <ul className="mt-2 grid gap-1">
+            {jobHistory.map((item) => (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-card px-3 py-2"
+              >
+                <span className="min-w-0 text-xs text-foreground">
+                  <span className="tabular-nums text-muted">
+                    {item.started_at ? formatEventTime(item.started_at) : "—"}
+                  </span>
+                  {item.error_message_ja ? (
+                    <span className="ml-2 break-words text-muted">
+                      {item.error_message_ja}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {item.started_at ? (
+                    <span className="text-xs tabular-nums text-muted">
+                      {formatElapsed(item.started_at, item.finished_at, nowTick)}
+                    </span>
+                  ) : null}
+                  <StatusBadge
+                    variant={
+                      item.status === "succeeded"
+                        ? "success"
+                        : item.status === "failed"
+                          ? "danger"
+                          : item.status === "cancelled"
+                            ? "neutral"
+                            : "info"
+                    }
+                    label={t(`profiles.ontologyBuild.jobStatus.${item.status}`)}
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
 
       <section

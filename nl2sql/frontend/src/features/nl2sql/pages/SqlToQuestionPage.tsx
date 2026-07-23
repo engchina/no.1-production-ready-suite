@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
-  DbObjectManagementStatusBar,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
@@ -47,6 +46,7 @@ export function SqlToQuestionPage() {
   const [reverseMode, setReverseMode] = useState<ReverseMode>("");
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [referenceRefreshVersion, setReferenceRefreshVersion] = useState(0);
   const loadSequence = useRef(0);
   const detailSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
@@ -69,6 +69,7 @@ export function SqlToQuestionPage() {
             ? current
             : (profilePage.items[0]?.id ?? "")
         );
+        setReferenceRefreshVersion((current) => current + 1);
       });
     } catch (err) {
       if (isAbortError(err)) {
@@ -130,7 +131,7 @@ export function SqlToQuestionPage() {
         if (sequence === detailSequence.current) setLoading(false);
       }
     });
-  }, [runScopedRequest, selectedProfileId]);
+  }, [referenceRefreshVersion, runScopedRequest, selectedProfileId]);
 
   useEffect(() => {
     void loadReferenceData();
@@ -181,52 +182,29 @@ export function SqlToQuestionPage() {
     }
   };
 
-  const workflowState = reverse
-    ? t("sqlToQuestion.workflow.generated")
-    : structureText
-      ? t("sqlToQuestion.workflow.analyzed")
-      : sql.trim()
-        ? t("sqlToQuestion.workflow.ready")
-        : t("sqlToQuestion.workflow.waiting");
   const actionBusy = analyzeLoading || Boolean(reverseMode);
   const stepIndex = reverse ? 3 : structureText ? 1 : 0;
 
   return (
     <>
-      <PageHeader title={t("nav.sqlToQuestion")} subtitle={t("sqlToQuestion.subtitle")} />
+      <PageHeader
+        title={t("nav.sqlToQuestion")}
+        subtitle={t("sqlToQuestion.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: loadReferenceData,
+            loading,
+          },
+        ]}
+      />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
           notice={loadError ? { tone: "danger", message: loadError } : null}
           action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loading}
-              onClick={() => void loadReferenceData()}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("sqlToQuestion.action.reload")}</span>
-            </Button>
-          }
-        />
-
-        <DbObjectManagementStatusBar
-          ariaLabel={t("sqlToQuestion.status.aria")}
-          metrics={[
-            {
-              label: t("sqlToQuestion.metric.profile"),
-              value: selectedProfile?.name ?? t("sqlToQuestion.metric.profileEmpty"),
-            },
-            {
-              label: t("sqlToQuestion.metric.tables"),
-              value: formatNumber(schemaTables.length),
-              emphasis: true,
-              testId: "sql-to-question-table-count",
-            },
-            { label: t("sqlToQuestion.metric.workflow"), value: workflowState },
-          ]}
-          actions={
             <Button
               type="button"
               variant="secondary"
@@ -460,7 +438,9 @@ function SchemaPreview({
     <section className="grid content-start gap-3 rounded-md border border-border bg-background p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant="neutral" label={profile?.name ?? "-"} />
-        <StatusBadge variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
+        <span data-testid="sql-to-question-table-count">
+          <StatusBadge variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
+        </span>
       </div>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
         <Database size={16} aria-hidden="true" />

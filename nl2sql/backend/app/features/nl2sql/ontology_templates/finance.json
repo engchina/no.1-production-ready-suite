@@ -1,0 +1,78 @@
+{
+  "id": "finance",
+  "metadata": {
+    "name_ja": "金融",
+    "description_ja": "口座・取引・顧客を中心とした金融業務の出発点テンプレート。",
+    "icon": "🏦",
+    "category": "業種",
+    "tags": ["金融", "口座", "取引"]
+  },
+  "entities": [
+    {
+      "key": "customer",
+      "business_name_ja": "顧客",
+      "description_ja": "口座を保有する顧客。主識別子は顧客番号。",
+      "aliases": ["口座名義人", "契約者"],
+      "object_name_hint": "CUSTOMERS"
+    },
+    {
+      "key": "account",
+      "business_name_ja": "口座",
+      "description_ja": "預金・ローン等の口座。主識別子は口座番号。",
+      "aliases": ["勘定", "account"],
+      "object_name_hint": "ACCOUNTS"
+    },
+    {
+      "key": "transaction",
+      "business_name_ja": "取引",
+      "description_ja": "口座に対する入出金・振替の取引履歴。",
+      "aliases": ["入出金", "明細", "トランザクション"],
+      "object_name_hint": "TRANSACTIONS"
+    },
+    {
+      "key": "branch",
+      "business_name_ja": "支店",
+      "description_ja": "口座を管理する支店。主識別子は支店コード。",
+      "aliases": ["店舗", "ブランチ"],
+      "object_name_hint": "BRANCHES"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "customer",
+      "target": "account",
+      "relationship_name_ja": "保有する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の顧客は複数の口座を保有する。",
+      "join_hints": [{ "left_column": "CUSTOMER_ID", "right_column": "CUSTOMER_ID" }]
+    },
+    {
+      "source": "account",
+      "target": "transaction",
+      "relationship_name_ja": "取引が発生する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの口座に複数の取引が発生する。",
+      "join_hints": [{ "left_column": "ACCOUNT_ID", "right_column": "ACCOUNT_ID" }]
+    },
+    {
+      "source": "branch",
+      "target": "account",
+      "relationship_name_ja": "管理する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの支店は複数の口座を管理する。",
+      "join_hints": [{ "left_column": "BRANCH_ID", "right_column": "BRANCH_ID" }]
+    }
+  ],
+  "terms": [
+    {
+      "business_name_ja": "預り残高",
+      "description_ja": "基準日時点の預金残高合計。",
+      "aliases": ["残高", "預金残高"]
+    },
+    {
+      "business_name_ja": "休眠口座",
+      "description_ja": "一定期間取引のない口座。",
+      "aliases": ["不稼働口座"]
+    }
+  ]
+}

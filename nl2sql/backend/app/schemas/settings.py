@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, field_validator
 
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
 UploadStorageBackend = Literal["local", "oci"]
-ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
@@ -155,7 +154,6 @@ class ModelSettingsData(BaseModel):
     """モデル設定 API のレスポンス data。"""
 
     settings: ModelSettingsPayload
-    checks: dict[str, ModelSettingsCheckStatus]
     model_settings_file: str
     source: Literal["runtime"]
     secret_source: ModelSettingsSecretSource

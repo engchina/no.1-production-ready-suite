@@ -16,6 +16,7 @@ import json
 import re
 import threading
 import unicodedata
+from array import array
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, is_dataclass
@@ -25,6 +26,8 @@ from enum import Enum
 from importlib import import_module
 from typing import Any, Literal, Protocol, cast
 from uuid import UUID
+
+from .oracle_lob import configure_clob_fetch_as_text
 
 OntologyCollection = Literal[
     "revisions",
@@ -1020,6 +1023,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             select_columns += ", EMBEDDING"
         sql = f"SELECT {select_columns} FROM {spec.table_name} WHERE {where_sql}"  # nosec B608
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(sql, binds)
             row = cursor.fetchone()
         return _decode_row(row, has_embedding=spec.has_embedding) if row else None
@@ -1043,6 +1047,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             sql += f" WHERE {where_sql}"
         sql += " ORDER BY UPDATED_AT DESC"
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(sql, binds)
             rows = cursor.fetchall()
         return [
@@ -1094,7 +1099,25 @@ class OracleOntologyStore(_ConvenienceMethods):
         prepared_documents: list[dict[str, Any]] = []
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
-                _set_payload_clob_input_size(cursor)
+                if documents and all(
+                    expected_etag is None
+                    for document, expected_etag in documents
+                ):
+                    for document, _expected_etag in documents:
+                        normalized = deserialize_json(canonical_json(document))
+                        _document_identity(collection, normalized)
+                        prepared_documents.append(
+                            next_versioned_document(
+                                normalized,
+                                current=None,
+                                expected_etag=None,
+                            )
+                        )
+                    _set_payload_clob_input_size(cursor)
+                    self._insert_documents(cursor, spec, prepared_documents)
+                    connection.commit()
+                    return prepared_documents
+                pending_operations: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
                 for document, expected_etag in documents:
                     normalized = deserialize_json(canonical_json(document))
                     _document_identity(collection, normalized)
@@ -1104,11 +1127,14 @@ class OracleOntologyStore(_ConvenienceMethods):
                         current=current,
                         expected_etag=expected_etag,
                     )
+                    pending_operations.append((prepared, current))
+                    prepared_documents.append(prepared)
+                _set_payload_clob_input_size(cursor)
+                for prepared, current in pending_operations:
                     if current is None:
                         self._insert_document(cursor, spec, prepared)
                     else:
                         self._update_document(cursor, spec, prepared, str(current["etag"]))
-                    prepared_documents.append(prepared)
                 connection.commit()
             except Exception as exc:
                 rollback = getattr(connection, "rollback", None)
@@ -1219,12 +1245,51 @@ class OracleOntologyStore(_ConvenienceMethods):
         if spec.has_embedding:
             columns.append("EMBEDDING")
             bind_names.append(":embedding")
-            binds["embedding"] = document.get("embedding")
+            binds["embedding"] = _embedding_bind_value(document.get("embedding"))
         sql = (
             f"INSERT INTO {spec.table_name} ({', '.join(columns)}) "  # nosec B608
             f"VALUES ({', '.join(bind_names)})"
         )
         cursor.execute(sql, binds)
+
+    def _insert_documents(
+        self,
+        cursor: Any,
+        spec: _CollectionSpec,
+        documents: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """新規 document 群を Oracle array binding の 1 batch で挿入する。"""
+
+        if not documents:
+            return
+        field_columns = _persisted_field_columns(spec)
+        columns = [column for _, column in field_columns]
+        columns.extend(("VERSION_NO", "ETAG", "PAYLOAD_JSON"))
+        bind_names = [f":{field}" for field, _ in field_columns]
+        bind_names.extend((":version_no", ":etag", ":payload_json"))
+        if spec.has_embedding:
+            columns.append("EMBEDDING")
+            bind_names.append(":embedding")
+        sql = (
+            f"INSERT INTO {spec.table_name} ({', '.join(columns)}) "  # nosec B608
+            f"VALUES ({', '.join(bind_names)})"
+        )
+        rows: list[dict[str, Any]] = []
+        for document in documents:
+            binds = {
+                field: _scalar_bind_value(document.get(field)) for field, _column in field_columns
+            }
+            binds.update(
+                {
+                    "version_no": document["version"],
+                    "etag": document["etag"],
+                    "payload_json": _payload_json(document),
+                }
+            )
+            if spec.has_embedding:
+                binds["embedding"] = _embedding_bind_value(document.get("embedding"))
+            rows.append(binds)
+        cursor.executemany(sql, rows)
 
     def _update_document(
         self,
@@ -1254,7 +1319,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         )
         if spec.has_embedding:
             assignments.append("EMBEDDING = :embedding")
-            binds["embedding"] = document.get("embedding")
+            binds["embedding"] = _embedding_bind_value(document.get("embedding"))
         identity = {field: document[field] for field in spec.key_fields}
         where_sql, identity_binds = _where_clause(spec, identity)
         binds.update(identity_binds)
@@ -1307,6 +1372,14 @@ def _scalar_bind_value(value: Any) -> Any:
     if isinstance(value, bool):
         return 1 if value else 0
     return value
+
+
+def _embedding_bind_value(value: Any) -> array[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, array) and value.typecode == "f":
+        return value
+    return array("f", (float(item) for item in value))
 
 
 def _payload_json(document: Mapping[str, Any]) -> str:

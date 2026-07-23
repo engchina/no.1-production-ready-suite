@@ -11,7 +11,13 @@ export const ja = {
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
   "common.notifications": "通知",
+  "common.pageActions": "ページ操作",
+  "common.actions.more": "その他の操作",
+  "common.action.refresh": "表示を更新",
+  "common.action.schemaRefresh": "DB 構造を再取得",
+  "common.schemaRefreshedAt": "DB 構造の最終取得: {date}",
   "common.action.refreshed": "最新の状態に更新しました。",
+  "common.action.schemaRefreshed": "DB 構造を再取得しました。",
   "common.action.copied": "クリップボードにコピーしました。",
   "common.action.copyFailed": "コピーできませんでした。ブラウザのクリップボード権限を確認して再試行してください。",
   "common.action.downloaded": "ファイルをダウンロードしました。",
@@ -58,7 +64,6 @@ export const ja = {
   "settings.preview.json.copy": "JSON をコピー",
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
-  "settings.preview.ops.title": "運用メモ",
   "settings.preview.secret.saved": "<保存済み secret>",
   "settings.preview.secret.entered": "<入力済み secret>",
 
@@ -854,15 +859,6 @@ export const ja = {
   "settings.oci.env.description":
     "保存時に backend/.env へ反映される OCI 共通設定です。",
   "settings.oci.hint": "保存した設定は、AI分析やObject Storage接続に反映されます。",
-  "settings.oci.ops.description": "OCI 認証を反映する前に確認するポイント。",
-  "settings.oci.ops.nonBlockingSave":
-    "未設定や形式要確認があっても保存できます。実行前の疎通確認はテストで行います。",
-  "settings.oci.ops.config":
-    "認証プロファイルの保存時は ~/.oci/config の DEFAULT profile と backend/.env を更新します。",
-  "settings.oci.ops.key":
-    "秘密鍵の中身は画面に保存せず、~/.oci/oci_api_key.pem へ安全な権限で配置します。",
-  "settings.oci.ops.storage":
-    "Object Storage namespace は OCI API から取得し、アップロード保存先ページの bucket と組み合わせて使います。",
   "settings.oci.configFileInput.aria": "OCI config ファイルを選択",
   "settings.oci.keyFileInput.aria": "秘密鍵ファイルを選択",
   "settings.oci.validation.required": "値を入力してください。",
@@ -908,31 +904,13 @@ export const ja = {
   "settings.uploadStorage.env.copied": "コピーしました",
   "settings.uploadStorage.env.copyFailed": "コピーできませんでした",
   "settings.uploadStorage.status.title": "保存先状態",
-  "settings.uploadStorage.status.description": "現在の保存先と readiness を確認します。",
-  "settings.uploadStorage.status.readiness": "Readiness",
+  "settings.uploadStorage.status.description": "現在の保存先情報を確認します。",
   "settings.uploadStorage.status.backend": "保存先",
   "settings.uploadStorage.status.source": "反映先",
   "settings.uploadStorage.status.maxUploadSize": "最大アップロードサイズ",
   "settings.uploadStorage.status.localStorageDir": "ローカル保存先",
   "settings.uploadStorage.status.objectStorage": "Object Storage",
   "settings.uploadStorage.source.runtime": "backend/.env + 現在のプロセス設定",
-  "settings.uploadStorage.ops.title": "運用メモ",
-  "settings.uploadStorage.ops.description": "保存先を切り替える前に確認するポイント。",
-  "settings.uploadStorage.ops.nonBlockingSave":
-    "未設定の項目があっても保存できます。検索対象にする前に保存先状態で readiness を確認してください。",
-  "settings.uploadStorage.ops.runtime":
-    "画面から保存した値は backend/.env へ書き込み、稼働中プロセスにも即時反映されます。",
-  "settings.uploadStorage.ops.local":
-    "ローカル保存ではコンテナ再作成時に消えない永続ボリュームを割り当ててください。",
-  "settings.uploadStorage.ops.oci":
-    "OCI 保存では OCI 認証設定の namespace とこの画面の bucket をバックエンドから参照できる必要があります。",
-  "settings.uploadStorage.readiness.ok": "OK",
-  "settings.uploadStorage.readiness.missing": "未設定",
-  "settings.uploadStorage.readiness.missingCredentials": "認証情報不足",
-  "settings.uploadStorage.readiness.invalid": "無効",
-  "settings.uploadStorage.readiness.walletNotFound": "Wallet 未検出",
-  "settings.uploadStorage.readiness.error": "エラー",
-  "settings.uploadStorage.readiness.unknown": "不明",
   "settings.uploadStorage.validation.required": "値を入力してください。",
   "settings.uploadStorage.validation.localStorageDir":
     "ローカル保存ディレクトリを入力してください。",
@@ -945,15 +923,11 @@ export const ja = {
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
   "settings.model.loading": "モデル設定を読み込んでいます。",
   "settings.model.loadError": "モデル設定の取得に失敗しました。",
-  "settings.model.unsaved": "未保存の変更があります。",
   "settings.model.saved": "モデル設定を保存しました。",
-  "settings.model.checked": "構成チェックを更新しました。",
   "settings.model.resetDone": "変更を元に戻しました。",
   "settings.model.save": "保存",
   "settings.model.saving": "保存中…",
   "settings.model.reset": "元に戻す",
-  "settings.model.check": "構成チェック",
-  "settings.model.checking": "確認中…",
   "settings.model.test.action": "テスト",
   "settings.model.test.testing": "テスト中…",
   "settings.model.test.aria": "{model} をテスト",
@@ -969,12 +943,6 @@ export const ja = {
   "settings.model.test.apiFailed":
     "モデルテスト API の呼び出しに失敗しました。バックエンドのログとネットワークを確認してください。",
   "settings.model.test.noDetails": "詳細は返されませんでした。",
-  "settings.model.source": "反映先",
-  "settings.model.source.runtime": "現在のプロセス設定",
-  "settings.model.secretSource": "API Key 保存先",
-  "settings.model.secretSource.environment": "backend/.env",
-  "settings.model.secretSource.legacyJson": "旧 JSON（移行が必要）",
-  "settings.model.secretSource.missing": "未設定",
   "settings.model.legacySecret.title": "旧 JSON に API Key が残っています",
   "settings.model.legacySecret.description":
     "原因: v1 の model-settings.json が secret を保存していました。復旧方法: この画面で保存すると API Key を backend/.env へ移し、JSON を secret のない v2 へ更新します。移行後は接続テストを実行してください。",
@@ -984,26 +952,6 @@ export const ja = {
     "backend/.env に保存する JSON ファイル名と Enterprise AI API Key の状態です。secret の値は表示しません。",
   "settings.model.json.description":
     "MODEL_SETTINGS_FILE に保存される v2 JSON のプレビューです。API Key は JSON に保存されません。",
-
-  "settings.model.status.title": "構成状態",
-  "settings.model.status.subtitle": "保存前チェックと readiness に影響する項目",
-  "settings.model.status.enterprise": "Enterprise AI",
-  "settings.model.status.generative": "Generative AI",
-  "settings.model.status.embedding": "Embedding 次元",
-  "settings.model.status.ok": "OK",
-  "settings.model.status.missing": "未設定",
-  "settings.model.status.invalid": "要確認",
-  "settings.model.status.enterprise.ok":
-    "Enterprise AI の endpoint、project、既定モデル、Vision 対応モデルが揃っています。",
-  "settings.model.status.enterprise.missing":
-    "OCI 運用前に endpoint、project、既定モデル、Vision 対応モデルを設定してください。",
-  "settings.model.status.enterprise.invalid": "Enterprise AI の設定形式を確認してください。",
-  "settings.model.status.generative.ok": "埋め込み/リランクのモデル ID が揃っています。",
-  "settings.model.status.generative.missing": "埋め込みモデルとリランクモデルを設定してください。",
-  "settings.model.status.generative.invalid": "Generative AI の設定形式を確認してください。",
-  "settings.model.status.embedding.ok": "Oracle VECTOR(1536, FLOAT32) と互換です。",
-  "settings.model.status.embedding.missing": "Embedding 次元を確認してください。",
-  "settings.model.status.embedding.invalid": "Embedding 次元は 1536 固定です。",
 
   "settings.model.enterprise.title": "OCI Enterprise AI",
   "settings.model.enterprise.description":
@@ -1068,17 +1016,6 @@ export const ja = {
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp": "Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
   "settings.model.genai.rerankModel": "リランクモデル ID",
-
-  "settings.model.ops.title": "運用メモ",
-  "settings.model.ops.description": "モデル設定を本番反映する前に確認するポイント。",
-  "settings.model.ops.nonBlockingSave":
-    "構成状態が未設定や要確認でも保存できます。実行前の readiness は構成状態で確認します。",
-  "settings.model.ops.enterpriseOnly":
-    "回答生成は既定モデルを使い、画像解析は Vision 対応モデルを使います。",
-  "settings.model.ops.genaiOnly":
-    "OCI Generative AI は embedding/rerank のみで使います。",
-  "settings.model.ops.vectorDim":
-    "Oracle 26ai のベクトル列は VECTOR(1536, FLOAT32) を前提にします。",
 
   "settings.model.placeholder.endpoint":
     "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
@@ -1201,7 +1138,6 @@ export const ja = {
   "settings.database.wallet.location": "Wallet保存先",
   "settings.database.status.title": "接続状態",
   "settings.database.status.description": "接続可否に必要な最小情報だけを表示します。",
-  "settings.database.status.readiness": "Readiness",
   "settings.database.status.authMethod": "認証方式",
   "settings.database.status.wallet": "Wallet",
   "settings.database.status.currentOwner": "現在の接続ユーザー",
@@ -1217,22 +1153,8 @@ export const ja = {
   "settings.database.wallet.notDetected": "未検出",
   "settings.database.env.description":
     "保存時に backend/.env へ反映される Oracle 26ai 接続設定です。secret は伏せ字で表示します。",
-  "settings.database.readiness.ok": "OK",
-  "settings.database.readiness.missing": "未設定",
-  "settings.database.readiness.missingCredentials": "認証情報不足",
-  "settings.database.readiness.invalid": "無効",
-  "settings.database.readiness.walletNotFound": "Wallet 未検出",
-  "settings.database.readiness.error": "エラー",
-  "settings.database.readiness.unknown": "不明",
-  "settings.database.ops.title": "運用メモ",
-  "settings.database.ops.description": "本番反映前に確認するポイント。",
-  "settings.database.ops.nonBlockingSave":
-    "接続情報が未設定でも保存できます。実 DB 接続は接続テストと readiness で確認します。",
-  "settings.database.ops.env": "永続的な正本は backend/.env で管理します。",
-  "settings.database.ops.vector": "外部ベクトル DB は使わず Oracle 26ai AI Vector Search に集約します。",
-  "settings.database.ops.pool": "保存後は既存 Oracle pool を閉じ、次回接続時に再作成します。",
   "settings.database.test.meta":
-    "readiness: {readiness} / 所要時間: {elapsed} ms / 確認時刻: {checkedAt}",
+    "所要時間: {elapsed} ms / 確認時刻: {checkedAt}",
   "settings.database.hint":
     "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
   "settings.database.validation.required": "値を入力してください。",

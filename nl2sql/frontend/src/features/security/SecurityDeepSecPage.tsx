@@ -9,11 +9,11 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
-  PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -59,6 +59,7 @@ export function SecurityDeepSecPage() {
 
   const loadStatus = async () => {
     const sequence = statusLoadSequence.current + 1;
+    let completed = false;
     statusLoadSequence.current = sequence;
     setStatusLoading(true);
     setStatusLoadError("");
@@ -67,10 +68,11 @@ export function SecurityDeepSecPage() {
         const nextStatus = await securityApi.deepSecStatus({ signal });
         if (signal.aborted || sequence !== statusLoadSequence.current) return;
         setStatus(nextStatus);
+        completed = true;
       });
     } catch (cause) {
       if (isAbortError(cause)) {
-        return;
+        return false;
       }
       if (sequence === statusLoadSequence.current) {
         setStatusLoadError(loadErrorMessage(cause));
@@ -78,10 +80,12 @@ export function SecurityDeepSecPage() {
     } finally {
       if (sequence === statusLoadSequence.current) setStatusLoading(false);
     }
+    return completed;
   };
 
   const loadPlan = async () => {
     const sequence = planLoadSequence.current + 1;
+    let completed = false;
     planLoadSequence.current = sequence;
     setPlanLoading(true);
     setPlanLoadError("");
@@ -90,10 +94,11 @@ export function SecurityDeepSecPage() {
         const nextPlan = await securityApi.deepSecPlan({ signal });
         if (signal.aborted || sequence !== planLoadSequence.current) return;
         setPlan(nextPlan);
+        completed = true;
       });
     } catch (cause) {
       if (isAbortError(cause)) {
-        return;
+        return false;
       }
       if (sequence === planLoadSequence.current) {
         setPlanLoadError(loadErrorMessage(cause));
@@ -101,16 +106,19 @@ export function SecurityDeepSecPage() {
     } finally {
       if (sequence === planLoadSequence.current) setPlanLoading(false);
     }
+    return completed;
   };
 
-  const load = () => {
+  const load = async (announce = false) => {
     setActionError("");
-    void loadStatus();
-    void loadPlan();
+    const results = await Promise.all([loadStatus(), loadPlan()]);
+    if (announce && results.every(Boolean)) {
+      toast.success(t("common.action.refreshed"));
+    }
   };
 
   useEffect(() => {
-    load();
+    void load();
     return () => {
       statusLoadSequence.current += 1;
       planLoadSequence.current += 1;
@@ -178,15 +186,18 @@ export function SecurityDeepSecPage() {
   return (
     <>
       <PageHeader
-        className="px-4 sm:px-8"
         title={t("nav.securityDeepSec")}
         subtitle={t("security.deepsec.subtitle")}
-        actions={
-          <Button variant="secondary" size="sm" onClick={load}>
-            <RefreshCw size={14} className={refreshing ? "animate-spin" : undefined} aria-hidden />
-            {t("security.common.reload")}
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading: refreshing,
+          },
+        ]}
       />
       <main className="space-y-5 p-4 lg:p-8">
         {actionError ? <Banner severity="danger">{actionError}</Banner> : null}

@@ -1,12 +1,9 @@
 "use client";
 
 import {
-  AlertCircle,
   Clipboard,
-  CheckCircle2,
   FileJson2,
   FileText,
-  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -59,7 +56,6 @@ export function SettingsSupplementalPanels({
   status,
   env,
   json,
-  operation,
 }: {
   status?: ReactNode;
   env: {
@@ -69,11 +65,6 @@ export function SettingsSupplementalPanels({
   json?: {
     description: string;
     value: string;
-  };
-  operation: {
-    description: string;
-    notes: string[];
-    warnings?: string[];
   };
 }) {
   return (
@@ -90,57 +81,8 @@ export function SettingsSupplementalPanels({
           previewHeightClassName="h-56"
         />
       ) : null}
-      <OperationMemoCard
-        description={operation.description}
-        notes={operation.notes}
-        warnings={operation.warnings ?? []}
-      />
       {status}
     </aside>
-  );
-}
-
-function OperationMemoCard({
-  description,
-  notes,
-  warnings,
-}: {
-  description: string;
-  notes: string[];
-  warnings: string[];
-}) {
-  const uniqueWarnings = [...new Set(warnings.filter(Boolean))];
-
-  return (
-    <Card>
-      <CardHeader>
-        <SettingsCardHeader
-          icon={ShieldCheck}
-          title={t("settings.preview.ops.title")}
-          description={description}
-        />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <ul className="space-y-2 text-sm leading-relaxed text-muted">
-          {notes.map((note) => (
-            <li key={note} className="flex gap-2">
-              <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-info" aria-hidden />
-              <span className="leading-relaxed">{note}</span>
-            </li>
-          ))}
-        </ul>
-        {uniqueWarnings.length > 0 ? (
-          <ul className="space-y-2 border-t border-border pt-3 text-sm leading-relaxed text-foreground">
-            {uniqueWarnings.map((warning) => (
-              <li key={warning} className="flex gap-2">
-                <AlertCircle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
-                <span className="leading-relaxed">{warning}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </CardContent>
-    </Card>
   );
 }
 

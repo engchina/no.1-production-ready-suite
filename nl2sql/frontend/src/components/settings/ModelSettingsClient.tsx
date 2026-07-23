@@ -12,7 +12,7 @@ import {
   TestTube2,
   Trash2,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
@@ -35,59 +35,19 @@ import {
   type EnterpriseAiModelSettings,
   type EnterpriseAiVlmInputMode,
   type GenerativeAiModelSettings,
-  type ModelSettingsCheckStatus,
   type ModelSettingsData,
   type ModelSettingsPayload,
-  type ModelSettingsSecretSource,
   type ModelSettingsTestRequest,
   type ModelSettingsTestResult,
   type ModelSettingsTestTargetType,
 } from "@/lib/api";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-type CheckKey = keyof ModelSettingsData["checks"];
 type NoticeTone = "success" | "info" | "error";
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 
-const CHECK_LABEL_KEYS: Record<CheckKey, I18nKey> = {
-  enterprise_ai: "settings.model.status.enterprise",
-  generative_ai: "settings.model.status.generative",
-  embedding_dim: "settings.model.status.embedding",
-};
-
-const CHECK_MESSAGE_KEYS: Record<CheckKey, Record<ModelSettingsCheckStatus, I18nKey>> = {
-  enterprise_ai: {
-    ok: "settings.model.status.enterprise.ok",
-    missing: "settings.model.status.enterprise.missing",
-    invalid: "settings.model.status.enterprise.invalid",
-  },
-  generative_ai: {
-    ok: "settings.model.status.generative.ok",
-    missing: "settings.model.status.generative.missing",
-    invalid: "settings.model.status.generative.invalid",
-  },
-  embedding_dim: {
-    ok: "settings.model.status.embedding.ok",
-    missing: "settings.model.status.embedding.missing",
-    invalid: "settings.model.status.embedding.invalid",
-  },
-};
-
-const STATUS_LABEL_KEYS: Record<ModelSettingsCheckStatus, I18nKey> = {
-  ok: "settings.model.status.ok",
-  missing: "settings.model.status.missing",
-  invalid: "settings.model.status.invalid",
-};
-
-const SECRET_SOURCE_LABEL_KEYS: Record<ModelSettingsSecretSource, I18nKey> = {
-  environment: "settings.model.secretSource.environment",
-  legacy_json: "settings.model.secretSource.legacyJson",
-  missing: "settings.model.secretSource.missing",
-};
-
-const CHECK_KEYS: CheckKey[] = ["enterprise_ai", "generative_ai", "embedding_dim"];
 const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
 const VLM_INPUT_MODE_OPTIONS = [
   {
@@ -115,7 +75,6 @@ export function ModelSettingsClient() {
   const confirm = useConfirm();
 
   const [draft, setDraft] = useState<ModelSettingsPayload | null>(null);
-  const [baseline, setBaseline] = useState<ModelSettingsPayload | null>(null);
   const [baselineData, setBaselineData] = useState<ModelSettingsData | null>(null);
   const [checkData, setCheckData] = useState<ModelSettingsData | null>(null);
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
@@ -128,29 +87,16 @@ export function ModelSettingsClient() {
     if (!query.data || draft) return;
     const loaded = cloneSettings(query.data.settings);
     setDraft(loaded);
-    setBaseline(cloneSettings(query.data.settings));
     setBaselineData(query.data);
     setCheckData(query.data);
   }, [draft, query.data]);
 
-  const validationMessages = useMemo(
-    () => (draft ? validateDraft(draft) : []),
-    [draft]
-  );
-  const isDirty = useMemo(
-    () => Boolean(draft && baseline && serializeSettings(draft) !== serializeSettings(baseline)),
-    [baseline, draft]
-  );
-
-  const activeChecks = checkData?.checks ?? baselineData?.checks;
   const canSubmit = Boolean(draft);
   const modelSettingsFile =
     checkData?.model_settings_file ??
     baselineData?.model_settings_file ??
     query.data?.model_settings_file ??
     DEFAULT_MODEL_SETTINGS_FILE;
-  const secretSource =
-    checkData?.secret_source ?? baselineData?.secret_source ?? query.data?.secret_source ?? "missing";
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
@@ -333,7 +279,6 @@ export function ModelSettingsClient() {
       const data = await updateMutation.mutateAsync(draft);
       const saved = cloneSettings(data.settings);
       setDraft(saved);
-      setBaseline(cloneSettings(data.settings));
       setBaselineData(data);
       setCheckData(data);
       setNotice({ tone: "success", message: t("settings.model.saved") });
@@ -358,7 +303,7 @@ export function ModelSettingsClient() {
     );
   }
 
-  if (query.isPending || !draft || !activeChecks) {
+  if (query.isPending || !draft) {
     return (
       <div>
         <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
@@ -375,35 +320,6 @@ export function ModelSettingsClient() {
     <div>
       <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
       <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6 p-8">
-        <section className="grid gap-4 lg:grid-cols-3" aria-labelledby="model-status-title">
-          <div className="lg:col-span-3">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 id="model-status-title" className="text-base font-semibold text-foreground">
-                  {t("settings.model.status.title")}
-                </h2>
-                <p className="mt-1 text-sm text-muted">{t("settings.model.status.subtitle")}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {isDirty ? (
-                  <span className="rounded-full bg-warning-bg px-3 py-1 text-xs font-medium text-warning">
-                    {t("settings.model.unsaved")}
-                  </span>
-                ) : null}
-                <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
-                  {t("settings.model.source")}: {t("settings.model.source.runtime")}
-                </span>
-                <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
-                  {t("settings.model.secretSource")}: {t(SECRET_SOURCE_LABEL_KEYS[secretSource])}
-                </span>
-              </div>
-            </div>
-          </div>
-          {CHECK_KEYS.map((key) => (
-            <CheckCard key={key} checkKey={key} status={activeChecks[key]} />
-          ))}
-        </section>
-
         {notice ? (
           <Banner severity={notice.tone === "error" ? "danger" : notice.tone}>
             {notice.message}
@@ -598,16 +514,6 @@ export function ModelSettingsClient() {
               description: t("settings.model.json.description"),
               value: jsonPreview,
             }}
-            operation={{
-              description: t("settings.model.ops.description"),
-              notes: [
-                t("settings.model.ops.nonBlockingSave"),
-                t("settings.model.ops.enterpriseOnly"),
-                t("settings.model.ops.genaiOnly"),
-                t("settings.model.ops.vectorDim"),
-              ],
-              warnings: validationMessages,
-            }}
           />
         </div>
       </form>
@@ -638,44 +544,6 @@ function ModelFormActions({
         {saveLabel}
       </Button>
     </div>
-  );
-}
-
-function CheckCard({ checkKey, status }: { checkKey: CheckKey; status: ModelSettingsCheckStatus }) {
-  const Icon = status === "ok" ? CheckCircle2 : AlertCircle;
-  return (
-    <Card>
-      <CardContent className="flex h-full flex-col gap-3 pt-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-foreground">{t(CHECK_LABEL_KEYS[checkKey])}</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              {t(CHECK_MESSAGE_KEYS[checkKey][status])}
-            </p>
-          </div>
-          <Icon
-            size={18}
-            className={cn(
-              "shrink-0",
-              status === "ok" && "text-success",
-              status === "missing" && "text-warning",
-              status === "invalid" && "text-danger"
-            )}
-            aria-hidden
-          />
-        </div>
-        <span
-          className={cn(
-            "mt-auto w-fit rounded-full px-2.5 py-1 text-xs font-medium",
-            status === "ok" && "bg-success-bg text-success",
-            status === "missing" && "bg-warning-bg text-warning",
-            status === "invalid" && "bg-danger-bg text-danger"
-          )}
-        >
-          {t(STATUS_LABEL_KEYS[status])}
-        </span>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1225,73 +1093,6 @@ function modelApiKeyEnvPreview(settings: EnterpriseAiModelSettings | null): stri
   return settings.has_api_key ? t("settings.preview.secret.saved") : "";
 }
 
-function validateDraft(draft: ModelSettingsPayload): string[] {
-  const messages: string[] = [];
-  if (draft.enterprise_ai.endpoint && !isHttpUrl(draft.enterprise_ai.endpoint)) {
-    messages.push(t("settings.model.validation.endpoint"));
-  }
-  if (
-    draft.enterprise_ai.project_ocid &&
-    !draft.enterprise_ai.project_ocid.startsWith("ocid1.generativeaiproject.")
-  ) {
-    messages.push(t("settings.model.validation.project"));
-  }
-  if (
-    !draft.enterprise_ai.api_key.trim() &&
-    (!draft.enterprise_ai.has_api_key || draft.enterprise_ai.clear_api_key)
-  ) {
-    messages.push(t("settings.model.validation.apiKey"));
-  }
-  const modelIds = draft.enterprise_ai.models.map((model) => model.model_id.trim());
-  const presentModelIds = modelIds.filter(Boolean);
-  if (draft.enterprise_ai.models.length === 0 || presentModelIds.length !== modelIds.length) {
-    messages.push(t("settings.model.validation.modelRequired"));
-  }
-  if (new Set(presentModelIds).size !== presentModelIds.length) {
-    messages.push(t("settings.model.validation.modelDuplicate"));
-  }
-  if (
-    !draft.enterprise_ai.default_model_id.trim() ||
-    !presentModelIds.includes(draft.enterprise_ai.default_model_id.trim())
-  ) {
-    messages.push(t("settings.model.validation.defaultModel"));
-  }
-  if (!draft.enterprise_ai.models.some((model) => model.model_id.trim() && model.vision_enabled)) {
-    messages.push(t("settings.model.validation.visionModel"));
-  }
-  if (!draft.enterprise_ai.api_path.trim()) {
-    messages.push(t("settings.model.validation.pathRequired"));
-  } else if (!isApiPath(draft.enterprise_ai.api_path)) {
-    messages.push(t("settings.model.validation.path"));
-  }
-  if (
-    draft.enterprise_ai.timeout_seconds <= 0 ||
-    draft.enterprise_ai.timeout_seconds > 600 ||
-    Number.isNaN(draft.enterprise_ai.timeout_seconds)
-  ) {
-    messages.push(t("settings.model.validation.timeout"));
-  }
-  if (
-    draft.enterprise_ai.max_retries < 0 ||
-    draft.enterprise_ai.max_retries > 5 ||
-    !Number.isInteger(draft.enterprise_ai.max_retries)
-  ) {
-    messages.push(t("settings.model.validation.retries"));
-  }
-  if (draft.generative_ai.embedding_dim !== 1536) {
-    messages.push(t("settings.model.validation.embeddingDim"));
-  }
-  return [...new Set(messages)];
-}
-
-function isHttpUrl(value: string) {
-  return value.startsWith("http://") || value.startsWith("https://");
-}
-
-function isApiPath(value: string) {
-  return value.startsWith("/") || isHttpUrl(value);
-}
-
 function buildClientSideTestFailure(
   target: Omit<ModelSettingsTestRequest, "settings">,
   rawError: string
@@ -1319,8 +1120,4 @@ function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
     },
     generative_ai: { ...settings.generative_ai },
   };
-}
-
-function serializeSettings(settings: ModelSettingsPayload): string {
-  return JSON.stringify(settings);
 }

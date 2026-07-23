@@ -1,0 +1,78 @@
+{
+  "id": "hr",
+  "metadata": {
+    "name_ja": "人事",
+    "description_ja": "社員・部門・勤怠を中心とした人事業務の出発点テンプレート。",
+    "icon": "👥",
+    "category": "業種",
+    "tags": ["人事", "勤怠", "組織"]
+  },
+  "entities": [
+    {
+      "key": "employee",
+      "business_name_ja": "社員",
+      "description_ja": "在籍する従業員。主識別子は社員番号。",
+      "aliases": ["従業員", "職員", "employee"],
+      "object_name_hint": "EMPLOYEES"
+    },
+    {
+      "key": "department",
+      "business_name_ja": "部門",
+      "description_ja": "組織上の部門。主識別子は部門コード。",
+      "aliases": ["部署", "組織", "department"],
+      "object_name_hint": "DEPARTMENTS"
+    },
+    {
+      "key": "attendance",
+      "business_name_ja": "勤怠",
+      "description_ja": "日次の出退勤・勤務時間の記録。",
+      "aliases": ["出勤記録", "勤務実績"],
+      "object_name_hint": "ATTENDANCES"
+    },
+    {
+      "key": "payroll",
+      "business_name_ja": "給与",
+      "description_ja": "月次の給与支給記録。",
+      "aliases": ["給与明細", "支給"],
+      "object_name_hint": "PAYROLLS"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "department",
+      "target": "employee",
+      "relationship_name_ja": "所属する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの部門に複数の社員が所属する。",
+      "join_hints": [{ "left_column": "DEPARTMENT_ID", "right_column": "DEPARTMENT_ID" }]
+    },
+    {
+      "source": "employee",
+      "target": "attendance",
+      "relationship_name_ja": "勤怠を記録する",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の社員に日次の勤怠記録が複数付く。",
+      "join_hints": [{ "left_column": "EMPLOYEE_ID", "right_column": "EMPLOYEE_ID" }]
+    },
+    {
+      "source": "employee",
+      "target": "payroll",
+      "relationship_name_ja": "給与を受け取る",
+      "cardinality": "one_to_many",
+      "description_ja": "1 人の社員に月次の給与記録が複数付く。",
+      "join_hints": [{ "left_column": "EMPLOYEE_ID", "right_column": "EMPLOYEE_ID" }]
+    }
+  ],
+  "terms": [
+    {
+      "business_name_ja": "離職率",
+      "description_ja": "期間内の退職者数 ÷ 期首在籍者数。",
+      "aliases": ["退職率"]
+    },
+    {
+      "business_name_ja": "平均残業時間",
+      "description_ja": "社員 1 人あたりの月間平均残業時間。",
+      "aliases": ["残業時間"]
+    }
+  ]
+}

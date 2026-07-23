@@ -151,6 +151,12 @@ class Settings(BaseServiceSettings):
     # inprocess: local 開発用 thread、external: API は job 永続化だけを行う。
     nl2sql_schema_refresh_worker_mode: str = "inprocess"
     nl2sql_schema_refresh_lease_seconds: float = 900.0
+    # 明示 system schema DDL が既存 DML lock の解放を待つ上限。
+    nl2sql_system_schema_ddl_lock_timeout_seconds: int = Field(
+        default=30,
+        ge=0,
+        le=120,
+    )
     # 品質評価は local で inprocess、Oracle 運用で external worker を使う。
     nl2sql_quality_evaluation_worker_mode: str = "inprocess"
     nl2sql_quality_evaluation_worker_poll_seconds: float = 1.0

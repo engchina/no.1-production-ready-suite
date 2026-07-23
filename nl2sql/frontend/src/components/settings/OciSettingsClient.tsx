@@ -157,7 +157,6 @@ export function OciSettingsClient() {
   }, []);
 
   const liveErrors = useMemo(() => validateOciSettingsDraft(draft), [draft]);
-  const operationWarnings = useMemo(() => ociValidationMessages(liveErrors), [liveErrors]);
   const envPreview = useMemo(() => buildOciEnvFile(draft), [draft]);
   const completedCount = REQUIRED_OCI_SETTINGS_FIELDS.filter((field) =>
     draft[field].trim()
@@ -552,16 +551,6 @@ export function OciSettingsClient() {
           env={{
             description: t("settings.oci.env.description"),
             value: envPreview,
-          }}
-          operation={{
-            description: t("settings.oci.ops.description"),
-            notes: [
-              t("settings.oci.ops.nonBlockingSave"),
-              t("settings.oci.ops.config"),
-              t("settings.oci.ops.key"),
-              t("settings.oci.ops.storage"),
-            ],
-            warnings: operationWarnings,
           }}
         />
       </div>
@@ -1274,14 +1263,6 @@ function clearSectionErrors(
     delete next[field];
   }
   return next;
-}
-
-function ociValidationMessages(validation: OciValidationResult): string[] {
-  return REQUIRED_OCI_SETTINGS_FIELDS.flatMap((field) => {
-    const code = validation[field];
-    if (!code) return [];
-    return [`${t(FIELD_LABEL_KEYS[field])}: ${t(validationMessageKey(code))}`];
-  });
 }
 
 function sameDraft(left: OciSettingsDraft, right: OciSettingsDraft): boolean {

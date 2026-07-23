@@ -17,7 +17,7 @@ async function fulfillJson(route: Route, data: unknown, status = 200) {
 function auditRecord(id: number) {
   return {
     audit_id: id,
-    actor_user_id: `actor-${id}`,
+    actor_user_id: id === 12 ? "00000000-0000-0000-0000-000000000000" : `actor-${id}`,
     event_type: `EVENT_${id}`,
     target_type: "USER",
     target_id: `target-${id}`,
@@ -35,6 +35,14 @@ function hasDocumentHorizontalScroll(page: Page) {
       document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
       document.body.scrollWidth > document.body.clientWidth + 1
   );
+}
+
+async function pageHeaderAction(page: Page, name: string) {
+  const actions = page.getByTestId("security-audit-actions");
+  const visibleButton = actions.getByRole("button", { name, exact: true });
+  if (await visibleButton.isVisible()) return visibleButton;
+  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  return page.getByRole("menuitem", { name, exact: true });
 }
 
 test("監査ログは 10 件ずつページ移動し、直近 1 年を Excel 出力できる", async ({ page }) => {
@@ -72,6 +80,11 @@ test("監査ログは 10 件ずつページ移動し、直近 1 年を Excel 出
   const table = page.getByTestId("security-audit-table");
   await expect(table.locator("tbody tr")).toHaveCount(10);
   await expect(table.locator("tbody tr").first()).toContainText("EVENT_12");
+  const actorColumn = table.getByRole("columnheader", { name: "実行者" });
+  await expect(actorColumn).toHaveCSS("min-width", "252px");
+  await expect(table.locator("tbody tr").first().locator("td").nth(2)).toContainText(
+    "00000000-0000-0000-0000-000000000000"
+  );
   await expect(page.getByText("1-10 / 12 件", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "次へ" }).click();
@@ -79,13 +92,14 @@ test("監査ログは 10 件ずつページ移動し、直近 1 年を Excel 出
   await expect(table.locator("tbody tr").first()).toContainText("EVENT_2");
   await expect(page.getByText("11-12 / 12 件", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "再読込" }).click();
+  await (await pageHeaderAction(page, "表示を更新")).click();
+  await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
   await expect(table.locator("tbody tr")).toHaveCount(10);
   await expect(table.locator("tbody tr").first()).toContainText("EVENT_12");
   expect(requestedPages.filter((requestedPage) => requestedPage === 2)).toHaveLength(1);
   expect(requestedPages.at(-1)).toBe(1);
 
-  const exportButton = page.getByRole("button", { name: "直近 1 年を Excel 出力" });
+  const exportButton = await pageHeaderAction(page, "直近 1 年を Excel 出力");
   await exportButton.focus();
   await expect(exportButton).toBeFocused();
   const downloadPromise = page.waitForEvent("download");

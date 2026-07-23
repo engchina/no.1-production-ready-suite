@@ -488,7 +488,12 @@ export type OntologyBuildStepStatus =
   | "succeeded"
   | "skipped"
   | "failed";
-export type OntologyBuildStatus = "queued" | "running" | "succeeded" | "failed";
+export type OntologyBuildStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export interface OntologyBuildStep {
   name: OntologyBuildStepName;

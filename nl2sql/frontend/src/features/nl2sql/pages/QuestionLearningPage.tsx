@@ -20,7 +20,6 @@ import {
   EmptyState,
   ErrorState,
   FormStatus,
-  PageHeader,
   Pagination,
   SelectField,
   StatusBadge,
@@ -28,6 +27,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -40,7 +40,6 @@ import {
   DbManagementLoadingSkeleton,
   DbManagementSearchField,
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
@@ -400,7 +399,47 @@ export function QuestionClassifierModelsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.questionClassifierModels")} subtitle={t("qcm.subtitle")} />
+      <PageHeader
+        title={t("nav.questionClassifierModels")}
+        subtitle={t("qcm.subtitle")}
+        status={
+          classifierStatus ? (
+            <span data-testid="qcm-model-status" aria-live="polite">
+              <StatusBadge
+                variant={
+                  classifierStatus.ready
+                    ? classifierStatus.stale
+                      ? "warning"
+                      : "success"
+                    : "neutral"
+                }
+                label={
+                  classifierStatus.ready
+                    ? classifierStatus.stale
+                      ? t("learning.classifier.stale")
+                      : t("learning.classifier.ready")
+                    : t("learning.classifier.notReady")
+                }
+              />
+            </span>
+          ) : undefined
+        }
+        meta={
+          classifierStatus?.updated_at
+            ? `${t("qcm.metric.updatedAt")}: ${formatDateTime(classifierStatus.updated_at)}`
+            : undefined
+        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading: loading === "load",
+          },
+        ]}
+      />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
@@ -411,35 +450,6 @@ export function QuestionClassifierModelsPage() {
                 <span>{t("learning.action.refresh")}</span>
               </Button>
             ) : undefined
-          }
-        />
-
-        <DbObjectManagementStatusBar
-          ariaLabel={t("qcm.status.aria")}
-          metricColumnsClass="sm:grid-cols-2 lg:grid-cols-5"
-          metrics={[
-            {
-              label: t("qcm.metric.modelStatus"),
-              value: classifierStatus
-                ? classifierStatus.ready
-                  ? classifierStatus.stale
-                    ? t("learning.classifier.stale")
-                    : t("learning.classifier.ready")
-                  : t("learning.classifier.notReady")
-                : "—",
-              emphasis: true,
-              testId: "qcm-model-status",
-            },
-            { label: t("qcm.metric.updatedAt"), value: formatDateTime(classifierStatus?.updated_at) },
-            { label: t("learning.classifier.examples"), value: formatNumber(classifierStatus?.example_count ?? 0) },
-            { label: t("learning.classifier.categories"), value: formatNumber(classifierStatus?.category_count ?? 0) },
-            { label: t("learning.classifier.dimension"), value: formatNumber(classifierStatus?.vector_dimension ?? 1536) },
-          ]}
-          actions={
-            <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load(true)}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("learning.action.refresh")}</span>
-            </Button>
           }
         />
 

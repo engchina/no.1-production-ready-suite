@@ -1,0 +1,78 @@
+{
+  "id": "manufacturing",
+  "metadata": {
+    "name_ja": "製造",
+    "description_ja": "品目・製造指図・工程実績を中心とした製造業務の出発点テンプレート。",
+    "icon": "🏭",
+    "category": "業種",
+    "tags": ["製造", "生産管理", "品質"]
+  },
+  "entities": [
+    {
+      "key": "item",
+      "business_name_ja": "品目",
+      "description_ja": "製造・調達対象の品目マスタ。主識別子は品目コード。",
+      "aliases": ["部品", "材料", "item"],
+      "object_name_hint": "ITEMS"
+    },
+    {
+      "key": "work_order",
+      "business_name_ja": "製造指図",
+      "description_ja": "製造の実行指示。主識別子は指図番号。",
+      "aliases": ["製造オーダー", "指図"],
+      "object_name_hint": "WORK_ORDERS"
+    },
+    {
+      "key": "operation",
+      "business_name_ja": "工程実績",
+      "description_ja": "製造指図に対する工程ごとの実績。",
+      "aliases": ["作業実績", "工程"],
+      "object_name_hint": "OPERATIONS"
+    },
+    {
+      "key": "inspection",
+      "business_name_ja": "検査結果",
+      "description_ja": "工程・完成品の品質検査結果。",
+      "aliases": ["品質検査", "検査"],
+      "object_name_hint": "INSPECTIONS"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "item",
+      "target": "work_order",
+      "relationship_name_ja": "製造される",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの品目は複数の製造指図で製造される。",
+      "join_hints": [{ "left_column": "ITEM_ID", "right_column": "ITEM_ID" }]
+    },
+    {
+      "source": "work_order",
+      "target": "operation",
+      "relationship_name_ja": "工程を持つ",
+      "cardinality": "one_to_many",
+      "description_ja": "1 件の製造指図は複数の工程実績を持つ。",
+      "join_hints": [{ "left_column": "WORK_ORDER_ID", "right_column": "WORK_ORDER_ID" }]
+    },
+    {
+      "source": "operation",
+      "target": "inspection",
+      "relationship_name_ja": "検査される",
+      "cardinality": "one_to_many",
+      "description_ja": "1 つの工程実績に複数の検査結果が紐づく。",
+      "join_hints": [{ "left_column": "OPERATION_ID", "right_column": "OPERATION_ID" }]
+    }
+  ],
+  "terms": [
+    {
+      "business_name_ja": "直行率",
+      "description_ja": "手直しなしで全工程を通過した数量の割合。",
+      "aliases": ["一発合格率"]
+    },
+    {
+      "business_name_ja": "不良率",
+      "description_ja": "検査数量に対する不良数量の割合。",
+      "aliases": ["不適合率"]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -20,6 +21,7 @@ from app.features.nl2sql.models import (
     QueryResults,
     SafetyReport,
     SchemaCatalog,
+    SchemaCatalogHead,
     SchemaColumn,
     SchemaTable,
 )
@@ -54,7 +56,11 @@ from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
-from app.features.nl2sql.ontology_store import InMemoryOntologyStore, stable_physical_id
+from app.features.nl2sql.ontology_store import (
+    InMemoryOntologyStore,
+    OntologyCollection,
+    stable_physical_id,
+)
 from app.main import app
 from app.settings import get_settings
 
@@ -175,6 +181,25 @@ class _FakeLegacyNl2SqlService:
         self.recorded_history.append(payload)
 
 
+class _IncrementalCatalogLegacyService(_FakeLegacyNl2SqlService):
+    uses_incremental_store = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.catalog_reads = 0
+        self.head = SchemaCatalogHead(
+            catalog_version=1,
+            schema_fingerprint="catalog-head-fingerprint",
+        )
+
+    def get_catalog(self) -> SchemaCatalog:
+        self.catalog_reads += 1
+        return super().get_catalog()
+
+    def get_catalog_head(self) -> SchemaCatalogHead:
+        return self.head.model_copy(deep=True)
+
+
 class _FakeOntologyEmbeddingClient:
     def is_configured(self) -> bool:
         return True
@@ -183,6 +208,35 @@ class _FakeOntologyEmbeddingClient:
         return [
             [1.0 if index == (len(text) % 8) else 0.0 for index in range(1536)] for text in texts
         ]
+
+
+class _BatchRecordingStore(InMemoryOntologyStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.individual_saves: list[OntologyCollection] = []
+        self.atomic_saves: list[tuple[OntologyCollection, int]] = []
+
+    def save_document(
+        self,
+        collection: OntologyCollection,
+        document: Mapping[str, Any] | Any,
+        *,
+        expected_etag: str | None = None,
+    ) -> dict[str, Any]:
+        self.individual_saves.append(collection)
+        return super().save_document(
+            collection,
+            document,
+            expected_etag=expected_etag,
+        )
+
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
+        self.atomic_saves.append((collection, len(documents)))
+        return super().save_documents_atomic(collection, documents)
 
 
 @pytest.fixture
@@ -233,6 +287,88 @@ def test_router_declares_complete_query_session_and_profile_view_api() -> None:
     assert "/nl2sql/ontology/revisions/current" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/drafts" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/publish" in declared_paths
+
+
+def test_initial_profile_view_persists_graph_in_collection_batches() -> None:
+    store = _BatchRecordingStore()
+    api = OntologyApiRuntime(
+        legacy_service=_FakeLegacyNl2SqlService(),
+        store=store,
+    )
+
+    _view, ontology = api.profile_view("sales")
+
+    assert set(store.individual_saves) == {"revisions"}
+    assert store.atomic_saves == [
+        ("nodes", len(ontology.nodes)),
+        ("edges", len(ontology.edges)),
+    ]
+    assert len(store.list_documents("nodes", {"revision_id": ontology.revision.id})) == len(
+        ontology.nodes
+    )
+    assert len(store.list_documents("edges", {"revision_id": ontology.revision.id})) == len(
+        ontology.edges
+    )
+
+
+def test_incremental_catalog_signature_avoids_reloading_unchanged_catalog() -> None:
+    service = _IncrementalCatalogLegacyService()
+    api = OntologyApiRuntime(
+        legacy_service=service,
+        store=InMemoryOntologyStore(),
+    )
+
+    api.profile_view("sales")
+    api.profile_view("sales")
+
+    assert service.catalog_reads == 1
+    assert api._synced_catalog_signature == (1, "catalog-head-fingerprint")  # noqa: SLF001
+
+    service.head = service.head.model_copy(
+        update={
+            "catalog_version": 2,
+            "schema_fingerprint": "next-catalog-head-fingerprint",
+        }
+    )
+    api.profile_view("sales")
+    api.profile_view("sales")
+
+    assert service.catalog_reads == 2
+    assert api._synced_catalog_signature == (  # noqa: SLF001
+        2,
+        "next-catalog-head-fingerprint",
+    )
+
+
+def test_cold_runtime_reuses_complete_deterministic_draft_revision() -> None:
+    service = _IncrementalCatalogLegacyService()
+    store = _BatchRecordingStore()
+    first_runtime = OntologyApiRuntime(legacy_service=service, store=store)
+    _first_view, first_ontology = first_runtime.profile_view("sales")
+    store.individual_saves.clear()
+    store.atomic_saves.clear()
+
+    second_runtime = OntologyApiRuntime(legacy_service=service, store=store)
+    _second_view, second_ontology = second_runtime.profile_view("sales")
+
+    assert second_ontology.revision.id == first_ontology.revision.id
+    assert store.individual_saves == []
+    assert store.atomic_saves == []
+
+
+def test_system_schema_reset_clears_incremental_catalog_signature() -> None:
+    service = _IncrementalCatalogLegacyService()
+    api = OntologyApiRuntime(
+        legacy_service=service,
+        store=InMemoryOntologyStore(),
+    )
+    api.profile_view("sales")
+
+    api.reset_after_system_schema_change()
+
+    assert api._synced_catalog_signature is None  # noqa: SLF001
+    api.profile_view("sales")
+    assert service.catalog_reads == 2
 
 
 def test_ontology_revision_cache_keeps_active_and_latest_only(

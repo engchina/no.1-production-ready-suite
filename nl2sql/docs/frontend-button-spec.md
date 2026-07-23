@@ -26,7 +26,7 @@
 |---|---|---|
 | **Action Button** | `<Button>` | 保存・実行・キャンセル・再試行など主たる操作 |
 | **Icon-only Button** | `<Button>` か aria-label 付き生 `<button>` | 閉じる ×・削除・表示切替など。**aria-label 必須** |
-| **Toggle / Segmented chip** | `aria-pressed` 付きピル群 | フィルタ・モード・対象切替(下記 §5) |
+| **Toggle / Segmented chip** | `aria-pressed` 付きピル群 | フィルタ・モード・対象切替(下記 §6) |
 | **Nav item** | リンク/ボタン(Sidebar) | ナビゲーション。本 spec の対象外(ナビ規約に従う) |
 
 ---
@@ -67,13 +67,39 @@
 
 - **主アクションバー**は、フォーム/カードの**末尾**に `border-t border-border pt-4` で区切って置く。`flex flex-wrap items-center gap-2`。
 - **並び順**: primary → secondary → ghost(左から重要度順)。結果表示(`FormStatus`)はバー内の末尾に置く。
-- **ヘッダーのユーティリティ操作**(更新など)は画面右上に置く(size sm/md・secondary)。
+- **ページレベル操作**はローカル [`<PageHeader>` / `<PageActionBar>`](../frontend/src/components/PageHeader.tsx) に集約する。独立したページ上部アクション行を追加しない。
 - **破壊的アクションは通常アクションから空間的に分離**(`destructive-nav-separation` / `destructive-emphasis`)。
 - レスポンシブ: 横幅が足りない場合は `w-full sm:w-auto` で縦積み→横並びにする。`whitespace-nowrap` でラベル折返しを防ぐ。
 
 ---
 
-## 5. Toggle / Segmented chip
+## 5. ページヘッダー操作
+
+ページレベル操作は `PageAction` descriptor で宣言し、`PageActionBar` に表示順・variant・モバイル縮約を委ねる。
+
+```tsx
+<PageHeader
+  title={t("nav.tables")}
+  actions={[
+    { id: "create", kind: "primary", label: t("table.create"), icon: Code2, onClick: startCreate },
+    { id: "import", kind: "secondary", label: t("table.import"), icon: Upload, onClick: startImport },
+    { id: "refresh", kind: "utility", label: t("common.action.refresh"), icon: RefreshCw, onClick: load, loading },
+    { id: "schema-refresh", kind: "utility", label: t("common.action.schemaRefresh"), icon: RefreshCw, onClick: refreshSchema },
+  ]}
+/>
+```
+
+- 固定順序は **primary → secondary → utility(現在表示の再取得 → 外部データ/DB 構造同期) → danger**。配列順に依存せず `kind` で整列し、同一 `kind` 内の宣言順を保つ。
+- `primary` はページ全体で最大 1 件。`utility` は `secondary` variant、`danger` は区切りを置いて表示する。
+- 共通文言は `common.action.refresh`=`表示を更新`、`common.action.schemaRefresh`=`DB 構造を再取得` を使用する。前者は現在表示の GET、後者は Schema Refresh Job の開始に限定する。
+- 非同期操作は `loading` を渡し、処理中の再送信を防止する。成功 Toast と回復可能なエラー表示は [frontend-messaging-spec.md](./frontend-messaging-spec.md) に従い handler 側で行う。
+- 375px で操作が 2 件以上なら、先頭の最高優先度操作だけを表示し、残りを `その他の操作` メニューへ収める。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印/Home/End、フォーカス復帰を満たす。
+- モバイルのページ操作は 44px、デスクトップは `size="sm"`。ラベルと既存 `data-testid` は可能な限り維持する。
+- ヘッダーには現在の判断を変える状態・リスク・バックグラウンド進捗だけを置く。件数は一覧/タブ/操作パネルへ、DB 構造の最終取得時刻は同期操作の近くへ置く。
+
+---
+
+## 6. Toggle / Segmented chip
 
 フィルタ・モード・対象切替の連動トグルは **共通 [`<ToggleChip>`](../frontend/src/components/ui/toggle-chip.tsx) を使う**(FileList のステータス絞り込み、検索のモード切替)。
 
@@ -93,7 +119,7 @@
 
 ---
 
-## 6. 命名規則(naming)
+## 7. 命名規則(naming)
 
 - **コンポーネント**: アクションは常に `<Button>`。同一バーを再利用する場合は `XxxActionBar` のような呼称で部品化する。
 - **ラベル文言キー**: `<domain>.<feature>.actions.<verb>`(例: `settings.model.actions.save` 相当)。汎用語は `common.*`(`common.confirm` / `common.cancel` / `common.delete` / `common.dismiss` / `common.undo`)。
@@ -105,7 +131,7 @@
 
 ---
 
-## 7. アイコン / ローディング
+## 8. アイコン / ローディング
 
 - Lucide を使用。ラベル付きは**アイコンを左**に置き(`<Button>` 既定の `gap-1.5`)、`aria-hidden` を付ける。
 - サイズ: §2 の対応(sm/md=14–15、lg=15–16)。`[&>svg]:shrink-0` 済み。
@@ -115,7 +141,7 @@
 
 ---
 
-## 8. アクセシビリティ チェックリスト(必須)
+## 9. アクセシビリティ チェックリスト(必須)
 
 - [ ] Icon-only に `aria-label`。
 - [ ] hit area: 通常 ≥32px、アイコン専用は最低 `h-9 w-9`(36px)、タッチ主導線は 44px 目標。
@@ -126,7 +152,7 @@
 
 ---
 
-## 9. 使用例(正)
+## 10. 使用例(正)
 
 ```tsx
 // 主アクションバー（設定）
@@ -154,9 +180,10 @@
 
 ---
 
-## 10. 移行状況
+## 11. 移行状況
 
 - ✅ `<Button>` に React 19 流の `ref` 対応を追加(ConfirmDialog のフォーカス制御で利用)。
 - ✅ 手書き secondary ボタン(`StateViews` 再試行 / `DashboardHeader` 更新)を `<Button variant="secondary">` へ統一。
 - ✅ 主アクションバーの高さ表現を `min-h-10` override → `size="lg"` に統一(設定各画面)。
 - ✅ 共通 `<ToggleChip>` を抽出し、FileList フィルタ・検索モード切替を移行(`role="group"` 付与)。
+- ✅ ページ上部操作を `<PageHeader>` / `<PageActionBar>` へ統一し、レスポンシブな `その他の操作` メニューへ対応。

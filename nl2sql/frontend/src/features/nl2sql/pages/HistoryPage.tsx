@@ -19,12 +19,13 @@ import {
   Button,
   DEFAULT_PAGE_SIZE,
   EmptyState,
-  PageHeader,
   Pagination,
   StatusBadge,
+  toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -34,7 +35,6 @@ import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectPanelHeader,
 } from "../components/DbObjectManagementShared";
 import {
@@ -61,14 +61,6 @@ function feedbackLabel(item: HistoryItem) {
 function columnsLabel(item: HistoryItem) {
   if (item.result_columns.length === 0) return "—";
   return item.result_columns.join(", ");
-}
-
-function latestCreatedAt(items: HistoryItem[]) {
-  return items.reduce((latest, item) => {
-    const currentTime = Date.parse(item.created_at);
-    const latestTime = latest ? Date.parse(latest) : Number.NEGATIVE_INFINITY;
-    return !Number.isNaN(currentTime) && currentTime > latestTime ? item.created_at : latest;
-  }, "");
 }
 
 function focusHistoryTab(id: string) {
@@ -219,71 +211,76 @@ function HistoryGrid({
           </Button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="grid gap-2">
           <div
-            className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5"
-            role="group"
-            aria-label={t("history.sort.label")}
+            className="overflow-hidden rounded-md border border-border bg-card"
+            data-testid="history-list-surface"
           >
-            <HistorySortButton
-              label={t("history.grid.question")}
-              sortKey="question"
-              sort={sort}
-              onToggle={onSortChange}
-            />
-            <HistorySortButton
-              label={t("history.grid.execution")}
-              sortKey="created_at"
-              sort={sort}
-              onToggle={onSortChange}
-            />
-          </div>
-          <div className="max-h-[42rem] overflow-x-hidden overflow-y-auto" data-testid="history-list">
-            <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
-              {pageItems.map((item) => {
-                const selected = item.id === selectedId;
-                return (
-                  <li key={item.id} className="min-w-0" data-testid="history-row">
-                    <button
-                      type="button"
-                      aria-label={t("history.grid.show", { question: item.question })}
-                      aria-current={selected ? "true" : undefined}
-                      className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 ${
-                        selected
-                          ? "border-l-primary bg-primary/10"
-                          : "border-l-transparent hover:bg-background"
-                      }`}
-                      onClick={() => onSelect(item, true)}
-                    >
-                      <span
-                        className="line-clamp-2 min-w-0 break-words text-sm font-semibold leading-5 text-primary [overflow-wrap:anywhere]"
-                        data-testid="history-question"
-                        title={item.question}
+            <div
+              className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5"
+              role="group"
+              aria-label={t("history.sort.label")}
+            >
+              <HistorySortButton
+                label={t("history.grid.question")}
+                sortKey="question"
+                sort={sort}
+                onToggle={onSortChange}
+              />
+              <HistorySortButton
+                label={t("history.grid.execution")}
+                sortKey="created_at"
+                sort={sort}
+                onToggle={onSortChange}
+              />
+            </div>
+            <div className="max-h-[42rem] overflow-x-hidden overflow-y-auto" data-testid="history-list">
+              <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
+                {pageItems.map((item) => {
+                  const selected = item.id === selectedId;
+                  return (
+                    <li key={item.id} className="min-w-0" data-testid="history-row">
+                      <button
+                        type="button"
+                        aria-label={t("history.grid.show", { question: item.question })}
+                        aria-current={selected ? "true" : undefined}
+                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 ${
+                          selected
+                            ? "border-l-primary bg-primary/10"
+                            : "border-l-transparent hover:bg-background"
+                        }`}
+                        onClick={() => onSelect(item, true)}
                       >
-                        {item.question}
-                      </span>
-                      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                        <span className="font-mono text-xs tabular-nums text-foreground">
-                          {formatDateTime(item.created_at)}
+                        <span
+                          className="line-clamp-2 min-w-0 break-words text-sm font-semibold leading-5 text-primary [overflow-wrap:anywhere]"
+                          data-testid="history-question"
+                          title={item.question}
+                        >
+                          {item.question}
                         </span>
-                        <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
-                          {engineLabel(item.engine)}
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-mono text-xs tabular-nums text-foreground">
+                            {formatDateTime(item.created_at)}
+                          </span>
+                          <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+                            {engineLabel(item.engine)}
+                          </span>
+                          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+                          <StatusBadge
+                            variant={item.feedback_rating ? "success" : "neutral"}
+                            label={feedbackLabel(item)}
+                          />
+                          <StatusBadge
+                            variant={item.safety_is_safe ? "success" : "danger"}
+                            label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
+                          />
                         </span>
-                        <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-                        <StatusBadge
-                          variant={item.feedback_rating ? "success" : "neutral"}
-                          label={feedbackLabel(item)}
-                        />
-                        <StatusBadge
-                          variant={item.safety_is_safe ? "success" : "danger"}
-                          label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
-                        />
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </div>
           <Pagination
             page={page}
@@ -499,7 +496,7 @@ export function HistoryPage() {
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const load = async () => {
+  const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -511,6 +508,9 @@ export function HistoryPage() {
         setItems(data.items);
         setSelectedId((current) => selectedVisibleHistoryId(data.items, current));
       });
+      if (announce && sequence === loadSequence.current) {
+        toast.success(t("common.action.refreshed"));
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return;
@@ -543,7 +543,6 @@ export function HistoryPage() {
   }, [selectedId]);
 
   const selectedItem = filteredItems.find((item) => item.id === selectedId) ?? filteredItems[0] ?? null;
-  const evaluatedCount = filteredItems.filter((item) => item.feedback_rating).length;
   const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
 
   const toggleSort = (key: HistorySortKey) => {
@@ -570,27 +569,24 @@ export function HistoryPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.history")} subtitle={t("history.subtitle")} />
+      <PageHeader
+        title={t("nav.history")}
+        subtitle={t("history.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading,
+          },
+        ]}
+      />
       <main className="grid gap-3 p-3 sm:p-4 lg:p-6">
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
           action={
-            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("history.action.refresh")}</span>
-            </Button>
-          }
-        />
-
-        <DbObjectManagementStatusBar
-          ariaLabel={t("history.status.label")}
-          density="compact"
-          metrics={[
-            { label: t("history.status.visible"), value: formatNumber(filteredItems.length), emphasis: true },
-            { label: t("history.status.evaluated"), value: formatNumber(evaluatedCount) },
-            { label: t("history.status.latest"), value: formatDateTime(latestCreatedAt(filteredItems)) },
-          ]}
-          actions={
             <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("history.action.refresh")}</span>

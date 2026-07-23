@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
     "@tanstack/react-query": "^5.62.0",
     "@xyflow/react": "^12.9.3",

@@ -1,4 +1,13 @@
-import { useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Code2,
   Download,
@@ -26,6 +35,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { FieldError } from "@/components/ui/field-error";
 import { apiPost } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
@@ -545,12 +555,29 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
 }
 
 type FileInputIcon = "file" | "spreadsheet" | "upload";
+type FileInputRejectReason = "multiple-files" | "unsupported-type";
 
 const fileInputIcons: Record<FileInputIcon, typeof FileText> = {
   file: FileText,
   spreadsheet: FileSpreadsheet,
   upload: Upload,
 };
+
+function fileMatchesAccept(file: File, accept: string): boolean {
+  const acceptedTypes = accept
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (acceptedTypes.length === 0) return true;
+
+  const filename = file.name.toLowerCase();
+  const mimeType = file.type.toLowerCase();
+  return acceptedTypes.some((acceptedType) => {
+    if (acceptedType.startsWith(".")) return filename.endsWith(acceptedType);
+    if (acceptedType.endsWith("/*")) return mimeType.startsWith(acceptedType.slice(0, -1));
+    return mimeType === acceptedType;
+  });
+}
 
 export function FileInputControl({
   label,
@@ -568,8 +595,12 @@ export function FileInputControl({
   clearDisabled,
   className = "",
   dataTestId,
+  dropEnabled = false,
+  dropActiveText,
+  errorText = "",
   onPick,
   onClear,
+  onReject,
 }: {
   label: string;
   ariaLabel?: string;
@@ -586,13 +617,81 @@ export function FileInputControl({
   clearDisabled?: boolean;
   className?: string;
   dataTestId?: string;
+  dropEnabled?: boolean;
+  dropActiveText?: string;
+  errorText?: string;
   onPick: (file: File) => void | Promise<void>;
   onClear?: () => void;
+  onReject?: (reason: FileInputRejectReason) => void;
 }) {
   const inputId = useId();
+  const errorId = `${inputId}-error`;
   const Icon = fileInputIcons[icon];
   const hasFile = Boolean(filename);
   const clearIsDisabled = clearDisabled ?? !hasFile;
+  const dragDepthRef = useRef(0);
+  const [isDragActive, setIsDragActive] = useState(false);
+
+  useEffect(() => {
+    if (!dropEnabled || disabled) {
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
+    }
+  }, [disabled, dropEnabled]);
+
+  const pickFiles = (files: FileList | File[]) => {
+    const candidates = Array.from(files);
+    if (candidates.length === 0) return;
+    if (!dropEnabled) {
+      void onPick(candidates[0]);
+      return;
+    }
+    if (candidates.length > 1) {
+      onReject?.("multiple-files");
+      return;
+    }
+    const file = candidates[0];
+    if (!fileMatchesAccept(file, accept)) {
+      onReject?.("unsupported-type");
+      return;
+    }
+    void onPick(file);
+  };
+
+  const handleDragEnter = (event: DragEvent<HTMLLabelElement>) => {
+    if (!dropEnabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (disabled) return;
+    dragDepthRef.current += 1;
+    setIsDragActive(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    if (!dropEnabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!disabled) event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLLabelElement>) => {
+    if (!dropEnabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (disabled) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragActive(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    if (!dropEnabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    if (disabled) return;
+    pickFiles(event.dataTransfer.files);
+  };
 
   return (
     <div className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`} data-testid={dataTestId}>
@@ -600,15 +699,37 @@ export function FileInputControl({
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
         <label
           htmlFor={inputId}
-          className={`group flex h-11 min-w-0 items-center gap-2 rounded-md border bg-card px-3 py-1 text-left transition-colors focus-within:ring-2 focus-within:ring-ring/40 ${
+          data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}
+          data-drag-active={dropEnabled ? String(isDragActive) : undefined}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`group flex min-w-0 touch-manipulation items-center gap-2 rounded-md border px-3 py-1 text-left focus-within:ring-2 focus-within:ring-ring/40 ${
+            dropEnabled
+              ? "h-[44px] border-dashed bg-background transition-[border-color,background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none"
+              : "h-11 bg-card transition-colors"
+          } ${
             disabled
               ? "cursor-not-allowed border-border opacity-60"
-              : "cursor-pointer border-border hover:border-primary/40 hover:bg-primary/10"
+              : dropEnabled
+                ? isDragActive
+                  ? "cursor-copy border-primary bg-primary/10 ring-2 ring-ring/40"
+                  : errorText
+                    ? "cursor-pointer border-danger/60 bg-danger-bg/30 hover:border-danger"
+                    : hasFile
+                      ? "cursor-pointer border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10"
+                      : "cursor-pointer border-border hover:border-primary/60 hover:bg-primary/5"
+                : "cursor-pointer border-border hover:border-primary/40 hover:bg-primary/10"
           }`}
         >
           <span
             className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-              hasFile ? "bg-primary/10 text-primary" : "bg-muted/30 text-muted group-hover:text-primary"
+              hasFile || isDragActive
+                ? "bg-primary/10 text-primary"
+                : dropEnabled
+                  ? "bg-muted/30 text-muted group-hover:bg-primary/10 group-hover:text-primary"
+                  : "bg-muted/30 text-muted group-hover:text-primary"
             }`}
             aria-hidden="true"
           >
@@ -616,7 +737,11 @@ export function FileInputControl({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-foreground">
-              {hasFile ? selectedText ?? filename : pickText}
+              {isDragActive && dropActiveText
+                ? dropActiveText
+                : hasFile
+                  ? selectedText ?? filename
+                  : pickText}
             </span>
           </span>
           <span
@@ -633,11 +758,13 @@ export function FileInputControl({
             accept={accept}
             disabled={disabled}
             aria-label={ariaLabel}
+            aria-invalid={Boolean(errorText)}
+            aria-describedby={errorText ? errorId : undefined}
             onChange={(event) => {
               const input = event.currentTarget;
-              const file = input.files?.[0];
-              if (!file) return;
-              void Promise.resolve(onPick(file)).finally(() => {
+              if (!input.files?.length) return;
+              pickFiles(input.files);
+              queueMicrotask(() => {
                 input.value = "";
               });
             }}
@@ -658,6 +785,7 @@ export function FileInputControl({
           </Button>
         )}
       </div>
+      <FieldError id={errorId} message={errorText} />
     </div>
   );
 }
@@ -747,9 +875,11 @@ export function SqlFileInput({
   disabled?: boolean;
 }) {
   const [filename, setFilename] = useState("");
+  const [errorText, setErrorText] = useState("");
 
   useEffect(() => {
     setFilename("");
+    setErrorText("");
   }, [resetSignal]);
 
   return (
@@ -758,14 +888,31 @@ export function SqlFileInput({
       accept=".sql,.txt"
       filename={filename}
       selectedText={filename}
-      emptyText={t("dbAdmin.runner.fileHint")}
-      pickText={t("dbAdmin.runner.filePickAction")}
-      replaceText={t("dbAdmin.runner.fileReplaceAction")}
-      icon="file"
+      emptyText={t("dbAdmin.runner.fileFormats")}
+      pickText={t("dbAdmin.runner.fileDropAction")}
+      replaceText={t("dbAdmin.runner.fileReplaceShort")}
+      icon="upload"
       disabled={disabled}
-      onPick={(file) => {
-        setFilename(file.name);
-        void readTextFileSmart(file).then(onLoad);
+      dataTestId="sql-file-input"
+      dropEnabled
+      dropActiveText={t("dbAdmin.runner.fileDropActive")}
+      errorText={errorText}
+      onReject={(reason) => {
+        setErrorText(
+          reason === "multiple-files"
+            ? t("dbAdmin.runner.fileErrorMultiple")
+            : t("dbAdmin.runner.fileErrorUnsupported")
+        );
+      }}
+      onPick={async (file) => {
+        setErrorText("");
+        try {
+          const text = await readTextFileSmart(file);
+          onLoad(text);
+          setFilename(file.name);
+        } catch {
+          setErrorText(t("dbAdmin.runner.fileErrorRead"));
+        }
       }}
     />
   );

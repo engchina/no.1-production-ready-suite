@@ -1,5 +1,6 @@
-import { PageHeader, Card, CardContent, EmptyState } from "@engchina/production-ready-ui";
+import { Card, CardContent, EmptyState } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { t } from "@/lib/i18n";
 
 /** 共有 UI で雛形ページを描画する（skeleton。実装はバックエンド接続時に追加）。 */

@@ -2,18 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
 
 import {
-  Button,
   Card,
   CardContent,
   DataTable,
   DEFAULT_PAGE_SIZE,
   EmptyState,
-  PageHeader,
   Pagination,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
@@ -39,7 +38,7 @@ export function SecurityAuditPage() {
   const requestSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const load = useCallback(async (requestedPage = 1) => {
+  const load = useCallback(async (requestedPage = 1, announce = false) => {
     const sequence = requestSequence.current + 1;
     requestSequence.current = sequence;
     setLoading(true);
@@ -52,6 +51,9 @@ export function SecurityAuditPage() {
         if (signal.aborted || sequence !== requestSequence.current) return;
         setPageData(nextPage);
       });
+      if (announce && sequence === requestSequence.current) {
+        toast.success(t("common.action.refreshed"));
+      }
     } catch (cause) {
       if (isAbortError(cause)) {
         return;
@@ -94,31 +96,27 @@ export function SecurityAuditPage() {
   return (
     <>
       <PageHeader
-        className="px-4 sm:px-8"
         title={t("nav.securityAudit")}
         subtitle={t("security.audit.subtitle")}
-        actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void exportAudit()}
-              loading={exporting}
-            >
-              <Download size={14} aria-hidden />
-              {t("security.audit.export")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void load(1)}
-              disabled={loading}
-            >
-              <RefreshCw size={14} aria-hidden />
-              {t("security.common.reload")}
-            </Button>
-          </div>
-        }
+        actions={[
+          {
+            id: "export",
+            kind: "secondary",
+            label: t("security.audit.export"),
+            icon: Download,
+            onClick: exportAudit,
+            loading: exporting,
+          },
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(1, true),
+            loading,
+          },
+        ]}
+        actionsTestId="security-audit-actions"
       />
       <main className="space-y-4 p-4 lg:p-8">
         <Card>
@@ -153,7 +151,8 @@ export function SecurityAuditPage() {
                     {
                       key: "actor_user_id",
                       header: t("security.audit.actor"),
-                      className: "max-w-40 break-all font-mono text-[11px]",
+                      headerClassName: "min-w-72",
+                      className: "min-w-72 break-all font-mono text-[11px]",
                       render: (row) => row.actor_user_id ?? t("security.common.none"),
                     },
                     {

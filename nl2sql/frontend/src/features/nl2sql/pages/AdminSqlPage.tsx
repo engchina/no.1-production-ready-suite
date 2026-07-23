@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Play, X } from "lucide-react";
 
-import { Button, PageHeader } from "@engchina/production-ready-ui";
+import { Button } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -119,18 +120,6 @@ export function AdminSqlPage() {
       <PageHeader title={t("nav.adminSql")} subtitle={t("nl2sql.adminSqlRunner.description")} />
       <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-admin-sql">
         <PageNotice notice={error ? { tone: "danger", message: error } : null} />
-        <PageNotice
-          notice={
-            trimmedSql
-              ? {
-                  tone: requiresConfirmation ? "warning" : "info",
-                  message: requiresConfirmation
-                    ? t("nl2sql.adminSqlRunner.adminHint")
-                    : t("nl2sql.adminSqlRunner.selectHint"),
-                }
-              : null
-          }
-        />
         <section className="grid gap-4 rounded-md border border-border bg-card p-4">
           <label className="grid gap-2 text-sm font-medium text-foreground">
             <span>{t("nl2sql.adminSqlRunner.label")}</span>

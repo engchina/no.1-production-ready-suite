@@ -46,10 +46,29 @@ def test_default_profile_delete_returns_stable_conflict_code(
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(
+        type(service),
+        "uses_incremental_store",
+        property(lambda _service: True),
+    )
+    monkeypatch.setattr(
+        service,
+        "delete_profile",
+        lambda *_args, **_kwargs: pytest.fail(
+            "default profile must be rejected before repository deletion"
+        ),
+    )
 
     with pytest.raises(HTTPException) as caught:
         nl2sql_router.delete_profile("default")
 
     assert caught.value.status_code == 409
-    assert isinstance(caught.value.detail, dict)
-    assert caught.value.detail["code"] == "DEFAULT_PROFILE_DELETE_FORBIDDEN"
+    detail = caught.value.detail
+    assert isinstance(detail, dict)
+    assert detail == {
+        "code": "DEFAULT_PROFILE_DELETE_FORBIDDEN",
+        "message": "標準プロファイルは削除できません。",
+    }
+    assert [profile.id for profile in service.list_profiles(include_archived=True)] == [
+        "default"
+    ]

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -13,6 +15,7 @@ from app.clients.oracle_runtime import get_oracle_pool_manager
 from app.features.nl2sql.oracle_adapter import oracle_connect_kwargs
 from app.features.settings.system_schema import (
     RECREATE_CONFIRMATION,
+    SystemSchemaError,
     SystemSchemaManager,
 )
 from app.settings import get_settings
@@ -59,7 +62,10 @@ def main() -> int:
             finally:
                 connection.close()
 
-        manager = SystemSchemaManager(temporary_connection)
+        manager = SystemSchemaManager(
+            temporary_connection,
+            ddl_lock_timeout_seconds=1,
+        )
         with temporary_connection() as connection, connection.cursor() as cursor:
             cursor.execute("CREATE TABLE NL2SQL_APP_USERS (ID NUMBER PRIMARY KEY)")
             cursor.execute("INSERT INTO NL2SQL_APP_USERS (ID) VALUES (1)")
@@ -81,6 +87,96 @@ def main() -> int:
             connection.commit()
 
         initialized = manager.initialize()
+
+        # 旧 migration の対象表がロック中でも、欠損 object の所有 migration (v8)
+        # だけを選べば更新できることを二つの session で確認する。
+        with temporary_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DROP TABLE NL2SQL_EVALUATION_RESULTS CASCADE CONSTRAINTS PURGE"
+            )
+            cursor.execute(
+                "DROP TABLE NL2SQL_EVALUATION_JOBS CASCADE CONSTRAINTS PURGE"
+            )
+            cursor.execute(
+                "DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 8"
+            )
+            connection.commit()
+        with temporary_connection() as locked_connection:
+            with locked_connection.cursor() as cursor:
+                cursor.execute(
+                    "LOCK TABLE NL2SQL_SCHEMA_COLUMNS IN ROW EXCLUSIVE MODE"
+                )
+            selective_migration = manager.initialize()
+            locked_connection.rollback()
+        assert selective_migration["status"] == "ready"
+        assert selective_migration["applied_versions"] == [0, 1, 2, 3, 5, 6, 7, 8]
+
+        def reset_v7_constraint() -> None:
+            with temporary_connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "ALTER TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS "
+                    "DROP CONSTRAINT FK_NL2SQL_ONT_VIEW_PROFILE"
+                )
+                cursor.execute(
+                    "DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 7"
+                )
+                connection.commit()
+
+        # timeout まで解放されない実ロックは ORA-00054/409 相当となり、
+        # lock 解放後の同一操作が安全に再開できることを確認する。
+        reset_v7_constraint()
+        with temporary_connection() as locked_connection:
+            with locked_connection.cursor() as cursor:
+                cursor.execute(
+                    "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS IN ROW EXCLUSIVE MODE"
+                )
+            try:
+                manager.initialize()
+            except SystemSchemaError as exc:
+                assert exc.code == "ORA-00054"
+                assert exc.status_code == 409
+                lock_timeout_observed = True
+            else:
+                raise AssertionError("ORA-00054 was not raised for the held DDL lock")
+            finally:
+                locked_connection.rollback()
+        retried_after_lock_release = manager.initialize()
+        assert retried_after_lock_release["status"] == "ready"
+
+        # timeout 内に別 session が lock を解放した場合は、そのまま成功する。
+        reset_v7_constraint()
+        lock_ready = threading.Event()
+        lock_errors: list[str] = []
+
+        def hold_then_release_lock() -> None:
+            try:
+                with temporary_connection() as locked_connection:
+                    with locked_connection.cursor() as cursor:
+                        cursor.execute(
+                            "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS "
+                            "IN ROW EXCLUSIVE MODE"
+                        )
+                    lock_ready.set()
+                    time.sleep(0.25)
+                    locked_connection.rollback()
+            except Exception as exc:  # pragma: no cover - real Oracle boundary
+                lock_errors.append(type(exc).__name__)
+                lock_ready.set()
+
+        lock_thread = threading.Thread(target=hold_then_release_lock, daemon=True)
+        lock_thread.start()
+        if not lock_ready.wait(timeout=10):
+            raise AssertionError("lock session did not become ready")
+        if lock_errors:
+            raise AssertionError(f"lock session failed: {lock_errors[0]}")
+        released_within_timeout = SystemSchemaManager(
+            temporary_connection,
+            ddl_lock_timeout_seconds=3,
+        ).initialize()
+        lock_thread.join(timeout=10)
+        if lock_thread.is_alive():
+            raise AssertionError("lock session did not finish")
+        assert released_within_timeout["status"] == "ready"
         with temporary_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -133,6 +229,11 @@ def main() -> int:
         result.update(
             initialized_operation=initialized["operation"],
             migrated_operation=migrated["operation"],
+            selective_migration_operation=selective_migration["operation"],
+            selective_migration_versions=selective_migration["applied_versions"],
+            ddl_lock_timeout_observed=lock_timeout_observed,
+            retry_after_lock_release_status=retried_after_lock_release["status"],
+            release_within_timeout_status=released_within_timeout["status"],
             recreated_operation=recreated["operation"],
             profile_preserved_during_upgrade=profile_preserved,
             core_profile_count_after_recreate=core_profile_count,

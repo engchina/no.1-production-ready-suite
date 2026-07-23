@@ -360,6 +360,8 @@ def delete_profile(
 ) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を物理削除する。"""
     try:
+        if profile_id == "default":
+            raise DefaultProfileDeleteForbidden("default profile cannot be deleted")
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
         deleted = nl2sql_service.delete_profile(
@@ -402,7 +404,7 @@ def delete_profile(
             status_code=409,
             detail={
                 "code": "DEFAULT_PROFILE_DELETE_FORBIDDEN",
-                "message": "default Profile は削除できません。",
+                "message": "標準プロファイルは削除できません。",
             },
         ) from exc
 

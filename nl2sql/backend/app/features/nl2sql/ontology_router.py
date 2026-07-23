@@ -334,6 +334,7 @@ class OntologyApiRuntime:
         self._revision_headers: dict[str, OntologyRevision] = {}
         self._ontology: SchemaOntology | None = None
         self._ontologies: dict[str, SchemaOntology] = {}
+        self._synced_catalog_signature: tuple[int, str] | None = None
         settings = get_settings()
         self._ontology_cache_order: OrderedDict[str, None] = OrderedDict()
         self._ontology_cache_max_revisions = max(
@@ -361,6 +362,7 @@ class OntologyApiRuntime:
             self._revision_headers.clear()
             self._ontology = None
             self._ontologies.clear()
+            self._synced_catalog_signature = None
             self._ontology_cache_order.clear()
             self._session_views.clear()
             self._profile_view_overrides.clear()
@@ -2815,14 +2817,11 @@ class OntologyApiRuntime:
     def _sync_ontology(self) -> SchemaOntology:
         self._ensure_store()
         self._load_published_revision()
-        if self._ontology is not None and bool(
-            getattr(self.legacy_service, "uses_incremental_store", False)
-        ):
+        catalog_signature: tuple[int, str] | None = None
+        if bool(getattr(self.legacy_service, "uses_incremental_store", False)):
             head = self.legacy_service.get_catalog_head()
-            if (
-                head.schema_fingerprint
-                and head.schema_fingerprint == self._ontology.revision.schema_fingerprint
-            ):
+            catalog_signature = (head.catalog_version, head.schema_fingerprint)
+            if self._ontology is not None and catalog_signature == self._synced_catalog_signature:
                 return self._ontology
         catalog = self.legacy_service.get_catalog()
         if self._ontology is None:
@@ -2830,13 +2829,17 @@ class OntologyApiRuntime:
         else:
             ontology = evolve_schema_ontology(catalog, self._ontology)
             if ontology.revision.id == self._ontology.revision.id:
+                self._synced_catalog_signature = catalog_signature
                 return self._ontology
             # 決定論採番のため「同一 id == 同一物理内容」。過去実行の復元や再評価で同じ
             # revision に到達しても再登録は no-op なので、既登録なら 409 にせず採用する
             # （既存 revision は published/draft の状態と承認済み業務定義を保持する）。
             existing = self._ontologies.get(ontology.revision.id)
+            if existing is None:
+                existing = self._load_matching_persisted_ontology(ontology)
             if existing is not None:
                 self._ontology = existing
+                self._synced_catalog_signature = catalog_signature
                 return existing
         self.sessions.register_revision(
             ontology.revision,
@@ -2846,6 +2849,7 @@ class OntologyApiRuntime:
         self._persist_ontology(ontology)
         self._ontology = ontology
         self._cache_ontology(ontology)
+        self._synced_catalog_signature = catalog_signature
         return ontology
 
     def _base_profile_view(
@@ -3190,6 +3194,52 @@ class OntologyApiRuntime:
         self._cache_ontology(ontology, embeddings=vectors)
         return ontology
 
+    def _load_matching_persisted_ontology(
+        self,
+        expected: SchemaOntology,
+    ) -> SchemaOntology | None:
+        """同じ決定論 revision が完全保存済みなら再生成 payload で上書きせず復元する。"""
+
+        revision_id = expected.revision.id
+        revision_document = self.store.get_document(
+            "revisions",
+            {"revision_id": revision_id},
+        )
+        if revision_document is None:
+            return None
+        node_documents = self.store.list_documents("nodes", {"revision_id": revision_id})
+        edge_documents = self.store.list_documents("edges", {"revision_id": revision_id})
+        if {str(document["node_id"]) for document in node_documents} != {
+            node.id for node in expected.nodes
+        }:
+            return None
+        if {str(document["edge_id"]) for document in edge_documents} != {
+            edge.id for edge in expected.edges
+        }:
+            return None
+
+        header = OntologyRevision.model_validate(
+            self._stored_payload(revision_document, collection="revision")
+        )
+        nodes = [
+            OntologyNode.model_validate(self._stored_payload(document, collection="node"))
+            for document in node_documents
+        ]
+        edges = [
+            OntologyEdge.model_validate(self._stored_payload(document, collection="edge"))
+            for document in edge_documents
+        ]
+        ontology = SchemaOntology(revision=header, nodes=nodes, edges=edges)
+        self.sessions.register_revision(header, nodes=nodes, edges=edges)
+        self._revision_headers[header.id] = header
+        vectors = {
+            str(document["node_id"]): [float(value) for value in document["embedding"]]
+            for document in node_documents
+            if document.get("embedding") is not None
+        }
+        self._cache_ontology(ontology, embeddings=vectors)
+        return ontology
+
     def _cache_ontology(
         self,
         ontology: SchemaOntology,
@@ -3271,7 +3321,8 @@ class OntologyApiRuntime:
 
         nodes/edges は revision 登録時に同一 revision_id で保存済みかつ不変のため、
         publish/archive のような revision header だけの変更では include_graph=False で
-        再永続化を省く(大規模スキーマで数千回の store 書き込みを避ける)。
+        再永続化を省く。初回 graph 保存は collection ごとの単一 transaction にまとめ、
+        大規模スキーマの read path で node/edge 件数分の接続を作らない。
         """
 
         self._save(
@@ -3286,11 +3337,30 @@ class OntologyApiRuntime:
         self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(deep=True)
         if not include_graph:
             return
-        for node in ontology.nodes:
-            self._persist_node(ontology, node)
-        for edge in ontology.edges:
-            self._save(
-                "edges",
+        self._save_graph_documents_atomic(
+            "nodes",
+            ontology.revision.id,
+            [
+                {
+                    "revision_id": ontology.revision.id,
+                    "node_id": node.id,
+                    "node_type": node.kind.value,
+                    "review_status": node.review_status.value,
+                    "physical_id": (
+                        node.physical_mappings[0].object_ref.node_id
+                        if node.physical_mappings
+                        else ""
+                    ),
+                    "embedding": self._embeddings.get(ontology.revision.id, {}).get(node.id),
+                    "payload": node,
+                }
+                for node in ontology.nodes
+            ],
+        )
+        self._save_graph_documents_atomic(
+            "edges",
+            ontology.revision.id,
+            [
                 {
                     "revision_id": ontology.revision.id,
                     "edge_id": edge.id,
@@ -3298,8 +3368,50 @@ class OntologyApiRuntime:
                     "target_node_id": edge.target_node_id,
                     "review_status": edge.review_status.value,
                     "payload": edge,
-                },
+                }
+                for edge in ontology.edges
+            ],
+        )
+
+    def _save_graph_documents_atomic(
+        self,
+        collection: Literal["nodes", "edges"],
+        revision_id: str,
+        documents: list[dict[str, Any]],
+    ) -> None:
+        """Immutable graph documents を既存 ETag 付きの一括 transaction で保存する。"""
+
+        if not documents:
+            return
+        self._ensure_store()
+        identity_fields = _STORE_IDENTITY_FIELDS[collection]
+        existing = {
+            tuple(str(item[field]) for field in identity_fields): item
+            for item in self.store.list_documents(
+                collection,
+                {"revision_id": revision_id},
             )
+        }
+        pending: list[tuple[dict[str, Any], str | None]] = []
+        for document in documents:
+            identity = tuple(str(document[field]) for field in identity_fields)
+            current = existing.get(identity)
+            if current is not None:
+                current_content = {
+                    key: value for key, value in current.items() if key not in {"version", "etag"}
+                }
+                if collection == "nodes" and "embedding" not in current_content:
+                    current_content["embedding"] = None
+                if canonical_json(current_content) == canonical_json(document):
+                    continue
+            pending.append(
+                (
+                    document,
+                    str(current["etag"]) if current is not None else None,
+                )
+            )
+        if pending:
+            self.store.save_documents_atomic(collection, pending)
 
     def _persist_revision_headers_atomic(self, ontologies: list[SchemaOntology]) -> None:
         self._ensure_store()
@@ -4026,6 +4138,10 @@ class OntologyBuildJobData(OntologyContract):
     job: OntologyBuildJob
 
 
+class OntologyBuildJobListData(OntologyContract):
+    jobs: list[OntologyBuildJob]
+
+
 class OntologyProposalListData(OntologyContract):
     proposals: list[OntologyProposal]
 
@@ -4098,6 +4214,54 @@ def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
             },
         )
     return ApiResponse(data=OntologyBuildJobData(job=job))
+
+
+@router.get(
+    "/profiles/{profile_id}/ontology-build-jobs",
+    response_model=ApiResponse[OntologyBuildJobListData],
+)
+def list_profile_ontology_build_jobs(
+    profile_id: str,
+    limit: int = 5,
+) -> ApiResponse[OntologyBuildJobListData]:
+    """リロード復旧・履歴表示用の build job 一覧(新しい順)。"""
+
+    try:
+        jobs = _run_runtime_sync(
+            ontology_build_service.list_profile_jobs,
+            profile_id,
+            limit=max(1, min(limit, 20)),
+        )
+        return ApiResponse(data=OntologyBuildJobListData(jobs=jobs))
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/ontology-build/{job_id}/cancel",
+    response_model=ApiResponse[OntologyBuildJobData],
+)
+def cancel_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+    try:
+        job = _run_runtime_sync(ontology_build_service.cancel, job_id)
+        return ApiResponse(data=OntologyBuildJobData(job=job))
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/ontology-build/{job_id}/retry",
+    response_model=ApiResponse[OntologyBuildJobData],
+    status_code=202,
+)
+def retry_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+    """failed/cancelled job を保存済み入力から再実行する(新規 job を返す)。"""
+
+    try:
+        job = _run_runtime_sync(ontology_build_service.retry, job_id)
+        return ApiResponse(data=OntologyBuildJobData(job=job))
+    except Exception as exc:
+        _raise_domain_error(exc)
 
 
 @router.get(

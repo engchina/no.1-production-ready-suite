@@ -1579,7 +1579,7 @@ class OracleNl2SqlAdapter:
                 message = str(exc)
                 if "ORA-00942" in message or "ORA-04043" in message:
                     raise OracleAdapterError(
-                        f"{table_name}: Select AI feedback vector table が未作成です。"
+                        "Select AI feedback vector table が未作成です。"
                         "feedback vector index を再構築してください。"
                     ) from exc
                 raise OracleAdapterError(

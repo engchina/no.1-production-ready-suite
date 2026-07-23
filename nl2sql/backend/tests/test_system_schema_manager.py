@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import re
 from collections.abc import AsyncGenerator
 from contextlib import contextmanager
@@ -8,27 +8,29 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
-import httpx
 import pytest
 from fastapi import HTTPException, Request
+from starlette.responses import JSONResponse
 
 from app.features.settings import router as settings_router
 from app.features.settings import system_schema_runtime
 from app.features.settings.system_schema import (
     CONTROL_TABLE,
+    MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
     MANAGED_OBJECTS,
     MANAGED_SEQUENCES,
     MANAGED_TABLES,
     MIGRATIONS,
     PRESERVED_TABLES,
+    SystemSchemaActiveJobsError,
     SystemSchemaBusyError,
     SystemSchemaError,
     SystemSchemaManager,
     classify_system_schema_status,
     split_migration_sql,
 )
-from app.main import app
+from app.schemas.settings import SystemTablesInitializeRequest
 from app.security import dependencies as security_dependencies
 from app.security.domain import Principal
 from app.security.permissions import permission_for_route
@@ -224,12 +226,23 @@ def test_recreate_drop_statements_only_use_manifest_allowlist(
 
 
 class _WorkflowManager(SystemSchemaManager):
-    def __init__(self, initial_status: str, *, fail_once: bool = False) -> None:
-        super().__init__(lambda: self._connection())
+    def __init__(
+        self,
+        initial_status: str,
+        *,
+        fail_once: bool = False,
+        failure_message: str = "password=secret ORA-00600 full sql must not leak",
+    ) -> None:
+        super().__init__(
+            lambda: self._connection(),
+            ddl_lock_timeout_seconds=1,
+        )
         self.initial_status = initial_status
         self.ready = initial_status == "ready"
         self.fail_once = fail_once
+        self.failure_message = failure_message
         self.failures: list[str] = []
+        self.applied_migrations: list[int] = []
 
     @contextmanager
     def _connection(self) -> Any:
@@ -244,11 +257,15 @@ class _WorkflowManager(SystemSchemaManager):
     def _status_on(self, connection: Any) -> dict[str, Any]:
         return _status_payload("ready" if self.ready else self.initial_status, existing=0)
 
+    def _configure_ddl_lock_timeout(self, connection: Any) -> None:
+        return None
+
     def _apply_migration(self, connection: Any, migration: Any) -> None:
         if self.fail_once:
             self.fail_once = False
-            raise RuntimeError("password=secret ORA-00600 full sql must not leak")
-        if migration.version == 6:
+            raise RuntimeError(self.failure_message)
+        self.applied_migrations.append(migration.version)
+        if migration.version == MIGRATIONS[-1].version:
             self.ready = True
 
     def _heartbeat(self, connection: Any, owner: str) -> None:
@@ -269,7 +286,10 @@ class _WorkflowManager(SystemSchemaManager):
 
 def test_initialize_is_idempotent_and_failure_is_safe_and_retryable() -> None:
     ready = _WorkflowManager("ready")
-    assert ready.initialize()["operation"] == "no_op"
+    no_op = ready.initialize()
+    assert no_op["operation"] == "no_op"
+    assert no_op["applied_versions"] == [migration.version for migration in MIGRATIONS]
+    assert ready.applied_migrations == []
 
     manager = _WorkflowManager("missing", fail_once=True)
     with pytest.raises(SystemSchemaError) as error:
@@ -282,6 +302,324 @@ def test_initialize_is_idempotent_and_failure_is_safe_and_retryable() -> None:
     assert retried["operation"] == "initialized"
     assert retried["status"] == "ready"
     assert retried["applied_versions"] == [migration.version for migration in MIGRATIONS]
+
+
+def _partial_status(
+    *,
+    applied_versions: list[int],
+    missing_objects: list[tuple[str, str]],
+    pending_versions: list[int] | None = None,
+) -> dict[str, Any]:
+    return {
+        **_status_payload("partial", existing=len(MANAGED_OBJECTS) - len(missing_objects)),
+        "applied_versions": applied_versions,
+        "pending_versions": (
+            pending_versions
+            if pending_versions is not None
+            else [
+                migration.version
+                for migration in MIGRATIONS
+                if migration.version not in applied_versions
+            ]
+        ),
+        "missing_objects": [
+            {"name": name, "object_type": object_type}
+            for name, object_type in missing_objects
+        ],
+    }
+
+
+def test_selective_plan_for_49_of_53_only_applies_versions_7_and_8() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    status = _partial_status(
+        applied_versions=[0, 1, 2, 3, 5, 6],
+        pending_versions=[7, 8],
+        missing_objects=[
+            ("NL2SQL_EVALUATION_JOBS", "TABLE"),
+            ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
+            ("IX_NL2SQL_EVAL_JOB_STATE", "INDEX"),
+            ("IX_NL2SQL_EVAL_JOB_LEASE", "INDEX"),
+        ],
+    )
+
+    assert [migration.version for migration in manager._plan_migrations(status)] == [7, 8]
+
+
+def test_selective_plan_replays_only_owner_of_one_missing_object() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    status = _partial_status(
+        applied_versions=[migration.version for migration in MIGRATIONS],
+        pending_versions=[],
+        missing_objects=[("IX_NL2SQL_EVAL_JOB_LEASE", "INDEX")],
+    )
+
+    assert [migration.version for migration in manager._plan_migrations(status)] == [8]
+
+
+def test_selective_plan_replays_only_checksum_mismatch() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    status = _partial_status(
+        applied_versions=[
+            migration.version for migration in MIGRATIONS if migration.version != 5
+        ],
+        pending_versions=[5],
+        missing_objects=[],
+    )
+
+    assert [migration.version for migration in manager._plan_migrations(status)] == [5]
+
+
+class _IncrementalWorkflowManager(_WorkflowManager):
+    def __init__(self) -> None:
+        super().__init__("partial")
+        self.before = _partial_status(
+            applied_versions=[0, 1, 2, 3, 5, 6],
+            pending_versions=[7, 8],
+            missing_objects=[
+                ("NL2SQL_EVALUATION_JOBS", "TABLE"),
+                ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
+                ("IX_NL2SQL_EVAL_JOB_STATE", "INDEX"),
+                ("IX_NL2SQL_EVAL_JOB_LEASE", "INDEX"),
+            ],
+        )
+
+    def _status_on(self, connection: Any) -> dict[str, Any]:
+        return _status_payload("ready") if self.ready else self.before
+
+
+def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> None:
+    manager = _IncrementalWorkflowManager()
+
+    result = manager.initialize()
+
+    assert manager.applied_migrations == [7, 8]
+    assert result["operation"] == "migrated"
+    assert result["status"] == "ready"
+    assert result["existing_object_count"] == len(MANAGED_OBJECTS)
+    assert result["applied_versions"] == [
+        migration.version for migration in MIGRATIONS
+    ]
+
+
+class _RecordingCursor:
+    def __init__(self, statements: list[str]) -> None:
+        self.statements = statements
+
+    def __enter__(self) -> _RecordingCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(
+        self,
+        sql: str,
+        binds: dict[str, Any] | None = None,
+    ) -> None:
+        self.statements.append(sql)
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.commits = 0
+
+    def cursor(self) -> _RecordingCursor:
+        return _RecordingCursor(self.statements)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+class _ForeignKeyStateManager(SystemSchemaManager):
+    def __init__(self, states: dict[str, str]) -> None:
+        super().__init__(ddl_lock_timeout_seconds=1)
+        self.states = states
+
+    def _foreign_key_state(self, connection: Any, expected: Any) -> Any:
+        return self.states[expected.name]
+
+
+def test_v7_resume_skips_matching_first_foreign_key_and_creates_second() -> None:
+    first, second = MANAGED_FOREIGN_KEYS
+    manager = _ForeignKeyStateManager(
+        {
+            first.name: "matching",
+            second.name: "missing",
+        }
+    )
+    connection = _RecordingConnection()
+
+    manager._apply_migration(connection, next(item for item in MIGRATIONS if item.version == 7))
+
+    executed = "\n".join(connection.statements)
+    assert f"ADD CONSTRAINT\n    {first.name}" not in executed
+    assert f"ADD CONSTRAINT\n    {second.name}" in executed
+    assert "MERGE INTO NL2SQL_SCHEMA_MIGRATIONS" in executed
+    assert connection.commits == 1
+
+
+def test_v7_resume_rejects_same_name_with_wrong_foreign_key_definition() -> None:
+    first, second = MANAGED_FOREIGN_KEYS
+    manager = _ForeignKeyStateManager(
+        {
+            first.name: "matching",
+            second.name: "mismatch",
+        }
+    )
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager._apply_migration(
+            _RecordingConnection(),
+            next(item for item in MIGRATIONS if item.version == 7),
+        )
+
+    assert error.value.code == "SCHEMA_CONSTRAINT_MISMATCH"
+    assert second.name in error.value.public_message
+
+
+class _ForeignKeyDictionaryCursor:
+    def __init__(self, connection: _ForeignKeyDictionaryConnection) -> None:
+        self.connection = connection
+        self.query_kind = ""
+
+    def __enter__(self) -> _ForeignKeyDictionaryCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, binds: dict[str, Any]) -> None:
+        if "SELECT child.TABLE_NAME" in sql:
+            self.query_kind = "constraint"
+        elif "SELECT referenced_column.COLUMN_NAME" in sql:
+            self.query_kind = "referenced_columns"
+        else:
+            self.query_kind = "columns"
+
+    def fetchone(self) -> tuple[str, ...]:
+        return (
+            "NL2SQL_ONTOLOGY_PROFILE_VIEWS",
+            "R",
+            "CASCADE",
+            "NL2SQL_PROFILES",
+            self.connection.status,
+            "VALIDATED",
+            "NOT DEFERRABLE",
+            "IMMEDIATE",
+        )
+
+    def fetchall(self) -> list[tuple[str]]:
+        return [("PROFILE_ID",)]
+
+
+class _ForeignKeyDictionaryConnection:
+    def __init__(self, *, status: str = "ENABLED") -> None:
+        self.status = status
+
+    def cursor(self) -> _ForeignKeyDictionaryCursor:
+        return _ForeignKeyDictionaryCursor(self)
+
+
+def test_foreign_key_dictionary_validation_checks_enforcement_state() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    expected = MANAGED_FOREIGN_KEYS[1]
+
+    assert (
+        manager._foreign_key_state(_ForeignKeyDictionaryConnection(), expected)
+        == "matching"
+    )
+    assert (
+        manager._foreign_key_state(
+            _ForeignKeyDictionaryConnection(status="DISABLED"),
+            expected,
+        )
+        == "mismatch"
+    )
+
+
+def test_schema_connection_sets_bounded_ddl_lock_timeout() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=30)
+    connection = _RecordingConnection()
+
+    manager._configure_ddl_lock_timeout(connection)
+
+    assert connection.statements == ["ALTER SESSION SET DDL_LOCK_TIMEOUT = 30"]
+
+
+def test_ora_00054_is_retryable_conflict_with_recovery_message() -> None:
+    manager = _WorkflowManager(
+        "missing",
+        fail_once=True,
+        failure_message="ORA-00054: resource busy and acquire with NOWAIT specified",
+    )
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+
+    assert error.value.code == "ORA-00054"
+    assert error.value.status_code == 409
+    assert "1 秒以内" in error.value.public_message
+    assert "品質評価 job" in error.value.public_message
+    assert manager.failures == ["ORA-00054"]
+
+    result = manager.initialize()
+    assert result["status"] == "ready"
+
+
+class _ActiveJobCursor(_RecordingCursor):
+    def __init__(self, statements: list[str], active_table: str) -> None:
+        super().__init__(statements)
+        self.active_table = active_table
+        self.current_sql = ""
+
+    def execute(
+        self,
+        sql: str,
+        binds: dict[str, Any] | None = None,
+    ) -> None:
+        super().execute(sql, binds)
+        self.current_sql = sql
+
+    def fetchone(self) -> tuple[int]:
+        return (1,) if self.active_table in self.current_sql else (0,)
+
+
+class _ActiveJobConnection(_RecordingConnection):
+    def __init__(self, active_table: str) -> None:
+        super().__init__()
+        self.active_table = active_table
+
+    def cursor(self) -> _ActiveJobCursor:
+        return _ActiveJobCursor(self.statements, self.active_table)
+
+
+@pytest.mark.parametrize(
+    "active_table",
+    [
+        "NL2SQL_SCHEMA_REFRESH_JOBS",
+        "NL2SQL_ONTOLOGY_JOBS",
+        "NL2SQL_EVALUATION_JOBS",
+    ],
+)
+def test_recreate_rejects_each_active_persistent_job_type(
+    monkeypatch: pytest.MonkeyPatch,
+    active_table: str,
+) -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    connection = _ActiveJobConnection(active_table)
+    existing_job_tables = {
+        (name, "TABLE"): None
+        for name in (
+            "NL2SQL_SCHEMA_REFRESH_JOBS",
+            "NL2SQL_ONTOLOGY_JOBS",
+            "NL2SQL_EVALUATION_JOBS",
+        )
+    }
+    monkeypatch.setattr(manager, "_load_objects", lambda _connection: existing_job_tables)
+
+    with pytest.raises(SystemSchemaActiveJobsError):
+        manager._assert_no_active_jobs(connection)
 
 
 class _ApiManager:
@@ -299,41 +637,76 @@ class _ApiManager:
         }
 
 
-def _api_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
-    async def send() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return await client.request(method, path, **kwargs)
+class _LockedApiManager(_ApiManager):
+    def initialize(self, *, recreate: bool, confirmation: str | None) -> dict[str, Any]:
+        raise SystemSchemaError(
+            "ORA-00054",
+            "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。",
+            status_code=409,
+        )
 
-    return asyncio.run(send())
+
+def _system_tables_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/settings/database/system-tables/initialize",
+            "headers": [],
+        }
+    )
 
 
 def test_system_tables_api_contract_and_strict_permission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def inline_threadpool(function: Any, *args: Any, **kwargs: Any) -> Any:
-        return function(*args, **kwargs)
-
     monkeypatch.setattr(settings_router, "system_schema_manager", _ApiManager())
-    monkeypatch.setattr(settings_router, "run_in_threadpool", inline_threadpool)
-
-    status = _api_request("GET", "/api/settings/database/system-tables")
-    initialized = _api_request(
-        "POST",
-        "/api/settings/database/system-tables/initialize",
-        json={"recreate": False},
+    monkeypatch.setattr(
+        settings_router,
+        "reset_system_schema_runtime",
+        lambda *, schema_epoch: None,
     )
 
-    assert status.status_code == 200
-    assert status.json()["data"]["status"] == "partial"
-    assert initialized.status_code == 200
-    assert initialized.json()["data"]["operation"] == "migrated"
+    status = settings_router.get_system_tables_status()
+    initialized = settings_router.initialize_system_tables(
+        SystemTablesInitializeRequest(recreate=False),
+        _system_tables_request(),
+    )
+
+    assert status.data is not None
+    assert status.data.status == "partial"
+    assert not isinstance(initialized, JSONResponse)
+    assert initialized.data is not None
+    assert initialized.data.operation == "migrated"
     assert permission_for_route("GET", "/settings/database/system-tables") == (
         "settings.database.view"
     )
     assert permission_for_route(
         "POST", "/settings/database/system-tables/initialize"
     ) == "settings.database.sql_execute"
+
+
+def test_system_tables_api_exposes_retryable_ora_00054_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings_router, "system_schema_manager", _LockedApiManager())
+
+    response = settings_router.initialize_system_tables(
+        SystemTablesInitializeRequest(recreate=False),
+        _system_tables_request(),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 409
+    assert response.headers["Retry-After"] == "5"
+    assert json.loads(bytes(response.body)) == {
+        "data": None,
+        "error_messages": [
+            "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。"
+        ],
+        "warning_messages": [],
+        "error_code": "ORA-00054",
+    }
 
 
 def test_schema_epoch_change_resets_each_runtime_once(

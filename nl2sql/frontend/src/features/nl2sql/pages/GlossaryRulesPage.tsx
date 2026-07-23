@@ -8,16 +8,15 @@ import {
 import {
   Button,
   EmptyState,
-  PageHeader,
   Pagination,
   StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
   FileInputControl,
@@ -26,7 +25,6 @@ import {
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
-  DbObjectManagementStatusBar,
   DbObjectPanelHeader,
 } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
@@ -146,15 +144,18 @@ export function GlossaryRulesPage() {
       <PageHeader
         title={t("nav.glossaryRules")}
         subtitle={t("glossary.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading,
+          },
+        ]}
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        <GlossaryStatusBar
-          termsCount={legacyTerms.length}
-          lastLoadedAt={lastLoadedAt}
-          loading={loading}
-          onRefresh={() => void load(true)}
-        />
-
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell
@@ -202,35 +203,6 @@ async function uploadLegacyLearningMaterialFile(
     throw new Error(payload.error || payload.detail || t("glossary.error.importMaterial"));
   }
   return payload.data;
-}
-
-function GlossaryStatusBar({
-  termsCount,
-  lastLoadedAt,
-  loading,
-  onRefresh,
-}: {
-  termsCount: number;
-  lastLoadedAt: string;
-  loading: boolean;
-  onRefresh: () => void;
-}) {
-  return (
-    <DbObjectManagementStatusBar
-      ariaLabel={t("glossary.status.label")}
-      metricColumnsClass="sm:grid-cols-2 xl:grid-cols-3"
-      metrics={[
-        { label: t("glossary.status.terms"), value: formatNumber(termsCount), emphasis: true },
-        { label: t("glossary.status.lastLoaded"), value: formatDateTime(lastLoadedAt) },
-      ]}
-      actions={
-        <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
-          <RefreshCw size={15} aria-hidden="true" />
-          <span>{t("glossary.action.refresh")}</span>
-        </Button>
-      }
-    />
-  );
 }
 
 function GlobalMaterialPanel({

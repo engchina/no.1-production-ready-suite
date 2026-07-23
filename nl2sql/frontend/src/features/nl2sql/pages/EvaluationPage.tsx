@@ -14,11 +14,11 @@ import {
   Banner,
   Button,
   EmptyState,
-  PageHeader,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FieldError } from "@/components/ui/field-error";

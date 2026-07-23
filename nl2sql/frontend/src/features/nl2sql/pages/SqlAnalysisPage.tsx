@@ -1,15 +1,14 @@
 import { useState } from "react";
 import { FileSearch, Play, ShieldCheck, Wrench } from "lucide-react";
 
-import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
+import { PageHeader } from "@/components/PageHeader";
 import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { QueryResultsTable } from "../components/DbAdminShared";
 import {
-  DbObjectManagementStatusBar,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
@@ -104,43 +103,12 @@ export function SqlAnalysisPage() {
     }
   };
 
-  const workflowState = resolveWorkflowState({
-    analysisSql,
-    repairSql,
-    repairErrorMessage,
-    analysis,
-    execution,
-    repair,
-    analysisLoading,
-    executeLoading,
-    repairLoading,
-  });
-  const safety = repair ? repair.safety : analysis?.safety;
-  const safetyState = safety
-    ? safety.is_safe
-      ? t("nl2sql.safety.safe")
-      : t("nl2sql.safety.blocked")
-    : t("sqlAnalysis.safety.unverified");
   const stepIndex = repair ? 3 : execution ? 1 : 0;
 
   return (
     <>
       <PageHeader title={t("nav.sqlAnalysis")} subtitle={t("sqlAnalysis.subtitle")} />
       <main className="grid gap-4 p-4 lg:p-8">
-        <DbObjectManagementStatusBar
-          ariaLabel={t("sqlAnalysis.status.aria")}
-          metrics={[
-            { label: t("sqlAnalysis.metric.workflow"), value: workflowState },
-            { label: t("sqlAnalysis.metric.safety"), value: safetyState },
-            {
-              label: t("sqlAnalysis.metric.resultRows"),
-              value: execution ? formatNumber(execution.total) : "-",
-              emphasis: Boolean(execution),
-              testId: "sql-analysis-result-count",
-            },
-          ]}
-        />
-
         <DbObjectStepIndicator
           steps={[
             t("sqlAnalysis.tabs.analysis"),
@@ -258,10 +226,12 @@ export function SqlAnalysisPage() {
               {execution ? (
                 <div className="grid min-w-0 gap-3">
                   <div className="flex flex-wrap gap-2">
-                    <StatusBadge
-                      variant="info"
-                      label={t("sqlAnalysis.execution.rows", { count: execution.total })}
-                    />
+                    <span data-testid="sql-analysis-result-count">
+                      <StatusBadge
+                        variant="info"
+                        label={t("sqlAnalysis.execution.rows", { count: execution.total })}
+                      />
+                    </span>
                   </div>
                   <QueryResultsTable results={execution} />
                 </div>
@@ -519,37 +489,4 @@ function CompactFact({ label, value }: { label: string; value: string }) {
 function actionableError(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : fallback;
   return `${message} ${t("sqlAnalysis.error.retryHint")}`;
-}
-
-function resolveWorkflowState({
-  analysisSql,
-  repairSql,
-  repairErrorMessage,
-  analysis,
-  execution,
-  repair,
-  analysisLoading,
-  executeLoading,
-  repairLoading,
-}: {
-  analysisSql: string;
-  repairSql: string;
-  repairErrorMessage: string;
-  analysis: AnalyzeData | null;
-  execution: QueryResults | null;
-  repair: RepairData | null;
-  analysisLoading: boolean;
-  executeLoading: boolean;
-  repairLoading: boolean;
-}) {
-  // 1 画面化に伴い activeView 非依存の単一状態解決へ。進行が進んだものを優先表示する。
-  if (analysisLoading) return t("sqlAnalysis.workflow.analyzing");
-  if (executeLoading) return t("sqlAnalysis.workflow.executing");
-  if (repairLoading) return t("sqlAnalysis.workflow.repairing");
-  if (repair) return t("sqlAnalysis.workflow.repaired");
-  if (execution) return t("sqlAnalysis.workflow.executed");
-  if (analysis) return t("sqlAnalysis.workflow.analyzed");
-  if (repairSql.trim() && repairErrorMessage.trim()) return t("sqlAnalysis.workflow.repairReady");
-  if (analysisSql.trim()) return t("sqlAnalysis.workflow.analysisReady");
-  return t("sqlAnalysis.workflow.analysisWaiting");
 }

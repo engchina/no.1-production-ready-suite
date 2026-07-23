@@ -32,6 +32,7 @@ class _JsonFixture:
 class _SchemaCursor:
     def __init__(self, database: _SchemaDatabase) -> None:
         self.database = database
+        self.input_sizes: dict[str, Any] = {}
 
     def __enter__(self) -> _SchemaCursor:
         return self
@@ -40,10 +41,26 @@ class _SchemaCursor:
         return None
 
     def execute(self, sql: str, _binds: dict[str, Any] | None = None) -> None:
+        self._assert_input_sizes_match(sql)
         self.database.executed.append(" ".join(sql.split()))
+
+    def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
+        self._assert_input_sizes_match(sql)
+        self.database.executed_many.append((" ".join(sql.split()), rows))
+
+    def setinputsizes(self, **input_sizes: Any) -> None:
+        self.input_sizes = input_sizes
+
+    def fetchone(self) -> None:
+        return None
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return []
+
+    def _assert_input_sizes_match(self, sql: str) -> None:
+        for bind_name in self.input_sizes:
+            if f":{bind_name}" not in sql:
+                raise RuntimeError(f"unrecognized bind variable {bind_name}")
 
 
 class _SchemaConnection:
@@ -70,6 +87,7 @@ class _SchemaDatabase:
     def __init__(self) -> None:
         self.factory_calls = 0
         self.executed: list[str] = []
+        self.executed_many: list[tuple[str, list[dict[str, Any]]]] = []
         self.commits = 0
         self.rollbacks = 0
 
@@ -287,6 +305,89 @@ def test_memory_atomic_save_rolls_back_entire_revision_switch_on_conflict() -> N
 
     assert store.get_revision("rev-1") == first
     assert store.get_revision("rev-2") == second
+
+
+def test_oracle_atomic_create_uses_one_array_bound_insert() -> None:
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+
+    created = store.save_documents_atomic(
+        "edges",
+        [
+            (
+                {
+                    "revision_id": "rev-1",
+                    "edge_id": "edge-1",
+                    "source_node_id": "node-1",
+                    "target_node_id": "node-2",
+                    "review_status": "approved",
+                },
+                None,
+            ),
+            (
+                {
+                    "revision_id": "rev-1",
+                    "edge_id": "edge-2",
+                    "source_node_id": "node-2",
+                    "target_node_id": "node-3",
+                    "review_status": "approved",
+                },
+                None,
+            ),
+        ],
+    )
+
+    assert [item["version"] for item in created] == [1, 1]
+    assert database.factory_calls == 1
+    assert database.commits == 1
+    assert database.rollbacks == 0
+    assert database.executed == []
+    assert len(database.executed_many) == 1
+    sql, rows = database.executed_many[0]
+    assert "INSERT INTO NL2SQL_ONTOLOGY_EDGES" in sql
+    assert [row["edge_id"] for row in rows] == ["edge-1", "edge-2"]
+
+
+def test_oracle_atomic_create_array_binds_node_vectors() -> None:
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+
+    created = store.save_documents_atomic(
+        "nodes",
+        [
+            (
+                {
+                    "revision_id": "rev-1",
+                    "node_id": "node-1",
+                    "node_type": "table",
+                    "review_status": "approved",
+                    "physical_id": "physical-1",
+                    "embedding": [0.1, 0.2],
+                },
+                None,
+            ),
+            (
+                {
+                    "revision_id": "rev-1",
+                    "node_id": "node-2",
+                    "node_type": "table",
+                    "review_status": "approved",
+                    "physical_id": "physical-2",
+                    "embedding": [0.3, 0.4],
+                },
+                None,
+            ),
+        ],
+    )
+
+    assert [item["version"] for item in created] == [1, 1]
+    assert database.commits == 1
+    assert database.rollbacks == 0
+    assert database.executed == []
+    assert len(database.executed_many) == 1
+    sql, rows = database.executed_many[0]
+    assert "INSERT INTO NL2SQL_ONTOLOGY_NODES" in sql
+    assert [row["embedding"].typecode for row in rows] == ["f", "f"]
 
 
 def test_memory_store_covers_query_trace_and_governance_collections() -> None:

@@ -50,9 +50,14 @@ from app.features.nl2sql.ontology_models import (
     OntologySourceStatus,
     ProfileOntologyView,
     QaPair,
+    RelationshipCardinality,
     utc_now,
 )
 from app.features.nl2sql.ontology_observability import record_job, record_source_extraction
+from app.features.nl2sql.ontology_service import (
+    OntologyNotFoundError,
+    OntologyStateConflictError,
+)
 from app.features.nl2sql.ontology_sources import OntologySourceStorage, extract_ontology_source
 from app.features.nl2sql.ontology_store import canonical_json, stable_ontology_id
 from app.settings import get_settings
@@ -359,6 +364,11 @@ def _convert_relationship(
             f"関係候補 {candidate.relationship_name_ja} に Join 条件がないため提案化しません。"
         )
         return
+    if candidate.cardinality is RelationshipCardinality.UNKNOWN:
+        result.warnings.append(
+            f"関係候補 {candidate.relationship_name_ja} の cardinality が未確定(unknown)です。"
+            "承認前に確認してください。"
+        )
     join_conditions: list[JoinCondition] = []
     for ordinal, item in enumerate(candidate.join_conditions, start=1):
         left = resolver.resolve_column(item.left)
@@ -656,6 +666,10 @@ _EXTRACTION_SYSTEM_PROMPT = (
     '"synonyms": [{"target": "OWNER.OBJECT", "aliases": ["..."], "evidence_ja": "..."}], '
     '"warnings_ja": ["..."]} '
     "。schema_context に存在しない owner/object/column を参照しないでください。"
+    "抽出ルール: (1) 業務文中の名詞をエンティティ候補、動詞・述語を関係候補として抽出する。"
+    "(2) 各関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many から"
+    "必ず選ぶ。判断できない場合のみ unknown とし、理由を warnings_ja に 1 行残す。"
+    "(3) 各エンティティの主識別子(主キーに相当する列)を description_ja に明記する。"
     "確信が持てない候補は confidence を下げるか warnings_ja に残してください。"
     "文言はすべて日本語にしてください。"
 )
@@ -694,8 +708,13 @@ _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.PROPOSAL_REGISTRATION: "提案の登録",
 }
 _MAX_JOB_EVENTS = 100
-# 完了(succeeded/failed)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
+# 完了(succeeded/failed/cancelled)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
 _MAX_FINISHED_JOBS = 20
+_TERMINAL_STATUSES = {
+    OntologyBuildStatus.SUCCEEDED,
+    OntologyBuildStatus.FAILED,
+    OntologyBuildStatus.CANCELLED,
+}
 
 
 class OntologyBuildService:
@@ -792,6 +811,10 @@ class OntologyBuildService:
             self._inputs[job.id] = {
                 "business_text": business_text,
                 "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
+                # retry がステップ構成を忠実に再現できるようトグルも永続化する
+                "run_schema_naming": run_schema_naming,
+                "run_qa_extraction": run_qa_extraction,
+                "run_text_extraction": run_text_extraction,
             }
         self._persist_job(job)
         if idempotency_key:
@@ -814,10 +837,23 @@ class OntologyBuildService:
         return job.model_copy(deep=True)
 
     def get(self, job_id: str) -> OntologyBuildJob | None:
+        # external worker モードでは worker だけが進捗を書くため store が正
+        # (in-memory は queued のまま止まって見える)。inprocess では実行スレッドが
+        # 先に in-memory を更新するため従来どおり in-memory が正。
+        if get_settings().nl2sql_ontology_worker_mode == "external":
+            restored = self._restore_from_store(job_id)
+            if restored is not None:
+                return restored.model_copy(deep=True)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
                 return job.model_copy(deep=True)
+        restored = self._restore_from_store(job_id)
+        return restored.model_copy(deep=True) if restored is not None else None
+
+    def _restore_from_store(self, job_id: str) -> OntologyBuildJob | None:
+        """store の job を in-memory キャッシュへ再水和して返す(未登録は None)。"""
+
         document = self._runtime.store.get_document("jobs", {"job_id": job_id})
         if document is None or document.get("job_type") != "build":
             return None
@@ -827,7 +863,7 @@ class OntologyBuildService:
             input_payload = document.get("input_payload")
             if isinstance(input_payload, dict):
                 self._inputs[job_id] = dict(input_payload)
-        return restored.model_copy(deep=True)
+        return restored
 
     def run_persisted(self, job_id: str) -> OntologyBuildJob:
         """独立 worker から、Oracle に保存した入力だけで job を再開する。"""
@@ -858,40 +894,151 @@ class OntologyBuildService:
             if document.get("job_type") != "build":
                 continue
             job = OntologyBuildJob.model_validate(document["payload"])
-            if job.status in {
-                OntologyBuildStatus.SUCCEEDED,
-                OntologyBuildStatus.FAILED,
-                OntologyBuildStatus.CANCELLED,
-            }:
+            if job.status in _TERMINAL_STATUSES:
                 continue
-            now = utc_now()
-            job.status = OntologyBuildStatus.CANCELLED
-            job.error_message_ja = "業務 Profile が削除されたため構築を中止しました。"
-            job.finished_at = now
-            for step in job.steps:
-                if step.status in {
-                    OntologyBuildStepStatus.PENDING,
-                    OntologyBuildStepStatus.RUNNING,
-                }:
-                    step.status = OntologyBuildStepStatus.SKIPPED
-                    step.finished_at = now
-            self._runtime.store.save_document(
-                "jobs",
-                {
-                    **{
-                        key: value
-                        for key, value in document.items()
-                        if key not in {"etag", "created_at", "updated_at"}
-                    },
-                    "status": OntologyBuildStatus.CANCELLED.value,
-                    "payload": job.model_dump(mode="json"),
-                },
-                expected_etag=str(document["etag"]),
+            self._save_cancelled(
+                document, job, "業務 Profile が削除されたため構築を中止しました。"
             )
-            with self._lock:
-                self._jobs[job.id] = job.model_copy(deep=True)
             cancelled += 1
         return cancelled
+
+    def _save_cancelled(
+        self,
+        document: dict[str, Any],
+        job: OntologyBuildJob,
+        message_ja: str,
+    ) -> None:
+        """job を CANCELLED として ETag 付きで保存し、in-memory も同期する。"""
+
+        now = utc_now()
+        job.status = OntologyBuildStatus.CANCELLED
+        job.error_message_ja = message_ja
+        job.finished_at = now
+        for step in job.steps:
+            if step.status in {
+                OntologyBuildStepStatus.PENDING,
+                OntologyBuildStepStatus.RUNNING,
+            }:
+                step.status = OntologyBuildStepStatus.SKIPPED
+                step.finished_at = now
+        job.events.append(OntologyBuildEvent(at=now, message_ja=message_ja))
+        del job.events[:-_MAX_JOB_EVENTS]
+        self._runtime.store.save_document(
+            "jobs",
+            {
+                **{
+                    key: value
+                    for key, value in document.items()
+                    if key not in {"etag", "created_at", "updated_at"}
+                },
+                "status": OntologyBuildStatus.CANCELLED.value,
+                "payload": job.model_dump(mode="json"),
+            },
+            expected_etag=str(document["etag"]),
+        )
+        with self._lock:
+            self._jobs[job.id] = job.model_copy(deep=True)
+
+    def list_profile_jobs(self, profile_id: str, *, limit: int = 5) -> list[OntologyBuildJob]:
+        """profile の build job を新しい順に返す(store が正、リロード復旧/履歴用)。"""
+
+        documents = self._runtime.store.list_documents("jobs", {"profile_id": profile_id})
+        jobs = [
+            OntologyBuildJob.model_validate(document["payload"])
+            for document in documents
+            if document.get("job_type") == "build"
+        ]
+        jobs.sort(key=lambda job: (job.created_at, job.id), reverse=True)
+        return [job.model_copy(deep=True) for job in jobs[: max(1, limit)]]
+
+    def cancel(self, job_id: str) -> OntologyBuildJob:
+        """ユーザー起点の単一 job キャンセル。
+
+        queued/running → CANCELLED(実行ループは既存の cancelled チェックで停止)。
+        CANCELLED → no-op 成功。SUCCEEDED/FAILED → 409。
+        """
+
+        for _attempt in range(3):
+            document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+            if document is None or document.get("job_type") != "build":
+                raise OntologyNotFoundError(
+                    "ONTOLOGY_BUILD_JOB_NOT_FOUND",
+                    "AI オントロジー構築 job が見つかりません。",
+                )
+            job = OntologyBuildJob.model_validate(document["payload"])
+            if job.status == OntologyBuildStatus.CANCELLED:
+                return job.model_copy(deep=True)
+            if job.status in _TERMINAL_STATUSES:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_BUILD_JOB_FINISHED",
+                    "この構築 job は既に完了しているため中止できません。",
+                )
+            try:
+                self._save_cancelled(document, job, "利用者の操作で構築を中止しました。")
+                return job.model_copy(deep=True)
+            except Exception:  # 完了/進捗書込と競合(ETag 不一致)→ 再読して再判定
+                logger.info("ontology_build_cancel_conflict job_id=%s", job_id)
+                continue
+        raise OntologyStateConflictError(
+            "ONTOLOGY_BUILD_CANCEL_CONFLICT",
+            "構築 job の状態が変化し続けているため中止できませんでした。再試行してください。",
+        )
+
+    def retry(self, job_id: str) -> OntologyBuildJob:
+        """failed/cancelled job を保存済み入力から新規 job として再実行する。"""
+
+        document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        if document is None or document.get("job_type") != "build":
+            raise OntologyNotFoundError(
+                "ONTOLOGY_BUILD_JOB_NOT_FOUND",
+                "AI オントロジー構築 job が見つかりません。",
+            )
+        job = OntologyBuildJob.model_validate(document["payload"])
+        if job.status not in {OntologyBuildStatus.FAILED, OntologyBuildStatus.CANCELLED}:
+            raise OntologyStateConflictError(
+                "ONTOLOGY_BUILD_JOB_NOT_RETRYABLE",
+                "失敗または中止された構築 job だけを再実行できます。",
+            )
+        raw_input = document.get("input_payload")
+        payload = dict(raw_input) if isinstance(raw_input, dict) else {}
+        step_names = {step.name for step in job.steps}
+
+        def toggle(key: str, step_name: OntologyBuildStepName) -> bool:
+            if key in payload:
+                return bool(payload[key])
+            # 旧 job(トグル未永続化)はステップ構成から復元する
+            return step_name in step_names
+
+        sources: list[OntologySourceDocument] = []
+        for source_id in job.source_document_ids:
+            try:
+                source = self._get_source_document(source_id)
+            except Exception as exc:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_BUILD_SOURCE_MISSING",
+                    "元の構築に使った資料が見つからないため再実行できません。"
+                    "資料を選び直して新規に実行してください。",
+                ) from exc
+            sources.append(
+                source.model_copy(
+                    update={"status": OntologySourceStatus.STORED, "updated_at": utc_now()},
+                    deep=True,
+                )
+            )
+        finished_marker = job.finished_at.isoformat() if job.finished_at else "none"
+        return self.start(
+            job.profile_id,
+            business_text=str(payload.get("business_text") or ""),
+            qa_pairs=[QaPair.model_validate(item) for item in payload.get("qa_pairs", [])],
+            run_schema_naming=toggle("run_schema_naming", OntologyBuildStepName.SCHEMA_NAMING),
+            run_qa_extraction=toggle("run_qa_extraction", OntologyBuildStepName.QA_EXTRACTION),
+            run_text_extraction=toggle(
+                "run_text_extraction", OntologyBuildStepName.TEXT_EXTRACTION
+            ),
+            source_documents=sources,
+            # 二度押しは既存 idempotency 機構で同じ再実行 job に合流させる
+            idempotency_key=f"retry:{job_id}:{finished_marker}",
+        )
 
     # --- internal ---------------------------------------------------------------------------
 
@@ -900,7 +1047,12 @@ class OntologyBuildService:
         finished = [
             job
             for job in self._jobs.values()
-            if job.status in {OntologyBuildStatus.SUCCEEDED, OntologyBuildStatus.FAILED}
+            if job.status
+            in {
+                OntologyBuildStatus.SUCCEEDED,
+                OntologyBuildStatus.FAILED,
+                OntologyBuildStatus.CANCELLED,
+            }
         ]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
@@ -1319,7 +1471,8 @@ class OntologyBuildService:
                     (
                         OntologyBuildStepName.TEXT_EXTRACTION,
                         "business_text の業務説明から、関係候補(relationships)・同義語(synonyms)・"
-                        "業務指標(metrics)を抽出してください。schema_context に対応づかない内容は "
+                        "業務指標(metrics)を抽出してください。名詞をエンティティ、動詞・述語を"
+                        "関係の手がかりとして読み取り、schema_context に対応づかない内容は "
                         "warnings_ja に残してください。",
                         text_context,
                         None,
