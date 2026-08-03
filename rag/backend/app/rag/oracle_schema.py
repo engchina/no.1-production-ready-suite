@@ -19,7 +19,6 @@ from app.clients.oracle import (
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
-    oracle_document_extractions_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
@@ -40,8 +39,8 @@ from app.clients.oracle import (
 )
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
-SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260703_002"
+SCHEMA_VERSION = "2"
+MIGRATION_ARTIFACT_VERSION = "20260723_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -92,9 +91,59 @@ class OracleSchemaSection:
     sql: str
 
 
+def oracle_system_schema_control_sql() -> str:
+    """明示的な schema 操作の lease / migration ledger 用 DDL を返す。"""
+    return """
+CREATE TABLE rag_schema_operations (
+    operation_key    VARCHAR2(64) PRIMARY KEY,
+    status           VARCHAR2(16) DEFAULT 'IDLE' NOT NULL,
+    operation_kind   VARCHAR2(16),
+    lease_owner      VARCHAR2(64),
+    lease_expires_at TIMESTAMP WITH TIME ZONE,
+    last_error_code  VARCHAR2(64),
+    schema_epoch     NUMBER(19) DEFAULT 0 NOT NULL,
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_schema_operations_status_ck
+        CHECK (status IN ('IDLE', 'RUNNING', 'FAILED')),
+    CONSTRAINT rag_schema_operations_kind_ck
+        CHECK (operation_kind IS NULL OR operation_kind IN ('INITIALIZE', 'RECREATE'))
+);
+
+CREATE TABLE rag_schema_migrations (
+    migration_name VARCHAR2(64) PRIMARY KEY,
+    description    VARCHAR2(512) NOT NULL,
+    checksum       CHAR(64) NOT NULL,
+    applied_at     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+MERGE INTO rag_schema_operations target
+USING (
+    SELECT 'system_schema' AS operation_key
+    FROM dual
+) source
+ON (target.operation_key = source.operation_key)
+WHEN NOT MATCHED THEN INSERT (
+    operation_key,
+    status,
+    schema_epoch,
+    updated_at
+) VALUES (
+    source.operation_key,
+    'IDLE',
+    0,
+    SYSTIMESTAMP
+);
+""".strip()
+
+
 def oracle_schema_sections() -> list[OracleSchemaSection]:
     """production RAG に必要な Oracle schema section を順序付きで返す。"""
     return [
+        OracleSchemaSection(
+            name="system_schema_control",
+            table_name="rag_schema_operations",
+            sql=oracle_system_schema_control_sql(),
+        ),
         OracleSchemaSection(
             name="documents",
             table_name="rag_documents",
@@ -154,11 +203,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunk_sets",
             table_name="rag_chunk_sets",
             sql=oracle_chunk_set_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="document_extractions",
-            table_name="rag_document_extractions",
-            sql=oracle_document_extractions_schema_sql(),
         ),
         OracleSchemaSection(
             name="search_audit",

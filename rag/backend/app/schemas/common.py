@@ -25,7 +25,8 @@ __all__ = [
 # - ok: 設定済みかつ実接続成功(検索・取込など DB 機能を利用できる)
 # - not_configured: 接続情報が未設定/不足(まず設定が必要)
 # - unreachable: 設定済みだが起動していない/到達できない(まず DB 起動が必要)
-DatabaseAvailability = Literal["ok", "not_configured", "unreachable"]
+# - setup_required: 接続済みだが RAG system schema の作成・更新が必要
+DatabaseAvailability = Literal["ok", "not_configured", "unreachable", "setup_required"]
 
 
 class DatabaseStatusData(BaseModel):
@@ -38,3 +39,4 @@ class DatabaseStatusData(BaseModel):
     # readiness check の生ステータス(ok / missing / missing_credentials / wallet_not_found 等)。
     check: str
     detail: str | None = None
+    schema_status: Literal["missing", "partial", "outdated", "ready"] | None = None

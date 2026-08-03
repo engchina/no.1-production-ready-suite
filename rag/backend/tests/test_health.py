@@ -2,18 +2,29 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.api.routes import health as health_route
 from app.config import EnterpriseAiConfiguredModel, get_settings
 from app.main import UNHANDLED_ERROR_MESSAGE, app, create_app
+from app.rag.system_schema import system_schema_manager
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 LLM_TEMPLATE = '{"input":"${user_message}"}'
 VLM_TEMPLATE = '{"input":"${data_base64}"}'
+
+
+async def _run_inline(
+    operation: Callable[..., Any],
+    *args: object,
+    **kwargs: object,
+) -> Any:
+    return operation(*args, **kwargs)
 
 
 def test_health() -> None:
@@ -236,6 +247,13 @@ def _configure_oracle_only(monkeypatch: MonkeyPatch, *, password: str = "oracle-
     monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
 
 
+def _schema_status(status: str = "ready") -> dict[str, object]:
+    return {
+        "status": status,
+        "operation_state": {"status": "idle"},
+    }
+
+
 def test_database_status_not_configured_skips_probe(monkeypatch: MonkeyPatch) -> None:
     """接続情報未設定なら実接続を試さず not_configured を返す。"""
     settings = get_settings()
@@ -263,6 +281,12 @@ def test_database_status_ok_when_probe_succeeds(monkeypatch: MonkeyPatch) -> Non
         return None
 
     monkeypatch.setattr(health_route, "test_oracle_connection", _probe_ok)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: _schema_status(),
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
 
     resp = client.get("/api/ready/database")
 
@@ -281,11 +305,39 @@ def test_database_status_uses_oracle_probe_timeout(monkeypatch: MonkeyPatch) -> 
         await asyncio.sleep(0.01)
 
     monkeypatch.setattr(health_route, "test_oracle_connection", _probe_ok)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: _schema_status(),
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
 
     resp = client.get("/api/ready/database")
 
     body = resp.json()
     assert body["data"]["status"] == "ok"
+
+
+def test_database_status_requires_system_schema_setup(monkeypatch: MonkeyPatch) -> None:
+    """接続成功でも RAG table が不足していれば setup_required を返す。"""
+    _configure_oracle_only(monkeypatch)
+
+    async def _probe_ok(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _probe_ok)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: _schema_status("missing"),
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    resp = client.get("/api/ready/database")
+
+    body = resp.json()
+    assert body["data"]["status"] == "setup_required"
+    assert body["data"]["schema_status"] == "missing"
 
 
 def test_database_status_unreachable_when_probe_fails(monkeypatch: MonkeyPatch) -> None:

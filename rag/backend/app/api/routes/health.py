@@ -1,11 +1,13 @@
 """ヘルスチェックエンドポイント。"""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Response, status
 
 from app.clients.oracle import test_oracle_connection
 from app.config import get_settings
+from app.rag.system_schema import oracle_error_code, system_schema_manager
 from app.readiness import (
     READINESS_OK,
     oracle_readiness_check,
@@ -54,7 +56,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
     """データベースの利用可否を返す(設定の有無 + 実接続プローブ)。
 
     フロントの DB ゲートが「設定ページ以外」を開く前に参照する。常に 200 で返し、
-    status で ok / not_configured / unreachable を区別する。
+    status で ok / not_configured / unreachable / setup_required を区別する。
     """
     settings = get_settings()
     check = oracle_readiness_check(settings)
@@ -83,4 +85,39 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
             ),
         )
 
-    return ApiResponse(data=DatabaseStatusData(status="ok", check=check))
+    try:
+        schema = await asyncio.to_thread(system_schema_manager.status)
+    except Exception as exc:  # noqa: BLE001 - schema 準備案内へ正規化する境界
+        code = oracle_error_code(exc)
+        logger.warning(
+            "database_schema_status_unavailable",
+            extra={"error_code": code, "exception_type": type(exc).__name__},
+        )
+        return ApiResponse(
+            data=DatabaseStatusData(
+                status="setup_required",
+                check=check,
+                detail=f"システムテーブルの状態を確認できませんでした ({code})。",
+            )
+        )
+
+    schema_status = schema["status"]
+    if (
+        schema_status != "ready"
+        or schema["operation_state"]["status"] == "running"
+    ):
+        return ApiResponse(
+            data=DatabaseStatusData(
+                status="setup_required",
+                check=check,
+                schema_status=schema_status,
+            )
+        )
+
+    return ApiResponse(
+        data=DatabaseStatusData(
+            status="ok",
+            check=check,
+            schema_status="ready",
+        )
+    )

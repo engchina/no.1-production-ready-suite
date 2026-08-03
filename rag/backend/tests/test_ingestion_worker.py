@@ -23,6 +23,10 @@ def _job(job_id: str) -> IngestionJob:
     )
 
 
+async def _schema_ready() -> bool:
+    return True
+
+
 @pytest.fixture(autouse=True)
 def _reset_wakeup() -> Iterator[None]:
     ingestion_worker._WAKEUP.clear()
@@ -54,12 +58,58 @@ async def test_worker_runs_all_queued_jobs() -> None:
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=2,
         poll_interval_seconds=0.05,
     )
     await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=5)
 
     assert sorted(executed) == ["j0", "j1", "j2"]
+
+
+async def test_worker_pauses_until_system_schema_is_ready(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """未初期化時は queue table を照会せず、ready 遷移後に自動再開する。"""
+    stop = asyncio.Event()
+    checks = 0
+    fetch_calls = 0
+
+    async def schema_ready() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    async def fetch(_limit: int) -> Sequence[IngestionJob]:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        stop.set()
+        return []
+
+    async def runner(_job_id: str) -> None:  # pragma: no cover - job はない
+        raise AssertionError("no queued job expected")
+
+    async def recover() -> Sequence[IngestionJob]:
+        return []
+
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        job_runner=runner,
+        fetch_queued=fetch,
+        recover_stale=recover,
+        schema_ready=schema_ready,
+        poll_interval_seconds=0.01,
+    )
+    with caplog.at_level("INFO", logger="app.rag.ingestion_worker"):
+        await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=5)
+
+    assert fetch_calls == 1
+    assert [record.message for record in caplog.records].count(
+        "ingestion_worker_schema_setup_required"
+    ) == 1
+    assert [record.message for record in caplog.records].count(
+        "ingestion_worker_schema_ready"
+    ) == 1
 
 
 async def test_worker_respects_concurrency_limit() -> None:
@@ -93,6 +143,7 @@ async def test_worker_respects_concurrency_limit() -> None:
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=2,
         poll_interval_seconds=0.05,
     )
@@ -125,6 +176,7 @@ async def test_worker_does_not_redispatch_inflight_job() -> None:
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=2,
         poll_interval_seconds=0.01,
     )
@@ -339,6 +391,7 @@ async def test_worker_marks_running_job_failed_when_runner_crashes(
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=1,
         poll_interval_seconds=0.01,
     )
@@ -391,6 +444,7 @@ async def test_worker_recovers_stale_jobs_before_consuming() -> None:
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=2,
         poll_interval_seconds=0.01,
     )
@@ -426,6 +480,7 @@ async def test_worker_recovers_stale_jobs_periodically_when_idle() -> None:
         job_runner=runner,
         fetch_queued=fetch,
         recover_stale=recover,
+        schema_ready=_schema_ready,
         concurrency=2,
         poll_interval_seconds=0.01,
     )

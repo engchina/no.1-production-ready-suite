@@ -13,6 +13,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     """RAG 本番運用に必要な Oracle table / vector 契約を artifact に含める。"""
     sql = oracle_schema.oracle_schema_sql()
 
+    assert "-- section: system_schema_control" in sql
+    assert "CREATE TABLE rag_schema_operations" in sql
+    assert "CREATE TABLE rag_schema_migrations" in sql
     assert "-- section: documents" in sql
     assert "CREATE TABLE rag_documents" in sql
     assert "-- section: knowledge_bases" in sql
@@ -46,6 +49,8 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE TABLE rag_chunk_sets" in sql
     assert "extraction_recipe_id VARCHAR2(64)" in sql
     assert "CREATE TABLE rag_document_extractions" in sql
+    assert sql.count("CREATE TABLE rag_document_extractions") == 1
+    assert "extraction_id   VARCHAR2(64) PRIMARY KEY" not in sql
     assert "CREATE TABLE rag_artifact_layers" in sql
     # 3 層モデル: per-KB binding 表は base schema から退役済み(membership + is_serving に一本化)。
     assert "CREATE TABLE rag_kb_chunk_set_bindings" not in sql
@@ -83,7 +88,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest == oracle_schema.oracle_schema_manifest()
     assert "generated_at" not in manifest
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "1"
+    assert manifest["schema_version"] == "2"
     assert manifest["vector_contract"] == "VECTOR(1536, FLOAT32)"
     assert manifest["vector_index"] == {
         "distance": "COSINE",
@@ -95,6 +100,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [section["name"] for section in manifest["sections"]] == [
+        "system_schema_control",
         "documents",
         "document_recipes",
         "knowledge_bases",
@@ -107,7 +113,6 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "ingestion_segments",
         "chunks",
         "chunk_sets",
-        "document_extractions",
         "search_audit",
         "ingestion_audit",
         "knowledge_graph",
@@ -280,9 +285,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
 
     assert manifest == oracle_schema.oracle_schema_migration_manifest()
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "1"
+    assert manifest["schema_version"] == "2"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260703_002"
+    assert manifest["migration_artifact_version"] == "20260723_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [

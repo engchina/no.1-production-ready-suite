@@ -18,10 +18,12 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
+from app.auth import AuthSession
 from app.clients.external_parser import (
     ENGINE_SPECS,
     ExternalParserBackend,
@@ -107,6 +109,12 @@ from app.rag.retrieval_adapter import (
     RetrievalStrategyStatus,
     retrieval_adapter_runtime_settings,
 )
+from app.rag.system_schema import (
+    SystemSchemaError,
+    oracle_error_code,
+    system_schema_manager,
+)
+from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
     normalize_vector_index_profile,
     vector_index_adapter_runtime_settings,
@@ -194,6 +202,9 @@ from app.schemas.settings import (
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
+    SystemTablesInitializeRequest,
+    SystemTablesOperationData,
+    SystemTablesStatusData,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
     VectorIndexProfileStatusData,
@@ -347,6 +358,63 @@ async def test_model_settings(
 async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     """現在の Oracle 26ai 接続設定を返す。secret は返さない。"""
     return ApiResponse(data=_database_settings_data(get_settings()))
+
+
+@router.get(
+    "/database/system-tables",
+    response_model=ApiResponse[SystemTablesStatusData],
+)
+async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
+    """RAG system table の状態を DDL なしで取得する。"""
+
+    try:
+        data = await asyncio.to_thread(system_schema_manager.status)
+    except Exception as exc:
+        code = oracle_error_code(exc)
+        safe_code = code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
+        raise HTTPException(
+            status_code=503,
+            detail=f"システムテーブルの状態を取得できませんでした ({safe_code})。",
+        ) from exc
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
+
+
+@router.post(
+    "/database/system-tables/initialize",
+    response_model=ApiResponse[SystemTablesOperationData],
+)
+async def initialize_system_tables(
+    payload: SystemTablesInitializeRequest,
+    request: Request,
+) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
+    """管理者の明示操作として作成・更新または全再作成する。"""
+
+    session = getattr(request.state, "auth_session", None)
+    if not isinstance(session, AuthSession) or session.role not in {"ADMIN", "LOCAL"}:
+        raise HTTPException(
+            status_code=403,
+            detail="システムテーブル操作には管理者権限が必要です。",
+        )
+    try:
+        data = await asyncio.to_thread(
+            system_schema_manager.initialize,
+            recreate=payload.recreate,
+            confirmation=payload.confirmation,
+        )
+    except SystemSchemaError as exc:
+        headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=headers,
+            content={
+                "data": None,
+                "error_messages": [exc.public_message],
+                "warning_messages": [],
+                "error_code": exc.code,
+            },
+        )
+    system_schema_runtime.invalidate()
+    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
 
 
 @router.patch("/database", response_model=ApiResponse[DatabaseSettingsData])

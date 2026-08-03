@@ -270,6 +270,73 @@ class DatabaseSettingsData(BaseModel):
     config_source: Literal["runtime"]
 
 
+SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
+SystemTableOperationStatus = Literal["idle", "running", "failed"]
+SystemTableOperationKind = Literal["initialize", "recreate"]
+SystemTableOperationResult = Literal["no_op", "initialized", "migrated", "recreated"]
+
+
+class SystemTableObjectData(BaseModel):
+    """system schema manifest の 1 object。"""
+
+    name: str
+    object_type: str
+
+
+class SystemTableMetadata(BaseModel):
+    """管理対象テーブルの dictionary metadata。"""
+
+    name: str
+    exists: bool
+    estimated_rows: int | None = None
+    created_at: str | None = None
+    last_analyzed_at: str | None = None
+
+
+class SystemTableOperationState(BaseModel):
+    """DB lease と直近操作状態。"""
+
+    status: SystemTableOperationStatus
+    operation_kind: SystemTableOperationKind | None = None
+    lease_expires_at: str | None = None
+    last_error_code: str | None = None
+    schema_epoch: int = 0
+    updated_at: str | None = None
+
+
+class SystemTablesStatusData(BaseModel):
+    """RAG system table の read-only status。"""
+
+    status: SystemTableSchemaStatus
+    schema_version: str
+    schema_head: str
+    applied_versions: list[str]
+    pending_versions: list[str]
+    expected_object_count: int
+    existing_object_count: int
+    expected_table_count: int
+    existing_table_count: int
+    missing_objects: list[SystemTableObjectData]
+    retired_objects: list[SystemTableObjectData]
+    tables: list[SystemTableMetadata]
+    operation_state: SystemTableOperationState
+
+
+class SystemTablesInitializeRequest(BaseModel):
+    """初期化または全再作成の request。"""
+
+    recreate: bool = False
+    confirmation: str | None = Field(default=None, max_length=128)
+
+
+class SystemTablesOperationData(SystemTablesStatusData):
+    """DDL operation 後の状態と件数。"""
+
+    operation: SystemTableOperationResult
+    dropped_object_count: int
+    created_object_count: int
+
+
 AdbOperationStatus = Literal[
     "success",
     "not_configured",

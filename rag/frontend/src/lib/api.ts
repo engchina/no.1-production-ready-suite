@@ -276,12 +276,17 @@ export interface HealthData {
   checks: Record<string, string>;
 }
 
-export type DatabaseAvailability = "ok" | "not_configured" | "unreachable";
+export type DatabaseAvailability =
+  | "ok"
+  | "not_configured"
+  | "unreachable"
+  | "setup_required";
 
 export interface DatabaseStatusData {
   status: DatabaseAvailability;
   check: string;
   detail: string | null;
+  schema_status: SystemTableSchemaStatus | null;
 }
 
 // --- ドキュメント ---
@@ -1497,6 +1502,64 @@ export interface DatabaseConnectionTestResult {
   details: Record<string, string | number | boolean | null>;
   checked_at: string;
   error_type: string | null;
+}
+
+export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationKind = "initialize" | "recreate";
+export type SystemTableOperationResult =
+  | "no_op"
+  | "initialized"
+  | "migrated"
+  | "recreated";
+
+export interface SystemTableObjectData {
+  name: string;
+  object_type: string;
+}
+
+export interface SystemTableMetadata {
+  name: string;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
+export interface SystemTableOperationState {
+  status: SystemTableOperationStatus;
+  operation_kind: SystemTableOperationKind | null;
+  lease_expires_at: string | null;
+  last_error_code: string | null;
+  schema_epoch: number;
+  updated_at: string | null;
+}
+
+export interface SystemTablesStatusData {
+  status: SystemTableSchemaStatus;
+  schema_version: string;
+  schema_head: string;
+  applied_versions: string[];
+  pending_versions: string[];
+  expected_object_count: number;
+  existing_object_count: number;
+  expected_table_count: number;
+  existing_table_count: number;
+  missing_objects: SystemTableObjectData[];
+  retired_objects: SystemTableObjectData[];
+  tables: SystemTableMetadata[];
+  operation_state: SystemTableOperationState;
+}
+
+export interface SystemTablesInitializeRequest {
+  recreate: boolean;
+  confirmation?: string;
+}
+
+export interface SystemTablesOperationData extends SystemTablesStatusData {
+  operation: SystemTableOperationResult;
+  dropped_object_count: number;
+  created_object_count: number;
 }
 
 // --- 設定: HuggingFace モデルダウンロード ---
@@ -2867,6 +2930,13 @@ export const api = {
   },
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseConnectionTestResult>("/api/settings/database/test", jsonBody(body)),
+  getSystemTablesStatus: () =>
+    request<SystemTablesStatusData>("/api/settings/database/system-tables"),
+  initializeSystemTables: (body: SystemTablesInitializeRequest) =>
+    request<SystemTablesOperationData>(
+      "/api/settings/database/system-tables/initialize",
+      jsonBody(body)
+    ),
 
   // 設定: Autonomous Database 管理
   getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),

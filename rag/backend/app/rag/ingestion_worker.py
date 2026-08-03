@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 JobRunner = Callable[[str], Awaitable[None]]
 QueuedJobFetcher = Callable[[int], Awaitable[Sequence[IngestionJob]]]
+SchemaReadinessChecker = Callable[[], Awaitable[bool]]
 
 # enqueue 側（同一プロセス内）から即時起床させるための通知イベント。
 # 別プロセスのワーカーには届かないが、その場合は poll interval で拾う。
@@ -53,6 +54,12 @@ async def _default_job_runner(job_id: str) -> None:
     from app.api.routes.documents import _run_ingestion_job
 
     await _run_ingestion_job(job_id)
+
+
+async def _default_schema_ready() -> bool:
+    from app.rag.system_schema_runtime import system_schema_runtime
+
+    return await system_schema_runtime.is_ready()
 
 
 class IngestionJobSubprocessError(RuntimeError):
@@ -122,6 +129,7 @@ class IngestionQueueWorker:
         job_runner: JobRunner | None = None,
         fetch_queued: QueuedJobFetcher | None = None,
         recover_stale: Callable[[], Awaitable[Sequence[IngestionJob]]] | None = None,
+        schema_ready: SchemaReadinessChecker | None = None,
         concurrency: int | None = None,
         poll_interval_seconds: float | None = None,
     ) -> None:
@@ -129,6 +137,7 @@ class IngestionQueueWorker:
         self._job_runner = job_runner or _job_runner_for_settings(settings)
         self._fetch_queued = fetch_queued or _default_fetch_queued
         self._recover_stale = recover_stale or self._default_recover_stale
+        self._schema_ready = schema_ready or _default_schema_ready
         self._concurrency = max(1, concurrency or settings.ingestion_queue_worker_concurrency)
         self._poll_interval = (
             poll_interval_seconds or settings.ingestion_queue_poll_interval_seconds
@@ -137,18 +146,25 @@ class IngestionQueueWorker:
         self._last_recovery_at: float | None = None
         self._inflight: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._last_schema_state: str | None = None
+        self._recovery_initialized = False
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         """停止イベントが立つまでキューを消費し続ける。"""
         stop_event = stop_event or asyncio.Event()
-        await self._recover_stale_safely()
-        self._last_recovery_at = asyncio.get_running_loop().time()
         logger.info(
             "ingestion_worker_started",
             extra={"concurrency": self._concurrency, "poll_interval": self._poll_interval},
         )
         try:
             while not stop_event.is_set():
+                if not await self._schema_is_ready():
+                    await self._wait_for_work(stop_event)
+                    continue
+                if not self._recovery_initialized:
+                    await self._recover_stale_safely()
+                    self._last_recovery_at = asyncio.get_running_loop().time()
+                    self._recovery_initialized = True
                 dispatched = await self._dispatch_available()
                 if dispatched == 0:
                     # アイドル時に、クラッシュで固着した文書/ジョブを定期回復する。
@@ -160,6 +176,36 @@ class IngestionQueueWorker:
             else:
                 await self._drain_inflight()
             logger.info("ingestion_worker_stopped")
+
+    async def _schema_is_ready(self) -> bool:
+        """schema 未作成/操作中は queue table へ触れず、状態変化だけを記録する。"""
+
+        try:
+            ready = await self._schema_ready()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            state = "unavailable"
+            if self._last_schema_state != state:
+                logger.exception("ingestion_worker_schema_probe_failed")
+                self._last_schema_state = state
+            return False
+
+        state = "ready" if ready else "setup_required"
+        if state != self._last_schema_state:
+            if ready:
+                logger.info("ingestion_worker_schema_ready")
+            else:
+                logger.warning(
+                    "ingestion_worker_schema_setup_required",
+                    extra={
+                        "advice": (
+                            "システム設定 > データベースでシステムテーブルを作成・更新してください"
+                        )
+                    },
+                )
+            self._last_schema_state = state
+        return ready
 
     async def _default_recover_stale(self) -> Sequence[IngestionJob]:
         stale_before = datetime.now(UTC) - timedelta(

@@ -8,17 +8,14 @@
 from __future__ import annotations
 
 import importlib
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from functools import lru_cache
 from typing import Any
 
 from app.clients.oracle import _init_oracle_client, _oracle_connect_kwargs
 from app.config import Settings
-from app.rag.oracle_schema import (
-    oracle_schema_migration_sql,
-    oracle_schema_sql,
-    split_sql_statements,
-)
+from app.rag.system_schema import SystemSchemaManager
 
 # .env を読み込んだ実接続設定（テスト中に singleton が書き換わっても影響を受けない）
 _REAL_SETTINGS = Settings()
@@ -26,10 +23,6 @@ _REAL_SETTINGS = Settings()
 # 既存（テスト開始前から存在する）ドキュメント ID。実運用データを誤って消さない基準。
 _BASELINE_DOCUMENT_IDS: set[str] = set()
 _BASELINE_KNOWLEDGE_BASE_IDS: set[str] = set()
-
-# 冪等適用で無視できる Oracle エラーコード（既に存在 / 列が既に索引済み）。
-_IDEMPOTENT_DDL_CODES = {955, 1408}
-
 
 def real_oracle_connection_kwargs() -> dict[str, Any]:
     """実 Oracle へ直接 connect するための kwargs を返す。"""
@@ -74,76 +67,21 @@ def db_available() -> bool:
         connection.close()
 
 
-def _clean_ddl_statement(statement: str) -> str:
-    """section コメント行を除いた実行用 DDL を返す。"""
-    lines = [line for line in statement.splitlines() if not line.strip().startswith("--")]
-    return "\n".join(lines).strip()
+@contextmanager
+def _schema_connection() -> Iterator[Any]:
+    connection = _connect()
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 @lru_cache(maxsize=1)
 def ensure_schema() -> None:
     """RAG スキーマ（rag_documents / rag_chunks など）を冪等に作成する。"""
-    oracledb = importlib.import_module("oracledb")
-    connection = _connect()
-    try:
-        cursor = connection.cursor()
-        for statement in split_sql_statements(oracle_schema_sql()):
-            sql = _clean_ddl_statement(statement)
-            if not sql:
-                continue
-            try:
-                cursor.execute(sql)
-            except oracledb.DatabaseError as exc:  # noqa: PERF203
-                code = exc.args[0].code if exc.args else None
-                if code in _IDEMPOTENT_DDL_CODES:
-                    continue
-                # rag_search_audit は予約語 mode の既知バグ(ORA-03050)で作成できず、
-                # その索引も ORA-00942 になる。ランタイムは当該テーブルへ書き込まない
-                # ためテストには影響しない。詳細は spawn 済みフォローアップ参照。
-                if code in (3050, 942):
-                    continue
-                # 既存 schema では新列を migration で補うため、当該索引だけ先に失敗し得る。
-                if code == 904 and "RESULT_SHA256" in sql.upper():
-                    continue
-                if code == 904 and "RAG_CHUNK_SETS_EXTRACTION_IDX" in sql.upper():
-                    continue
-                if code == 904 and "RAG_CHUNK_SETS_SERVING_IDX" in sql.upper():
-                    continue
-                if code == 904 and "RAG_DOC_EXT_STATUS_IDX" in sql.upper():
-                    continue
-                if code == 904 and "RAG_ARTIFACT_LAYERS_PARENT_IDX" in sql.upper():
-                    continue
-                if (
-                    code == 904
-                    and "RAG_CHUNKS_TEXT_IDX" in sql.upper()
-                    and "SEARCH_TEXT" in sql.upper()
-                ):
-                    continue
-                if code == 904 and "RAG_INGESTION_AUDIT_PARSER_CREATED_IDX" in sql.upper():
-                    continue
-                if (
-                    code == 904
-                    and "RAG_AGENT_MEMORIES" in sql.upper()
-                    and "ROLE_ID_HASH" in sql.upper()
-                ):
-                    continue
-                raise
-        for statement in split_sql_statements(oracle_schema_migration_sql()):
-            sql = _clean_ddl_statement(statement)
-            if not sql:
-                continue
-            try:
-                cursor.execute(sql)
-            except oracledb.DatabaseError as exc:  # noqa: PERF203
-                code = exc.args[0].code if exc.args else None
-                if code in _IDEMPOTENT_DDL_CODES:
-                    continue
-                if code in (3050, 942):
-                    continue
-                raise
-        connection.commit()
-    finally:
-        connection.close()
+    result = SystemSchemaManager(_schema_connection).initialize()
+    if result["status"] != "ready":
+        raise RuntimeError("RAG system schema の初期化後 status が ready ではありません。")
 
 
 def capture_baseline() -> None:

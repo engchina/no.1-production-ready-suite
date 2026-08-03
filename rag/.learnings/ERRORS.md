@@ -1,3 +1,70 @@
+## [ERR-20260723-THR] sandbox_asyncio_to_thread_hang
+
+**Logged**: 2026-07-23T00:00:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+managed workspace sandbox では `asyncio.to_thread()` と ThreadPoolExecutor が完了せず、ASGI 単体テストが停止した。
+
+### Error
+```text
+pytest が system schema API の `await asyncio.to_thread(...)` で進行しない。
+単独の asyncio.to_thread(lambda: "ok") も timeout。
+```
+
+### Context
+- production では既存 Oracle client も executor を使うため、API 実装の非同期 offload は維持する。
+- 決定論的 API unit test では offload 関数を inline async stub へ差し替えられる。
+
+### Suggested Fix
+thread 制限のある sandbox では API test の offload 境界を inline stub 化し、実 DB / production では executor を使用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/health.py, backend/app/api/routes/settings.py
+
+### Resolution
+- **Resolved**: 2026-07-23T00:00:00+09:00
+- **Notes**: 対象 API tests で `asyncio.to_thread` を inline stub に差し替えた。
+
+---
+
+## [ERR-20260723-UV1] uv_readonly_default_cache
+
+**Logged**: 2026-07-23T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+workspace-write sandbox では uv の既定 cache `/root/.cache/uv` が読み取り専用で、検証コマンドが開始前に失敗する。
+
+### Error
+```text
+error: Could not acquire lock
+Caused by: Could not create temporary file
+Caused by: Read-only file system at /root/.cache/uv/.tmp...
+```
+
+### Context
+- `uv run ruff check ...` を backend ディレクトリから実行した。
+- source code の検査前に uv cache lock 作成で停止した。
+
+### Suggested Fix
+sandbox 内の検証では `UV_CACHE_DIR=/tmp/production-ready-rag-uv-cache` を指定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/uv.lock
+
+### Resolution
+- **Resolved**: 2026-07-23T00:00:00+09:00
+- **Notes**: writable な `/tmp` cache を使って再実行する。
+
+---
+
 ## [ERR-20260703-007] service_testclient_httpx_deadlock
 
 **Logged**: 2026-07-03T05:23:00+09:00

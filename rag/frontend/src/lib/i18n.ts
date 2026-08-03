@@ -21,6 +21,9 @@ export const ja = {
   "dbGate.unreachable.title": "データベースに接続できません",
   "dbGate.unreachable.message":
     "データベースの起動状態、ネットワーク到達性、Wallet サービス名、認証情報を確認してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
+  "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
+  "dbGate.setupRequired.message":
+    "Oracle 26ai には接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定で「作成・更新」を実行してください。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
   "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",
@@ -1481,6 +1484,70 @@ export const ja = {
     "readiness: {readiness} / 所要時間: {elapsed} ms / 確認時刻: {checkedAt}",
   "settings.database.hint":
     "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
+  "settings.database.systemTables.title": "RAG システムテーブル",
+  "settings.database.systemTables.description":
+    "RAG が使用する Oracle テーブル、ベクトル索引、Oracle Text 索引、migration の状態を確認し、管理者の明示操作で準備します。",
+  "settings.database.systemTables.loading": "システムテーブルの状態を確認しています。",
+  "settings.database.systemTables.status.ready": "準備完了",
+  "settings.database.systemTables.status.missing": "未作成",
+  "settings.database.systemTables.status.partial": "一部不足",
+  "settings.database.systemTables.status.outdated": "更新が必要",
+  "settings.database.systemTables.operation.running": "操作中",
+  "settings.database.systemTables.summary.objects": "管理対象オブジェクト",
+  "settings.database.systemTables.summary.head": "Migration head",
+  "settings.database.systemTables.summary.epoch": "Schema epoch",
+  "settings.database.systemTables.hint.missing":
+    "RAG システムテーブルがまだありません。「作成・更新」で必要なオブジェクトを作成してください。",
+  "settings.database.systemTables.hint.partial":
+    "必須オブジェクトが {count} 件不足しています。「作成・更新」で不足分を補ってください。",
+  "settings.database.systemTables.hint.outdated":
+    "DDL または migration の更新が必要です。「作成・更新」は既存データを保持して更新します。",
+  "settings.database.systemTables.ready":
+    "RAG に必要なシステムテーブルと索引は準備できています。",
+  "settings.database.systemTables.action.initialize": "作成・更新",
+  "settings.database.systemTables.action.refresh": "状態を再取得",
+  "settings.database.systemTables.action.retry": "再試行",
+  "settings.database.systemTables.action.recreate": "すべて再作成",
+  "settings.database.systemTables.success.noOp": "システムテーブルは最新です。",
+  "settings.database.systemTables.success.initialized":
+    "RAG システムテーブルを作成しました。",
+  "settings.database.systemTables.success.migrated":
+    "RAG システムテーブルを更新しました。",
+  "settings.database.systemTables.success.recreated":
+    "RAG システムテーブルをすべて再作成しました。",
+  "settings.database.systemTables.success.refreshed": "システムテーブルの状態を更新しました。",
+  "settings.database.systemTables.error.statusTitle": "状態を取得できません",
+  "settings.database.systemTables.error.status":
+    "Oracle 接続設定とデータベースの起動状態を確認して再試行してください。",
+  "settings.database.systemTables.error.operationTitle": "システムテーブル操作に失敗しました",
+  "settings.database.systemTables.error.operation":
+    "システムテーブル操作を完了できませんでした。",
+  "settings.database.systemTables.error.recovery":
+    "状態を再取得し、取込ジョブや Oracle のロック状態を確認して再試行してください。",
+  "settings.database.systemTables.previousFailure": "前回の操作が失敗しています",
+  "settings.database.systemTables.previousFailureDetail":
+    "エラーコード: {code}。状態を再取得してから再試行してください。",
+  "settings.database.systemTables.details.title": "テーブルと migration の詳細",
+  "settings.database.systemTables.details.versions":
+    "適用済み: {applied} / 未適用または checksum 不一致: {pending}",
+  "settings.database.systemTables.table.scrollLabel":
+    "RAG システムテーブル一覧。横方向にスクロールできます。",
+  "settings.database.systemTables.table.name": "テーブル",
+  "settings.database.systemTables.table.status": "状態",
+  "settings.database.systemTables.table.rows": "推定行数",
+  "settings.database.systemTables.table.created": "作成日時",
+  "settings.database.systemTables.table.analyzed": "統計更新",
+  "settings.database.systemTables.table.exists": "存在",
+  "settings.database.systemTables.table.missing": "不足",
+  "settings.database.systemTables.recreate.title": "危険な操作",
+  "settings.database.systemTables.recreate.description":
+    "文書、chunk、ナレッジベース、業務ビュー、会話、監査、評価など RAG の DB データを削除して再作成します。元に戻せません。同じ Oracle schema の非 RAG オブジェクトと Object Storage の原本は削除しません。",
+  "settings.database.systemTables.recreate.confirmationLabel": "確認文字列",
+  "settings.database.systemTables.recreate.helper":
+    "実行するには {phrase} と正確に入力し、続く確認ダイアログでも承認してください。",
+  "settings.database.systemTables.confirm.title": "RAG の DB データを削除しますか？",
+  "settings.database.systemTables.confirm.description":
+    "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
   "settings.database.validation.required": "値を入力してください。",
   "settings.database.validation.passwordRequired":
     "DB設定を保存するにはデータベースパスワードを入力してください。",

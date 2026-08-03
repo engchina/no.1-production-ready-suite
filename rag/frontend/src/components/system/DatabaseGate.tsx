@@ -61,6 +61,16 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
           isRetrying={query.isFetching}
         />
       );
+    case "setup_required":
+      return (
+        <GateNotice
+          tone="info"
+          titleKey="dbGate.setupRequired.title"
+          messageKey="dbGate.setupRequired.message"
+          onRetry={() => void query.refetch()}
+          isRetrying={query.isFetching}
+        />
+      );
     default:
       // data が無い/想定外: 状態を確認できないものとして扱う。
       return (

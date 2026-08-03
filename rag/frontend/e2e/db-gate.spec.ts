@@ -18,13 +18,33 @@ const authStatus = {
   warning_messages: [],
 };
 
-function dbStatus(status: "ok" | "not_configured" | "unreachable") {
+function dbStatus(
+  status: "ok" | "not_configured" | "unreachable" | "setup_required"
+) {
   return {
     data: { status, check: status === "not_configured" ? "missing" : "ok", detail: null },
     error_messages: [],
     warning_messages: [],
   };
 }
+
+test("DB 接続済みでも schema 未作成ならデータベース設定へ案内する", async ({
+  page,
+}) => {
+  await routeAuth(page);
+  await page.route("**/api/ready/database", (route) =>
+    route.fulfill({ json: dbStatus("setup_required") })
+  );
+
+  await page.goto("/dashboard");
+
+  await expect(
+    page.getByRole("heading", { name: "RAG システムテーブルの準備が必要です" })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /データベース設定を開く/ })
+  ).toHaveAttribute("href", "/settings/database");
+});
 
 async function routeAuth(page: Page) {
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
