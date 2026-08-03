@@ -148,7 +148,7 @@ if (ok) { /* 実行 */ }
 ### 3.6 State views
 
 - `src/components/StateViews.tsx` の `ErrorState`(再試行付き)/ `EmptyState` を正本とする。
-- **Loading を追加**: 1 秒超の取得は `Skeleton`(`src/components/ui/skeleton.tsx`)で行う(`progressive-loading`、ブロッキングスピナー禁止)。CLS を出さないよう領域寸法を予約する。
+- **Loading を追加**: 1 秒超の取得は `TimedLoadingState` + `Skeleton`(`src/components/ProcessingState.tsx` / `src/components/ui/skeleton.tsx`)で行う(`progressive-loading`、ブロッキングスピナー禁止)。CLS を出さないよう領域寸法を予約する。
 - TanStack Query 連動の標準分岐:
 
 ```tsx
@@ -158,6 +158,43 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 ```
 
 - `ErrorState` のメッセージは原因 + 再試行/設定誘導を含める(`error-recovery`)。
+
+### 3.7 処理中・経過時間
+
+- ユーザーが直接見ている取得・送信・実行と durable job は、対象領域内に共通
+  `ProcessingIndicator` または `TimedLoadingState` を表示する。静かな polling、prefetch、
+  background refresh には表示しない。
+- **配置は「影響を受ける最小領域の先頭」**を正本とする。座標やページごとの見た目ではなく、
+  `ProcessingPlacement = page | workspace | panel | tab | result | action | job` で意味を明示し、
+  `data-processing-placement` へ反映する。
+  - `page`: 認証・DB gate など、ページ全体を利用できない初期処理。
+  - `workspace`: 一覧再取得や DB 構造再取得など、複数パネルへ影響する処理。
+  - `panel`: 一覧、設定カード、詳細ペインなど単一パネルの取得。
+  - `tab`: DDL など、選択中タブの内容だけを取得する処理。
+  - `result`: SQL・分析・プレビューなど、実行結果を生成する処理。
+  - `action`: ログインや送信など、フォーム操作に直接属する処理。
+  - `job`: 評価・Ontology 構築など durable job の進行表示。
+- 領域内の順序は **固定の見出し／検索／タブ → 処理中表示 → Skeleton または保持中の内容**
+  とする。処理と無関係なタイトル、フィルター、タブは隠さず、ユーザーが現在地を見失わないようにする。
+- `PageHeader` / `PageActionBar` はアクションボタンの spinner のみを担当し、経過時間を含む詳細表示を
+  自動生成しない。詳細表示をヘッダー直下へ置くのは `placement="page"` の処理だけとする。
+- 初回取得は `TimedLoadingState` + Skeleton で寸法を予約する。明示的な再取得は既存内容を保持し、
+  対象領域の先頭へ compact な `ProcessingIndicator` を置く。静かな polling / prefetch は表示しない。
+- 同じ operation に対する詳細表示は 1 つだけにする。起点ボタンの spinner との併用は許可するが、
+  複数パネルへ同じ timer を重複表示しない。
+- 実行中は `経過時間 00:00`、durable job や結果カードの完了後は `処理時間 00:00` とする。
+  1 時間未満は `mm:ss`、1 時間以上は `h:mm:ss`。数字は `tabular-nums` で幅を固定する。
+- 10 秒を超えたら低干渉の slow hint を追加する。取消可能な処理は同じ領域に取消 action を置く。
+  未知の進捗には progress bar を表示せず、評価など総量が既知の場合だけ進捗率と併記する。
+- timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとの読み上げを発生させない。アニメーションは
+  `prefers-reduced-motion` に従う。
+- 操作キーが変わった場合は client start time をリセットする。durable job は server の
+  `started_at` / `finished_at` / `elapsed_ms` を優先し、技術診断値のミリ秒精度は保持する。
+- timeout と取消は別状態にする。timeout は現在の選択を保持した `ErrorState` に置換して再試行を示し、
+  取消は timeout error として通知しない。
+- request budget は `requestPolicy.ts` を正本とする。`interactive-list = 8 秒`、
+  `interactive-detail = 30 秒`、`job-control = 5 秒`。それ以上の処理は durable job とし、
+  秒数をページ文言へ直書きしない。
 
 ---
 

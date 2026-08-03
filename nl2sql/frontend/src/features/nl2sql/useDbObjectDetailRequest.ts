@@ -26,8 +26,10 @@ interface DbObjectDetailRequestState {
   loading: boolean;
   ddlLoading: boolean;
   error: string;
+  ddlError: string;
   load: (name: string) => Promise<void>;
   loadDdl: (name: string) => Promise<void>;
+  cancel: () => void;
   clear: () => void;
   requestVersion: () => number;
 }
@@ -53,6 +55,7 @@ export function useDbObjectDetailRequest({
   const [loading, setLoading] = useState(false);
   const [ddlLoading, setDdlLoading] = useState(false);
   const [error, setError] = useState("");
+  const [ddlError, setDdlError] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
   const ddlControllerRef = useRef<{ name: string; controller: AbortController } | null>(null);
   const sequenceRef = useRef(0);
@@ -68,6 +71,16 @@ export function useDbObjectDetailRequest({
     setLoading(false);
     setDdlLoading(false);
     setError("");
+    setDdlError("");
+  }, []);
+
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    ddlControllerRef.current?.controller.abort();
+    ddlControllerRef.current = null;
+    setLoading(false);
+    setDdlLoading(false);
   }, []);
 
   const load = useCallback(
@@ -82,6 +95,7 @@ export function useDbObjectDetailRequest({
       setSelectedName(name);
       setDetail(null);
       setError("");
+      setDdlError("");
       setLoading(true);
       setDdlLoading(false);
       try {
@@ -124,6 +138,7 @@ export function useDbObjectDetailRequest({
       ddlControllerRef.current?.controller.abort();
       const controller = new AbortController();
       ddlControllerRef.current = { name, controller };
+      setDdlError("");
       setDdlLoading(true);
       try {
         const nextDetail = await apiGet<DbAdminObjectDetail>(
@@ -138,8 +153,15 @@ export function useDbObjectDetailRequest({
             current && current.name === name ? { ...current, ddl: nextDetail.ddl } : current,
           );
         }
-      } catch {
-        // DDL 取得失敗時は従来どおり空表示へ戻し、タブを開き直すと再試行できる。
+      } catch (cause) {
+        if (isAbortError(cause)) return;
+        if (sequence === sequenceRef.current) {
+          setDdlError(
+            isTimeoutError(cause)
+              ? timeoutErrorMessage
+              : detailLoadError(cause, loadErrorMessage),
+          );
+        }
       } finally {
         if (sequence === sequenceRef.current) {
           ddlControllerRef.current = null;
@@ -147,7 +169,7 @@ export function useDbObjectDetailRequest({
         }
       }
     },
-    [collectionPath, detail],
+    [collectionPath, detail, loadErrorMessage, timeoutErrorMessage],
   );
 
   useEffect(
@@ -168,8 +190,10 @@ export function useDbObjectDetailRequest({
     loading,
     ddlLoading,
     error,
+    ddlError,
     load,
     loadDdl,
+    cancel,
     clear,
     requestVersion,
   };

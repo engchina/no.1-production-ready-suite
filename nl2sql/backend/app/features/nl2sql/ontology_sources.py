@@ -28,9 +28,16 @@ from .ontology_models import (
     OntologySourceDocument,
     QaPair,
 )
+from .tabular_files import (
+    WORKBOOK_SUFFIXES,
+    XLS_OLE_SIGNATURE,
+    TabularFileReadError,
+    normalize_workbook_scalar,
+    read_workbook_sheets,
+)
 
 SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES = frozenset(
-    {".pdf", ".docx", ".txt", ".md", ".csv", ".tsv", ".xlsx", ".xlsm"}
+    {".pdf", ".docx", ".txt", ".md", ".csv", ".tsv", ".xlsx", ".xls", ".xlsm"}
 )
 _CHUNK_SIZE = 1024 * 1024
 _ALLOWED_MEDIA_TYPES: dict[str, frozenset[str]] = {
@@ -41,6 +48,7 @@ _ALLOWED_MEDIA_TYPES: dict[str, frozenset[str]] = {
     ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
     ".tsv": frozenset({"text/tab-separated-values", "text/plain"}),
     ".xlsx": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
+    ".xls": frozenset({"application/vnd.ms-excel"}),
     ".xlsm": frozenset({"application/vnd.ms-excel.sheet.macroenabled.12"}),
 }
 
@@ -111,12 +119,17 @@ def validate_source_signature(filename: str, content: bytes) -> None:
     if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLSM のいずれかを指定してください。",
+            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
         )
     if not content:
         raise OntologySourceError("ONTOLOGY_SOURCE_EMPTY", "空の資料は登録できません。")
     if suffix == ".pdf" and not content.startswith(b"%PDF-"):
         raise OntologySourceError("ONTOLOGY_SOURCE_MIME_MISMATCH", "PDF の内容を確認できません。")
+    if suffix == ".xls" and not content.startswith(XLS_OLE_SIGNATURE):
+        raise OntologySourceError(
+            "ONTOLOGY_SOURCE_MIME_MISMATCH",
+            "拡張子と XLS ファイル内容が一致しません。ファイルを確認して再選択してください。",
+        )
     if suffix in {".docx", ".xlsx", ".xlsm"}:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -130,9 +143,13 @@ def validate_source_signature(filename: str, content: bytes) -> None:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_MIME_MISMATCH", "拡張子と Office ファイル内容が一致しません。"
             )
-    if suffix in {".txt", ".md", ".csv", ".tsv"} and b"\x00" in content[:4096]:
+    if suffix in {".txt", ".md", ".csv", ".tsv"} and (
+        b"\x00" in content[:4096]
+        or content.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
+    ):
         raise OntologySourceError(
-            "ONTOLOGY_SOURCE_BINARY_TEXT", "テキスト資料にバイナリデータが含まれています。"
+            "ONTOLOGY_SOURCE_BINARY_TEXT",
+            "テキスト資料の拡張子と内容が一致しません。正しい形式で再選択してください。",
         )
 
 
@@ -143,7 +160,7 @@ def validate_source_path(filename: str, path: Path) -> None:
     if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLSM のいずれかを指定してください。",
+            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
         )
     if path.stat().st_size == 0:
         raise OntologySourceError("ONTOLOGY_SOURCE_EMPTY", "空の資料は登録できません。")
@@ -151,6 +168,11 @@ def validate_source_path(filename: str, path: Path) -> None:
         prefix = stream.read(4096)
     if suffix == ".pdf" and not prefix.startswith(b"%PDF-"):
         raise OntologySourceError("ONTOLOGY_SOURCE_MIME_MISMATCH", "PDF の内容を確認できません。")
+    if suffix == ".xls" and not prefix.startswith(XLS_OLE_SIGNATURE):
+        raise OntologySourceError(
+            "ONTOLOGY_SOURCE_MIME_MISMATCH",
+            "拡張子と XLS ファイル内容が一致しません。ファイルを確認して再選択してください。",
+        )
     if suffix in {".docx", ".xlsx", ".xlsm"}:
         try:
             with zipfile.ZipFile(path) as archive:
@@ -164,9 +186,13 @@ def validate_source_path(filename: str, path: Path) -> None:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_MIME_MISMATCH", "拡張子と Office ファイル内容が一致しません。"
             )
-    if suffix in {".txt", ".md", ".csv", ".tsv"} and b"\x00" in prefix:
+    if suffix in {".txt", ".md", ".csv", ".tsv"} and (
+        b"\x00" in prefix
+        or prefix.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
+    ):
         raise OntologySourceError(
-            "ONTOLOGY_SOURCE_BINARY_TEXT", "テキスト資料にバイナリデータが含まれています。"
+            "ONTOLOGY_SOURCE_BINARY_TEXT",
+            "テキスト資料の拡張子と内容が一致しません。正しい形式で再選択してください。",
         )
 
 
@@ -199,7 +225,7 @@ class OntologySourceStorage:
         if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-                "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLSM のいずれかを指定してください。",
+                "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
             )
         source_id = f"ontology_source_{uuid4().hex}"
         profile_storage_key = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:24]
@@ -300,8 +326,8 @@ def extract_ontology_source(
         return _extract_text(content)
     if suffix in {".csv", ".tsv"}:
         return _extract_delimited(content, delimiter="\t" if suffix == ".tsv" else ",")
-    if suffix in {".xlsx", ".xlsm"}:
-        return _extract_workbook(content)
+    if suffix in WORKBOOK_SUFFIXES:
+        return _extract_workbook(source.filename, content)
     if suffix == ".docx":
         return _extract_docx(content)
     if suffix == ".pdf":
@@ -358,21 +384,19 @@ def _extract_delimited(content: bytes, *, delimiter: str) -> ExtractedOntologySo
     )
 
 
-def _extract_workbook(content: bytes) -> ExtractedOntologySource:
-    import openpyxl  # type: ignore[import-untyped]
-
+def _extract_workbook(filename: str, content: bytes) -> ExtractedOntologySource:
     try:
-        workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception as exc:
+        workbook_sheets = read_workbook_sheets(filename, content)
+    except TabularFileReadError as exc:
         raise OntologySourceError(
-            "ONTOLOGY_SOURCE_XLSX_INVALID", "Excel 資料を読み取れません。"
+            "ONTOLOGY_SOURCE_EXCEL_INVALID", str(exc)
         ) from exc
     chunks: list[ExtractedSourceChunk] = []
     qa_pairs: list[QaPair] = []
-    for sheet in workbook.worksheets:
+    for sheet in workbook_sheets:
         rows = [
-            [normalize_source_text(str(value)) if value is not None else "" for value in row]
-            for row in sheet.iter_rows(values_only=True)
+            [normalize_source_text(normalize_workbook_scalar(value)) for value in row]
+            for row in sheet.rows
         ]
         if not qa_pairs:
             qa_pairs = _qa_pairs_from_rows(rows)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import importlib
 import io
 import re
@@ -11,14 +12,17 @@ from datetime import datetime
 from typing import Any, cast
 
 import pytest
+from fastapi import HTTPException
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
     AssetRefreshData,
+    CsvImportColumn,
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewRequest,
     DbAdminDropViewRequest,
+    DbAdminExecuteRequest,
     DbAdminImportTabularRequest,
     DbAdminJoinWhereRequest,
     DbAdminStatementsRequest,
@@ -35,10 +39,12 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
+    TabularImportValidationError,
     _flexible_date_value,
     _normalize_select_ai_object_list,
 )
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.router import db_admin_import_tabular, db_admin_upload_csv
+from app.features.nl2sql.service import DbAdminOperationFailed, Nl2SqlService, _db_admin_error
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.settings import get_settings
 
@@ -593,6 +599,211 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
     )
 
 
+def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "INSERT",
+                "status": "success",
+                "sql": "INSERT INTO T1 VALUES (1)",
+                "message": "RowsAffected=1",
+            },
+            {
+                "index": 2,
+                "statement_type": "UPDATE",
+                "status": "error",
+                "sql": "UPDATE MISSING_TABLE SET ID = 2",
+                "error_message": "ORA-00942: table or view does not exist",
+            },
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="INSERT INTO T1 VALUES (1); UPDATE MISSING_TABLE SET ID = 2",
+            confirmation="ADMIN_EXECUTE",
+            reason="admin-sql-admin",
+        )
+    )
+
+    assert adapter.calls == [
+        (
+            ["INSERT INTO T1 VALUES (1)", "UPDATE MISSING_TABLE SET ID = 2"],
+            False,
+        )
+    ]
+    assert result.executed is True
+    assert result.committed is True
+    assert result.rolled_back is False
+    assert any("部分的に成功しました(1/2 件)" in warning for warning in result.warnings)
+    assert any(
+        item["operation"] == "db_admin_statements_data_dml" for item in service._admin_audit
+    )
+
+
+def test_admin_sql_commits_when_all_data_dml_statements_succeed() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "INSERT",
+                "status": "success",
+                "sql": "INSERT INTO T1 VALUES (1)",
+                "message": "RowsAffected=1",
+            },
+            {
+                "index": 2,
+                "statement_type": "DELETE",
+                "status": "success",
+                "sql": "DELETE FROM T1 WHERE ID = 2",
+                "message": "RowsAffected=1",
+            },
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="INSERT INTO T1 VALUES (1); DELETE FROM T1 WHERE ID = 2",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.calls[0][1] is False
+    assert result.executed is True
+    assert result.committed is True
+    assert result.rolled_back is False
+    assert result.warnings == []
+
+
+def test_admin_sql_rolls_back_when_all_data_dml_statements_fail() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "DELETE",
+                "status": "error",
+                "sql": "DELETE FROM MISSING_TABLE",
+                "error_message": "ORA-00942: table or view does not exist",
+            },
+            {
+                "index": 2,
+                "statement_type": "UPDATE",
+                "status": "error",
+                "sql": "UPDATE MISSING_TABLE SET ID = 2",
+                "error_message": "ORA-00942: table or view does not exist",
+            },
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="DELETE FROM MISSING_TABLE; UPDATE MISSING_TABLE SET ID = 2",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.calls[0][1] is False
+    assert result.executed is False
+    assert result.committed is False
+    assert result.rolled_back is True
+
+
+def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "CREATE",
+                "status": "success",
+                "sql": "CREATE TABLE T1 (ID NUMBER)",
+                "message": "実行しました。",
+            },
+            {
+                "index": 2,
+                "statement_type": "UPDATE",
+                "status": "error",
+                "sql": "UPDATE MISSING_TABLE SET ID = 2",
+                "error_message": "ORA-00942: table or view does not exist",
+            },
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="CREATE TABLE T1 (ID NUMBER); UPDATE MISSING_TABLE SET ID = 2",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.calls[0][1] is True
+    assert result.executed is False
+    assert result.committed is False
+    assert result.rolled_back is True
+    assert not any("部分的に成功" in warning for warning in result.warnings)
+
+
+def test_admin_sql_keeps_plsql_and_with_dml_atomic() -> None:
+    plsql_adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "PLSQL",
+                "status": "success",
+                "sql": "BEGIN NULL; END",
+                "message": "実行しました。",
+            }
+        ]
+    )
+    plsql_service = _OracleRuntimeService(plsql_adapter)
+
+    plsql_result = plsql_service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="BEGIN NULL; END;",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert plsql_adapter.calls[0][1] is True
+    assert plsql_result.executed is True
+    assert plsql_result.committed is True
+
+    with_dml_adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "SELECT",
+                "status": "success",
+                "sql": (
+                    "WITH TARGET AS (SELECT ID FROM T1) "
+                    "UPDATE T1 SET ID = 2 WHERE ID IN (SELECT ID FROM TARGET)"
+                ),
+                "message": "RowsAffected=1",
+            }
+        ]
+    )
+    with_dml_service = _OracleRuntimeService(with_dml_adapter)
+    with_dml_sql = (
+        "WITH TARGET AS (SELECT ID FROM T1) "
+        "UPDATE T1 SET ID = 2 WHERE ID IN (SELECT ID FROM TARGET)"
+    )
+
+    with_dml_result = with_dml_service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql=with_dml_sql,
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert with_dml_adapter.calls == [([with_dml_sql], True)]
+    assert with_dml_result.executed is True
+    assert with_dml_result.committed is True
+
+
 def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
@@ -1001,6 +1212,65 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
     ]
 
 
+def test_view_export_xlsx_contains_column_information_only() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="V_EMP_DEPT",
+                logical_name="社員部署ビュー",
+                owner="APP",
+                table_type="view",
+                row_count=None,
+                comment="社員と部署",
+                columns=[
+                    SchemaColumn(
+                        column_name="EMPLOYEE_NAME",
+                        logical_name="社員名",
+                        data_type="VARCHAR2(120)",
+                        nullable=False,
+                        comment="社員名",
+                        sample_values=["山田太郎"],
+                    ),
+                    SchemaColumn(
+                        column_name="DEPARTMENT_NAME",
+                        logical_name="部署名",
+                        data_type="VARCHAR2(80)",
+                        nullable=True,
+                        comment="部署名",
+                        sample_values=["営業部"],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    filename, content = service.export_db_admin_view_xlsx("V_EMP_DEPT")
+
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    assert filename == "v_emp_dept_columns.xlsx"
+    assert workbook.sheetnames == ["columns"]
+    sheet = workbook["columns"]
+    assert [sheet.cell(row=1, column=index).value for index in range(1, 7)] == [
+        "物理名",
+        "論理名",
+        "コメント",
+        "型",
+        "NULL 可",
+        "サンプル",
+    ]
+    assert [sheet.cell(row=2, column=index).value for index in range(1, 7)] == [
+        "EMPLOYEE_NAME",
+        "-",
+        "社員名",
+        "VARCHAR2(120)",
+        "NO",
+        "山田太郎",
+    ]
+
+
 def _invoices_catalog(*, column_logical: str, column_comment: str) -> SchemaCatalog:
     return SchemaCatalog(
         refreshed_at="2026-07-10T00:00:00+00:00",
@@ -1188,6 +1458,52 @@ def test_upload_csv_validates_confirmation_and_matches_catalog_columns() -> None
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in requires_oracle.warnings)
 
 
+def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
+    """CR 単独改行を行区切りにし、quote 内の CR は cell 値として保持する。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    import base64
+
+    csv_text = (
+        'ORDER_ID,ORDER_NAME,NOTE\r'
+        '1,青山商事,"第1行\r第2行"\r'
+        "2,北海物産,通常行\r"
+    )
+    result = service.upload_db_admin_csv(
+        DbAdminCsvUploadRequest(
+            table_name="ORDERS",
+            content_base64=base64.b64encode(csv_text.encode()).decode(),
+            filename="cr-only.csv",
+        )
+    )
+
+    assert result.row_count == 2
+    assert result.sample_rows[0]["ORDER_NAME"] == "青山商事"
+    assert result.sample_rows[0]["NOTE"] == "第1行\r第2行"
+    assert result.sample_rows[1]["ORDER_NAME"] == "北海物産"
+
+
+def test_upload_csv_parse_error_returns_http_400() -> None:
+    """csv.Error を API 境界で利用者向け 400 応答へ正規化する。"""
+    import base64
+
+    oversized_cell = "x" * (csv.field_size_limit() + 1)
+    request = DbAdminCsvUploadRequest(
+        table_name="ORDERS",
+        content_base64=base64.b64encode(f"NOTE\n{oversized_cell}\n".encode()).decode(),
+        filename="oversized.csv",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        db_admin_upload_csv(request)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == (
+        "CSV の解析に失敗しました。改行形式・引用符・セルの長さを確認してください。"
+    )
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert isinstance(exc_info.value.__cause__.__cause__, csv.Error)
+
+
 def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     import base64
@@ -1214,6 +1530,293 @@ def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
     )
     assert admin_confirmation.executed is False
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in admin_confirmation.warnings)
+
+
+def test_import_tabular_infers_explicit_char_semantics_for_japanese() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    columns, rows, warnings = service._parse_csv_sample(
+        table_name="TEST_TABLE",
+        csv_text="ID,NAME\n1,株式会社青山\n",
+        max_rows=100,
+        max_columns=10,
+    )
+
+    assert warnings == []
+    assert rows == [{"ID": "1", "NAME": "株式会社青山"}]
+    assert [column.data_type for column in columns] == ["NUMBER", "VARCHAR2(6 CHAR)"]
+    assert service._csv_import_ddl("TEST_TABLE", columns) == (
+        'CREATE TABLE "TEST_TABLE" ("ID" NUMBER, "NAME" VARCHAR2(6 CHAR))'
+    )
+
+
+def test_import_tabular_rejects_text_over_varchar2_char_limit() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    with pytest.raises(ValueError, match="4000 文字を超えるセル"):
+        service._infer_csv_data_type(["あ" * 4001])
+
+
+def test_import_tabular_rejects_oversized_existing_byte_column_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, dict[str, object]]] = []
+            self.executemany_called = False
+            self._metadata = [
+                ("ID", "NUMBER", 22, 0, None),
+                ("NAME", "VARCHAR2", 6, 6, "B"),
+            ]
+            self._violation: tuple[object, ...] | None = None
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, binds: dict[str, object]) -> None:
+            self.executed.append((sql, binds))
+            if "JSON_TABLE" in sql:
+                assert "c0 VARCHAR2(4000 BYTE) TRUNCATE" in sql
+                assert "LENGTHB(c0)" in sql
+                self._violation = (2, "NAME", 16, 6, "バイト")
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return self._metadata
+
+        def fetchone(self) -> tuple[object, ...] | None:
+            return self._violation
+
+        def setinputsizes(self, **_kwargs: object) -> None:
+            return None
+
+        def executemany(
+            self,
+            _sql: str,
+            _rows: list[dict[str, object]],
+            *,
+            batcherrors: bool,
+        ) -> None:
+            assert batcherrors is True
+            self.executemany_called = True
+
+        def getbatcherrors(self) -> list[Exception]:
+            return []
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+            self.committed = False
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+        def commit(self) -> None:
+            self.committed = True
+
+    cursor = _Cursor()
+    connection = _Connection(cursor)
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield connection
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+    import_columns = [
+        CsvImportColumn(
+            source_name="ID",
+            column_name="ID",
+            data_type="NUMBER",
+            nullable=False,
+        ),
+        CsvImportColumn(
+            source_name="NAME",
+            column_name="NAME",
+            data_type="VARCHAR2(6 CHAR)",
+            nullable=False,
+        ),
+    ]
+
+    with pytest.raises(TabularImportValidationError, match="16バイト.*上限6バイト"):
+        adapter.import_tabular_table(
+            table_name="TEST_TABLE",
+            columns=import_columns,
+            rows=[{"ID": "1", "NAME": "株式会社青山"}],
+            mode="append",
+        )
+
+    assert cursor.executemany_called is False
+    assert connection.committed is False
+    assert not any(
+        "DELETE FROM" in sql or "TRUNCATE TABLE" in sql
+        for sql, _binds in cursor.executed
+    )
+
+
+def test_import_tabular_truncate_mode_uses_transactional_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+            self.batch_rows: list[dict[str, object]] = []
+            self._metadata = [
+                ("ID", "NUMBER", 22, 0, None),
+                ("NAME", "VARCHAR2", 20, 20, "C"),
+            ]
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, _binds: dict[str, object]) -> None:
+            self.executed.append(sql)
+            if "JSON_TABLE" in sql:
+                assert "c0 CLOB" in sql
+                assert "LENGTH(c0)" in sql
+                assert "LENGTHB(c0)" not in sql
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return self._metadata
+
+        def fetchone(self) -> None:
+            return None
+
+        def setinputsizes(self, **_kwargs: object) -> None:
+            return None
+
+        def executemany(
+            self,
+            _sql: str,
+            rows: list[dict[str, object]],
+            *,
+            batcherrors: bool,
+        ) -> None:
+            assert batcherrors is True
+            self.batch_rows = rows
+
+        def getbatcherrors(self) -> list[Exception]:
+            return []
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+            self.committed = False
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+        def commit(self) -> None:
+            self.committed = True
+
+    cursor = _Cursor()
+    connection = _Connection(cursor)
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield connection
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+    result = adapter.import_tabular_table(
+        table_name="TEST_TABLE",
+        columns=[
+            CsvImportColumn(
+                source_name="ID",
+                column_name="ID",
+                data_type="NUMBER",
+                nullable=False,
+            ),
+            CsvImportColumn(
+                source_name="NAME",
+                column_name="NAME",
+                data_type="VARCHAR2(6 CHAR)",
+                nullable=False,
+            ),
+        ],
+        rows=[{"ID": "1", "NAME": "株式会社青山"}],
+        mode="truncate",
+    )
+
+    assert result["row_count"] == 1
+    assert any('DELETE FROM "TEST_TABLE"' in sql for sql in cursor.executed)
+    assert not any("TRUNCATE TABLE" in sql for sql in cursor.executed)
+    assert cursor.batch_rows == [{"c0": 1, "c1": "株式会社青山"}]
+    assert connection.committed is True
+
+
+def test_import_tabular_validation_error_returns_http_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    class _FailingService:
+        def import_db_admin_tabular(
+            self, _request: DbAdminImportTabularRequest
+        ) -> None:
+            raise TabularImportValidationError(
+                "TEST_TABLE.NAME: ファイル2行目は16バイトで、"
+                "取込先列の上限6バイトを超えています。"
+                "値を短くするか列定義を拡張して再試行してください。"
+            )
+
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _FailingService())
+    request = DbAdminImportTabularRequest(
+        table_name="TEST_TABLE",
+        content_base64="YQ==",
+        confirmation="ADMIN_EXECUTE",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        db_admin_import_tabular(request)
+
+    assert exc_info.value.status_code == 422
+    assert "16バイト" in str(exc_info.value.detail)
+    assert isinstance(exc_info.value.__cause__, TabularImportValidationError)
+
+
+@pytest.mark.parametrize(
+    ("message", "code", "expected"),
+    [
+        ("ORA-01031: insufficient privileges", "ORA-01031", "権限が不足"),
+        ("ORA-01722: invalid number", "ORA-01722", "数値形式"),
+        ("ORA-00001: unique constraint violated", "ORA-00001", "一意制約"),
+        ("ORA-00054: resource busy", "ORA-00054", "使用中"),
+    ],
+)
+def test_db_admin_error_maps_oracle_codes_to_actionable_japanese(
+    message: str, code: str, expected: str
+) -> None:
+    error = _db_admin_error(OracleAdapterError(message), target_name="TEST_TABLE")
+    assert error.error_code == code
+    assert expected in error.summary
+    assert error.actions
+
+
+def test_db_admin_duplicate_error_identifies_target_and_safe_recovery() -> None:
+    error = _db_admin_error(
+        OracleAdapterError("ORA-00955: name is already used by an existing object"),
+        target_name="TEST_TABLE",
+        target_type="TABLE",
+        operation="tabular_import",
+    )
+    assert isinstance(error, DbAdminOperationFailed)
+    assert error.error_code == "ORA-00955"
+    assert "TEST_TABLE" in error.summary
+    assert "既存のTABLE" in error.cause
+    assert all("削除" not in action for action in error.actions)
+
+
+def test_db_admin_unknown_oracle_error_keeps_code_and_safe_fallback() -> None:
+    error = _db_admin_error(OracleAdapterError("ORA-29999: unexpected"))
+    assert error.error_code == "ORA-29999"
+    assert "ORA-29999" in error.summary
+    assert "SQL" in error.actions[0]
 
 
 def test_flexible_date_value_parses_common_formats() -> None:

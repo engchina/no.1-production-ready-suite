@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { dropFiles } from "./_helpers/file-dropzone";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -165,6 +166,7 @@ async function mockApi(page: Page) {
     startPayloadSeen: false,
     idempotencySeen: false,
     sourceFilesSeen: false,
+    qaFileSeen: false,
     ontologyDraftPayload: null as Record<string, unknown> | null,
     materialized: true,
     stale: false,
@@ -241,6 +243,7 @@ async function mockApi(page: Page) {
     state.idempotencySeen = Boolean(route.request().headers()["idempotency-key"]);
     const postData = route.request().postData() ?? "";
     state.sourceFilesSeen = postData.includes("rules.md") && postData.includes("terms.csv");
+    state.qaFileSeen = postData.includes("qa_cases.csv");
     await fulfillJson(route, buildJob("queued", "pending"));
   });
   await page.route("**/api/nl2sql/ontology-build/*", async (route) => {
@@ -363,21 +366,63 @@ test("AI オントロジー構築の実行 → 進捗 → 提案承認 → 公�
 
   // 空状態の提案リスト
   await expect(section.getByText("レビュー対象の提案はありません", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("ontology-build-source-files-input")).toHaveAttribute(
+    "accept",
+    ".csv,.xlsx,.xls,.pdf,.docx,.txt,.md,.tsv,.xlsm"
+  );
+  await expect(page.getByTestId("ontology-build-qa-file-input")).toHaveAttribute(
+    "accept",
+    ".csv,.xlsx,.xls,.tsv,.xlsm"
+  );
 
   // 実行 → ステップ進捗 → 完了
   await section
     .getByLabel("業務説明(自然言語)")
     .fill("受注は顧客に紐づく。売上は受注金額の合計。");
-  await page.getByTestId("ontology-build-source-files").setInputFiles([
-    { name: "rules.md", mimeType: "text/markdown", buffer: Buffer.from("# 受注ルール") },
+  await dropFiles(page, page.getByTestId("ontology-build-source-files-dropzone"), [
+    {
+      name: "rules.md",
+      type: "text/markdown",
+      content: "# 受注ルール",
+      lastModified: 1_700_000_000_000,
+    },
     {
       name: "terms.csv",
-      mimeType: "text/csv",
-      buffer: Buffer.from("用語,説明\n受注,顧客からの注文"),
+      type: "text/csv",
+      content: "用語,説明\n受注,顧客からの注文",
+      lastModified: 1_700_000_001_000,
     },
   ]);
-  await expect(section.getByText("rules.md")).toBeVisible();
-  await expect(section.getByText("terms.csv")).toBeVisible();
+  await dropFiles(page, page.getByTestId("ontology-build-source-files-dropzone"), [
+    {
+      name: "rules.md",
+      type: "text/markdown",
+      content: "# 受注ルール",
+      lastModified: 1_700_000_000_000,
+    },
+  ]);
+  await dropFiles(page, page.getByTestId("ontology-build-qa-file-dropzone"), [
+    {
+      name: "qa_cases.csv",
+      type: "text/csv",
+      content: "QUESTION,SQL\n受注件数は,SELECT COUNT(*) FROM ORDERS",
+    },
+  ]);
+  const sourceFileList = section.getByRole("list", { name: "選択した構築資料" });
+  await expect(sourceFileList.getByText("rules.md", { exact: true })).toHaveCount(1);
+  await expect(sourceFileList.getByText("terms.csv", { exact: true })).toBeVisible();
+  await section.getByRole("button", { name: "terms.csv を資料一覧から削除" }).click();
+  await expect(sourceFileList.getByText("terms.csv", { exact: true })).toHaveCount(0);
+  await dropFiles(page, page.getByTestId("ontology-build-source-files-dropzone"), [
+    {
+      name: "terms.csv",
+      type: "text/csv",
+      content: "用語,説明\n受注,顧客からの注文",
+      lastModified: 1_700_000_001_000,
+    },
+  ]);
+  await expect(sourceFileList.getByText("terms.csv", { exact: true })).toBeVisible();
+  await expect(section.getByText("選択済み: qa_cases.csv")).toBeVisible();
   await section.getByRole("button", { name: "AI 構築を実行" }).click();
   const steps = page.getByTestId("ontology-build-steps");
   await expect(steps.getByText("スキーマ情報の準備")).toBeVisible();
@@ -388,11 +433,12 @@ test("AI オントロジー構築の実行 → 進捗 → 提案承認 → 公�
   expect(state.startPayloadSeen).toBe(true);
   expect(state.idempotencySeen).toBe(true);
   expect(state.sourceFilesSeen).toBe(true);
+  expect(state.qaFileSeen).toBe(true);
   // アクティビティタイムライン(時刻付きイベント)が表示される
   const timeline = page.getByTestId("ontology-build-timeline");
   await expect(timeline.getByText("スキーマ情報を準備しました", { exact: false })).toBeVisible();
   await expect(timeline.getByText("構築が完了しました", { exact: false })).toBeVisible();
-  await expect(steps.getByText(/経過 \d+ 秒/)).toBeVisible();
+  await expect(steps.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
   // スコープ外候補の警告が確認できる
   await steps.locator("summary").filter({ hasText: "警告" }).click();
   await expect(steps.getByText("APP.SECRET", { exact: false })).toBeVisible();

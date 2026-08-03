@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { dropFiles } from "./_helpers/file-dropzone";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -254,14 +255,13 @@ test("RDF エクスポートとインポートが動作する", async ({ page })
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("ontology-revision-1.rdf");
 
-  await page
-    .getByTestId("ontology-import-file")
-    .locator("input[type=file]")
-    .setInputFiles({
+  await dropFiles(page, page.getByTestId("ontology-import-file-dropzone"), [
+    {
       name: "external.rdf",
-      mimeType: "application/rdf+xml",
-      buffer: Buffer.from('<?xml version="1.0"?><rdf:RDF/>'),
-    });
+      type: "application/rdf+xml",
+      content: '<?xml version="1.0"?><rdf:RDF/>',
+    },
+  ]);
   await page.getByTestId("ontology-import-run").click();
   await expect(page.getByTestId("ontology-interchange-result")).toContainText(
     "提案を 1 件登録しました"

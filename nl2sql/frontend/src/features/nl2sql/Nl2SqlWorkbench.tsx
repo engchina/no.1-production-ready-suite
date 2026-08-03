@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, ChevronDown, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { BookOpenText, ChevronDown, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, UserCog, Wand2 } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   Banner,
@@ -9,6 +9,7 @@ import {
   toast,
 } from "@engchina/production-ready-ui";
 
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -52,7 +53,6 @@ import type {
   SimilarHistoryItem,
 } from "./types";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
-import { useOperationTimer } from "./useOperationTimer";
 import {
   confirmQuerySessionSql,
   confirmOntologyProfileRecommendation,
@@ -116,6 +116,7 @@ export function Nl2SqlWorkbench() {
 }
 
 function ExecutableNl2SqlWorkbench() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
@@ -281,7 +282,6 @@ function ExecutableNl2SqlWorkbench() {
   });
   const jobActive = isJobInFlight(job?.status) || submitting;
   const active = jobActive || previewLoading || previewExecuteLoading || ontologyLoading;
-  const elapsedSeconds = useOperationTimer(jobActive, jobStartedAt);
   const latestHistory = useMemo(() => lastMatchingHistory(history, result), [history, result]);
   const selectAiOverrides = useMemo(() => {
     if (engine !== "select_ai") return null;
@@ -294,6 +294,11 @@ function ExecutableNl2SqlWorkbench() {
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
+  const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
+  const profileSelectionReady =
+    !noProfiles &&
+    Boolean(profileId) &&
+    (profiles.some((profile) => profile.id === profileId) || selectedProfileQuery.isSuccess);
   const profileAllowedTableNames = useMemo(() => {
     if (!selectedProfile) return null;
     const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
@@ -306,6 +311,42 @@ function ExecutableNl2SqlWorkbench() {
     if (prefill.engine) setEngine(prefill.engine);
     if (prefill.profileId) setProfileId(prefill.profileId);
   }, [searchParams]);
+
+  useEffect(() => {
+    if (profilesQuery.isPending) return;
+    if (noProfiles) {
+      if (profileId) setProfileId("");
+      setSelection(emptySelection());
+      setRecommendation(null);
+      setOntologyProfileRecommendation(null);
+      setOntologyProfileConfirmation(null);
+      return;
+    }
+    if (!profileId) {
+      const nextProfileId = profiles[0]?.id ?? "";
+      if (nextProfileId) setProfileId(nextProfileId);
+      return;
+    }
+    if (
+      profiles.some((profile) => profile.id === profileId) ||
+      selectedProfileQuery.isPending ||
+      selectedProfileQuery.isSuccess
+    ) {
+      return;
+    }
+    setProfileId(profiles[0]?.id ?? "");
+    setSelection(emptySelection());
+    setRecommendation(null);
+    setOntologyProfileRecommendation(null);
+    setOntologyProfileConfirmation(null);
+  }, [
+    noProfiles,
+    profileId,
+    profiles,
+    profilesQuery.isPending,
+    selectedProfileQuery.isPending,
+    selectedProfileQuery.isSuccess,
+  ]);
 
   useEffect(() => {
     const trimmed = question.trim();
@@ -336,7 +377,7 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     const trimmed = question.trim();
-    if (trimmed.length < 4 || active) {
+    if (trimmed.length < 4 || active || profiles.length === 0) {
       setSimilarHistory([]);
       return undefined;
     }
@@ -364,7 +405,7 @@ function ExecutableNl2SqlWorkbench() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [active, profileId, question]);
+  }, [active, profileId, profiles.length, question]);
 
   const insertSchemaText = (text: string) => {
     const el = questionTextareaRef.current;
@@ -427,7 +468,7 @@ function ExecutableNl2SqlWorkbench() {
   // 質問から業務プロファイルを自動判定（学習済み分類器 → 決定論フォールバック）して選択する。
   const detectProfile = useCallback(async () => {
     const trimmed = question.trim();
-    if (!trimmed || active) return;
+    if (!trimmed || active || !profileSelectionReady) return;
     setDetecting(true);
     try {
       const data = await apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
@@ -453,7 +494,7 @@ function ExecutableNl2SqlWorkbench() {
     } finally {
       setDetecting(false);
     }
-  }, [active, profileId, question]);
+  }, [active, profileId, profileSelectionReady, question]);
 
   // schema catalog が空（サンプル未投入）のとき、エラーからワンクリックで投入して解消する。
   const importSampleData = useCallback(async () => {
@@ -473,7 +514,7 @@ function ExecutableNl2SqlWorkbench() {
 
   const previewSql = async () => {
     const trimmed = question.trim();
-    if (!trimmed || active) return;
+    if (!trimmed || active || !profileSelectionReady) return;
     setPreviewLoading(true);
     setError("");
     clearTrackedJob();
@@ -565,7 +606,7 @@ function ExecutableNl2SqlWorkbench() {
 
   const startOntologySession = async () => {
     const trimmed = question.trim();
-    if (!trimmed || active) return;
+    if (!trimmed || active || !profileSelectionReady) return;
     setOntologyLoading(true);
     setError("");
     setOntologyPatch(null);
@@ -676,7 +717,7 @@ function ExecutableNl2SqlWorkbench() {
 
   const submit = async () => {
     const trimmed = question.trim();
-    if (!trimmed || active) return;
+    if (!trimmed || active || !profileSelectionReady) return;
     setSubmitting(true);
     setError("");
     setResult(null);
@@ -793,6 +834,26 @@ function ExecutableNl2SqlWorkbench() {
           }
         />
 
+        {noProfiles ? (
+          <Banner
+            severity="info"
+            title={t("nl2sql.profile.empty.title")}
+            action={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => navigate("/profiles?profile=new")}
+              >
+                <UserCog size={15} aria-hidden="true" />
+                <span>{t("nl2sql.profile.empty.action")}</span>
+              </Button>
+            }
+          >
+            {t("nl2sql.profile.empty.description")}
+          </Banner>
+        ) : null}
+
         <section
           className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm"
           aria-label={t("nl2sql.workspace.label")}
@@ -872,7 +933,7 @@ function ExecutableNl2SqlWorkbench() {
                       id="nl2sql-profile-select"
                       value={profileId}
                       onChange={(event) => setProfileId(event.currentTarget.value)}
-                      disabled={active || profilesQuery.isPending}
+                      disabled={active || profilesQuery.isPending || noProfiles}
                       className="min-h-11 min-w-0 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
                       {profilesQuery.isPending && (
@@ -890,7 +951,7 @@ function ExecutableNl2SqlWorkbench() {
                       size="md"
                       className="min-h-11 shrink-0"
                       loading={detecting}
-                      disabled={!question.trim() || active}
+                      disabled={!question.trim() || active || !profileSelectionReady}
                       onClick={() => void detectProfile()}
                     >
                       <Wand2 size={16} aria-hidden="true" />
@@ -1013,7 +1074,7 @@ function ExecutableNl2SqlWorkbench() {
                   {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
                     <div className="grid gap-2">
-                      {/* SQL 一括実行(StatementRunnerCard)とスタイル・挙動を統一したテンプレート行(全置換) */}
+                      {/* 検索クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
                         {QUESTION_TEMPLATES.map((template) => (
@@ -1229,7 +1290,7 @@ function ExecutableNl2SqlWorkbench() {
                         variant="secondary"
                         size="md"
                         loading={previewLoading}
-                        disabled={!question.trim() || active}
+                        disabled={!question.trim() || active || !profileSelectionReady}
                         onClick={() => void previewSql()}
                       >
                         <Eye size={16} aria-hidden="true" />
@@ -1240,7 +1301,7 @@ function ExecutableNl2SqlWorkbench() {
                         variant="primary"
                         size="md"
                         loading={ontologyLoading}
-                        disabled={!question.trim() || active}
+                        disabled={!question.trim() || active || !profileSelectionReady}
                         onClick={() => void startOntologySession()}
                       >
                         <Network size={16} aria-hidden="true" />
@@ -1251,7 +1312,7 @@ function ExecutableNl2SqlWorkbench() {
                         variant="secondary"
                         size="md"
                         loading={jobActive}
-                        disabled={!question.trim() || active}
+                        disabled={!question.trim() || active || !profileSelectionReady}
                         onClick={() => void submit()}
                       >
                         <Play size={16} aria-hidden="true" />
@@ -1293,9 +1354,38 @@ function ExecutableNl2SqlWorkbench() {
           />
         )}
 
+        {submitting || previewLoading || ontologyLoading || previewExecuteLoading || detecting ? (
+          <TimedLoadingState
+            label={
+              submitting
+                ? t("nl2sql.action.run")
+                : previewLoading
+                  ? t("nl2sql.action.preview")
+                  : ontologyLoading
+                    ? t("nl2sql.session.confirmIntent")
+                    : previewExecuteLoading
+                      ? t("nl2sql.action.executePreview")
+                      : t("nl2sql.recommend.autoDetect")
+            }
+            operationKey={
+              submitting
+                ? "submit"
+                : previewLoading
+                  ? "preview"
+                  : ontologyLoading
+                    ? "ontology"
+                    : previewExecuteLoading
+                      ? "preview-execute"
+                      : "profile-detect"
+            }
+            placement="result"
+            testId="nl2sql-foreground-processing"
+          />
+        ) : null}
+
         <OperationStatusStrip
           job={job ?? previewJob}
-          elapsedSeconds={elapsedSeconds}
+          startedAtMs={jobStartedAt}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
           importingSample={importingSample}
           onImportSample={importSampleData}

@@ -1,4 +1,4 @@
-// 検索クエリ(自然言語)の穴埋めテンプレート。sqlTemplates.ts(DML テンプレート)と対の定義。
+// 検索クエリ（自然言語）の穴埋めテンプレート。
 // 値は空欄のまま挿入し、スキーマ参照パネルのカーソル挿入でテーブル名・列名を埋める想定。
 export const QUESTION_TEMPLATES: Array<{ labelKey: string; body: string }> = [
   // 先頭は「自由入力」。body 空でクリック時に検索クエリを空へ戻す(テンプレ未適用の初期状態)。

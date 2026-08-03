@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { dropFiles } from "./_helpers/file-dropzone";
 
 const basePath = "/api/nl2sql/quality-evaluations";
 
@@ -270,17 +271,26 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await checkboxes.nth(2).check();
   await expect(checkboxes.nth(1)).toBeDisabled();
   await page.getByLabel("繰り返し回数").fill("2");
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "quality-cases.xlsx",
-    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    buffer: Buffer.from("mock xlsx"),
-  });
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [
+    {
+      name: "quality-cases.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock xlsx",
+    },
+  ]);
   await page.getByRole("button", { name: "評価を開始" }).click();
 
   await expect(page).toHaveURL(/\?job=job-001/);
   await expect(page.getByText("CASE-001").first()).toBeVisible();
   await expect(page.getByText("一部エラーで完了").first()).toBeVisible({ timeout: 8_000 });
   await expect(page.getByRole("heading", { name: "評価概要" })).toBeVisible();
+  await expect(
+    page.getByTestId("quality-evaluation-timing").getByRole("timer")
+  ).toHaveAccessibleName("処理時間 00:03");
+  await expect(page.getByRole("progressbar", { name: "実行状況" })).toHaveAttribute(
+    "aria-valuemax",
+    "4",
+  );
   await expect(
     page.getByText("質問と期待 SQL の意味に一致します。").filter({ visible: true }).first()
   ).toBeVisible();
@@ -328,13 +338,18 @@ test("form errors, unavailable engines, Judge readiness and failed jobs are expl
   await page.getByRole("button", { name: "評価を開始" }).click();
   await expect(page.getByText(".xlsx ファイルを選択してください。")).toBeVisible();
   await expect(page.getByText("利用可能な実行エンジンを1つ以上選択してください。")).toBeVisible();
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "invalid.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from("QUESTION,EXPECTED_SQL"),
-  });
-  await page.getByRole("checkbox").nth(0).check();
-  await page.getByRole("button", { name: "評価を開始" }).click();
+  await expect(page.getByTestId("quality-evaluation-file-input")).toHaveAttribute(
+    "accept",
+    ".xlsx"
+  );
+  await expect(page.getByText(".XLSX", { exact: true })).toBeVisible();
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [
+    {
+      name: "invalid.csv",
+      type: "text/csv",
+      content: "QUESTION,EXPECTED_SQL",
+    },
+  ]);
   await expect(page.getByText(".xlsx ファイルのみ使用できます。")).toBeVisible();
 
   await page.unrouteAll({ behavior: "wait" });

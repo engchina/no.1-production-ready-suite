@@ -24,6 +24,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -469,6 +470,15 @@ export function SecurityUsersPage() {
                     onChange={setSearch}
                   />
                 </div>
+                {loading ? (
+                  <ProcessingIndicator
+                    active
+                    label={t("security.common.loading")}
+                    operationKey="security-users-load"
+                    placement="panel"
+                    testId="security-users-loading"
+                  />
+                ) : null}
                 <DataTable
                   dense
                   loading={loading}

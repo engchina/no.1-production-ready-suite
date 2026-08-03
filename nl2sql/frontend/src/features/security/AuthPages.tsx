@@ -4,6 +4,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { Banner, Button, Card, CardContent, CardHeader, CardTitle, toast } from "@engchina/production-ready-ui";
 
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { securityApi } from "./api";
@@ -106,6 +107,15 @@ export function LoginPage() {
               <LogIn size={16} aria-hidden />
               {t("auth.login.submit")}
             </Button>
+            {busy ? (
+              <ProcessingIndicator
+                active
+                label={t("auth.login.submit")}
+                operationKey="auth-login"
+                placement="action"
+                testId="auth-login-processing"
+              />
+            ) : null}
           </form>
         </CardContent>
       </Card>
@@ -181,6 +191,16 @@ export function PasswordChangePage() {
                 <KeyRound size={16} aria-hidden />
                 {t("auth.password.submit")}
               </Button>
+              {busy ? (
+                <ProcessingIndicator
+                  active
+                  label={t("auth.password.submit")}
+                  operationKey="auth-password-change"
+                  placement="action"
+                  className="mt-3"
+                  testId="auth-password-processing"
+                />
+              ) : null}
             </div>
           </form>
         </CardContent>

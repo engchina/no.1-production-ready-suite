@@ -31,6 +31,14 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
+async function expectNoHorizontalScroll(page: Page) {
+  const size = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+}
+
 const scenarios = [
   {
     title: "テーブル一覧",
@@ -152,8 +160,7 @@ const prepareManagementScenarios = [
     idPrefix: "data-management",
     tabs: [
       { id: "preview", tabName: "テーブル・ビューデータの表示" },
-      { id: "csv", tabName: "CSV アップロード(既存テーブル)" },
-      { id: "sql", tabName: "SQL 一括実行" },
+      { id: "csv", tabName: "Excel/CSV アップロード(既存テーブル)" },
       { id: "synthetic", tabName: "合成データ生成" },
     ],
   },
@@ -595,7 +602,7 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
 });
 
 for (const scenario of scenarios) {
-  test(`${scenario.title}の DDL 後追い取得中は共有詳細スケルトンを表示する`, async ({
+  test(`${scenario.title}の DDL 後追い取得中は詳細を保った局所スケルトンと経過時間を表示する`, async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -680,13 +687,26 @@ for (const scenario of scenarios) {
     await ddlStarted;
 
     const idPrefix = scenario.path.slice(1);
-    const skeleton = page.getByTestId(`${idPrefix}-detail-skeleton`);
+    const skeleton = page.getByTestId(`${idPrefix}-ddl-skeleton`);
     await expect(skeleton).toBeVisible();
     await expect(skeleton).toHaveAttribute("aria-busy", "true");
-    await expect(skeleton).toHaveAttribute("aria-label", loadingLabel);
-    await expect(skeleton).toHaveText("");
-    await expect(page.getByRole("tab", { name: "DDL" })).toHaveCount(0);
+    await expect(skeleton).toHaveAttribute("data-processing-placement", "tab");
+    await expect(skeleton).toContainText(loadingLabel);
+    await expect(skeleton.getByRole("timer")).toHaveAccessibleName(/経過時間 00:0\d/);
+    await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "DDL" })).toBeVisible();
     await expect(page.getByRole("button", { name: "コピー" })).toHaveCount(0);
+    expect(
+      await skeleton.evaluate((element) => {
+        const detailPanel = element.closest("section[aria-labelledby]");
+        const tabList = detailPanel?.querySelector('[role="tablist"]');
+        return Boolean(
+          detailPanel &&
+            tabList &&
+            tabList.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }),
+    ).toBe(true);
 
     const skeletonHeights = await skeleton
       .getByTestId("db-management-skeleton-block")
@@ -695,7 +715,7 @@ for (const scenario of scenarios) {
           Math.round(Number.parseFloat(window.getComputedStyle(element).height)),
         ),
       );
-    expect(skeletonHeights).toEqual([64, 40, 288]);
+    expect(skeletonHeights).toEqual([40, 288]);
     await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
       "animation-name",
       "none",
@@ -718,6 +738,109 @@ for (const scenario of scenarios) {
     expect(ddlRequestCount).toBe(1);
   });
 }
+
+test("明示的な一覧再取得はヘッダーではなくテーブル作業領域の先頭に表示する", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  const refreshGate = createRequestGate();
+  let objectRequestCount = 0;
+  let holdNextRefresh = false;
+  let markRefreshStarted: () => void = () => undefined;
+  const refreshStarted = new Promise<void>((resolve) => {
+    markRefreshStarted = resolve;
+  });
+  const tableItems = [
+    {
+      name: "TABLE_REFRESH",
+      owner: "APP",
+      object_type: "table",
+      row_count: 12,
+      comment: "",
+    },
+  ];
+
+  await page.route("**/api/nl2sql/db-admin/objects?*", async (route) => {
+    objectRequestCount += 1;
+    if (holdNextRefresh) {
+      holdNextRefresh = false;
+      markRefreshStarted();
+      await refreshGate.promise;
+    }
+    await fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items: tableItems,
+      total: 1,
+      table_count: 1,
+      view_count: 0,
+      next_cursor: null,
+      refreshed_at: "2026-07-29T00:00:00.000Z",
+      catalog_version: objectRequestCount,
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/tables/*", (route) =>
+    fulfillJson(route, {
+      name: "TABLE_REFRESH",
+      owner: "APP",
+      object_type: "table",
+      row_count: 12,
+      comment: "",
+      columns: [
+        {
+          column_name: "ID",
+          logical_name: "識別子",
+          data_type: "NUMBER",
+          nullable: false,
+          comment: "",
+          sample_values: ["1"],
+        },
+      ],
+      ddl: "",
+      warnings: [],
+    }),
+  );
+
+  await page.goto("/table-management");
+  await expect(page.getByRole("heading", { name: "TABLE_REFRESH" })).toBeVisible();
+  holdNextRefresh = true;
+  await clickPageHeaderAction(page, "table-management-actions", "表示を更新");
+  await refreshStarted;
+
+  const processing = page.getByTestId("table-management-workspace-processing");
+  await expect(processing).toBeVisible();
+  await expect(processing).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(processing).toContainText("テーブル一覧を更新しています");
+  await expect(page.getByTestId("table-management-actions-processing")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "TABLE_REFRESH" })).toBeVisible();
+
+  const shell = page
+    .getByTestId("management-panel-shell")
+    .filter({ has: page.getByTestId("fixed-split-pane-table-management-list") });
+  await expect(shell.getByTestId("table-management-workspace-processing")).toBeVisible();
+  expect(
+    await processing.evaluate((element) => {
+      const split = document.querySelector(
+        '[data-testid="fixed-split-pane-table-management-list"]',
+      );
+      return Boolean(
+        split &&
+          element.compareDocumentPosition(split) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }),
+  ).toBe(true);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalScroll(page);
+  await expect(processing.locator("svg.lucide-loader-circle")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+
+  refreshGate.release();
+  await expect(processing).toHaveCount(0);
+});
 
 test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄する", async ({ page }) => {
   const ddlGate = createRequestGate();
@@ -793,7 +916,7 @@ test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄す�
   await expect(page.getByRole("heading", { name: "TABLE_A" })).toBeVisible();
   await page.getByRole("tab", { name: "DDL" }).click();
   await ddlStarted;
-  await expect(page.getByTestId("table-management-detail-skeleton")).toBeVisible();
+  await expect(page.getByTestId("table-management-ddl-skeleton")).toBeVisible();
 
   await page.getByRole("button", { name: "TABLE_B を表示" }).click();
   await expect(page.getByRole("heading", { name: "TABLE_B" })).toBeVisible();
@@ -803,6 +926,182 @@ test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄す�
   await page.waitForTimeout(100);
   await expect(page.getByText('CREATE TABLE "TABLE_A" ("ID" NUMBER)')).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "TABLE_B" })).toBeVisible();
+});
+
+test("テーブル詳細は経過時間、遅延案内、切替リセット、取消、成功を同じ領域で扱う", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.clock.install({ time: new Date("2026-07-29T00:00:00.000Z") });
+  const firstSlowGate = createRequestGate();
+  const cancelledSlowGate = createRequestGate();
+  const tableNames = ["TABLE_SLOW", "TABLE_FAST"];
+  const tableItems = tableNames.map((name) => ({
+    name,
+    owner: "APP",
+    object_type: "table",
+    row_count: 1,
+    comment: "",
+  }));
+  let slowAttempts = 0;
+
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items: tableItems,
+      total: tableItems.length,
+      table_count: tableItems.length,
+      view_count: 0,
+      next_cursor: null,
+      refreshed_at: "2026-07-29T00:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    }),
+  );
+  await page.route("**/api/nl2sql/db-admin/tables/*", async (route) => {
+    const url = new URL(route.request().url());
+    const tableName = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if (tableName === "TABLE_SLOW") {
+      slowAttempts += 1;
+      if (slowAttempts === 1) await firstSlowGate.promise;
+      if (slowAttempts === 2) await cancelledSlowGate.promise;
+    }
+    try {
+      await fulfillJson(route, {
+        name: tableName,
+        owner: "APP",
+        object_type: "table",
+        row_count: 1,
+        comment: "",
+        columns: [
+          {
+            column_name: `${tableName}_ID`,
+            logical_name: `${tableName} の識別子`,
+            data_type: "NUMBER",
+            nullable: false,
+            comment: "",
+            sample_values: ["1"],
+          },
+        ],
+        ddl: "",
+        warnings: [],
+      });
+    } catch {
+      // 切替または取消で client が破棄した旧 request は fulfill できなくても正常。
+    }
+  });
+
+  await page.goto("/table-management");
+  const skeleton = page.getByTestId("table-management-detail-skeleton");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
+  await expect(skeleton.locator("svg.lucide-loader-circle")).toHaveCSS("animation-name", "none");
+
+  await page.clock.fastForward(11_000);
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:11");
+  await expect(skeleton).toContainText("通常より時間がかかっています");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
+        document.body.scrollWidth > document.body.clientWidth + 1,
+    ),
+  ).toBe(false);
+
+  // 処理中に別テーブルへ切り替えると旧 request を無効化し、新しい timer は 00:00 から始まる。
+  await page.getByRole("button", { name: "TABLE_FAST を表示" }).click();
+  await expect(page.getByRole("heading", { name: "TABLE_FAST" })).toBeVisible();
+  firstSlowGate.release();
+  await page.waitForTimeout(50);
+  await expect(page.getByText("TABLE_SLOW の識別子")).toHaveCount(0);
+
+  // 同じ対象を再度読み込み、キーボードで取消しても選択状態は保持する。
+  await page.getByRole("button", { name: "TABLE_SLOW を表示" }).click();
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
+  const cancel = skeleton.getByRole("button", { name: "キャンセル" });
+  await cancel.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "TABLE_SLOW を表示" })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(skeleton).toHaveCount(0);
+  cancelledSlowGate.release();
+
+  // 通常 request の完了後は timer を残さず、結果へ自然に置き換える。
+  await page.getByRole("button", { name: "TABLE_SLOW を表示" }).click();
+  await expect(page.getByRole("heading", { name: "TABLE_SLOW" })).toBeVisible();
+  await expect(page.getByRole("timer")).toHaveCount(0);
+});
+
+test("テーブル詳細の30秒 timeout は選択を保持して再試行できる", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: (delay: number) => nativeTimeout(delay === 30_000 ? 150 : delay),
+    });
+  });
+  const timeoutGate = createRequestGate();
+  let attempts = 0;
+  const objectName = "TABLE_TIMEOUT";
+  const items = [
+    { name: objectName, owner: "APP", object_type: "table", row_count: 1, comment: "" },
+  ];
+
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: 1,
+      table_count: 1,
+      view_count: 0,
+      next_cursor: null,
+      refreshed_at: "2026-07-29T00:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    }),
+  );
+  await page.route("**/api/nl2sql/db-admin/tables/*", async (route) => {
+    attempts += 1;
+    if (attempts === 1) await timeoutGate.promise;
+    try {
+      await fulfillJson(route, {
+        name: objectName,
+        owner: "APP",
+        object_type: "table",
+        row_count: 1,
+        comment: "",
+        columns: [],
+        ddl: "",
+        warnings: [],
+      });
+    } catch {
+      // timeout で破棄された最初の request は fulfill 不可でも正常。
+    }
+  });
+
+  await page.goto("/table-management");
+  await expect(page.getByTestId("table-management-detail-skeleton")).toBeVisible();
+  await expect(page.getByTestId("table-management-detail-error")).toContainText(
+    "30秒以内に完了しませんでした",
+  );
+  await expect(page.getByRole("button", { name: `${objectName} を表示` })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+
+  timeoutGate.release();
+  const retry = page.getByRole("button", { name: "再試行" });
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
+  expect(attempts).toBe(2);
 });
 
 for (const scenario of scenarios) {
@@ -969,7 +1268,7 @@ test("テーブル詳細は A→B→A の遅延応答でも最後に選んだ A 
   await expect(page.getByTestId("db-admin-detail-columns")).toContainText("TABLE_A の識別子");
 });
 
-test("Excel/CSV 取込フォームはファイル選択と取込方法の高さを揃える", async ({ page }) => {
+test("Excel/CSV 取込フォームは取込方法を表示せずファイル選択を全幅で表示する", async ({ page }) => {
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");
   await clickPageHeaderAction(
@@ -981,31 +1280,29 @@ test("Excel/CSV 取込フォームはファイル選択と取込方法の高さ�
   const importPanel = page.locator("#table-management-panel-import");
   await expect(importPanel).toBeVisible();
   const fileField = importPanel.getByTestId("table-import-file-field");
-  const modeField = importPanel.getByTestId("table-import-mode-field");
   await expect(fileField).toBeVisible();
-  await expect(modeField).toBeVisible();
-  await expect(modeField.getByText("取込方法")).toBeVisible();
-  await expect(modeField.locator("option")).toHaveText([
-    "新規作成",
-    "既存データに追加",
-    "データを全削除して取込",
-    "テーブルを再作成",
-  ]);
+  await expect(importPanel.getByTestId("table-import-mode-field")).toHaveCount(0);
+  await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);
+  await expect(importPanel.locator("select")).toHaveCount(0);
 
   const fileFieldBox = await fileField.boundingBox();
-  const modeFieldBox = await modeField.boundingBox();
   const filePickerBox = await fileField.locator("label").first().boundingBox();
-  const modeSelectBox = await modeField.locator("select").boundingBox();
   const clearButtonBox = await fileField.getByRole("button", { name: "取込ファイルをクリア" }).boundingBox();
+  const fillsAvailableWidth = await fileField.evaluate((element) => {
+    const parent = element.parentElement;
+    return Boolean(
+      parent &&
+        Math.abs(element.getBoundingClientRect().width - parent.getBoundingClientRect().width) <= 1
+    );
+  });
 
   expect(fileFieldBox).not.toBeNull();
-  expect(modeFieldBox).not.toBeNull();
   expect(filePickerBox).not.toBeNull();
-  expect(modeSelectBox).not.toBeNull();
   expect(clearButtonBox).not.toBeNull();
-  expect(Math.abs(fileFieldBox!.height - modeFieldBox!.height)).toBeLessThanOrEqual(1);
-  expect(Math.abs(filePickerBox!.height - modeSelectBox!.height)).toBeLessThanOrEqual(1);
-  expect(Math.abs(clearButtonBox!.height - modeSelectBox!.height)).toBeLessThanOrEqual(1);
+  expect(fillsAvailableWidth).toBe(true);
+  expect(filePickerBox!.height).toBeGreaterThanOrEqual(44);
+  expect(clearButtonBox!.height).toBeGreaterThanOrEqual(44);
+  await expectNoHorizontalScroll(page);
 });
 
 test("テーブル管理は一覧と作成・取込パネルを同じ外枠で表示する", async ({ page }) => {

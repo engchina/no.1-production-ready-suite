@@ -21,6 +21,7 @@ dependencies = [
   "scikit-learn>=1.7",
   "joblib>=1.5",
   "openpyxl>=3.1",
+  "xlrd>=2.0.2,<3",
   "pypdf>=6.0",
   "pypdfium2>=4.30",
   "pillow>=11.0",

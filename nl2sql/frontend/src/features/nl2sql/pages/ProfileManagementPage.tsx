@@ -22,6 +22,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -34,6 +35,8 @@ import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
+  DbObjectSelectorFooter,
+  DbObjectSelectorToolbar,
 } from "../components/DbObjectManagementShared";
 import { engineLabel } from "../labels";
 import {
@@ -393,18 +396,16 @@ function ProfileList({
                           <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
                             <span>{t("profiles.action.select")}</span>
                           </Button>
-                          {profile.id !== "default" ? (
-                            <Button
-                              type="button"
-                              variant="danger"
-                              size="sm"
-                              loading={deletingId === profile.id}
-                              onClick={() => onDelete(profile)}
-                            >
-                              <Trash2 size={15} aria-hidden="true" />
-                              <span>{t("profiles.action.delete")}</span>
-                            </Button>
-                          ) : null}
+                          <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            loading={deletingId === profile.id}
+                            onClick={() => onDelete(profile)}
+                          >
+                            <Trash2 size={15} aria-hidden="true" />
+                            <span>{t("profiles.action.delete")}</span>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -681,6 +682,7 @@ function SchemaGroupedSelectionPanel({
         ),
       }));
   }, [objects]);
+  const totalCount = Object.values(ownerTotals).reduce((total, count) => total + count, 0) || objects.length;
 
   return (
     <section
@@ -777,17 +779,16 @@ function SchemaGroupedSelectionPanel({
           })}
         </div>
       )}
-      {hasNextPage && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          loading={loadingNextPage}
-          onClick={onLoadMore}
-        >
-          {t("profiles.action.loadMore")}
-        </Button>
-      )}
+      <DbObjectSelectorFooter
+        visibleCount={objects.length}
+        totalCount={totalCount}
+        selectedCount={selectedItems.length}
+        hasNextPage={hasNextPage}
+        loadingNextPage={loadingNextPage}
+        loadMoreLabel={t("profiles.action.loadMore")}
+        dataTestId={`${dataTestId}-footer`}
+        onLoadMore={onLoadMore}
+      />
     </section>
   );
 }
@@ -882,7 +883,7 @@ function ProfileEditor({
         }
         description={t("profiles.editor.hint")}
         action={
-          selectedProfile && selectedProfile.id !== "default" ? (
+          selectedProfile ? (
             <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
               <Trash2 size={15} aria-hidden="true" />
               <span>{t("profiles.action.delete")}</span>
@@ -937,19 +938,18 @@ function ProfileEditor({
           <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.objects")}</h3>
           <p className="mt-1 text-sm text-muted">{t("profiles.field.allowedObjects")}</p>
         </div>
-        <div
-          className="grid gap-2 rounded-md border border-border bg-background p-3"
-          data-testid="profile-object-search-toolbar"
-        >
-          <div className="w-full md:max-w-2xl">
-            <DbManagementSearchField
-              label={t("profiles.objects.filter")}
-              placeholder={t("profiles.objects.filterPlaceholder")}
-              value={objectFilter}
-              onChange={onObjectFilterChange}
-            />
-          </div>
-        </div>
+        <DbObjectSelectorToolbar
+          searchLabel={t("profiles.objects.filter")}
+          searchPlaceholder={t("profiles.objects.filterPlaceholder")}
+          searchValue={objectFilter}
+          onSearchChange={onObjectFilterChange}
+          resultLabel={t("objectSelector.resultCountWithSelected", {
+            visible: tableObjects.length + viewObjects.length,
+            total: tableObjects.length + viewObjects.length,
+            selected: form.allowedTables.length + form.allowedViews.length,
+          })}
+          dataTestId="profile-object-search-toolbar"
+        />
         <div className="grid gap-3 xl:grid-cols-2">
           <SchemaGroupedSelectionPanel
             title={t("profiles.objects.tablesTitle")}
@@ -1614,7 +1614,6 @@ export function ProfileManagementPage() {
   };
 
   const deleteProfile = async (profile: Pick<Nl2SqlProfile, "id" | "name" | "etag">) => {
-    if (profile.id === "default") return;
     const ok = await confirm({
       title: t("profiles.delete.confirm.title"),
       description: t("profiles.delete.confirm.description", { name: profile.name }),
@@ -1770,6 +1769,30 @@ export function ProfileManagementPage() {
               role="region"
               idPrefix="profile-management"
               ariaLabel={t("profiles.workspace.label")}
+              processing={
+                profiles.length > 0 &&
+                (loading === "load" ||
+                  profilesQuery.isFetching ||
+                  schemaRefreshStatus === "pending" ||
+                  schemaRefreshStatus === "running") ? (
+                  <ProcessingIndicator
+                    active
+                    label={
+                      schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
+                        ? t("common.processing.schemaRefreshing")
+                        : t("common.processing.refreshing")
+                    }
+                    operationKey={
+                      schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
+                        ? refreshJobId || "schema-refresh"
+                        : "profile-refresh"
+                    }
+                    placement="workspace"
+                    className="rounded-md border border-border bg-background px-3 py-2"
+                    testId="profile-management-workspace-processing"
+                  />
+                ) : undefined
+              }
             >
               <ProfileList
                 profiles={filteredProfiles}

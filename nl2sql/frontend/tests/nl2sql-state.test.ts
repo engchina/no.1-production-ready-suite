@@ -13,6 +13,11 @@ import {
 } from "../src/features/nl2sql/jobPersistence.ts";
 import { elapsedSecondsSince, formatElapsed } from "../src/features/nl2sql/operationTiming.ts";
 import {
+  elapsedMsBetween,
+  formatElapsedClock,
+  operationTimestampMs,
+} from "../src/lib/operationTiming.ts";
+import {
   adjustFixedSplitFraction,
   clampFixedSplitFraction,
   clampFixedSplitFractionToPaneWidths,
@@ -289,6 +294,20 @@ test("elapsed time helpers format live and final timings", () => {
   assert.equal(formatElapsed(null), "-");
   assert.equal(formatElapsed(850), "850ms");
   assert.equal(formatElapsed(1_250), "1.3秒");
+  assert.equal(formatElapsedClock(59_000), "00:59");
+  assert.equal(formatElapsedClock(60_000), "01:00");
+  assert.equal(formatElapsedClock(3_723_000), "1:02:03");
+});
+
+test("elapsed time helpers normalize server timestamps and completed durations", () => {
+  assert.equal(operationTimestampMs("2026-07-29T00:00:00.000Z"), 1_785_283_200_000);
+  assert.equal(operationTimestampMs("invalid"), null);
+  assert.equal(operationTimestampMs(Number.NaN), null);
+  assert.equal(
+    elapsedMsBetween("2026-07-29T00:00:00.000Z", "2026-07-29T00:00:01.250Z"),
+    1_250,
+  );
+  assert.equal(elapsedMsBetween(null, null), null);
 });
 
 test("schema metadata helpers format counts and sample values for compact UI", () => {

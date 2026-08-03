@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { dropFiles } from "./_helpers/file-dropzone";
 
 function settingsEnvelope(data: unknown) {
   return {
@@ -79,6 +80,14 @@ async function fulfillJson(route: Route, data: unknown) {
     contentType: "application/json",
     body: JSON.stringify(settingsEnvelope(data)),
   });
+}
+
+function createRequestGate() {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
 }
 
 async function mockNl2sqlSettingsApi(page: Page) {
@@ -465,6 +474,90 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expectNoHorizontalOverflow(page);
 });
 
+test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アップロードできる", async ({
+  page,
+}) => {
+  let keyUploadCount = 0;
+  let walletUploadCount = 0;
+  let keyUploadBody = "";
+  let walletUploadBody = "";
+  const keyUploadGate = createRequestGate();
+
+  await page.unroute("**/api/settings/oci/key-file");
+  await page.route("**/api/settings/oci/key-file", async (route) => {
+    keyUploadCount += 1;
+    keyUploadBody = route.request().postDataBuffer()?.toString("utf8") ?? "";
+    await keyUploadGate.promise;
+    await fulfillJson(route, { key_file: "~/.oci/oci_api_key.pem", saved: true });
+  });
+  await page.unroute("**/api/settings/database/wallet");
+  await page.route("**/api/settings/database/wallet", async (route) => {
+    walletUploadCount += 1;
+    walletUploadBody = route.request().postDataBuffer()?.toString("utf8") ?? "";
+    await fulfillJson(route, databaseSettingsFixture());
+  });
+
+  await page.goto("/settings/oci");
+  const keyDropzone = page.getByTestId("oci-key-file-upload-dropzone");
+  await expect(keyDropzone).toHaveCSS("height", "44px");
+  await dropFiles(page, keyDropzone, [
+    {
+      name: "private.pem",
+      type: "application/x-pem-file",
+      content: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
+    },
+  ]);
+  try {
+    await expect(keyDropzone).toHaveAttribute("aria-busy", "true");
+    await expect(page.getByTestId("oci-key-file-upload-input")).toBeDisabled();
+  } finally {
+    keyUploadGate.release();
+  }
+  await expect(page.getByText("秘密鍵ファイルをアップロードしました。")).toBeVisible();
+  await expect.poll(() => keyUploadCount).toBe(1);
+  expect(keyUploadBody).toContain('filename="private.pem"');
+
+  await page.goto("/settings/database");
+  const walletInput = page.getByTestId("oracle-wallet-upload-input");
+  await walletInput.focus();
+  await expect(walletInput).toBeFocused();
+  await dropFiles(page, page.getByTestId("oracle-wallet-upload-dropzone"), [
+    {
+      name: "wallet.zip",
+      type: "application/zip",
+      content: "PK\u0003\u0004test",
+    },
+  ]);
+  await expect(page.getByText("Wallet ZIP をアップロードしました: wallet.zip")).toBeVisible();
+  await expect.poll(() => walletUploadCount).toBe(1);
+  expect(walletUploadBody).toContain('filename="wallet.zip"');
+  await expectNoHorizontalOverflow(page);
+});
+
+test("データベース設定の可視読込は共通スケルトン内に経過時間を表示する", async ({
+  page,
+}) => {
+  const gate = createRequestGate();
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", async (route) => {
+    await gate.promise;
+    await fulfillJson(route, databaseSettingsFixture());
+  });
+
+  await page.goto("/settings/database");
+  const loading = page.getByTestId("settings-database-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("データベース設定を読み込んでいます");
+  await expect(loading.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
+  await expect(loading.getByRole("timer")).toHaveAttribute("aria-live", "off");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalOverflow(page);
+  gate.release();
+  await expect(page.getByLabel("データベースユーザー")).toBeVisible();
+  await expect(loading).toHaveCount(0);
+});
+
 test("非正常な readiness 値も設定画面には表示しない", async ({ page }) => {
   await page.unroute("**/api/settings/upload-storage");
   await page.route("**/api/settings/upload-storage", (route) =>
@@ -645,7 +738,10 @@ test("Wallet 不足時はページ表示ごとに OCI 自動取得を一度だ�
     .getByRole("status")
     .filter({ hasText: "OCI から Wallet を取得し、サーバーへ安全に設定しています…" });
   await expect(pendingStatus).toBeVisible();
-  await expect(page.getByText("`.zip` Wallet ファイルをアップロード")).toBeVisible();
+  await expect(page.getByTestId("oracle-wallet-upload-input")).toBeDisabled();
+  await expect(page.getByTestId("oracle-wallet-upload-dropzone")).toContainText(
+    "ドラッグ＆ドロップまたは選択"
+  );
 
   releaseDownload?.();
 
@@ -700,7 +796,9 @@ test("Wallet 自動取得の失敗を保持し、キーボードで再取得で�
   await expect(
     page.getByRole("alert").filter({ hasText: /IAM 権限を確認して再試行/ })
   ).toBeVisible();
-  await expect(page.getByText("`.zip` Wallet ファイルをアップロード")).toBeVisible();
+  await expect(page.getByTestId("oracle-wallet-upload-dropzone")).toContainText(
+    "ドラッグ＆ドロップまたは選択"
+  );
   await retry.focus();
   await expect(retry).toBeFocused();
   await expect
@@ -758,7 +856,9 @@ test("ADB OCID がない場合は自動取得せず手動アップロードを�
   await page.goto("/settings/database");
 
   await expect(page.getByText(/ADB OCID が未設定のため自動取得は行いません/)).toBeVisible();
-  await expect(page.getByText("`.zip` Wallet ファイルをアップロード")).toBeVisible();
+  await expect(page.getByTestId("oracle-wallet-upload-dropzone")).toContainText(
+    "ドラッグ＆ドロップまたは選択"
+  );
   await expect.poll(() => downloadCount).toBe(0);
   await expectNoHorizontalOverflow(page);
 });

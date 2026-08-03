@@ -139,6 +139,7 @@ from .models import (
     SyntheticDataOperationStatusData,
     SyntheticDataResultsData,
 )
+from .oracle_adapter import TabularImportValidationError
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
     QualityEvaluationJobPage,
@@ -150,11 +151,10 @@ from .quality_evaluation_service import (
     quality_evaluation_service,
 )
 from .service import (
-    DefaultProfileDeleteForbidden,
-    nl2sql_service,
+    is_select_only as _is_select_only,
 )
 from .service import (
-    is_select_only as _is_select_only,
+    nl2sql_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,8 +360,6 @@ def delete_profile(
 ) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を物理削除する。"""
     try:
-        if profile_id == "default":
-            raise DefaultProfileDeleteForbidden("default profile cannot be deleted")
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
         deleted = nl2sql_service.delete_profile(
@@ -399,14 +397,6 @@ def delete_profile(
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
-    except DefaultProfileDeleteForbidden as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "DEFAULT_PROFILE_DELETE_FORBIDDEN",
-                "message": "標準プロファイルは削除できません。",
-            },
-        ) from exc
 
 
 @router.post(
@@ -418,14 +408,14 @@ async def import_profile_learning_material(
     file: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "merge",
 ) -> ApiResponse[ProfileLearningMaterialImportData]:
-    """旧版 terms/rules/few-shot CSV/XLSX を取り込む。rules は追加指示へ吸収する。"""
+    """旧版 terms/rules/few-shot .xlsx テンプレートを取り込む。rules は追加指示へ吸収する。"""
     content = await file.read()
     try:
         return ApiResponse(
             data=await run_sync_io(
                 nl2sql_service.import_profile_learning_material,
                 profile_id=profile_id,
-                filename=file.filename or "learning_material.csv",
+                filename=file.filename or "learning_material.xlsx",
                 content=content,
                 mode=mode,
             )
@@ -434,6 +424,8 @@ async def import_profile_learning_material(
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/profiles/{profile_id}/learning-material/export.xlsx")
@@ -470,13 +462,16 @@ async def import_legacy_terms(
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 terms.xlsx 互換の用語集を取り込む。"""
     content = await file.read()
-    return ApiResponse(
-        data=await run_sync_io(
-            nl2sql_service.import_legacy_terms,
-            filename=file.filename or "terms.xlsx",
-            content=content,
+    try:
+        return ApiResponse(
+            data=await run_sync_io(
+                nl2sql_service.import_legacy_terms,
+                filename=file.filename or "terms.xlsx",
+                content=content,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(
@@ -488,13 +483,16 @@ async def import_legacy_rules(
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 rules.xlsx 互換のグローバルルールを取り込む。"""
     content = await file.read()
-    return ApiResponse(
-        data=await run_sync_io(
-            nl2sql_service.import_legacy_rules,
-            filename=file.filename or "rules.xlsx",
-            content=content,
+    try:
+        return ApiResponse(
+            data=await run_sync_io(
+                nl2sql_service.import_legacy_rules,
+                filename=file.filename or "rules.xlsx",
+                content=content,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/legacy-learning-material/terms/export.xlsx")
@@ -1087,17 +1085,20 @@ async def import_classifier_training_data(
     replace: Annotated[bool, Form()] = False,
     profile_id: Annotated[str | None, Form()] = None,
 ) -> ApiResponse[ClassifierImportData]:
-    """CATEGORY/TEXT の CSV/XLSX training data を取り込む。"""
+    """CATEGORY/TEXT の .xlsx training data テンプレートを取り込む。"""
     content = await file.read()
-    return ApiResponse(
-        data=await run_sync_io(
-            nl2sql_service.import_classifier_training_data,
-            filename=file.filename or "training_data.csv",
-            content=content,
-            replace=replace,
-            profile_id=profile_id,
+    try:
+        return ApiResponse(
+            data=await run_sync_io(
+                nl2sql_service.import_classifier_training_data,
+                filename=file.filename or "training_data.xlsx",
+                content=content,
+                replace=replace,
+                profile_id=profile_id,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/classifier/training-data/export.xlsx")
@@ -1531,8 +1532,13 @@ def db_admin_extract_join_where(
 def db_admin_import_tabular(
     req: DbAdminImportTabularRequest,
 ) -> ApiResponse[DbAdminImportTabularData]:
-    """CSV/XLSX tabular data を DB admin tool から import する。"""
-    return ApiResponse(data=nl2sql_service.import_db_admin_tabular(req))
+    """CSV/XLSX/XLS tabular data を DB admin tool から import する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.import_db_admin_tabular(req))
+    except TabularImportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/db-admin/tables/{table_name}/export.xlsx")
@@ -1540,6 +1546,20 @@ def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
     """DB admin table の列情報を Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_db_admin_table_xlsx(
         table_name,
+        limit=max(1, min(limit, 50000)),
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/db-admin/views/{view_name}/export.xlsx")
+def db_admin_export_view_xlsx(view_name: str, limit: int = 1000) -> Response:
+    """DB admin view の列情報を Excel workbook として出力する。"""
+    filename, content = nl2sql_service.export_db_admin_view_xlsx(
+        view_name,
         limit=max(1, min(limit, 50000)),
     )
     return Response(

@@ -15,13 +15,13 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import {
-  FileInputControl,
-  downloadBlob,
-} from "../components/DbAdminShared";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { downloadBlob } from "../components/DbAdminShared";
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
@@ -163,6 +163,18 @@ export function GlossaryRulesPage() {
           labelledBy="glossary-rules-panel-heading"
           idPrefix={GLOSSARY_RULES_ID}
           ariaLabel={t("glossary.globalTerms.workspace")}
+          processing={
+            loading && lastLoadedAt ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="glossary-rules-refresh"
+                placement="workspace"
+                className="rounded-md border border-border bg-background px-3 py-2"
+                testId="glossary-rules-workspace-processing"
+              />
+            ) : undefined
+          }
         >
           <GlobalMaterialPanel
             headingId="glossary-rules-panel-heading"
@@ -242,18 +254,18 @@ function GlobalMaterialPanel({
         action={<StatusBadge variant="neutral" label={countLabel} />}
       />
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-        <FileInputControl
+        <FileDropzone
           label={importLabel}
           ariaLabel={importLabel}
-          accept=".xlsx,.xlsm,.csv,.tsv,.txt"
-          filename={filename}
+          accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
           selectedText={filename}
-          emptyText={t("glossary.file.emptyWorkbook")}
-          pickText={t("glossary.file.pickWorkbook")}
+          formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
           replaceText={t("glossary.file.replaceWorkbook")}
           icon="spreadsheet"
           disabled={busy}
-          onPick={onImport}
+          loading={busy}
+          dataTestId={`${headingId}-file`}
+          onFiles={([file]) => onImport(file)}
         />
         <Button
           type="button"

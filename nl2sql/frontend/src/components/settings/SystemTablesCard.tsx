@@ -4,6 +4,7 @@ import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -299,10 +300,15 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 
 function SystemTablesSkeleton() {
   return (
-    <div className="space-y-3" role="status" aria-label={t("settings.database.systemTables.loading")}>
+    <TimedLoadingState
+      label={t("settings.database.systemTables.loading")}
+      operationKey="system-tables-status"
+      placement="panel"
+      testId="system-tables-loading"
+    >
       <Skeleton className="h-16 w-full rounded-md" />
       <Skeleton className="h-10 w-full rounded-md" />
-    </div>
+    </TimedLoadingState>
   );
 }
 

@@ -626,6 +626,8 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   // 対象オブジェクト選択はタブなしで常時表示される
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
+  await expect(page.getByTestId("profile-allowed-table-list-footer")).toContainText("選択");
+  await expect(page.getByTestId("profile-allowed-view-list-footer")).toContainText("選択");
   await expect(tableList.getByText("APP.TABLE_01", { exact: true })).toBeVisible();
   await expect(viewList.getByText("APP.VIEW_02", { exact: true })).toBeVisible();
   await expect(tableList.getByText("APP.VIEW_02", { exact: true })).toHaveCount(0);

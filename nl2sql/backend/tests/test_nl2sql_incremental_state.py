@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import io
 import json
 import threading
 import time
@@ -183,16 +185,31 @@ def _incremental_service(
     return service
 
 
+def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_incremental_legacy_learning_material_is_restored_lazily_after_restart() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     first = _incremental_service(repository)
     first.import_legacy_terms(
-        filename="terms.csv",
-        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["売上", "INVOICES.TOTAL_AMOUNT"]],
+        ),
     )
     first.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\nSELECT のみ\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes("rules", [["RULE"], ["SELECT のみ"]]),
     )
 
     restarted = _incremental_service(repository)
@@ -226,8 +243,11 @@ def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() 
 
     terms_service = _incremental_service(repository)
     terms = terms_service.import_legacy_terms(
-        filename="terms.csv",
-        content="TERM,DEFINITION\n粗利,INVOICES.PROFIT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["粗利", "INVOICES.PROFIT"]],
+        ),
     )
     assert terms.glossary == {"粗利": "INVOICES.PROFIT"}
     assert terms.rules == ["SELECT のみ"]
@@ -237,8 +257,11 @@ def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() 
 
     rules_service = _incremental_service(repository)
     rules = rules_service.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\n集計時は NULL を除外する\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [["RULE"], ["集計時は NULL を除外する"]],
+        ),
     )
     assert rules.glossary == {"粗利": "INVOICES.PROFIT"}
     assert rules.rules == ["集計時は NULL を除外する"]
@@ -344,8 +367,11 @@ def test_incremental_legacy_import_rolls_back_memory_when_save_fails() -> None:
 
     with pytest.raises(Nl2SqlRepositoryOperationFailed):
         service.import_legacy_terms(
-            filename="terms.csv",
-            content="TERM,DEFINITION\n粗利,INVOICES.PROFIT\n".encode(),
+            filename="terms.xlsx",
+            content=_single_sheet_workbook_bytes(
+                "terms",
+                [["TERM", "DEFINITION"], ["粗利", "INVOICES.PROFIT"]],
+            ),
         )
 
     assert service._legacy_learning_material.glossary == {  # noqa: SLF001

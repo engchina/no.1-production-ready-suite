@@ -230,9 +230,20 @@ from .object_visibility import (
     filter_user_visible_object_page,
     is_user_visible_object_name,
 )
-from .oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
+from .oracle_adapter import (
+    OracleAdapterError,
+    OracleNl2SqlAdapter,
+    TabularImportValidationError,
+)
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
+from .tabular_files import (
+    WORKBOOK_SUFFIXES,
+    normalize_workbook_scalar,
+    read_workbook_sheets,
+    select_workbook_sheet,
+    validate_tabular_text_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +274,30 @@ class Nl2SqlRepositoryOperationFailed(RuntimeError):
         self.reason_code = reason_code
 
 
-class DefaultProfileDeleteForbidden(RuntimeError):
-    """既定 Profile の物理削除を拒否する。"""
+class DbAdminOperationFailed(RuntimeError):
+    """DB 管理画面向けに、復旧可能な情報を保持する公開例外。"""
+
+    def __init__(
+        self,
+        *,
+        error_code: str,
+        summary: str,
+        cause: str,
+        actions: list[str],
+        target_name: str = "",
+        target_type: str = "",
+        operation: str = "",
+        raw_message: str = "",
+    ) -> None:
+        super().__init__(summary)
+        self.error_code = error_code
+        self.summary = summary
+        self.cause = cause
+        self.actions = actions
+        self.target_name = target_name
+        self.target_type = target_type
+        self.operation = operation
+        self.raw_message = raw_message
 
 
 _ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
@@ -293,6 +326,148 @@ _ORACLE_SCHEMA_COMPATIBILITY_CODES = frozenset({"ORA-00904", "ORA-00942"})
 def _safe_oracle_error_code(exc: Exception) -> str:
     match = _ORACLE_ERROR_CODE_RE.search(str(exc))
     return match.group(0).upper() if match else ""
+
+
+_TEMPLATE_XLSX_UPLOAD_MESSAGE = (
+    "ダウンロードした .xlsx テンプレートファイルをアップロードしてください。"
+)
+
+
+def _require_xlsx_template_upload(filename: str) -> None:
+    """Excel 出力と対になるテンプレート取込は .xlsx のみ受け付ける。"""
+
+    if Path(filename).suffix.lower() != ".xlsx":
+        raise ValueError(_TEMPLATE_XLSX_UPLOAD_MESSAGE)
+
+
+def _db_admin_error(
+    exc: Exception,
+    *,
+    target_name: str = "",
+    target_type: str = "",
+    operation: str = "",
+) -> DbAdminOperationFailed:
+    """Oracle 例外を、DB 管理で共通利用する日本語の復旧情報へ変換する。"""
+    code = _safe_oracle_error_code(exc) or "oracle_operation_failed"
+    raw_message = str(exc)
+    known: dict[str, tuple[str, str, list[str]]] = {
+        "ORA-01031": (
+            "権限が不足しています。",
+            "この操作を実行する Oracle 権限がありません。",
+            [
+                "実行ユーザーの CREATE / ALTER / DROP または対象表への権限を"
+                "管理者に確認してください。"
+            ],
+        ),
+        "ORA-00942": (
+            "対象の表またはビューが見つかりません。",
+            "対象が存在しないか、参照権限がありません。",
+            ["対象名、schema owner、実行ユーザーの権限を確認してください。"],
+        ),
+        "ORA-00904": (
+            "列名または識別子が無効です。",
+            "存在しない列名、または Oracle で解釈できない識別子が指定されています。",
+            ["SQL と表定義の列名・引用符・alias を確認してください。"],
+        ),
+        "ORA-00922": (
+            "Oracle SQL の構文が無効です。",
+            "句、括弧、カンマ、または複数 SQL の区切りが Oracle 構文に合っていません。",
+            ["SQL プレビューを確認し、文ごとに実行してください。"],
+        ),
+        "ORA-01722": (
+            "数値形式が正しくありません。",
+            "数値列へ文字列を渡した、または数値変換できない値が含まれています。",
+            ["対象列のデータ型とファイルまたは SQL の値を確認してください。"],
+        ),
+        "ORA-01843": (
+            "日付の月が正しくありません。",
+            "指定した日付値を Oracle が解釈できません。",
+            ["日付を YYYY-MM-DD など表定義に合う形式へ修正してください。"],
+        ),
+        "ORA-01861": (
+            "日付または時刻の形式が一致しません。",
+            "値の書式が対象列または変換書式と一致していません。",
+            ["日付・時刻の書式と対象列の型を確認してください。"],
+        ),
+        "ORA-12899": (
+            "値が列の最大長を超えています。",
+            "文字列またはバイト数が対象列の上限を超えています。",
+            ["値を短くするか、対象列の長さを拡張してください。"],
+        ),
+        "ORA-00001": (
+            "一意制約に違反しています。",
+            "同じ主キーまたは一意キーの値が既に存在します。",
+            ["重複する値を修正するか、既存データを確認してください。"],
+        ),
+        "ORA-01400": (
+            "必須列に値がありません。",
+            "NOT NULL の列へ NULL または空の値を登録しようとしました。",
+            ["ファイルまたは SQL に必須列の値を設定してください。"],
+        ),
+        "ORA-02291": (
+            "参照先データが存在しません。",
+            "外部キーが参照する親データが未登録です。",
+            ["親テーブルのデータを先に登録し、外部キー値を確認してください。"],
+        ),
+        "ORA-02292": (
+            "参照されているデータは削除できません。",
+            "子テーブルのデータが対象行を参照しています。",
+            ["参照データを確認し、必要なら子データを先に処理してください。"],
+        ),
+        "ORA-00054": (
+            "対象が他の処理で使用中です。",
+            "ロック競合のため操作を完了できませんでした。",
+            ["他の更新処理の完了後に再試行してください。"],
+        ),
+    }
+    if code == "ORA-00955":
+        object_description = (
+            f"既存の{target_type}" if target_type else "同名のデータベースオブジェクト"
+        )
+        name = f"「{target_name}」" if target_name else "指定した名前"
+        return DbAdminOperationFailed(
+            error_code=code,
+            summary=f"{name} は既に存在するため、新規作成できません。",
+            cause=f"{object_description} と名前が重複しています。",
+            actions=[
+                "表名を変更して再実行してください。",
+                "一覧へ戻り、同名の既存オブジェクトを確認してください。",
+            ],
+            target_name=target_name,
+            target_type=target_type,
+            operation=operation,
+            raw_message=raw_message,
+        )
+    if code in _ORACLE_CONNECTION_CODES or _is_oracle_connection_failure(exc):
+        return DbAdminOperationFailed(
+            error_code=code,
+            summary="Oracle データベースに接続できません。",
+            cause="接続設定、ネットワーク、またはデータベースの稼働状態に問題がある可能性があります。",
+            actions=[
+                "データベース接続状態を確認してから再試行してください。",
+                "解消しない場合は管理者に接続設定を確認してください。",
+            ],
+            target_name=target_name,
+            target_type=target_type,
+            operation=operation,
+            raw_message=raw_message,
+        )
+    if code in known:
+        summary, cause, actions = known[code]
+    else:
+        summary = f"データベース処理に失敗しました（{code}）。"
+        cause = "Oracle 側で処理を完了できませんでした。"
+        actions = ["対象 SQL または取込データ、実行権限、データベース状態を確認してください。"]
+    return DbAdminOperationFailed(
+        error_code=code,
+        summary=summary,
+        cause=cause,
+        actions=actions,
+        target_name=target_name,
+        target_type=target_type,
+        operation=operation,
+        raw_message=raw_message,
+    )
 
 
 def _is_oracle_connection_failure(exc: Exception) -> bool:
@@ -1402,9 +1577,7 @@ class Nl2SqlService:
         self._legacy_learning_material_io_lock = threading.RLock()
         self._legacy_learning_material_loaded = False
         self._legacy_learning_material_checked_at = 0.0
-        self._ontology_name_index_cache: tuple[
-            str, dict[str, dict[str, str]]
-        ] | None = None
+        self._ontology_name_index_cache: tuple[str, dict[str, dict[str, str]]] | None = None
         if self._incremental_repository is not None:
             self._persistence_ready = True
             self._persistence_writable = True
@@ -1485,9 +1658,7 @@ class Nl2SqlService:
                 if not migrated:
                     record_persistence_failure(operation, "migration")
                     self._mark_persistence_unavailable("incremental_migration_required")
-                    raise Nl2SqlPersistenceUnavailable(
-                        "incremental_migration_required"
-                    ) from exc
+                    raise Nl2SqlPersistenceUnavailable("incremental_migration_required") from exc
 
         record_persistence_failure(operation, "operation")
         logger.error(
@@ -1612,9 +1783,7 @@ class Nl2SqlService:
             self._persistence_reason_code = reason_code
             self._persistence_checked_at = _utc_now()
             self._persistence_circuit_state = "open"
-            self._persistence_retry_at = (
-                time.monotonic() + self._persistence_retry_delay_seconds
-            )
+            self._persistence_retry_at = time.monotonic() + self._persistence_retry_delay_seconds
             self._persistence_retry_delay_seconds = min(
                 self._persistence_retry_delay_seconds * 2,
                 30.0,
@@ -2096,9 +2265,7 @@ class Nl2SqlService:
             if isinstance(cached, SchemaCatalog):
                 return filter_user_visible_catalog(cached)
             try:
-                catalog = filter_user_visible_catalog(
-                    self._incremental_repository.load_catalog()
-                )
+                catalog = filter_user_visible_catalog(self._incremental_repository.load_catalog())
             except Exception as exc:
                 self._raise_incremental_repository_failure(
                     operation="catalog_load",
@@ -2237,25 +2404,29 @@ class Nl2SqlService:
                 changed_keys=set(manifest),
                 deleted_keys=set(),
             )
-            return filter_user_visible_object_page(memory.search_schema_objects(
-                cursor=cursor,
-                limit=limit,
-                query=query,
-                owner=owner,
-                object_type=object_type,
-                allowed_names=allowed_names,
-                row_state=row_state,
-            ))
+            return filter_user_visible_object_page(
+                memory.search_schema_objects(
+                    cursor=cursor,
+                    limit=limit,
+                    query=query,
+                    owner=owner,
+                    object_type=object_type,
+                    allowed_names=allowed_names,
+                    row_state=row_state,
+                )
+            )
         try:
-            return filter_user_visible_object_page(repository.search_schema_objects(
-                cursor=cursor,
-                limit=limit,
-                query=query,
-                owner=owner,
-                object_type=object_type,
-                allowed_names=allowed_names,
-                row_state=row_state,
-            ))
+            return filter_user_visible_object_page(
+                repository.search_schema_objects(
+                    cursor=cursor,
+                    limit=limit,
+                    query=query,
+                    owner=owner,
+                    object_type=object_type,
+                    allowed_names=allowed_names,
+                    row_state=row_state,
+                )
+            )
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_object_search",
@@ -3143,14 +3314,10 @@ class Nl2SqlService:
         visible_profile = profile.model_copy(
             update={
                 "allowed_tables": [
-                    name
-                    for name in profile.allowed_tables
-                    if is_user_visible_object_name(name)
+                    name for name in profile.allowed_tables if is_user_visible_object_name(name)
                 ],
                 "allowed_views": [
-                    name
-                    for name in profile.allowed_views
-                    if is_user_visible_object_name(name)
+                    name for name in profile.allowed_views if is_user_visible_object_name(name)
                 ],
             }
         )
@@ -3160,6 +3327,10 @@ class Nl2SqlService:
             visible_profile,
             migrate_legacy_empty=True,
         )
+        if migrated.object_scope_version < 2:
+            # Catalog 未取得時は移行スナップショットを確定できない。同一 payload の
+            # 再保存で version/ETag だけを進めず、後続の更新・削除競合を防ぐ。
+            return migrated
         legacy_empty_scope = not profile.allowed_tables and not profile.allowed_views
         if not persist_migration or not legacy_empty_scope:
             return migrated
@@ -3410,10 +3581,11 @@ class Nl2SqlService:
         return updated
 
     def delete_profile(self, profile_id: str, *, expected_etag: str | None = None) -> Nl2SqlProfile:
-        if profile_id == "default":
-            raise DefaultProfileDeleteForbidden("default profile cannot be deleted")
         if self._incremental_repository is not None:
-            current = self.get_profile(profile_id, include_archived=True)
+            try:
+                current = self.get_profile(profile_id, include_archived=True)
+            except ValueError as exc:
+                raise KeyError(profile_id) from exc
             try:
                 self._incremental_repository.delete_profile(
                     profile_id,
@@ -3448,6 +3620,7 @@ class Nl2SqlService:
         if normalized_mode not in {"merge", "replace"}:
             warnings.append(f"{mode}: 未対応の import mode のため merge として扱いました。")
             normalized_mode = "merge"
+        _require_xlsx_template_upload(filename)
         parsed, skipped = self._parse_profile_learning_material_file(
             filename,
             content,
@@ -3590,6 +3763,7 @@ class Nl2SqlService:
         return self._load_legacy_learning_material(force_reload=True)
 
     def import_legacy_terms(self, *, filename: str, content: bytes) -> LegacyLearningMaterialData:
+        _require_xlsx_template_upload(filename)
         warnings: list[str] = []
         glossary = self._parse_legacy_terms_file(filename, content, warnings)
         with self._legacy_learning_material_io_lock:
@@ -3608,6 +3782,7 @@ class Nl2SqlService:
             return updated.model_copy(deep=True)
 
     def import_legacy_rules(self, *, filename: str, content: bytes) -> LegacyLearningMaterialData:
+        _require_xlsx_template_upload(filename)
         warnings: list[str] = []
         rules = self._parse_legacy_rules_file(filename, content, warnings)
         with self._legacy_learning_material_io_lock:
@@ -4642,6 +4817,7 @@ class Nl2SqlService:
         replace: bool = False,
         profile_id: str | None = None,
     ) -> ClassifierImportData:
+        _require_xlsx_template_upload(filename)
         self._load_classifier_state()
         warnings: list[str] = []
         parsed, skipped = self._parse_classifier_training_file(filename, content, warnings)
@@ -5225,13 +5401,15 @@ class Nl2SqlService:
         self, filename: str, content: bytes, warnings: list[str]
     ) -> tuple[list[tuple[str, str, str]], int]:
         suffix = Path(filename).suffix.lower()
-        if suffix in {".xlsx", ".xlsm"}:
-            return self._parse_classifier_training_xlsx(content, warnings)
+        if suffix in WORKBOOK_SUFFIXES:
+            return self._parse_classifier_training_workbook(filename, content, warnings)
         if suffix in {".csv", ".txt", ""}:
+            validate_tabular_text_signature(content)
             text = content.decode("utf-8-sig", errors="replace")
             return self._parse_classifier_training_csv(text, warnings)
-        warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
-        return [], 0
+        raise ValueError(
+            f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
+        )
 
     def _parse_classifier_training_csv(
         self, text: str, warnings: list[str]
@@ -5256,21 +5434,16 @@ class Nl2SqlService:
             rows.append((category, value, row_profile_id))
         return rows, skipped
 
-    def _parse_classifier_training_xlsx(
-        self, content: bytes, warnings: list[str]
+    def _parse_classifier_training_workbook(
+        self, filename: str, content: bytes, warnings: list[str]
     ) -> tuple[list[tuple[str, str, str]], int]:
-        try:
-            openpyxl = importlib.import_module("openpyxl")
-            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        except Exception as exc:
-            warnings.append(f"XLSX の読込に失敗しました: {exc}")
-            return [], 0
-        sheet = workbook.active
-        rows_iter = sheet.iter_rows(values_only=True)
+        sheet, sheet_warnings = select_workbook_sheet(read_workbook_sheets(filename, content))
+        warnings.extend(sheet_warnings)
+        rows_iter = iter(sheet.rows)
         headers = [str(value or "").strip() for value in next(rows_iter, [])]
         category_key, text_key, profile_key = self._classifier_header_keys(headers)
         if (not category_key and not profile_key) or not text_key:
-            warnings.append("XLSX は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
+            warnings.append("Excel は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
             return [], 0
         category_index = headers.index(category_key) if category_key else None
         text_index = headers.index(text_key)
@@ -5319,9 +5492,10 @@ class Nl2SqlService:
         warnings: list[str],
     ) -> tuple[dict[str, Any], int]:
         suffix = Path(filename).suffix.lower()
-        if suffix in {".xlsx", ".xlsm"}:
-            return self._parse_profile_learning_material_xlsx(content, warnings)
+        if suffix in WORKBOOK_SUFFIXES:
+            return self._parse_profile_learning_material_workbook(filename, content, warnings)
         if suffix in {".csv", ".tsv", ".txt", ""}:
+            validate_tabular_text_signature(content)
             text = content.decode("utf-8-sig", errors="replace")
             first_line = text.splitlines()[0] if text.splitlines() else ""
             delimiter = "\t" if suffix == ".tsv" or "\t" in first_line else ","
@@ -5331,30 +5505,25 @@ class Nl2SqlService:
                 kind_hint=self._learning_material_kind_hint(filename),
                 delimiter=delimiter,
             )
-        warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
-        return self._empty_learning_material(), 0
+        raise ValueError(
+            f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
+        )
 
     def _legacy_material_rows(
         self, filename: str, content: bytes, warnings: list[str]
     ) -> list[tuple[list[str], list[Sequence[Any]]]]:
         suffix = Path(filename).suffix.lower()
-        if suffix in {".xlsx", ".xlsm"}:
-            try:
-                openpyxl = importlib.import_module("openpyxl")
-                workbook = openpyxl.load_workbook(
-                    io.BytesIO(content), read_only=True, data_only=True
-                )
-            except Exception as exc:
-                warnings.append(f"XLSX の読込に失敗しました: {exc}")
-                return []
+        if suffix in WORKBOOK_SUFFIXES:
+            workbook_sheets = read_workbook_sheets(filename, content)
             sheets: list[tuple[list[str], list[Sequence[Any]]]] = []
-            for sheet in workbook.worksheets:
-                rows_iter = sheet.iter_rows(values_only=True)
+            for sheet in workbook_sheets:
+                rows_iter = iter(sheet.rows)
                 headers = [str(value or "").strip() for value in next(rows_iter, [])]
                 if any(headers):
                     sheets.append((headers, list(rows_iter)))
             return sheets
         if suffix in {".csv", ".tsv", ".txt", ""}:
+            validate_tabular_text_signature(content)
             text = content.decode("utf-8-sig", errors="replace")
             first_line = text.splitlines()[0] if text.splitlines() else ""
             delimiter = "\t" if suffix == ".tsv" or "\t" in first_line else ","
@@ -5365,8 +5534,9 @@ class Nl2SqlService:
                 warnings.append("CSV header が見つかりません。")
                 return []
             return [(headers, list(reader))]
-        warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
-        return []
+        raise ValueError(
+            f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
+        )
 
     def _parse_legacy_terms_file(
         self, filename: str, content: bytes, warnings: list[str]
@@ -5422,21 +5592,17 @@ class Nl2SqlService:
             return self._empty_learning_material(), 0
         return self._parse_profile_learning_rows(headers, reader, warnings, kind_hint=kind_hint)
 
-    def _parse_profile_learning_material_xlsx(
+    def _parse_profile_learning_material_workbook(
         self,
+        filename: str,
         content: bytes,
         warnings: list[str],
     ) -> tuple[dict[str, Any], int]:
-        try:
-            openpyxl = importlib.import_module("openpyxl")
-            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        except Exception as exc:
-            warnings.append(f"XLSX の読込に失敗しました: {exc}")
-            return self._empty_learning_material(), 0
+        workbook_sheets = read_workbook_sheets(filename, content)
         merged = self._empty_learning_material()
         skipped = 0
-        for sheet in workbook.worksheets:
-            rows_iter = sheet.iter_rows(values_only=True)
+        for sheet in workbook_sheets:
+            rows_iter = iter(sheet.rows)
             headers = [str(value or "").strip() for value in next(rows_iter, [])]
             if not any(headers):
                 continue
@@ -6770,9 +6936,7 @@ class Nl2SqlService:
                         detail={"statement_count": len(statements)},
                     )
                     try:
-                        schema_refresh_job_id = (
-                            self._submit_schema_refresh_after_admin_mutation()
-                        )
+                        schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
                     except Nl2SqlPersistenceUnavailable as exc:
                         warnings.append(f"COMMENT 適用後の Schema job 投入に失敗しました: {exc}")
                 except OracleAdapterError as exc:
@@ -6892,13 +7056,9 @@ class Nl2SqlService:
                         detail={"statement_count": len(statements)},
                     )
                     try:
-                        schema_refresh_job_id = (
-                            self._submit_schema_refresh_after_admin_mutation()
-                        )
+                        schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
                     except Nl2SqlPersistenceUnavailable as exc:
-                        warnings.append(
-                            f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}"
-                        )
+                        warnings.append(f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}")
                 except OracleAdapterError as exc:
                     warnings.append(str(exc))
                     statements = [
@@ -8050,9 +8210,7 @@ class Nl2SqlService:
                 name=item.object_name,
                 owner=item.owner,
                 object_type=(
-                    "view"
-                    if item.object_type.upper() in {"VIEW", "MATERIALIZED VIEW"}
-                    else "table"
+                    "view" if item.object_type.upper() in {"VIEW", "MATERIALIZED VIEW"} else "table"
                 ),
                 row_count=item.row_count,
                 comment=item.comment,
@@ -8191,7 +8349,7 @@ class Nl2SqlService:
                     }
                 )
                 for col in detail.columns
-            ]
+            ],
         }
         if not exact_count and catalog_table is not None:
             updates["row_count"] = catalog_table.row_count
@@ -8284,6 +8442,21 @@ class Nl2SqlService:
                 committed=False,
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
+            )
+        # data_dml 互換契約を管理 SQL 実行でも再利用する。
+        # 全文が whitelist に一致する場合だけ既存経路へ委譲し、部分成功 commit・
+        # policy audit・互換 API と同一の結果契約を維持する。WITH 更新や DDL/PLSQL
+        # を含む管理 SQL は一致しないため、従来どおり下段の atomic 経路で実行する。
+        if statements and all(
+            not _db_admin_policy_error(statement, "data_dml") for statement in statements
+        ):
+            return self.execute_db_admin_statements(
+                DbAdminStatementsRequest(
+                    sql=request.sql,
+                    policy="data_dml",
+                    confirmation=request.confirmation,
+                    reason=request.reason,
+                )
             )
         confirmation_error = self._admin_confirmation_error(
             confirmation=request.confirmation,
@@ -8414,12 +8587,40 @@ class Nl2SqlService:
         if confirmation_error:
             warnings.append(confirmation_error)
         elif self._use_oracle_runtime():
-            self._oracle_adapter.import_tabular_table(
-                table_name=table_name,
-                columns=columns,
-                rows=rows,
-                mode=mode,
-            )
+            try:
+                self._oracle_adapter.import_tabular_table(
+                    table_name=table_name,
+                    columns=columns,
+                    rows=rows,
+                    mode=mode,
+                )
+            except TabularImportValidationError:
+                raise
+            except OracleAdapterError as exc:
+                object_type = ""
+                if _safe_oracle_error_code(exc) == "ORA-00955":
+                    try:
+                        object_type = (
+                            self._oracle_adapter.find_db_admin_object_type(table_name) or ""
+                        )
+                    except Exception:
+                        # エラー表示の補足取得に失敗しても、元の import エラーを優先する。
+                        object_type = ""
+                logger.error(
+                    "db_admin_import_tabular_failed",
+                    extra={
+                        "table_name": table_name,
+                        "mode": mode,
+                        "error_code": _safe_oracle_error_code(exc) or "oracle_import_error",
+                    },
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                raise _db_admin_error(
+                    exc,
+                    target_name=table_name,
+                    target_type=object_type,
+                    operation="tabular_import",
+                ) from exc
             executed = True
             self._record_admin_audit(
                 operation="db_admin_import_tabular",
@@ -8451,11 +8652,14 @@ class Nl2SqlService:
             timing=self._timing(created_at, started, "db_admin_import_tabular"),
         )
 
-    def export_db_admin_table_xlsx(self, table_name: str, limit: int = 1000) -> tuple[str, bytes]:
+    def _export_db_admin_object_columns_xlsx(
+        self, object_name: str, object_type: str, limit: int = 1000
+    ) -> tuple[str, bytes]:
         _ = limit
-        detail = self.get_db_admin_object(table_name, "table")
-        safe_table = self._sanitize_import_table_name(detail.name)
-        catalog_table = self._find_catalog_table(safe_table)
+        normalized_type = "view" if object_type.lower() == "view" else "table"
+        detail = self.get_db_admin_object(object_name, normalized_type)
+        safe_name = self._sanitize_import_table_name(detail.name)
+        catalog_table = self._find_catalog_table(safe_name)
         sample_by_column = {
             column.column_name.upper(): ", ".join(column.sample_values)
             for column in (catalog_table.columns if catalog_table else [])
@@ -8498,7 +8702,13 @@ class Nl2SqlService:
             columns_sheet.column_dimensions[column_letter].width = width
         buffer = io.BytesIO()
         workbook.save(buffer)
-        return f"{safe_table.lower()}_columns.xlsx", buffer.getvalue()
+        return f"{safe_name.lower()}_columns.xlsx", buffer.getvalue()
+
+    def export_db_admin_table_xlsx(self, table_name: str, limit: int = 1000) -> tuple[str, bytes]:
+        return self._export_db_admin_object_columns_xlsx(table_name, "table", limit=limit)
+
+    def export_db_admin_view_xlsx(self, view_name: str, limit: int = 1000) -> tuple[str, bytes]:
+        return self._export_db_admin_object_columns_xlsx(view_name, "view", limit=limit)
 
     def execute_db_admin_statements(self, request: DbAdminStatementsRequest) -> DbAdminExecuteData:
         """文種 whitelist 付き複数 statement 実行(SQL Assist のテーブル/ビュー/データ SQL 実行)。"""
@@ -8723,7 +8933,7 @@ class Nl2SqlService:
         return sql
 
     def upload_db_admin_csv(self, request: DbAdminCsvUploadRequest) -> DbAdminCsvUploadData:
-        """既存テーブルへの CSV アップロード(SQL Assist upload_csv_data の再マップ)。"""
+        """既存テーブルへの表形式アップロード(SQL Assist upload_csv_data の再マップ)。"""
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
@@ -8731,7 +8941,11 @@ class Nl2SqlService:
             content = base64.b64decode(request.content_base64)
         except Exception as exc:
             raise ValueError(f"content_base64 の decode に失敗しました: {exc}") from exc
-        csv_text = content.decode("utf-8-sig", errors="replace")
+        csv_text, _sheet_name, sheet_warnings = self._tabular_content_to_csv_text(
+            filename=request.filename,
+            content=content,
+        )
+        warnings.extend(sheet_warnings)
         settings = get_settings()
         row_limit = request.max_rows or settings.nl2sql_csv_import_max_rows
         columns, rows, parse_warnings = self._parse_csv_sample(
@@ -8788,7 +9002,7 @@ class Nl2SqlService:
                     },
                 )
         else:
-            warnings.append("CSV アップロード実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+            warnings.append("表形式アップロード実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return DbAdminCsvUploadData(
             table_name=table_name,
             filename=request.filename,
@@ -9118,23 +9332,22 @@ class Nl2SqlService:
     ) -> tuple[str, str, list[str]]:
         suffix = Path(filename).suffix.lower()
         warnings: list[str] = []
-        if suffix in {".xlsx", ".xlsm"}:
-            openpyxl = importlib.import_module("openpyxl")
-            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            sheet = (
-                workbook[sheet_name]
-                if sheet_name and sheet_name in workbook.sheetnames
-                else workbook.active
+        if suffix in WORKBOOK_SUFFIXES:
+            sheet, sheet_warnings = select_workbook_sheet(
+                read_workbook_sheets(filename, content),
+                sheet_name,
             )
-            if sheet_name and sheet_name not in workbook.sheetnames:
-                warnings.append(
-                    f"{sheet_name}: sheet が見つからないため active sheet を使用しました。"
-                )
+            warnings.extend(sheet_warnings)
             output = io.StringIO()
             writer = csv.writer(output)
-            for row in sheet.iter_rows(values_only=True):
-                writer.writerow(["" if value is None else value for value in row])
-            return output.getvalue(), str(sheet.title), warnings
+            for row in sheet.rows:
+                writer.writerow([normalize_workbook_scalar(value) for value in row])
+            return output.getvalue(), sheet.title, warnings
+        if suffix not in {".csv", ""}:
+            raise ValueError(
+                f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
+            )
+        validate_tabular_text_signature(content)
         return content.decode("utf-8-sig", errors="replace"), "", warnings
 
     def _admin_confirmation_error(self, *, confirmation: str, target: str) -> str:
@@ -9256,11 +9469,18 @@ class Nl2SqlService:
             dialect = csv.Sniffer().sniff(text[:2048])
         except csv.Error:
             dialect = csv.excel
-        reader = csv.reader(io.StringIO(text), dialect)
+        # csv.reader は newline="" で開いた text stream を前提とする。
+        # これにより LF / CRLF / CR をすべて record separator として扱いつつ、
+        # quote 内の改行は cell 値として保持できる。
+        reader = csv.reader(io.StringIO(text, newline=""), dialect)
         try:
             raw_header = next(reader)
         except StopIteration as exc:
             raise ValueError("CSV header が見つかりません。") from exc
+        except csv.Error as exc:
+            raise ValueError(
+                "CSV の解析に失敗しました。改行形式・引用符・セルの長さを確認してください。"
+            ) from exc
         if not raw_header or all(not cell.strip() for cell in raw_header):
             raise ValueError("CSV header が空です。")
         if len(raw_header) > max_columns:
@@ -9271,11 +9491,16 @@ class Nl2SqlService:
         column_names = self._dedupe_csv_column_names(raw_header)
         raw_rows: list[list[str]] = []
         truncated = False
-        for index, row in enumerate(reader):
-            if index >= max_rows:
-                truncated = True
-                break
-            raw_rows.append(row[: len(column_names)])
+        try:
+            for index, row in enumerate(reader):
+                if index >= max_rows:
+                    truncated = True
+                    break
+                raw_rows.append(row[: len(column_names)])
+        except csv.Error as exc:
+            raise ValueError(
+                "CSV の解析に失敗しました。改行形式・引用符・セルの長さを確認してください。"
+            ) from exc
         if truncated:
             warnings.append(
                 f"行数が上限 {max_rows} を超えたため、先頭 {max_rows} 行だけを使用します。"
@@ -9326,7 +9551,12 @@ class Nl2SqlService:
         if normalized and all(self._is_csv_number(value) for value in normalized):
             return "NUMBER"
         max_len = max((len(value) for value in normalized), default=1)
-        return f"VARCHAR2({min(max(max_len, 1), 4000)})"
+        if max_len > 4000:
+            raise ValueError(
+                "4000 文字を超えるセルは自動 VARCHAR2 取込できません。"
+                "値を短くするか、CLOB 列を持つ既存テーブルへ取り込んでください。"
+            )
+        return f"VARCHAR2({max(max_len, 1)} CHAR)"
 
     def _is_csv_number(self, value: str) -> bool:
         return bool(re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)", value.strip()))
@@ -10530,15 +10760,11 @@ class Nl2SqlService:
         )
 
     def _effective_glossary(self, profile: Nl2SqlProfile) -> dict[str, str]:
-        legacy = dict(
-            self._load_legacy_learning_material(force_reload=False).glossary
-        )
+        legacy = dict(self._load_legacy_learning_material(force_reload=False).glossary)
         return {**legacy, **profile.glossary}
 
     def _effective_sql_rules(self, profile: Nl2SqlProfile) -> list[str]:
-        global_rules = list(
-            self._load_legacy_learning_material(force_reload=False).rules
-        )
+        global_rules = list(self._load_legacy_learning_material(force_reload=False).rules)
         return self._merge_unique_strings(global_rules, profile.sql_rules)
 
     def _append_rules_to_question(self, question: str, profile: Nl2SqlProfile) -> str:
@@ -11259,9 +11485,7 @@ class Nl2SqlService:
                 fallback_messages.append(f"{engine.value}: {exc}")
                 if not allow_deterministic_fallback:
                     raise RuntimeError(str(exc)) from exc
-        elif engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and not (
-            allow_deterministic_fallback
-        ):
+        elif engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and not (allow_deterministic_fallback):
             raise RuntimeError("OCI Enterprise AI Direct が構成されていません。")
 
         if not allow_deterministic_fallback:
@@ -11306,21 +11530,13 @@ class Nl2SqlService:
         )
         agent_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
         agent_assets_ready = bool(
-            agent_meta
-            and agent_meta.refreshed
-            and agent_meta.status in {"ready", "refreshed"}
+            agent_meta and agent_meta.refreshed and agent_meta.status in {"ready", "refreshed"}
         )
         return {
             Nl2SqlEngine.SELECT_AI: (
-                bool(
-                    settings.nl2sql_select_ai_enabled
-                    and oracle_ready
-                    and select_ai_assets_ready
-                ),
+                bool(settings.nl2sql_select_ai_enabled and oracle_ready and select_ai_assets_ready),
                 ""
-                if settings.nl2sql_select_ai_enabled
-                and oracle_ready
-                and select_ai_assets_ready
+                if settings.nl2sql_select_ai_enabled and oracle_ready and select_ai_assets_ready
                 else "Oracle Select AI の接続・credential・profile が未構成です。",
             ),
             Nl2SqlEngine.SELECT_AI_AGENT: (

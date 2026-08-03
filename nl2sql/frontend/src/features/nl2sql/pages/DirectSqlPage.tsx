@@ -4,6 +4,7 @@ import { Play, X } from "lucide-react";
 import { Button } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { Banner } from "@/components/ui/banner";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -122,6 +123,14 @@ function ExecutableDirectSqlPage() {
               <span>{t("nl2sql.action.clearSql")}</span>
             </Button>
           </div>
+          {loading ? (
+            <TimedLoadingState
+              label={t("nl2sql.action.executeSql")}
+              operationKey="direct-sql-execute"
+              placement="result"
+              testId="direct-sql-processing"
+            />
+          ) : null}
           <Nl2SqlResultTable results={results} />
         </section>
       </main>

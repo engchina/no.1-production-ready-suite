@@ -10,6 +10,7 @@ import {
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
@@ -84,8 +85,13 @@ function AuthenticatedApplication() {
 
   if (auth.status === "loading") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-4 text-sm text-muted" role="status">
-        {t("auth.loading")}
+      <main className="flex min-h-screen items-center justify-center bg-background p-4">
+        <TimedLoadingState
+          label={t("auth.loading")}
+          operationKey="auth-session"
+          placement="page"
+          testId="auth-session-loading"
+        />
       </main>
     );
   }

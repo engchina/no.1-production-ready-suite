@@ -10,6 +10,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -95,9 +96,16 @@ export function UploadStorageSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
-        <Skeleton className="h-64 w-full rounded-lg" />
-        <Skeleton className="h-72 w-full rounded-lg" />
+      <div className="p-8">
+        <TimedLoadingState
+          label={t("settings.uploadStorage.loading")}
+          operationKey="settings-upload-storage-load"
+          placement="page"
+          testId="settings-upload-storage-loading"
+        >
+          <Skeleton className="h-64 w-full rounded-lg" />
+          <Skeleton className="h-72 w-full rounded-lg" />
+        </TimedLoadingState>
       </div>
     );
   }

@@ -4,6 +4,7 @@ import { FileSearch, Play, ShieldCheck, Wrench } from "lucide-react";
 import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -442,11 +443,17 @@ function RepairResult({ repair, loading }: { repair: RepairData | null; loading:
 
 function ResultSkeleton({ ariaLabel }: { ariaLabel: string }) {
   return (
-    <div className="grid min-h-48 gap-3" aria-label={ariaLabel} data-testid="sql-analysis-result-skeleton">
+    <TimedLoadingState
+      label={ariaLabel}
+      operationKey={ariaLabel}
+      placement="result"
+      className="min-h-48"
+      testId="sql-analysis-result-skeleton"
+    >
       <div className="h-8 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
       <div className="h-20 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
       <div className="h-32 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
-    </div>
+    </TimedLoadingState>
   );
 }
 

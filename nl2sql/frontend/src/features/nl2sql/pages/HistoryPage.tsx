@@ -27,9 +27,11 @@ import {
 
 import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
+import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
@@ -47,7 +49,6 @@ import {
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { historyRerunUrl } from "../queryPrefillState";
-import { formatElapsed } from "../useOperationTimer";
 import type { HistoryData, HistoryItem } from "../types";
 
 type HistoryDetailTab = "overview" | "sql";
@@ -73,7 +74,14 @@ function HistorySkeletonBlock({ className = "" }: { className?: string }) {
 
 function HistoryListSkeleton() {
   return (
-    <section className="grid min-w-0 content-start gap-3" aria-labelledby="history-grid-heading">
+    <TimedLoadingState
+      label={t("history.list.loading")}
+      operationKey="history-list-load"
+      placement="panel"
+      className="content-start"
+      testId="history-list-loading"
+      framed={false}
+    >
       <h2 id="history-grid-heading" className="sr-only">{t("history.list.title")}</h2>
       <HistorySkeletonBlock className="h-14" />
       <HistorySkeletonBlock className="h-28" />
@@ -82,17 +90,24 @@ function HistoryListSkeleton() {
           <HistorySkeletonBlock key={index} className="h-20" />
         ))}
       </div>
-    </section>
+    </TimedLoadingState>
   );
 }
 
 function HistoryDetailSkeleton() {
   return (
-    <section className="grid min-w-0 content-start gap-3" aria-label={t("history.detail.title")} data-testid="history-detail-skeleton">
+    <TimedLoadingState
+      label={t("history.detail.loading")}
+      operationKey="history-detail-load"
+      placement="panel"
+      className="content-start"
+      testId="history-detail-skeleton"
+      framed={false}
+    >
       <HistorySkeletonBlock className="h-20" />
       <HistorySkeletonBlock className="h-11" />
       <HistorySkeletonBlock className="h-72" />
-    </section>
+    </TimedLoadingState>
   );
 }
 
@@ -618,6 +633,18 @@ export function HistoryPage() {
             ariaLabel={t("history.workspace.label")}
             splitId="history-management-list"
             preferredWidePane="right"
+            processing={
+              loading ? (
+                <ProcessingIndicator
+                  active
+                  label={t("common.processing.refreshing")}
+                  operationKey="history-refresh"
+                  placement="workspace"
+                  className="rounded-md border border-border bg-background px-3 py-2"
+                  testId="history-workspace-processing"
+                />
+              ) : undefined
+            }
           >
             <HistoryGrid
               items={filteredItems}

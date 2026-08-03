@@ -11,13 +11,17 @@ import {
 
 import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { FileInputControl } from "../components/DbAdminShared";
+import { mergeUniqueFiles } from "@/lib/file-dropzone";
+import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
+import { tabularFileFormatConfig } from "@/lib/tabular-file-formats";
 import {
   DbManagementLoadingSkeleton,
   DbObjectPanelHeader,
@@ -48,6 +52,15 @@ import type {
 const POLL_INTERVAL_MS = 1000;
 // 状態取得が連続で失敗したらポーリングを止めてエラー表示する(404 は即終端)
 const MAX_POLL_FAILURES = 5;
+const ONTOLOGY_SOURCE_FILE_FORMATS = tabularFileFormatConfig([
+  ".pdf",
+  ".docx",
+  ".txt",
+  ".md",
+  ".tsv",
+  ".xlsm",
+]);
+const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".tsv", ".xlsm"]);
 const textareaClass =
   "min-h-24 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
 
@@ -59,13 +72,8 @@ function stepStatusVariant(status: OntologyBuildStep["status"]) {
 }
 
 function formatElapsed(startIso: string | null | undefined, endIso: string | null | undefined, now: number): string {
-  if (!startIso) return "";
-  const start = Date.parse(startIso);
-  if (Number.isNaN(start)) return "";
-  const end = endIso ? Date.parse(endIso) : now;
-  const seconds = Math.max(0, Math.floor((end - start) / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  const elapsed = elapsedMsBetween(startIso, endIso, now);
+  return elapsed === null ? "" : formatElapsedClock(elapsed);
 }
 
 function formatEventTime(iso: string): string {
@@ -572,32 +580,19 @@ export function OntologyBuildSection({
             className="grid gap-2 rounded-md border border-border bg-background p-3"
             data-testid="ontology-build-source-panel"
           >
-            <label className="grid gap-1 text-sm font-medium text-foreground">
-              <span>{t("profiles.ontologyBuild.sourceFiles")}</span>
-              <span className="text-xs font-normal leading-5 text-muted">
-                {t("profiles.ontologyBuild.sourceFilesHint")}
-              </span>
-              <input
-                type="file"
-                multiple
-                accept=".pdf,.docx,.txt,.md,.csv,.tsv,.xlsx,.xlsm"
-                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-primary/10 file:px-3 file:py-1 file:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-                data-testid="ontology-build-source-files"
-                onChange={(event) => {
-                  const picked = Array.from(event.currentTarget.files ?? []);
-                  setSourceFiles((current) => {
-                    const byKey = new Map(
-                      [...current, ...picked].map((file) => [
-                        `${file.name}:${file.size}:${file.lastModified}`,
-                        file,
-                      ])
-                    );
-                    return [...byKey.values()];
-                  });
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
+            <FileDropzone
+              label={t("profiles.ontologyBuild.sourceFiles")}
+              accept={ONTOLOGY_SOURCE_FILE_FORMATS.accept}
+              formatLabel={ONTOLOGY_SOURCE_FILE_FORMATS.formatLabel}
+              multiple
+              selectedCount={sourceFiles.length}
+              hint={t("profiles.ontologyBuild.sourceFilesHint")}
+              icon="file"
+              dataTestId="ontology-build-source-files"
+              onFiles={(picked) =>
+                setSourceFiles((current) => mergeUniqueFiles(current, picked))
+              }
+            />
             {sourceFiles.length > 0 ? (
               <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
                 {sourceFiles.map((file) => (
@@ -627,18 +622,17 @@ export function OntologyBuildSection({
               </ul>
             ) : null}
           </div>
-          <FileInputControl
+          <FileDropzone
             label={t("profiles.ontologyBuild.qaFile")}
-            accept=".csv,.tsv,.xlsx,.xlsm"
+            accept={ONTOLOGY_QA_FILE_FORMATS.accept}
             icon="spreadsheet"
-            filename={qaFile?.name ?? ""}
             selectedText={
               qaFile ? t("profiles.ontologyBuild.qaFileSelected", { name: qaFile.name }) : undefined
             }
-            emptyText={t("profiles.ontologyBuild.qaFileEmpty")}
-            pickText={t("profiles.ontologyBuild.qaFilePick")}
+            formatLabel={ONTOLOGY_QA_FILE_FORMATS.formatLabel}
+            hint={t("profiles.ontologyBuild.qaFileEmpty")}
             dataTestId="ontology-build-qa-file"
-            onPick={(file) => setQaFile(file)}
+            onFiles={([file]) => setQaFile(file)}
             onClear={() => setQaFile(null)}
           />
           <fieldset className="grid gap-2">
@@ -693,22 +687,18 @@ export function OntologyBuildSection({
               description={t("profiles.ontologyBuild.reviewHint")}
             />
       {!job && busy === "start" ? (
-        // スピナーは「AI 構築を実行」ボタン内の loading 表示に一本化する
-        // (ここに Loader2 を置くと二重スピナーになるため、テキストのみ表示)。
-        <div
-          className="rounded-md border border-border bg-background p-3 text-sm text-foreground"
-          role="status"
-          data-testid="ontology-build-submitting"
-        >
-          {t("profiles.ontologyBuild.submitting")}
-        </div>
+        <TimedLoadingState
+          label={t("profiles.ontologyBuild.submitting")}
+          operationKey="ontology-build-submit"
+          placement="action"
+          testId="ontology-build-submitting"
+        />
       ) : null}
 
       {job ? (
         <section
           className="grid gap-2 rounded-md border border-border bg-background p-3"
           aria-label={t("profiles.ontologyBuild.stepsTitle")}
-          aria-live="polite"
           data-testid="ontology-build-steps"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -726,13 +716,6 @@ export function OntologyBuildSection({
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {job.started_at ? (
-                <span className="text-xs tabular-nums text-muted">
-                  {t("profiles.ontologyBuild.elapsed", {
-                    time: formatElapsed(job.started_at, job.finished_at, nowTick),
-                  })}
-                </span>
-              ) : null}
               {jobRunning ? (
                 <Button
                   type="button"
@@ -763,6 +746,19 @@ export function OntologyBuildSection({
               ) : null}
             </div>
           </div>
+          {job.started_at || job.created_at ? (
+            <ProcessingIndicator
+              active={jobRunning}
+              operationKey={job.id}
+              startedAt={job.started_at ?? job.created_at}
+              finishedAt={job.finished_at}
+              label={t("profiles.ontologyBuild.running")}
+              finalLabel={t(`profiles.ontologyBuild.jobStatus.${job.status}`)}
+              showSlowMessage={jobRunning}
+              placement="job"
+              testId="ontology-build-timing"
+            />
+          ) : null}
           <ul className="grid gap-2">
             {job.steps.map((step) => {
               const elapsed = formatElapsed(step.started_at, step.finished_at, nowTick);

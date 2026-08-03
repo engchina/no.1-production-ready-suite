@@ -45,6 +45,7 @@ function profile(id: string, name: string, archived = false) {
 
 async function mockProfileManagement(page: Page) {
   let deleteRequests = 0;
+  const deleteIfMatchHeaders: string[] = [];
   let profiles = [
     profile("default", "標準プロファイル"),
     profile("accounting", "経理プロファイル"),
@@ -181,6 +182,7 @@ async function mockProfileManagement(page: Page) {
       return;
     }
     deleteRequests += 1;
+    deleteIfMatchHeaders.push(route.request().headers()["if-match"] ?? "");
     const target = profiles.find((item) => item.id === profileId);
     if (!target) {
       await route.fulfill({
@@ -193,7 +195,10 @@ async function mockProfileManagement(page: Page) {
     profiles = profiles.filter((item) => item.id !== profileId);
     await fulfillJson(route, target);
   });
-  return { deleteRequests: () => deleteRequests };
+  return {
+    deleteRequests: () => deleteRequests,
+    deleteIfMatchHeaders: () => [...deleteIfMatchHeaders],
+  };
 }
 
 test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻れる", async ({ page }) => {
@@ -317,14 +322,14 @@ test("リセットとアーカイブ関連 UI は表示しない", async ({ page
   expect(viewport.body).toBeLessThanOrEqual(viewport.window);
 });
 
-test("標準プロファイルは一覧と編集画面のどちらからも削除できない", async ({ page }) => {
+test("標準プロファイルも一覧と編集画面から確認付きで削除できる", async ({ page }) => {
   const api = await mockProfileManagement(page);
   await page.goto("/profiles");
 
   const defaultRow = page.getByRole("row").filter({ hasText: "標準プロファイル" });
   await expect(defaultRow).toBeVisible();
   await expect(defaultRow.getByRole("button", { name: "編集", exact: true })).toBeVisible();
-  await expect(defaultRow.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
+  await expect(defaultRow.getByRole("button", { name: "削除", exact: true })).toBeVisible();
 
   const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
   await expect(salesRow.getByRole("button", { name: "削除", exact: true })).toBeVisible();
@@ -336,9 +341,29 @@ test("標準プロファイルは一覧と編集画面のどちらからも削�
     editor.getByRole("heading", { name: "プロファイル編集: 標準プロファイル" })
   ).toBeVisible();
   await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeVisible();
-  await expect(editor.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
+  const deleteButton = editor.getByRole("button", { name: "削除", exact: true });
+  await expect(deleteButton).toBeVisible();
+
+  await deleteButton.click();
+  const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteButton).toBeFocused();
   expect(api.deleteRequests()).toBe(0);
 
+  await deleteButton.click();
+  await page
+    .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
+    .getByRole("button", { name: "削除", exact: true })
+    .click();
+  expect(api.deleteRequests()).toBe(1);
+  expect(api.deleteIfMatchHeaders()).toEqual(['"profile-default-v1"']);
+  await expect(page.getByText("「標準プロファイル」を削除しました。")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "標準プロファイル" })).toHaveCount(0);
+  await expect(page.locator("#profile-management-panel-list")).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 900 });
   const viewport = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,

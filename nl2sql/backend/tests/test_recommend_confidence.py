@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import importlib
+import io
 from typing import Any, cast
 
 from app.features.nl2sql.models import (
@@ -18,6 +20,18 @@ from app.features.nl2sql.models import (
 )
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
+
+
+def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
 
 
 class _FakeEmbeddingClient:
@@ -100,17 +114,19 @@ def test_classifier_confidence_uses_probability_not_divided_by_six() -> None:
             glossary={"入金": "PAYMENTS.PAID_AT"},
         )
     )
-    payload = "\n".join(
-        [
-            "CATEGORY,TEXT",
-            "標準業務プロファイル,請求金額が大きい取引先を見たい",
-            "標準業務プロファイル,売上合計を顧客別に確認したい",
-            "入金管理,入金が遅れている請求を確認したい",
-            "入金管理,未入金の支払状況を見たい",
-        ]
-    ).encode()
     service.import_classifier_training_data(
-        filename="training_data.csv", content=payload, replace=True
+        filename="training_data.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [
+                ["CATEGORY", "TEXT"],
+                ["標準業務プロファイル", "請求金額が大きい取引先を見たい"],
+                ["標準業務プロファイル", "売上合計を顧客別に確認したい"],
+                ["入金管理", "入金が遅れている請求を確認したい"],
+                ["入金管理", "未入金の支払状況を見たい"],
+            ],
+        ),
+        replace=True,
     )
     status = service.train_classifier(ClassifierTrainRequest())
     assert status.ready

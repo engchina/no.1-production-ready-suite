@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 
 import { Banner } from "@engchina/production-ready-ui";
 
+import { TimedLoadingState } from "@/components/ProcessingState";
 import {
   DatabaseUnavailableNotice,
   type DatabaseNoticeStatus,
@@ -204,10 +204,12 @@ function noticeStatusForDatabase(
 function GateChecking({ labelKey = "dbGate.checking" }: { labelKey?: I18nKey }) {
   return (
     <div className="grid min-h-dvh place-items-center p-6">
-      <div className="flex items-center gap-2 text-sm text-muted" role="status" aria-live="polite">
-        <Loader2 size={16} className="animate-spin" aria-hidden />
-        {t(labelKey)}
-      </div>
+      <TimedLoadingState
+        label={t(labelKey)}
+        operationKey={labelKey}
+        placement="page"
+        testId="database-gate-loading"
+      />
     </div>
   );
 }

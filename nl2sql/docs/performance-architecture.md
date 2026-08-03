@@ -13,12 +13,17 @@ Ontology graph、embedding を読み込まない。構造再取得や AI 処理�
 | class | timeout | 実装契約 |
 |---|---:|---|
 | `interactive-list` | 8 秒 | keyset pagination、最大100件、SWR、cancel、dedupe。p95 3秒以内 |
-| `interactive-detail` | 15 秒 | owner/object 単位。DDL、CLOB、関連 graph は必要時のみ |
+| `interactive-detail` | 30 秒 | owner/object 単位。DDL、CLOB、関連 graph は必要時のみ |
 | `job-control` | 5 秒 | submit/status のみ。1秒間隔、前回完了後に次回 poll |
 | `long-running` | HTTP 実行禁止 | durable job + worker。lease、heartbeat、再開、coalescing 必須 |
 
 timeout とユーザー取消は区別する。取消はエラー表示せず、timeout は現在の表示を保持して再試行を出す。
 legacy fallback は 404/410/501 の互換性エラーだけに限定し、network/timeout/5xx で重い旧 API を呼ばない。
+
+ユーザーが直接見ている処理は、処理領域内に経過時間を表示する。`interactive-list` は 8 秒、
+`interactive-detail` は 30 秒、`job-control` は 5 秒の予算を共有定数から適用し、それを超える実処理は
+HTTP request を延長せず durable job へ移す。静かな polling、prefetch、background refresh は
+ユーザー操作として扱わず、経過時間を表示しない。
 
 ## Schema read/write path
 

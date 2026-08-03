@@ -14,6 +14,10 @@ import {
 
 import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import {
+  TimedLoadingState,
+  type ProcessingPlacement,
+} from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -135,56 +139,64 @@ export function DbManagementLoadingSkeleton({
   ariaLabel,
   variant = "detail",
   rows = 8,
+  operationKey,
+  onCancel,
+  placement = "panel",
 }: {
   idPrefix: string;
   ariaLabel: string;
   variant?: DbManagementLoadingSkeletonVariant;
   rows?: number;
+  operationKey?: string | number | null;
+  onCancel?: () => void;
+  placement?: ProcessingPlacement;
 }) {
   if (variant === "list") {
     return (
-      <div
-        className="grid gap-2"
-        role="status"
-        aria-busy="true"
-        aria-label={ariaLabel}
-        data-testid={`${idPrefix}-list-skeleton`}
+      <TimedLoadingState
+        label={ariaLabel}
+        operationKey={operationKey}
+        onCancel={onCancel}
+        placement={placement}
+        testId={`${idPrefix}-list-skeleton`}
       >
-        <SkeletonBlock className="h-11" />
-        {Array.from({ length: rows }, (_, index) => (
-          <SkeletonBlock key={index} className="h-12" />
-        ))}
-      </div>
+        <div className="grid gap-2">
+          <SkeletonBlock className="h-11" />
+          {Array.from({ length: rows }, (_, index) => (
+            <SkeletonBlock key={index} className="h-12" />
+          ))}
+        </div>
+      </TimedLoadingState>
     );
   }
 
   if (variant === "compact") {
     return (
-      <div
-        className="grid gap-3"
-        role="status"
-        aria-busy="true"
-        aria-label={ariaLabel}
-        data-testid={`${idPrefix}-compact-skeleton`}
+      <TimedLoadingState
+        label={ariaLabel}
+        operationKey={operationKey}
+        onCancel={onCancel}
+        placement={placement}
+        testId={`${idPrefix}-compact-skeleton`}
       >
         <SkeletonBlock className="h-10" />
         <SkeletonBlock className="h-24" />
-      </div>
+      </TimedLoadingState>
     );
   }
 
   return (
-    <div
-      className="grid gap-3"
-      role="status"
-      aria-busy="true"
-      aria-label={ariaLabel}
-      data-testid={`${idPrefix}-detail-skeleton`}
+    <TimedLoadingState
+      label={ariaLabel}
+      operationKey={operationKey}
+      onCancel={onCancel}
+      placement={placement}
+      testId={`${idPrefix}-detail-skeleton`}
     >
       <SkeletonBlock className="h-[64px]" />
       <SkeletonBlock className="h-[40px]" />
       <SkeletonBlock className="h-[288px]" />
-    </div>
+    </TimedLoadingState>
   );
 }
 
@@ -199,6 +211,7 @@ export function DbObjectManagementPanelShell({
   minLeftPaneWidthPx,
   minRightPaneWidthPx,
   role = "tabpanel",
+  processing,
   children,
 }: {
   id: string;
@@ -213,6 +226,8 @@ export function DbObjectManagementPanelShell({
   minRightPaneWidthPx?: number;
   /** タブ配下は "tabpanel"(既定)、タブ非連携の独立領域は "region"。 */
   role?: "tabpanel" | "region";
+  /** 既存内容を保持する明示的な再取得など、作業領域に属する処理状態。 */
+  processing?: ReactNode;
   children: ReactNode;
 }) {
   const panelChildren = Children.toArray(children);
@@ -224,10 +239,12 @@ export function DbObjectManagementPanelShell({
       role={role}
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
+      aria-busy={processing ? true : undefined}
       className={`grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm ${className}`}
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
+      {processing}
       {splitPaneId ? (
         <FixedSplitPane
           splitId={splitPaneId}
@@ -300,6 +317,255 @@ export function DbManagementSearchField({
         />
       </span>
     </label>
+  );
+}
+
+export function DbObjectSelectorToolbar({
+  searchLabel,
+  searchPlaceholder,
+  searchValue,
+  onSearchChange,
+  resultLabel,
+  dataTestId,
+  className = "",
+  children,
+}: {
+  searchLabel: string;
+  searchPlaceholder: string;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  resultLabel?: string;
+  dataTestId?: string;
+  className?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className={`grid gap-2 rounded-md border border-border bg-background p-3 ${className}`}
+      data-testid={dataTestId}
+    >
+      <div className={children ? "grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]" : "grid gap-2"}>
+        <DbManagementSearchField
+          label={searchLabel}
+          placeholder={searchPlaceholder}
+          value={searchValue}
+          onChange={onSearchChange}
+        />
+        {children && (
+          <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
+            {children}
+          </div>
+        )}
+      </div>
+      {resultLabel && (
+        <p className="text-xs text-muted" aria-live="polite">
+          {resultLabel}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function DbObjectSelectorFooter({
+  visibleCount,
+  totalCount,
+  selectedCount,
+  hasNextPage,
+  loadingNextPage = false,
+  loadMoreLabel = t("objectSelector.loadMore"),
+  dataTestId,
+  onLoadMore,
+}: {
+  visibleCount: number;
+  totalCount: number;
+  selectedCount?: number;
+  hasNextPage?: boolean;
+  loadingNextPage?: boolean;
+  loadMoreLabel?: string;
+  dataTestId?: string;
+  onLoadMore?: () => void;
+}) {
+  return (
+    <div
+      className="flex min-h-10 flex-col gap-2 rounded-md border border-border bg-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+      data-testid={dataTestId}
+    >
+      <p className="text-xs text-muted" aria-live="polite">
+        {selectedCount == null
+          ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
+          : t("objectSelector.resultCountWithSelected", {
+              visible: visibleCount,
+              total: totalCount,
+              selected: selectedCount,
+            })}
+      </p>
+      {hasNextPage && onLoadMore && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full sm:w-auto"
+          loading={loadingNextPage}
+          onClick={onLoadMore}
+        >
+          {loadMoreLabel}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export function DbObjectSelectionSummary({
+  label,
+  value,
+  badge,
+}: {
+  label: string;
+  value: string;
+  badge?: ReactNode;
+}) {
+  if (!value) return null;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-card px-3 py-2 text-sm text-foreground">
+      <span className="font-medium text-foreground">{label}</span>
+      <span className="break-all font-mono text-xs font-semibold text-primary">{value}</span>
+      {badge}
+    </div>
+  );
+}
+
+export interface DbObjectPickerItem {
+  key: string;
+  name: string;
+  kindLabel?: string;
+  kindVariant?: "neutral" | "info" | "success" | "warning" | "danger";
+  rowCountLabel?: string;
+  owner?: string;
+  comment?: string;
+}
+
+export function DbSingleObjectPickerList({
+  items,
+  selectedKey,
+  hasActiveFilter,
+  loadingKey = "",
+  listLabel,
+  emptyTitle,
+  emptyHint,
+  noResultsTitle,
+  noResultsHint,
+  dataTestId,
+  maxHeightClass = "max-h-80",
+  onSelect,
+  action,
+}: {
+  items: DbObjectPickerItem[];
+  selectedKey: string;
+  hasActiveFilter: boolean;
+  loadingKey?: string;
+  listLabel: string;
+  emptyTitle: string;
+  emptyHint: string;
+  noResultsTitle: string;
+  noResultsHint: string;
+  dataTestId?: string;
+  maxHeightClass?: string;
+  onSelect: (item: DbObjectPickerItem) => void;
+  action?: {
+    label: string;
+    icon?: LucideIcon;
+    ariaLabel: (item: DbObjectPickerItem) => string;
+    disabled?: (item: DbObjectPickerItem) => boolean;
+    onClick: (item: DbObjectPickerItem) => void;
+  };
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="rounded-md border border-border bg-card p-4" data-testid={dataTestId}>
+        <EmptyState
+          title={hasActiveFilter ? noResultsTitle : emptyTitle}
+          hint={hasActiveFilter ? noResultsHint : emptyHint}
+        />
+      </div>
+    );
+  }
+
+  const headerClass = action
+    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
+    : "hidden grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid";
+  const rowClass = action
+    ? "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem]"
+    : "md:grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)]";
+
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-card" data-testid={dataTestId}>
+      <div className={headerClass} aria-hidden="true">
+        <span>{t("objectSelector.column.name")}</span>
+        <span>{t("objectSelector.column.kind")}</span>
+        <span>{t("objectSelector.column.rows")}</span>
+        <span>{t("objectSelector.column.owner")}</span>
+        {action && <span className="text-right">{t("objectSelector.column.actions")}</span>}
+      </div>
+      <div className={`${maxHeightClass} overflow-auto`} role="list" aria-label={listLabel}>
+        {items.map((item) => {
+          const selected = item.key === selectedKey || item.name === selectedKey;
+          const ActionIcon = action?.icon;
+          return (
+            <div
+              key={item.key}
+              role="listitem"
+              className={[
+                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background",
+                `${rowClass} md:items-center md:py-2`,
+                selected ? "bg-primary/10" : "bg-card",
+              ].join(" ")}
+            >
+              <button
+                type="button"
+                aria-current={selected ? "true" : undefined}
+                aria-label={t("objectSelector.selectObject", { name: item.name })}
+                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-ring/40 md:min-h-0"
+                onClick={() => onSelect(item)}
+              >
+                <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
+                {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
+              </button>
+              <span className="flex items-center gap-2 md:block">
+                <span className="text-xs font-medium text-muted md:hidden">{t("objectSelector.column.kind")}</span>
+                {item.kindLabel ? (
+                  <StatusBadge variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
+                ) : (
+                  <span className="text-xs text-muted">-</span>
+                )}
+              </span>
+              <span className="flex items-center gap-2 font-mono text-xs text-foreground md:block">
+                <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.rows")}</span>
+                {item.rowCountLabel || "-"}
+              </span>
+              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted md:block">
+                <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.owner")}</span>
+                <span className="break-all">{item.owner || "-"}</span>
+              </span>
+              {action && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full whitespace-nowrap md:w-auto"
+                  aria-label={action.ariaLabel(item)}
+                  loading={loadingKey === item.key}
+                  disabled={action.disabled?.(item)}
+                  onClick={() => action.onClick(item)}
+                >
+                  {ActionIcon && <ActionIcon size={15} aria-hidden="true" />}
+                  <span>{action.label}</span>
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -675,43 +941,53 @@ export function DbObjectGrid({
 
 export function DbObjectDetailPanel({
   idPrefix,
+  operationKey,
   headingId,
   detail,
   loading,
   ddlLoading = false,
   error,
+  ddlError = "",
   exporting = false,
   countingRows = false,
   tab,
   labels,
   onTabChange,
   onRetry,
+  onRetryDdl,
+  onCancel,
   onExport,
   onExactCount,
   onDrop,
 }: {
   idPrefix: string;
+  operationKey?: string | number | null;
   headingId: string;
   detail: DbAdminObjectDetail | null;
   loading: boolean;
   ddlLoading?: boolean;
   error: string;
+  ddlError?: string;
   exporting?: boolean;
   countingRows?: boolean;
   tab: DbObjectDetailTab;
   labels: DbObjectDetailLabels;
   onTabChange: (tab: DbObjectDetailTab) => void;
   onRetry: () => void;
+  onRetryDdl?: () => void;
+  onCancel?: () => void;
   onExport?: (name: string) => void;
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
-  if (loading || ddlLoading) {
+  if (loading) {
     return (
       <DbManagementLoadingSkeleton
         idPrefix={idPrefix}
-        ariaLabel={ddlLoading ? labels.ddlLoading : labels.loading}
+        ariaLabel={labels.loading}
         variant="detail"
+        operationKey={operationKey ?? idPrefix}
+        onCancel={onCancel}
       />
     );
   }
@@ -891,6 +1167,27 @@ export function DbObjectDetailPanel({
             </tbody>
           </table>
         </div>
+      ) : ddlLoading ? (
+        <TimedLoadingState
+          label={labels.ddlLoading}
+          operationKey={`${idPrefix}-${detail.name}-ddl`}
+          onCancel={onCancel}
+          placement="tab"
+          testId={`${idPrefix}-ddl-skeleton`}
+        >
+          <SkeletonBlock className="h-[40px]" />
+          <SkeletonBlock className="h-[288px]" />
+        </TimedLoadingState>
+      ) : ddlError ? (
+        <section
+          id={`${idPrefix}-detail-panel-ddl`}
+          role="tabpanel"
+          aria-labelledby={`${idPrefix}-detail-tab-ddl`}
+          className="rounded-md border border-border bg-card p-3"
+          data-testid={`${idPrefix}-ddl-error`}
+        >
+          <ErrorState message={ddlError} onRetry={onRetryDdl} />
+        </section>
       ) : (
         <section
           id={`${idPrefix}-detail-panel-ddl`}
@@ -1038,7 +1335,7 @@ export function DropDbObjectDialog({
             <p className="text-xs font-semibold text-danger">{labels.target}</p>
             <p className="mt-1 break-all font-mono text-sm font-semibold text-danger">{objectName}</p>
           </div>
-          <fieldset className="grid gap-3 rounded-md border border-danger/30 bg-danger-bg/70 p-3">
+          <fieldset className="grid gap-3 rounded-md border border-border bg-background p-3">
             <legend className="px-1 text-sm font-semibold text-danger">{labels.executeTitle}</legend>
             <ExecutionConfirmationField
               value={confirmation}

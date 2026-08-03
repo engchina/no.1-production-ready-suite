@@ -60,6 +60,14 @@ from app.features.nl2sql.ontology_service import (
 )
 from app.features.nl2sql.ontology_sources import OntologySourceStorage, extract_ontology_source
 from app.features.nl2sql.ontology_store import canonical_json, stable_ontology_id
+from app.features.nl2sql.tabular_files import (
+    WORKBOOK_SUFFIXES,
+    TabularFileReadError,
+    normalize_workbook_scalar,
+    read_workbook_sheets,
+    select_workbook_sheet,
+    validate_tabular_text_signature,
+)
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -89,28 +97,34 @@ def _header_index(headers: list[str], candidates: tuple[str, ...]) -> int | None
 
 def _rows_from_content(filename: str, content: bytes, warnings: list[str]) -> list[list[str]]:
     suffix = Path(filename).suffix.lower()
-    if suffix in {".xlsx", ".xlsm"}:
+    if suffix in WORKBOOK_SUFFIXES:
         try:
-            import openpyxl  # type: ignore[import-untyped]
-
-            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        except Exception as exc:
-            warnings.append(f"XLSX の読込に失敗しました: {exc}")
+            sheet, sheet_warnings = select_workbook_sheet(
+                read_workbook_sheets(filename, content)
+            )
+        except TabularFileReadError as exc:
+            warnings.append(str(exc))
             return []
-        rows: list[list[str]] = []
-        for sheet in workbook.worksheets:
-            for raw_row in sheet.iter_rows(values_only=True):
-                rows.append([str(value).strip() if value is not None else "" for value in raw_row])
-            break  # 先頭シートのみ対象
-        return rows
+        warnings.extend(sheet_warnings)
+        return [
+            [normalize_workbook_scalar(value).strip() for value in raw_row]
+            for raw_row in sheet.rows
+        ]
     if suffix in {".csv", ".tsv", ".txt", ""}:
+        try:
+            validate_tabular_text_signature(content)
+        except TabularFileReadError as exc:
+            warnings.append(str(exc))
+            return []
         text = content.decode("utf-8-sig", errors="replace")
         delimiter = "\t" if suffix == ".tsv" else ","
         return [
             [str(value).strip() for value in row]
             for row in csv.reader(io.StringIO(text), delimiter=delimiter)
         ]
-    warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
+    warnings.append(
+        f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
+    )
     return []
 
 

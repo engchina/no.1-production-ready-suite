@@ -14,6 +14,7 @@ from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
 from app.features.nl2sql.ontology_router import OntologyApiRuntime, ontology_runtime
 from app.features.nl2sql.service import (
+    DbAdminOperationFailed,
     Nl2SqlPersistenceUnavailable,
     Nl2SqlRepositoryOperationFailed,
     Nl2SqlService,
@@ -120,6 +121,32 @@ async def nl2sql_repository_operation_failed_handler(
             "error_messages": [exc.public_message],
             "warning_messages": [],
             "error_code": exc.reason_code,
+        },
+    )
+
+
+@app.exception_handler(DbAdminOperationFailed)
+async def db_admin_operation_failed_handler(
+    _request: Request,
+    exc: DbAdminOperationFailed,
+) -> JSONResponse:
+    """DB 管理操作の失敗を、画面で復旧できる構造化情報として返す。"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "data": None,
+            "error_messages": [exc.summary],
+            "warning_messages": [],
+            "error_code": exc.error_code,
+            "error_details": {
+                "summary": exc.summary,
+                "cause": exc.cause,
+                "actions": exc.actions,
+                "target_name": exc.target_name,
+                "target_type": exc.target_type,
+                "operation": exc.operation,
+                "raw_message": exc.raw_message,
+            },
         },
     )
 

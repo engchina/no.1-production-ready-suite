@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -6,7 +6,6 @@ import {
   Download,
   FileSpreadsheet,
   Play,
-  Upload,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -19,11 +18,14 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FieldError } from "@/components/ui/field-error";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiFetch, apiGet, apiPostForm } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import {
   qualityEvaluationPollingInterval,
@@ -61,7 +63,6 @@ export function EvaluationPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const currentJobId = searchParams.get("job") ?? "";
   const { notice, showNotice, clearNotice } = usePageNotice();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [profileId, setProfileId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [engines, setEngines] = useState<QualityEvaluationEngine[]>([]);
@@ -260,7 +261,7 @@ export function EvaluationPage() {
             description={t("qualityEvaluation.conditions.description")}
           />
           {pageLoading ? (
-            <LoadingState label={t("common.loading")} />
+            <LoadingState label={t("common.loading")} placement="panel" />
           ) : pageError ? null : (
             <div className="mt-5 grid min-w-0 gap-5">
               {capabilities && !capabilities.judge.available ? (
@@ -299,37 +300,34 @@ export function EvaluationPage() {
                 </label>
 
                 <div className="grid min-w-0 gap-1.5">
-                  <span className="text-sm font-medium text-foreground">
-                    {t("qualityEvaluation.file.label")}
-                  </span>
-                  <label
-                    className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-4 text-center outline-none transition hover:border-primary hover:bg-primary/5 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40"
-                  >
-                    <Upload className="size-5 text-primary" aria-hidden="true" />
-                    <span className="text-sm font-medium text-foreground">
-                      {file
-                        ? t("qualityEvaluation.file.selected", { name: file.name })
-                        : t("qualityEvaluation.file.drop")}
-                    </span>
-                    <span className="text-xs text-muted">{t("qualityEvaluation.file.hint")}</span>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      className="sr-only"
-                      disabled={running}
-                      aria-invalid={Boolean(formErrors.file)}
-                      aria-describedby="quality-file-hint quality-file-error"
-                      onChange={(event) => {
-                        setFile(event.currentTarget.files?.[0] ?? null);
-                        setFormErrors((current) => ({ ...current, file: undefined }));
-                      }}
-                    />
-                  </label>
-                  <span id="quality-file-hint" className="sr-only">
-                    {t("qualityEvaluation.file.hint")}
-                  </span>
-                  <FieldError id="quality-file-error" message={formErrors.file} />
+                  <FileDropzone
+                    label={t("qualityEvaluation.file.label")}
+                    accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
+                    formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
+                    selectedText={
+                      file ? t("qualityEvaluation.file.selected", { name: file.name }) : ""
+                    }
+                    hint={t("qualityEvaluation.file.hint")}
+                    errorText={formErrors.file}
+                    icon="spreadsheet"
+                    disabled={running}
+                    dataTestId="quality-evaluation-file"
+                    onReject={(reason) =>
+                      setFormErrors((current) => ({
+                        ...current,
+                        file:
+                          reason === "multiple-files"
+                            ? t("common.fileDropzone.error.multiple", {
+                                formats: XLSX_TEMPLATE_FILE_FORMATS.formatLabel,
+                              })
+                            : t("qualityEvaluation.file.invalidExtension"),
+                      }))
+                    }
+                    onFiles={([selectedFile]) => {
+                      setFile(selectedFile);
+                      setFormErrors((current) => ({ ...current, file: undefined }));
+                    }}
+                  />
                   <div>
                     <Button
                       type="button"
@@ -490,7 +488,7 @@ export function EvaluationPage() {
                 hint={t("qualityEvaluation.progress.emptyHint")}
               />
             ) : currentJobQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} />
+              <LoadingState label={t("common.loading")} placement="job" />
             ) : currentJobQuery.isError || !currentJob ? (
               <ErrorState
                 message={t("qualityEvaluation.error.load")}
@@ -565,7 +563,7 @@ export function EvaluationPage() {
                 hint={t("qualityEvaluation.details.emptyHint")}
               />
             ) : resultsQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} />
+              <LoadingState label={t("common.loading")} placement="result" />
             ) : resultsQuery.isError ? (
               <ErrorState
                 message={t("qualityEvaluation.error.load")}
@@ -606,7 +604,7 @@ export function EvaluationPage() {
           />
           <div className="mt-5">
             {recentJobsQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} />
+              <LoadingState label={t("common.loading")} placement="panel" />
             ) : recentJobsQuery.isError ? (
               <ErrorState
                 message={t("qualityEvaluation.error.load")}
@@ -710,6 +708,7 @@ function SectionHeader({
 }
 
 function JobProgress({ job }: { job: QualityEvaluationJobSummary }) {
+  const active = ACTIVE_STATUSES.has(job.status);
   const percentage = job.total_attempts
     ? Math.round((job.completed_attempts / job.total_attempts) * 100)
     : 0;
@@ -724,6 +723,17 @@ function JobProgress({ job }: { job: QualityEvaluationJobSummary }) {
           })}
         </span>
       </div>
+      <ProcessingIndicator
+        active={active}
+        operationKey={job.job_id}
+        startedAt={job.started_at ?? job.created_at}
+        finishedAt={job.finished_at}
+        label={t("qualityEvaluation.progress.processing")}
+        finalLabel={statusLabel(job.status)}
+        showSlowMessage={active}
+        placement="job"
+        testId="quality-evaluation-timing"
+      />
       <div
         className="h-2 overflow-hidden rounded-full bg-muted/40"
         role="progressbar"

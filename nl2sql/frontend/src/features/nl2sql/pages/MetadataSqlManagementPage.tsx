@@ -4,7 +4,6 @@ import {
   Code2,
   FileText,
   RefreshCw,
-  Search,
   Table2,
   Wand2,
 } from "lucide-react";
@@ -17,6 +16,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -25,6 +25,8 @@ import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementLoadingSkeleton,
+  DbObjectSelectorFooter,
+  DbObjectSelectorToolbar,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
@@ -344,6 +346,20 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             </Button>
           }
         />
+        {(loading === "load" && Boolean(tables || views)) || loading === "schema-refresh" ? (
+          <ProcessingIndicator
+            active
+            label={
+              loading === "schema-refresh"
+                ? t("common.processing.schemaRefreshing")
+                : t("common.processing.refreshing")
+            }
+            operationKey={loading}
+            placement="workspace"
+            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            testId={`${pageId}-workspace-processing`}
+          />
+        ) : null}
 
         <DbObjectStepIndicator
           steps={[
@@ -469,34 +485,31 @@ function MetadataTargetGrid({
         }
       />
 
-      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
-        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("dbAdmin.search.label")}</span>
-            <span className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
-              <input
-                value={search}
-                onChange={(event) => onSearchChange(event.currentTarget.value)}
-                className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                placeholder={t("metadataSql.targets.searchPlaceholder")}
-              />
-            </span>
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("metadataSql.targets.typeFilter")}</span>
-            <select
-              value={filter}
-              onChange={(event) => onFilterChange(event.currentTarget.value as TargetFilter)}
-              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-            >
-              <option value="all">{t("metadataSql.targets.typeFilterAll")}</option>
-              <option value="table">{t("metadataSql.targets.typeFilterTables")}</option>
-              <option value="view">{t("metadataSql.targets.typeFilterViews")}</option>
-            </select>
-          </label>
-        </div>
-      </div>
+      <DbObjectSelectorToolbar
+        searchLabel={t("dbAdmin.search.label")}
+        searchPlaceholder={t("metadataSql.targets.searchPlaceholder")}
+        searchValue={search}
+        onSearchChange={onSearchChange}
+        resultLabel={t("objectSelector.resultCountWithSelected", {
+          visible: items.length,
+          total: items.length,
+          selected: selectedKeys.length,
+        })}
+        dataTestId={`${pageId}-target-toolbar`}
+      >
+        <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
+          <span>{t("metadataSql.targets.typeFilter")}</span>
+          <select
+            value={filter}
+            onChange={(event) => onFilterChange(event.currentTarget.value as TargetFilter)}
+            className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+          >
+            <option value="all">{t("metadataSql.targets.typeFilterAll")}</option>
+            <option value="table">{t("metadataSql.targets.typeFilterTables")}</option>
+            <option value="view">{t("metadataSql.targets.typeFilterViews")}</option>
+          </select>
+        </label>
+      </DbObjectSelectorToolbar>
 
       {loading ? (
         <DbManagementLoadingSkeleton
@@ -572,6 +585,14 @@ function MetadataTargetGrid({
             </table>
           </div>
         </div>
+      )}
+      {!loading && (
+        <DbObjectSelectorFooter
+          visibleCount={items.length}
+          totalCount={items.length}
+          selectedCount={selectedKeys.length}
+          dataTestId={`${pageId}-target-footer`}
+        />
       )}
     </section>
   );

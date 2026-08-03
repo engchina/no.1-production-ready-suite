@@ -12,8 +12,9 @@ import {
 
 import { Button, StatusBadge } from "@engchina/production-ready-ui";
 
+import { useOperationTiming } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
-import { formatElapsed } from "../useOperationTimer";
+import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 
@@ -83,7 +84,7 @@ function StepIcon({ status, index }: { status: JobStepStatus; index: number }) {
 
 export function OperationStatusStrip({
   job,
-  elapsedSeconds,
+  startedAtMs,
   catalogEmpty = false,
   importingSample = false,
   onImportSample,
@@ -91,7 +92,7 @@ export function OperationStatusStrip({
   previewExecuteLoading = false,
 }: {
   job: JobData | null;
-  elapsedSeconds: number;
+  startedAtMs: number | null;
   /** schema catalog が空（サンプル未投入）か。空 catalog 由来の失敗をアクション化する。 */
   catalogEmpty?: boolean;
   importingSample?: boolean;
@@ -100,11 +101,18 @@ export function OperationStatusStrip({
   onPreviewExecute?: () => void;
   previewExecuteLoading?: boolean;
 }) {
+  const active = job?.status === "pending" || job?.status === "running";
+  const finalElapsed =
+    job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
+  const timing = useOperationTiming({
+    active,
+    operationKey: job?.job_id ?? null,
+    startedAt: startedAtMs,
+    elapsedMs: finalElapsed,
+  });
   if (!job) return null;
 
-  const active = job.status === "pending" || job.status === "running";
   const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "pending";
-  const finalElapsed = job.elapsed_ms ?? job.result?.timing.elapsed_ms ?? job.timing?.elapsed_ms;
   const steps = normalizeSteps(job);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const isPreview = Boolean(onPreviewExecute);
@@ -161,9 +169,14 @@ export function OperationStatusStrip({
           <span className="font-mono">{t("nl2sql.status.jobId", { id: `${job.job_id.slice(0, 8)}...` })}</span>
           <span className="inline-flex items-center gap-1.5 font-mono tabular-nums" aria-label={t("nl2sql.progress.elapsedLabel")}>
             <Clock3 size={14} aria-hidden="true" />
-            {active
-              ? t("nl2sql.status.elapsed", { seconds: elapsedSeconds })
-              : t("nl2sql.status.elapsedFinal", { elapsed: formatElapsed(finalElapsed) })}
+            <span>{active ? t("common.processing.elapsed") : t("common.processing.duration")}</span>
+            <span
+              role="timer"
+              aria-live="off"
+              aria-label={`${active ? t("common.processing.elapsed") : t("common.processing.duration")} ${timing.elapsedClock}`}
+            >
+              {timing.elapsedClock}
+            </span>
           </span>
         </div>
       </div>

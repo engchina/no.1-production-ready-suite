@@ -2,25 +2,22 @@ import {
   useEffect,
   useId,
   useMemo,
-  useRef,
   useState,
-  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
   Code2,
+  CircleAlert,
   Download,
-  FileSpreadsheet,
-  FileText,
   Play,
   Search,
-  Upload,
   X,
   type LucideIcon,
 } from "lucide-react";
 
 import {
+  Banner,
   Button,
   Card,
   CardContent,
@@ -35,8 +32,8 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
-import { FieldError } from "@/components/ui/field-error";
-import { apiPost } from "@/lib/api";
+import { FileDropzone } from "@/components/ui/file-dropzone";
+import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import type {
@@ -283,6 +280,7 @@ export function ExecutionConfirmationField({
   placeholder: string;
   expectedLabel: string;
   helper: string;
+  /** danger は不可逆操作の強調用。入力値の検証失敗は status badge と aria-invalid で表現する。 */
   tone?: "neutral" | "danger";
   disabled?: boolean;
   /** 確認語入力の直下に描画する実行/キャンセル等のアクションバー。primary/danger → secondary の順で渡す。 */
@@ -297,14 +295,14 @@ export function ExecutionConfirmationField({
       : t("dbAdmin.confirmation.status.pending");
   const isDanger = tone === "danger";
   const containerClass = [
-    "grid gap-2 rounded-md border p-3",
-    isDanger ? "border-danger/30 bg-danger-bg/70" : "border-border bg-background",
+    "grid gap-2 rounded-md border border-border bg-background p-3",
+    isDanger ? "border-l-4 border-l-danger" : "",
   ].join(" ");
   const inputClass = [
-    "h-11 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
+    "h-11 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
     isDanger
-      ? "border-danger/30 focus:border-danger focus:ring-2 focus:ring-danger/40"
-      : "border-border focus:border-primary focus:ring-2 focus:ring-ring/40",
+      ? "focus:border-danger focus:ring-2 focus:ring-danger/40"
+      : "focus:border-primary focus:ring-2 focus:ring-ring/40",
   ].join(" ");
   const statusClass = [
     "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
@@ -398,7 +396,7 @@ function runtimeLabel(runtime: string) {
   return runtime;
 }
 
-type ResultStatusVariant = "success" | "neutral" | "danger" | "info";
+type ResultStatusVariant = "success" | "neutral" | "danger" | "info" | "warning";
 
 function statusVariant(status: string): ResultStatusVariant {
   if (["success", "executed", "applied_to_local_state", "submitted"].includes(status)) return "success";
@@ -415,6 +413,9 @@ function statusLabel(status: string) {
 
 function resultSummary(result: DbAdminExecuteData): { variant: ResultStatusVariant; label: string } {
   const statuses = result.statements.map((statement) => statement.status);
+  if (result.executed && statuses.includes("error")) {
+    return { variant: "warning", label: t("dbAdmin.result.summary.partial") };
+  }
   if (result.executed) return { variant: "success", label: t("dbAdmin.result.summary.executed") };
   if (statuses.includes("error")) return { variant: "danger", label: t("dbAdmin.result.summary.error") };
   if (statuses.includes("blocked")) return { variant: "danger", label: t("dbAdmin.result.summary.blocked") };
@@ -452,6 +453,18 @@ function oracleErrorGuidance(code: string | null) {
       ],
     };
   }
+  if (code === "ORA-01031") {
+    return { cause: "この操作を実行する Oracle 権限がありません。", actions: ["実行ユーザーの権限を管理者に確認してください。"] };
+  }
+  if (["ORA-01722", "ORA-01843", "ORA-01861", "ORA-12899"].includes(code ?? "")) {
+    return { cause: "取込データまたは SQL の値が対象列のデータ型・長さに一致していません。", actions: ["対象列の型、日付形式、数値形式、文字数を確認してください。"] };
+  }
+  if (["ORA-00001", "ORA-01400", "ORA-02291", "ORA-02292"].includes(code ?? "")) {
+    return { cause: "表の制約条件を満たしていません。", actions: ["重複値、必須値、親子データの関係を確認してください。"] };
+  }
+  if (code === "ORA-00054") {
+    return { cause: "対象が他の処理で使用中です。", actions: ["他の更新処理の完了後に再試行してください。"] };
+  }
   if (code === "ORA-11548") {
     return {
       cause: t("dbAdmin.result.error.ora11548.cause"),
@@ -471,20 +484,43 @@ function oracleErrorGuidance(code: string | null) {
   };
 }
 
-function parseDbAdminError(message: string) {
+function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode?: string) {
   const helpUrl = message.match(/https?:\/\/\S+/)?.[0] ?? "";
   const summary = message.replace(/\s*Help:\s*https?:\/\/\S+/i, "").trim();
-  const code = summary.match(/\bORA-\d{5}\b/)?.[0] ?? null;
+  const code = errorCode || summary.match(/\bORA-\d{5}\b/)?.[0] || null;
   const guidance = oracleErrorGuidance(code);
-  return { code, summary: summary || message, helpUrl, ...guidance };
+  return {
+    code,
+    summary: details?.summary || summary || message,
+    helpUrl,
+    cause: details?.cause || guidance.cause,
+    actions: details?.actions?.length ? details.actions : guidance.actions,
+    rawMessage: details?.raw_message || message,
+  };
 }
 
-function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
-  const error = parseDbAdminError(statement.error_message);
+export function DbAdminErrorNotice({
+  error: sourceError,
+  onReturnToList,
+}: {
+  error: unknown;
+  onReturnToList?: () => void;
+}) {
+  const message = sourceError instanceof Error ? sourceError.message : String(sourceError || "");
+  const details = sourceError instanceof ApiError ? sourceError.details : undefined;
+  const error = parseDbAdminError(
+    message,
+    details,
+    sourceError instanceof ApiError ? sourceError.errorCode : undefined
+  );
+  if (!message) return null;
   return (
     <div className="mt-3 grid gap-3 rounded-md border border-danger/30 bg-danger-bg p-3 text-danger" role="alert">
       <div className="grid gap-1">
-        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.summary")}</p>
+        <div className="flex items-center gap-2 text-xs font-semibold text-danger">
+          <CircleAlert size={18} aria-hidden="true" />
+          <p>{t("dbAdmin.result.error.summary")}</p>
+        </div>
         <p className="break-words text-sm font-semibold">{error.summary}</p>
       </div>
       <div className="grid gap-1">
@@ -502,21 +538,34 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
           ))}
         </ul>
       </div>
-      <details className="rounded-md border border-danger/30 bg-card/70">
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-danger/40">
-          {t("dbAdmin.result.error.detail")}
-        </summary>
-        <div className="grid gap-2 border-t border-danger/20 p-3">
-          {error.helpUrl && (
-            <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
-              {t("dbAdmin.result.error.help")}
-            </a>
-          )}
-          <code className="block break-words text-sm leading-6 text-danger">{statement.error_message}</code>
-        </div>
-      </details>
+      {(error.helpUrl || error.rawMessage !== error.summary) && (
+        <details className="rounded-md border border-danger/30 bg-card/70">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-danger/40">
+            {t("dbAdmin.result.error.detail")}
+          </summary>
+          <div className="grid gap-2 border-t border-danger/20 p-3">
+            {error.helpUrl && (
+              <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
+                {t("dbAdmin.result.error.help")}
+              </a>
+            )}
+            {error.rawMessage !== error.summary && (
+              <code className="block break-words text-sm leading-6 text-danger">{error.rawMessage}</code>
+            )}
+          </div>
+        </details>
+      )}
+      {onReturnToList && error.code === "ORA-00955" && (
+        <Button type="button" variant="secondary" size="sm" onClick={onReturnToList}>
+          一覧へ戻る
+        </Button>
+      )}
     </div>
   );
+}
+
+function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
+  return <DbAdminErrorNotice error={statement.error_message} />;
 }
 
 export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData }) {
@@ -529,10 +578,10 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
         {result.committed && <StatusBadge variant="success" label={t("dbAdmin.result.summary.committed")} />}
         {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
-      {result.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
+      {result.warnings.map((warning, index) => (
+        <Banner key={`${index}-${warning}`} severity="warning">
           {warning}
-        </p>
+        </Banner>
       ))}
       {result.select_result && <QueryResultsTable results={result.select_result} />}
       <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
@@ -551,242 +600,6 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
         ))}
       </div>
     </section>
-  );
-}
-
-type FileInputIcon = "file" | "spreadsheet" | "upload";
-type FileInputRejectReason = "multiple-files" | "unsupported-type";
-
-const fileInputIcons: Record<FileInputIcon, typeof FileText> = {
-  file: FileText,
-  spreadsheet: FileSpreadsheet,
-  upload: Upload,
-};
-
-function fileMatchesAccept(file: File, accept: string): boolean {
-  const acceptedTypes = accept
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  if (acceptedTypes.length === 0) return true;
-
-  const filename = file.name.toLowerCase();
-  const mimeType = file.type.toLowerCase();
-  return acceptedTypes.some((acceptedType) => {
-    if (acceptedType.startsWith(".")) return filename.endsWith(acceptedType);
-    if (acceptedType.endsWith("/*")) return mimeType.startsWith(acceptedType.slice(0, -1));
-    return mimeType === acceptedType;
-  });
-}
-
-export function FileInputControl({
-  label,
-  ariaLabel = label,
-  accept,
-  filename,
-  selectedText,
-  emptyText,
-  pickText,
-  replaceText,
-  clearText = t("dbAdmin.runner.clear"),
-  clearAriaLabel,
-  icon = "upload",
-  disabled = false,
-  clearDisabled,
-  className = "",
-  dataTestId,
-  dropEnabled = false,
-  dropActiveText,
-  errorText = "",
-  onPick,
-  onClear,
-  onReject,
-}: {
-  label: string;
-  ariaLabel?: string;
-  accept: string;
-  filename: string;
-  selectedText?: string;
-  emptyText: string;
-  pickText: string;
-  replaceText?: string;
-  clearText?: string;
-  clearAriaLabel?: string;
-  icon?: FileInputIcon;
-  disabled?: boolean;
-  clearDisabled?: boolean;
-  className?: string;
-  dataTestId?: string;
-  dropEnabled?: boolean;
-  dropActiveText?: string;
-  errorText?: string;
-  onPick: (file: File) => void | Promise<void>;
-  onClear?: () => void;
-  onReject?: (reason: FileInputRejectReason) => void;
-}) {
-  const inputId = useId();
-  const errorId = `${inputId}-error`;
-  const Icon = fileInputIcons[icon];
-  const hasFile = Boolean(filename);
-  const clearIsDisabled = clearDisabled ?? !hasFile;
-  const dragDepthRef = useRef(0);
-  const [isDragActive, setIsDragActive] = useState(false);
-
-  useEffect(() => {
-    if (!dropEnabled || disabled) {
-      dragDepthRef.current = 0;
-      setIsDragActive(false);
-    }
-  }, [disabled, dropEnabled]);
-
-  const pickFiles = (files: FileList | File[]) => {
-    const candidates = Array.from(files);
-    if (candidates.length === 0) return;
-    if (!dropEnabled) {
-      void onPick(candidates[0]);
-      return;
-    }
-    if (candidates.length > 1) {
-      onReject?.("multiple-files");
-      return;
-    }
-    const file = candidates[0];
-    if (!fileMatchesAccept(file, accept)) {
-      onReject?.("unsupported-type");
-      return;
-    }
-    void onPick(file);
-  };
-
-  const handleDragEnter = (event: DragEvent<HTMLLabelElement>) => {
-    if (!dropEnabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (disabled) return;
-    dragDepthRef.current += 1;
-    setIsDragActive(true);
-  };
-
-  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
-    if (!dropEnabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (!disabled) event.dataTransfer.dropEffect = "copy";
-  };
-
-  const handleDragLeave = (event: DragEvent<HTMLLabelElement>) => {
-    if (!dropEnabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (disabled) return;
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) setIsDragActive(false);
-  };
-
-  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
-    if (!dropEnabled) return;
-    event.preventDefault();
-    event.stopPropagation();
-    dragDepthRef.current = 0;
-    setIsDragActive(false);
-    if (disabled) return;
-    pickFiles(event.dataTransfer.files);
-  };
-
-  return (
-    <div className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`} data-testid={dataTestId}>
-      <span>{label}</span>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
-        <label
-          htmlFor={inputId}
-          data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}
-          data-drag-active={dropEnabled ? String(isDragActive) : undefined}
-          onDragEnter={handleDragEnter}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`group flex min-w-0 touch-manipulation items-center gap-2 rounded-md border px-3 py-1 text-left focus-within:ring-2 focus-within:ring-ring/40 ${
-            dropEnabled
-              ? "h-[44px] border-dashed bg-background transition-[border-color,background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none"
-              : "h-11 bg-card transition-colors"
-          } ${
-            disabled
-              ? "cursor-not-allowed border-border opacity-60"
-              : dropEnabled
-                ? isDragActive
-                  ? "cursor-copy border-primary bg-primary/10 ring-2 ring-ring/40"
-                  : errorText
-                    ? "cursor-pointer border-danger/60 bg-danger-bg/30 hover:border-danger"
-                    : hasFile
-                      ? "cursor-pointer border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10"
-                      : "cursor-pointer border-border hover:border-primary/60 hover:bg-primary/5"
-                : "cursor-pointer border-border hover:border-primary/40 hover:bg-primary/10"
-          }`}
-        >
-          <span
-            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-              hasFile || isDragActive
-                ? "bg-primary/10 text-primary"
-                : dropEnabled
-                  ? "bg-muted/30 text-muted group-hover:bg-primary/10 group-hover:text-primary"
-                  : "bg-muted/30 text-muted group-hover:text-primary"
-            }`}
-            aria-hidden="true"
-          >
-            <Icon size={16} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold text-foreground">
-              {isDragActive && dropActiveText
-                ? dropActiveText
-                : hasFile
-                  ? selectedText ?? filename
-                  : pickText}
-            </span>
-          </span>
-          <span
-            className={`hidden max-w-56 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:inline-block ${
-              hasFile ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-background text-muted"
-            }`}
-          >
-            {hasFile ? replaceText ?? pickText : emptyText}
-          </span>
-          <input
-            id={inputId}
-            className="sr-only"
-            type="file"
-            accept={accept}
-            disabled={disabled}
-            aria-label={ariaLabel}
-            aria-invalid={Boolean(errorText)}
-            aria-describedby={errorText ? errorId : undefined}
-            onChange={(event) => {
-              const input = event.currentTarget;
-              if (!input.files?.length) return;
-              pickFiles(input.files);
-              queueMicrotask(() => {
-                input.value = "";
-              });
-            }}
-          />
-        </label>
-        {onClear && (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="min-h-11 whitespace-nowrap"
-            disabled={clearIsDisabled || disabled}
-            aria-label={clearAriaLabel ?? clearText}
-            onClick={onClear}
-          >
-            <X size={15} aria-hidden="true" />
-            <span>{clearText}</span>
-          </Button>
-        )}
-      </div>
-      <FieldError id={errorId} message={errorText} />
-    </div>
   );
 }
 
@@ -883,19 +696,17 @@ export function SqlFileInput({
   }, [resetSignal]);
 
   return (
-    <FileInputControl
+    <FileDropzone
       label={t("dbAdmin.runner.filePick")}
       accept=".sql,.txt"
-      filename={filename}
       selectedText={filename}
-      emptyText={t("dbAdmin.runner.fileFormats")}
-      pickText={t("dbAdmin.runner.fileDropAction")}
+      formatLabel={t("dbAdmin.runner.fileFormats")}
+      actionText={t("dbAdmin.runner.fileDropAction")}
       replaceText={t("dbAdmin.runner.fileReplaceShort")}
       icon="upload"
       disabled={disabled}
       dataTestId="sql-file-input"
-      dropEnabled
-      dropActiveText={t("dbAdmin.runner.fileDropActive")}
+      activeText={t("dbAdmin.runner.fileDropActive")}
       errorText={errorText}
       onReject={(reason) => {
         setErrorText(
@@ -904,7 +715,7 @@ export function SqlFileInput({
             : t("dbAdmin.runner.fileErrorUnsupported")
         );
       }}
-      onPick={async (file) => {
+      onFiles={async ([file]) => {
         setErrorText("");
         try {
           const text = await readTextFileSmart(file);
@@ -925,7 +736,6 @@ export function StatementRunnerCard({
   description,
   initialSql,
   placeholder,
-  templates,
   progress,
   confirmationTitle,
   executeOnly = false,
@@ -937,7 +747,6 @@ export function StatementRunnerCard({
   description?: string;
   initialSql?: string;
   placeholder?: string;
-  templates?: Array<{ label: string; build: () => string }>;
   progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
   confirmationTitle?: string;
   executeOnly?: boolean;
@@ -1032,22 +841,6 @@ export function StatementRunnerCard({
         <p className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger" role="alert">
           {message}
         </p>
-      )}
-      {templates && templates.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
-          {templates.map((template) => (
-            <Button
-              key={template.label}
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setSql(template.build())}
-            >
-              {template.label}
-            </Button>
-          ))}
-        </div>
       )}
       <label className="grid gap-1 text-sm font-medium text-foreground">
         <span>{t("dbAdmin.runner.sqlLabel")}</span>

@@ -571,7 +571,7 @@ class SampleDataMutationData(BaseModel):
 
 
 class DbAdminImportTabularRequest(AdminExecutionConfirmation):
-    """CSV/XLSX tabular import execution request."""
+    """CSV/XLSX/XLS tabular import execution request."""
 
     table_name: str = Field(min_length=1)
     content_base64: str = Field(min_length=1)

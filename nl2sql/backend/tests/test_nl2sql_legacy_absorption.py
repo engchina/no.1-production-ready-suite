@@ -112,6 +112,16 @@ def _workbook_bytes(workbook: Any) -> bytes:
     return buffer.getvalue()
 
 
+def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    return _workbook_bytes(workbook)
+
+
 def _classifier_model_bytes(*categories: str) -> bytes:
     buffer = io.BytesIO()
     joblib = importlib.import_module("joblib")
@@ -140,19 +150,18 @@ def test_classifier_training_predicts_and_drives_profile_recommendation() -> Non
             glossary={"入金": "PAYMENTS.PAID_AT"},
         )
     )
-    payload = "\n".join(
-        [
-            "CATEGORY,TEXT",
-            "標準業務プロファイル,請求金額が大きい取引先を見たい",
-            "標準業務プロファイル,売上合計を顧客別に確認したい",
-            "入金管理,入金が遅れている請求を確認したい",
-            "入金管理,未入金の支払状況を見たい",
-        ]
-    ).encode()
-
     imported = service.import_classifier_training_data(
-        filename="training_data.csv",
-        content=payload,
+        filename="training_data.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [
+                ["CATEGORY", "TEXT"],
+                ["標準業務プロファイル", "請求金額が大きい取引先を見たい"],
+                ["標準業務プロファイル", "売上合計を顧客別に確認したい"],
+                ["入金管理", "入金が遅れている請求を確認したい"],
+                ["入金管理", "未入金の支払状況を見たい"],
+            ],
+        ),
         replace=True,
     )
     assert imported.imported_count == 4
@@ -538,10 +547,12 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     ]
 
     service.create_profile(Nl2SqlProfile(id="audit", name="監査"))
-    replacement_payload = "CATEGORY,TEXT\n監査,監査ログを確認したい\n".encode()
     replaced = service.import_classifier_training_data(
-        filename="replacement.csv",
-        content=replacement_payload,
+        filename="replacement.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [["CATEGORY", "TEXT"], ["監査", "監査ログを確認したい"]],
+        ),
         replace=True,
     )
     assert replaced.imported_count == 1
@@ -554,12 +565,15 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
 def test_classifier_training_data_xlsx_export_contains_profile_and_source_metadata() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service.import_classifier_training_data(
-        filename="training_data.csv",
-        content=(
-            "CATEGORY,TEXT\n"
-            "標準業務プロファイル,請求金額を確認したい\n"
-            "入金管理,未入金の請求を確認したい\n"
-        ).encode(),
+        filename="training_data.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [
+                ["CATEGORY", "TEXT"],
+                ["標準業務プロファイル", "請求金額を確認したい"],
+                ["入金管理", "未入金の請求を確認したい"],
+            ],
+        ),
         replace=True,
         profile_id="default",
     )
@@ -583,7 +597,7 @@ def test_classifier_training_data_xlsx_export_contains_profile_and_source_metada
             "標準業務プロファイル",
             "請求金額を確認したい",
             "default",
-            "training_data.csv",
+            "training_data.xlsx",
             "file",
             None,
         ),
@@ -591,7 +605,7 @@ def test_classifier_training_data_xlsx_export_contains_profile_and_source_metada
             "入金管理",
             "未入金の請求を確認したい",
             "default",
-            "training_data.csv",
+            "training_data.xlsx",
             "file",
             None,
         ),
@@ -751,12 +765,15 @@ def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
     assert any("DENPYO_FILES" in warning and "BLOB" in warning for warning in synthetic.warnings)
 
 
-def test_profile_learning_material_imports_csv_and_exports_xlsx() -> None:
+def test_profile_learning_material_imports_xlsx_and_exports_xlsx() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     imported = service.import_profile_learning_material(
         profile_id="default",
-        filename="terms.csv",
-        content="TERM,DEFINITION\n粗利,INVOICES.PROFIT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["粗利", "INVOICES.PROFIT"]],
+        ),
         mode="merge",
     )
     assert imported.imported_terms == 1
@@ -764,8 +781,11 @@ def test_profile_learning_material_imports_csv_and_exports_xlsx() -> None:
 
     imported_rules = service.import_profile_learning_material(
         profile_id="default",
-        filename="rules.csv",
-        content="CATEGORY,RULE\n共通,日付条件は TRUNC を使う\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [["CATEGORY", "RULE"], ["共通", "日付条件は TRUNC を使う"]],
+        ),
         mode="merge",
     )
     assert imported_rules.imported_rules == 1
@@ -833,8 +853,11 @@ def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace()
 
     replaced = service.import_profile_learning_material(
         profile_id="compat",
-        filename="terms.csv",
-        content="term,definition\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["term", "definition"], ["売上", "INVOICES.TOTAL_AMOUNT"]],
+        ),
         mode="replace",
     )
 
@@ -902,6 +925,33 @@ def test_global_learning_material_imports_exports_and_applies_all_rules() -> Non
     assert terms_export.active["A1"].value == "TERM"
     assert rules_export.active["A1"].value == "RULE"
     assert rules_export.active["B1"].value is None
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".xls", ".xlsm", ".txt", ".tsv"])
+@pytest.mark.parametrize(
+    "template_import",
+    ["legacy_terms", "legacy_rules", "classifier_training", "profile_learning"],
+)
+def test_excel_template_imports_reject_non_xlsx_extensions(
+    suffix: str,
+    template_import: str,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    filename = f"template{suffix}"
+
+    with pytest.raises(ValueError, match="xlsx テンプレート"):
+        if template_import == "legacy_terms":
+            service.import_legacy_terms(filename=filename, content=b"")
+        elif template_import == "legacy_rules":
+            service.import_legacy_rules(filename=filename, content=b"")
+        elif template_import == "classifier_training":
+            service.import_classifier_training_data(filename=filename, content=b"")
+        else:
+            service.import_profile_learning_material(
+                profile_id="default",
+                filename=filename,
+                content=b"",
+            )
 
 
 def test_global_rule_xlsx_preserves_newlines_blank_lines_and_indentation() -> None:
@@ -973,12 +1023,23 @@ def test_oracle_runtime_does_not_append_rules_to_select_ai_questions(
         )
     )
     service.import_legacy_terms(
-        filename="terms.csv",
-        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["売上", "INVOICES.TOTAL_AMOUNT"]],
+        ),
     )
     service.import_legacy_rules(
-        filename="rules.csv",
-        content="CATEGORY,RULE\n共通,共通ルール\nOSAKA,大阪ルール\nTOKYO,東京ルール\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [
+                ["CATEGORY", "RULE"],
+                ["共通", "共通ルール"],
+                ["OSAKA", "大阪ルール"],
+                ["TOKYO", "東京ルール"],
+            ],
+        ),
     )
     cast(Any, service)._embedding_client = FakeEmbeddingClient()
     fake_oracle = FakeOracleGenerator()
@@ -1049,8 +1110,11 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
         ],
     )
     service.import_legacy_terms(
-        filename="terms.csv",
-        content="TERM,DEFINITION\n売上,INVOICES.TOTAL_AMOUNT\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["売上", "INVOICES.TOTAL_AMOUNT"]],
+        ),
     )
     service.create_profile(
         Nl2SqlProfile(
@@ -1062,8 +1126,11 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
         )
     )
     service.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\nグローバルルール\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [["RULE"], ["グローバルルール"]],
+        ),
     )
     fake = FakeEnterpriseAiClient(
         '{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES","explanation":"売上を取得します。"}'
@@ -1244,8 +1311,11 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
 def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service.import_legacy_terms(
-        filename="terms.csv",
-        content="TERM,DEFINITION\n請求表,INVOICES\n".encode(),
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["請求表", "INVOICES"]],
+        ),
     )
     service.create_profile(
         Nl2SqlProfile(
@@ -1257,8 +1327,11 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
         )
     )
     service.import_legacy_rules(
-        filename="rules.csv",
-        content="RULE\n金額列には業務名を使う\n".encode(),
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [["RULE"], ["金額列には業務名を使う"]],
+        ),
     )
     fake = FakeEnterpriseAiClient(
         '{"question":"請求金額を一覧で確認したい",'

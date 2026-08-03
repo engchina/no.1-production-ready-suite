@@ -4,6 +4,7 @@ import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 import { Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
@@ -228,6 +229,18 @@ export function SampleDataPage() {
           ariaLabel={t("dataTools.sample.workspace.label")}
           splitId={`sample-data-${activeAction}`}
           preferredWidePane="right"
+          processing={
+            loading === "load" ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="sample-data-refresh"
+                placement="workspace"
+                className="rounded-md border border-border bg-background px-3 py-2"
+                testId="sample-data-workspace-processing"
+              />
+            ) : undefined
+          }
         >
           <section className="grid min-w-0 content-start gap-4" aria-labelledby="sample-data-action-heading">
             <DbObjectPanelHeader

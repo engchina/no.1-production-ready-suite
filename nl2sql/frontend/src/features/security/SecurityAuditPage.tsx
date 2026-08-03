@@ -13,6 +13,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
@@ -128,6 +129,16 @@ export function SecurityAuditPage() {
               />
             ) : (
               <>
+                {loading ? (
+                  <ProcessingIndicator
+                    active
+                    label={t("security.common.loading")}
+                    operationKey={`security-audit-${pageData.page}`}
+                    placement="panel"
+                    className="mb-4"
+                    testId="security-audit-loading"
+                  />
+                ) : null}
                 <DataTable
                   loading={loading}
                   dense

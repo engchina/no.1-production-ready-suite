@@ -326,7 +326,7 @@ test("migration 未適用でも共通の起動案内と ADB 管理導線を表�
   await expectNoHorizontalOverflow(page);
 });
 
-test("STOPPED から起動し AVAILABLE 後に元の Profile へ戻って復元データを表示する", async ({
+test("STOPPED から起動し AVAILABLE 後もサービス利用状態と戻る導線を表示しない", async ({
   page,
 }) => {
   let lifecycle = "STOPPED";
@@ -385,18 +385,18 @@ test("STOPPED から起動し AVAILABLE 後に元の Profile へ戻って復元�
   await page.getByRole("button", { name: "起動" }).click();
   await expect(page.getByText("OCI ADB: 起動中")).toBeVisible();
   await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible({ timeout: 15_000 });
-
-  const returnLink = page.getByRole("link", { name: "元の画面に戻る" });
-  await expect(returnLink).toBeVisible();
-  await returnLink.click();
-
-  await expect(page).toHaveURL(/\/profiles$/);
-  await expect(page.getByText("保存済みプロファイル")).toBeVisible();
-  expect(recoveryRequests).toBe(1);
+  await expect(page.getByRole("button", { name: "停止" })).toBeEnabled();
+  await expect(page.getByText("サービス利用状態")).toHaveCount(0);
+  await expect(page.getByText("Oracle SQL 接続")).toHaveCount(0);
+  await expect(page.getByText("NL2SQL 保存領域")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存領域へ再接続" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "元の画面に戻る" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/settings\/database#adb-management$/);
+  expect(recoveryRequests).toBe(0);
   await expectNoHorizontalOverflow(page);
 });
 
-test("ADB 起動済みでも接続不可なら Wallet と DSN の確認を案内する", async ({ page }) => {
+test("ADB 起動済みでも設定画面にはサービス利用状態を表示しない", async ({ page }) => {
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "unreachable", check: "ok", detail: "ORA-12514" })
   );
@@ -404,12 +404,17 @@ test("ADB 起動済みでも接続不可なら Wallet と DSN の確認を案内
 
   await page.goto("/settings/database#adb-management");
 
-  await expect(page.getByText(/Wallet のサービス名、DSN、認証情報/)).toBeVisible();
+  await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
+  await expect(page.getByText(/Wallet のサービス名、DSN、認証情報/)).toHaveCount(0);
+  await expect(page.getByText("サービス利用状態")).toHaveCount(0);
+  await expect(page.getByText("Oracle SQL 接続")).toHaveCount(0);
+  await expect(page.getByText("NL2SQL 保存領域")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存領域へ再接続" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "起動" })).toBeDisabled();
   await expect(page.getByRole("link", { name: "元の画面に戻る" })).toHaveCount(0);
 });
 
-test("ADB と SQL が正常でも保存領域が閉じていれば分離表示して再接続する", async ({
+test("保存領域が閉じていても設定画面には分離表示と再接続を出さない", async ({
   page,
 }) => {
   let recovered = false;
@@ -458,18 +463,18 @@ test("ADB と SQL が正常でも保存領域が閉じていれば分離表示�
   await page.getByRole("link", { name: "データベース設定を開く" }).click();
 
   await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
-  await expect(page.getByText("Oracle SQL 接続")).toBeVisible();
-  await expect(page.getByText("NL2SQL 保存領域")).toBeVisible();
-  await expect(page.getByText(/incremental_schema_search_failed/)).toBeVisible();
+  await expect(page.getByText("サービス利用状態")).toHaveCount(0);
+  await expect(page.getByText("Oracle SQL 接続")).toHaveCount(0);
+  await expect(page.getByText("NL2SQL 保存領域")).toHaveCount(0);
+  await expect(page.getByText(/incremental_schema_search_failed/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存領域へ再接続" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "元の画面に戻る" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
 
-  const reconnect = page.getByRole("button", { name: "保存領域へ再接続" });
-  await reconnect.focus();
-  await expect(reconnect).toBeFocused();
-  await reconnect.press("Enter");
-
-  await expect(page.getByText("NL2SQL 保存領域").locator("..").getByText("利用可能")).toBeVisible();
-  await expect(page.getByRole("link", { name: "元の画面に戻る" })).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(page.locator("#adb-management")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
+  await expect(page.getByText("サービス利用状態")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 

@@ -36,9 +36,10 @@ test("Ontology view materialization belongs to the Ontology page", () => {
   assert.match(messages, /業務 Profile の保存では更新されません/u);
 });
 
-test("default profile is protected and delete confirmation names retained state", () => {
+test("all profiles share the physical delete flow and retained-state confirmation", () => {
   assert.match(messages, /そのすべての Ontology view を完全に削除/u);
   assert.match(messages, /Oracle DBMS_CLOUD_AI Profile と監査履歴は削除されません/u);
-  assert.match(profilePage, /profile\.id !== "default"/u);
-  assert.match(profilePage, /if \(profile\.id === "default"\) return;/u);
+  assert.doesNotMatch(profilePage, /profile\.id !== "default"/u);
+  assert.doesNotMatch(profilePage, /if \(profile\.id === "default"\) return;/u);
+  assert.match(profilePage, /\/api\/nl2sql\/profiles\/\$\{encodeURIComponent\(profile\.id\)\}/u);
 });

@@ -42,6 +42,10 @@ class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
 
 
+class TabularImportValidationError(OracleAdapterError):
+    """Excel/CSV 取込を DB mutation 前に拒否する利用者修正可能なエラー。"""
+
+
 WALLET_PASSWORD_REQUIRED_ERROR = (
     "Oracle Wallet がパスワードを必要としています。"  # nosec B105
     "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
@@ -1084,6 +1088,21 @@ class OracleNl2SqlAdapter:
             if is_user_visible_object_name(str(row[0] or ""))
         ]
 
+    def find_db_admin_object_type(self, object_name: str) -> str | None:
+        """同名オブジェクトの実種別を、エラー表示の補足用に取得する。"""
+        safe_name = _strict_sql_name(object_name)
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT object_type FROM user_objects
+                WHERE object_name = :object_name
+                ORDER BY CASE object_type WHEN 'TABLE' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
+                """,
+                {"object_name": safe_name},
+            )
+            row = cursor.fetchone()
+        return str(row[0]).upper() if row and row[0] else None
+
     def get_db_admin_object_detail(
         self,
         *,
@@ -1245,6 +1264,9 @@ class OracleNl2SqlAdapter:
         """Import parsed tabular rows into Oracle using create/replace/append/truncate mode."""
         safe_table = _strict_sql_name(table_name)
         quoted_table = _quote_identifier(safe_table)
+        normalized_mode = mode.strip().lower()
+        if normalized_mode not in {"create", "replace", "append", "truncate"}:
+            raise OracleAdapterError(f"未対応 import mode です: {mode}")
         column_defs = ", ".join(
             f"{_quote_identifier(column.column_name)} {column.data_type}" for column in columns
         )
@@ -1255,25 +1277,60 @@ class OracleNl2SqlAdapter:
             f"({', '.join(_quote_identifier(column.column_name) for column in columns)}) "
             f"VALUES ({', '.join(':' + name for name in bind_names)})"
         )
-        bind_rows = [
-            {
-                bind_names[index]: self._coerce_csv_value(row.get(column.column_name), column)
-                for index, column in enumerate(columns)
-            }
-            for row in rows
-        ]
-        normalized_mode = mode.strip().lower()
         with self.connection() as conn, conn.cursor() as cursor:
+            target_types: dict[str, str] = {}
+            if normalized_mode in {"append", "truncate"}:
+                target_types = self._validate_existing_tabular_import(
+                    cursor,
+                    table_name=safe_table,
+                    columns=columns,
+                    rows=rows,
+                )
+            bind_rows = [
+                {
+                    bind_names[index]: (
+                        self._csv_upload_value(
+                            row.get(column.column_name),
+                            target_types[column.column_name],
+                        )
+                        if target_types
+                        else self._coerce_csv_value(row.get(column.column_name), column)
+                    )
+                    for index, column in enumerate(columns)
+                }
+                for row in rows
+            ]
             if normalized_mode in {"replace", "create"}:
                 if normalized_mode == "replace":
                     self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
                 self._execute_plsql_like(cursor, ddl, {})
             elif normalized_mode == "truncate":
-                self._execute_plsql_like(cursor, f"TRUNCATE TABLE {quoted_table}", {})
-            elif normalized_mode != "append":
-                raise OracleAdapterError(f"未対応 import mode です: {mode}")
+                # TRUNCATE は暗黙 commit されるため、後続 INSERT 失敗時に既存行を戻せない。
+                # DELETE と INSERT を同一 transaction に置き、全件成功時だけ commit する。
+                self._execute_plsql_like(cursor, f"DELETE FROM {quoted_table}", {})
             if bind_rows:
-                cursor.executemany(insert_sql, bind_rows)
+                try:
+                    cursor.executemany(insert_sql, bind_rows, batcherrors=True)
+                    batch_errors = list(cursor.getbatcherrors())
+                except TabularImportValidationError:
+                    raise
+                except Exception as exc:
+                    if "ORA-12899" in str(exc):
+                        raise self._tabular_import_batch_error(
+                            exc,
+                            table_name=safe_table,
+                            row_offset=None,
+                        ) from exc
+                    raise OracleAdapterError(
+                        "Excel/CSV 取込の Oracle INSERT に失敗しました。"
+                    ) from exc
+                if batch_errors:
+                    first_error = batch_errors[0]
+                    raise self._tabular_import_batch_error(
+                        first_error,
+                        table_name=safe_table,
+                        row_offset=getattr(first_error, "offset", None),
+                    )
             conn.commit()
         return {
             "runtime": "oracle",
@@ -1283,6 +1340,185 @@ class OracleNl2SqlAdapter:
             "ddl": ddl,
             "insert_sql": insert_sql,
         }
+
+    def _validate_existing_tabular_import(
+        self,
+        cursor: Any,
+        *,
+        table_name: str,
+        columns: list[CsvImportColumn],
+        rows: list[dict[str, str | None]],
+    ) -> dict[str, str]:
+        """既存表の列存在と CHAR/BYTE 上限を mutation 前に Oracle semantics で検証する。"""
+        cursor.execute(
+            """
+            SELECT column_name,
+                   data_type,
+                   data_length,
+                   char_length,
+                   char_used
+            FROM user_tab_columns
+            WHERE table_name = :table_name
+            ORDER BY column_id
+            """,
+            {"table_name": table_name},
+        )
+        table_columns = {
+            str(row[0] or "").upper(): {
+                "data_type": str(row[1] or "").upper(),
+                "data_length": int(row[2] or 0),
+                "char_length": int(row[3] or 0),
+                "char_used": str(row[4] or "B").upper(),
+            }
+            for row in cursor.fetchall()
+        }
+        if not table_columns:
+            raise TabularImportValidationError(
+                f"{table_name}: 取込先テーブルが見つからないか、列情報を取得できません。"
+                "表名を確認して再試行してください。"
+            )
+        missing = [
+            column.column_name
+            for column in columns
+            if column.column_name.upper() not in table_columns
+        ]
+        if missing:
+            joined = ", ".join(missing)
+            raise TabularImportValidationError(
+                f"{table_name}: 取込先に存在しない列があります: {joined}。"
+                "CSV/XLSX/XLS のヘッダーまたは表定義を修正して再試行してください。"
+            )
+
+        text_columns: list[tuple[CsvImportColumn, dict[str, Any]]] = []
+        for column in columns:
+            metadata = table_columns[column.column_name.upper()]
+            if metadata["data_type"] in {"CHAR", "VARCHAR2", "NCHAR", "NVARCHAR2"}:
+                text_columns.append((column, metadata))
+        self._validate_tabular_text_lengths(
+            cursor,
+            table_name=table_name,
+            text_columns=text_columns,
+            rows=rows,
+        )
+        return {
+            column.column_name: str(table_columns[column.column_name.upper()]["data_type"])
+            for column in columns
+        }
+
+    def _validate_tabular_text_lengths(
+        self,
+        cursor: Any,
+        *,
+        table_name: str,
+        text_columns: list[tuple[CsvImportColumn, dict[str, Any]]],
+        rows: list[dict[str, str | None]],
+    ) -> None:
+        """JSON_TABLE で入力を小分けし、DB charset における LENGTH/LENGTHB を測定する。"""
+        if not text_columns or not rows:
+            return
+        json_column_defs: list[str] = [
+            "file_row NUMBER PATH '$.__file_row' ERROR ON ERROR"
+        ]
+        violation_queries: list[str] = []
+        for index, (column, metadata) in enumerate(text_columns):
+            alias = f"c{index}"
+            char_semantics = metadata["char_used"] == "C" or metadata["data_type"] in {
+                "NCHAR",
+                "NVARCHAR2",
+            }
+            # CHAR semantics は CLOB へ投影し、4000 byte を超える多バイト値も
+            # 文字数の検証前に失敗させない。BYTE semantics は LENGTHB が CLOB を
+            # 扱えない多バイト DB に備え、SQL VARCHAR2 の上限まで安全に切り詰める。
+            projection_type = "CLOB" if char_semantics else "VARCHAR2(4000 BYTE) TRUNCATE"
+            # CSV identifier は英数字/underscore に正規化済みなので JSON path へ安全に埋め込める。
+            json_column_defs.append(
+                f"{alias} {projection_type} "
+                f"PATH '$.\"{column.column_name}\"' NULL ON EMPTY ERROR ON ERROR"
+            )
+            length_function = "LENGTH" if char_semantics else "LENGTHB"
+            maximum = (
+                int(metadata["char_length"])
+                if char_semantics
+                else int(metadata["data_length"])
+            )
+            unit = "文字" if char_semantics else "バイト"
+            violation_queries.append(
+                "SELECT file_row, "
+                f"'{column.column_name}' AS column_name, "
+                f"{length_function}({alias}) AS actual_length, "
+                f"{maximum} AS maximum_length, "
+                f"'{unit}' AS length_unit "
+                "FROM input_rows "
+                f"WHERE {alias} IS NOT NULL AND {length_function}({alias}) > {maximum}"
+            )
+
+        sql = (
+            "WITH input_rows AS ("
+            "SELECT * FROM JSON_TABLE("
+            ":payload, '$[*]' COLUMNS ("
+            + ", ".join(json_column_defs)
+            + "))) "
+            "SELECT file_row, column_name, actual_length, maximum_length, length_unit "
+            "FROM ("
+            + " UNION ALL ".join(violation_queries)
+            + ") ORDER BY file_row FETCH FIRST 1 ROW ONLY"
+        )
+        cursor.setinputsizes(payload=self._load_oracledb().DB_TYPE_CLOB)
+        chunk_size = 200
+        for start in range(0, len(rows), chunk_size):
+            payload_rows = [
+                {
+                    "__file_row": start + offset + 2,
+                    **{
+                        column.column_name: row.get(column.column_name)
+                        for column, _metadata in text_columns
+                    },
+                }
+                for offset, row in enumerate(rows[start : start + chunk_size])
+            ]
+            cursor.execute(sql, {"payload": json.dumps(payload_rows, ensure_ascii=False)})
+            violation = cursor.fetchone()
+            if violation is None:
+                continue
+            file_row, column_name, actual, maximum, unit = violation
+            raise TabularImportValidationError(
+                f"{table_name}.{column_name}: ファイル{int(file_row)}行目は"
+                f"{int(actual)}{unit}で、取込先列の上限{int(maximum)}{unit}を超えています。"
+                "値を短くするか列定義を拡張して再試行してください。"
+            )
+
+    def _tabular_import_batch_error(
+        self,
+        exc: Exception,
+        *,
+        table_name: str,
+        row_offset: int | None,
+    ) -> OracleAdapterError:
+        """batch DML error を安全な import エラーへ正規化する。"""
+        message = str(exc)
+        if "ORA-12899" not in message:
+            file_row = row_offset + 2 if isinstance(row_offset, int) else None
+            row_detail = f"ファイル{file_row}行目の" if file_row is not None else ""
+            return OracleAdapterError(
+                f"{row_detail}Excel/CSV データを Oracle に投入できませんでした。"
+                "値の形式と取込先の制約を確認して再試行してください。"
+            )
+        match = re.search(
+            r'column\s+"[^"]+"\."[^"]+"\."([^"]+)".*?'
+            r"actual:\s*(\d+),\s*maximum:\s*(\d+)",
+            message,
+            re.IGNORECASE | re.DOTALL,
+        )
+        column_name = match.group(1) if match else "文字列"
+        actual = match.group(2) if match else "許容値超過"
+        maximum = match.group(3) if match else "列定義"
+        file_row = row_offset + 2 if isinstance(row_offset, int) else None
+        row_detail = f"ファイル{file_row}行目の" if file_row is not None else ""
+        return TabularImportValidationError(
+            f"{table_name}.{column_name}: {row_detail}値の長さ({actual})が"
+            f"取込先列の上限({maximum})を超えています。"
+            "値を短くするか列定義を拡張して再試行してください。"
+        )
 
     def upload_csv_to_existing_table(
         self,

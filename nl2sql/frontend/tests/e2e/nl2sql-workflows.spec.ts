@@ -4,6 +4,7 @@ import {
   expectSplitPaneReservedTrack,
   expectSplitPaneStacked,
 } from "./_helpers/fixed-split-pane";
+import { dropFiles } from "./_helpers/file-dropzone";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -516,6 +517,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     const objectType = url.searchParams.get("type") ?? "all";
     const rowState = url.searchParams.get("row_state") ?? "all";
     const query = (url.searchParams.get("q") ?? "").toLowerCase();
+    const cursor = url.searchParams.get("cursor") ?? "";
     const allItems = [
       { name: "INVOICES", owner: "APP", object_type: "table", row_count: 2, comment: "請求情報" },
       { name: "PAYMENTS", owner: "APP", object_type: "table", row_count: 1, comment: "入金情報" },
@@ -531,14 +533,20 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       if (rowState === "unknown_rows" && item.row_count !== null) return false;
       return !query || `${item.name} ${item.owner} ${item.comment}`.toLowerCase().includes(query);
     });
+    const pagedItems =
+      objectType === "table" && !query
+        ? cursor === "tables-page-2"
+          ? items.slice(2)
+          : items.slice(0, 2)
+        : items;
     return fulfillJson(route, {
       runtime: "deterministic",
       owner: "APP",
-      items,
+      items: pagedItems,
       total: items.length,
       table_count: items.filter((item) => item.object_type === "table").length,
       view_count: items.filter((item) => item.object_type === "view").length,
-      next_cursor: null,
+      next_cursor: objectType === "table" && !query && !cursor && items.length > 2 ? "tables-page-2" : null,
       refreshed_at: schemaCatalog.refreshed_at,
       catalog_version: 1,
       warnings: [],
@@ -620,6 +628,16 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       warnings: [],
     })
   );
+  await page.route("**/api/nl2sql/db-admin/views/V_EMP_DEPT/export.xlsx", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      headers: {
+        "Content-Disposition": 'attachment; filename="v_emp_dept_columns.xlsx"',
+      },
+      body: "xlsx",
+    })
+  );
   await page.route("**/api/nl2sql/db-admin/preview-data", (route) => {
     state.previewDataPayload = route.request().postDataJSON() as Record<string, unknown>;
     const rows = Array.from({ length: 12 }, (_, index) => ({
@@ -652,7 +670,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.csvUploadPayload = route.request().postDataJSON() as Record<string, unknown>;
     const executed = true;
     return fulfillJson(route, {
-      table_name: "INVOICES",
+      table_name: String(state.csvUploadPayload.table_name ?? "INVOICES"),
       filename: "upload.csv",
       mode: "insert",
       matched_columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
@@ -679,11 +697,16 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       mode: state.importTabularPayload.mode ?? "create",
       columns: [
         { source_name: "ORDER_ID", column_name: "ORDER_ID", data_type: "NUMBER", nullable: false },
-        { source_name: "ORDER_NAME", column_name: "ORDER_NAME", data_type: "VARCHAR2(4000)", nullable: true },
+        {
+          source_name: "ORDER_NAME",
+          column_name: "ORDER_NAME",
+          data_type: "VARCHAR2(4 CHAR)",
+          nullable: true,
+        },
       ],
       row_count: 1,
       executed: true,
-      ddl: `CREATE TABLE ${tableName} (ORDER_ID NUMBER, ORDER_NAME VARCHAR2(4000))`,
+      ddl: `CREATE TABLE ${tableName} (ORDER_ID NUMBER, ORDER_NAME VARCHAR2(4 CHAR))`,
       insert_sql: `INSERT INTO ${tableName} (ORDER_ID, ORDER_NAME) VALUES (:1, :2)`,
       warnings: [],
       sample_rows: [{ ORDER_ID: "1", ORDER_NAME: "青山商事" }],
@@ -730,6 +753,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     const hasMutation =
       /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i.test(sql);
     const isSelect = !hasMutation && /^\s*(?:--[^\n]*\n\s*)*(?:select|with)\b/i.test(sql);
+    const isPartialDml = /\bMISSING_TABLE\b/i.test(sql);
     if (!isSelect && confirmation !== "ADMIN_EXECUTE") {
       return fulfillJson(route, {
         executed: false,
@@ -750,6 +774,40 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         committed: false,
         rolled_back: false,
         warnings: ["ADMIN_EXECUTE が必要です。"],
+        timing,
+      });
+    }
+    if (isPartialDml) {
+      const [successfulSql, failedSql] = sql.split(";").map((statement) => statement.trim());
+      return fulfillJson(route, {
+        executed: true,
+        runtime: "oracle",
+        select_result: null,
+        statements: [
+          {
+            index: 1,
+            statement_type: "INSERT",
+            status: "success",
+            sql: successfulSql,
+            row_count: 1,
+            message: "1 rows affected",
+            elapsed_ms: 1,
+            error_message: "",
+          },
+          {
+            index: 2,
+            statement_type: "UPDATE",
+            status: "error",
+            sql: failedSql,
+            row_count: null,
+            message: "",
+            elapsed_ms: 2,
+            error_message: "ORA-00942: table or view does not exist",
+          },
+        ],
+        committed: true,
+        rolled_back: false,
+        warnings: ["部分的に成功しました（1/2 件）。成功した SQL はコミット済みです。"],
         timing,
       });
     }
@@ -2115,7 +2173,7 @@ test("検索クエリのテンプレートボタンで穴埋めテンプレー�
   await page.goto("/query");
   const question = page.getByLabel("検索クエリ");
 
-  // SQL 一括実行と統一の「テンプレート:」行が textarea の上に見える
+  // 「テンプレート:」行が textarea の上に見える
   await expect(page.getByText("テンプレート:", { exact: true })).toBeVisible();
   for (const label of ["項目抽出", "集計・グループ化", "上位N件・並び替え", "複数テーブル結合"]) {
     await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
@@ -2129,7 +2187,7 @@ test("検索クエリのテンプレートボタンで穴埋めテンプレー�
   const caret = await question.evaluate((el) => (el as HTMLTextAreaElement).selectionStart);
   expect(caret).toBe("対象テーブル：".length);
 
-  // 別テンプレートは全置換（SQL 一括実行と同じ挙動）
+  // 別テンプレートも全置換
   await page.getByRole("button", { name: "集計・グループ化", exact: true }).click();
   await expect(question).toHaveValue(
     "対象テーブル：\n集計内容（件数・合計・平均など）：\n集計単位（グループ化）：\n抽出条件：",
@@ -2257,6 +2315,100 @@ test("検索クエリは内容に応じて最大10行まで自動拡張し、挿
   await expect(question).toHaveValue(/請求金額"$/);
   const scrollTop = await question.evaluate((el) => el.scrollTop);
   expect(scrollTop).toBeGreaterThan(0);
+});
+
+test("標準プロファイル削除後は最初の利用可能なプロファイルを選択する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const alternateProfile = {
+    ...profiles[0],
+    id: "alternate",
+    name: "代替プロファイル",
+    category: "代替",
+  };
+  await page.unroute("**/api/nl2sql/profiles/search?*");
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          id: alternateProfile.id,
+          name: alternateProfile.name,
+          category: alternateProfile.category,
+          description: alternateProfile.description,
+          archived: false,
+          allowed_table_count: alternateProfile.allowed_tables.length,
+          allowed_view_count: alternateProfile.allowed_views.length,
+          glossary_count: Object.keys(alternateProfile.glossary).length,
+          few_shot_count: alternateProfile.few_shot_examples.length,
+          version: 1,
+          etag: "etag-alternate",
+          updated_at: "2026-06-21T10:00:00.000Z",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 2,
+    })
+  );
+  await page.unroute("**/api/nl2sql/profiles/default");
+  await page.route("**/api/nl2sql/profiles/default", (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/alternate", (route) =>
+    fulfillJson(route, alternateProfile)
+  );
+
+  await page.goto("/query");
+
+  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue(
+    "alternate"
+  );
+  await expect(page.getByText("業務プロファイルがありません")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("最後のプロファイル削除後は作成案内を表示して検索操作を無効化する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/profiles/search?*");
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: [],
+      next_cursor: null,
+      total: 0,
+      change_token: 2,
+    })
+  );
+  await page.unroute("**/api/nl2sql/profiles/default");
+  await page.route("**/api/nl2sql/profiles/default", (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+    })
+  );
+
+  await page.goto("/query");
+  await expect(page.getByText("業務プロファイルがありません")).toBeVisible();
+  await expect(
+    page.getByText("検索を実行するには、先に業務プロファイルを作成してください。")
+  ).toBeVisible();
+
+  const workspace = page.getByTestId("nl2sql-workspace-shell");
+  await page.getByLabel("検索クエリ").fill("未入金の請求を確認したい");
+  await expect(
+    workspace.getByRole("button", { name: "プロファイルを自動判定" })
+  ).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "質問を解釈" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "検索を実行" })).toBeDisabled();
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalScroll(page);
+  await page.getByRole("button", { name: "業務プロファイルを作成" }).click();
+  await expect(page).toHaveURL(/\/profiles\?profile=new$/);
 });
 
 test("質問から業務プロファイルを自動判定して選択できる", async ({ page }) => {
@@ -2665,6 +2817,8 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
     await expect(generate).toHaveAttribute("data-step-status", "running");
     await expect(generate).toHaveAttribute("aria-current", "step");
     await expect(generate).toContainText("SQL を生成");
+    await expect(progress.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+    await expect(progress.getByRole("timer")).toHaveAttribute("aria-live", "off");
     const runningIcon = generate.locator("svg.animate-spin");
     await expect(runningIcon).toBeVisible();
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
@@ -2685,7 +2839,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
     await expect(step).toHaveAttribute("data-step-status", "done");
     await expect(step).toContainText(item.elapsed_ms < 1000 ? `${item.elapsed_ms}ms` : "");
   }
-  await expect(progress).toContainText("処理時間 170ms");
+  await expect(progress.getByRole("timer")).toHaveAccessibleName("処理時間 00:00");
   await prepare.locator("summary").click();
   await expect(prepare).toContainText("今月の請求金額を確認したい");
   await expect(prepare).toContainText("INVOICES");
@@ -3108,8 +3262,13 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   );
   await expect(removedAdminHint).toHaveCount(0);
   await expect(
-    adminSql.getByText("非 SELECT / 複数 statement は ADMIN_EXECUTE を入力すると実行できます。")
+    adminSql.getByText(
+      "非 SELECT / 複数 statement は ADMIN_EXECUTE を入力すると実行できます。INSERT / UPDATE / DELETE / MERGE / TRUNCATE のみの場合は、成功した SQL をコミットします。"
+    )
   ).toBeVisible();
+  for (const label of ["INSERT(単一行)", "INSERT(複数行)", "UPDATE", "DELETE", "MERGE"]) {
+    await expect(adminSql.getByRole("button", { name: label, exact: true })).toHaveCount(0);
+  }
   await expect(adminSql.getByLabel("実行確認語")).toBeVisible();
   const executeButton = adminSql.getByRole("button", { name: "SQL 実行" });
   await expect(executeButton).toBeDisabled();
@@ -3159,7 +3318,78 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expectNoHorizontalScroll(page);
 });
 
+test("管理 SQL の純 DML バッチは部分成功を警告し、成功文だけコミットする", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.goto("/admin-sql");
+
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  const sqlInput = adminSql.getByLabel("管理 SQL", { exact: true });
+  const partialSql =
+    "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('青山商事'); " +
+    "UPDATE MISSING_TABLE SET STATUS = 'REVIEWED' WHERE ID = 1";
+  await sqlInput.fill(partialSql);
+  await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+
+  const executeButton = adminSql.getByRole("button", { name: "SQL 実行" });
+  await executeButton.focus();
+  await executeButton.press("Enter");
+
+  await expect(adminSql.getByText("一部実行", { exact: true })).toBeVisible();
+  await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
+  const partialWarning = adminSql.getByRole("status").filter({
+    hasText: "部分的に成功しました（1/2 件）。成功した SQL はコミット済みです。",
+  });
+  await expect(partialWarning).toBeVisible();
+  await expect(partialWarning.locator("svg")).toHaveCount(1);
+  await expect(adminSql.getByText("成功", { exact: true })).toBeVisible();
+  await expect(adminSql.getByText("エラー", { exact: true })).toBeVisible();
+  await expect(
+    adminSql.getByText("ORA-00942: table or view does not exist", { exact: true }).first()
+  ).toBeVisible();
+  expect(api.adminExecutePayload).toEqual({
+    sql: partialSql,
+    row_limit: 100,
+    confirmation: "ADMIN_EXECUTE",
+    reason: "admin-sql-admin",
+  });
+
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expectNoHorizontalScroll(page);
+});
+
+test("管理 SQL のコミット後はデータ管理のオブジェクト一覧を再取得する", async ({ page }) => {
+  let objectRequestCount = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/nl2sql/db-admin/objects") {
+      objectRequestCount += 1;
+    }
+  });
+  await mockNl2SqlApi(page);
+  await page.goto("/data-management");
+  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(objectRequestCount).toBeGreaterThan(0);
+  const initialObjectRequestCount = objectRequestCount;
+
+  await page.getByRole("link", { name: "管理 SQL を実行" }).click();
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  await adminSql
+    .getByLabel("管理 SQL", { exact: true })
+    .fill("UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1");
+  await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
+
+  await page.getByRole("link", { name: "データの管理" }).click();
+  await expect(page).toHaveURL(/\/data-management$/);
+  await expect.poll(() => objectRequestCount).toBeGreaterThan(initialObjectRequestCount);
+});
+
 test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロップで読み込める", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
   await page.goto("/query");
   await page.getByRole("link", { name: "管理 SQL を実行" }).click();
@@ -3171,6 +3401,17 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
 
   await expect(dropzone).toHaveClass(/\bborder-dashed\b/);
   await expect(dropzone).toHaveAttribute("data-drag-active", "false");
+  await expect(dropzone.getByText(".SQL / .TXT", { exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      dropzone.evaluate((element) => {
+        const duration = getComputedStyle(element).transitionDuration;
+        return duration.endsWith("ms")
+          ? Number.parseFloat(duration)
+          : Number.parseFloat(duration) * 1_000;
+      })
+    )
+    .toBeLessThan(1);
   const desktopBox = await dropzone.boundingBox();
   expect(desktopBox).not.toBeNull();
   expect(desktopBox!.height).toBe(44);
@@ -3227,6 +3468,8 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
   await expect(adminSql.getByRole("alert")).toContainText(
     "このファイルは読み込めません。.sql または .txt ファイルを選択してください。"
   );
+  await expect(fileInput).toHaveAttribute("aria-invalid", "true");
+  await expect(fileInput).toHaveAttribute("aria-describedby", /-error/);
   await expect(sqlInput).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
 
   const multipleTransfer = await createFileDataTransfer(page, [
@@ -3246,6 +3489,7 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
     buffer: Buffer.from("SELECT 1 FROM DUAL"),
   });
   await expect(adminSql.getByRole("alert")).toHaveCount(0);
+  await expect(fileInput).toHaveAttribute("aria-invalid", "false");
   await expect(sqlInput).toHaveValue("SELECT 1 FROM DUAL");
 
   await page.unroute("**/api/nl2sql/db-admin/execute");
@@ -3301,7 +3545,16 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
   const mobileBox = await dropzone.boundingBox();
   expect(mobileBox).not.toBeNull();
   expect(mobileBox!.height).toBe(44);
+  await expect(dropzone.getByText(".SQL / .TXT", { exact: true })).toBeHidden();
   await expectNoHorizontalScroll(page);
+
+  const lightBackground = await dropzone.evaluate(
+    (element) => getComputedStyle(element).backgroundColor
+  );
+  await page.locator("html").evaluate((element) => element.classList.add("dark"));
+  await expect
+    .poll(() => dropzone.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe(lightBackground);
 });
 
 test("AI 活用の 4 画面はナビ切替で入力を保持し、リセットで消える", async ({ page }) => {
@@ -4251,12 +4504,31 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
     trainingWorkspace.getByText("旧モデル管理と同じ CATEGORY / TEXT 形式の訓練データを一覧・取込・出力します。")
   ).toHaveCount(0);
   await expect(trainingWorkspace.getByText("既存 training data を置き換える")).toBeVisible();
+  await expect(trainingWorkspace.getByTestId("qcm-training-file-field-input")).toHaveAttribute(
+    "accept",
+    ".xlsx"
+  );
+  await expect(trainingWorkspace.getByText(".XLSX", { exact: true })).toBeVisible();
 
-  await trainingWorkspace.getByLabel("Excel/CSV ファイル").setInputFiles({
-    name: "training_data.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from("CATEGORY,TEXT\n監査,監査ログを確認したい\n"),
-  });
+  await dropFiles(page, trainingWorkspace.getByTestId("qcm-training-file-field-dropzone"), [
+    {
+      name: "training_data.csv",
+      type: "text/csv",
+      content: "CATEGORY,TEXT\n監査,監査ログを確認したい\n",
+    },
+  ]);
+  await expect(
+    trainingWorkspace.getByText(
+      "このファイル形式は使用できません。.XLSX ファイルを選択してください。"
+    )
+  ).toBeVisible();
+  await dropFiles(page, trainingWorkspace.getByTestId("qcm-training-file-field-dropzone"), [
+    {
+      name: "training_data.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock xlsx",
+    },
+  ]);
   await expect(page.getByText("1 件の training data を取り込みました。")).toBeVisible();
   expect(api.classifierTrainingImportBody).toContain('name="file"');
   expect(api.classifierTrainingImportBody).toContain('name="replace"');
@@ -4666,12 +4938,27 @@ test("glossary page manages global terms only", async ({ page }) => {
   await page.getByRole("button", { name: "表示を更新", exact: true }).click();
   await expect(page.getByText("サーバーの最新内容を読み込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1 / 3 ページ");
+  await expect(page.getByTestId("glossary-rules-panel-heading-file-input")).toHaveAttribute(
+    "accept",
+    ".xlsx"
+  );
+  await expect(page.getByText(".XLSX", { exact: true })).toBeVisible();
 
-  await page.getByLabel("用語・同義語 Excel 取込").setInputFiles({
-    name: "terms.xlsx",
-    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    buffer: Buffer.from("mock"),
-  });
+  await dropFiles(page, page.getByTestId("glossary-rules-panel-heading-file-dropzone"), [
+    {
+      name: "terms.csv",
+      type: "text/csv",
+      content: "TERM,DEFINITION\n粗利,INVOICES.PROFIT\n",
+    },
+  ]);
+  await expect(page.getByText(".XLSX ファイルを選択してください")).toBeVisible();
+  await dropFiles(page, page.getByTestId("glossary-rules-panel-heading-file-dropzone"), [
+    {
+      name: "terms.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock",
+    },
+  ]);
   await expect(page.getByText("用語・同義語を 1 件取り込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "粗利" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.PROFIT" })).toBeVisible();
@@ -4948,7 +5235,13 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   });
 
   await page.goto("/comment-management");
+  const commentTargetToolbar = page.getByTestId("comment-management-target-toolbar");
+  await expect(commentTargetToolbar).toBeVisible();
+  await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 0 件");
+  await commentTargetToolbar.getByRole("searchbox", { name: "検索" }).fill("INVO");
+  await expect(page.getByRole("checkbox", { name: /INVOICES/ })).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 1 件");
   await page.getByRole("button", { name: "情報を取得" }).click();
   const commentInputSkeleton = page.getByTestId("comment-management-input-detail-skeleton");
   await expect(commentInputSkeleton).toBeVisible();
@@ -4995,6 +5288,11 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await page.goto("/view-management");
   await expect(page.getByTestId("view-management-grid")).toBeVisible();
   await page.getByRole("button", { name: "V_EMP_DEPT を表示" }).click();
+  await expect(page.getByRole("button", { name: /XLSX ダウンロード/ })).toBeVisible();
+  const viewColumnsDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: /XLSX ダウンロード/ }).click();
+  const viewColumnsDownload = await viewColumnsDownloadPromise;
+  expect(viewColumnsDownload.suggestedFilename()).toBe("v_emp_dept_columns.xlsx");
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const joinWhereGate = createRequestGate();
   await page.route("**/api/nl2sql/db-admin/extract-join-where", async (route) => {
@@ -5170,6 +5468,11 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   });
 
   await page.goto("/global-rules");
+  await expect(page.getByTestId("global-rules-file-input")).toHaveAttribute(
+    "accept",
+    ".xlsx"
+  );
+  await expect(page.getByText(".XLSX", { exact: true })).toBeVisible();
   await expect(page.getByTestId("global-rules-list-skeleton")).toBeVisible();
   await expect(page.getByTestId("global-rules-preview")).toHaveCount(0);
   await expect(page.getByText("共通ルールがありません。")).toHaveCount(0);
@@ -5182,6 +5485,22 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   await expect(page.getByTestId("global-rules-list-skeleton")).toHaveCount(0);
   rulesReloadGate.release();
   await expect(page.getByRole("button", { name: "表示を更新" })).toBeEnabled();
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+    {
+      name: "rules.csv",
+      type: "text/csv",
+      content: "RULE\n集計時は NULL を除外する\n",
+    },
+  ]);
+  await expect(page.getByText(".XLSX ファイルを選択してください")).toBeVisible();
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+    {
+      name: "rules.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock rules",
+    },
+  ]);
+  await expect(page.getByText(/共通ルールを取り込みました/)).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -5199,6 +5518,9 @@ test("sample data and data management run imported workflows", async ({ page }) 
 
   const importPanel = page.locator("#sample-data-panel-import");
   const importConfirmationField = importPanel.getByTestId("execution-confirmation-field");
+  await expect(importConfirmationField).toHaveClass(/border-border/);
+  await expect(importConfirmationField).not.toHaveClass(/border-l-danger/);
+  await expect(importConfirmationField).not.toHaveClass(/bg-danger-bg/);
   await expect(importPanel.getByText("未入力", { exact: true })).toHaveCount(1);
   const importButton = page.getByRole("button", { name: "取り込み実行" }).last();
   await expect(importButton).toBeDisabled();
@@ -5213,7 +5535,10 @@ test("sample data and data management run imported workflows", async ({ page }) 
 
   await page.getByRole("tab", { name: "削除実行" }).click();
   const deletePanel = page.locator("#sample-data-panel-delete");
-  await expect(deletePanel.getByTestId("execution-confirmation-field").getByText("確認済み", { exact: true })).toBeVisible();
+  const deleteConfirmationField = deletePanel.getByTestId("execution-confirmation-field");
+  await expect(deleteConfirmationField).toHaveClass(/border-l-danger/);
+  await expect(deleteConfirmationField).not.toHaveClass(/bg-danger-bg/);
+  await expect(deleteConfirmationField.getByText("確認済み", { exact: true })).toBeVisible();
   await expect(deletePanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const deleteButton = page.getByRole("button", { name: "削除実行" }).last();
   await expect(deleteButton).toBeEnabled();
@@ -5237,14 +5562,22 @@ test("sample data and data management run imported workflows", async ({ page }) 
 
   await page.goto("/data-management");
   const dataPreviewTab = page.getByRole("tab", { name: "テーブル・ビューデータの表示" });
-  const dataCsvTab = page.getByRole("tab", { name: "CSV アップロード(既存テーブル)" });
-  const dataSqlTab = page.getByRole("tab", { name: "SQL 一括実行" });
+  const dataCsvTab = page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" });
   const dataSyntheticTab = page.getByRole("tab", { name: "合成データ生成" });
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(page.getByRole("tab", { name: "SQL 一括実行" })).toHaveCount(0);
+  for (const label of ["INSERT(単一行)", "INSERT(複数行)", "UPDATE", "DELETE", "MERGE"]) {
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
+  }
   await expect(dataPreviewTab).toHaveAttribute("aria-selected", "true");
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "false");
   await expect(page.getByRole("tab", { name: "Synthetic NL2SQL ケース" })).toHaveCount(0);
   await dataPreviewTab.focus();
   await page.keyboard.press("ArrowRight");
+  await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(dataSyntheticTab).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowLeft");
   await expect(dataPreviewTab).toHaveAttribute("aria-selected", "true");
@@ -5304,40 +5637,43 @@ test("sample data and data management run imported workflows", async ({ page }) 
 
   await dataCsvTab.click();
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#data-management-panel-csv")).toBeVisible();
-  await page.getByLabel("CSV 選択").setInputFiles({
-    name: "invoices.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from("CUSTOMER_NAME,TOTAL_AMOUNT,UNKNOWN_COLUMN\n青山商事,1200000,x\n"),
-  });
-  await expect(page.getByText("選択中: invoices.csv")).toBeVisible();
+  const csvPanel = page.locator("#data-management-panel-csv");
+  await expect(csvPanel).toBeVisible();
+  const csvTableSearch = csvPanel.getByRole("searchbox", { name: "検索" });
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("INVOICES", { exact: true })).toBeVisible();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("AUDIT_LOG", { exact: true })).toHaveCount(0);
+  await csvTableSearch.fill("PAY");
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("PAYMENTS", { exact: true })).toBeVisible();
+  await csvPanel.getByRole("button", { name: "PAYMENTS を選択" }).click();
+  await expect(csvPanel.getByText("選択中")).toBeVisible();
+  await expect(csvPanel.getByText("PAYMENTS", { exact: true }).first()).toBeVisible();
+  await csvTableSearch.clear();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("INVOICES", { exact: true })).toBeVisible();
+  await csvPanel.getByLabel("実行確認語").fill("PAYMENTS");
+  await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  await csvPanel.getByTestId("data-csv-table-footer").getByRole("button", { name: "さらに読み込む" }).click();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("AUDIT_LOG", { exact: true })).toBeVisible();
+  await expect(csvPanel.getByText("PAYMENTS", { exact: true }).first()).toBeVisible();
+  await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const dataTabularInput = page.getByTestId("data-csv-file-field-input");
+  await expect(dataTabularInput).toHaveAttribute("accept", ".csv,.xlsx,.xls");
+  await expect(page.getByText(".CSV / .XLSX / .XLS", { exact: true })).toBeVisible();
+  await dropFiles(page, page.getByTestId("data-csv-file-field-dropzone"), [
+    {
+      name: "invoices.XLS",
+      type: "application/vnd.ms-excel",
+      content: "legacy-xls",
+    },
+  ]);
+  await expect(page.getByText("選択中: invoices.XLS")).toBeVisible();
   const csvUploadButton = page.getByRole("button", { name: "アップロード実行" });
-  await expect(csvUploadButton).toBeDisabled();
-  await page.locator("#data-management-panel-csv").getByLabel("実行確認語").fill("INVOICES");
-  await expect(page.locator("#data-management-panel-csv").getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(csvUploadButton).toBeEnabled();
   await csvUploadButton.click();
   await expect(page.getByText("UNKNOWN_COLUMN", { exact: false }).first()).toBeVisible();
-  await expect.poll(() => api.csvUploadPayload?.table_name).toBe("INVOICES");
+  await expect.poll(() => api.csvUploadPayload?.table_name).toBe("PAYMENTS");
   expect(api.csvUploadPayload?.mode).toBe("insert");
-  expect(api.csvUploadPayload?.confirmation).toBe("INVOICES");
-
-  await dataSqlTab.click();
-  await expect(dataSqlTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#data-management-panel-sql")).toBeVisible();
-  await page.getByRole("button", { name: "INSERT(単一行)" }).click();
-  await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/^INSERT INTO TABLE_NAME/);
-  await expect(page.locator("#data-management-panel-sql").getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
-  await expect(page.locator("#data-management-panel-sql").getByLabel("Oracle に実行する")).toHaveCount(0);
-  await expect(page.locator("#data-management-panel-sql").getByText("Oracle への SQL 実行")).toBeVisible();
-  const dataSqlExecuteButton = page.locator("#data-management-panel-sql").getByRole("button", { name: "SQL 実行" });
-  await expect(dataSqlExecuteButton).toBeDisabled();
-  await page.locator("#data-management-panel-sql").getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await expect(page.locator("#data-management-panel-sql").getByText("確認済み", { exact: true })).toHaveCount(1);
-  await expect(dataSqlExecuteButton).toBeEnabled();
-  await dataSqlExecuteButton.click();
-  await expect.poll(() => api.statementsPayload?.policy).toBe("data_dml");
-  expect(api.statementsPayload?.confirmation).toBe("ADMIN_EXECUTE");
+  expect(api.csvUploadPayload?.confirmation).toBe("PAYMENTS");
+  expect(api.csvUploadPayload?.filename).toBe("invoices.XLS");
 
   await dataSyntheticTab.click();
   await expect(dataSyntheticTab).toHaveAttribute("aria-selected", "true");
@@ -5361,7 +5697,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticPanel.getByLabel("PAYMENTS を選択")).toHaveCount(0);
   await expect(syntheticPanel.getByLabel("AUDIT_LOG を選択")).toHaveCount(0);
   await syntheticPanel.getByLabel("INVOICES を選択").check();
-  await expect(syntheticPanel.getByText("選択 1 件")).toBeVisible();
+  await expect(syntheticPanel.getByText("選択 1 件", { exact: true })).toBeVisible();
   await expect(syntheticGenerateButton).toBeDisabled();
   await syntheticPanel.getByLabel("実行確認語").fill("INVOICES");
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
@@ -5573,6 +5909,114 @@ test("system objects stay hidden across database object management pages", async
   await expectNoHorizontalScroll(page);
 });
 
+test("Excel/CSV取込の列幅エラーは取込フォーム内に表示して入力を保持する", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  const errorMessage =
+    "TEST_TABLE.NAME: ファイル2行目は16バイトで、取込先列の上限6バイトを超えています。" +
+    "値を短くするか列定義を拡張して再試行してください。";
+  let submittedMode = "";
+  await page.unroute("**/api/nl2sql/db-admin/import-tabular");
+  await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
+    const payload = route.request().postDataJSON() as { mode?: string };
+    submittedMode = payload.mode ?? "";
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: [errorMessage],
+        warning_messages: [],
+      }),
+    });
+  });
+
+  await page.goto("/table-management");
+  await clickPageHeaderAction(
+    page,
+    "table-management-actions",
+    "Excel/CSV 取込(新規テーブル)"
+  );
+  const importPanel = page.locator("#table-management-panel-import");
+  await importPanel.getByLabel("Oracle 表名").fill("TEST_TABLE");
+  await dropFiles(page, importPanel.getByTestId("table-import-file-field-dropzone"), [
+    {
+      name: "oversized.csv",
+      type: "text/csv",
+      content: "ID,NAME\n1,株式会社青山\n",
+    },
+  ]);
+  await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+
+  const executeButton = importPanel.getByRole("button", { name: "取込を実行" });
+  await executeButton.focus();
+  await executeButton.press("Enter");
+
+  const errorStatus = importPanel.getByRole("alert").filter({ hasText: "16バイト" });
+  await expect(errorStatus).toBeVisible();
+  await expect(errorStatus).toContainText("列定義を拡張して再試行してください");
+  await expect(errorStatus.locator("svg")).toHaveCount(1);
+  await expect(page.getByText(errorMessage, { exact: true })).toHaveCount(1);
+  expect(submittedMode).toBe("create");
+  await expect(importPanel.getByLabel("Oracle 表名")).toHaveValue("TEST_TABLE");
+  await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);
+  await expect(importPanel.locator("select")).toHaveCount(0);
+  await expect(importPanel.getByText("選択中: oversized.csv")).toBeVisible();
+  await expect(importPanel.getByLabel("実行確認語")).toHaveValue("ADMIN_EXECUTE");
+  await expect(executeButton).toBeEnabled();
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expectNoHorizontalScroll(page);
+  await importPanel.getByLabel("Oracle 表名").fill("TEST_TABLE_FIXED");
+  await expect(errorStatus).toHaveCount(0);
+});
+
+test("Excel/CSV取込の重複名は対象と安全な復旧手順を表示する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/import-tabular");
+  await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: ["「TEST_TABLE」は既に存在するため、新規作成できません。"],
+        error_code: "ORA-00955",
+        error_details: {
+          summary: "「TEST_TABLE」は既に存在するため、新規作成できません。",
+          cause: "既存のTABLE と名前が重複しています。",
+          actions: ["表名を変更して再実行してください。", "一覧へ戻り、同名の既存オブジェクトを確認してください。"],
+          target_name: "TEST_TABLE",
+          target_type: "TABLE",
+          operation: "tabular_import",
+          raw_message: "ORA-00955: name is already used by an existing object",
+        },
+      }),
+    });
+  });
+
+  await page.goto("/table-management");
+  await clickPageHeaderAction(page, "table-management-actions", "Excel/CSV 取込(新規テーブル)");
+  const importPanel = page.locator("#table-management-panel-import");
+  await importPanel.getByLabel("Oracle 表名").fill("TEST_TABLE");
+  await dropFiles(page, importPanel.getByTestId("table-import-file-field-dropzone"), [
+    { name: "test.csv", type: "text/csv", content: "ID\n1\n" },
+  ]);
+  await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await importPanel.getByRole("button", { name: "取込を実行" }).click();
+
+  const alert = importPanel.getByRole("alert");
+  await expect(alert).toContainText("TEST_TABLE");
+  await expect(alert).toContainText("表名を変更して再実行してください");
+  await expect(importPanel.getByLabel("Oracle 表名")).toHaveValue("TEST_TABLE");
+  await alert.getByText("詳細ログ").click();
+  await expect(alert).toContainText("ORA-00955: name is already used by an existing object");
+  await expect(alert.getByRole("button", { name: "一覧へ戻る" })).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalScroll(page);
+});
+
 test("table and view management pages run guarded DDL and AI workflows", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
@@ -5679,8 +6123,11 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importExecuteButton).toBeDisabled();
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");
   const importFileClearButton = importPanel.getByRole("button", { name: "取込ファイルをクリア" });
+  const importFileInput = importPanel.getByTestId("table-import-file-field-input");
   await expect(importFileClearButton).toBeDisabled();
-  await importPanel.getByLabel("CSV/XLSX 選択", { exact: true }).setInputFiles({
+  await expect(importFileInput).toHaveAttribute("accept", ".csv,.xlsx,.xls");
+  await expect(importPanel.getByText(".CSV / .XLSX / .XLS", { exact: true })).toHaveCount(1);
+  await importPanel.getByLabel("CSV/XLSX/XLS 選択", { exact: true }).setInputFiles({
     name: "orders.csv",
     mimeType: "text/csv",
     buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,青山商事\n"),
@@ -5688,13 +6135,25 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importPanel.getByText("選択中: orders.csv")).toBeVisible();
   await expect(importFileClearButton).toBeEnabled();
   await importFileClearButton.click();
-  await expect(importPanel.getByText("CSV / XLSX ファイルを選択")).toBeVisible();
+  await expect(importPanel.getByText("ドラッグ＆ドロップまたは選択")).toBeVisible();
   await expect(importFileClearButton).toBeDisabled();
-  await importPanel.getByLabel("CSV/XLSX 選択").setInputFiles({
-    name: "orders.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,青山商事\n"),
+  await importPanel.getByLabel("CSV/XLSX/XLS 選択").setInputFiles({
+    name: "orders.XLS",
+    mimeType: "application/vnd.ms-excel",
+    buffer: Buffer.from("legacy-xls"),
   });
+  await expect(importPanel.getByText("選択中: orders.XLS")).toBeVisible();
+  await dropFiles(page, importPanel.getByTestId("table-import-file-field-dropzone"), [
+    {
+      name: "orders.exe",
+      type: "application/x-msdownload",
+      content: "unsupported",
+    },
+  ]);
+  await expect(importPanel.getByRole("alert")).toContainText(
+    ".CSV / .XLSX / .XLS ファイルを選択してください"
+  );
+  await expect(importPanel.getByText("選択中: orders.XLS")).toBeVisible();
   const importExecuteButtonBox = await importExecuteButton.boundingBox();
   const importConfirmationBox = await importPanel.getByLabel("実行確認語").boundingBox();
   expect(importExecuteButtonBox).not.toBeNull();
@@ -5710,6 +6169,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importPanel.getByText("IMPORTED_ORDERS", { exact: true })).toBeVisible();
   await expect(importPanel.getByTestId("table-import-steps").getByText("実行確認")).toBeVisible();
   await expect.poll(() => api.importTabularPayload?.table_name).toBe("IMPORTED_ORDERS");
+  expect(api.importTabularPayload?.filename).toBe("orders.XLS");
   expect(api.importTabularPayload?.mode).toBe("create");
   expect(api.importTabularPayload?.confirmation).toBe("ADMIN_EXECUTE");
 

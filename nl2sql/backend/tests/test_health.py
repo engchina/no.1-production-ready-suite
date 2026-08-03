@@ -35,7 +35,6 @@ from app.features.nl2sql.oracle_adapter import (
 )
 from app.features.nl2sql.router import is_select_only
 from app.features.nl2sql.service import (
-    DefaultProfileDeleteForbidden,
     GeneratedSql,
     Nl2SqlService,
     _extract_referenced_tables,
@@ -1494,16 +1493,18 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_history.id == history_item.id
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
-def test_nl2sql_store_forbids_default_profile_physical_delete() -> None:
+def test_nl2sql_store_deletes_default_profile_without_reseeding() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
 
-    with pytest.raises(DefaultProfileDeleteForbidden):
-        service.delete_profile("default")
-    assert [profile.id for profile in service.list_profiles(include_archived=True)] == ["default"]
+    deleted = service.delete_profile("default")
+    assert deleted.id == "default"
+    assert service.list_profiles(include_archived=True) == []
 
     reloaded = Nl2SqlService(store=store)
-    assert reloaded.get_profile("default").id == "default"
+    assert reloaded.list_profiles(include_archived=True) == []
+    with pytest.raises(ValueError, match="見つからないか、利用できません"):
+        reloaded.get_profile("default")
 
 
 def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:

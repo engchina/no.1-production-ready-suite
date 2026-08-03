@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { apiGet, isAbortError, isTimeoutError } from "../src/lib/api.ts";
+import { API_TIMEOUT_MS } from "../src/lib/requestPolicy.ts";
 
 function abortableFetch(
   calls: { count: number },
@@ -45,7 +46,7 @@ test("apiGet preserves an explicit user cancellation as AbortError", async () =>
   try {
     const request = apiGet("/api/nl2sql/db-admin/views/VIEW_01", {
       signal: controller.signal,
-      timeoutMs: 15_000,
+      timeoutMs: API_TIMEOUT_MS.interactiveDetail,
     });
     controller.abort();
     await assert.rejects(

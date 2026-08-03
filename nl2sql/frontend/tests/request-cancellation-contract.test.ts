@@ -29,9 +29,13 @@ test("API helpers propagate cancellation and optional timeout signals", () => {
   }
 });
 
-test("table and view base detail requests use the shared 15 second state machine", () => {
+test("table and view base detail requests use the shared 30 second state machine", () => {
   const hookSource = readFileSync(
     new URL("../src/features/nl2sql/useDbObjectDetailRequest.ts", import.meta.url),
+    "utf8",
+  );
+  const policySource = readFileSync(
+    new URL("../src/lib/requestPolicy.ts", import.meta.url),
     "utf8",
   );
   const tableSource = readFileSync(
@@ -44,10 +48,16 @@ test("table and view base detail requests use the shared 15 second state machine
   );
 
   assert.match(hookSource, /DB_OBJECT_DETAIL_TIMEOUT_MS = API_TIMEOUT_MS\.interactiveDetail/u);
+  assert.match(policySource, /interactiveDetail:\s*30_000/u);
+  assert.match(policySource, /requestTimeoutSeconds/u);
   assert.match(hookSource, /controllerRef\.current\?\.abort\(\)/u);
   assert.match(hookSource, /sequence === sequenceRef\.current/u);
   assert.match(tableSource, /useDbObjectDetailRequest\(/u);
   assert.match(viewSource, /useDbObjectDetailRequest\(/u);
+  assert.match(tableSource, /requestTimeoutSeconds\(API_TIMEOUT_MS\.interactiveDetail\)/u);
+  assert.match(viewSource, /requestTimeoutSeconds\(API_TIMEOUT_MS\.interactiveDetail\)/u);
+  assert.doesNotMatch(tableSource, /seconds:\s*15/u);
+  assert.doesNotMatch(viewSource, /seconds:\s*15/u);
 });
 
 test("interactive schema fallbacks are restricted to compatibility statuses", () => {
@@ -82,7 +92,8 @@ test("data management refresh uses the paged read model and durable schema job",
   }
   assert.match(source, /previewRequestSequence = useRef\(0\)/u);
   assert.match(source, /sequence !== previewRequestSequence\.current/u);
-  assert.match(source, /onLoadMore=\{\(\) => void baseObjectsQuery\.fetchNextPage\(\)\}/u);
+  assert.match(source, /const csvTablesQuery = useDbAdminObjects\(\s*debouncedCsvTableSearch,\s*"table",\s*"all"\s*\)/u);
+  assert.match(source, /onLoadMore=\{\(\) => void csvTablesQuery\.fetchNextPage\(\)\}/u);
   assert.doesNotMatch(source, /activeView !== "csv"[\s\S]{0,200}fetchNextPage/u);
 });
 

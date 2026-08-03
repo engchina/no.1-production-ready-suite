@@ -1,21 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Code2, Database, Eye, FileSpreadsheet, RefreshCw, Search, Table2, Upload } from "lucide-react";
+import { Database, Eye, FileSpreadsheet, RefreshCw, Table2, Upload } from "lucide-react";
 
 import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import {
   ExecutionConfirmationField,
-  FileInputControl,
   QueryResultsTable,
-  StatementRunnerCard,
   downloadBlob,
   fileToBase64,
 } from "../components/DbAdminShared";
@@ -24,16 +25,15 @@ import {
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
+  DbObjectSelectionSummary,
+  DbObjectSelectorFooter,
+  DbObjectSelectorToolbar,
   DbObjectStepIndicator,
+  DbSingleObjectPickerList,
+  rowCountLabel,
   type DbObjectTab,
+  type DbObjectPickerItem,
 } from "../components/DbObjectManagementShared";
-import {
-  buildDeleteTemplate,
-  buildInsertTemplate,
-  buildMergeTemplate,
-  buildMultiInsertTemplate,
-  buildUpdateTemplate,
-} from "../sqlTemplates";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import {
   useDbAdminObjects,
@@ -53,7 +53,7 @@ import type {
   SyntheticDataResultsData,
 } from "../types";
 
-type ActiveView = "preview" | "csv" | "sql" | "synthetic";
+type ActiveView = "preview" | "csv" | "synthetic";
 type CsvStep = "file" | "execute";
 type CsvMode = "insert" | "truncate_insert";
 type PreviewObjectKind = "table" | "view";
@@ -86,6 +86,7 @@ export function DataManagementPage() {
   const [previewWhere, setPreviewWhere] = useState("");
   const [preview, setPreview] = useState<DbAdminDataPreviewData | null>(null);
   const [csvTable, setCsvTable] = useState("");
+  const [csvTableSearch, setCsvTableSearch] = useState("");
   const [csvFilename, setCsvFilename] = useState("");
   const [csvBase64, setCsvBase64] = useState("");
   const [csvMode, setCsvMode] = useState<CsvMode>("insert");
@@ -120,7 +121,9 @@ export function DataManagementPage() {
   const completedSchemaJob = useRef("");
   const previewRequestSequence = useRef(0);
   const debouncedObjectSearch = useDebouncedValue(previewObjectSearch, 250);
+  const debouncedCsvTableSearch = useDebouncedValue(csvTableSearch, 250);
   const baseObjectsQuery = useDbAdminObjects("", "all", "all");
+  const csvTablesQuery = useDbAdminObjects(debouncedCsvTableSearch, "table", "all");
   const previewObjectsQuery = useDbAdminObjects(
     debouncedObjectSearch,
     previewObjectKindFilter,
@@ -141,13 +144,13 @@ export function DataManagementPage() {
   });
   const selectAiDbProfiles = selectAiProfilesQuery.data ?? null;
   const baseObjectPages = baseObjectsQuery.data?.pages ?? [];
-  const baseObjectItems = baseObjectPages.flatMap((page) => page.items);
-  const dbAdminTables: DbAdminObjectsData = {
-    runtime: baseObjectPages[0]?.runtime ?? "",
-    items: baseObjectItems.filter((item) => item.object_type === "table"),
-    refreshed_at: baseObjectPages[0]?.refreshed_at ?? "",
-    warnings: baseObjectPages.flatMap((page) => page.warnings),
-  };
+  const csvTableItems = useMemo(
+    () =>
+      (csvTablesQuery.data?.pages ?? []).flatMap((page) =>
+        page.items.filter((item) => item.object_type === "table")
+      ),
+    [csvTablesQuery.data]
+  );
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
     return (previewObjectsQuery.data?.pages ?? []).flatMap((page) =>
@@ -220,11 +223,10 @@ export function DataManagementPage() {
   }, [previewObjects]);
 
   useEffect(() => {
-    const firstTable = dbAdminTables.items[0]?.name ?? "";
-    setCsvTable((current) =>
-      current && dbAdminTables.items.some((item) => item.name === current) ? current : firstTable
-    );
-  }, [baseObjectsQuery.data]);
+    if (csvTable) return;
+    const firstTable = csvTableItems[0]?.name ?? "";
+    if (firstTable) setCsvTable(firstTable);
+  }, [csvTable, csvTableItems]);
 
   useEffect(() => {
     const job = schemaJobQuery.data;
@@ -234,6 +236,7 @@ export function DataManagementPage() {
       setSchemaJobError("");
       toast.success(t("dataMgmt.schemaJob.done"));
       void baseObjectsQuery.refetch();
+      void csvTablesQuery.refetch();
       void previewObjectsQuery.refetch();
     } else if (job.status === "error") {
       completedSchemaJob.current = `${job.job_id}:${job.status}`;
@@ -245,6 +248,7 @@ export function DataManagementPage() {
     setSchemaJobError("");
     const results = await Promise.all([
       baseObjectsQuery.refetch(),
+      csvTablesQuery.refetch(),
       previewObjectsQuery.refetch(),
     ]);
     if (announce && results.every((result) => !result.isError)) {
@@ -366,6 +370,7 @@ export function DataManagementPage() {
       if (result.executed) {
         toast.success(t("dataMgmt.csv.successToast"));
         await baseObjectsQuery.refetch();
+        await csvTablesQuery.refetch();
         await previewObjectsQuery.refetch();
       }
     } catch (err) {
@@ -486,7 +491,7 @@ export function DataManagementPage() {
     }
   };
 
-  const objectQueryError = previewObjectsQuery.error ?? baseObjectsQuery.error;
+  const objectQueryError = previewObjectsQuery.error ?? baseObjectsQuery.error ?? csvTablesQuery.error;
   const objectErrorMessage = objectQueryError
     ? apiErrorMessage(
         objectQueryError,
@@ -502,6 +507,9 @@ export function DataManagementPage() {
   const schemaRefreshing =
     !schemaJobQuery.error &&
     (startSchemaRefresh.isPending || schemaJob?.status === "pending" || schemaJob?.status === "running");
+  const objectRefreshing =
+    (baseObjectsQuery.isFetching || previewObjectsQuery.isFetching || csvTablesQuery.isFetching) &&
+    Boolean(baseObjectsQuery.data || previewObjectsQuery.data || csvTablesQuery.data);
 
   return (
     <>
@@ -537,7 +545,7 @@ export function DataManagementPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: baseObjectsQuery.isFetching || previewObjectsQuery.isFetching,
+            loading: baseObjectsQuery.isFetching || previewObjectsQuery.isFetching || csvTablesQuery.isFetching,
             onClick: () => void refreshObjects(true),
           },
           {
@@ -560,13 +568,26 @@ export function DataManagementPage() {
               : null
           }
         />
+        {objectRefreshing || schemaRefreshing ? (
+          <ProcessingIndicator
+            active
+            label={
+              schemaRefreshing
+                ? t("common.processing.schemaRefreshing")
+                : t("common.processing.refreshing")
+            }
+            operationKey={schemaRefreshing ? schemaJobId || "schema-refresh" : "object-refresh"}
+            placement="workspace"
+            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            testId="data-management-workspace-processing"
+          />
+        ) : null}
 
         <DbObjectManagementTabs
           activeView={activeView}
           tabs={[
             { id: "preview", label: t("dataMgmt.preview.title"), icon: Table2 },
             { id: "csv", label: t("dataMgmt.csv.title"), icon: Upload },
-            { id: "sql", label: t("dataMgmt.sql.title"), icon: Code2 },
             { id: "synthetic", label: t("dataTools.synthetic.title"), icon: Database },
           ] satisfies Array<DbObjectTab<ActiveView>>}
           idPrefix={DATA_MANAGEMENT_ID}
@@ -629,8 +650,9 @@ export function DataManagementPage() {
             ariaLabel={t("dataMgmt.workspace.csv")}
           >
             <CsvUploadWorkspace
-              tables={dbAdminTables.items}
+              tables={csvTableItems}
               table={csvTable}
+              tableSearch={csvTableSearch}
               filename={csvFilename}
               fileReady={Boolean(csvBase64)}
               mode={csvMode}
@@ -641,8 +663,15 @@ export function DataManagementPage() {
               result={csvUploadResult}
               loading={csvUploading}
               error={csvUploadError}
-              hasNextPage={Boolean(baseObjectsQuery.hasNextPage)}
-              loadingNextPage={baseObjectsQuery.isFetchingNextPage}
+              tablesLoading={csvTablesQuery.isPending && !csvTablesQuery.data}
+              tablesError={
+                csvTablesQuery.error
+                  ? apiErrorMessage(csvTablesQuery.error, "dataMgmt.objectList.error", "dataMgmt.objectList.timeout")
+                  : ""
+              }
+              hasNextPage={Boolean(csvTablesQuery.hasNextPage)}
+              loadingNextPage={csvTablesQuery.isFetchingNextPage}
+              onTableSearchChange={setCsvTableSearch}
               onTableChange={(value) => {
                 setCsvTable(value);
                 setCsvUploadResult(null);
@@ -661,39 +690,9 @@ export function DataManagementPage() {
               }}
               onUpload={() => void uploadCsv()}
               onRetry={() => void uploadCsv()}
-              onLoadMore={() => void baseObjectsQuery.fetchNextPage()}
+              onTablesRetry={() => void csvTablesQuery.refetch()}
+              onLoadMore={() => void csvTablesQuery.fetchNextPage()}
             />
-          </DbObjectManagementPanelShell>
-        )}
-
-        {activeView === "sql" && (
-          <DbObjectManagementPanelShell
-            id="data-management-panel-sql"
-            labelledBy="data-management-tab-sql"
-            idPrefix={DATA_MANAGEMENT_ID}
-            ariaLabel={t("dataMgmt.workspace.sql")}
-          >
-            <StatementRunnerCard
-              policy="data_dml"
-              title={t("dataMgmt.sql.title")}
-              description={t("dataMgmt.section.sqlHint")}
-              placeholder={t("dataMgmt.sql.placeholder")}
-              templates={[
-                { label: t("dataMgmt.template.insert"), build: () => buildInsertTemplate(null) },
-                { label: t("dataMgmt.template.insertMulti"), build: () => buildMultiInsertTemplate(null) },
-                { label: t("dataMgmt.template.update"), build: () => buildUpdateTemplate(null) },
-                { label: t("dataMgmt.template.delete"), build: () => buildDeleteTemplate(null) },
-                { label: t("dataMgmt.template.merge"), build: () => buildMergeTemplate(null) },
-              ]}
-              confirmationTitle={t("dataMgmt.sql.executeTitle")}
-              executeOnly
-              framed={false}
-              onExecuted={() => {
-                void baseObjectsQuery.refetch();
-                void previewObjectsQuery.refetch();
-              }}
-            />
-            <p className="px-1 text-xs text-muted">{t("dataMgmt.sql.note")}</p>
           </DbObjectManagementPanelShell>
         )}
 
@@ -833,6 +832,15 @@ function PreviewControlsPanel({
     Boolean(previewObjectSearch.trim()) ||
     previewObjectKindFilter !== "all" ||
     previewObjectRowFilter !== "all";
+  const pickerItems = filteredPreviewObjects.map<DbObjectPickerItem>((item) => ({
+    key: item.name,
+    name: item.name,
+    owner: item.owner,
+    comment: item.comment,
+    kindLabel: previewObjectKindLabel(item.kind),
+    kindVariant: item.kind === "view" ? "info" : "neutral",
+    rowCountLabel: previewObjectRowCountLabel(item.rowCount),
+  }));
 
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="data-preview-controls-heading">
@@ -852,24 +860,13 @@ function PreviewControlsPanel({
 
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
         <div className="grid gap-2">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <label className="grid min-w-0 flex-1 gap-1 text-sm font-medium text-foreground">
-              <span>{t("dataMgmt.preview.search")}</span>
-              <span className="relative block min-w-0">
-                <Search
-                  size={16}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-                  aria-hidden="true"
-                />
-                <input
-                  type="search"
-                  value={previewObjectSearch}
-                  onChange={(event) => onPreviewObjectSearchChange(event.currentTarget.value)}
-                  placeholder={t("dataMgmt.preview.searchPlaceholder")}
-                  className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card py-2 pl-9 pr-3 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                />
-              </span>
-            </label>
+          <DbObjectSelectorToolbar
+            searchLabel={t("dataMgmt.preview.search")}
+            searchPlaceholder={t("dataMgmt.preview.searchPlaceholder")}
+            searchValue={previewObjectSearch}
+            onSearchChange={onPreviewObjectSearchChange}
+            dataTestId="data-preview-object-toolbar"
+          >
             <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
               <span>{t("dataMgmt.preview.kindFilter")}</span>
               <select
@@ -895,7 +892,7 @@ function PreviewControlsPanel({
                 <option value="unknown_rows">{t("dataMgmt.preview.rowFilterUnknownRows")}</option>
               </select>
             </label>
-          </div>
+          </DbObjectSelectorToolbar>
           {initialLoading ? (
             <DbManagementLoadingSkeleton
               idPrefix="data-preview-object"
@@ -907,42 +904,46 @@ function PreviewControlsPanel({
             <ErrorState message={error} onRetry={onRetry} />
           ) : (
             <>
-              <p className="text-xs text-muted" aria-live="polite">
-                {t("dataMgmt.preview.filteredObjectCount", {
-                  filtered: filteredPreviewObjects.length,
-                  total: previewObjects.length,
-                })}
-              </p>
-              <PreviewObjectList
-                objects={filteredPreviewObjects}
-                selectedObject={previewObject}
+              <DbSingleObjectPickerList
+                items={pickerItems}
+                selectedKey={previewObject}
                 hasActiveFilter={hasActiveFilter}
-                loadingObjectName={loadingObjectName}
-                onSelect={onPreviewObjectChange}
-                onShowPreview={onShowPreview}
+                loadingKey={loadingObjectName}
+                listLabel={t("dataMgmt.preview.object")}
+                emptyTitle={t("dataMgmt.preview.emptyObjectsTitle")}
+                emptyHint={t("dataMgmt.preview.emptyObjectsHint")}
+                noResultsTitle={t("dataMgmt.preview.noObjectsTitle")}
+                noResultsHint={t("dataMgmt.preview.noObjectsHint")}
+                dataTestId="data-preview-object-list"
+                onSelect={(item) => onPreviewObjectChange(item.name)}
+                action={{
+                  label: t("dataMgmt.preview.show"),
+                  icon: Eye,
+                  ariaLabel: (item) => t("dataMgmt.preview.showObject", { name: item.name }),
+                  disabled: (item) => Boolean(loadingObjectName) && item.name !== loadingObjectName,
+                  onClick: (item) => onShowPreview(item.name),
+                }}
               />
-              {hasNextPage && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={loadingNextPage}
-                  onClick={onLoadMore}
-                >
-                  {t("dataMgmt.objectList.loadMore")}
-                </Button>
-              )}
+              <DbObjectSelectorFooter
+                visibleCount={filteredPreviewObjects.length}
+                totalCount={previewObjects.length}
+                hasNextPage={hasNextPage}
+                loadingNextPage={loadingNextPage}
+                loadMoreLabel={t("dataMgmt.objectList.loadMore")}
+                dataTestId="data-preview-object-footer"
+                onLoadMore={onLoadMore}
+              />
             </>
           )}
         </div>
 
         <div className="grid gap-3 border-t border-border pt-3">
           {selectedObject && (
-            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-card px-3 py-2 text-sm text-foreground">
-              <span className="font-medium text-foreground">{t("dataMgmt.preview.selectedObject")}</span>
-              <span className="break-all font-mono text-xs font-semibold text-primary">{selectedObject.name}</span>
-              <StatusBadge variant="neutral" label={previewObjectKindLabel(selectedObject.kind)} />
-            </div>
+            <DbObjectSelectionSummary
+              label={t("dataMgmt.preview.selectedObject")}
+              value={selectedObject.name}
+              badge={<StatusBadge variant="neutral" label={previewObjectKindLabel(selectedObject.kind)} />}
+            />
           )}
           <label className="grid gap-1 text-sm font-medium text-foreground">
             <span>{t("dataMgmt.preview.limit")}</span>
@@ -970,101 +971,6 @@ function PreviewControlsPanel({
         </div>
       </div>
     </section>
-  );
-}
-
-function PreviewObjectList({
-  objects,
-  selectedObject,
-  hasActiveFilter,
-  loadingObjectName,
-  onSelect,
-  onShowPreview,
-}: {
-  objects: PreviewObject[];
-  selectedObject: string;
-  hasActiveFilter: boolean;
-  loadingObjectName: string;
-  onSelect: (value: string) => void;
-  onShowPreview: (objectName: string) => void;
-}) {
-  if (objects.length === 0) {
-    return (
-      <div className="rounded-md border border-border bg-card p-4">
-        <EmptyState
-          title={hasActiveFilter ? t("dataMgmt.preview.noObjectsTitle") : t("dataMgmt.preview.emptyObjectsTitle")}
-          hint={hasActiveFilter ? t("dataMgmt.preview.noObjectsHint") : t("dataMgmt.preview.emptyObjectsHint")}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="overflow-hidden rounded-md border border-border bg-card" data-testid="data-preview-object-list">
-      <div
-        className="hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
-        aria-hidden="true"
-      >
-        <span>{t("dataMgmt.preview.objectName")}</span>
-        <span>{t("dataMgmt.preview.objectKind")}</span>
-        <span>{t("dataMgmt.preview.objectRows")}</span>
-        <span>{t("dataMgmt.preview.objectOwner")}</span>
-        <span className="text-right">{t("dataMgmt.preview.actions")}</span>
-      </div>
-      <div className="max-h-80 overflow-auto" role="list" aria-label={t("dataMgmt.preview.object")}>
-        {objects.map((item) => {
-          const selected = item.name === selectedObject;
-          const loading = item.name === loadingObjectName;
-          return (
-            <div
-              key={`${item.kind}-${item.name}`}
-              role="listitem"
-              className={[
-                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background",
-                "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] md:items-center md:py-2",
-                selected ? "bg-primary/10" : "bg-card",
-              ].join(" ")}
-            >
-              <button
-                type="button"
-                aria-current={selected ? "true" : undefined}
-                aria-label={t("dataMgmt.preview.selectObject", { name: item.name })}
-                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-ring/40 md:min-h-0"
-                onClick={() => onSelect(item.name)}
-              >
-                <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
-                {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
-              </button>
-              <span className="flex items-center gap-2 md:block">
-                <span className="text-xs font-medium text-muted md:hidden">{t("dataMgmt.preview.objectKind")}</span>
-                <StatusBadge variant={item.kind === "view" ? "info" : "neutral"} label={previewObjectKindLabel(item.kind)} />
-              </span>
-              <span className="flex items-center gap-2 font-mono text-xs text-foreground md:block">
-                <span className="font-sans font-medium text-muted md:hidden">{t("dataMgmt.preview.objectRows")}</span>
-                {previewObjectRowCountLabel(item.rowCount)}
-              </span>
-              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted md:block">
-                <span className="font-sans font-medium text-muted md:hidden">{t("dataMgmt.preview.objectOwner")}</span>
-                <span className="break-all">{item.owner || "-"}</span>
-              </span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="w-full whitespace-nowrap md:w-auto"
-                aria-label={t("dataMgmt.preview.showObject", { name: item.name })}
-                loading={loading}
-                disabled={Boolean(loadingObjectName) && !loading}
-                onClick={() => onShowPreview(item.name)}
-              >
-                <Eye size={15} aria-hidden="true" />
-                <span>{t("dataMgmt.preview.show")}</span>
-              </Button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
@@ -1203,6 +1109,7 @@ function PreviewResultsPanel({
 function CsvUploadWorkspace({
   tables,
   table,
+  tableSearch,
   filename,
   fileReady,
   mode,
@@ -1213,8 +1120,11 @@ function CsvUploadWorkspace({
   result,
   loading,
   error,
+  tablesLoading,
+  tablesError,
   hasNextPage,
   loadingNextPage,
+  onTableSearchChange,
   onTableChange,
   onModeChange,
   onFilePick,
@@ -1222,10 +1132,12 @@ function CsvUploadWorkspace({
   onConfirmationChange,
   onUpload,
   onRetry,
+  onTablesRetry,
   onLoadMore,
 }: {
   tables: DbAdminObjectsData["items"];
   table: string;
+  tableSearch: string;
   filename: string;
   fileReady: boolean;
   mode: CsvMode;
@@ -1236,8 +1148,11 @@ function CsvUploadWorkspace({
   result: DbAdminCsvUploadData | null;
   loading: boolean;
   error: string;
+  tablesLoading: boolean;
+  tablesError: string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
+  onTableSearchChange: (value: string) => void;
   onTableChange: (value: string) => void;
   onModeChange: (value: CsvMode) => void;
   onFilePick: (file: File) => void;
@@ -1245,9 +1160,20 @@ function CsvUploadWorkspace({
   onConfirmationChange: (value: string) => void;
   onUpload: () => void;
   onRetry: () => void;
+  onTablesRetry: () => void;
   onLoadMore: () => void;
 }) {
   const activeIndex = step === "execute" ? 1 : 0;
+  const hasTableFilter = Boolean(tableSearch.trim());
+  const tablePickerItems = tables.map<DbObjectPickerItem>((item) => ({
+    key: item.name,
+    name: item.name,
+    owner: item.owner,
+    comment: item.comment,
+    kindLabel: t("dataMgmt.preview.kindFilterTable"),
+    kindVariant: "neutral",
+    rowCountLabel: rowCountLabel(item.row_count),
+  }));
   return (
     <div className="grid gap-4">
       <DbObjectPanelHeader
@@ -1263,27 +1189,58 @@ function CsvUploadWorkspace({
         dataTestId="data-csv-steps"
       />
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        <div className="grid min-w-0 gap-2">
-          <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
-            <span>{t("dataMgmt.csv.table")}</span>
-            <select
-              value={table}
-              onChange={(event) => onTableChange(event.currentTarget.value)}
-              className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-            >
-              {tables.length === 0 && <option value="">{t("tableMgmt.list.emptyTitle")}</option>}
-              {tables.map((item) => (
-                <option key={`${item.owner}.${item.name}`} value={item.name}>{item.name}</option>
-              ))}
-            </select>
-          </label>
-          {hasNextPage && (
-            <Button type="button" variant="secondary" size="sm" loading={loadingNextPage} onClick={onLoadMore}>
-              {t("dataMgmt.objectList.loadMore")}
-            </Button>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(15rem,0.65fr)]">
+        <section className="grid min-w-0 gap-3" aria-labelledby="data-csv-table-heading">
+          <div>
+            <h3 id="data-csv-table-heading" className="text-sm font-semibold text-foreground">
+              {t("dataMgmt.csv.table")}
+            </h3>
+            <p className="mt-1 text-sm text-muted">{t("dataMgmt.csv.tableHint")}</p>
+          </div>
+          <DbObjectSelectionSummary label={t("objectSelector.selected")} value={table} />
+          <DbObjectSelectorToolbar
+            searchLabel={t("objectSelector.search")}
+            searchPlaceholder={t("dataMgmt.csv.tableSearchPlaceholder")}
+            searchValue={tableSearch}
+            onSearchChange={onTableSearchChange}
+            dataTestId="data-csv-table-toolbar"
+          />
+          {tablesLoading ? (
+            <DbManagementLoadingSkeleton
+              idPrefix="data-csv-table"
+              ariaLabel={t("dataMgmt.objectList.loading")}
+              variant="list"
+              rows={5}
+            />
+          ) : tablesError ? (
+            <ErrorState message={tablesError} onRetry={onTablesRetry} />
+          ) : (
+            <>
+              <DbSingleObjectPickerList
+                items={tablePickerItems}
+                selectedKey={table}
+                hasActiveFilter={hasTableFilter}
+                listLabel={t("dataMgmt.csv.table")}
+                emptyTitle={t("dataMgmt.csv.emptyTablesTitle")}
+                emptyHint={t("dataMgmt.csv.emptyTablesHint")}
+                noResultsTitle={t("dataMgmt.csv.noTablesTitle")}
+                noResultsHint={t("dataMgmt.csv.noTablesHint")}
+                dataTestId="data-csv-table-list"
+                maxHeightClass="max-h-64"
+                onSelect={(item) => onTableChange(item.name)}
+              />
+              <DbObjectSelectorFooter
+                visibleCount={tablePickerItems.length}
+                totalCount={tablePickerItems.length}
+                hasNextPage={hasNextPage}
+                loadingNextPage={loadingNextPage}
+                loadMoreLabel={t("dataMgmt.objectList.loadMore")}
+                dataTestId="data-csv-table-footer"
+                onLoadMore={onLoadMore}
+              />
+            </>
           )}
-        </div>
+        </section>
         <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
           <span>{t("dataMgmt.csv.mode")}</span>
           <select
@@ -1299,18 +1256,17 @@ function CsvUploadWorkspace({
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
 
-      <FileInputControl
+      <FileDropzone
         label={t("dataMgmt.csv.file")}
-        accept=".csv"
-        filename={filename}
+        accept={CORE_TABULAR_FILE_FORMATS.accept}
         selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
-        emptyText={t("dataMgmt.csv.noFile")}
-        pickText={t("dataMgmt.csv.filePick")}
+        formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+        actionText={t("common.fileDropzone.action")}
         replaceText={t("dataMgmt.csv.fileReplace")}
         clearAriaLabel={t("dataMgmt.csv.clearFile")}
         icon="spreadsheet"
         dataTestId="data-csv-file-field"
-        onPick={onFilePick}
+        onFiles={([file]) => onFilePick(file)}
         onClear={onFileClear}
       />
 
@@ -1479,11 +1435,18 @@ function SyntheticWorkspace({
 }) {
   const activeStep = syntheticDataResults ? 3 : syntheticData || syntheticDataStatus ? 1 : 0;
   const operationId = syntheticData?.operation_id.trim() ?? "";
+  const [syntheticTableSearch, setSyntheticTableSearch] = useState("");
   // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
   const syntheticExpectedConfirmation =
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const resultTableOptions = syntheticAvailableTables;
   const hasValidResultTable = resultTableOptions.includes(syntheticResultTable);
+  const normalizedSyntheticTableSearch = syntheticTableSearch.trim().toLowerCase();
+  const filteredSyntheticTables = normalizedSyntheticTableSearch
+    ? syntheticAvailableTables.filter((tableName) =>
+        tableName.toLowerCase().includes(normalizedSyntheticTableSearch)
+      )
+    : syntheticAvailableTables;
 
   return (
     <div className="grid gap-4">
@@ -1576,7 +1539,13 @@ function SyntheticWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-2">
-          <div className="text-sm font-medium text-foreground">{t("dataTools.syntheticData.tables")}</div>
+          <DbObjectSelectorToolbar
+            searchLabel={t("dataTools.syntheticData.tables")}
+            searchPlaceholder={t("dataTools.syntheticData.tableSearchPlaceholder")}
+            searchValue={syntheticTableSearch}
+            onSearchChange={setSyntheticTableSearch}
+            dataTestId="data-synthetic-table-toolbar"
+          />
           {loading === "tables" ? (
             <DbManagementLoadingSkeleton
               idPrefix="data-synthetic-tables"
@@ -1584,10 +1553,10 @@ function SyntheticWorkspace({
               variant="list"
               rows={4}
             />
-          ) : syntheticAvailableTables.length > 0 ? (
+          ) : filteredSyntheticTables.length > 0 ? (
             <div className="max-h-56 overflow-auto rounded-md border border-border bg-card" role="group" aria-label={t("dataTools.syntheticData.tables")}>
               <div className="grid divide-y divide-border/70">
-                {syntheticAvailableTables.map((tableName) => {
+                {filteredSyntheticTables.map((tableName) => {
                   const selected = syntheticSelectedTables.includes(tableName);
                   return (
                     <label
@@ -1609,8 +1578,24 @@ function SyntheticWorkspace({
             </div>
           ) : (
             <EmptyState
-              title={t("dataTools.syntheticData.noTablesTitle")}
-              hint={t("dataTools.syntheticData.noTablesHint")}
+              title={
+                normalizedSyntheticTableSearch
+                  ? t("dataTools.syntheticData.noTableResultsTitle")
+                  : t("dataTools.syntheticData.noTablesTitle")
+              }
+              hint={
+                normalizedSyntheticTableSearch
+                  ? t("dataTools.syntheticData.noTableResultsHint")
+                  : t("dataTools.syntheticData.noTablesHint")
+              }
+            />
+          )}
+          {loading !== "tables" && (
+            <DbObjectSelectorFooter
+              visibleCount={filteredSyntheticTables.length}
+              totalCount={syntheticAvailableTables.length}
+              selectedCount={syntheticSelectedTables.length}
+              dataTestId="data-synthetic-table-footer"
             />
           )}
         </div>

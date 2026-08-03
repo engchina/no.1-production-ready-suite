@@ -28,14 +28,16 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { FileInputControl } from "../components/DbAdminShared";
 import {
   DbManagementLoadingSkeleton,
   DbManagementSearchField,
@@ -452,6 +454,16 @@ export function QuestionClassifierModelsPage() {
             ) : undefined
           }
         />
+        {loading === "load" ? (
+          <ProcessingIndicator
+            active
+            label={t("common.processing.refreshing")}
+            operationKey="question-learning-refresh"
+            placement="workspace"
+            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            testId="question-learning-workspace-processing"
+          />
+        ) : null}
 
         <DbObjectManagementTabs
           activeView={activeView}
@@ -649,19 +661,19 @@ function TrainingDataPanel({
       </div>
 
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
-        <FileInputControl
+        <FileDropzone
           label={t("qcm.training.file")}
-          accept=".csv,.txt,.xlsx,.xlsm"
-          filename={filename}
+          accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
           selectedText={filename ? t("qcm.file.selected", { filename }) : ""}
-          emptyText={t("qcm.training.noFile")}
-          pickText={t("learning.classifier.import")}
+          formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
+          hint={t("qcm.training.noFile")}
           replaceText={t("qcm.file.replace")}
           clearAriaLabel={t("qcm.file.clear")}
           icon="spreadsheet"
           disabled={loading === "classifier-import"}
+          loading={loading === "classifier-import"}
           dataTestId="qcm-training-file-field"
-          onPick={onImport}
+          onFiles={([file]) => onImport(file)}
           onClear={onClearFile}
         />
         <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-sm text-foreground">

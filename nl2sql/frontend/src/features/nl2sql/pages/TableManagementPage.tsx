@@ -8,17 +8,20 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
+import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   ExecutionConfirmationField,
-  FileInputControl,
   QueryResultsTable,
   StatementRunnerCard,
+  DbAdminErrorNotice,
   downloadBlob,
   fileToBase64,
 } from "../components/DbAdminShared";
@@ -59,35 +62,35 @@ function ImportWizard({
   sheet,
   filename,
   fileReady,
-  mode,
   result,
   step,
   confirmation,
   loading,
+  error,
   onTableChange,
   onSheetChange,
-  onModeChange,
   onFilePick,
   onFileClear,
   onExecute,
   onConfirmationChange,
+  onReturnToList,
 }: {
   table: string;
   sheet: string;
   filename: string;
   fileReady: boolean;
-  mode: string;
   result: DbAdminImportTabularData | null;
   step: ImportStep;
   confirmation: string;
   loading: boolean;
+  error: unknown;
   onTableChange: (value: string) => void;
   onSheetChange: (value: string) => void;
-  onModeChange: (value: string) => void;
   onFilePick: (file: File | undefined) => void;
   onFileClear: () => void;
   onExecute: () => void;
   onConfirmationChange: (value: string) => void;
+  onReturnToList: () => void;
 }) {
   const steps: Array<{ id: ImportStep; label: string }> = [
     { id: "file", label: t("tableMgmt.importWizard.stepFile") },
@@ -133,36 +136,20 @@ function ImportWizard({
           </label>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem]">
-          <FileInputControl
+          <FileDropzone
             label={t("dataTools.dbAdmin.file")}
-            accept=".csv,.xlsx,.xls"
-            filename={filename}
+            accept={CORE_TABULAR_FILE_FORMATS.accept}
             selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
-            emptyText={t("tableMgmt.importWizard.noFile")}
-            pickText={t("tableMgmt.importWizard.filePick")}
-            replaceText={t("tableMgmt.importWizard.fileReplace")}
-            clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
-            icon="spreadsheet"
-            className="min-w-0"
-            dataTestId="table-import-file-field"
-            onPick={onFilePick}
-            onClear={onFileClear}
-          />
-          <label className={importFieldClass} data-testid="table-import-mode-field">
-            <span>{t("dataTools.dbAdmin.mode")}</span>
-            <select
-              value={mode}
-              onChange={(event) => onModeChange(event.currentTarget.value)}
-              className={`${importControlClass} py-2`}
-            >
-              <option value="create">{t("dataTools.dbAdmin.mode.create")}</option>
-              <option value="append">{t("dataTools.dbAdmin.mode.append")}</option>
-              <option value="truncate">{t("dataTools.dbAdmin.mode.truncate")}</option>
-              <option value="replace">{t("dataTools.dbAdmin.mode.replace")}</option>
-            </select>
-          </label>
-        </div>
+            formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+          actionText={t("common.fileDropzone.action")}
+          replaceText={t("tableMgmt.importWizard.fileReplace")}
+          clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
+          icon="spreadsheet"
+          className="w-full"
+          dataTestId="table-import-file-field"
+          onFiles={([file]) => onFilePick(file)}
+          onClear={onFileClear}
+        />
 
         {result && (
           <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("tableMgmt.importWizard.result")}>
@@ -202,18 +189,23 @@ function ImportWizard({
           expectedLabel="ADMIN_EXECUTE"
           helper={t("tableMgmt.importWizard.executeHint")}
           actions={
-            <Button
-              type="button"
-              variant="danger"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading}
-              disabled={!canExecute}
-              onClick={onExecute}
-            >
-              <Upload size={15} aria-hidden="true" />
-              <span>{t("dataTools.dbAdmin.import")}</span>
-            </Button>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                className="w-full sm:w-auto"
+                loading={loading}
+                disabled={!canExecute}
+                onClick={onExecute}
+              >
+                <Upload size={15} aria-hidden="true" />
+                <span>{t("dataTools.dbAdmin.import")}</span>
+              </Button>
+              <div className="w-full">
+                {Boolean(error) && <DbAdminErrorNotice error={error} onReturnToList={onReturnToList} />}
+              </div>
+            </div>
           }
         />
       </fieldset>
@@ -235,10 +227,10 @@ export function TableManagementPage() {
   const [importFilename, setImportFilename] = useState("");
   const [importBase64, setImportBase64] = useState("");
   const [importSheet, setImportSheet] = useState("");
-  const [importMode, setImportMode] = useState("create");
   const [importStep, setImportStep] = useState<ImportStep>("file");
   const [importConfirmation, setImportConfirmation] = useState("");
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
+  const [importError, setImportError] = useState<unknown>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
@@ -246,7 +238,9 @@ export function TableManagementPage() {
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/tables",
     loadErrorMessage: t("tableMgmt.error.detail"),
-    timeoutErrorMessage: t("dbAdmin.detail.timeout", { seconds: 15 }),
+    timeoutErrorMessage: t("dbAdmin.detail.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveDetail),
+    }),
   });
   const {
     selectedName: selectedTableName,
@@ -392,6 +386,7 @@ export function TableManagementPage() {
     setImportBase64("");
     setImportBase64(await fileToBase64(file));
     setImportResult(null);
+    setImportError(null);
     setImportStep("file");
   };
 
@@ -399,6 +394,7 @@ export function TableManagementPage() {
     setImportFilename("");
     setImportBase64("");
     setImportResult(null);
+    setImportError(null);
     setImportStep("file");
   };
 
@@ -406,13 +402,14 @@ export function TableManagementPage() {
     if (!importTable.trim() || !importBase64) return;
     setLoading("import-tabular");
     setMessage("");
+    setImportError(null);
     try {
       const result = await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
         table_name: importTable,
         content_base64: importBase64,
         filename: importFilename || "upload.csv",
         sheet_name: importSheet,
-        mode: importMode,
+        mode: "create",
         confirmation: importConfirmation,
         reason: "ui-table-management-import-tabular",
       });
@@ -422,7 +419,7 @@ export function TableManagementPage() {
         await reloadAfterMutation(result);
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.import"));
+      setImportError(err instanceof Error ? err : new Error(t("dataTools.error.import")));
     } finally {
       setLoading("");
     }
@@ -504,24 +501,21 @@ export function TableManagementPage() {
         sheet={importSheet}
         filename={importFilename}
         fileReady={Boolean(importBase64)}
-        mode={importMode}
         result={importResult}
         step={importStep}
         confirmation={importConfirmation}
         loading={loading === "import-tabular"}
+        error={importError}
         onTableChange={(value) => {
           setImportTable(value);
           setImportResult(null);
+          setImportError(null);
           setImportStep("file");
         }}
         onSheetChange={(value) => {
           setImportSheet(value);
           setImportResult(null);
-          setImportStep("file");
-        }}
-        onModeChange={(value) => {
-          setImportMode(value);
-          setImportResult(null);
+          setImportError(null);
           setImportStep("file");
         }}
         onFilePick={(file) => void pickImportFile(file)}
@@ -529,8 +523,10 @@ export function TableManagementPage() {
         onExecute={() => void importTabular()}
         onConfirmationChange={(value) => {
           setImportConfirmation(value);
+          setImportError(null);
           if (value.trim()) setImportStep("execute");
         }}
+        onReturnToList={() => setActiveView("list")}
       />
     ) : null;
 
@@ -606,6 +602,22 @@ export function TableManagementPage() {
               ariaLabel={t("tableMgmt.workspace.label")}
               splitId="table-management-list"
               preferredWidePane="right"
+              processing={
+                tables && (loading === "load" || loading === "schema-refresh") ? (
+                  <ProcessingIndicator
+                    active
+                    label={
+                      loading === "schema-refresh"
+                        ? t("tableMgmt.workspace.schemaRefreshing")
+                        : t("tableMgmt.workspace.refreshing")
+                    }
+                    operationKey={loading}
+                    placement="workspace"
+                    className="rounded-md border border-border bg-background px-3 py-2"
+                    testId="table-management-workspace-processing"
+                  />
+                ) : undefined
+              }
             >
             <DbObjectGrid
               idPrefix="table-management"
@@ -646,11 +658,13 @@ export function TableManagementPage() {
             />
             <DbObjectDetailPanel
               idPrefix="table-management"
+              operationKey={selectedTableName}
               headingId="table-detail-heading"
               detail={detail}
               loading={detailRequest.loading || (loading === "load" && !tables)}
               ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
+              ddlError={detailRequest.ddlError}
               exporting={loading === "table-export"}
               countingRows={loading === "count"}
               tab={detailTab}
@@ -668,6 +682,10 @@ export function TableManagementPage() {
               }}
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedTableName)}
+              onRetryDdl={() => {
+                if (detail) void detailRequest.loadDdl(detail.name);
+              }}
+              onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}
               onExactCount={exactCountDone ? undefined : (name) => void handleExactCount(name)}
               onDrop={openDropDialog}

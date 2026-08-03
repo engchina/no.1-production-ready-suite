@@ -4,6 +4,7 @@ import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } 
 import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -336,6 +337,21 @@ export function SqlToQuestionPage() {
                 </Button>
                 <FormStatus tone="danger" message={actionError} className="sm:ml-auto" />
               </div>
+              {actionBusy ? (
+                <ProcessingIndicator
+                  active
+                  label={
+                    analyzeLoading
+                      ? t("sqlToQuestion.action.analyze")
+                      : reverseMode === "deep"
+                        ? t("sqlToQuestion.action.deep")
+                        : t("sqlToQuestion.action.generate")
+                  }
+                  operationKey={analyzeLoading ? "analyze" : reverseMode}
+                  placement="action"
+                  testId="sql-to-question-processing"
+                />
+              ) : null}
               </section>
             }
             right={
@@ -420,17 +436,17 @@ function SchemaPreview({
 }) {
   if (loading) {
     return (
-      <section
-        className="grid min-h-56 content-start gap-3 rounded-md border border-border bg-background p-4"
-        aria-label={t("sqlToQuestion.schema.loading")}
-        aria-busy="true"
-        data-testid="sql-to-question-schema-skeleton"
+      <TimedLoadingState
+        label={t("sqlToQuestion.schema.loading")}
+        operationKey="sql-to-question-schema"
+        placement="panel"
+        className="min-h-56 content-start"
+        testId="sql-to-question-schema-skeleton"
       >
         <Skeleton className="h-5 w-40" aria-hidden="true" />
         <Skeleton className="h-16 w-full" aria-hidden="true" />
         <Skeleton className="h-16 w-full" aria-hidden="true" />
-        <span className="sr-only">{t("sqlToQuestion.schema.loading")}</span>
-      </section>
+      </TimedLoadingState>
     );
   }
 

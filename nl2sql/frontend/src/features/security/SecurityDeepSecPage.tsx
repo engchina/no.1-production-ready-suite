@@ -14,6 +14,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -213,7 +214,13 @@ export function SecurityDeepSecPage() {
               <Banner severity="danger">{statusLoadError}</Banner>
             ) : null}
             {statusLoading && !status ? (
-              <p className="text-sm text-muted" role="status">{t("security.deepsec.statusLoading")}</p>
+              <ProcessingIndicator
+                active
+                label={t("security.deepsec.statusLoading")}
+                operationKey="security-deepsec-status"
+                placement="panel"
+                testId="security-deepsec-loading"
+              />
             ) : status ? (
               <>
                 <Banner severity={status.configured ? "success" : "info"}>{status.message}</Banner>

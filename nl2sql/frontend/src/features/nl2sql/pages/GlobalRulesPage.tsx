@@ -11,10 +11,13 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { FileInputControl, downloadBlob } from "../components/DbAdminShared";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { downloadBlob } from "../components/DbAdminShared";
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
@@ -143,6 +146,18 @@ export function GlobalRulesPage() {
           labelledBy="global-rules-panel-heading"
           idPrefix={GLOBAL_RULES_ID}
           ariaLabel={t("globalRules.workspace")}
+          processing={
+            loading && lastLoadedAt ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="global-rules-refresh"
+                placement="workspace"
+                className="rounded-md border border-border bg-background px-3 py-2"
+                testId="global-rules-workspace-processing"
+              />
+            ) : undefined
+          }
         >
           <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3">
             <DbObjectPanelHeader
@@ -158,18 +173,18 @@ export function GlobalRulesPage() {
               }
             />
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-              <FileInputControl
+              <FileDropzone
                 label={t("globalRules.import")}
                 ariaLabel={t("globalRules.import")}
-                accept=".xlsx,.xlsm,.csv,.tsv,.txt"
-                filename={filename}
+                accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
                 selectedText={filename}
-                emptyText={t("glossary.file.emptyWorkbook")}
-                pickText={t("glossary.file.pickWorkbook")}
+                formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
                 replaceText={t("glossary.file.replaceWorkbook")}
                 icon="spreadsheet"
                 disabled={busy}
-                onPick={(file) => void importRules(file)}
+                loading={busy}
+                dataTestId="global-rules-file"
+                onFiles={([file]) => void importRules(file)}
               />
               <Button
                 type="button"

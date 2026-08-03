@@ -15,6 +15,7 @@ import {
 import { type FormEvent, useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/PageHeader";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
@@ -307,10 +308,17 @@ export function ModelSettingsClient() {
     return (
       <div>
         <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <div className="space-y-4 p-8" aria-label={t("settings.model.loading")}>
-          <Skeleton className="h-28 w-full rounded-lg" />
-          <Skeleton className="h-72 w-full rounded-lg" />
-          <Skeleton className="h-44 w-full rounded-lg" />
+        <div className="p-8">
+          <TimedLoadingState
+            label={t("settings.model.loading")}
+            operationKey="settings-model-load"
+            placement="page"
+            testId="settings-model-loading"
+          >
+            <Skeleton className="h-28 w-full rounded-lg" />
+            <Skeleton className="h-72 w-full rounded-lg" />
+            <Skeleton className="h-44 w-full rounded-lg" />
+          </TimedLoadingState>
         </div>
       </div>
     );

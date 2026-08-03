@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowLeft,
   CheckCircle2,
   CloudDownload,
   Database,
@@ -15,18 +14,17 @@ import {
   Save,
   Server,
   ShieldCheck,
-  Upload,
   XCircle,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,13 +45,9 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
-  queryKeys,
   useAdbInfo,
-  useDatabaseStatus,
   useDatabaseSettings,
   useDownloadDatabaseWallet,
-  usePersistenceStatus,
-  useRecoverPersistence,
   useSchemaOwners,
   useStartAdb,
   useStopAdb,
@@ -102,7 +96,6 @@ export function DatabaseSettingsClient() {
 
   const userRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const walletInputRef = useRef<HTMLInputElement>(null);
   const autoWalletAttemptedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -221,9 +214,16 @@ export function DatabaseSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
-        <Skeleton className="h-20 w-full rounded-lg" />
-        <Skeleton className="h-[460px] w-full rounded-lg" />
+      <div className="p-8">
+        <TimedLoadingState
+          label={t("settings.database.loading")}
+          operationKey="settings-database-load"
+          placement="page"
+          testId="settings-database-loading"
+        >
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <Skeleton className="h-[460px] w-full rounded-lg" />
+        </TimedLoadingState>
       </div>
     );
   }
@@ -308,7 +308,6 @@ export function DatabaseSettingsClient() {
               />
 
               <WalletUploadField
-                inputRef={walletInputRef}
                 settings={settings}
                 uploadPending={walletUpload.isPending}
                 autoDownloadPending={walletDownload.isPending}
@@ -412,8 +411,6 @@ const ADB_LIFECYCLE_LABEL_KEYS: Record<string, I18nKey> = {
 
 /** Autonomous Database の情報取得・起動・停止を行う運用パネル。 */
 function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
-  const location = useLocation();
-  const queryClient = useQueryClient();
   const infoQuery = useAdbInfo();
   const saveSettings = useUpdateAdbSettings();
   const start = useStartAdb();
@@ -430,43 +427,11 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
 
   const info = infoQuery.data;
   const lifecycle = info?.lifecycle_state ?? null;
-  const databaseStatus = useDatabaseStatus({ enabled: lifecycle === "AVAILABLE" });
-  const persistenceStatus = usePersistenceStatus({
-    enabled: lifecycle === "AVAILABLE" && databaseStatus.data?.status === "ok",
-  });
-  const recoverPersistence = useRecoverPersistence();
-  const returnTo = safeReturnTo(location.state);
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
   const canStop = lifecycle === "AVAILABLE";
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
   const busy = saveSettings.isPending || start.isPending || stop.isPending;
-  const operationalReady =
-    databaseStatus.data?.status === "ok" && persistenceStatus.data?.ready === true;
-
-  useEffect(() => {
-    if (lifecycle !== "AVAILABLE") return;
-    void queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-  }, [lifecycle, queryClient]);
-
-  useEffect(() => {
-    if (
-      lifecycle !== "AVAILABLE" ||
-      databaseStatus.data?.status !== "ok" ||
-      !persistenceStatus.data ||
-      persistenceStatus.data.ready ||
-      recoverPersistence.isPending ||
-      recoverPersistence.isError
-    ) {
-      return;
-    }
-    recoverPersistence.mutate();
-  }, [
-    databaseStatus.data?.status,
-    lifecycle,
-    persistenceStatus.data,
-    recoverPersistence,
-  ]);
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -623,113 +588,10 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
 
         {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
 
-        {lifecycle === "AVAILABLE" ? (
-          <section className="space-y-2" aria-labelledby="database-operational-status">
-            <h3 id="database-operational-status" className="text-sm font-semibold text-foreground">
-              {t("settings.adb.operational.title")}
-            </h3>
-            <div className="grid gap-2 sm:grid-cols-2" aria-live="polite">
-              <OperationalStatusRow
-                label={t("settings.adb.operational.sql")}
-                value={
-                  databaseStatus.isPending
-                    ? t("settings.adb.operational.checking")
-                    : databaseStatus.data?.status === "ok"
-                      ? t("settings.adb.operational.available")
-                      : t("settings.adb.operational.unavailable")
-                }
-                tone={
-                  databaseStatus.isPending
-                    ? "muted"
-                    : databaseStatus.data?.status === "ok"
-                      ? "ok"
-                      : "warning"
-                }
-              />
-              <OperationalStatusRow
-                label={t("settings.adb.operational.persistence")}
-                value={
-                  recoverPersistence.isPending
-                    ? t("settings.adb.operational.recovering")
-                    : persistenceStatus.isPending && databaseStatus.data?.status === "ok"
-                      ? t("settings.adb.operational.checking")
-                      : persistenceStatus.data?.ready
-                        ? t("settings.adb.operational.available")
-                        : databaseStatus.data?.status === "ok"
-                          ? t("settings.adb.operational.unavailableWithCode", {
-                              code: persistenceStatus.data?.reason_code ?? "unknown",
-                            })
-                          : t("settings.adb.operational.waitingForSql")
-                }
-                tone={
-                  recoverPersistence.isPending ||
-                  (persistenceStatus.isPending && databaseStatus.data?.status === "ok")
-                    ? "muted"
-                    : persistenceStatus.data?.ready
-                      ? "ok"
-                      : databaseStatus.data?.status === "ok"
-                        ? "danger"
-                        : "muted"
-                }
-              />
-            </div>
-            {databaseStatus.data?.status === "ok" && !persistenceStatus.data?.ready ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  size="md"
-                  variant="secondary"
-                  loading={recoverPersistence.isPending}
-                  onClick={() => {
-                    recoverPersistence.reset();
-                    recoverPersistence.mutate();
-                  }}
-                >
-                  <RefreshCw size={15} aria-hidden />
-                  {t("settings.adb.operational.retryPersistence")}
-                </Button>
-                {recoverPersistence.isError ? (
-                  <FormStatus
-                    tone="danger"
-                    message={
-                      recoverPersistence.error instanceof ApiError
-                        ? recoverPersistence.error.message
-                        : t("settings.adb.operational.recoveryFailed")
-                    }
-                  />
-                ) : null}
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-
-        {lifecycle === "AVAILABLE" && databaseStatus.data?.status === "unreachable" ? (
-          <FormStatus tone="warning" message={t("settings.adb.connectionStillUnavailable")} />
-        ) : null}
-
-        {returnTo && operationalReady ? (
-          <Link
-            to={returnTo}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            <ArrowLeft size={16} aria-hidden />
-            {t("settings.adb.action.returnToPrevious")}
-          </Link>
-        ) : null}
-
         {log.length > 0 ? <AdbOperationLog entries={log} /> : null}
       </CardContent>
     </Card>
   );
-}
-
-function safeReturnTo(state: unknown): string | null {
-  if (!state || typeof state !== "object" || !("returnTo" in state)) return null;
-  const value = (state as { returnTo?: unknown }).returnTo;
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
-    return null;
-  }
-  return value.startsWith("/settings") ? null : value;
 }
 
 function AdbInfoPanel({ info }: { info: AdbInfoData }) {
@@ -739,36 +601,6 @@ function AdbInfoPanel({ info }: { info: AdbInfoData }) {
     <div className="space-y-2">
       <AdbLifecycleBadge state={info.lifecycle_state} />
       {!known ? <FormStatus tone="warning" className="text-xs" message={info.message} /> : null}
-    </div>
-  );
-}
-
-function OperationalStatusRow({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "ok" | "warning" | "danger" | "muted";
-}) {
-  const Icon = tone === "ok" ? CheckCircle2 : tone === "danger" ? XCircle : AlertCircle;
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 items-start gap-2 rounded-md border px-3 py-2 text-sm",
-        tone === "ok" && "border-success/30 bg-success-bg/50 text-success",
-        tone === "warning" && "border-warning/30 bg-warning-bg/60 text-warning",
-        tone === "danger" && "border-danger/30 bg-danger-bg/50 text-danger",
-        tone === "muted" && "border-border bg-card text-muted"
-      )}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <Icon size={16} className="mt-0.5 shrink-0" aria-hidden />
-      <span className="min-w-0">
-        <span className="font-medium text-current">{label}</span>
-        <span className="block break-words text-xs leading-relaxed">{value}</span>
-      </span>
     </div>
   );
 }
@@ -1047,7 +879,6 @@ function RequiredLabel({
 }
 
 function WalletUploadField({
-  inputRef,
   settings,
   uploadPending,
   autoDownloadPending,
@@ -1058,7 +889,6 @@ function WalletUploadField({
   onUpload,
   onRetryDownload,
 }: {
-  inputRef: RefObject<HTMLInputElement | null>;
   settings: DatabaseSettingsData;
   uploadPending: boolean;
   autoDownloadPending: boolean;
@@ -1069,52 +899,23 @@ function WalletUploadField({
   onUpload: (file: File) => void;
   onRetryDownload: () => void;
 }) {
-  const hintId = "oracle-wallet-upload-hint";
-  const walletBusy = uploadPending || autoDownloadPending;
-
-  function handleDrop(event: DragEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    const file = event.dataTransfer.files?.[0];
-    if (file) onUpload(file);
-  }
-
   return (
     <div className="space-y-2">
-      <span className="block text-sm font-medium text-foreground">
-        {t("settings.database.wallet.title")}
-      </span>
-      <button
-        type="button"
-        disabled={walletBusy}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={handleDrop}
-        aria-describedby={hintId}
-        className="flex min-h-36 w-full cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-border bg-background px-4 py-6 text-center transition-colors hover:border-primary hover:bg-info-bg/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <Upload size={24} className="text-muted" aria-hidden />
-        <span className="mt-2 text-sm font-semibold text-foreground">
-          {uploadPending
-            ? t("settings.database.actions.uploadingWallet")
-            : t("settings.database.wallet.uploadCta")}
-        </span>
-        <span id={hintId} className="mt-2 text-sm leading-relaxed text-muted">
-          {t("settings.database.wallet.help")}
-        </span>
-      </button>
-      <input
-        ref={inputRef}
-        type="file"
-        className="hidden"
+      <FileDropzone
+        label={t("settings.database.wallet.title")}
+        ariaLabel={t("settings.database.walletInput.aria")}
         accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream"
-        aria-label={t("settings.database.walletInput.aria")}
-        aria-describedby={hintId}
-        disabled={walletBusy}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) onUpload(file);
-          event.target.value = "";
-        }}
+        formatLabel=".ZIP"
+        selectedText={
+          settings.wallet_uploaded ? t("settings.database.wallet.replaceCta") : ""
+        }
+        hint={t("settings.database.wallet.help")}
+        errorText={validationError}
+        loading={uploadPending}
+        loadingText={t("settings.database.actions.uploadingWallet")}
+        disabled={autoDownloadPending}
+        dataTestId="oracle-wallet-upload"
+        onFiles={([file]) => onUpload(file)}
       />
 
       {autoDownloadPending ? (
@@ -1148,9 +949,6 @@ function WalletUploadField({
         </div>
       ) : null}
 
-      {validationError ? (
-        <FormStatus tone="warning" className="text-xs" message={validationError} />
-      ) : null}
       {uploadError ? <FormStatus tone="danger" className="text-xs" message={uploadError} /> : null}
 
       <div className="space-y-1 text-xs leading-relaxed text-muted">

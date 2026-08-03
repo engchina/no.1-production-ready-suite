@@ -4,11 +4,12 @@ import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementLoadingSkeleton,
@@ -24,7 +25,7 @@ import {
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
-import { StatementRunnerCard } from "../components/DbAdminShared";
+import { StatementRunnerCard, downloadBlob } from "../components/DbAdminShared";
 import type {
   DbAdminExecuteData,
   DbAdminJoinWhereData,
@@ -235,7 +236,9 @@ export function ViewManagementPage() {
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/views",
     loadErrorMessage: t("viewMgmt.error.detail"),
-    timeoutErrorMessage: t("dbAdmin.detail.timeout", { seconds: 15 }),
+    timeoutErrorMessage: t("dbAdmin.detail.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveDetail),
+    }),
   });
   const {
     selectedName: selectedViewName,
@@ -354,6 +357,27 @@ export function ViewManagementPage() {
       key,
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
+  };
+
+  const downloadColumnsXlsx = async (name: string) => {
+    setLoading("view-export");
+    setMessage("");
+    try {
+      const response = await apiFetch(`/api/nl2sql/db-admin/views/${encodeURIComponent(name)}/export.xlsx`, {
+        headers: {
+          Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(t("viewMgmt.error.export"));
+      }
+      downloadBlob(`${name.toLowerCase()}_columns.xlsx`, await response.blob());
+      toast.success(t("common.action.downloaded"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("viewMgmt.error.export"));
+    } finally {
+      setLoading("");
+    }
   };
 
   const openDropDialog = (name: string) => {
@@ -509,6 +533,22 @@ export function ViewManagementPage() {
               ariaLabel={t("viewMgmt.workspace.label")}
               splitId="view-management-list"
               preferredWidePane="right"
+              processing={
+                views && (loading === "load" || loading === "schema-refresh") ? (
+                  <ProcessingIndicator
+                    active
+                    label={
+                      loading === "schema-refresh"
+                        ? t("viewMgmt.workspace.schemaRefreshing")
+                        : t("viewMgmt.workspace.refreshing")
+                    }
+                    operationKey={loading}
+                    placement="workspace"
+                    className="rounded-md border border-border bg-background px-3 py-2"
+                    testId="view-management-workspace-processing"
+                  />
+                ) : undefined
+              }
             >
             <DbObjectGrid
               idPrefix={VIEW_MANAGEMENT_ID}
@@ -549,11 +589,14 @@ export function ViewManagementPage() {
             />
             <DbObjectDetailPanel
               idPrefix={VIEW_MANAGEMENT_ID}
+              operationKey={selectedViewName}
               headingId="view-detail-heading"
               detail={detail}
               loading={detailRequest.loading || (loading === "load" && !views)}
               ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
+              ddlError={detailRequest.ddlError}
+              exporting={loading === "view-export"}
               tab={detailTab}
               labels={{
                 loading: t("viewMgmt.detail.loading"),
@@ -561,10 +604,17 @@ export function ViewManagementPage() {
                 tabsLabel: t("viewMgmt.detailTabs.label"),
                 columns: t("viewMgmt.detailTabs.columns"),
                 ddl: t("viewMgmt.detailTabs.ddl"),
+                export: t("viewMgmt.export"),
+                exportAria: t("viewMgmt.exportColumns"),
                 drop: t("viewMgmt.grid.drop"),
               }}
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedViewName)}
+              onRetryDdl={() => {
+                if (detail) void detailRequest.loadDdl(detail.name);
+              }}
+              onCancel={detailRequest.cancel}
+              onExport={(name) => void downloadColumnsXlsx(name)}
               onDrop={openDropDialog}
             />
             </DbObjectManagementPanelShell>

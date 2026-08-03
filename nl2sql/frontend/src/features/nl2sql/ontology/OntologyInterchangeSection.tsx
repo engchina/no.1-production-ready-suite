@@ -4,9 +4,9 @@ import { ArrowLeftRight, Download, LayoutTemplate } from "lucide-react";
 import { Banner, Button, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { t } from "@/lib/i18n";
 import { downloadBlob, downloadFilename } from "@/lib/download";
-import { FileInputControl } from "../components/DbAdminShared";
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
@@ -412,14 +412,13 @@ export function OntologyInterchangeSection({
               </Button>
             </div>
             <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <FileInputControl
+              <FileDropzone
                 label={t("ontologyInterchange.import.fileLabel")}
                 accept=".rdf,.owl,.xml,.ttl"
-                filename={importFile?.name ?? ""}
-                emptyText={t("ontologyInterchange.import.fileEmpty")}
-                pickText={t("ontologyInterchange.import.filePick")}
+                selectedText={importFile?.name ?? ""}
+                formatLabel=".RDF / .OWL / .XML / .TTL"
                 dataTestId="ontology-import-file"
-                onPick={(file) => {
+                onFiles={([file]) => {
                   setImportFile(file);
                   setImportResult(null);
                   setImportError("");

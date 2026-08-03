@@ -8,23 +8,20 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
-  Upload,
   XCircle,
 } from "lucide-react";
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type DragEvent,
   type ReactNode,
-  type RefObject,
 } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
+import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
@@ -113,7 +110,6 @@ export function OciSettingsClient() {
   const [namespaceFetchState, setNamespaceFetchState] = useState<FeedbackState>("idle");
   const [namespaceFetchMessage, setNamespaceFetchMessage] = useState("");
   const [configTestState, setConfigTestState] = useState<ConfigTestState>({ phase: "idle" });
-  const keyFileInputRef = useRef<HTMLInputElement | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   useEffect(() => {
@@ -444,7 +440,6 @@ export function OciSettingsClient() {
                 label={t("settings.oci.field.keyFile")}
                 value={draft.keyFile}
                 error={errorText(errors.keyFile)}
-                inputRef={keyFileInputRef}
                 fileState={keyFileState}
                 fileMessage={keyFileMessage}
                 keyFileExists={keyFileExists}
@@ -949,7 +944,6 @@ function PrivateKeyDropzoneField({
   label,
   value,
   error,
-  inputRef,
   fileState,
   fileMessage,
   keyFileExists,
@@ -960,17 +954,13 @@ function PrivateKeyDropzoneField({
   label: string;
   value: string;
   error?: string;
-  inputRef: RefObject<HTMLInputElement | null>;
   fileState: FeedbackState;
   fileMessage: string;
   keyFileExists: boolean | null;
   onFileChange: (file: File | undefined) => void | Promise<void>;
   required?: boolean;
 }) {
-  const hintId = `${id}-hint`;
   const statusId = `${id}-status`;
-  const errorId = `${id}-error`;
-  const fileErrorId = `${id}-file-error`;
   const warningId = `${id}-warning`;
   const isConfigured = keyFileExists === true || fileState === "success";
   const warning =
@@ -984,65 +974,27 @@ function PrivateKeyDropzoneField({
   const helper = isConfigured
     ? t("settings.oci.privateKey.helpConfigured")
     : t("settings.oci.privateKey.helpUpload");
-  const describedBy = [
-    hintId,
-    statusMessage ? statusId : "",
-    error ? errorId : "",
-    fileState === "error" ? fileErrorId : "",
-    warning ? warningId : "",
-  ].filter(Boolean).join(" ");
-
-  function handleDrop(event: DragEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (fileState === "loading") return;
-    void onFileChange(event.dataTransfer.files?.[0]);
-  }
-
   return (
     <div id={id} className="space-y-2">
-      <label
-        htmlFor={`${id}-button`}
-        className="flex items-center gap-1 text-sm font-medium text-foreground"
-      >
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <button
-        id={`${id}-button`}
-        type="button"
-        className={cn(
-          "flex min-h-32 w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-background px-4 py-7 text-center transition-colors hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60",
-          error || fileState === "error" ? "border-danger" : "border-border"
-        )}
-        aria-invalid={Boolean(error) || fileState === "error"}
-        aria-describedby={describedBy}
-        aria-busy={fileState === "loading"}
-        disabled={fileState === "loading"}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={handleDrop}
-      >
-        <Upload size={22} className="text-muted" aria-hidden />
-        <span className="text-sm font-semibold text-foreground">
-          {fileState === "loading"
-            ? t("settings.oci.actions.uploadingKeyFile")
-            : t("settings.oci.privateKey.uploadCta")}
-        </span>
-        <span id={hintId} className="max-w-2xl text-sm leading-relaxed text-foreground">
-          {helper}
-        </span>
-      </button>
-      <input
-        ref={inputRef}
-        type="file"
+      <FileDropzone
+        label={label}
+        ariaLabel={t("settings.oci.keyFileInput.aria")}
         accept=".pem,.key"
-        className="sr-only"
-        aria-label={t("settings.oci.keyFileInput.aria")}
-        onChange={(event) => {
-          void onFileChange(event.target.files?.[0]);
-          event.target.value = "";
-        }}
+        formatLabel=".PEM / .KEY"
+        selectedText={
+          isConfigured ? t("settings.oci.privateKey.replaceCta") : ""
+        }
+        hint={helper}
+        errorText={
+          fileState === "error"
+            ? fileMessage || t("settings.oci.validation.invalidKeyFile")
+            : error
+        }
+        required={required}
+        loading={fileState === "loading"}
+        loadingText={t("settings.oci.actions.uploadingKeyFile")}
+        dataTestId="oci-key-file-upload"
+        onFiles={([file]) => void onFileChange(file)}
       />
       {statusMessage ? (
         <div id={statusId}>
@@ -1067,13 +1019,6 @@ function PrivateKeyDropzoneField({
           <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
           <span>{warning}</span>
         </p>
-      ) : null}
-      <FieldError id={errorId} message={error} />
-      {fileState === "error" ? (
-        <FieldError
-          id={fileErrorId}
-          message={fileMessage || t("settings.oci.validation.invalidKeyFile")}
-        />
       ) : null}
     </div>
   );

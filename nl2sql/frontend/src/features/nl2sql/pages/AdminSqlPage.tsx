@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Play, X } from "lucide-react";
 
 import { Button } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -47,6 +49,7 @@ function isSingleSelectSql(sql: string): boolean {
 
 /** 管理者向け SQL 実行ページ。更新系 SQL は確認語・RBAC・監査を必須とする。 */
 export function AdminSqlPage() {
+  const queryClient = useQueryClient();
   const [sqlText, setSqlText] = useState("");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [confirmation, setConfirmation] = useState("");
@@ -71,6 +74,11 @@ export function AdminSqlPage() {
         reason: requiresConfirmation ? "admin-sql-admin" : "admin-sql-select",
       });
       setResult(data);
+      if (data.committed) {
+        void queryClient.invalidateQueries({
+          queryKey: ["nl2sql", "db-admin", "objects"],
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("nl2sql.error.executeSqlFailed"));
       setResult(null);
@@ -160,6 +168,14 @@ export function AdminSqlPage() {
               {actionButtons}
             </div>
           )}
+          {loading ? (
+            <TimedLoadingState
+              label={t("nl2sql.action.executeSql")}
+              operationKey="admin-sql-execute"
+              placement="result"
+              testId="admin-sql-processing"
+            />
+          ) : null}
           {result && <DbAdminExecutionResult result={result} />}
         </section>
       </main>

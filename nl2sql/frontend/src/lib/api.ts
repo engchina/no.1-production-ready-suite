@@ -14,6 +14,16 @@ export interface ApiEnvelope<T> {
   request_id?: string;
 }
 
+export interface ApiErrorDetails {
+  summary?: string;
+  cause?: string;
+  actions?: string[];
+  target_name?: string;
+  target_type?: string;
+  operation?: string;
+  raw_message?: string;
+}
+
 export interface ApiRequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -151,6 +161,7 @@ async function parseJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as ApiEnvelope<T> & {
     error_messages?: unknown;
     detail?: unknown;
+    error_details?: ApiErrorDetails;
   };
   if (!response.ok) {
     // 共通例外ハンドラは ApiResponse { error_messages: [...] } 形式で返す
@@ -167,7 +178,7 @@ async function parseJson<T>(response: Response): Promise<T> {
             payload.error ||
               (payload.detail ? String(payload.detail) : "API リクエストに失敗しました"),
           ];
-    throw new ApiError(response.status, messages, payload.error_code);
+    throw new ApiError(response.status, messages, payload.error_code, payload.error_details);
   }
   return payload.data;
 }
@@ -598,13 +609,15 @@ export class ApiError extends Error {
   readonly status: number;
   readonly messages: string[];
   readonly errorCode?: string;
+  readonly details?: ApiErrorDetails;
 
-  constructor(status: number, messages: string[], errorCode?: string) {
+  constructor(status: number, messages: string[], errorCode?: string, details?: ApiErrorDetails) {
     super(messages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
     this.errorCode = errorCode;
+    this.details = details;
   }
 }
 

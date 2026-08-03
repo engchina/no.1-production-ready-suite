@@ -12,6 +12,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -45,7 +46,7 @@ import type {
   SelectAiFeedbackEntry,
   SelectAiFeedbackMutationData,
 } from "../types";
-import { formatElapsed } from "../useOperationTimer";
+import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
 
@@ -513,6 +514,16 @@ export function FeedbackManagementPage() {
 
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice notice={message ? { tone: "danger", message } : null} />
+        {loading === "load" ? (
+          <ProcessingIndicator
+            active
+            label={t("common.processing.refreshing")}
+            operationKey="feedback-management-refresh"
+            placement="workspace"
+            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            testId="feedback-management-workspace-processing"
+          />
+        ) : null}
 
         <DbObjectManagementTabs
           idPrefix="feedback-management"

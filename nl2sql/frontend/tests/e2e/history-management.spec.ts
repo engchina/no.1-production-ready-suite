@@ -298,6 +298,12 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   await page.goto("/history");
   await expect(page.getByTestId("history-list-skeleton")).toBeVisible();
   await expect(page.getByTestId("history-detail-skeleton")).toBeVisible();
+  await expect(
+    page.getByTestId("history-list-loading").getByRole("timer")
+  ).toHaveAccessibleName(/経過時間 00:0\d/);
+  await expect(page.getByTestId("history-detail-skeleton")).toContainText(
+    "履歴詳細を読み込んでいます",
+  );
   await expect(page.getByText("履歴はまだありません")).toBeVisible();
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
 });

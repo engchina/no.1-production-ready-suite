@@ -57,6 +57,12 @@ test("モバイル操作メニューは 44px とキーボード・ARIA 契約を
   assert.match(source, /triggerRef\.current\?\.focus/u);
 });
 
+test("ページ操作はボタンの loading のみを担当し、詳細な処理表示を自動配置しない", () => {
+  assert.doesNotMatch(source, /ProcessingIndicator/u);
+  assert.doesNotMatch(source, /loadingAction/u);
+  assert.doesNotMatch(source, /data-processing-placement/u);
+});
+
 test("移行対象ページはローカル PageHeader を使い、旧トップ概覧カードを表示しない", () => {
   for (const page of migratedPages) {
     assert.match(page, /from "@\/components\/PageHeader"/u);
