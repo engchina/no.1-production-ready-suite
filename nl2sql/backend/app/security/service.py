@@ -19,6 +19,7 @@ from app.settings import Settings, get_settings
 
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
+    SYSTEM_ADMIN_ROLE_ID,
     AuditRecord,
     DataEntitlementRecord,
     Principal,
@@ -81,6 +82,9 @@ _AUDIT_EXPORT_HEADERS = (
 )
 _EXCEL_MAX_DATA_ROWS_PER_SHEET = 1_048_575
 _JST = ZoneInfo("Asia/Tokyo")
+_SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE = (
+    "SYSTEM_ADMIN ロールは初期システム管理者にのみ割り当てできます。"
+)
 
 
 def _one_calendar_year_before(value: datetime) -> datetime:
@@ -408,6 +412,9 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> tuple[UserRecord, str]:
+        normalized_role_ids = list(dict.fromkeys(role_ids))
+        if SYSTEM_ADMIN_ROLE_ID in normalized_role_ids:
+            raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
         password = temporary_password or generate_temporary_password()
         self._validate_new_password(password, login_name)
         user = UserRecord(
@@ -420,7 +427,7 @@ class SecurityService:
             failed_login_count=0,
             locked_until=None,
             version=1,
-            role_ids=list(dict.fromkeys(role_ids)),
+            role_ids=normalized_role_ids,
         )
         try:
             created = self.store.create_user(user)
@@ -444,12 +451,19 @@ class SecurityService:
         current = self.store.get_user(user_id)
         if current is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
+        normalized_role_ids = list(dict.fromkeys(role_ids))
         current_roles = [self.store.get_role(role_id) for role_id in current.role_ids]
         is_admin = any(role and role.role_code == SYSTEM_ADMIN_ROLE_CODE for role in current_roles)
-        next_roles = [self.store.get_role(role_id) for role_id in role_ids]
+        next_roles = [self.store.get_role(role_id) for role_id in normalized_role_ids]
         remains_admin = any(
             role and role.role_code == SYSTEM_ADMIN_ROLE_CODE for role in next_roles
         )
+        grants_system_admin = (
+            SYSTEM_ADMIN_ROLE_ID in normalized_role_ids
+            and SYSTEM_ADMIN_ROLE_ID not in current.role_ids
+        )
+        if grants_system_admin and not current.is_bootstrap_admin:
+            raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
         if (
             is_admin
             and (status != "ACTIVE" or not remains_admin)
@@ -462,7 +476,7 @@ class SecurityService:
                 expected_version=expected_version,
                 display_name=display_name.strip(),
                 status=status,
-                role_ids=list(dict.fromkeys(role_ids)),
+                role_ids=normalized_role_ids,
             )
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc

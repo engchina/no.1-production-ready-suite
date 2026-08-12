@@ -208,25 +208,32 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 const DATABASE_UNAVAILABLE_MESSAGE =
   "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。";
+const DATABASE_SETTINGS_HINT =
+  "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。";
 
 async function expectDatabaseGate(
   page: Page,
   {
     title = "データベースを起動してください",
     message = DATABASE_UNAVAILABLE_MESSAGE,
-  }: { title?: string; message?: string } = {}
+    actionName = "データベース設定を開く",
+    actionHref = "/settings/database#adb-management",
+    settingsHint = DATABASE_SETTINGS_HINT,
+  }: {
+    title?: string;
+    message?: string;
+    actionName?: string;
+    actionHref?: string;
+    settingsHint?: string;
+  } = {}
 ) {
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
-  const settingsLink = page.getByRole("link", { name: "データベース設定を開く" });
-  await expect(settingsLink).toHaveAttribute("href", "/settings/database#adb-management");
-  await expect(
-    page.getByText("OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。", {
-      exact: true,
-    })
-  ).toBeVisible();
-  return settingsLink;
+  const actionLink = page.getByRole("link", { name: actionName });
+  await expect(actionLink).toHaveAttribute("href", actionHref);
+  await expect(page.getByText(settingsHint, { exact: true })).toBeVisible();
+  return actionLink;
 }
 
 test("DB 到達不可では Profile を空表示せず ADB 管理へ誘導する", async ({ page }) => {
@@ -255,6 +262,24 @@ test("DB 到達不可では Profile を空表示せず ADB 管理へ誘導する
   await expectNoHorizontalOverflow(page);
 });
 
+test("DB 到達不可ではシステムテーブル管理も共通の起動案内を表示する", async ({ page }) => {
+  let systemTablesRequests = 0;
+  await page.route("**/api/ready/database", (route) =>
+    fulfill(route, { status: "unreachable", check: "ok", detail: "ORA-12514" })
+  );
+  await page.route("**/api/settings/database/system-tables", (route) => {
+    systemTablesRequests += 1;
+    return fulfill(route, null, 503);
+  });
+
+  await page.goto("/settings/system-tables");
+
+  await expectDatabaseGate(page);
+  await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toHaveCount(0);
+  expect(systemTablesRequests).toBe(0);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("未設定でも共通の起動案内から設定ページを Gate 外で開ける", async ({ page }) => {
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "not_configured", check: "missing", detail: null })
@@ -275,7 +300,8 @@ test("未設定でも共通の起動案内から設定ページを Gate 外で�
   await expect(page.locator("#adb-management")).toBeVisible();
 });
 
-test("migration 未適用でも共通の起動案内と ADB 管理導線を表示する", async ({ page }) => {
+test("migration 未適用では通常機能を止め、システムテーブル管理は開ける", async ({ page }) => {
+  let persistenceRequests = 0;
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, {
       status: "setup_required",
@@ -283,23 +309,31 @@ test("migration 未適用でも共通の起動案内と ADB 管理導線を表�
       detail: "migration 3 is required",
     })
   );
+  await page.route("**/api/nl2sql/persistence", (route) => {
+    persistenceRequests += 1;
+    return fulfill(route, {
+      mode: "oracle",
+      ready: false,
+      durable: false,
+      writable: false,
+      snapshot_loaded: false,
+      reason_code: "should_not_be_called",
+      checked_at: "2026-07-19T00:00:00Z",
+    });
+  });
 
   await page.goto("/profiles");
 
-  const settingsLink = await expectDatabaseGate(page, {
+  const systemTablesLink = await expectDatabaseGate(page, {
     title: "データベース接続済み・初期化が必要です",
     message:
-      "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。データベース設定の「システムテーブル」から作成・更新してください。",
+      "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
+    actionName: "システムテーブルを開く",
+    actionHref: "/settings/system-tables",
+    settingsHint:
+      "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
   });
 
-  await mockDatabaseSettings(page, () => "AVAILABLE");
-  await page.route("**/api/schema/owners", (route) =>
-    fulfill(route, {
-      current_owner: "NL2SQL_APP",
-      owners: [],
-      excluded_oracle_maintained_count: 0,
-    })
-  );
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, {
       status: "missing",
@@ -320,9 +354,14 @@ test("migration 未適用でも共通の起動案内と ADB 管理導線を表�
       },
     })
   );
-  await settingsLink.click();
-  await expect(page).toHaveURL(/\/settings\/database#adb-management$/);
-  await expect(page.locator("#adb-management")).toBeVisible();
+  await systemTablesLink.click();
+  await expect(page).toHaveURL(/\/settings\/system-tables$/);
+  await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();
+  await expect(page.locator("#system-tables")).toBeVisible();
+  await expect(
+    page.locator("#system-tables").locator("span").filter({ hasText: /^未初期化$/ }).first()
+  ).toBeVisible();
+  expect(persistenceRequests).toBe(0);
   await expectNoHorizontalOverflow(page);
 });
 

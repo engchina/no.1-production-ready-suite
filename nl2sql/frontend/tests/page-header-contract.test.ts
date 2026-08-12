@@ -44,8 +44,10 @@ test("PageAction descriptor と固定優先順位をローカル実装が保持�
   assert.match(source, /left\.index - right\.index/u);
 });
 
-test("モバイル操作メニューは 44px とキーボード・ARIA 契約を持つ", () => {
+test("compact 操作メニューは lg 未満で 44px とキーボード・ARIA 契約を持つ", () => {
   assert.match(source, /h-\[44px\]/u);
+  assert.match(source, /lg:flex/u);
+  assert.match(source, /lg:hidden/u);
   assert.match(source, /aria-expanded=\{menuOpen\}/u);
   assert.match(source, /aria-controls=\{menuId\}/u);
   assert.match(source, /aria-haspopup="menu"/u);
@@ -55,6 +57,15 @@ test("モバイル操作メニューは 44px とキーボード・ARIA 契約を
     assert.match(source, new RegExp(`event\\.key === "${key}"`, "u"));
   }
   assert.match(source, /triggerRef\.current\?\.focus/u);
+});
+
+test("ページ操作は作業系・ツール系・危険操作を kind から分組する", () => {
+  assert.match(source, /type PageActionGroup = "task" \| "utility" \| "danger"/u);
+  assert.match(source, /function actionGroup/u);
+  assert.match(source, /data-page-action-group=\{group\}/u);
+  assert.match(source, /data-page-action-group-start=\{startsGroup \? "true"/u);
+  assert.match(source, /border-l border-border pl-4/u);
+  assert.match(source, /border-t border-border pt-1/u);
 });
 
 test("ページ操作はボタンの loading のみを担当し、詳細な処理表示を自動配置しない", () => {

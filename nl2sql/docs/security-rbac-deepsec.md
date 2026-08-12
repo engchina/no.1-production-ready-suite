@@ -24,6 +24,10 @@ uv run python -m app.cli.app_security_migrate --apply
 作成し、組み込み `SYSTEM_ADMIN` role を付与する。この application password のコピーは初回だけで、
 以降は database password と独立する。初回ログイン後は強制パスワード変更が必要になる。
 
+`SYSTEM_ADMIN` role はこの初期 bootstrap user 専用とする。ユーザー管理 API/UI は、後続で作成した
+ユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に `SYSTEM_ADMIN` が
+残っている場合も migration では自動撤去せず、管理者が必要に応じて手動で解除する。
+
 旧版で作成された 8 個の `RAG_*` security table が存在する場合、migration 005 がデータを保持したまま
 `NL2SQL_*` へ table、constraint、index を rename し、entitlement resource code も移行する。新規環境は
 migration 004 から `NL2SQL_*` object を直接作成する。005 に残る旧 prefix は移行元を識別するためだけの

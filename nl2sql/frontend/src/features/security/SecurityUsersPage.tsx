@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
   KeyRound,
@@ -14,7 +14,6 @@ import {
 import {
   Banner,
   Button,
-  DataTable,
   EmptyState,
   FormStatus,
   StatusBadge,
@@ -23,13 +22,15 @@ import {
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
+import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { cn } from "@/lib/utils";
 import { useAuth } from "./AuthProvider";
 import {
   SecurityDetailField,
@@ -60,6 +61,7 @@ const EMPTY_DRAFT: UserDraftState = {
 
 const INPUT_CLASS =
   "h-11 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 disabled:bg-muted/20 disabled:text-muted";
+const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -95,6 +97,10 @@ export function SecurityUsersPage() {
     () => new Map(roles.map((role) => [role.role_id, role.display_name])),
     [roles]
   );
+  const systemAdminRoleId = useMemo(
+    () => roles.find((role) => role.role_code === SYSTEM_ADMIN_ROLE_CODE)?.role_id ?? null,
+    [roles]
+  );
 
   const selectedUser = users.find((user) => user.user_id === selectedId) ?? null;
   const editingUser = users.find((user) => user.user_id === editingId) ?? null;
@@ -104,6 +110,17 @@ export function SecurityUsersPage() {
   const roleSummary = (user: SecurityUser) => {
     const names = roleNames(user);
     return names.length > 0 ? names.join(", ") : t("security.common.none");
+  };
+  const canAssignSystemAdmin = activeView === "edit" && Boolean(editingUser?.is_bootstrap_admin);
+  const isSystemAdminRole = (role: SecurityRole) =>
+    role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
+  const isSystemAdminRoleDisabled = (role: SecurityRole) =>
+    isSystemAdminRole(role) && !canAssignSystemAdmin && !draft.roleIds.includes(role.role_id);
+  const systemAdminRoleHint = (role: SecurityRole) => {
+    if (!isSystemAdminRole(role) || canAssignSystemAdmin) return "";
+    return draft.roleIds.includes(role.role_id)
+      ? t("security.users.systemAdminLegacyNotice")
+      : t("security.users.systemAdminBootstrapOnly");
   };
 
   const filteredUsers = useMemo(() => {
@@ -298,12 +315,45 @@ export function SecurityUsersPage() {
     }
   };
 
+  const userActions = (user: SecurityUser): EntityAction[] =>
+    canManage
+      ? [
+          {
+            id: "edit",
+            label: t("security.common.edit"),
+            icon: Pencil,
+            onSelect: () => startEdit(user),
+          },
+          {
+            id: "reset-password",
+            label: t("security.users.resetPassword"),
+            icon: KeyRound,
+            onSelect: () => handleResetPassword(user),
+          },
+          {
+            id: "unlock",
+            label: t("security.users.unlock"),
+            visible: Boolean(user.locked_until),
+            onSelect: () => handleUnlock(user),
+          },
+          {
+            id: user.status === "ACTIVE" ? "disable" : "enable",
+            label: user.status === "ACTIVE" ? t("security.users.disable") : t("security.users.enable"),
+            icon: user.status === "ACTIVE" ? UserX : UserCheck,
+            tone: user.status === "ACTIVE" ? "danger" : "default",
+            onSelect: () => handleToggleStatus(user),
+          },
+        ]
+      : [];
+
   const toggleRole = (roleId: string) => {
     setDraft((current) => ({
       ...current,
       roleIds: current.roleIds.includes(roleId)
         ? current.roleIds.filter((id) => id !== roleId)
-        : [...current.roleIds, roleId],
+        : roleId === systemAdminRoleId && !canAssignSystemAdmin
+          ? current.roleIds
+          : [...current.roleIds, roleId],
     }));
   };
 
@@ -353,55 +403,14 @@ export function SecurityUsersPage() {
           {
             key: "actions",
             header: t("security.common.actions"),
-            className: "min-w-64",
+            align: "right" as const,
+            className: "w-14",
             render: (user: SecurityUser) => (
-              <div className="flex flex-wrap justify-end gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    startEdit(user);
-                  }}
-                >
-                  <Pencil size={14} aria-hidden />
-                  {t("security.common.edit")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    void handleResetPassword(user);
-                  }}
-                >
-                  <KeyRound size={14} aria-hidden />
-                  {t("security.users.resetPassword")}
-                </Button>
-                {user.locked_until ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                      event.stopPropagation();
-                      void handleUnlock(user);
-                    }}
-                  >
-                    {t("security.users.unlock")}
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    void handleToggleStatus(user);
-                  }}
-                >
-                  {user.status === "ACTIVE" ? <UserX size={14} aria-hidden /> : <UserCheck size={14} aria-hidden />}
-                  {user.status === "ACTIVE" ? t("security.users.disable") : t("security.users.enable")}
-                </Button>
-              </div>
+              <RowActionMenu
+                actions={userActions(user)}
+                ariaLabel={`${t("security.common.actions")}: ${user.display_name}`}
+                testId={`security-users-row-actions-${user.user_id}`}
+              />
             ),
           },
         ]
@@ -479,14 +488,16 @@ export function SecurityUsersPage() {
                     testId="security-users-loading"
                   />
                 ) : null}
-                <DataTable
+                <MasterDetailDataTable
                   dense
                   loading={loading}
                   rows={filteredUsers}
                   sort={sort}
                   onSortChange={setSort}
-                  onRowClick={(user) => setSelectedId(user.user_id)}
+                  selectedRowKey={selectedId}
+                  onRowSelect={(user) => setSelectedId(user.user_id)}
                   getRowKey={(user) => user.user_id}
+                  getRowAriaLabel={(user) => t("security.users.showUser", { name: user.display_name })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
                   empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} />}
@@ -498,10 +509,7 @@ export function SecurityUsersPage() {
                 user={selectedUser}
                 canManage={canManage}
                 roleNames={selectedUser ? roleNames(selectedUser) : []}
-                onEdit={startEdit}
-                onResetPassword={(user) => void handleResetPassword(user)}
-                onUnlock={(user) => void handleUnlock(user)}
-                onToggleStatus={(user) => void handleToggleStatus(user)}
+                actions={selectedUser ? userActions(selectedUser) : []}
               />
             </SecurityManagementPanelShell>
         ) : (
@@ -571,23 +579,34 @@ export function SecurityUsersPage() {
                     <p className="text-sm text-muted">{t("security.users.noRole")}</p>
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                      {roles.map((role) => (
-                        <label
-                          key={role.role_id}
-                          className="flex min-h-11 cursor-pointer items-start gap-2 rounded-md border border-border p-2.5 text-sm hover:bg-background"
-                        >
-                          <input
-                            className="mt-0.5 h-4 w-4 accent-primary"
-                            type="checkbox"
-                            checked={draft.roleIds.includes(role.role_id)}
-                            onChange={() => toggleRole(role.role_id)}
-                          />
-                          <span className="min-w-0">
-                            <span className="block break-words font-medium">{role.display_name}</span>
-                            <span className="block break-all font-mono text-[11px] text-muted">{role.role_code}</span>
-                          </span>
-                        </label>
-                      ))}
+                      {roles.map((role) => {
+                        const disabled = isSystemAdminRoleDisabled(role);
+                        const hint = systemAdminRoleHint(role);
+                        return (
+                          <label
+                            key={role.role_id}
+                            className={cn(
+                              "flex min-h-11 items-start gap-2 rounded-md border border-border p-2.5 text-sm",
+                              disabled
+                                ? "cursor-not-allowed bg-muted/20 text-muted"
+                                : "cursor-pointer hover:bg-background"
+                            )}
+                          >
+                            <input
+                              className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                              type="checkbox"
+                              checked={draft.roleIds.includes(role.role_id)}
+                              disabled={disabled}
+                              onChange={() => toggleRole(role.role_id)}
+                            />
+                            <span className="min-w-0">
+                              <span className="block break-words font-medium">{role.display_name}</span>
+                              <span className="block break-all font-mono text-[11px] text-muted">{role.role_code}</span>
+                              {hint ? <span className="mt-1 block text-xs leading-5 text-muted">{hint}</span> : null}
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
                   )}
                 </fieldset>
@@ -625,18 +644,12 @@ function UserDetailPanel({
   user,
   roleNames,
   canManage,
-  onEdit,
-  onResetPassword,
-  onUnlock,
-  onToggleStatus,
+  actions,
 }: {
   user: SecurityUser | null;
   roleNames: string[];
   canManage: boolean;
-  onEdit: (user: SecurityUser) => void;
-  onResetPassword: (user: SecurityUser) => void;
-  onUnlock: (user: SecurityUser) => void;
-  onToggleStatus: (user: SecurityUser) => void;
+  actions: EntityAction[];
 }) {
   if (!user) {
     return (
@@ -661,25 +674,11 @@ function UserDetailPanel({
           <p className="mt-1 break-all font-mono text-xs text-muted">{user.login_name}</p>
         </div>
         {canManage ? (
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
-            <Button type="button" variant="secondary" size="sm" onClick={() => onEdit(user)}>
-              <Pencil size={15} aria-hidden="true" />
-              <span>{t("security.common.edit")}</span>
-            </Button>
-            <Button type="button" variant="secondary" size="sm" onClick={() => onResetPassword(user)}>
-              <KeyRound size={15} aria-hidden="true" />
-              <span>{t("security.users.resetPassword")}</span>
-            </Button>
-            {user.locked_until ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => onUnlock(user)}>
-                <span>{t("security.users.unlock")}</span>
-              </Button>
-            ) : null}
-            <Button type="button" variant="secondary" size="sm" onClick={() => onToggleStatus(user)}>
-              {user.status === "ACTIVE" ? <UserX size={15} aria-hidden="true" /> : <UserCheck size={15} aria-hidden="true" />}
-              <span>{user.status === "ACTIVE" ? t("security.users.disable") : t("security.users.enable")}</span>
-            </Button>
-          </div>
+          <ObjectActionBar
+            actions={actions}
+            ariaLabel={`${t("security.common.actions")}: ${user.display_name}`}
+            testId="security-users-detail-actions"
+          />
         ) : null}
       </div>
 
@@ -695,9 +694,6 @@ function UserDetailPanel({
         </SecurityDetailField>
         <SecurityDetailField label={t("security.common.version")}>
           {String(user.version)}
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.users.lockedUntil")}>
-          {user.locked_until ? formatDateTime(user.locked_until) : t("security.common.none")}
         </SecurityDetailField>
       </dl>
 

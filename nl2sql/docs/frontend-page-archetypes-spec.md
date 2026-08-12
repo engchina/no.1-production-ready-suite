@@ -13,6 +13,10 @@
 3. 色は **意味論トークン**のみ（`text-foreground` / `bg-card` / `border-border` / `text-muted-foreground` / `text-danger` …）。生パレット class（`slate-`/`sky-`/`red-`…）を新規に足さない（§4）。
 4. 一覧・結果表は共有 `DataTable` + `Pagination`、詳細併置は共有 `FixedSplitPane`、確認は `useConfirm`、通知は §messaging の 6 チャネル。
 5. 文言はすべて i18n 経由（`src/lib/i18n.ts` の `t()`）。パッケージ側プリミティブは i18n 非依存（翻訳済み文字列/ラベルを props で受ける）。
+6. 一覧行と詳細パネルの対象オブジェクト操作は `EntityAction` を単一情報源にし、行は `RowActionMenu`、詳細は `ObjectActionBar` で表示する。複数の行内文字ボタンを新規追加しない。行/詳細の menu は最近の実スクロール祖先を優先して方向判定し、下端では上方向へ反転、上下とも不足する場合は menu 内部をスクロールさせる。
+7. 一覧/詳細の単一選択は、行の非アクション領域クリックで選択し、選択状態は行全体の背景と `aria-current` で示す。キーボード向けには先頭セルの対象名ボタンを残し、行メニューには削除・アーカイブなど実操作だけを入れる。
+8. ページ級操作は `PageHeader` 右側に置き、`primary/secondary` の作業開始グループと `utility` のページツールグループを分ける。`lg` 未満は最高優先度 1 件 + `その他の操作` へ収める。
+9. コードブロック・プレビュー・結果などのコンテンツ内操作は `ContentActionBar` で右上に寄せる。ページ級・オブジェクト級・行級・内容級の操作を混在させない。
 
 ---
 
@@ -30,6 +34,10 @@
 
 ### B. マスタ詳細ブラウズ（読み取り/点検）
 一覧 + 詳細を共有 `FixedSplitPane` で常時併置（§3 の規約に従う）。
+- 行の非アクション領域クリックで選択し、右側詳細を即時更新する。`詳細` ボタンを行内に重複配置しない。
+- 一覧行の対象操作は `RowActionMenu` 1 個へ集約し、詳細側は同じ action descriptor を `ObjectActionBar` へ渡す。
+- 詳細側で常時表示する操作は最大 2 個の非破壊・高頻度操作に限定し、危険操作と低頻度操作は overflow menu に入れる。
+- 行 menu は表や分割ペインの scroll container に裁切されないこと。件数が少なく一覧 container が実スクロール状態でない場合も、viewport 内に浮かせて表示する。
 - **割当**: 実行履歴。A 型の一覧内詳細も本規約を流用可。
 
 ### C. ツール/ワークフロー（入力 → アクション → 結果）
@@ -65,6 +73,14 @@ usePagination<T>(items: T[], pageSize?: number)
 
 ### 既存（再利用）
 `Button` / `Card` / `Banner` / `FormStatus` / `FieldError` / `SelectField` / `Switch` / `ToggleChip` / `Skeleton` / `StatusBadge` / `LoadingState`・`ErrorState`・`EmptyState` / `ConfirmProvider`・`useConfirm` / `toast`・`Toaster` / `PageHeader` / `Breadcrumbs` / `Sidebar`・`AppShell`。
+
+### アクション配置レイヤー
+| レイヤー | 影響範囲 | 置き場所 / プリミティブ |
+|---|---|---|
+| ページ級 | 現在ページ全体 | `PageHeader` 右側 |
+| オブジェクト級 | 選択中の 1 オブジェクト | `ObjectActionBar` 右側 |
+| 行級 | 一覧の 1 行 | `RowActionMenu` |
+| 内容級 | 直下のコード/プレビュー/結果 | `ContentActionBar` 右側 |
 
 ---
 

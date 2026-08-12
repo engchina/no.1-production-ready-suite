@@ -463,11 +463,11 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   await expect(page.getByText("Oracle Profile", { exact: true })).toHaveCount(0);
 
   const actions = page.getByTestId("profile-management-actions");
-  const isMobile = (page.viewportSize()?.width ?? 0) < 640;
+  const isCompactHeader = (page.viewportSize()?.width ?? 0) < 1024;
   const createButton = actions.getByRole("button", { name: "新規作成", exact: true });
   await expect(createButton).toHaveAttribute("data-page-action-kind", "primary");
 
-  if (isMobile) {
+  if (isCompactHeader) {
     const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
     await expect(actions.getByRole("button")).toHaveText(["新規作成", "その他の操作"]);
     await createButton.focus();
@@ -507,6 +507,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     });
 
     await expect(actionButtons).toHaveText(["新規作成", "表示を更新", "DB 構造を再取得"]);
+    await expect(actions.locator('[data-page-action-group="utility"][data-page-action-group-start="true"]')).toBeVisible();
     await expect(createButton).toHaveClass(/\bbg-primary\b/);
     await expect(refreshButton).toHaveClass(/\bbg-card\b/);
     await expect(schemaRefreshButton).toHaveClass(/\bbg-card\b/);
@@ -597,7 +598,7 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
   await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
   const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
-  await profileRow.getByRole("button", { name: "編集", exact: true }).click();
+  await profileRow.locator("td").nth(1).click();
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 既定プロファイル" })
   ).toBeVisible();
@@ -814,7 +815,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
 
   await page.goto("/profiles");
   const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
-  await profileRow.getByRole("button", { name: "編集", exact: true }).click();
+  await profileRow.locator("td").nth(1).click();
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   const save = page.getByRole("button", { name: "保存", exact: true });
   await save.click();

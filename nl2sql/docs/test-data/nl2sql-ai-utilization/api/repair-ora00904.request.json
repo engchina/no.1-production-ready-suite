@@ -1,0 +1,24 @@
+{
+  "sql": "SELECT CUSTOMER_NM, TOTAL_AMOUNT FROM APP.ORDERS WHERE ORDER_DATE >= DATE '2026-08-01'",
+  "error_message": "ORA-00904: \"CUSTOMER_NM\": invalid identifier",
+  "allowed_objects": {
+    "table_names": [
+      "APP.ORDERS",
+      "APP.CUSTOMERS"
+    ],
+    "columns": {
+      "APP.ORDERS": [
+        "CUSTOMER_ID",
+        "TOTAL_AMOUNT",
+        "ORDER_DATE"
+      ],
+      "APP.CUSTOMERS": [
+        "CUSTOMER_ID",
+        "CUSTOMER_NAME"
+      ]
+    },
+    "enforce_table_scope": true
+  },
+  "row_limit": 100
+}
+

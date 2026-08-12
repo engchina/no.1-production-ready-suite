@@ -14,6 +14,9 @@ import {
 
 import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { ContentActionBar } from "@/components/ContentActionBar";
+import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
+import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import {
   TimedLoadingState,
   type ProcessingPlacement,
@@ -59,6 +62,7 @@ export interface DbObjectGridLabels {
 }
 
 export interface DbObjectDetailLabels {
+  actions: string;
   loading: string;
   ddlLoading: string;
   tabsLabel: string;
@@ -514,11 +518,16 @@ export function DbSingleObjectPickerList({
             <div
               key={item.key}
               role="listitem"
+              aria-current={selected ? "true" : undefined}
               className={[
-                "grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-background",
+                "grid w-full min-w-0 cursor-pointer gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0",
                 `${rowClass} md:items-center md:py-2`,
-                selected ? "bg-primary/10" : "bg-card",
+                selected ? "bg-primary/10" : "bg-card hover:bg-background",
               ].join(" ")}
+              onClick={(event) => {
+                if (isInteractiveRowTarget(event.target)) return;
+                onSelect(item);
+              }}
             >
               <button
                 type="button"
@@ -555,7 +564,10 @@ export function DbSingleObjectPickerList({
                   aria-label={action.ariaLabel(item)}
                   loading={loadingKey === item.key}
                   disabled={action.disabled?.(item)}
-                  onClick={() => action.onClick(item)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    action.onClick(item);
+                  }}
                 >
                   {ActionIcon && <ActionIcon size={15} aria-hidden="true" />}
                   <span>{action.label}</span>
@@ -882,7 +894,7 @@ export function DbObjectGrid({
                 <col className="w-[9.5rem]" />
                 <col className="w-[4.25rem]" />
                 <col className="w-[4.25rem]" />
-                <col className="w-[10rem]" />
+                <col className="w-[3.5rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>
@@ -901,8 +913,29 @@ export function DbObjectGrid({
               <tbody className="divide-y divide-border/70">
                 {items.map((item) => {
                   const selected = item.name === selectedName;
+                  const rowActions: EntityAction[] = [
+                    {
+                      id: "drop",
+                      label: labels.drop,
+                      icon: Trash2,
+                      tone: "danger",
+                      onSelect: () => onDrop(item.name),
+                    },
+                  ];
                   return (
-                    <tr key={item.name} className={selected ? "bg-primary/10" : "hover:bg-background"}>
+                    <tr
+                      key={item.name}
+                      data-selected={selected ? "true" : "false"}
+                      aria-current={selected ? "true" : undefined}
+                      className={[
+                        "cursor-pointer transition-colors",
+                        selected ? "bg-primary/10" : "hover:bg-background",
+                      ].join(" ")}
+                      onClick={(event) => {
+                        if (isInteractiveRowTarget(event.target)) return;
+                        onSelect(item.name);
+                      }}
+                    >
                       <td className="px-3 py-2 align-top">
                         <button
                           type="button"
@@ -917,15 +950,11 @@ export function DbObjectGrid({
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
                       <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-muted lg:table-cell">{item.owner || "-"}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-right align-top">
-                        <div className="flex flex-nowrap justify-end gap-2">
-                          <Button type="button" variant="secondary" size="sm" className="min-w-14 whitespace-nowrap" onClick={() => onSelect(item.name)}>
-                            <span className="whitespace-nowrap">{labels.detail}</span>
-                          </Button>
-                          <Button type="button" variant="danger" size="sm" className="min-w-16 whitespace-nowrap" onClick={() => onDrop(item.name)}>
-                            <Trash2 size={15} aria-hidden="true" />
-                            <span className="whitespace-nowrap">{labels.drop}</span>
-                          </Button>
-                        </div>
+                        <RowActionMenu
+                          actions={rowActions}
+                          ariaLabel={`${labels.actions}: ${item.name}`}
+                          testId={`${idPrefix}-row-actions-${item.name}`}
+                        />
                       </td>
                     </tr>
                   );
@@ -1023,6 +1052,36 @@ export function DbObjectDetailPanel({
     { id: "columns", label: labels.columns, icon: Table2 },
     { id: "ddl", label: labels.ddl, icon: Code2 },
   ] as const;
+  const detailActions: EntityAction[] = [
+    {
+      id: "exact-count",
+      label: labels.exactCount ?? "",
+      ariaLabel: labels.exactCountAria,
+      visible: Boolean(onExactCount && labels.exactCount && detail.object_type === "table"),
+      loading: countingRows,
+      onSelect: () => {
+        if (onExactCount) onExactCount(detail.name);
+      },
+    },
+    {
+      id: "export",
+      label: labels.export ?? "",
+      ariaLabel: labels.exportAria,
+      icon: Download,
+      visible: Boolean(onExport && labels.export && labels.exportAria),
+      loading: exporting,
+      onSelect: () => {
+        if (onExport) onExport(detail.name);
+      },
+    },
+    {
+      id: "drop",
+      label: labels.drop,
+      icon: Trash2,
+      tone: "danger",
+      onSelect: () => onDrop(detail.name),
+    },
+  ];
   const handleDetailTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const keyMap: Record<string, number | undefined> = {
       ArrowRight: (index + 1) % detailTabs.length,
@@ -1037,10 +1096,14 @@ export function DbObjectDetailPanel({
     onTabChange(nextTab.id);
     focusDbObjectTabElement(`${idPrefix}-detail-tab-${nextTab.id}`);
   };
+  const showRowCountBadge = detail.object_type === "table" || detail.row_count != null;
 
   return (
     <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby={headingId}>
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+      <div
+        className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
+        data-testid={`${idPrefix}-detail-header`}
+      >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 id={headingId} className="break-all font-mono text-base font-semibold text-foreground">
@@ -1048,41 +1111,21 @@ export function DbObjectDetailPanel({
             </h2>
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
-            {detail.row_count != null && <StatusBadge variant="info" label={rowCountLabel(detail.row_count)} />}
-            {onExactCount && labels.exactCount && detail.object_type === "table" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                loading={countingRows}
-                aria-label={labels.exactCountAria ?? labels.exactCount}
-                onClick={() => onExactCount(detail.name)}
-              >
-                {labels.exactCount}
-              </Button>
+            {showRowCountBadge && (
+              <StatusBadge
+                variant={detail.row_count != null ? "info" : "neutral"}
+                label={rowCountLabel(detail.row_count)}
+                className="min-w-[4.5rem]"
+              />
             )}
           </div>
           {detail.comment && <p className="mt-2 text-sm leading-6 text-foreground">{detail.comment}</p>}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
-          {onExport && labels.export && labels.exportAria && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={exporting}
-              aria-label={labels.exportAria}
-              onClick={() => onExport(detail.name)}
-            >
-              <Download size={15} aria-hidden="true" />
-              <span>{labels.export}</span>
-            </Button>
-          )}
-          <Button type="button" variant="danger" size="sm" onClick={() => onDrop(detail.name)}>
-            <Trash2 size={15} aria-hidden="true" />
-            <span>{labels.drop}</span>
-          </Button>
-        </div>
+        <ObjectActionBar
+          actions={detailActions}
+          ariaLabel={`${labels.actions}: ${detail.name}`}
+          testId={`${idPrefix}-detail-actions`}
+        />
       </div>
 
       {detail.warnings.map((warning) => (
@@ -1195,7 +1238,10 @@ export function DbObjectDetailPanel({
           aria-labelledby={`${idPrefix}-detail-tab-ddl`}
           className="grid gap-3 rounded-md border border-border bg-card p-3"
         >
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <ContentActionBar
+            ariaLabel={`${labels.ddl}: ${labels.actions}`}
+            testId={`${idPrefix}-ddl-actions`}
+          >
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
               {t("dbAdmin.detail.copy")}
             </Button>
@@ -1216,7 +1262,7 @@ export function DbObjectDetailPanel({
               <Download size={15} aria-hidden="true" />
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
-          </div>
+          </ContentActionBar>
           <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>

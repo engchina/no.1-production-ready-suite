@@ -1,0 +1,12 @@
+{
+  "data": {
+    "original_question": "今月の売上トップ5",
+    "rewritten_question": "今月の受注金額上位5件を表示してください",
+    "source": "deterministic",
+    "model": "",
+    "warnings": []
+  },
+  "error_messages": [],
+  "warning_messages": []
+}
+

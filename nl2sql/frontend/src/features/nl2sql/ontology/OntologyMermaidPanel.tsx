@@ -3,6 +3,7 @@ import { ClipboardCopy, FileCode2 } from "lucide-react";
 
 import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { fetchProfileOntologyMermaid } from "./api";
 import { t } from "@/lib/i18n";
@@ -61,7 +62,10 @@ export function OntologyMermaidPanel({ profileId }: { profileId: string }) {
         </summary>
         <div className="mt-3 grid gap-3">
           {error ? <Banner severity="danger">{error}</Banner> : null}
-          <div className="flex flex-wrap gap-2">
+          <ContentActionBar
+            ariaLabel={t("profiles.ontologyBuild.mermaidTitle")}
+            testId="ontology-mermaid-actions"
+          >
             <Button
               type="button"
               variant="secondary"
@@ -75,7 +79,7 @@ export function OntologyMermaidPanel({ profileId }: { profileId: string }) {
             {mermaid ? (
               <Button
                 type="button"
-                variant="ghost"
+                variant="secondary"
                 size="sm"
                 aria-label={t("profiles.ontologyBuild.mermaidCopy")}
                 onClick={() => void copyMermaid()}
@@ -84,7 +88,7 @@ export function OntologyMermaidPanel({ profileId }: { profileId: string }) {
                 <span>{t("profiles.ontologyBuild.mermaidCopy")}</span>
               </Button>
             ) : null}
-          </div>
+          </ContentActionBar>
           {mermaid ? (
             <pre
               className="max-h-80 max-w-full overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg"

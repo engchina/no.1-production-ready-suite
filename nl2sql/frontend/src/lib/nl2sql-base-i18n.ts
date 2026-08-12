@@ -32,13 +32,16 @@ export const ja = {
     "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
   "dbGate.setupRequired.title": "データベース接続済み・初期化が必要です",
   "dbGate.setupRequired.message":
-    "データベースへの接続は確認できましたが、NL2SQL の保存領域が初期化されていません。管理者が migration 003 を適用した後、再試行してください。",
+    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
   "dbGate.unreachable.title": "データベースを起動してください",
   "dbGate.unreachable.message":
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
+  "dbGate.openSystemTables": "システムテーブルを開く",
   "dbGate.settingsHint":
     "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
+  "dbGate.setupRequired.settingsHint":
+    "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",
   "dbGate.checkFailed.message":
     "バックエンドの起動状態を確認して再試行してください。",
@@ -128,6 +131,8 @@ export const ja = {
   "nav.settingsModel.sidebar": "モデル",
   "nav.settingsDatabase": "データベース設定",
   "nav.settingsDatabase.sidebar": "データベース",
+  "nav.settingsSystemTables": "システムテーブル管理",
+  "nav.settingsSystemTables.sidebar": "システムテーブル",
   "nav.settingsServices": "サービス管理",
   "nav.settingsServices.sidebar": "サービス",
   "nav.settingsPrompts": "プロンプト設定",
@@ -1050,6 +1055,8 @@ export const ja = {
     "Payload template は JSON object で入力してください。",
 
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
+  "settings.systemTables.subtitle":
+    "NL2SQL 内部 schema、migration、保存領域の状態を確認・初期化します。",
   "settings.database.loading": "データベース設定を読み込んでいます。",
   "settings.database.loadError": "データベース設定の取得に失敗しました。",
   "settings.database.saveError": "データベース設定の保存に失敗しました。入力値と backend/.env の書き込み権限を確認してください。",

@@ -24,6 +24,7 @@ from app.security.domain import (
     DataEntitlementRecord,
     Principal,
     RoleRecord,
+    UserRecord,
 )
 from app.security.passwords import PasswordPolicyError, validate_password
 from app.security.permissions import (
@@ -38,9 +39,14 @@ from app.security.router import (
     logout,
     me,
 )
-from app.security.schemas import DataEntitlementInput, PasswordChangeRequest
+from app.security.schemas import DataEntitlementInput, PasswordChangeRequest, UserData
 from app.security.service import SecurityApiError, SecurityService, reset_security_service
-from app.security.store import InMemorySecurityStore, OracleSecurityStore, SecurityConflict
+from app.security.store import (
+    InMemorySecurityStore,
+    OracleSecurityStore,
+    SecurityConflict,
+    _audit_record_from_row,
+)
 from app.settings import Settings, get_settings
 
 
@@ -78,6 +84,29 @@ async def _inline_threadpool(
 ) -> object:
     """AnyIO worker が使えない sandbox でも API 契約だけを検証する。"""
     return function(*args, **kwargs)
+
+
+class _AuditDetailLob:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def read(self) -> object:
+        return self._value
+
+
+def _audit_row(detail: object) -> tuple[object, ...]:
+    return (
+        1,
+        None,
+        "LOGIN_SUCCESS",
+        "USER",
+        "target-1",
+        "SUCCESS",
+        detail,
+        "request-1",
+        "127.0.0.1",
+        datetime(2026, 7, 20, tzinfo=UTC),
+    )
 
 
 def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,6 +401,94 @@ def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
         )
 
 
+def test_bootstrap_user_is_marked_in_user_response() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    admin = service.store.get_user(actor.user_id)
+
+    assert admin is not None
+    assert admin.is_bootstrap_admin is True
+    assert UserData.from_record(admin).is_bootstrap_admin is True
+
+
+def test_system_admin_role_cannot_be_assigned_to_new_user() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+
+    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+        service.create_user(
+            login_name="extra.admin",
+            display_name="追加管理者",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            temporary_password="ExtraAdminPass!123",
+            actor=actor,
+        )
+
+    assert service.store.get_user_by_login("extra.admin") is None
+
+
+def test_system_admin_role_cannot_be_added_to_non_bootstrap_user() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    user, _password = service.create_user(
+        login_name="query.user",
+        display_name="検索ユーザー",
+        role_ids=[],
+        temporary_password="QueryUserPass!123",
+        actor=actor,
+    )
+
+    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+        service.update_user(
+            user.user_id,
+            expected_version=user.version,
+            display_name=user.display_name,
+            status="ACTIVE",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            actor=actor,
+        )
+
+
+def test_legacy_non_bootstrap_system_admin_can_be_removed_but_not_reassigned() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    legacy_admin = service.store.create_user(
+        UserRecord(
+            user_id="legacy-admin-user",
+            login_name="legacy.admin",
+            display_name="旧管理者",
+            password_hash="legacy-hash",
+            status="ACTIVE",
+            force_password_change=False,
+            failed_login_count=0,
+            locked_until=None,
+            version=1,
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            is_bootstrap_admin=False,
+        )
+    )
+
+    removed = service.update_user(
+        legacy_admin.user_id,
+        expected_version=legacy_admin.version,
+        display_name=legacy_admin.display_name,
+        status="ACTIVE",
+        role_ids=[],
+        actor=actor,
+    )
+
+    assert removed.role_ids == []
+    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+        service.update_user(
+            removed.user_id,
+            expected_version=removed.version,
+            display_name=removed.display_name,
+            status="ACTIVE",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            actor=actor,
+        )
+
+
 def test_login_lockout_is_generic() -> None:
     service = _service()
     for _ in range(5):
@@ -419,6 +536,40 @@ def test_audit_store_pages_ten_rows_and_clamps_to_last_page() -> None:
     assert empty_page == []
     assert total == 0
     assert resolved_page == 1
+
+
+def test_audit_row_detail_accepts_oracle_native_json_mapping() -> None:
+    record = _audit_record_from_row(_audit_row({"reason": "native", "count": 2}))
+
+    assert record.detail == {"reason": "native", "count": 2}
+
+
+def test_audit_row_detail_accepts_lob_and_bytes_json() -> None:
+    lob_record = _audit_record_from_row(_audit_row(_AuditDetailLob('{"reason":"lob"}')))
+    bytes_record = _audit_record_from_row(_audit_row(_AuditDetailLob(b'{"reason":"bytes"}')))
+
+    assert lob_record.detail == {"reason": "lob"}
+    assert bytes_record.detail == {"reason": "bytes"}
+
+
+def test_audit_row_detail_accepts_legacy_python_dict_literal() -> None:
+    record = _audit_record_from_row(_audit_row("{'reason': 'legacy', 'locked': True}"))
+
+    assert record.detail == {"reason": "legacy", "locked": True}
+
+
+def test_audit_row_detail_reports_unparseable_values_without_raising() -> None:
+    invalid_record = _audit_record_from_row(_audit_row("{bad json"))
+    non_object_record = _audit_record_from_row(_audit_row('["unexpected"]'))
+
+    assert invalid_record.detail == {
+        "decode_warning": "audit_detail_invalid_json",
+        "raw_detail": "{bad json",
+    }
+    assert non_object_record.detail == {
+        "decode_warning": "audit_detail_not_json_object",
+        "raw_detail": '["unexpected"]',
+    }
 
 
 def test_audit_export_contains_rolling_year_full_fields_and_literal_text() -> None:

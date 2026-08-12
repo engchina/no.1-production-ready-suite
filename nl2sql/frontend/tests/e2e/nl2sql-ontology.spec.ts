@@ -727,7 +727,7 @@ test("対象オブジェクトは業務プロファイル、構築とモデル�
 
   // 業務プロファイル編集: 対象オブジェクト一覧は常時表示、オントロジー(構築/モデル)は非表示。
   await page.goto("/profiles");
-  await page.getByRole("button", { name: "編集", exact: true }).first().click();
+  await page.getByTestId("profile-management-grid").locator("tbody tr").first().locator("td").nth(1).click();
   await expect(page.getByTestId("profile-allowed-table-list")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);

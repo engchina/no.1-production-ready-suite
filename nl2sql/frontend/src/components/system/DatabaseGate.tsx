@@ -38,19 +38,33 @@ function isDatabaseGateExemptRoute(pathname: string) {
   );
 }
 
+function isSystemTablesRoute(pathname: string) {
+  return (
+    pathname === APP_ROUTES.settingsSystemTables ||
+    pathname.startsWith(`${APP_ROUTES.settingsSystemTables}/`)
+  );
+}
+
 /** DB と persisted snapshot の両方が復旧するまで業務ページを描画しない。 */
 export function DatabaseGate({ children }: { children: ReactNode }) {
   const location = useLocation();
   const queryClient = useQueryClient();
   const isGateExemptRoute = isDatabaseGateExemptRoute(location.pathname);
+  const isSystemTablesGateRoute = isSystemTablesRoute(location.pathname);
   const [reportedFailure, setReportedFailure] = useState<{
     at: number;
     failure: DatabaseOperationalFailure;
   } | null>(null);
   const database = useDatabaseStatus({ enabled: !isGateExemptRoute });
-  const databaseReady = database.data?.status === "ok";
+  const databaseStatus = database.data?.status;
+  const databaseReady = databaseStatus === "ok";
+  const systemTablesRouteReady =
+    isSystemTablesGateRoute &&
+    (databaseStatus === "ok" || databaseStatus === "setup_required");
+  const shouldCheckPersistence =
+    !isGateExemptRoute && !isSystemTablesGateRoute && databaseReady;
   const persistence = usePersistenceStatus({
-    enabled: !isGateExemptRoute && databaseReady,
+    enabled: shouldCheckPersistence,
   });
   const recover = useRecoverPersistence();
 
@@ -74,9 +88,18 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   useEffect(() => {
+    if (reportedFailure === null) {
+      return;
+    }
     if (
-      reportedFailure === null ||
-      database.data?.status !== "ok" ||
+      (isGateExemptRoute || systemTablesRouteReady) &&
+      database.dataUpdatedAt > reportedFailure.at
+    ) {
+      setReportedFailure(null);
+      return;
+    }
+    if (
+      databaseStatus !== "ok" ||
       database.dataUpdatedAt <= reportedFailure.at ||
       !persistence.data?.ready ||
       persistence.dataUpdatedAt <= reportedFailure.at
@@ -85,17 +108,18 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
     }
     setReportedFailure(null);
   }, [
-    database.data?.status,
+    databaseStatus,
     database.dataUpdatedAt,
+    isGateExemptRoute,
     persistence.data?.ready,
     persistence.dataUpdatedAt,
     reportedFailure,
+    systemTablesRouteReady,
   ]);
 
   useEffect(() => {
     if (
-      isGateExemptRoute ||
-      !databaseReady ||
+      !shouldCheckPersistence ||
       !persistence.data ||
       persistence.data.ready ||
       recover.isPending ||
@@ -104,7 +128,7 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
       return;
     }
     recover.mutate();
-  }, [databaseReady, isGateExemptRoute, persistence.data, recover]);
+  }, [shouldCheckPersistence, persistence.data, recover]);
 
   if (isGateExemptRoute) return <>{children}</>;
 
@@ -113,7 +137,14 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
     supersedeDatabaseUnavailableProbe();
     recover.reset();
     const databaseResult = await database.refetch();
-    if (databaseResult.data?.status !== "ok") return;
+    const databaseOkForRoute =
+      databaseResult.data?.status === "ok" ||
+      (isSystemTablesGateRoute && databaseResult.data?.status === "setup_required");
+    if (!databaseOkForRoute) return;
+    if (isSystemTablesGateRoute) {
+      setReportedFailure(null);
+      return;
+    }
 
     let persistenceResult = await persistence.refetch();
     if (!persistenceResult.data?.ready) {
@@ -127,7 +158,7 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
     if (persistenceResult.data?.ready) setReportedFailure(null);
   };
 
-  if (reportedFailure !== null) {
+  if (reportedFailure !== null && !systemTablesRouteReady) {
     const reportedStatus: DatabaseNoticeStatus =
       reportedFailure.failure.kind === "persistence"
         ? "persistence"
@@ -148,7 +179,7 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
   }
 
   if (database.isPending) return <GateChecking />;
-  if (database.isError || database.data?.status !== "ok") {
+  if (database.isError || (databaseStatus !== "ok" && !systemTablesRouteReady)) {
     return (
       <DatabaseUnavailableNotice
         returnTo={returnTo}
@@ -157,12 +188,14 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
         status={
           database.isError
             ? "check_failed"
-            : noticeStatusForDatabase(database.data?.status)
+            : noticeStatusForDatabase(databaseStatus)
         }
         reasonCode={database.data?.check}
       />
     );
   }
+
+  if (systemTablesRouteReady) return <>{children}</>;
 
   if (persistence.isPending || recover.isPending) {
     return <GateChecking labelKey="dbGate.recovering" />;

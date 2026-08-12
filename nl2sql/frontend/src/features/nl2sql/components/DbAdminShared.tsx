@@ -32,6 +32,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
@@ -514,6 +515,8 @@ export function DbAdminErrorNotice({
     sourceError instanceof ApiError ? sourceError.errorCode : undefined
   );
   if (!message) return null;
+  const hasRawDetail = Boolean(error.rawMessage) && (error.rawMessage !== error.summary || Boolean(error.code));
+  const hasDetail = Boolean(error.helpUrl || hasRawDetail);
   return (
     <div className="mt-3 grid gap-3 rounded-md border border-danger/30 bg-danger-bg p-3 text-danger" role="alert">
       <div className="grid gap-1">
@@ -538,7 +541,7 @@ export function DbAdminErrorNotice({
           ))}
         </ul>
       </div>
-      {(error.helpUrl || error.rawMessage !== error.summary) && (
+      {hasDetail && (
         <details className="rounded-md border border-danger/30 bg-card/70">
           <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-danger/40">
             {t("dbAdmin.result.error.detail")}
@@ -549,7 +552,7 @@ export function DbAdminErrorNotice({
                 {t("dbAdmin.result.error.help")}
               </a>
             )}
-            {error.rawMessage !== error.summary && (
+            {hasRawDetail && (
               <code className="block break-words text-sm leading-6 text-danger">{error.rawMessage}</code>
             )}
           </div>
@@ -1078,7 +1081,7 @@ export function ObjectDetailPanel({
           <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
         </summary>
         <div className="grid gap-2 border-t border-border bg-card p-3">
-          <div className="flex flex-wrap gap-2">
+          <ContentActionBar ariaLabel={t("dbAdmin.detail.ddl")}>
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
               {t("dbAdmin.detail.copy")}
             </Button>
@@ -1099,7 +1102,7 @@ export function ObjectDetailPanel({
               <Download size={15} aria-hidden="true" />
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
-          </div>
+          </ContentActionBar>
           <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>

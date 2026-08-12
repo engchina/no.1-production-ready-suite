@@ -21,6 +21,8 @@ import {
   toast,
 } from "@engchina/production-ready-ui";
 
+import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
+import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
@@ -296,6 +298,7 @@ function updateSelectAiConfig(
 
 function ProfileList({
   profiles,
+  selectedProfileId,
   loading,
   search,
   sort,
@@ -309,6 +312,7 @@ function ProfileList({
   onLoadMore,
 }: {
   profiles: ProfileSummary[];
+  selectedProfileId: string;
   loading: boolean;
   search: string;
   sort: SortState;
@@ -377,12 +381,37 @@ function ProfileList({
               </thead>
               <tbody className="divide-y divide-border/70">
                 {profiles.map((profile) => {
+                  const selected = profile.id === selectedProfileId;
+                  const rowActions: EntityAction[] = [
+                    {
+                      id: "delete",
+                      label: t("profiles.action.delete"),
+                      icon: Trash2,
+                      tone: "danger",
+                      loading: deletingId === profile.id,
+                      onSelect: () => onDelete(profile),
+                    },
+                  ];
                   return (
-                    <tr key={profile.id} className="hover:bg-background">
+                    <tr
+                      key={profile.id}
+                      data-selected={selected ? "true" : "false"}
+                      aria-current={selected ? "true" : undefined}
+                      className={[
+                        "cursor-pointer transition-colors",
+                        selected ? "bg-primary/10" : "hover:bg-background",
+                      ].join(" ")}
+                      onClick={(event) => {
+                        if (isInteractiveRowTarget(event.target)) return;
+                        onSelect(profile);
+                      }}
+                    >
                       <td className="px-3 py-2 align-top">
                         <button
                           type="button"
                           className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-ring/40"
+                          aria-current={selected ? "true" : undefined}
+                          aria-label={t("profiles.action.selectProfile", { name: profile.name })}
                           onClick={() => onSelect(profile)}
                         >
                           <span className="break-words font-semibold text-primary">{profile.name}</span>
@@ -392,21 +421,11 @@ function ProfileList({
                       <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_table_count}</td>
                       <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_view_count}</td>
                       <td className="px-3 py-2 text-right">
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
-                            <span>{t("profiles.action.select")}</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            size="sm"
-                            loading={deletingId === profile.id}
-                            onClick={() => onDelete(profile)}
-                          >
-                            <Trash2 size={15} aria-hidden="true" />
-                            <span>{t("profiles.action.delete")}</span>
-                          </Button>
-                        </div>
+                        <RowActionMenu
+                          actions={rowActions}
+                          ariaLabel={`${t("tableMgmt.grid.actions")}: ${profile.name}`}
+                          testId={`profile-management-row-actions-${profile.id}`}
+                        />
                       </td>
                     </tr>
                   );
@@ -1796,6 +1815,7 @@ export function ProfileManagementPage() {
             >
               <ProfileList
                 profiles={filteredProfiles}
+                selectedProfileId={selectedProfileId}
                 loading={loading === "load" && profiles.length === 0}
                 search={profileSearch}
                 sort={profileSort}

@@ -209,6 +209,7 @@ test("管理者がユーザーを作成して複数ロールを割り当て、�
       locked_until: null,
       version: 1,
       role_ids: ["role-system"],
+      is_bootstrap_admin: true,
     },
   ];
   const viewerRole = {
@@ -243,6 +244,7 @@ test("管理者がユーザーを作成して複数ロールを割り当て、�
       locked_until: null,
       version: 1,
       role_ids: payload.role_ids,
+      is_bootstrap_admin: false,
     };
     users = [...users, user];
     await fulfill(route, { user, temporary_password: "RandomStrong!Pass123" });
@@ -252,7 +254,8 @@ test("管理者がユーザーを作成して複数ロールを割り当て、�
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
   await page.getByLabel("ログイン名").fill("sales.user");
   await page.getByLabel("表示名").fill("営業ユーザー");
-  await page.getByLabel("システム管理者").check();
+  await expect(page.getByLabel("システム管理者")).toBeDisabled();
+  await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
   await page.getByLabel("検索閲覧").check();
   await page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true }).click();
 
@@ -273,6 +276,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
       locked_until: null,
       version: 1,
       role_ids: ["role-system"],
+      is_bootstrap_admin: true,
     },
     {
       user_id: "sales-user",
@@ -283,6 +287,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
       locked_until: "2026-07-21T03:00:00Z",
       version: 2,
       role_ids: ["role-viewer"],
+      is_bootstrap_admin: false,
     },
   ];
   await page.route("**/api/security/roles?include_archived=false", (route) =>
@@ -310,6 +315,34 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expectSplitPaneReservedTrack(usersSplitPane);
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
   await expect(page.getByTestId("security-users-grid").locator("tbody tr")).toHaveCount(2);
+  const adminUserRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
+  await expect(adminUserRowAction).toBeVisible();
+  await expect(page.getByTestId("security-users-grid").getByRole("button", { name: "編集" })).toHaveCount(0);
+  await adminUserRowAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(adminUserRowAction).toBeFocused();
+  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
+  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
+  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "その他の操作" })).toBeVisible();
+  const salesUserRow = page.getByTestId("security-users-grid").locator("tbody tr").filter({ hasText: "営業ユーザー" });
+  await salesUserRow.locator("td").nth(1).click();
+  await expect(salesUserRow).toHaveAttribute("data-selected", "true");
+  await expect(page.locator("dl").getByText("ロック中", { exact: true })).toBeVisible();
+  await expect(page.getByText("ロック期限", { exact: true })).toHaveCount(0);
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "ロック解除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByLabel("システム管理者")).toBeDisabled();
+  await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
   await page.getByTestId("security-users-search").fill("sales");
   await expect(page.getByTestId("security-users-grid").getByText("営業ユーザー")).toBeVisible();
   await expect(page.getByTestId("security-users-grid").getByText("システム管理者")).toHaveCount(0);
@@ -320,11 +353,15 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
 
-  await page.getByTestId("security-users-grid").getByRole("button", { name: "編集" }).first().click();
+  await page.getByTestId("security-users-row-actions-admin-user-trigger").click();
+  await page.getByRole("menuitem", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(listStyle);
+  await expect(page.getByLabel("システム管理者")).toBeEnabled();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
+  await expect(page.getByTestId("security-users-row-actions-admin-user-trigger")).toBeVisible();
 });
 
 test("ロール・権限管理はカード型リストではなくテーブル一覧と詳細で表示する", async ({ page }) => {
@@ -372,6 +409,13 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
   await expect(grid.locator("tbody tr")).toHaveCount(2);
+  const systemRoleAction = page.getByTestId("security-roles-row-actions-role-system-trigger");
+  await expect(systemRoleAction).toBeVisible();
+  await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
+  await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
+  const viewerRoleRow = grid.locator("tbody tr").filter({ hasText: "セキュリティ閲覧" });
+  await viewerRoleRow.locator("td").nth(2).click();
+  await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
   await page.getByTestId("security-roles-search").fill("閲覧");
   await expect(grid.getByText("セキュリティ閲覧")).toBeVisible();
   await expect(grid.getByText("システム管理者")).toHaveCount(0);
@@ -382,11 +426,14 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 
-  await grid.getByRole("button", { name: "編集" }).first().click();
+  await page.getByTestId("security-roles-row-actions-role-system-trigger").click();
+  await page.getByRole("menuitem", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(listStyle);
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
+  await expect(page.getByTestId("security-roles-row-actions-role-system-trigger")).toBeVisible();
 });
 
 test("ロール・権限管理はオントロジー提案取得が遅延しても読み込み完了する", async ({ page }) => {
@@ -493,7 +540,7 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan()));
 
   await page.goto("/settings/security/deepsec");
-  await expect(page.getByText("構成状態を確認しています。", { exact: true })).toBeVisible();
+  await expect(page.getByText("構成状態を確認しています。", { exact: true }).nth(1)).toBeVisible();
   await expect(page.locator("pre")).toHaveCount(1);
   await expect(page.getByText("CREATE END USER NL2SQL_APP_END_USER", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "Data Grant を検証" })).toBeDisabled();

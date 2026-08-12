@@ -24,6 +24,7 @@ export const ROUTE_PERMISSIONS: Record<string, string> = {
   [APP_ROUTES.settingsUploadStorage]: "settings.object_storage.view",
   [APP_ROUTES.settingsModel]: "settings.models.view",
   [APP_ROUTES.settingsDatabase]: "settings.database.view",
+  [APP_ROUTES.settingsSystemTables]: "settings.database.view",
   [APP_ROUTES.settingsAppearance]: "dashboard.view",
   [APP_ROUTES.securityUsers]: "security.users.view",
   [APP_ROUTES.securityRoles]: "security.roles.view",

@@ -164,6 +164,22 @@ test.beforeEach(async ({ page }) => {
   await mockDatabasePage(page);
 });
 
+test("システム設定の独立メニューからシステムテーブル管理を開ける", async ({ page }) => {
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("ready"))
+  );
+
+  await page.goto("/settings/database");
+  await expect(page.locator("#system-tables")).toHaveCount(0);
+
+  await page.getByRole("link", { name: "システムテーブル" }).click();
+  await expect(page).toHaveURL(/\/settings\/system-tables$/);
+  await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();
+  await expect(page.locator("#system-tables")).toBeVisible();
+  await expect(page.locator("#system-tables").getByText("初期化済み", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
 test("状態取得中は aria status を表示し、完了後に操作を有効化する", async ({ page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -174,9 +190,9 @@ test("状態取得中は aria status を表示し、完了後に操作を有効�
     await fulfill(route, systemTables("ready"));
   });
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   await expect(
-    page.getByRole("status", { name: "システムテーブルの状態を読み込んでいます" })
+    page.getByRole("region", { name: "システムテーブルの状態を読み込んでいます" })
   ).toBeVisible();
   release();
   await expect(page.locator("#system-tables").getByRole("button", { name: "作成・更新" })).toBeEnabled();
@@ -188,7 +204,7 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
     fulfill(route, systemTables(status))
   );
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await expect(card).toBeVisible();
 
@@ -218,7 +234,7 @@ test("詳細表は 10 行まで自然表示し、11 行目から内部スクロ�
     fulfill(route, systemTables("ready", { tableCount }))
   );
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await card.getByText("システムテーブルの詳細を表示").click();
 
@@ -317,7 +333,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
     });
   });
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   const initialize = card.getByRole("button", { name: "作成・更新" });
   await initialize.click();
@@ -353,7 +369,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
     })
   );
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const initialize = page.locator("#system-tables").getByRole("button", { name: "作成・更新" });
   await initialize.focus();
   await initialize.click();
@@ -409,7 +425,7 @@ test("全再作成は実行確認語の完全一致まで実行できない", as
     });
   });
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   const trigger = card.getByRole("button", { name: "すべて再作成" });
   const confirmationField = card.getByTestId("execution-confirmation-field");
@@ -448,7 +464,7 @@ test("SQL 実行権限がない利用者は状態のみ閲覧できる", async (
     fulfill(route, systemTables("ready"))
   );
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await expect(card.getByText(/管理 SQL 実行権限が必要/)).toBeVisible();
   await expect(card.getByRole("button", { name: "作成・更新" })).toHaveCount(0);
@@ -479,7 +495,7 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
     return fulfill(route, null, 409, [longFailureDetail], "ORA-00054");
   });
 
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await expect(card.getByText("データベースを起動してください", { exact: true })).toBeVisible();
   await expect(

@@ -233,7 +233,7 @@ export function FileDropzone({
           </span>
           <span
             className={cn(
-              "hidden max-w-56 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:inline-block",
+              "inline-block max-w-24 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:max-w-56",
               hasSelection
                 ? "border-primary/30 bg-primary/10 text-primary"
                 : "border-border bg-background text-muted"

@@ -215,7 +215,7 @@ test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻�
   await expect(listPanel.getByRole("heading", { name: /プロファイル編集/ })).toHaveCount(0);
 
   const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await salesRow.getByRole("button", { name: "編集", exact: true }).click();
+  await salesRow.locator("td").nth(1).click();
   await expect(page).toHaveURL(/\/profiles\?profile=sales$/);
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
@@ -282,7 +282,8 @@ test("未保存の変更があるときは一覧に戻る前に確認する", as
   await page
     .getByRole("row")
     .filter({ hasText: "営業プロファイル" })
-    .getByRole("button", { name: "編集", exact: true })
+    .locator("td")
+    .nth(0)
     .click();
   await page.getByLabel("名称").fill("営業プロファイル改");
   await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
@@ -328,13 +329,14 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
 
   const defaultRow = page.getByRole("row").filter({ hasText: "標準プロファイル" });
   await expect(defaultRow).toBeVisible();
-  await expect(defaultRow.getByRole("button", { name: "編集", exact: true })).toBeVisible();
-  await expect(defaultRow.getByRole("button", { name: "削除", exact: true })).toBeVisible();
+  await expect(defaultRow.getByRole("button", { name: "編集", exact: true })).toHaveCount(0);
+  await expect(defaultRow.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
+  await expect(defaultRow.getByRole("button", { name: /操作:/ })).toBeVisible();
 
   const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await expect(salesRow.getByRole("button", { name: "削除", exact: true })).toBeVisible();
+  await expect(salesRow.getByRole("button", { name: /操作:/ })).toBeVisible();
 
-  await defaultRow.getByRole("button", { name: "編集", exact: true }).click();
+  await defaultRow.locator("td").nth(1).click();
   await expect(page).toHaveURL(/\/profiles\?profile=default$/);
   const editor = page.locator("#profile-management-panel-editor");
   await expect(
@@ -376,7 +378,8 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await page.goto("/profiles");
 
   const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await salesRow.getByRole("button", { name: "削除", exact: true }).click();
+  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expect(dialog.getByText("プロファイルを削除しますか")).toBeVisible();
   await expect(
@@ -388,7 +391,8 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   expect(api.deleteRequests()).toBe(0);
   await expect(page.getByText("営業プロファイル")).toBeVisible();
 
-  await salesRow.getByRole("button", { name: "削除", exact: true }).click();
+  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
     .getByRole("button", { name: "削除", exact: true })
@@ -398,7 +402,7 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await expect(page.getByRole("row").filter({ hasText: "営業プロファイル" })).toHaveCount(0);
 
   const accountingRow = page.getByRole("row").filter({ hasText: "経理プロファイル" });
-  await accountingRow.getByRole("button", { name: "編集", exact: true }).click();
+  await accountingRow.locator("td").nth(1).click();
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();

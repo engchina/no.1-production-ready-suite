@@ -216,7 +216,6 @@ function ImportWizard({
 export function TableManagementPage() {
   const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
-  const [exactCountDone, setExactCountDone] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [tableSearch, setTableSearch] = useState("");
   const [tableFilter, setTableFilter] = useState<DbObjectFilter>("all");
@@ -250,7 +249,6 @@ export function TableManagementPage() {
 
   const fetchDetail = async (name: string) => {
     setDetailTab("columns");
-    setExactCountDone(false);
     await detailRequest.load(name);
   };
 
@@ -271,7 +269,6 @@ export function TableManagementPage() {
       setDetail((current) =>
         current && current.name === name ? { ...current, row_count: full.row_count } : current,
       );
-      setExactCountDone(true);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.exactCount"));
     } finally {
@@ -669,6 +666,7 @@ export function TableManagementPage() {
               countingRows={loading === "count"}
               tab={detailTab}
               labels={{
+                actions: t("tableMgmt.grid.actions"),
                 loading: t("tableMgmt.detail.loading"),
                 ddlLoading: t("tableMgmt.detail.ddlLoading"),
                 tabsLabel: t("tableMgmt.detailTabs.label"),
@@ -687,7 +685,7 @@ export function TableManagementPage() {
               }}
               onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}
-              onExactCount={exactCountDone ? undefined : (name) => void handleExactCount(name)}
+              onExactCount={(name) => void handleExactCount(name)}
               onDrop={openDropDialog}
             />
             </DbObjectManagementPanelShell>

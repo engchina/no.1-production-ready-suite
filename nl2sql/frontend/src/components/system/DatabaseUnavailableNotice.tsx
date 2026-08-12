@@ -1,4 +1,4 @@
-import { ArrowRight, Database, RefreshCw, Settings } from "lucide-react";
+import { ArrowRight, Database, DatabaseZap, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { Banner } from "@engchina/production-ready-ui";
@@ -8,6 +8,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
 const DATABASE_SETTINGS_TARGET = `${APP_ROUTES.settingsDatabase}#adb-management`;
+const SYSTEM_TABLES_TARGET = APP_ROUTES.settingsSystemTables;
 
 export type DatabaseNoticeStatus =
   | "not_configured"
@@ -73,6 +74,21 @@ export function DatabaseUnavailableNotice({
     );
   }
 
+  const action =
+    status === "setup_required"
+      ? {
+          href: SYSTEM_TABLES_TARGET,
+          labelKey: "dbGate.openSystemTables",
+          icon: DatabaseZap,
+          hintKey: "dbGate.setupRequired.settingsHint",
+        }
+      : {
+          href: DATABASE_SETTINGS_TARGET,
+          labelKey: "dbGate.openDatabaseSettings",
+          icon: Settings,
+          hintKey: "dbGate.settingsHint",
+        };
+
   return (
     <div className="grid min-h-dvh place-items-center p-4 sm:p-6">
       <section
@@ -97,6 +113,7 @@ export function DatabaseUnavailableNotice({
           isRetrying={isRetrying}
           messageKey={copy.message}
           reasonCode={reasonCode}
+          primaryAction={action}
         />
       </section>
     </div>
@@ -109,13 +126,21 @@ function NoticeContent({
   isRetrying,
   messageKey,
   reasonCode,
+  primaryAction,
 }: {
   returnTo?: string;
   onRetry: () => void;
   isRetrying: boolean;
   messageKey: I18nKey;
   reasonCode?: string | null;
+  primaryAction: {
+    href: string;
+    labelKey: I18nKey;
+    icon: typeof Settings;
+    hintKey: I18nKey;
+  };
 }) {
+  const PrimaryActionIcon = primaryAction.icon;
   return (
     <>
       <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
@@ -129,12 +154,12 @@ function NoticeContent({
 
       <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
         <Link
-          to={DATABASE_SETTINGS_TARGET}
+          to={primaryAction.href}
           state={returnTo ? { returnTo } : undefined}
           className={buttonVariants({ variant: "primary", size: "md" })}
         >
-          <Settings size={15} aria-hidden />
-          {t("dbGate.openDatabaseSettings")}
+          <PrimaryActionIcon size={15} aria-hidden />
+          {t(primaryAction.labelKey)}
           <ArrowRight size={15} aria-hidden />
         </Link>
         <Button size="md" variant="secondary" onClick={onRetry} loading={isRetrying}>
@@ -144,7 +169,7 @@ function NoticeContent({
       </div>
 
       <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-muted">
-        {t("dbGate.settingsHint")}
+        {t(primaryAction.hintKey)}
       </p>
     </>
   );

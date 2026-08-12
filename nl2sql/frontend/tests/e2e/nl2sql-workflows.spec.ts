@@ -20,6 +20,36 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
+async function clickRowAction(page: Page, testId: string, name: string) {
+  const trigger = page.getByTestId(`${testId}-trigger`);
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
+async function expectContentActionsRightAligned(actions: Locator) {
+  const metrics = await actions.evaluate((node) => {
+    const group = node.querySelector('[role="group"]');
+    const firstButton = group?.querySelector("button");
+    const panel = node.closest('[role="tabpanel"]') ?? node.parentElement;
+    const code = panel?.querySelector("pre, textarea");
+    if (!group || !firstButton || !panel || !code) return null;
+    const buttonRect = firstButton.getBoundingClientRect();
+    const groupRect = group.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const codeRect = code.getBoundingClientRect();
+    return {
+      codeLeft: codeRect.left,
+      firstButtonLeft: buttonRect.left,
+      groupRight: groupRect.right,
+      panelRight: panelRect.right,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  expect(metrics!.groupRight).toBeGreaterThanOrEqual(metrics!.panelRight - 20);
+  expect(metrics!.firstButtonLeft).toBeGreaterThan(metrics!.codeLeft);
+}
+
 type JsonValue = Record<string, unknown> | unknown[];
 
 interface MockApiState {
@@ -2850,6 +2880,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expect(generate.getByText("安全", { exact: true })).toBeVisible();
   const copySql = generate.getByRole("button", { name: "コピー" });
   await expect(copySql).toBeVisible();
+  await expectContentActionsRightAligned(generate.getByTestId("generated-sql-content-actions"));
   await copySql.click();
   await expect(page.getByRole("status").filter({ hasText: "クリップボードにコピーしました。" })).toBeVisible();
   await page.getByRole("status").filter({ hasText: "クリップボードにコピーしました。" }).getByRole("button", { name: "閉じる" }).click();
@@ -4039,7 +4070,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByRole("columnheader", { name: "SQL_TEXT" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "ATTRIBUTES" })).toBeVisible();
   const pageRefreshButton = page.getByRole("button", { name: "表示を更新", exact: true });
-  if ((page.viewportSize()?.width ?? 0) < 640) {
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
     await expect(pageRefreshButton).toHaveCSS("height", "44px");
   } else {
     await expect(pageRefreshButton).toHaveClass(/\bh-8\b/);
@@ -4329,7 +4360,7 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expect(page.getByRole("alert")).toContainText("Feedback 類似検索設定を取得できません。");
   await expect(page.getByText("Select AI feedback はありません")).toBeVisible();
   const reloadButton = page.getByRole("button", { name: "表示を更新", exact: true });
-  if ((page.viewportSize()?.width ?? 0) < 640) {
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
     await expect(reloadButton).toHaveCSS("height", "44px");
   } else {
     await expect(reloadButton).toHaveClass(/\bh-8\b/);
@@ -6031,7 +6062,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText("取得元", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/DB 構造の最終取得:/)).toBeVisible();
   const tablePageActions = page.getByTestId("table-management-actions");
-  if ((page.viewportSize()?.width ?? 0) < 640) {
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
     await tablePageActions.getByRole("button", { name: "その他の操作" }).click();
     await expect(page.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeVisible();
@@ -6076,12 +6107,13 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(columnsTab).toHaveAttribute("aria-selected", "true");
   await ddlTab.click();
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toBeVisible();
+  await expectContentActionsRightAligned(page.getByTestId("table-management-ddl-actions"));
   const ddlDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "SQL 出力" }).click();
   const ddlDownload = await ddlDownloadPromise;
   expect(ddlDownload.suggestedFilename()).toBe("invoices_ddl.sql");
 
-  await page.getByRole("button", { name: "削除" }).first().click();
+  await clickRowAction(page, "table-management-row-actions-INVOICES", "削除");
   await expect(page.getByRole("dialog", { name: "DROP TABLE の確認" })).toBeVisible();
   await page.getByRole("dialog", { name: "DROP TABLE の確認" }).getByLabel("実行確認語").fill("INVOICES");
   await expect(page.getByRole("dialog", { name: "DROP TABLE の確認" }).getByText("確認済み", { exact: true })).toHaveCount(1);
@@ -6178,6 +6210,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
   await page.getByRole("tab", { name: "DDL" }).click();
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toBeVisible();
+  await expectContentActionsRightAligned(page.getByTestId("table-management-ddl-actions"));
   await expectNoHorizontalScroll(page);
 
   await page.goto("/comment-management");
@@ -6238,6 +6271,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.keyboard.press("ArrowRight");
   await expect(viewDdlTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText('CREATE OR REPLACE VIEW "V_EMP_DEPT"')).toBeVisible();
+  await expectContentActionsRightAligned(page.getByTestId("view-management-ddl-actions"));
 
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const stepIndicatorBox = await page.getByTestId("view-join-where-steps").boundingBox();
@@ -6268,7 +6302,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
   await page.getByRole("button", { name: "一覧に戻る" }).click();
-  await page.getByTestId("view-management-grid").getByRole("button", { name: "削除" }).click();
+  await clickRowAction(page, "view-management-row-actions-V_EMP_DEPT", "削除");
   await expect(page.getByRole("dialog", { name: "DROP VIEW の確認" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Drop 実行" })).toBeDisabled();
   await page.getByLabel("実行確認語").fill("V_EMP_DEPT");

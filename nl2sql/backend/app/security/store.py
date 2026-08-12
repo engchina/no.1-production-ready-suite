@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
@@ -116,8 +117,46 @@ def _resolved_page(total: int, requested_page: int, page_size: int) -> int:
     return min(max(1, requested_page), total_pages)
 
 
+def _audit_detail_warning(code: str, raw_detail: object) -> dict[str, object]:
+    return {"decode_warning": code, "raw_detail": "" if raw_detail is None else str(raw_detail)}
+
+
+def _audit_detail_object(value: object, raw_detail: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return _audit_detail_warning("audit_detail_not_json_object", raw_detail)
+    try:
+        return cast(
+            dict[str, object],
+            json.loads(json.dumps(value, ensure_ascii=False, separators=(",", ":"))),
+        )
+    except (TypeError, ValueError):
+        return _audit_detail_warning("audit_detail_not_json_serializable", raw_detail)
+
+
+def _decode_audit_detail(value: Any) -> dict[str, object]:
+    read = getattr(value, "read", None)
+    raw_detail = read() if callable(read) else value
+    if raw_detail in (None, ""):
+        return {}
+    if isinstance(raw_detail, Mapping):
+        return _audit_detail_object(raw_detail, raw_detail)
+    if isinstance(raw_detail, bytes):
+        raw_text = raw_detail.decode("utf-8", errors="replace")
+    else:
+        raw_text = str(raw_detail)
+    if not raw_text:
+        return {}
+    try:
+        decoded = json.loads(raw_text)
+    except json.JSONDecodeError:
+        try:
+            decoded = ast.literal_eval(raw_text)
+        except (SyntaxError, ValueError):
+            return _audit_detail_warning("audit_detail_invalid_json", raw_text)
+    return _audit_detail_object(decoded, raw_text)
+
+
 def _audit_record_from_row(row: Any) -> AuditRecord:
-    raw_detail = row[6].read() if hasattr(row[6], "read") else row[6]
     return AuditRecord(
         audit_id=int(row[0]),
         actor_user_id=str(row[1]) if row[1] else None,
@@ -125,7 +164,7 @@ def _audit_record_from_row(row: Any) -> AuditRecord:
         target_type="" if row[3] in (None, "-") else str(row[3]),
         target_id="" if row[4] in (None, "-") else str(row[4]),
         outcome=str(row[5]),
-        detail=json.loads(str(raw_detail or "{}")),
+        detail=_decode_audit_detail(row[6]),
         request_id="" if row[7] in (None, "-") else str(row[7]),
         client_ip="" if row[8] in (None, "-") else str(row[8]),
         created_at=row[9],
@@ -163,6 +202,7 @@ class InMemorySecurityStore:
                 locked_until=None,
                 version=1,
                 role_ids=[SYSTEM_ADMIN_ROLE_ID],
+                is_bootstrap_admin=True,
             )
             self.users[user.user_id] = user
             return True
@@ -568,7 +608,11 @@ class OracleSecurityStore:
     def _user_select() -> str:
         return (
             "SELECT USER_ID, LOGIN_NAME, DISPLAY_NAME, PASSWORD_HASH, STATUS, "
-            "FORCE_PASSWORD_CHANGE, FAILED_LOGIN_COUNT, LOCKED_UNTIL, VERSION_NO "
+            "FORCE_PASSWORD_CHANGE, FAILED_LOGIN_COUNT, LOCKED_UNTIL, VERSION_NO, "
+            "CASE WHEN USER_ID = ("
+            "  SELECT MIN(USER_ID) KEEP (DENSE_RANK FIRST ORDER BY CREATED_AT, USER_ID) "
+            "  FROM NL2SQL_APP_USERS"
+            ") THEN 1 ELSE 0 END AS IS_BOOTSTRAP_ADMIN "
             "FROM NL2SQL_APP_USERS"
         )
 
@@ -590,6 +634,7 @@ class OracleSecurityStore:
             locked_until=row[7],
             version=int(row[8]),
             role_ids=role_ids,
+            is_bootstrap_admin=bool(row[9]),
         )
 
     def create_user(self, user: UserRecord) -> UserRecord:

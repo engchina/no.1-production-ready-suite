@@ -69,7 +69,7 @@
 - **並び順**: primary → secondary → ghost(左から重要度順)。結果表示(`FormStatus`)はバー内の末尾に置く。
 - **ページレベル操作**はローカル [`<PageHeader>` / `<PageActionBar>`](../frontend/src/components/PageHeader.tsx) に集約する。独立したページ上部アクション行を追加しない。
 - **破壊的アクションは通常アクションから空間的に分離**(`destructive-nav-separation` / `destructive-emphasis`)。
-- レスポンシブ: 横幅が足りない場合は `w-full sm:w-auto` で縦積み→横並びにする。`whitespace-nowrap` でラベル折返しを防ぐ。
+- レスポンシブ: ページヘッダー操作は `lg` 未満で compact 表示にし、タイトル/説明とボタンが横方向に押し合わないよう縦積みにする。`whitespace-nowrap` でラベル折返しを防ぐ。
 
 ---
 
@@ -90,12 +90,43 @@
 ```
 
 - 固定順序は **primary → secondary → utility(現在表示の再取得 → 外部データ/DB 構造同期) → danger**。配列順に依存せず `kind` で整列し、同一 `kind` 内の宣言順を保つ。
-- `primary` はページ全体で最大 1 件。`utility` は `secondary` variant、`danger` は区切りを置いて表示する。
+- `primary` はページ全体で最大 1 件。`primary/secondary` は作業開始グループ、`utility` はページツールグループ、`danger` は危険操作グループとして、グループ境界に軽い区切りと余白を置く。
 - 共通文言は `common.action.refresh`=`表示を更新`、`common.action.schemaRefresh`=`DB 構造を再取得` を使用する。前者は現在表示の GET、後者は Schema Refresh Job の開始に限定する。
 - 非同期操作は `loading` を渡し、処理中の再送信を防止する。成功 Toast と回復可能なエラー表示は [frontend-messaging-spec.md](./frontend-messaging-spec.md) に従い handler 側で行う。
-- 375px で操作が 2 件以上なら、先頭の最高優先度操作だけを表示し、残りを `その他の操作` メニューへ収める。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印/Home/End、フォーカス復帰を満たす。
-- モバイルのページ操作は 44px、デスクトップは `size="sm"`。ラベルと既存 `data-testid` は可能な限り維持する。
+- `lg` 未満で操作が 2 件以上なら、先頭の最高優先度操作だけを表示し、残りを `その他の操作` メニューへ収める。`DB 構造を再取得` は `lg+` では工具グループ最右、`lg` 未満では overflow 内へ入れる。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印/Home/End、フォーカス復帰を満たす。
+- compact のページ操作は 44px、`lg+` は `size="sm"`。ラベルと既存 `data-testid` は可能な限り維持する。
 - ヘッダーには現在の判断を変える状態・リスク・バックグラウンド進捗だけを置く。件数は一覧/タブ/操作パネルへ、DB 構造の最終取得時刻は同期操作の近くへ置く。
+
+---
+
+## 5.1 オブジェクト操作（一覧行 / 詳細）
+
+一覧 + 詳細の管理画面では、同じ対象オブジェクトの操作を `EntityAction` descriptor で 1 回だけ定義し、
+表示場所ごとに `RowActionMenu` / `ObjectActionBar` へ渡す。左の一覧と右の詳細で別々にボタン列を組まない。
+
+- **ページ操作**: 新規作成・表示更新など対象を選ばない操作は `PageHeader` に置く。
+- **一覧行**: 行内は常時表示の `RowActionMenu` 1 個だけにする。複数の文字ボタンを横並びにしない。
+- **行選択**: 一覧/詳細の単一選択画面では、行の非アクション領域クリックで対象を選択し、右側詳細または編集対象を更新する。`詳細` / `編集` のような純粋な選択導線は `RowActionMenu` に入れない。
+- **詳細**: `ObjectActionBar` は最大 2 個の非破壊・高頻度操作を `secondary` で表示し、残りを `その他の操作` メニューへ入れる。
+- **危険操作**: 無効化・アーカイブ・削除・DROP は一覧行/詳細では menu item として扱い、確定は `ConfirmDialog` または専用確認ダイアログの `danger` ボタンで行う。
+- **一括操作**: 複数選択を導入する場合は batch action bar を使い、batch mode 中は行内 `RowActionMenu` を disabled または非表示にする。
+- **アクセシビリティ**: menu trigger は `aria-haspopup="menu"` / `aria-expanded` / `aria-controls`、menu は `role="menu"`、item は `role="menuitem"`。Esc で閉じ、ArrowUp/Down/Home/End で移動し、Esc 後は trigger にフォーカスを戻す。
+- **配置**: 行内 trigger は右寄せの icon-only ghost、詳細 action bar はヘッダー右側で `secondary` + overflow。danger item は menu 内で区切り線を置く。menu surface は scroll container 内へ absolute 配置せず、viewport 基準の fixed/portal で表示する。
+- **menu の表示方向**: 方向判定は trigger の最近の実スクロール祖先を優先し、該当祖先がない場合は viewport を使う。下方向の空きが足りない場合は上方向へ反転する。上下どちらにも十分な空きがない場合は、空きが大きい側を選び `max-height` + 内部スクロールにする。表の件数が少なく container が実スクロール状態でない場合は、menu を container に閉じ込めず viewport 内で表示する。
+
+---
+
+## 5.2 コンテンツ内の局所ツール操作
+
+コードブロック、プレビュー、結果、局所テーブルなど、特定コンテンツだけに作用する操作は
+[`<ContentActionBar>`](../frontend/src/components/ContentActionBar.tsx) に集約する。左側はタイトル・説明・状態などの情報、右側は操作ボタンにする。
+
+- **配置**: 操作はコンテンツ面の右上に置く。左側は本文の読み始め、タイトル、説明、状態表示に残す。
+- **対象**: コピー、ダウンロード、SQL 出力、局所プレビュー実行など、直下または同一カード内のコンテンツだけに作用する操作。
+- **見た目**: ボタンは `<Button variant="secondary" size="sm">` を既定にする。低頻度の補助でも ghost に落とさず、同じ局所ツール群では variant と size を揃える。
+- **構造**: `ContentActionBar` は `aria-label` 必須。複雑な左側状態は `leading`、単純な情報は `title` / `description` / `meta` を使う。
+- **レスポンシブ**: 375px では折り返し可。ただし操作はコンテンツの上に残し、本文やコードの左起点を押し下げすぎない。ページ横スクロールを出さない。
+- **境界**: ページ全体・選択オブジェクト全体に作用する操作は `PageHeader` / `ObjectActionBar` に置き、`ContentActionBar` へ混在させない。
 
 ---
 

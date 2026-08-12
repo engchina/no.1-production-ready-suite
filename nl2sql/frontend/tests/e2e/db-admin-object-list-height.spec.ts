@@ -39,6 +39,32 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+async function expectContentActionsRightAligned(actions: Locator) {
+  const metrics = await actions.evaluate((node) => {
+    const group = node.querySelector('[role="group"]');
+    const firstButton = group?.querySelector("button");
+    const panel = node.closest('[role="tabpanel"]');
+    const code = panel?.querySelector("pre");
+    if (!group || !firstButton || !panel || !code) return null;
+    const buttonRect = firstButton.getBoundingClientRect();
+    const groupRect = group.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const codeRect = code.getBoundingClientRect();
+    return {
+      firstButtonLeft: buttonRect.left,
+      codeLeft: codeRect.left,
+      groupLeft: groupRect.left,
+      groupRight: groupRect.right,
+      panelLeft: panelRect.left,
+      panelRight: panelRect.right,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  expect(metrics!.groupRight).toBeGreaterThanOrEqual(metrics!.panelRight - 20);
+  expect(metrics!.groupLeft).toBeGreaterThan(metrics!.panelLeft);
+  expect(metrics!.firstButtonLeft).toBeGreaterThan(metrics!.codeLeft);
+}
+
 const scenarios = [
   {
     title: "テーブル一覧",
@@ -175,8 +201,13 @@ const prepareManagementScenarios = [
   },
 ] as const;
 
-async function mockObjectManagementApi(page: Page, scenario: (typeof scenarios)[number]) {
-  const items = Array.from({ length: 30 }, (_, index) => ({
+async function mockObjectManagementApi(
+  page: Page,
+  scenario: (typeof scenarios)[number],
+  options: { itemCount?: number } = {}
+) {
+  const itemCount = options.itemCount ?? 30;
+  const items = Array.from({ length: itemCount }, (_, index) => ({
     name: `${scenario.prefix}_${String(index + 1).padStart(2, "0")}`,
     owner: "APP",
     object_type: scenario.objectType,
@@ -491,6 +522,28 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
 
   // 一覧が既定。作成/取込はタブではなくツールバーのアクションボタン。
   const actions = page.getByTestId("table-management-actions");
+  await expect(actions.getByRole("button")).toHaveText([
+    "テーブル作成",
+    "Excel/CSV 取込(新規テーブル)",
+    "表示を更新",
+    "DB 構造を再取得",
+  ]);
+  await expect(actions.locator('[data-page-action-group="task"]')).toHaveCount(2);
+  await expect(actions.locator('[data-page-action-group="utility"]')).toHaveCount(2);
+  await expect(actions.locator('[data-page-action-group="utility"][data-page-action-group-start="true"]')).toBeVisible();
+  const [createBox, importBox, refreshBox, schemaRefreshBox] = await Promise.all([
+    actions.getByRole("button", { name: "テーブル作成" }).boundingBox(),
+    actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).boundingBox(),
+    actions.getByRole("button", { name: "表示を更新" }).boundingBox(),
+    actions.getByRole("button", { name: "DB 構造を再取得" }).boundingBox(),
+  ]);
+  expect(createBox).not.toBeNull();
+  expect(importBox).not.toBeNull();
+  expect(refreshBox).not.toBeNull();
+  expect(schemaRefreshBox).not.toBeNull();
+  expect(importBox!.x).toBeGreaterThan(createBox!.x);
+  expect(refreshBox!.x).toBeGreaterThan(importBox!.x);
+  expect(schemaRefreshBox!.x).toBeGreaterThan(refreshBox!.x);
   await expectSingleLine(actions.getByRole("button", { name: "テーブル作成" }).locator("span"));
   await expectSingleLine(actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).locator("span"));
   // 詳細内タブ(列情報/DDL)は維持。
@@ -501,8 +554,19 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   await expect(grid.locator("tbody tr")).toHaveCount(30);
   await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
   await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
-  await expectSingleLine(grid.getByRole("button", { name: "詳細" }).first().locator("span").first());
-  await expectSingleLine(grid.getByRole("button", { name: "削除" }).first().locator("span").first());
+  const rowAction = grid.getByRole("button", { name: /操作: TABLE_01/ });
+  await expect(rowAction).toBeVisible();
+  await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);
+  await rowAction.click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
+  await expect(page.getByRole("menuitem", { name: "詳細" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  const secondRow = grid.locator("tbody tr").nth(1);
+  await secondRow.locator("td").nth(1).click();
+  await expect(secondRow).toHaveAttribute("data-selected", "true");
 
   const scroll = await page.getByTestId("db-admin-object-list").evaluate((node) => ({
     internalWidthStable: node.scrollWidth >= node.clientWidth,
@@ -514,10 +578,65 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   expect(scroll.pageHorizontal).toBe(false);
 });
 
+test("テーブル管理の行メニューは下端では上方向に開く", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1365, height: 900 });
+  await mockObjectManagementApi(page, scenarios[0]);
+  await page.goto("/table-management");
+
+  const list = page.getByTestId("db-admin-object-list");
+  await list.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+
+  const bottomRowAction = page.getByRole("button", { name: /操作: TABLE_30/ });
+  await expect(bottomRowAction).toBeVisible();
+  const bottomTriggerBox = await bottomRowAction.boundingBox();
+  expect(bottomTriggerBox).not.toBeNull();
+  await bottomRowAction.click();
+
+  const bottomMenu = page.getByRole("menu");
+  await expect(bottomMenu).toBeVisible();
+  await expect(bottomMenu).toHaveAttribute("data-floating-menu-placement", "top");
+  const bottomMenuBox = await bottomMenu.boundingBox();
+  expect(bottomMenuBox).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(bottomTriggerBox!.y + 1);
+  expect(bottomMenuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(viewport!.height + 1);
+});
+
+test("テーブル管理の行メニューは少件数の一覧でも裁切されない", async ({ page }) => {
+  await page.setViewportSize({ width: 1365, height: 900 });
+  await mockObjectManagementApi(page, scenarios[0], { itemCount: 1 });
+  await page.goto("/table-management");
+
+  const shortList = page.getByTestId("db-admin-object-list");
+  const shortListBox = await shortList.boundingBox();
+  expect(shortListBox).not.toBeNull();
+  const shortRowAction = page.getByRole("button", { name: /操作: TABLE_01/ });
+  await expect(shortRowAction).toBeVisible();
+  await shortRowAction.click();
+
+  const shortMenu = page.getByRole("menu");
+  await expect(shortMenu).toBeVisible();
+  await expect(shortMenu).toHaveAttribute("data-floating-menu-placement", "bottom");
+  const shortMenuBox = await shortMenu.boundingBox();
+  expect(shortMenuBox).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  expect(shortMenuBox!.y + shortMenuBox!.height).toBeGreaterThan(shortListBox!.y + shortListBox!.height);
+  expect(shortMenuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(shortMenuBox!.y + shortMenuBox!.height).toBeLessThanOrEqual(viewport!.height + 1);
+});
+
 test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初回表示で後追い取得する", async ({
   page,
 }) => {
   const detailUrls: string[] = [];
+  const exactCountGate = createRequestGate();
   let catalogHit = false;
   await page.route("**/api/schema/catalog", (route) => {
     catalogHit = true;
@@ -527,7 +646,7 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
     fulfillJson(route, {
       runtime: "deterministic",
       items: [
-        { name: "TABLE_01", owner: "APP", object_type: "table", row_count: 7, comment: "" },
+        { name: "TABLE_01", owner: "APP", object_type: "table", row_count: null, comment: "" },
       ],
       refreshed_at: "2026-07-14T03:53:00+00:00",
       warnings: [],
@@ -538,7 +657,7 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
       runtime: "deterministic",
       owner: "APP",
       items: [
-        { name: "TABLE_01", owner: "APP", object_type: "table", row_count: 7, comment: "" },
+        { name: "TABLE_01", owner: "APP", object_type: "table", row_count: null, comment: "" },
       ],
       total: 1,
       table_count: 1,
@@ -549,17 +668,19 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
       warnings: [],
     }),
   );
-  await page.route("**/api/nl2sql/db-admin/tables/*", (route) => {
+  await page.route("**/api/nl2sql/db-admin/tables/*", async (route) => {
     const url = route.request().url();
     detailUrls.push(url);
     // 重い GET_DDL を伴う DDL は include_ddl=1 のときだけ返す(バックエンドの挙動を模す)。
     const withDdl = url.includes("include_ddl=1");
+    const exactCount = url.includes("exact_count=1");
+    if (exactCount) await exactCountGate.promise;
     return fulfillJson(route, {
       name: "TABLE_01",
       owner: "APP",
       object_type: "table",
       // 既定は num_rows 統計、exact_count=1 のときだけ COUNT(*) 相当の正確値を返す。
-      row_count: url.includes("exact_count=1") ? 999 : 10,
+      row_count: exactCount ? 999 : null,
       comment: "",
       // サンプル値は詳細応答が返す(catalog 全取得に依存しない)。
       columns: [
@@ -582,7 +703,8 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
   // 列タブ(既定)の初期表示は DDL 抜きで取得し、サンプル値は詳細応答由来で表示される。
   await expect(page.getByRole("heading", { name: "TABLE_01" })).toBeVisible();
   await expect(page.getByText("NEW, PAID")).toBeVisible();
-  await expect(page.getByText("10 行")).toBeVisible(); // 既定は num_rows 統計
+  const detailHeader = page.getByTestId("table-management-detail-header");
+  await expect(detailHeader.getByText("-", { exact: true })).toBeVisible(); // 未取得時も行数スロットを予約する
   expect(detailUrls.length).toBeGreaterThan(0);
   expect(detailUrls.every((url) => url.includes("include_ddl=0"))).toBe(true);
   expect(detailUrls.some((url) => url.includes("include_ddl=1"))).toBe(false);
@@ -590,14 +712,33 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
   // catalog 全取得は行わない(サンプル値も取得日時も一覧/詳細で賄う)。
   expect(catalogHit).toBe(false);
 
-  // 「正確な件数を取得」で exact_count=1 を明示取得し、行数バッジが更新される。
-  await page.getByRole("button", { name: "COUNT(*) で正確な行数を取得" }).click();
+  const headerBoxBefore = await detailHeader.boundingBox();
+  expect(headerBoxBefore).not.toBeNull();
+  const exactCountButton = page.getByRole("button", { name: "COUNT(*) で正確な行数を取得" });
+
+  // 「正確な件数を取得」は loading 中も消えず、ヘッダー高さを変えず、完了後も再実行できる。
+  await exactCountButton.click();
+  await expect.poll(() => detailUrls.filter((url) => url.includes("exact_count=1")).length).toBe(1);
+  await expect(exactCountButton).toBeVisible();
+  await expect(exactCountButton).toBeDisabled();
+  const headerBoxLoading = await detailHeader.boundingBox();
+  expect(headerBoxLoading).not.toBeNull();
+  expect(Math.abs(headerBoxLoading!.height - headerBoxBefore!.height)).toBeLessThanOrEqual(1);
+  exactCountGate.release();
   await expect(page.getByText("999 行")).toBeVisible();
+  await expect(exactCountButton).toBeVisible();
+  await expect(exactCountButton).toBeEnabled();
+  const headerBoxAfter = await detailHeader.boundingBox();
+  expect(headerBoxAfter).not.toBeNull();
+  expect(Math.abs(headerBoxAfter!.height - headerBoxBefore!.height)).toBeLessThanOrEqual(1);
   expect(detailUrls.some((url) => url.includes("exact_count=1"))).toBe(true);
+  await exactCountButton.click();
+  await expect.poll(() => detailUrls.filter((url) => url.includes("exact_count=1")).length).toBeGreaterThanOrEqual(2);
 
   // DDL タブを開くと include_ddl=1 で後追い取得し、DDL が表示される。
   await page.getByRole("tab", { name: "DDL" }).click();
   await expect(page.getByText('CREATE TABLE "TABLE_01" ("ID" NUMBER)')).toBeVisible();
+  await expectContentActionsRightAligned(page.getByTestId("table-management-ddl-actions"));
   expect(detailUrls.some((url) => url.includes("include_ddl=1"))).toBe(true);
 });
 
@@ -1087,7 +1228,6 @@ test("テーブル詳細の30秒 timeout は選択を保持して再試行でき
   });
 
   await page.goto("/table-management");
-  await expect(page.getByTestId("table-management-detail-skeleton")).toBeVisible();
   await expect(page.getByTestId("table-management-detail-error")).toContainText(
     "30秒以内に完了しませんでした",
   );
@@ -1592,8 +1732,16 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
   if (await ownerHeader.count()) {
     await expectSingleLine(ownerHeader.locator("span").first());
   }
-  await expectSingleLine(grid.getByRole("button", { name: "詳細" }).first().locator("span").first());
-  await expectSingleLine(grid.getByRole("button", { name: "削除" }).first().locator("span").first());
+  const rowAction = grid.getByRole("button", { name: /操作: VIEW_01/ });
+  await expect(rowAction).toBeVisible();
+  await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);
+  await rowAction.click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
+  await expect(page.getByRole("menuitem", { name: "詳細" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
+  await page.keyboard.press("Escape");
 });
 
 test("ビュー管理はアクションボタンで作成・JOIN/WHERE を開閉できる", async ({ page }) => {

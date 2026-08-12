@@ -172,6 +172,7 @@ class UserData(BaseModel):
     locked_until: datetime | None
     version: int
     role_ids: list[str]
+    is_bootstrap_admin: bool
 
     @classmethod
     def from_record(cls, user: UserRecord) -> UserData:
@@ -184,6 +185,7 @@ class UserData(BaseModel):
             locked_until=user.locked_until,
             version=user.version,
             role_ids=user.role_ids,
+            is_bootstrap_admin=user.is_bootstrap_admin,
         )
 
 

@@ -33,7 +33,6 @@ import {
   SettingsSupplementalPanels,
   formatSettingsEnvValue,
 } from "@/components/settings/SettingsPreviewPanels";
-import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import {
   ApiError,
   type AdbInfoData,
@@ -352,7 +351,6 @@ export function DatabaseSettingsClient() {
         </form>
 
           <AdbManagementCard settings={settings} />
-          <SystemTablesCard />
         </div>
 
         <SettingsSupplementalPanels

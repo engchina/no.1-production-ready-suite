@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Navigate,
   Route,
@@ -11,43 +19,171 @@ import {
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
-import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
-import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
-import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
-import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
-import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
-import { AdminSqlPage } from "@/features/nl2sql/pages/AdminSqlPage";
-import { DataManagementPage } from "@/features/nl2sql/pages/DataManagementPage";
-import { DirectSqlPage } from "@/features/nl2sql/pages/DirectSqlPage";
-import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
-import { FeedbackManagementPage } from "@/features/nl2sql/pages/FeedbackManagementPage";
-import { GlossaryRulesPage } from "@/features/nl2sql/pages/GlossaryRulesPage";
-import { GlobalRulesPage } from "@/features/nl2sql/pages/GlobalRulesPage";
-import { HistoryPage } from "@/features/nl2sql/pages/HistoryPage";
-import { QuestionClassifierModelsPage } from "@/features/nl2sql/pages/QuestionLearningPage";
-import {
-  AnnotationManagementPage,
-  CommentManagementPage,
-} from "@/features/nl2sql/pages/MetadataSqlManagementPage";
-import { OntologyBuildPage } from "@/features/nl2sql/pages/OntologyBuildPage";
-import { ProfileManagementPage } from "@/features/nl2sql/pages/ProfileManagementPage";
-import { SampleDataPage } from "@/features/nl2sql/pages/SampleDataPage";
-import { TableManagementPage } from "@/features/nl2sql/pages/TableManagementPage";
-import { ViewManagementPage } from "@/features/nl2sql/pages/ViewManagementPage";
-import { SqlAnalysisPage } from "@/features/nl2sql/pages/SqlAnalysisPage";
-import { SqlToQuestionPage } from "@/features/nl2sql/pages/SqlToQuestionPage";
 import { useAuth } from "@/features/security/AuthProvider";
-import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/features/security/AuthPages";
 import { ROUTE_PERMISSIONS, firstAllowedRoute } from "@/features/security/route-permissions";
-import { SecurityAuditPage } from "@/features/security/SecurityAuditPage";
-import { SecurityDeepSecPage } from "@/features/security/SecurityDeepSecPage";
-import { SecurityRolesPage } from "@/features/security/SecurityRolesPage";
-import { SecurityUsersPage } from "@/features/security/SecurityUsersPage";
+
+const LoginPage = lazy(() =>
+  import("@/features/security/AuthPages").then((module) => ({ default: module.LoginPage }))
+);
+const PasswordChangePage = lazy(() =>
+  import("@/features/security/AuthPages").then((module) => ({
+    default: module.PasswordChangePage,
+  }))
+);
+const ForbiddenPage = lazy(() =>
+  import("@/features/security/AuthPages").then((module) => ({
+    default: module.ForbiddenPage,
+  }))
+);
+const Nl2SqlWorkbench = lazy(() =>
+  import("@/features/nl2sql/Nl2SqlWorkbench").then((module) => ({
+    default: module.Nl2SqlWorkbench,
+  }))
+);
+const DirectSqlPage = lazy(() =>
+  import("@/features/nl2sql/pages/DirectSqlPage").then((module) => ({
+    default: module.DirectSqlPage,
+  }))
+);
+const SqlAnalysisPage = lazy(() =>
+  import("@/features/nl2sql/pages/SqlAnalysisPage").then((module) => ({
+    default: module.SqlAnalysisPage,
+  }))
+);
+const SqlToQuestionPage = lazy(() =>
+  import("@/features/nl2sql/pages/SqlToQuestionPage").then((module) => ({
+    default: module.SqlToQuestionPage,
+  }))
+);
+const AdminSqlPage = lazy(() =>
+  import("@/features/nl2sql/pages/AdminSqlPage").then((module) => ({
+    default: module.AdminSqlPage,
+  }))
+);
+const TableManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/TableManagementPage").then((module) => ({
+    default: module.TableManagementPage,
+  }))
+);
+const ViewManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/ViewManagementPage").then((module) => ({
+    default: module.ViewManagementPage,
+  }))
+);
+const DataManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/DataManagementPage").then((module) => ({
+    default: module.DataManagementPage,
+  }))
+);
+const SampleDataPage = lazy(() =>
+  import("@/features/nl2sql/pages/SampleDataPage").then((module) => ({
+    default: module.SampleDataPage,
+  }))
+);
+const CommentManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/MetadataSqlManagementPage").then((module) => ({
+    default: module.CommentManagementPage,
+  }))
+);
+const AnnotationManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/MetadataSqlManagementPage").then((module) => ({
+    default: module.AnnotationManagementPage,
+  }))
+);
+const ProfileManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/ProfileManagementPage").then((module) => ({
+    default: module.ProfileManagementPage,
+  }))
+);
+const OntologyBuildPage = lazy(() =>
+  import("@/features/nl2sql/pages/OntologyBuildPage").then((module) => ({
+    default: module.OntologyBuildPage,
+  }))
+);
+const GlossaryRulesPage = lazy(() =>
+  import("@/features/nl2sql/pages/GlossaryRulesPage").then((module) => ({
+    default: module.GlossaryRulesPage,
+  }))
+);
+const GlobalRulesPage = lazy(() =>
+  import("@/features/nl2sql/pages/GlobalRulesPage").then((module) => ({
+    default: module.GlobalRulesPage,
+  }))
+);
+const FeedbackManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/FeedbackManagementPage").then((module) => ({
+    default: module.FeedbackManagementPage,
+  }))
+);
+const QuestionClassifierModelsPage = lazy(() =>
+  import("@/features/nl2sql/pages/QuestionLearningPage").then((module) => ({
+    default: module.QuestionClassifierModelsPage,
+  }))
+);
+const HistoryPage = lazy(() =>
+  import("@/features/nl2sql/pages/HistoryPage").then((module) => ({
+    default: module.HistoryPage,
+  }))
+);
+const EvaluationPage = lazy(() =>
+  import("@/features/nl2sql/pages/EvaluationPage").then((module) => ({
+    default: module.EvaluationPage,
+  }))
+);
+const OciSettingsClient = lazy(() =>
+  import("@/components/settings/OciSettingsClient").then((module) => ({
+    default: module.OciSettingsClient,
+  }))
+);
+const UploadStorageSettingsClient = lazy(() =>
+  import("@/components/settings/UploadStorageSettingsClient").then((module) => ({
+    default: module.UploadStorageSettingsClient,
+  }))
+);
+const ModelSettingsClient = lazy(() =>
+  import("@/components/settings/ModelSettingsClient").then((module) => ({
+    default: module.ModelSettingsClient,
+  }))
+);
+const DatabaseSettingsClient = lazy(() =>
+  import("@/components/settings/DatabaseSettingsClient").then((module) => ({
+    default: module.DatabaseSettingsClient,
+  }))
+);
+const SystemTablesCard = lazy(() =>
+  import("@/components/settings/SystemTablesCard").then((module) => ({
+    default: module.SystemTablesCard,
+  }))
+);
+const AppearanceSettings = lazy(() =>
+  import("@/components/settings/AppearanceSettings").then((module) => ({
+    default: module.AppearanceSettings,
+  }))
+);
+const SecurityUsersPage = lazy(() =>
+  import("@/features/security/SecurityUsersPage").then((module) => ({
+    default: module.SecurityUsersPage,
+  }))
+);
+const SecurityRolesPage = lazy(() =>
+  import("@/features/security/SecurityRolesPage").then((module) => ({
+    default: module.SecurityRolesPage,
+  }))
+);
+const SecurityAuditPage = lazy(() =>
+  import("@/features/security/SecurityAuditPage").then((module) => ({
+    default: module.SecurityAuditPage,
+  }))
+);
+const SecurityDeepSecPage = lazy(() =>
+  import("@/features/security/SecurityDeepSecPage").then((module) => ({
+    default: module.SecurityDeepSecPage,
+  }))
+);
 
 /**
  * ナビ切替で state を破棄したくない「AI 活用」4画面。常時マウントし表示のみ切替する。
@@ -71,11 +207,47 @@ export function App() {
 
   return (
     <Routes>
-      <Route path={APP_ROUTES.login} element={<LoginPage />} />
-      <Route path={APP_ROUTES.passwordChange} element={<PasswordChangePage />} />
-      <Route path={APP_ROUTES.forbidden} element={<ForbiddenPage />} />
+      <Route path={APP_ROUTES.login} element={<PublicRoute element={<LoginPage />} />} />
+      <Route
+        path={APP_ROUTES.passwordChange}
+        element={<PublicRoute element={<PasswordChangePage />} />}
+      />
+      <Route
+        path={APP_ROUTES.forbidden}
+        element={<PublicRoute element={<ForbiddenPage />} />}
+      />
       <Route path="*" element={<AuthenticatedApplication />} />
     </Routes>
+  );
+}
+
+function PublicRoute({ element }: { element: ReactNode }) {
+  return <Suspense fallback={<FullPageRouteLoadingFallback />}>{element}</Suspense>;
+}
+
+function FullPageRouteLoadingFallback() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background p-4">
+      <TimedLoadingState
+        label={t("app.route.loading")}
+        operationKey="route-loading-full"
+        placement="page"
+        testId="route-loading"
+      />
+    </main>
+  );
+}
+
+function RouteLoadingFallback() {
+  return (
+    <div className="p-8">
+      <TimedLoadingState
+        label={t("app.route.loading")}
+        operationKey="route-loading"
+        placement="page"
+        testId="route-loading"
+      />
+    </div>
   );
 }
 
@@ -110,55 +282,61 @@ function AuthenticatedApplication() {
   return (
     <AppLayout>
       <DatabaseGate>
-        <KeepAlivePages />
-        <Routes>
-        <Route path={APP_ROUTES.dashboard} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
-        <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
-        <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
-        <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
-        <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
-        <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
-        <Route path={APP_ROUTES.commentManagement} element={<CommentManagementPage />} />
-        <Route path={APP_ROUTES.annotationManagement} element={<AnnotationManagementPage />} />
-        {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
-        <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
-        <Route path="/data-tools" element={<Navigate to={APP_ROUTES.dataManagement} replace />} />
-        {/* 実体は KeepAlivePages で常時マウント。ここでは route match だけ成立させ警告を防ぐ。 */}
-        {KEEP_ALIVE_PAGES.map((page) => (
-          <Route key={page.path} path={page.path} element={null} />
-        ))}
-        <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
-        <Route path={APP_ROUTES.ontologyBuild} element={<OntologyBuildPage />} />
-        <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />
-        <Route path={APP_ROUTES.globalRules} element={<GlobalRulesPage />} />
-        <Route path={APP_ROUTES.feedbackManagement} element={<FeedbackManagementPage />} />
-        <Route path={APP_ROUTES.learning} element={<Navigate to={APP_ROUTES.feedbackManagement} replace />} />
-        <Route
-          path={APP_ROUTES.questionLearning}
-          element={<Navigate to={APP_ROUTES.questionClassifierModels} replace />}
-        />
-        <Route path={APP_ROUTES.questionClassifierModels} element={<QuestionClassifierModelsPage />} />
-        <Route path={APP_ROUTES.history} element={<HistoryPage />} />
-        <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
-        <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
-        <Route
-          path={APP_ROUTES.settingsUploadStorage}
-          element={<SettingsUploadStorageRoute />}
-        />
-        <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
-        <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
-        <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
-        <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
-        <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
-        <Route path={APP_ROUTES.securityAudit} element={<SecurityAuditPage />} />
-        <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
-        <Route
-          path={APP_ROUTES.legacyNl2sqlModelLearning}
-          element={<Navigate to={`${APP_ROUTES.profiles}#profile-learning`} replace />}
-        />
-        <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
-        <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
-        </Routes>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <KeepAlivePages />
+          <Routes>
+            <Route path={APP_ROUTES.dashboard} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+            <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
+            <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
+            <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
+            <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
+            <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
+            <Route path={APP_ROUTES.commentManagement} element={<CommentManagementPage />} />
+            <Route path={APP_ROUTES.annotationManagement} element={<AnnotationManagementPage />} />
+            {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
+            <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
+            <Route path="/data-tools" element={<Navigate to={APP_ROUTES.dataManagement} replace />} />
+            {/* 実体は KeepAlivePages で常時マウント。ここでは route match だけ成立させ警告を防ぐ。 */}
+            {KEEP_ALIVE_PAGES.map((page) => (
+              <Route key={page.path} path={page.path} element={null} />
+            ))}
+            <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
+            <Route path={APP_ROUTES.ontologyBuild} element={<OntologyBuildPage />} />
+            <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />
+            <Route path={APP_ROUTES.globalRules} element={<GlobalRulesPage />} />
+            <Route path={APP_ROUTES.feedbackManagement} element={<FeedbackManagementPage />} />
+            <Route path={APP_ROUTES.learning} element={<Navigate to={APP_ROUTES.feedbackManagement} replace />} />
+            <Route
+              path={APP_ROUTES.questionLearning}
+              element={<Navigate to={APP_ROUTES.questionClassifierModels} replace />}
+            />
+            <Route path={APP_ROUTES.questionClassifierModels} element={<QuestionClassifierModelsPage />} />
+            <Route path={APP_ROUTES.history} element={<HistoryPage />} />
+            <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
+            <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
+            <Route
+              path={APP_ROUTES.settingsUploadStorage}
+              element={<SettingsUploadStorageRoute />}
+            />
+            <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
+            <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
+            <Route
+              path={APP_ROUTES.settingsSystemTables}
+              element={<SettingsSystemTablesRoute />}
+            />
+            <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
+            <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
+            <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+            <Route path={APP_ROUTES.securityAudit} element={<SecurityAuditPage />} />
+            <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
+            <Route
+              path={APP_ROUTES.legacyNl2sqlModelLearning}
+              element={<Navigate to={`${APP_ROUTES.profiles}#profile-learning`} replace />}
+            />
+            <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
+            <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+          </Routes>
+        </Suspense>
       </DatabaseGate>
     </AppLayout>
   );
@@ -332,6 +510,20 @@ function SettingsDatabaseRoute() {
     <>
       <PageHeader title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
+    </>
+  );
+}
+
+function SettingsSystemTablesRoute() {
+  return (
+    <>
+      <PageHeader
+        title={t("nav.settingsSystemTables")}
+        subtitle={t("settings.systemTables.subtitle")}
+      />
+      <div className="p-8">
+        <SystemTablesCard />
+      </div>
     </>
   );
 }

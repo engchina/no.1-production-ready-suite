@@ -5,6 +5,7 @@ const nl2sqlJa = {
   "app.title": "Production Ready NL2SQL",
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "NL2SQL",
+  "app.route.loading": "画面を読み込んでいます…",
 
   "nav.sidebar.aria": "サイドナビゲーション",
   "nav.sidebar.expand": "サイドバーを展開",
@@ -143,7 +144,8 @@ const nl2sqlJa = {
   "security.users.tempPassword": "一時パスワード（空欄の場合は自動生成）",
   "security.users.forceChange": "次回ログイン時に変更必須",
   "security.users.locked": "ロック中",
-  "security.users.lockedUntil": "ロック期限",
+  "security.users.systemAdminBootstrapOnly": "SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。",
+  "security.users.systemAdminLegacyNotice": "既存の割り当ては解除できますが、解除後は再割り当てできません。",
   "security.users.enable": "有効化",
   "security.users.disable": "無効化",
   "security.users.unlock": "ロック解除",
@@ -655,6 +657,7 @@ const nl2sqlJa = {
   "profiles.action.save": "保存",
   "profiles.action.delete": "削除",
   "profiles.action.select": "編集",
+  "profiles.action.selectProfile": "{name} を編集",
   "profiles.action.backToList": "一覧に戻る",
   "profiles.discard.confirm.title": "変更を破棄しますか",
   "profiles.discard.confirm.description": "保存されていない変更があります。一覧に戻ると破棄されます。",
@@ -1713,7 +1716,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.recreate.description":
     "削除: Profile、Ontology、schema catalog、履歴・評価・学習・状態データ。保持: 認証/RBAC/DeepSec、Oracle 接続設定、ユーザー業務表、旧 snapshot、Feedback Vector。削除した中核データは復元できません。",
   "dbGate.setupRequired.message":
-    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。データベース設定の「システムテーブル」から作成・更新してください。",
+    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
 
   "dataTools.confirmation": "確認語",
   "dataTools.action.refresh": "データ更新",

@@ -599,6 +599,7 @@ export function ViewManagementPage() {
               exporting={loading === "view-export"}
               tab={detailTab}
               labels={{
+                actions: t("viewMgmt.grid.actions"),
                 loading: t("viewMgmt.detail.loading"),
                 ddlLoading: t("viewMgmt.detail.ddlLoading"),
                 tabsLabel: t("viewMgmt.detailTabs.label"),

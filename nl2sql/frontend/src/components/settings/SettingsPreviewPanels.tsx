@@ -9,6 +9,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
@@ -121,19 +122,21 @@ function SettingsPreviewCard({
   return (
     <Card>
       <CardHeader>
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-          <SettingsCardHeader icon={icon} title={title} description={description} />
+        <ContentActionBar
+          ariaLabel={title}
+          leading={<SettingsCardHeader icon={icon} title={title} description={description} />}
+          testId="settings-preview-actions"
+        >
           <Button
             type="button"
             variant="secondary"
-            size="lg"
-            className="w-full shrink-0 whitespace-nowrap sm:w-auto"
+            size="sm"
             onClick={() => void handleCopy()}
           >
             <Clipboard size={14} aria-hidden />
             {copyLabel}
           </Button>
-        </div>
+        </ContentActionBar>
       </CardHeader>
       <CardContent className="space-y-3">
         <textarea

@@ -1,0 +1,49 @@
+{
+  "data": {
+    "status": "missing",
+    "schema_head": 6,
+    "applied_versions": [],
+    "pending_versions": [
+      0,
+      1,
+      2,
+      3,
+      5,
+      6
+    ],
+    "expected_object_count": 49,
+    "existing_object_count": 0,
+    "expected_table_count": 18,
+    "existing_table_count": 0,
+    "missing_objects": [
+      {
+        "name": "NL2SQL_PROFILES",
+        "object_type": "TABLE"
+      },
+      {
+        "name": "NL2SQL_EXECUTION_LOGS",
+        "object_type": "TABLE"
+      }
+    ],
+    "tables": [
+      {
+        "name": "NL2SQL_PROFILES",
+        "exists": false,
+        "estimated_rows": null,
+        "created_at": null,
+        "last_analyzed_at": null
+      }
+    ],
+    "operation_state": {
+      "status": "idle",
+      "operation_kind": null,
+      "lease_expires_at": null,
+      "last_error_code": null,
+      "schema_epoch": 0,
+      "updated_at": null
+    }
+  },
+  "error_messages": [],
+  "warning_messages": []
+}
+

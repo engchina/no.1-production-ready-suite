@@ -1,0 +1,41 @@
+{
+  "data": {
+    "status": "outdated",
+    "schema_head": 6,
+    "applied_versions": [
+      0,
+      1,
+      2,
+      3,
+      5
+    ],
+    "pending_versions": [
+      6
+    ],
+    "expected_object_count": 49,
+    "existing_object_count": 49,
+    "expected_table_count": 18,
+    "existing_table_count": 18,
+    "missing_objects": [],
+    "tables": [
+      {
+        "name": "NL2SQL_PROFILES",
+        "exists": true,
+        "estimated_rows": 3,
+        "created_at": "2026-07-19T00:00:00Z",
+        "last_analyzed_at": "2026-07-19T00:00:00Z"
+      }
+    ],
+    "operation_state": {
+      "status": "idle",
+      "operation_kind": null,
+      "lease_expires_at": null,
+      "last_error_code": null,
+      "schema_epoch": 1,
+      "updated_at": "2026-08-12T00:00:00Z"
+    }
+  },
+  "error_messages": [],
+  "warning_messages": []
+}
+

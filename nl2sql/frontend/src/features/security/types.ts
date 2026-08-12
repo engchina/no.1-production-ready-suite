@@ -26,6 +26,7 @@ export interface SecurityUser {
   locked_until: string | null;
   version: number;
   role_ids: string[];
+  is_bootstrap_admin: boolean;
 }
 
 export interface SecurityRole {

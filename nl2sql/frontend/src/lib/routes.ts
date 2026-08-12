@@ -29,6 +29,7 @@ export const APP_ROUTES = {
   settingsUploadStorage: "/settings/upload-storage",
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
+  settingsSystemTables: "/settings/system-tables",
   settingsAppearance: "/settings/appearance",
   securityUsers: "/settings/security/users",
   securityRoles: "/settings/security/roles",

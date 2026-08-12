@@ -35,6 +35,14 @@ const ACTION_KIND_ORDER: Record<PageActionKind, number> = {
   danger: 3,
 };
 
+type PageActionGroup = "task" | "utility" | "danger";
+
+function actionGroup(kind: PageActionKind): PageActionGroup {
+  if (kind === "utility") return "utility";
+  if (kind === "danger") return "danger";
+  return "task";
+}
+
 function orderedActions(actions: readonly PageAction[]) {
   return actions
     .map((action, index) => ({ action, index }))
@@ -83,7 +91,7 @@ function PageActionButton({
       data-page-action-id={action.id}
       data-page-action-kind={action.kind}
       className={cn(
-        mobile && "h-[44px] min-w-0 flex-1 whitespace-nowrap px-3 sm:h-8",
+        mobile && "h-[44px] min-w-0 flex-1 whitespace-nowrap px-3",
         menuItem && "h-[44px] w-full justify-start whitespace-nowrap px-3"
       )}
       onClick={handleClick}
@@ -109,9 +117,9 @@ export function PageActionBar({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const collapseOnMobile = ordered.length > 1;
-  const mobilePrimaryAction = ordered[0];
-  const mobileOverflowActions = collapseOnMobile ? ordered.slice(1) : [];
+  const collapseInCompactHeader = ordered.length > 1;
+  const compactPrimaryAction = ordered[0];
+  const compactOverflowActions = collapseInCompactHeader ? ordered.slice(1) : [];
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -172,26 +180,28 @@ export function PageActionBar({
       aria-label={ariaLabel}
       data-testid={testId}
     >
-      <div className="hidden flex-wrap items-center justify-end gap-2 sm:flex">
-        {ordered.map((action, index) => (
-          <div
-            key={action.id}
-            className={cn(
-              action.kind === "danger" &&
-                index > 0 &&
-                ordered[index - 1]?.kind !== "danger" &&
-                "ml-1 border-l border-border pl-3"
-            )}
-          >
-            <PageActionButton action={action} />
-          </div>
-        ))}
+      <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">
+        {ordered.map((action, index) => {
+          const group = actionGroup(action.kind);
+          const previousKind = ordered[index - 1]?.kind;
+          const startsGroup = Boolean(previousKind && actionGroup(previousKind) !== group);
+          return (
+            <div
+              key={action.id}
+              data-page-action-group={group}
+              data-page-action-group-start={startsGroup ? "true" : undefined}
+              className={cn(startsGroup && "ml-2 border-l border-border pl-4")}
+            >
+              <PageActionButton action={action} />
+            </div>
+          );
+        })}
       </div>
 
-      <div className="flex w-full min-w-0 items-center justify-end gap-2 sm:hidden">
-        {collapseOnMobile ? (
+      <div className="flex w-full min-w-0 items-center justify-end gap-2 lg:hidden">
+        {collapseInCompactHeader ? (
           <>
-            <PageActionButton action={mobilePrimaryAction} mobile />
+            <PageActionButton action={compactPrimaryAction} mobile />
             <Button
               ref={triggerRef}
               type="button"
@@ -219,31 +229,34 @@ export function PageActionBar({
         )}
       </div>
 
-      {collapseOnMobile && menuOpen ? (
+      {collapseInCompactHeader && menuOpen ? (
         <div
           ref={menuRef}
           id={menuId}
           role="menu"
-          className="absolute right-0 top-full z-50 mt-2 grid min-w-56 gap-1 rounded-md border border-border bg-card p-1 shadow-lg sm:hidden"
+          className="absolute right-0 top-full z-50 mt-2 grid min-w-56 gap-1 rounded-md border border-border bg-card p-1 shadow-lg lg:hidden"
           onKeyDown={handleMenuKeyDown}
         >
-          {mobileOverflowActions.map((action, index) => (
-            <div
-              key={action.id}
-              role="none"
-              className={cn(
-                action.kind === "danger" &&
-                  (index === 0 || mobileOverflowActions[index - 1]?.kind !== "danger") &&
-                  "mt-1 border-t border-border pt-1"
-              )}
-            >
-              <PageActionButton
-                action={action}
-                menuItem
-                onInvoked={() => closeMenu(false)}
-              />
-            </div>
-          ))}
+          {compactOverflowActions.map((action, index) => {
+            const group = actionGroup(action.kind);
+            const previousKind = compactOverflowActions[index - 1]?.kind;
+            const startsGroup = Boolean(previousKind && actionGroup(previousKind) !== group);
+            return (
+              <div
+                key={action.id}
+                role="none"
+                data-page-action-group={group}
+                data-page-action-group-start={startsGroup ? "true" : undefined}
+                className={cn(startsGroup && "mt-1 border-t border-border pt-1")}
+              >
+                <PageActionButton
+                  action={action}
+                  menuItem
+                  onInvoked={() => closeMenu(false)}
+                />
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -273,7 +286,7 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "flex min-w-0 flex-col gap-4 border-b border-border bg-card px-4 py-5 sm:flex-row sm:items-start sm:justify-between sm:px-8",
+        "flex min-w-0 flex-col gap-4 border-b border-border bg-card px-4 py-5 sm:px-8 lg:flex-row lg:items-start lg:justify-between",
         className
       )}
     >
@@ -286,7 +299,7 @@ export function PageHeader({
         {meta ? <div className="mt-1 text-xs leading-5 text-muted">{meta}</div> : null}
       </div>
       {actions.length > 0 ? (
-        <div className="w-full min-w-0 sm:w-auto sm:shrink-0">
+        <div className="w-full min-w-0 lg:w-auto">
           <PageActionBar
             actions={actions}
             ariaLabel={actionsAriaLabel}

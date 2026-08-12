@@ -43,6 +43,7 @@ class UserRecord:
     locked_until: datetime | None
     version: int
     role_ids: list[str] = field(default_factory=list)
+    is_bootstrap_admin: bool = False
 
 
 @dataclass(slots=True)

@@ -1,0 +1,8 @@
+{
+  "question": "今月の売上トップ5",
+  "profile_id": "default",
+  "use_glossary": true,
+  "use_schema": true,
+  "extra_prompt": "受注テーブルの金額列を使う"
+}
+

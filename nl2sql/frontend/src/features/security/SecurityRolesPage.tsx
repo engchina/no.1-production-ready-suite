@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Archive, ArrowLeft, Pencil, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from "lucide-react";
 
 import {
   Banner,
   Button,
-  DataTable,
   EmptyState,
   FormStatus,
   StatusBadge,
@@ -13,7 +12,9 @@ import {
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
+import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { isAbortError } from "@/lib/api";
@@ -268,6 +269,26 @@ export function SecurityRolesPage() {
     }
   };
 
+  const roleActions = (role: SecurityRole): EntityAction[] =>
+    canManage
+      ? [
+          {
+            id: "edit",
+            label: t("security.common.edit"),
+            icon: Pencil,
+            onSelect: () => startEdit(role),
+          },
+          {
+            id: "archive",
+            label: t("security.roles.archive"),
+            icon: Archive,
+            tone: "danger",
+            visible: !role.is_built_in && !role.archived,
+            onSelect: () => handleArchive(role),
+          },
+        ]
+      : [];
+
   const togglePermission = (code: string) => {
     setDraft((current) => ({
       ...current,
@@ -351,34 +372,14 @@ export function SecurityRolesPage() {
           {
             key: "actions",
             header: t("security.common.actions"),
-            className: "min-w-40",
+            align: "right" as const,
+            className: "w-14",
             render: (role: SecurityRole) => (
-              <div className="flex flex-wrap justify-end gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    startEdit(role);
-                  }}
-                >
-                  <Pencil size={14} aria-hidden />
-                  {t("security.common.edit")}
-                </Button>
-                {!role.is_built_in && !role.archived ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                      event.stopPropagation();
-                      void handleArchive(role);
-                    }}
-                  >
-                    <Archive size={14} aria-hidden />
-                    {t("security.roles.archive")}
-                  </Button>
-                ) : null}
-              </div>
+              <RowActionMenu
+                actions={roleActions(role)}
+                ariaLabel={`${t("security.common.actions")}: ${role.display_name}`}
+                testId={`security-roles-row-actions-${role.role_id}`}
+              />
             ),
           },
         ]
@@ -456,14 +457,16 @@ export function SecurityRolesPage() {
                     testId="security-roles-loading"
                   />
                 ) : null}
-                <DataTable
+                <MasterDetailDataTable
                   dense
                   loading={loading}
                   rows={filteredRoles}
                   sort={sort}
                   onSortChange={setSort}
-                  onRowClick={(role) => setSelectedId(role.role_id)}
+                  selectedRowKey={selectedId}
+                  onRowSelect={(role) => setSelectedId(role.role_id)}
                   getRowKey={(role) => role.role_id}
+                  getRowAriaLabel={(role) => t("security.roles.showRole", { name: role.display_name })}
                   ariaLabel={t("security.roles.list")}
                   testId="security-roles-grid"
                   empty={<EmptyState title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.roles.noResultsHint") : undefined} />}
@@ -476,8 +479,7 @@ export function SecurityRolesPage() {
                 canManage={canManage}
                 permissions={permissions}
                 permissionByCode={permissionByCode}
-                onEdit={startEdit}
-                onArchive={(role) => void handleArchive(role)}
+                actions={selectedRole ? roleActions(selectedRole) : []}
               />
             </SecurityManagementPanelShell>
         ) : (
@@ -674,15 +676,13 @@ function RoleDetailPanel({
   canManage,
   permissions,
   permissionByCode,
-  onEdit,
-  onArchive,
+  actions,
 }: {
   role: SecurityRole | null;
   canManage: boolean;
   permissions: PermissionDefinition[];
   permissionByCode: Map<string, PermissionDefinition>;
-  onEdit: (role: SecurityRole) => void;
-  onArchive: (role: SecurityRole) => void;
+  actions: EntityAction[];
 }) {
   if (!role) {
     return (
@@ -718,18 +718,11 @@ function RoleDetailPanel({
           <p className="mt-1 break-all font-mono text-xs text-muted">{role.role_code}</p>
         </div>
         {canManage ? (
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
-            <Button type="button" variant="secondary" size="sm" onClick={() => onEdit(role)}>
-              <Pencil size={15} aria-hidden="true" />
-              <span>{t("security.common.edit")}</span>
-            </Button>
-            {!role.is_built_in && !role.archived ? (
-              <Button type="button" variant="danger" size="sm" onClick={() => onArchive(role)}>
-                <Archive size={15} aria-hidden="true" />
-                <span>{t("security.roles.archive")}</span>
-              </Button>
-            ) : null}
-          </div>
+          <ObjectActionBar
+            actions={actions}
+            ariaLabel={`${t("security.common.actions")}: ${role.display_name}`}
+            testId="security-roles-detail-actions"
+          />
         ) : null}
       </div>
 
