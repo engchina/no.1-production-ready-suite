@@ -1,10 +1,19 @@
+import { Button } from "@/components/ui/button";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
-import { Banner, Button, Card, CardContent, CardHeader, CardTitle, toast } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  toast,
+} from "@engchina/production-ready-ui";
 
 import { ProcessingIndicator } from "@/components/ProcessingState";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { securityApi } from "./api";
@@ -81,27 +90,34 @@ export function LoginPage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit} noValidate>
+            <RequiredFieldsNote />
             {error ? <Banner severity="danger">{error}</Banner> : null}
-            <label className="block space-y-1.5 text-sm font-medium">
-              <span>{t("auth.login.name")}</span>
+            <div className="block space-y-1.5 text-sm font-medium">
+              <FieldLabel htmlFor="auth-login-name" label={t("auth.login.name")} required />
               <input
+                id="auth-login-name"
+                required
+                aria-required="true"
                 autoComplete="username"
                 autoFocus
                 className={INPUT_CLASS}
                 value={loginName}
                 onChange={(event) => setLoginName(event.target.value)}
               />
-            </label>
-            <label className="block space-y-1.5 text-sm font-medium">
-              <span>{t("auth.login.password")}</span>
+            </div>
+            <div className="block space-y-1.5 text-sm font-medium">
+              <FieldLabel htmlFor="auth-login-password" label={t("auth.login.password")} required />
               <input
+                id="auth-login-password"
+                required
+                aria-required="true"
                 type="password"
                 autoComplete="current-password"
                 className={INPUT_CLASS}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
-            </label>
+            </div>
             {/* 認証の主導線はモバイルでも 44px のタッチ領域を確保する。 */}
             <Button className="h-11 w-full" loading={busy} type="submit">
               <LogIn size={16} aria-hidden />
@@ -114,6 +130,7 @@ export function LoginPage() {
                 operationKey="auth-login"
                 placement="action"
                 testId="auth-login-processing"
+                activityIcon="none"
               />
             ) : null}
           </form>
@@ -167,24 +184,27 @@ export function PasswordChangePage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit}>
+            <RequiredFieldsNote />
             {error ? <Banner severity="danger">{error}</Banner> : null}
             <Banner severity="info">{t("auth.password.rule")}</Banner>
             {[
-              [t("auth.password.current"), currentPassword, setCurrentPassword, "current-password"],
-              [t("auth.password.new"), newPassword, setNewPassword, "new-password"],
-              [t("auth.password.confirm"), confirmation, setConfirmation, "new-password"],
-            ].map(([label, value, setter, autoComplete]) => (
-              <label key={String(label)} className="block space-y-1.5 text-sm font-medium">
-                <span>{String(label)}</span>
+              ["auth-password-current", t("auth.password.current"), currentPassword, setCurrentPassword, "current-password"],
+              ["auth-password-new", t("auth.password.new"), newPassword, setNewPassword, "new-password"],
+              ["auth-password-confirm", t("auth.password.confirm"), confirmation, setConfirmation, "new-password"],
+            ].map(([id, label, value, setter, autoComplete]) => (
+              <div key={String(id)} className="block space-y-1.5 text-sm font-medium">
+                <FieldLabel htmlFor={String(id)} label={String(label)} required />
                 <input
+                  id={String(id)}
                   required
+                  aria-required="true"
                   type="password"
                   className={INPUT_CLASS}
                   autoComplete={String(autoComplete)}
                   value={String(value)}
                   onChange={(event) => (setter as (value: string) => void)(event.target.value)}
                 />
-              </label>
+              </div>
             ))}
             <div className="border-t border-border pt-4">
               <Button className="h-11 w-full" loading={busy} type="submit">
@@ -199,6 +219,7 @@ export function PasswordChangePage() {
                   placement="action"
                   className="mt-3"
                   testId="auth-password-processing"
+                  activityIcon="none"
                 />
               ) : null}
             </div>

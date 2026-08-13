@@ -137,6 +137,7 @@ export function SecurityAuditPage() {
                     placement="panel"
                     className="mb-4"
                     testId="security-audit-loading"
+                    activityIcon="none"
                   />
                 ) : null}
                 <DataTable

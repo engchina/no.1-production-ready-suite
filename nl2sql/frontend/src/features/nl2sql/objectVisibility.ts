@@ -1,8 +1,4 @@
-import type {
-  DbAdminObjectPage,
-  SchemaCatalog,
-  SchemaObjectPage,
-} from "./types";
+import type { DbAdminObjectPage, SchemaCatalog, SchemaObjectPage } from "./types";
 
 export function isUserVisibleObjectName(objectName: string): boolean {
   const normalized = objectName.trim();

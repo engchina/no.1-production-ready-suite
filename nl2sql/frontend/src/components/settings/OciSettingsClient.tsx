@@ -23,11 +23,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
+import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import {
-  SETTINGS_DETAIL_GRID_CLASS,
-  SettingsSupplementalPanels,
-} from "@/components/settings/SettingsPreviewPanels";
+import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   api,
@@ -366,6 +364,7 @@ export function OciSettingsClient() {
               </div>
             </CardHeader>
             <CardContent className="space-y-5 p-6">
+              <RequiredFieldsNote />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <ConfigFileField
                   id="oci-config-file"
@@ -820,6 +819,8 @@ function ConfigFileField({
           value={value}
           readOnly={readOnly}
           aria-readonly={readOnly || undefined}
+          required={required}
+          aria-required={required}
           onChange={(event) => {
             if (!readOnly) onChange?.(event.target.value);
           }}
@@ -904,6 +905,8 @@ function NamespaceField({
           value={value}
           readOnly
           aria-readonly="true"
+          required={required}
+          aria-required={required}
           placeholder={placeholder}
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
@@ -1060,6 +1063,8 @@ function TextField({
         value={value}
         readOnly={readOnly}
         aria-readonly={readOnly || undefined}
+        required={required}
+        aria-required={required}
         onChange={(event) => {
           if (!readOnly) onChange?.(event.target.value);
         }}
@@ -1081,14 +1086,7 @@ function TextField({
 }
 
 function RequiredBadge() {
-  return (
-    <>
-      <span aria-hidden className="text-danger">
-        *
-      </span>
-      <span className="sr-only">{t("settings.oci.required")}</span>
-    </>
-  );
+  return <RequiredIndicator label={t("settings.oci.required")} />;
 }
 
 function FieldStatusRow({

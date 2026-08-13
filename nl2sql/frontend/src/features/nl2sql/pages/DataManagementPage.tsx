@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Database, Eye, FileSpreadsheet, RefreshCw, Table2, Upload } from "lucide-react";
+import { Database, Eye, FileSpreadsheet, RefreshCw, Table2, Trash2, Upload } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
+import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -21,7 +25,9 @@ import {
   fileToBase64,
 } from "../components/DbAdminShared";
 import {
+  DB_OBJECT_PICKER_SHORT_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
+  DropDbObjectDialog,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
@@ -35,21 +41,17 @@ import {
   type DbObjectPickerItem,
 } from "../components/DbObjectManagementShared";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
-import {
-  useDbAdminObjects,
-  useSchemaRefreshJob,
-  useStartSchemaRefresh,
-} from "../incrementalQueries";
+import { useDbAdminObjects, useSchemaRefreshJob, useStartSchemaRefresh } from "../incrementalQueries";
 import type {
   DbAdminCsvUploadData,
   DbAdminDataPreviewData,
+  DbAdminExecuteData,
   DbAdminObjectsData,
   SchemaRefreshJob,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
   SelectAiDbProfilesData,
   SyntheticDataOperationData,
-  SyntheticDataOperationStatusData,
   SyntheticDataResultsData,
 } from "../types";
 
@@ -59,7 +61,7 @@ type CsvMode = "insert" | "truncate_insert";
 type PreviewObjectKind = "table" | "view";
 type PreviewObjectKindFilter = "all" | PreviewObjectKind;
 type PreviewObjectRowFilter = "all" | "with_rows" | "empty_rows" | "unknown_rows";
-type SyntheticLoading = "" | "tables" | "generate" | "status" | "results";
+type SyntheticLoading = "" | "tables" | "generate" | "results";
 
 const DATA_MANAGEMENT_ID = "data-management";
 
@@ -94,8 +96,6 @@ export function DataManagementPage() {
   const [csvConfirmation, setCsvConfirmation] = useState("");
   const [csvUploadResult, setCsvUploadResult] = useState<DbAdminCsvUploadData | null>(null);
   const [syntheticData, setSyntheticData] = useState<SyntheticDataOperationData | null>(null);
-  const [syntheticDataStatus, setSyntheticDataStatus] =
-    useState<SyntheticDataOperationStatusData | null>(null);
   const [syntheticDataResults, setSyntheticDataResults] = useState<SyntheticDataResultsData | null>(null);
   const [syntheticProfileName, setSyntheticProfileName] = useState("");
   const [syntheticAvailableTables, setSyntheticAvailableTables] = useState<string[]>([]);
@@ -108,6 +108,10 @@ export function DataManagementPage() {
   const [syntheticResultTable, setSyntheticResultTable] = useState("");
   const [syntheticResultLimit, setSyntheticResultLimit] = useState(100);
   const [previewLoadingObject, setPreviewLoadingObject] = useState("");
+  const [truncateTargetName, setTruncateTargetName] = useState("");
+  const [truncateConfirmation, setTruncateConfirmation] = useState("");
+  const [truncateLoading, setTruncateLoading] = useState(false);
+  const [truncateError, setTruncateError] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState("");
@@ -195,7 +199,6 @@ export function DataManagementPage() {
     setSyntheticSelectedTables([]);
     setSyntheticResultTable("");
     setSyntheticData(null);
-    setSyntheticDataStatus(null);
     setSyntheticDataResults(null);
   };
 
@@ -268,17 +271,8 @@ export function DataManagementPage() {
     }
   };
 
-  const selectPreviewObject = (objectName: string) => {
-    previewRequestSequence.current += 1;
-    setPreviewLoadingObject("");
-    setPreviewObject(objectName);
-    setPreview(null);
-    setPreviewError("");
-    setExportError("");
-  };
-
   const showPreview = async (objectName: string) => {
-    if (!objectName) return;
+    if (!objectName || previewLoadingObject) return;
     const sequence = previewRequestSequence.current + 1;
     previewRequestSequence.current = sequence;
     setPreviewObject(objectName);
@@ -303,6 +297,50 @@ export function DataManagementPage() {
       setPreviewError(apiErrorMessage(err, "dataMgmt.error.preview"));
     } finally {
       if (sequence === previewRequestSequence.current) setPreviewLoadingObject("");
+    }
+  };
+
+  const openTruncateDialog = (objectName: string) => {
+    setTruncateTargetName(objectName);
+    setTruncateConfirmation("");
+    setTruncateError("");
+  };
+
+  const closeTruncateDialog = () => {
+    if (truncateLoading) return;
+    setTruncateTargetName("");
+    setTruncateConfirmation("");
+    setTruncateError("");
+  };
+
+  const truncateTableData = async () => {
+    const tableName = truncateTargetName;
+    if (!tableName || truncateLoading) return;
+    setTruncateLoading(true);
+    setTruncateError("");
+    try {
+      const result = await apiPost<DbAdminExecuteData>(
+        "/api/nl2sql/db-admin/truncate-table",
+        {
+          table_name: tableName,
+          confirmation: truncateConfirmation,
+          reason: "ui-data-management-truncate",
+        },
+        { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
+      );
+      if (!result.executed) {
+        setTruncateError(result.warnings[0] || t("dataMgmt.truncate.error"));
+        return;
+      }
+      setTruncateTargetName("");
+      setTruncateConfirmation("");
+      toast.success(t("dataMgmt.truncate.success", { name: tableName }));
+      await refreshObjects();
+      await showPreview(tableName);
+    } catch (err) {
+      setTruncateError(apiErrorMessage(err, "dataMgmt.truncate.error"));
+    } finally {
+      setTruncateLoading(false);
     }
   };
 
@@ -403,7 +441,6 @@ export function DataManagementPage() {
       setSyntheticSelectedTables((current) => current.filter((tableName) => nextTables.includes(tableName)));
       setSyntheticResultTable((current) => (current && nextTables.includes(current) ? current : (nextTables[0] ?? "")));
       setSyntheticData(null);
-      setSyntheticDataStatus(null);
       setSyntheticDataResults(null);
     } catch (err) {
       setSyntheticError(apiErrorMessage(err, "dataTools.error.load"));
@@ -421,7 +458,6 @@ export function DataManagementPage() {
     setSyntheticError("");
     setSyntheticErrorOperation("");
     try {
-      setSyntheticDataStatus(null);
       setSyntheticDataResults(null);
       const result = await apiPost<SyntheticDataOperationData>("/api/nl2sql/synthetic-data/generate", {
         table_name: singleTable ? selectedTables[0] : "",
@@ -442,29 +478,9 @@ export function DataManagementPage() {
         if (result.table_name && allowedTables.includes(result.table_name)) return result.table_name;
         return selectedTables.find((tableName) => allowedTables.includes(tableName)) ?? allowedTables[0] ?? "";
       });
-      const operationId = result.operation_id.trim();
-      if (operationId) {
-        setSyntheticDataStatus(await fetchSyntheticDataStatus(operationId));
-      }
     } catch (err) {
       setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData"));
       setSyntheticErrorOperation("generate");
-    } finally {
-      setSyntheticLoading("");
-    }
-  };
-
-  const checkSyntheticDataStatus = async () => {
-    const operationId = syntheticData?.operation_id.trim();
-    if (!operationId) return;
-    setSyntheticLoading("status");
-    setSyntheticError("");
-    setSyntheticErrorOperation("");
-    try {
-      setSyntheticDataStatus(await fetchSyntheticDataStatus(operationId));
-    } catch (err) {
-      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticStatus"));
-      setSyntheticErrorOperation("status");
     } finally {
       setSyntheticLoading("");
     }
@@ -580,6 +596,7 @@ export function DataManagementPage() {
             placement="workspace"
             className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
             testId="data-management-workspace-processing"
+            activityIcon="none"
           />
         ) : null}
 
@@ -620,13 +637,13 @@ export function DataManagementPage() {
               error={objectErrorMessage}
               hasNextPage={Boolean(previewObjectsQuery.hasNextPage)}
               loadingNextPage={previewObjectsQuery.isFetchingNextPage}
-              onPreviewObjectChange={selectPreviewObject}
               onPreviewObjectSearchChange={setPreviewObjectSearch}
               onPreviewObjectKindFilterChange={setPreviewObjectKindFilter}
               onPreviewObjectRowFilterChange={setPreviewObjectRowFilter}
               onPreviewLimitChange={setPreviewLimit}
               onPreviewWhereChange={setPreviewWhere}
               onShowPreview={(objectName) => void showPreview(objectName)}
+              onTruncateTable={openTruncateDialog}
               onRetry={() => void refreshObjects()}
               onLoadMore={() => void previewObjectsQuery.fetchNextPage()}
             />
@@ -719,7 +736,6 @@ export function DataManagementPage() {
               selectAiDbProfiles={selectAiDbProfiles}
               selectedSyntheticProfile={selectedSyntheticProfile}
               syntheticData={syntheticData}
-              syntheticDataStatus={syntheticDataStatus}
               syntheticDataResults={syntheticDataResults}
               syntheticProfileName={syntheticProfileName}
               syntheticAvailableTables={syntheticAvailableTables}
@@ -746,7 +762,18 @@ export function DataManagementPage() {
                   currentTable && nextTables.includes(currentTable) ? currentTable : (nextTables[0] ?? "")
                 );
                 setSyntheticData(null);
-                setSyntheticDataStatus(null);
+                setSyntheticDataResults(null);
+              }}
+              onSyntheticTablesBulkChange={(tableNames, selected) => {
+                const targetSet = new Set(tableNames);
+                const nextTables = selected
+                  ? uniqueStrings([...syntheticSelectedTables, ...tableNames])
+                  : syntheticSelectedTables.filter((item) => !targetSet.has(item));
+                setSyntheticSelectedTables(nextTables);
+                setSyntheticResultTable((currentTable) =>
+                  currentTable && nextTables.includes(currentTable) ? currentTable : (nextTables[0] ?? "")
+                );
+                setSyntheticData(null);
                 setSyntheticDataResults(null);
               }}
               onSyntheticPromptChange={setSyntheticPrompt}
@@ -761,11 +788,9 @@ export function DataManagementPage() {
               }}
               onSyntheticResultLimitChange={(value) => setSyntheticResultLimit(clampNumber(value, 1, 10000))}
               onGenerateSyntheticData={() => void generateSyntheticData()}
-              onCheckSyntheticDataStatus={() => void checkSyntheticDataStatus()}
               onLoadSyntheticDataResults={() => void loadSyntheticDataResults()}
               onRetry={() => {
                 if (syntheticErrorOperation === "tables") void refreshSyntheticTables();
-                else if (syntheticErrorOperation === "status") void checkSyntheticDataStatus();
                 else if (syntheticErrorOperation === "results") void loadSyntheticDataResults();
                 else void generateSyntheticData();
               }}
@@ -774,6 +799,30 @@ export function DataManagementPage() {
           </DbObjectManagementPanelShell>
         )}
       </main>
+      {truncateTargetName && (
+        <DropDbObjectDialog
+          objectName={truncateTargetName}
+          confirmation={truncateConfirmation}
+          loading={truncateLoading}
+          error={truncateError}
+          labels={{
+            title: t("dataMgmt.truncateDialog.title"),
+            subtitle: t("dataMgmt.truncateDialog.subtitle"),
+            close: t("dataMgmt.truncateDialog.close"),
+            target: t("dataMgmt.truncateDialog.target"),
+            executeTitle: t("dataMgmt.truncateDialog.executeTitle"),
+            executeHint: t("dataMgmt.truncateDialog.executeHint"),
+            cancel: t("dataMgmt.truncateDialog.cancel"),
+            run: t("dataMgmt.truncate.action"),
+          }}
+          onConfirmationChange={(value) => {
+            setTruncateConfirmation(value);
+            if (truncateError) setTruncateError("");
+          }}
+          onExecute={() => void truncateTableData()}
+          onClose={closeTruncateDialog}
+        />
+      )}
     </>
   );
 }
@@ -792,13 +841,13 @@ function PreviewControlsPanel({
   error,
   hasNextPage,
   loadingNextPage,
-  onPreviewObjectChange,
   onPreviewObjectSearchChange,
   onPreviewObjectKindFilterChange,
   onPreviewObjectRowFilterChange,
   onPreviewLimitChange,
   onPreviewWhereChange,
   onShowPreview,
+  onTruncateTable,
   onRetry,
   onLoadMore,
 }: {
@@ -815,13 +864,13 @@ function PreviewControlsPanel({
   error: string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
-  onPreviewObjectChange: (value: string) => void;
   onPreviewObjectSearchChange: (value: string) => void;
   onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
   onPreviewObjectRowFilterChange: (value: PreviewObjectRowFilter) => void;
   onPreviewLimitChange: (value: number) => void;
   onPreviewWhereChange: (value: string) => void;
   onShowPreview: (objectName: string) => void;
+  onTruncateTable: (objectName: string) => void;
   onRetry: () => void;
   onLoadMore: () => void;
 }) {
@@ -835,6 +884,7 @@ function PreviewControlsPanel({
   const pickerItems = filteredPreviewObjects.map<DbObjectPickerItem>((item) => ({
     key: item.name,
     name: item.name,
+    kind: item.kind,
     owner: item.owner,
     comment: item.comment,
     kindLabel: previewObjectKindLabel(item.kind),
@@ -908,20 +958,24 @@ function PreviewControlsPanel({
                 items={pickerItems}
                 selectedKey={previewObject}
                 hasActiveFilter={hasActiveFilter}
-                loadingKey={loadingObjectName}
                 listLabel={t("dataMgmt.preview.object")}
                 emptyTitle={t("dataMgmt.preview.emptyObjectsTitle")}
                 emptyHint={t("dataMgmt.preview.emptyObjectsHint")}
                 noResultsTitle={t("dataMgmt.preview.noObjectsTitle")}
                 noResultsHint={t("dataMgmt.preview.noObjectsHint")}
                 dataTestId="data-preview-object-list"
-                onSelect={(item) => onPreviewObjectChange(item.name)}
+                onSelect={(item) => onShowPreview(item.name)}
+                selectAriaLabel={(item) => t("dataMgmt.preview.showObject", { name: item.name })}
+                selectDisabled={() => Boolean(loadingObjectName)}
                 action={{
-                  label: t("dataMgmt.preview.show"),
-                  icon: Eye,
-                  ariaLabel: (item) => t("dataMgmt.preview.showObject", { name: item.name }),
-                  disabled: (item) => Boolean(loadingObjectName) && item.name !== loadingObjectName,
-                  onClick: (item) => onShowPreview(item.name),
+                  id: "truncate-data",
+                  label: t("dataMgmt.truncate.action"),
+                  icon: Trash2,
+                  tone: "danger",
+                  ariaLabel: (item) => t("dataMgmt.truncate.actionObject", { name: item.name }),
+                  visible: (item) => item.kind === "table",
+                  disabled: () => Boolean(loadingObjectName),
+                  onClick: (item) => onTruncateTable(item.name),
                 }}
               />
               <DbObjectSelectorFooter
@@ -1189,70 +1243,64 @@ function CsvUploadWorkspace({
         dataTestId="data-csv-steps"
       />
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(15rem,0.65fr)]">
-        <section className="grid min-w-0 gap-3" aria-labelledby="data-csv-table-heading">
-          <div>
-            <h3 id="data-csv-table-heading" className="text-sm font-semibold text-foreground">
-              {t("dataMgmt.csv.table")}
-            </h3>
-            <p className="mt-1 text-sm text-muted">{t("dataMgmt.csv.tableHint")}</p>
-          </div>
-          <DbObjectSelectionSummary label={t("objectSelector.selected")} value={table} />
-          <DbObjectSelectorToolbar
-            searchLabel={t("objectSelector.search")}
-            searchPlaceholder={t("dataMgmt.csv.tableSearchPlaceholder")}
-            searchValue={tableSearch}
-            onSearchChange={onTableSearchChange}
-            dataTestId="data-csv-table-toolbar"
+      <RequiredFieldsNote />
+
+      <section
+        className="grid min-w-0 gap-3"
+        aria-labelledby="data-csv-table-heading"
+        data-testid="data-csv-table-section"
+      >
+        <div>
+          <h3 id="data-csv-table-heading" className="text-sm font-semibold text-foreground">
+            {t("dataMgmt.csv.table")}
+            <RequiredIndicator />
+          </h3>
+          <p className="mt-1 text-sm text-muted">{t("dataMgmt.csv.tableHint")}</p>
+        </div>
+        <DbObjectSelectionSummary label={t("objectSelector.selected")} value={table} />
+        <DbObjectSelectorToolbar
+          searchLabel={t("objectSelector.search")}
+          searchPlaceholder={t("dataMgmt.csv.tableSearchPlaceholder")}
+          searchValue={tableSearch}
+          onSearchChange={onTableSearchChange}
+          dataTestId="data-csv-table-toolbar"
+        />
+        {tablesLoading ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="data-csv-table"
+            ariaLabel={t("dataMgmt.objectList.loading")}
+            variant="list"
+            rows={5}
           />
-          {tablesLoading ? (
-            <DbManagementLoadingSkeleton
-              idPrefix="data-csv-table"
-              ariaLabel={t("dataMgmt.objectList.loading")}
-              variant="list"
-              rows={5}
+        ) : tablesError ? (
+          <ErrorState message={tablesError} onRetry={onTablesRetry} />
+        ) : (
+          <>
+            <DbSingleObjectPickerList
+              items={tablePickerItems}
+              selectedKey={table}
+              hasActiveFilter={hasTableFilter}
+              listLabel={t("dataMgmt.csv.table")}
+              emptyTitle={t("dataMgmt.csv.emptyTablesTitle")}
+              emptyHint={t("dataMgmt.csv.emptyTablesHint")}
+              noResultsTitle={t("dataMgmt.csv.noTablesTitle")}
+              noResultsHint={t("dataMgmt.csv.noTablesHint")}
+              dataTestId="data-csv-table-list"
+              maxHeightClass={DB_OBJECT_PICKER_SHORT_SCROLL_CLASS}
+              onSelect={(item) => onTableChange(item.name)}
             />
-          ) : tablesError ? (
-            <ErrorState message={tablesError} onRetry={onTablesRetry} />
-          ) : (
-            <>
-              <DbSingleObjectPickerList
-                items={tablePickerItems}
-                selectedKey={table}
-                hasActiveFilter={hasTableFilter}
-                listLabel={t("dataMgmt.csv.table")}
-                emptyTitle={t("dataMgmt.csv.emptyTablesTitle")}
-                emptyHint={t("dataMgmt.csv.emptyTablesHint")}
-                noResultsTitle={t("dataMgmt.csv.noTablesTitle")}
-                noResultsHint={t("dataMgmt.csv.noTablesHint")}
-                dataTestId="data-csv-table-list"
-                maxHeightClass="max-h-64"
-                onSelect={(item) => onTableChange(item.name)}
-              />
-              <DbObjectSelectorFooter
-                visibleCount={tablePickerItems.length}
-                totalCount={tablePickerItems.length}
-                hasNextPage={hasNextPage}
-                loadingNextPage={loadingNextPage}
-                loadMoreLabel={t("dataMgmt.objectList.loadMore")}
-                dataTestId="data-csv-table-footer"
-                onLoadMore={onLoadMore}
-              />
-            </>
-          )}
-        </section>
-        <label className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground">
-          <span>{t("dataMgmt.csv.mode")}</span>
-          <select
-            value={mode}
-            onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-            className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-          >
-            <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
-            <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
-          </select>
-        </label>
-      </div>
+            <DbObjectSelectorFooter
+              visibleCount={tablePickerItems.length}
+              totalCount={tablePickerItems.length}
+              hasNextPage={hasNextPage}
+              loadingNextPage={loadingNextPage}
+              loadMoreLabel={t("dataMgmt.objectList.loadMore")}
+              dataTestId="data-csv-table-footer"
+              onLoadMore={onLoadMore}
+            />
+          </>
+        )}
+      </section>
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
 
@@ -1265,12 +1313,31 @@ function CsvUploadWorkspace({
         replaceText={t("dataMgmt.csv.fileReplace")}
         clearAriaLabel={t("dataMgmt.csv.clearFile")}
         icon="spreadsheet"
+        required
         dataTestId="data-csv-file-field"
         onFiles={([file]) => onFilePick(file)}
         onClear={onFileClear}
       />
 
-      <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+      <label
+        className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground"
+        data-testid="data-csv-mode-field"
+      >
+        <span>{t("dataMgmt.csv.mode")}</span>
+        <select
+          value={mode}
+          onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
+          className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+        >
+          <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
+          <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
+        </select>
+      </label>
+
+      <fieldset
+        className="grid gap-3 rounded-md border border-border bg-card p-3"
+        data-testid="data-csv-execution-fieldset"
+      >
         <legend className="px-1 text-sm font-semibold text-foreground">{t("dataMgmt.csv.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
@@ -1368,7 +1435,6 @@ function SyntheticWorkspace({
   selectAiDbProfiles,
   selectedSyntheticProfile,
   syntheticData,
-  syntheticDataStatus,
   syntheticDataResults,
   syntheticProfileName,
   syntheticAvailableTables,
@@ -1387,6 +1453,7 @@ function SyntheticWorkspace({
   onRefreshTables,
   onSyntheticProfileNameChange,
   onSyntheticTableToggle,
+  onSyntheticTablesBulkChange,
   onSyntheticPromptChange,
   onSyntheticConfirmationChange,
   onSyntheticRowsChange,
@@ -1395,14 +1462,12 @@ function SyntheticWorkspace({
   onSyntheticResultTableChange,
   onSyntheticResultLimitChange,
   onGenerateSyntheticData,
-  onCheckSyntheticDataStatus,
   onLoadSyntheticDataResults,
   onRetry,
 }: {
   selectAiDbProfiles: SelectAiDbProfilesData | null;
   selectedSyntheticProfile: SelectAiDbProfile | null;
   syntheticData: SyntheticDataOperationData | null;
-  syntheticDataStatus: SyntheticDataOperationStatusData | null;
   syntheticDataResults: SyntheticDataResultsData | null;
   syntheticProfileName: string;
   syntheticAvailableTables: string[];
@@ -1421,6 +1486,7 @@ function SyntheticWorkspace({
   onRefreshTables: () => void;
   onSyntheticProfileNameChange: (value: string) => void;
   onSyntheticTableToggle: (tableName: string, selected: boolean) => void;
+  onSyntheticTablesBulkChange: (tableNames: string[], selected: boolean) => void;
   onSyntheticPromptChange: (value: string) => void;
   onSyntheticConfirmationChange: (value: string) => void;
   onSyntheticRowsChange: (value: number) => void;
@@ -1429,12 +1495,10 @@ function SyntheticWorkspace({
   onSyntheticResultTableChange: (value: string) => void;
   onSyntheticResultLimitChange: (value: number) => void;
   onGenerateSyntheticData: () => void;
-  onCheckSyntheticDataStatus: () => void;
   onLoadSyntheticDataResults: () => void;
   onRetry: () => void;
 }) {
-  const activeStep = syntheticDataResults ? 3 : syntheticData || syntheticDataStatus ? 1 : 0;
-  const operationId = syntheticData?.operation_id.trim() ?? "";
+  const activeStep = syntheticData || syntheticDataResults ? 1 : 0;
   const [syntheticTableSearch, setSyntheticTableSearch] = useState("");
   // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
   const syntheticExpectedConfirmation =
@@ -1447,6 +1511,11 @@ function SyntheticWorkspace({
         tableName.toLowerCase().includes(normalizedSyntheticTableSearch)
       )
     : syntheticAvailableTables;
+  const selectedVisibleTableCount = filteredSyntheticTables.filter((tableName) =>
+    syntheticSelectedTables.includes(tableName)
+  ).length;
+  const allVisibleTablesSelected =
+    filteredSyntheticTables.length > 0 && selectedVisibleTableCount === filteredSyntheticTables.length;
 
   return (
     <div className="grid gap-4">
@@ -1460,7 +1529,6 @@ function SyntheticWorkspace({
       <DbObjectStepIndicator
         steps={[
           t("dataTools.syntheticData.stepTarget"),
-          t("dataTools.syntheticData.stepStatus"),
           t("dataTools.syntheticData.stepResults"),
         ]}
         activeIndex={activeStep}
@@ -1474,20 +1542,6 @@ function SyntheticWorkspace({
           icon={Database}
           title={t("dataTools.syntheticData.stepTarget")}
           description={t("dataTools.syntheticData.targetHint")}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading === "tables"}
-              disabled={!syntheticProfileName}
-              onClick={onRefreshTables}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("dataTools.syntheticData.refreshTables")}</span>
-            </Button>
-          }
         />
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
@@ -1538,6 +1592,31 @@ function SyntheticWorkspace({
           ))}
         </div>
 
+        <ContentActionBar
+          ariaLabel={t("dataTools.syntheticData.refreshTablesActions")}
+          title={t("dataTools.syntheticData.refreshTablesActionTitle")}
+          description={
+            syntheticProfileName
+              ? t("dataTools.syntheticData.refreshTablesActionReady")
+              : t("dataTools.syntheticData.refreshTablesActionDisabled")
+          }
+          actionsClassName="w-full sm:w-auto"
+          testId="data-synthetic-refresh-tables-actions"
+        >
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full sm:w-auto"
+            loading={loading === "tables"}
+            disabled={!syntheticProfileName}
+            onClick={onRefreshTables}
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+            <span>{t("dataTools.syntheticData.refreshTables")}</span>
+          </Button>
+        </ContentActionBar>
+
         <div className="grid min-w-0 gap-2">
           <DbObjectSelectorToolbar
             searchLabel={t("dataTools.syntheticData.tables")}
@@ -1546,6 +1625,17 @@ function SyntheticWorkspace({
             onSearchChange={setSyntheticTableSearch}
             dataTestId="data-synthetic-table-toolbar"
           />
+          {loading !== "tables" && filteredSyntheticTables.length > 0 ? (
+            <BulkSelectionActions
+              selectLabel={t("common.selection.selectVisible")}
+              clearLabel={t("common.selection.clearVisible")}
+              selectDisabled={allVisibleTablesSelected}
+              clearDisabled={selectedVisibleTableCount === 0}
+              dataTestId="data-synthetic-table-selection-actions"
+              onSelectAll={() => onSyntheticTablesBulkChange(filteredSyntheticTables, true)}
+              onClearAll={() => onSyntheticTablesBulkChange(filteredSyntheticTables, false)}
+            />
+          ) : null}
           {loading === "tables" ? (
             <DbManagementLoadingSkeleton
               idPrefix="data-synthetic-tables"
@@ -1666,102 +1756,12 @@ function SyntheticWorkspace({
         </fieldset>
       </section>
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-status-heading">
-        <DbObjectPanelHeader
-          headingId="synthetic-status-heading"
-          icon={RefreshCw}
-          title={t("dataTools.syntheticData.stepStatus")}
-          description={t("dataTools.syntheticData.statusHint")}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading === "status"}
-              disabled={!operationId}
-              onClick={onCheckSyntheticDataStatus}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("dataTools.syntheticData.status")}</span>
-            </Button>
-          }
-        />
-
-        <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-          <span>{t("dataTools.syntheticData.operationId")}</span>
-          <input
-            value={operationId || "-"}
-            readOnly
-            className="h-11 rounded-md border border-border bg-card px-3 font-mono text-sm text-foreground"
-          />
-        </label>
-
-        {syntheticData ? (
-          <div className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" aria-label={t("dataTools.syntheticData.operationResult")}>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge variant={syntheticData.executed ? "success" : "neutral"} label={syntheticData.status} />
-              <StatusBadge variant="neutral" label={syntheticData.runtime} />
-              {operationId && <StatusBadge variant="info" label={operationId} />}
-            </div>
-            <p className="text-foreground">{syntheticData.message || "-"}</p>
-            {syntheticData.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
-                {warning}
-              </p>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title={t("dataTools.syntheticData.noOperationTitle")} hint={t("dataTools.syntheticData.noOperationHint")} />
-        )}
-
-        {loading === "status" ? (
-          <DbManagementLoadingSkeleton
-            idPrefix="data-synthetic-status"
-            ariaLabel={t("dataTools.syntheticData.statusLoading")}
-            variant="compact"
-          />
-        ) : syntheticDataStatus ? (
-          <div className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" aria-label={t("dataTools.syntheticData.statusResult")}>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge variant="info" label={syntheticDataStatus.status} />
-              <StatusBadge variant="neutral" label={syntheticDataStatus.runtime} />
-            </div>
-            <p className="text-foreground">{syntheticDataStatus.message || "-"}</p>
-            {syntheticDataStatus.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
-                {warning}
-              </p>
-            ))}
-            {Object.keys(syntheticDataStatus.result).length > 0 && (
-              <pre className="max-h-52 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
-                <code>{JSON.stringify(syntheticDataStatus.result, null, 2)}</code>
-              </pre>
-            )}
-          </div>
-        ) : null}
-      </section>
-
       <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
           headingId="synthetic-results-heading"
           icon={Eye}
           title={t("dataTools.syntheticData.stepResults")}
           description={t("dataTools.syntheticData.resultsHint")}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading === "results"}
-              disabled={!hasValidResultTable}
-              onClick={onLoadSyntheticDataResults}
-            >
-              <Eye size={15} aria-hidden="true" />
-              <span>{t("dataTools.syntheticData.results")}</span>
-            </Button>
-          }
         />
 
         <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
@@ -1794,6 +1794,31 @@ function SyntheticWorkspace({
           </label>
         </div>
 
+        <ContentActionBar
+          ariaLabel={t("dataTools.syntheticData.resultsActions")}
+          title={t("dataTools.syntheticData.resultsActionTitle")}
+          description={
+            hasValidResultTable
+              ? t("dataTools.syntheticData.resultsActionReady")
+              : t("dataTools.syntheticData.resultsActionDisabled")
+          }
+          actionsClassName="w-full sm:w-auto"
+          testId="data-synthetic-results-actions"
+        >
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full sm:w-auto"
+            loading={loading === "results"}
+            disabled={!hasValidResultTable}
+            onClick={onLoadSyntheticDataResults}
+          >
+            <Eye size={15} aria-hidden="true" />
+            <span>{t("dataTools.syntheticData.results")}</span>
+          </Button>
+        </ContentActionBar>
+
         {loading === "results" ? (
           <DbManagementLoadingSkeleton
             idPrefix="data-synthetic-results"
@@ -1818,13 +1843,6 @@ function SyntheticWorkspace({
         )}
       </section>
     </div>
-  );
-}
-
-async function fetchSyntheticDataStatus(operationId: string) {
-  return apiGet<SyntheticDataOperationStatusData>(
-    `/api/nl2sql/synthetic-data/operations/${encodeURIComponent(operationId)}`,
-    { timeoutMs: API_TIMEOUT_MS.jobControl }
   );
 }
 

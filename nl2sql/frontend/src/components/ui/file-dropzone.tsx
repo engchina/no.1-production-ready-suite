@@ -14,13 +14,11 @@ import {
 } from "lucide-react";
 
 import { t } from "@/lib/i18n";
-import {
-  validateFileDropzoneSelection,
-  type FileDropzoneRejectReason,
-} from "@/lib/file-dropzone";
+import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "@/lib/file-dropzone";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 import { FieldError } from "./field-error";
+import { FieldLabel } from "./required-field";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 
@@ -175,14 +173,7 @@ export function FileDropzone({
       className={cn("grid min-w-0 gap-1 text-sm font-medium text-foreground", className)}
       data-testid={dataTestId}
     >
-      <span>
-        {label}
-        {required ? (
-          <span className="ml-0.5" aria-hidden="true">
-            *
-          </span>
-        ) : null}
-      </span>
+      <FieldLabel htmlFor={inputId} label={label} required={required} />
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
         <label
           htmlFor={inputId}
@@ -250,6 +241,7 @@ export function FileDropzone({
             accept={accept}
             multiple={multiple}
             disabled={interactionDisabled}
+            required={required}
             aria-label={ariaLabel}
             aria-required={required}
             aria-invalid={Boolean(visibleError)}

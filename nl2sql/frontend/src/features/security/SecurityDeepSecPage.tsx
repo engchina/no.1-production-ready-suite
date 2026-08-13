@@ -1,9 +1,14 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Play, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardHeader,

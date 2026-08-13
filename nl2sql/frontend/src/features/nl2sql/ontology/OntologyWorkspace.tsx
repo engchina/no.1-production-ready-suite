@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   ArrowRight,
   ArrowUpDown,
@@ -6,11 +7,17 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { lazy, Suspense, useId, useMemo, useState, type KeyboardEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useId,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,
@@ -21,6 +28,12 @@ import {
   cn,
   type StatusVariant,
 } from "@engchina/production-ready-ui";
+
+import {
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
 
 import { fitLayoutToBounds, layoutOntologyGraph } from "./graphLayout";
 import { edgeStroke, nodeFill, nodeStroke } from "./graphPalette";
@@ -421,11 +434,11 @@ function SortHeader({
     <th
       scope="col"
       aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
-      className="px-3 py-2 text-left text-xs font-semibold text-foreground"
+      className="h-10 px-3 py-2 text-left text-xs font-semibold text-foreground"
     >
       <button
         type="button"
-        className="inline-flex min-h-11 cursor-pointer items-center gap-1 rounded-md px-1 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="inline-flex min-h-10 cursor-pointer items-center gap-1 rounded-md px-1 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
         onClick={() => onSort(sortKey)}
       >
         {children}
@@ -522,7 +535,10 @@ function RelationshipList({
         <Banner severity="info">{labels.empty}</Banner>
       ) : (
         <>
-          <div className="grid gap-3 md:hidden">
+          <div
+            className={`grid gap-3 pr-1 md:hidden ${INFORMATION_LIST_SCROLL_CLASS}`}
+            data-testid="ontology-relationship-card-list"
+          >
             {rows.map((row) => (
               <MobileRelationshipCard
                 key={row.edge_id}
@@ -533,10 +549,13 @@ function RelationshipList({
               />
             ))}
           </div>
-          <div className="hidden overflow-hidden rounded-lg border border-border md:block">
+          <div
+            className={`hidden rounded-lg border border-border md:block ${INFORMATION_TABLE_SCROLL_CLASS}`}
+            data-testid="ontology-relationship-table-scroll-region"
+          >
             <table className="w-full table-fixed border-collapse text-sm">
-              <thead className="bg-background">
-                <tr>
+              <thead className="sticky top-0 z-10 bg-background">
+                <tr className="h-10">
                   <SortHeader sortKey="source" activeKey={sortKey} direction={direction} onSort={changeSort}>
                     {labels.source}
                   </SortHeader>
@@ -546,7 +565,7 @@ function RelationshipList({
                   <SortHeader sortKey="target" activeKey={sortKey} direction={direction} onSort={changeSort}>
                     {labels.target}
                   </SortHeader>
-                  <th scope="col" className="px-3 py-2 text-left text-xs font-semibold text-foreground">
+                  <th scope="col" className="h-10 px-3 py-2 text-left text-xs font-semibold text-foreground">
                     {labels.joinCondition}
                   </th>
                   <SortHeader sortKey="status" activeKey={sortKey} direction={direction} onSort={changeSort}>
@@ -561,6 +580,7 @@ function RelationshipList({
                     tabIndex={onSelectEdge ? 0 : undefined}
                     aria-selected={onSelectEdge ? row.edge_id === selectedEdgeId : undefined}
                     className={cn(
+                      INFORMATION_TABLE_ROW_CLASS,
                       "outline-none transition-colors motion-reduce:transition-none",
                       row.edge_id === selectedEdgeId ? "bg-primary/10" : "hover:bg-background",
                       onSelectEdge && "cursor-pointer focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"

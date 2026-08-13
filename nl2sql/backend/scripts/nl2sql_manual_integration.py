@@ -923,10 +923,6 @@ def _legacy_synthetic_data_smoke(
                 reason="manual-integration-synthetic-data",
             )
         )
-        status_summary = "-"
-        if operation.operation_id:
-            status = nl2sql_service.synthetic_data_operation_status(operation.operation_id)
-            status_summary = f"{status.runtime}:{status.status}"
     except Exception as exc:
         return StepResult(name="legacy_synthetic_data", ok=False, message=str(exc))
     return StepResult(
@@ -935,8 +931,7 @@ def _legacy_synthetic_data_smoke(
         message=(
             f"table={operation.table_name}; execute={execute}; "
             f"executed={operation.executed}; runtime={operation.runtime}; "
-            f"status={operation.status}; operation={operation.operation_id or '-'}; "
-            f"operation_status={status_summary}; warnings={len(operation.warnings)}"
+            f"status={operation.status}; warnings={len(operation.warnings)}"
         ),
     )
 

@@ -10,7 +10,8 @@ import {
   X,
 } from "lucide-react";
 
-import { Button, StatusBadge } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@engchina/production-ready-ui";
 
 import { useOperationTiming } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";

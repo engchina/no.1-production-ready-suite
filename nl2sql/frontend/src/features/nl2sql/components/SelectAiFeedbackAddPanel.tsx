@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { DatabaseZap, ThumbsDown, ThumbsUp } from "lucide-react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  StatusBadge,
+  toast,
+} from "@engchina/production-ready-ui";
 
 import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";

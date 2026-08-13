@@ -1,9 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Archive, ArrowLeft, Pencil, Plus, RefreshCw, Shield, ShieldCheck, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import {
+  Archive,
+  ArrowLeft,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Shield,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 
 import {
   Banner,
-  Button,
   EmptyState,
   FormStatus,
   StatusBadge,
@@ -12,11 +27,13 @@ import {
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -297,6 +314,23 @@ export function SecurityRolesPage() {
         : [...current.permissions, code],
     }));
   };
+  const permissionCodes = permissions.map((permission) => permission.code);
+  const selectedPermissionCount = permissionCodes.filter((code) =>
+    draft.permissions.includes(code)
+  ).length;
+  const selectPermissions = (codes: string[]) => {
+    setDraft((current) => ({
+      ...current,
+      permissions: [...new Set([...current.permissions, ...codes])],
+    }));
+  };
+  const clearPermissions = (codes: string[]) => {
+    const codeSet = new Set(codes);
+    setDraft((current) => ({
+      ...current,
+      permissions: current.permissions.filter((code) => !codeSet.has(code)),
+    }));
+  };
 
   const addEntitlement = () => {
     setDraft((current) => ({
@@ -455,6 +489,7 @@ export function SecurityRolesPage() {
                     operationKey="security-roles-load"
                     placement="panel"
                     testId="security-roles-loading"
+                    activityIcon="none"
                   />
                 ) : null}
                 <MasterDetailDataTable
@@ -502,30 +537,33 @@ export function SecurityRolesPage() {
                 headingId="security-roles-form-heading"
               />
               <form className="grid gap-6" onSubmit={handleSubmit} aria-labelledby="security-roles-form-heading">
+                <RequiredFieldsNote />
                 {editingRole?.role_code === "SYSTEM_ADMIN" ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    <span>{t("security.roles.code")}</span>
+                  <div className="grid gap-1.5 text-sm font-medium">
+                    <FieldLabel htmlFor="security-role-code" label={t("security.roles.code")} required />
                     <input
+                      id="security-role-code"
                       required
                       disabled={activeView === "edit"}
                       className={INPUT_CLASS}
                       value={draft.roleCode}
                       onChange={(event) => setDraft((current) => ({ ...current, roleCode: event.target.value.toUpperCase() }))}
                     />
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    <span>{t("security.roles.name")}</span>
+                  </div>
+                  <div className="grid gap-1.5 text-sm font-medium">
+                    <FieldLabel htmlFor="security-role-name" label={t("security.roles.name")} required />
                     <input
+                      id="security-role-name"
                       required
                       disabled={readOnly}
                       className={INPUT_CLASS}
                       value={draft.displayName}
                       onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
                     />
-                  </label>
+                  </div>
                 </div>
                 <label className="grid gap-1.5 text-sm font-medium">
                   <span>{t("security.roles.description")}</span>
@@ -540,32 +578,62 @@ export function SecurityRolesPage() {
                 <fieldset className="grid gap-3" disabled={readOnly}>
                   <legend className="text-base font-semibold">{t("security.roles.permissions")}</legend>
                   <p className="text-sm text-muted">{t("security.roles.permissionsHint")}</p>
+                  {permissions.length > 0 ? (
+                    <BulkSelectionActions
+                      selectLabel={t("common.selection.selectAll")}
+                      clearLabel={t("common.selection.clearAll")}
+                      selectDisabled={readOnly || selectedPermissionCount === permissionCodes.length}
+                      clearDisabled={readOnly || selectedPermissionCount === 0}
+                      dataTestId="security-roles-permission-selection-actions"
+                      onSelectAll={() => selectPermissions(permissionCodes)}
+                      onClearAll={() => clearPermissions(permissionCodes)}
+                    />
+                  ) : null}
                   {permissionGroups.length === 0 ? (
                     <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">{t("security.common.empty")}</p>
                   ) : (
                     <div className="grid gap-3 lg:grid-cols-2">
-                      {permissionGroups.map(([group, groupPermissions]) => (
-                        <div key={group} className="rounded-md border border-border p-3">
-                          <h3 className="mb-2 text-sm font-semibold">{group}</h3>
-                          <div className="grid gap-2">
-                            {groupPermissions.map((permission) => (
-                              <label key={permission.code} className="flex min-h-11 cursor-pointer items-start gap-2 text-sm">
-                                <input
-                                  className="mt-0.5 h-4 w-4 accent-primary"
-                                  type="checkbox"
-                                  checked={draft.permissions.includes(permission.code)}
-                                  onChange={() => togglePermission(permission.code)}
-                                />
-                                <span className="min-w-0">
-                                  <span className="block font-medium">{permission.label}</span>
-                                  <span className="block text-xs leading-5 text-muted">{permission.description}</span>
-                                  <code className="block break-all text-[10px] text-muted">{permission.code}</code>
-                                </span>
-                              </label>
-                            ))}
+                      {permissionGroups.map(([group, groupPermissions]) => {
+                        const groupCodes = groupPermissions.map((permission) => permission.code);
+                        const selectedGroupCount = groupCodes.filter((code) =>
+                          draft.permissions.includes(code)
+                        ).length;
+                        return (
+                          <div key={group} className="rounded-md border border-border p-3">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <h3 className="text-sm font-semibold">{group}</h3>
+                              <BulkSelectionActions
+                                selectLabel={t("common.selection.selectAll")}
+                                clearLabel={t("common.selection.clearAll")}
+                                selectAriaLabel={t("common.selection.selectGroup", { name: group })}
+                                clearAriaLabel={t("common.selection.clearGroup", { name: group })}
+                                selectDisabled={readOnly || selectedGroupCount === groupCodes.length}
+                                clearDisabled={readOnly || selectedGroupCount === 0}
+                                dataTestId={`security-roles-${group}-permission-selection-actions`}
+                                onSelectAll={() => selectPermissions(groupCodes)}
+                                onClearAll={() => clearPermissions(groupCodes)}
+                              />
+                            </div>
+                            <div className="grid gap-2">
+                              {groupPermissions.map((permission) => (
+                                <label key={permission.code} className="flex min-h-11 cursor-pointer items-start gap-2 text-sm">
+                                  <input
+                                    className="mt-0.5 h-4 w-4 accent-primary"
+                                    type="checkbox"
+                                    checked={draft.permissions.includes(permission.code)}
+                                    onChange={() => togglePermission(permission.code)}
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="block font-medium">{permission.label}</span>
+                                    <span className="block text-xs leading-5 text-muted">{permission.description}</span>
+                                    <code className="block break-all text-[10px] text-muted">{permission.code}</code>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </fieldset>

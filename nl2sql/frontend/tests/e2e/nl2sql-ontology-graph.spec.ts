@@ -1,4 +1,4 @@
-import { expect, test, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -102,7 +102,65 @@ const edges = [
   },
 ];
 
-async function mockApi(page: import("@playwright/test").Page) {
+const relationshipRows = Array.from({ length: 30 }, (_, index) => {
+  const source = edges[index % edges.length];
+  return {
+    ...source,
+    id: `relationship-row-${index + 1}`,
+    relationship_name_ja: `${source.relationship_name_ja} ${index + 1}`,
+  };
+});
+
+function expectedInformationRows(testInfo: TestInfo) {
+  return testInfo.project.name === "mobile-375" ? 5 : 8;
+}
+
+async function expectInformationTableRowLimit(
+  list: Locator,
+  rowSelector: string,
+  visibleRows: number
+) {
+  const fit = await list.evaluate(
+    (node, { rowSelector: selector }) => {
+      const listBox = node.getBoundingClientRect();
+      const rows = Array.from(node.querySelectorAll(selector)).map((row) =>
+        row.getBoundingClientRect()
+      );
+      const header = node.querySelector("thead");
+      const computed = window.getComputedStyle(node);
+      const rootFontSize = Number.parseFloat(
+        window.getComputedStyle(document.documentElement).fontSize
+      );
+      return {
+        listHeight: listBox.height,
+        maxHeight: Number.parseFloat(computed.maxHeight),
+        rootFontSize,
+        headerPosition: header ? window.getComputedStyle(header).position : "",
+        rowCount: rows.length,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+      };
+    },
+    { rowSelector }
+  );
+  const expectedMaxHeight = fit.rootFontSize * (2.5 + 3.5 * visibleRows);
+  expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
+  expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
+  expect(fit.rowCount).toBeGreaterThan(visibleRows);
+  expect(fit.scrollHeight).toBeGreaterThan(fit.clientHeight);
+  expect(fit.headerPosition).toBe("sticky");
+}
+
+async function expectNoHorizontalScroll(page: Page) {
+  const size = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+}
+
+async function mockApi(page: Page) {
   await page.route("**/api/schema/catalog", (route) =>
     fulfillJson(route, { refreshed_at: "2026-07-12T00:00:00Z", tables: [] })
   );
@@ -152,7 +210,7 @@ async function mockApi(page: import("@playwright/test").Page) {
           etag: "re",
         },
         nodes,
-        edges,
+        edges: relationshipRows,
       },
     })
   );
@@ -204,4 +262,42 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await playground.screenshot({
     path: testInfo.outputPath("ontology-graph-canvas.png"),
   });
+});
+
+test("Ontology 関連一覧はデスクトップ8行・モバイル5行相当の高さで内部スクロールする", async ({
+  page,
+}, testInfo) => {
+  await mockApi(page);
+  await page.goto("/ontology-build?profile=default");
+
+  if (testInfo.project.name === "mobile-375") {
+    const cardList = page.getByTestId("ontology-relationship-card-list");
+    await expect(cardList).toBeVisible();
+    expect(await cardList.locator("button").count()).toBeGreaterThan(expectedInformationRows(testInfo));
+    const state = await cardList.evaluate((node) => {
+      const computed = window.getComputedStyle(node);
+      const rootFontSize = Number.parseFloat(
+        window.getComputedStyle(document.documentElement).fontSize
+      );
+      return {
+        listHeight: node.getBoundingClientRect().height,
+        maxHeight: Number.parseFloat(computed.maxHeight),
+        rootFontSize,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+      };
+    });
+    expect(state.maxHeight).toBeGreaterThanOrEqual(state.rootFontSize * 17.5 - 2);
+    expect(state.maxHeight).toBeLessThanOrEqual(state.rootFontSize * 17.5 + 2);
+    expect(Math.abs(state.listHeight - state.maxHeight)).toBeLessThanOrEqual(2);
+    expect(state.scrollHeight).toBeGreaterThan(state.clientHeight);
+    await expectNoHorizontalScroll(page);
+    return;
+  }
+
+  const table = page.getByTestId("ontology-relationship-table-scroll-region");
+  await expect(table).toBeVisible();
+  expect(await table.locator("tbody tr").count()).toBeGreaterThan(expectedInformationRows(testInfo));
+  await expectInformationTableRowLimit(table, "tbody tr", expectedInformationRows(testInfo));
+  await expectNoHorizontalScroll(page);
 });

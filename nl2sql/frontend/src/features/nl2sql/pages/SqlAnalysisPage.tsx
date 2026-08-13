@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { FileSearch, Play, ShieldCheck, Wrench } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -9,10 +10,7 @@ import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { QueryResultsTable } from "../components/DbAdminShared";
-import {
-  DbObjectPanelHeader,
-  DbObjectStepIndicator,
-} from "../components/DbObjectManagementShared";
+import { DbObjectPanelHeader, DbObjectStepIndicator } from "../components/DbObjectManagementShared";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import type { AnalyzeData, QueryResults, RepairData } from "../types";
 
@@ -449,6 +447,7 @@ function ResultSkeleton({ ariaLabel }: { ariaLabel: string }) {
       placement="result"
       className="min-h-48"
       testId="sql-analysis-result-skeleton"
+      activityIcon="none"
     >
       <div className="h-8 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />
       <div className="h-20 animate-pulse rounded-md bg-muted/30" aria-hidden="true" />

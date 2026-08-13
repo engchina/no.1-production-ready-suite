@@ -8,22 +8,23 @@ import {
   Wand2,
 } from "lucide-react";
 
-import {
-  Button,
-  EmptyState,
-  StatusBadge,
-  toast,
-} from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { ErrorState } from "@/components/StateViews";
+import { apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
+  DB_OBJECT_GRID_ROW_CLASS,
+  DB_OBJECT_GRID_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
@@ -32,15 +33,17 @@ import {
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
-import { waitForSchemaRefreshJob } from "../incrementalQueries";
+import {
+  useDbAdminObjects,
+  useSchemaRefreshJob,
+  waitForSchemaRefreshJob,
+} from "../incrementalQueries";
 
 // タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 import type {
   DbAdminObjectDetail,
-  DbAdminObjectPage,
   DbAdminExecuteData,
-  DbAdminObjectsData,
   DbAdminObjectSummary,
   DbAdminStatementPolicy,
   MetadataSqlGenerateData,
@@ -50,7 +53,6 @@ import type {
   MetadataSqlTarget,
   SchemaRefreshJob,
 } from "../types";
-import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
 
 type MetadataMode = "comment" | "annotation";
 type TargetFilter = "all" | "table" | "view";
@@ -78,6 +80,15 @@ const ANNOTATION_EXTRA_TEXT =
   "例(表): ALTER TABLE USERS ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Users');\n" +
   "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'ID'));";
 
+const useDebouncedValue = <T,>(value: T, delayMs: number) => {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+  return debounced;
+};
+
 export function CommentManagementPage() {
   return <MetadataSqlManagementPage mode="comment" />;
 }
@@ -86,9 +97,18 @@ export function AnnotationManagementPage() {
   return <MetadataSqlManagementPage mode="annotation" />;
 }
 
+function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
+  if (!job) return "";
+  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
+  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
+  return t("dataMgmt.schemaJob.progress", {
+    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
+    progress,
+  });
+}
+
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const pageId = mode === "comment" ? "comment-management" : "annotation-management";
-  const [objects, setObjects] = useState<DbAdminObjectPage | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
   const [sampleLimit, setSampleLimit] = useState(10);
@@ -98,29 +118,36 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [targetSearch, setTargetSearch] = useState("");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
-  const tables = useMemo<DbAdminObjectsData | null>(() => objects ? ({
-    runtime: objects.runtime,
-    items: objects.items.filter((item) => item.object_type === "table"),
-    refreshed_at: objects.refreshed_at,
-    warnings: objects.warnings,
-  }) : null, [objects]);
-  const views = useMemo<DbAdminObjectsData | null>(() => objects ? ({
-    runtime: objects.runtime,
-    items: objects.items.filter((item) => item.object_type === "view"),
-    refreshed_at: objects.refreshed_at,
-    warnings: objects.warnings,
-  }) : null, [objects]);
+  const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
+  const objectsQuery = useDbAdminObjects(debouncedTargetSearch, targetFilter, "all");
+  const objectPages = objectsQuery.data?.pages ?? [];
+  const objectItems = useMemo(
+    () => objectPages.flatMap((page) => page.items),
+    [objectPages]
+  );
+  const firstObjectPage = objectPages[0];
+  const totalTargetCount = firstObjectPage?.total ?? objectItems.length;
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const loadSequence = useRef(0);
+  const completedSchemaRefreshJob = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
+  const schemaRefreshing =
+    !schemaRefreshJobQuery.error &&
+    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
+  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
+    ? schemaRefreshJobQuery.error instanceof Error
+      ? schemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : schemaRefreshError;
 
   const allTargets = useMemo(
-    () => [
-      ...targetItemsFromObjects(tables?.items ?? [], "table"),
-      ...targetItemsFromObjects(views?.items ?? [], "view"),
-    ],
-    [tables, views]
+    () => targetItemsFromObjects(objectItems),
+    [objectItems]
   );
   const selectedTargets = useMemo(
     () => selectedKeys.map((key) => targetFromKey(key)).filter(Boolean) as MetadataSqlTarget[],
@@ -154,74 +181,129 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       });
   }, [allTargets, targetFilter, targetSearch, targetSort]);
 
-  const load = async (refreshSchema = false, announce = false) => {
+  const refreshObjects = async (announce = false) => {
+    setMessage("");
+    const result = await objectsQuery.refetch();
+    if (result.error) {
+      setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
+      return;
+    }
+    if (announce) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
+  const refreshSchema = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    setLoading(refreshSchema ? "schema-refresh" : "load");
+    setLoading("schema-refresh");
     setMessage("");
     try {
       await runScopedRequest(async (signal) => {
-        if (refreshSchema) {
-          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-            signal,
-            timeoutMs: API_TIMEOUT_MS.jobControl,
+        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.jobControl,
+        });
+        if (job.job_id) {
+          completedSchemaRefreshJob.current = "";
+          setSchemaRefreshJobId(job.job_id);
+          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
+            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
           });
-          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
+          if (completedJob.status === "done") {
+            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
+          }
         }
-        const objectData = filterUserVisibleDbAdminObjectPage(
-          await apiGet<DbAdminObjectPage>(
-            "/api/nl2sql/db-admin/objects?limit=100&type=all&row_state=all",
-            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
-          )
-        );
         if (signal.aborted || sequence !== loadSequence.current) return;
-        setObjects(objectData);
-        const availableKeys = new Set([
-          ...targetItemsFromObjects(
-            objectData.items.filter((item) => item.object_type === "table"),
-            "table"
-          ).map((item) => item.key),
-          ...targetItemsFromObjects(
-            objectData.items.filter((item) => item.object_type === "view"),
-            "view"
-          ).map((item) => item.key),
-        ]);
-        setSelectedKeys((current) => current.filter((key) => availableKeys.has(key)));
       });
+      if (sequence !== loadSequence.current) return;
+      const result = await objectsQuery.refetch();
+      if (result.error) throw result.error;
       if (announce && sequence === loadSequence.current) {
-        toast.success(
-          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
-        );
+        toast.success(t("common.action.schemaRefreshed"));
       }
     } catch (err) {
       if (isAbortError(err)) {
         return;
       }
-      setMessage(err instanceof Error ? err.message : t("metadataSql.error.load"));
+      setMessage(
+        isTimeoutError(err)
+          ? t("dataMgmt.schemaJob.timeout")
+          : err instanceof Error
+            ? err.message
+            : t("metadataSql.error.load")
+      );
     } finally {
       if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
-    void load();
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  const reloadAfterMutation = async (result: DbAdminExecuteData) => {
-    if (result.schema_refresh_job_id) {
-      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      toast.success(t("common.action.schemaRefreshed"));
+      void refreshObjects();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const error = job.error_code
+        ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+        : t("dataMgmt.schemaJob.error");
+      setSchemaRefreshError(error);
+      toast.error(t("dataMgmt.schemaJob.error"));
     }
-    await load();
+  }, [schemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
+    const reportKey = `${schemaRefreshJobId}:query-error`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    completedSchemaRefreshJob.current = reportKey;
+    const error =
+      schemaRefreshJobQuery.error instanceof Error
+        ? schemaRefreshJobQuery.error.message
+        : t("dataMgmt.schemaJob.error");
+    setSchemaRefreshError(error);
+    toast.error(t("dataMgmt.schemaJob.error"));
+  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
+
+  const reloadAfterMutation = (result: DbAdminExecuteData) => {
+    if (result.schema_refresh_job_id) {
+      completedSchemaRefreshJob.current = "";
+      setSchemaRefreshError("");
+      setSchemaRefreshJobId(result.schema_refresh_job_id);
+    }
+    void refreshObjects();
   };
 
   const toggleTarget = (target: MetadataSqlTarget) => {
     const key = targetKey(target);
     setSelectedKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+    );
+    setDetails([]);
+    setRefreshedSampleText(null);
+    setGenerated(null);
+  };
+
+  const bulkSelectTargets = (targets: MetadataTargetItem[], selected: boolean) => {
+    const targetKeys = targets.map((target) => target.key);
+    const targetKeySet = new Set(targetKeys);
+    setSelectedKeys((current) =>
+      selected
+        ? [...new Set([...current, ...targetKeys])]
+        : current.filter((key) => !targetKeySet.has(key))
     );
     setDetails([]);
     setRefreshedSampleText(null);
@@ -311,11 +393,31 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             : "metadataSql.annotation.subtitle"
         )}
         meta={
-          objects?.refreshed_at
+          firstObjectPage?.refreshed_at
             ? t("common.schemaRefreshedAt", {
-                date: formatDateTime(objects.refreshed_at),
+                date: formatDateTime(firstObjectPage.refreshed_at),
               })
             : undefined
+        }
+        status={
+          schemaRefreshJob ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaRefreshJob.status === "done"
+                    ? "success"
+                    : schemaRefreshJob.status === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={schemaRefreshJobLabel(schemaRefreshJob)}
+              />
+            </span>
+          ) : visibleSchemaRefreshError ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge variant="warning" label={visibleSchemaRefreshError} />
+            </span>
+          ) : undefined
         }
         actions={[
           {
@@ -323,41 +425,53 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: () => load(false, true),
-            loading: loading === "load",
+            onClick: () => void refreshObjects(true),
+            loading: objectsQuery.isFetching,
           },
           {
             id: "schema-refresh",
             kind: "utility",
             label: t("common.action.schemaRefresh"),
             icon: RefreshCw,
-            onClick: () => load(true, true),
-            loading: loading === "schema-refresh",
+            onClick: () => void refreshSchema(true),
+            loading: loading === "schema-refresh" || schemaRefreshing,
+            disabled: loading === "schema-refresh" || schemaRefreshing,
           },
         ]}
       />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
-          notice={message ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` } : null}
+          notice={
+            message
+              ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
+              : visibleSchemaRefreshError
+                ? { tone: "warning", message: visibleSchemaRefreshError }
+              : null
+          }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("tableMgmt.action.refresh")}</span>
             </Button>
           }
         />
-        {(loading === "load" && Boolean(tables || views)) || loading === "schema-refresh" ? (
+        {(objectsQuery.isFetching && Boolean(objectsQuery.data)) || loading === "schema-refresh" || schemaRefreshing ? (
           <ProcessingIndicator
             active
             label={
-              loading === "schema-refresh"
+              loading === "schema-refresh" || schemaRefreshing
                 ? t("common.processing.schemaRefreshing")
                 : t("common.processing.refreshing")
             }
-            operationKey={loading}
+            operationKey={
+              loading === "schema-refresh" || schemaRefreshing
+                ? schemaRefreshJob?.job_id || loading
+                : "metadata-objects-refresh"
+            }
             placement="workspace"
             className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
             testId={`${pageId}-workspace-processing`}
+            activityIcon="none"
           />
         ) : null}
 
@@ -376,15 +490,28 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           <MetadataTargetGrid
             pageId={pageId}
             items={filteredTargets}
+            totalCount={totalTargetCount}
             selectedKeys={selectedKeys}
-            loading={loading === "load" && !tables && !views}
+            loading={objectsQuery.isPending && !objectsQuery.data}
+            error={
+              objectsQuery.error && !objectsQuery.data
+                ? objectsQuery.error instanceof Error
+                  ? objectsQuery.error.message
+                  : t("metadataSql.error.load")
+                : ""
+            }
             search={targetSearch}
             filter={targetFilter}
             sort={targetSort}
+            hasNextPage={Boolean(objectsQuery.hasNextPage)}
+            loadingNextPage={objectsQuery.isFetchingNextPage}
             onSearchChange={setTargetSearch}
             onFilterChange={setTargetFilter}
             onSortChange={toggleSort}
             onToggle={toggleTarget}
+            onBulkSelect={bulkSelectTargets}
+            onRetry={() => void refreshObjects()}
+            onLoadMore={() => void objectsQuery.fetchNextPage()}
             onFetchDetails={() => void fetchDetails()}
             fetchingDetails={loading === "details"}
           />
@@ -428,34 +555,50 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 function MetadataTargetGrid({
   pageId,
   items,
+  totalCount,
   selectedKeys,
   loading,
+  error,
   search,
   filter,
   sort,
+  hasNextPage,
+  loadingNextPage,
   fetchingDetails,
   onSearchChange,
   onFilterChange,
   onSortChange,
   onToggle,
+  onBulkSelect,
+  onRetry,
+  onLoadMore,
   onFetchDetails,
 }: {
   pageId: string;
   items: MetadataTargetItem[];
+  totalCount: number;
   selectedKeys: string[];
   loading: boolean;
+  error: string;
   search: string;
   filter: TargetFilter;
   sort: TargetSortState;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
   fetchingDetails: boolean;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: TargetFilter) => void;
   onSortChange: (key: TargetSortKey) => void;
   onToggle: (target: MetadataSqlTarget) => void;
+  onBulkSelect: (targets: MetadataTargetItem[], selected: boolean) => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
   onFetchDetails: () => void;
 }) {
   const hasActiveFilter = Boolean(search.trim()) || filter !== "all";
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedVisibleCount = items.filter((item) => selectedSet.has(item.key)).length;
+  const allVisibleSelected = items.length > 0 && selectedVisibleCount === items.length;
 
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={`${pageId}-targets-heading`}>
@@ -471,16 +614,6 @@ function MetadataTargetGrid({
               label={t("command.count", { count: items.length })}
             />
             <StatusBadge variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              loading={fetchingDetails}
-              disabled={selectedKeys.length === 0}
-              onClick={onFetchDetails}
-            >
-              <span>{t("metadataSql.action.fetchInfo")}</span>
-            </Button>
           </>
         }
       />
@@ -492,7 +625,7 @@ function MetadataTargetGrid({
         onSearchChange={onSearchChange}
         resultLabel={t("objectSelector.resultCountWithSelected", {
           visible: items.length,
-          total: items.length,
+          total: totalCount,
           selected: selectedKeys.length,
         })}
         dataTestId={`${pageId}-target-toolbar`}
@@ -511,12 +644,26 @@ function MetadataTargetGrid({
         </label>
       </DbObjectSelectorToolbar>
 
+      {!loading && items.length > 0 ? (
+        <BulkSelectionActions
+          selectLabel={t("common.selection.selectVisible")}
+          clearLabel={t("common.selection.clearVisible")}
+          selectDisabled={allVisibleSelected}
+          clearDisabled={selectedVisibleCount === 0}
+          dataTestId={`${pageId}-target-selection-actions`}
+          onSelectAll={() => onBulkSelect(items, true)}
+          onClearAll={() => onBulkSelect(items, false)}
+        />
+      ) : null}
+
       {loading ? (
         <DbManagementLoadingSkeleton
           idPrefix={`${pageId}-target`}
           ariaLabel={t("metadataSql.targets.loading")}
           variant="list"
         />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} />
       ) : items.length === 0 ? (
         <EmptyState
           title={hasActiveFilter ? t("metadataSql.targets.noResultsTitle") : t("metadataSql.targets.emptyTitle")}
@@ -524,7 +671,7 @@ function MetadataTargetGrid({
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className="max-h-[42rem] overflow-auto" data-testid="db-admin-object-list">
+          <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
             <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
                 <col className="w-[16rem]" />
@@ -550,8 +697,11 @@ function MetadataTargetGrid({
                 {items.map((item) => {
                   const selected = selectedSet.has(item.key);
                   return (
-                    <tr key={item.key} className={selected ? "bg-primary/10" : "hover:bg-background"}>
-                      <td className="px-3 py-2 align-top">
+                    <tr
+                      key={item.key}
+                      className={`${DB_OBJECT_GRID_ROW_CLASS} ${selected ? "bg-primary/10" : "hover:bg-background"}`}
+                    >
+                      <td className="px-3 py-1 align-top">
                         <label className="flex min-h-11 cursor-pointer items-start gap-3 text-foreground">
                           <input
                             type="checkbox"
@@ -563,19 +713,19 @@ function MetadataTargetGrid({
                             <span className="block break-all font-mono text-xs font-semibold text-primary">
                               {item.object_name}
                             </span>
-                            <span className="mt-1 block text-xs text-muted">
+                            <span className="sr-only">
                               {t("metadataSql.targets.grid.toggleHint")}
                             </span>
                           </span>
                         </label>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 align-top">
+                      <td className="whitespace-nowrap px-3 py-1 align-top">
                         <StatusBadge variant="neutral" label={targetTypeLabel(item.object_type)} />
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-xs text-muted">
+                      <td className="whitespace-nowrap px-3 py-1 align-top font-mono text-xs text-muted">
                         {item.owner || "-"}
                       </td>
-                      <td className="break-words px-3 py-2 align-top text-sm text-foreground">
+                      <td className="break-words px-3 py-1 align-top text-sm text-foreground">
                         {item.comment || "-"}
                       </td>
                     </tr>
@@ -589,10 +739,38 @@ function MetadataTargetGrid({
       {!loading && (
         <DbObjectSelectorFooter
           visibleCount={items.length}
-          totalCount={items.length}
+          totalCount={totalCount}
           selectedCount={selectedKeys.length}
+          hasNextPage={hasNextPage}
+          loadingNextPage={loadingNextPage}
           dataTestId={`${pageId}-target-footer`}
+          onLoadMore={onLoadMore}
         />
+      )}
+      {!loading && (
+        <ContentActionBar
+          ariaLabel={t("metadataSql.targets.actions")}
+          title={t("metadataSql.targets.fetchActionTitle")}
+          description={
+            selectedKeys.length > 0
+              ? t("metadataSql.targets.fetchActionReady", { count: selectedKeys.length })
+              : t("metadataSql.targets.fetchActionDisabled")
+          }
+          actionsClassName="w-full sm:w-auto"
+          testId={`${pageId}-target-actions`}
+        >
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            className="w-full sm:w-auto"
+            loading={fetchingDetails}
+            disabled={selectedKeys.length === 0}
+            onClick={onFetchDetails}
+          >
+            <span>{t("metadataSql.action.fetchInfo")}</span>
+          </Button>
+        </ContentActionBar>
       )}
     </section>
   );
@@ -631,20 +809,6 @@ function MetadataInputPanel({
         icon={FileText}
         title={t("metadataSql.input.title")}
         description={t("metadataSql.input.hint")}
-        action={
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading}
-            disabled={!detailsReady}
-            onClick={onGenerate}
-          >
-            <Wand2 size={15} aria-hidden="true" />
-            <span>{t("metadataSql.action.generate")}</span>
-          </Button>
-        }
       />
 
       {detailsLoading ? (
@@ -695,6 +859,31 @@ function MetadataInputPanel({
               className="min-h-32 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
             />
           </label>
+
+          <ContentActionBar
+            ariaLabel={t("metadataSql.input.actions")}
+            title={t("metadataSql.input.generateActionTitle")}
+            description={
+              detailsReady
+                ? t("metadataSql.input.generateActionReady", { count: selectedCount })
+                : t("metadataSql.input.generateActionDisabled")
+            }
+            actionsClassName="w-full sm:w-auto"
+            testId={`${pageId}-input-actions`}
+          >
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loading}
+              disabled={!detailsReady}
+              onClick={onGenerate}
+            >
+              <Wand2 size={15} aria-hidden="true" />
+              <span>{t("metadataSql.action.generate")}</span>
+            </Button>
+          </ContentActionBar>
         </>
       )}
     </div>
@@ -714,7 +903,7 @@ function MetadataExecutePanel({
   generated: MetadataSqlGenerateData | null;
   loading: boolean;
   policy: DbAdminStatementPolicy;
-  onExecuted: (result: DbAdminExecuteData) => Promise<void>;
+  onExecuted: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   return (
     <div className="grid gap-4">
@@ -805,8 +994,9 @@ function TargetSortButton({
   );
 }
 
-function targetItemsFromObjects(items: DbAdminObjectSummary[], objectType: MetadataSqlTarget["object_type"]) {
+function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
   return items.map((item): MetadataTargetItem => {
+    const objectType: MetadataSqlTarget["object_type"] = item.object_type === "view" ? "view" : "table";
     const target: MetadataSqlTarget = {
       object_name: item.name,
       object_type: objectType,

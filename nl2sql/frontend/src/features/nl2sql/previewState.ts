@@ -63,11 +63,21 @@ export function previewExecutePayload(
 export function sqlExecutePayload(
   sql: string,
   profileId: string | null,
-  allowedObjects: AllowedObjects
+  allowedObjects: AllowedObjects,
+  rowLimit?: number | null
 ) {
-  return {
+  const payload: {
+    sql: string;
+    profile_id: string | null;
+    allowed_objects: AllowedObjects;
+    row_limit?: number;
+  } = {
     sql: sql.trim(),
     profile_id: profileId,
     allowed_objects: allowedObjects,
   };
+  if (typeof rowLimit === "number") {
+    payload.row_limit = rowLimit;
+  }
+  return payload;
 }

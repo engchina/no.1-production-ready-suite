@@ -640,10 +640,16 @@ class OracleNl2SqlAdapter:
         catalog.schema_fingerprint = self._schema_fingerprint(catalog)
         return catalog
 
-    def fetch_schema_manifest(self) -> dict[tuple[str, str], str]:
+    def fetch_schema_manifest(
+        self,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> dict[tuple[str, str], str]:
         """ALL_OBJECTS から軽量 change manifest だけを取得する。"""
 
         owner_filter, owner_binds = self._schema_owner_filter("o.owner")
+        target_filter, target_binds = self._object_key_filter(
+            "o.owner", "o.object_name", object_keys, prefix="manifest_target"
+        )
         sql = f"""
             SELECT o.owner, o.object_name, o.last_ddl_time
             FROM all_objects o
@@ -652,10 +658,11 @@ class OracleNl2SqlAdapter:
               AND o.status = 'VALID'
               AND o.object_name NOT LIKE '%$%'
               AND o.object_name NOT LIKE '%#%'
+              {target_filter}
             ORDER BY o.owner, o.object_name
         """
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, owner_binds)
+            cursor.execute(sql, {**owner_binds, **target_binds})
             return {
                 (str(owner).upper(), str(object_name).upper()): (
                     last_ddl_time.isoformat()
@@ -1699,6 +1706,33 @@ class OracleNl2SqlAdapter:
             "Oracle Select AI profile 一覧を取得できませんでした: " + "; ".join(errors)
         )
 
+    def fetch_select_ai_profile_names(
+        self,
+        profile_names: set[str] | None = None,
+    ) -> set[str]:
+        """USER_CLOUD_AI_PROFILES から profile 名だけを軽量取得する。"""
+
+        names = {name.strip().upper() for name in (profile_names or set()) if name.strip()}
+        binds: dict[str, Any] = {}
+        target_filter = ""
+        if names:
+            placeholders: list[str] = []
+            for index, name in enumerate(sorted(names)):
+                bind_name = f"profile_name_{index}"
+                placeholders.append(f":{bind_name}")
+                binds[bind_name] = name
+            target_filter = f"WHERE UPPER(PROFILE_NAME) IN ({', '.join(placeholders)})"
+        sql = f"SELECT PROFILE_NAME FROM USER_CLOUD_AI_PROFILES {target_filter}"
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(sql, binds)
+                rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+            except Exception as exc:
+                raise OracleAdapterError(
+                    f"Oracle Select AI profile 名一覧を取得できませんでした: {exc}"
+                ) from exc
+        return {str(row[0] or "").strip().upper() for row in rows if str(row[0] or "").strip()}
+
     def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
         """Fetch one DBMS_CLOUD_AI profile detail with best-effort attribute decoding.
 
@@ -2287,15 +2321,11 @@ class OracleNl2SqlAdapter:
             for sql, params in candidates:
                 try:
                     cursor.execute(sql, params)
-                    row = cursor.fetchone()
+                    cursor.fetchone()
                     conn.commit()
-                    operation_id = _coerce_text(row[0] if row else "").strip()
-                    if not operation_id:
-                        operation_id = self._latest_load_operation_id(cursor)
                     return {
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
-                        "operation_id": operation_id,
                         "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
                         "object_list": safe_objects,
                         "row_count": int(row_count),
@@ -2316,7 +2346,6 @@ class OracleNl2SqlAdapter:
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
                         "mode": "procedure",
-                        "operation_id": self._latest_load_operation_id(cursor),
                         "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
                         "object_list": safe_objects,
                         "row_count": int(row_count),
@@ -2333,69 +2362,6 @@ class OracleNl2SqlAdapter:
             "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の対応 signature が見つかりません: "
             + "; ".join(errors)
         )
-
-    def _latest_load_operation_id(self, cursor: Any) -> str:
-        # GENERATE_SYNTHETIC_DATA は戻り値のない同期プロシージャのため、同一 session の直後に
-        # USER_LOAD_OPERATIONS.MAX(ID) を引いて operation id を得る。
-        # ponytail: 直近 1 件を返すだけ。並行実行時は取り違えの可能性あり(単一管理者運用前提)。
-        try:
-            cursor.execute("SELECT MAX(ID) FROM USER_LOAD_OPERATIONS")
-            row = cursor.fetchone()
-        except Exception:
-            return ""
-        return _coerce_text(row[0] if row else "").strip()
-
-    def synthetic_data_operation_status(self, *, operation_id: str) -> dict[str, Any]:
-        safe = operation_id.strip()
-        if not safe:
-            raise OracleAdapterError("operation_id が空です。")
-        if not safe.isdigit():
-            # 動的テーブル名に埋め込むため digits 限定(識別子はバインド不可・injection 防止)
-            raise OracleAdapterError("operation_id が不正です。")
-        table = f'"SYNTHETIC_DATA${safe}_STATUS"'
-        sql = (
-            f"SELECT NAME, ROWS_LOADED, STATUS, ERROR_MESSAGE "
-            f"FROM {table} FETCH FIRST 200 ROWS ONLY"
-        )
-        with self.connection() as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute(sql)
-                rows = cursor.fetchall() or []
-            except Exception as exc:
-                # status テーブル未生成(ORA-00942)等 → not_found で安全に縮退
-                return {
-                    "runtime": "oracle",
-                    "status": "not_found",
-                    "message": _coerce_text(str(exc)),
-                    "result": {},
-                }
-        if not rows:
-            return {"runtime": "oracle", "status": "not_found", "message": "", "result": {}}
-        entries = [
-            {
-                "name": _coerce_text(row[0]),
-                "rows_loaded": _coerce_result_value(row[1]),
-                "status": _coerce_text(row[2]),
-                "error_message": _coerce_text(row[3]) if len(row) > 3 else "",
-            }
-            for row in rows
-        ]
-        statuses = [entry["status"].upper() for entry in entries if entry["status"]]
-        if any(status in {"FAILED", "ERROR"} for status in statuses):
-            overall = "failed"
-        elif statuses and all(status in {"COMPLETED", "SUCCEEDED"} for status in statuses):
-            overall = "completed"
-        elif statuses:
-            overall = statuses[-1].lower()
-        else:
-            overall = "unknown"
-        message = next((entry["error_message"] for entry in entries if entry["error_message"]), "")
-        return {
-            "runtime": "oracle",
-            "status": overall,
-            "message": message,
-            "result": {"operations": entries},
-        }
 
     def rebuild_feedback_vector_index(
         self,

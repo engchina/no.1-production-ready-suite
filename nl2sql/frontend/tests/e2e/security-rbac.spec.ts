@@ -150,7 +150,7 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toHaveCount(0);
 
   await page.getByLabel("現在のパスワード").fill("BootstrapPass!123");
-  await page.getByLabel("新しいパスワード", { exact: true }).fill("IndependentPass!456");
+  await page.locator("#auth-password-new").fill("IndependentPass!456");
   await page.getByLabel("新しいパスワード（確認）").fill("IndependentPass!456");
   await page.getByRole("button", { name: "パスワードを変更" }).click();
   await expect(page).toHaveURL(/\/login$/);
@@ -195,10 +195,12 @@ test("表示権限だけのユーザーはメニューと直達 URL/API の双�
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 });
 
-test("管理者がユーザーを作成して複数ロールを割り当て、一時パスワードを一度だけ確認する", async ({ page, context }) => {
+test("管理者がユーザーを作成して単一ロールを割り当て、一時パスワードを一度だけ確認する", async ({ page, context }) => {
   await mockDatabaseGateReady(page);
   await context.addCookies([{ name: "nl2sql_csrf", value: "csrf-token", url: "http://127.0.0.1:3101" }]);
   let csrfObserved = false;
+  let createRequestCount = 0;
+  let createdPayloadRoleIds: string[] | null = null;
   let users = [
     {
       user_id: "admin-user",
@@ -221,20 +223,31 @@ test("管理者がユーザーを作成して複数ロールを割り当て、�
     permissions: ["search.view"],
     data_entitlements: [],
   };
+  const runnerRole = {
+    ...systemRole,
+    role_id: "role-runner",
+    role_code: "QUERY_RUNNER",
+    display_name: "検索実行",
+    is_built_in: false,
+    permissions: ["search.execute"],
+    data_entitlements: [],
+  };
   await page.route("**/api/security/roles?include_archived=false", (route) =>
-    fulfill(route, [systemRole, viewerRole])
+    fulfill(route, [systemRole, viewerRole, runnerRole])
   );
   await page.route("**/api/security/users", async (route) => {
     if (route.request().method() === "GET") {
       await fulfill(route, users);
       return;
     }
+    createRequestCount += 1;
     csrfObserved = route.request().headers()["x-csrf-token"] === "csrf-token";
     const payload = route.request().postDataJSON() as {
       login_name: string;
       display_name: string;
       role_ids: string[];
     };
+    createdPayloadRoleIds = payload.role_ids;
     const user = {
       user_id: "new-user",
       login_name: payload.login_name,
@@ -254,14 +267,31 @@ test("管理者がユーザーを作成して複数ロールを割り当て、�
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
   await page.getByLabel("ログイン名").fill("sales.user");
   await page.getByLabel("表示名").fill("営業ユーザー");
-  await expect(page.getByLabel("システム管理者")).toBeDisabled();
+  await expect(page.getByTestId("security-users-role-selection-actions")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: /システム管理者/ })).toBeDisabled();
   await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
-  await page.getByLabel("検索閲覧").check();
+  const createButton = page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true });
+  await createButton.click();
+  await expect(page.getByText("ロールを1つ選択してください。", { exact: true })).toBeVisible();
+  expect(createRequestCount).toBe(0);
+
+  const viewerRadio = page.getByRole("radio", { name: /検索閲覧/ });
+  const runnerRadio = page.getByRole("radio", { name: /検索実行/ });
+  await expect(viewerRadio).toHaveAttribute("type", "radio");
+  await expect(runnerRadio).toHaveAttribute("type", "radio");
+  await viewerRadio.check();
+  await expect(viewerRadio).toBeChecked();
+  await expect(runnerRadio).not.toBeChecked();
+  await runnerRadio.check();
+  await expect(runnerRadio).toBeChecked();
+  await expect(viewerRadio).not.toBeChecked();
+  await viewerRadio.check();
   await page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true }).click();
 
   await expect(page.getByText("一時パスワードは今回だけ表示されます。安全な方法で利用者へ伝えてください。", { exact: true })).toBeVisible();
   await expect(page.getByText("RandomStrong!Pass123", { exact: true })).toBeVisible();
   expect(csrfObserved).toBe(true);
+  expect(createdPayloadRoleIds).toEqual(["role-viewer"]);
 });
 
 test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", async ({ page }) => {
@@ -423,6 +453,17 @@ test("ロール・権限管理はカード型リストではなくテーブル�
 
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
   expect(await topLevelPanelStyle(page, "create", "security-roles")).toEqual(listStyle);
+  const permissionBulkActions = page.getByTestId("security-roles-permission-selection-actions");
+  await expect(permissionBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
+  await expect(permissionBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
+  await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
+  await expect(page.getByRole("checkbox", { name: /ユーザーを表示/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ユーザーを管理/ })).toBeChecked();
+  const securityGroupBulkActions = page.getByTestId("security-roles-security-permission-selection-actions");
+  await expect(securityGroupBulkActions.getByRole("button", { name: "security の選択を解除" })).toBeEnabled();
+  await securityGroupBulkActions.getByRole("button", { name: "security の選択を解除" }).click();
+  await expect(page.getByRole("checkbox", { name: /ユーザーを表示/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ユーザーを管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 

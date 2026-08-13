@@ -19,14 +19,12 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
-  useInitializeSystemTables,
-  useSystemTablesStatus,
-} from "@/lib/queries";
-import {
-  systemTableControlsBusy,
-  systemTableOperationMessageKey,
-  systemTableStatusLabelKey,
-} from "@/lib/system-tables";
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
+import { useInitializeSystemTables, useSystemTablesStatus } from "@/lib/queries";
+import { systemTableControlsBusy, systemTableOperationMessageKey, systemTableStatusLabelKey } from "@/lib/system-tables";
 
 const RECREATE_CONFIRMATION = "RECREATE_NL2SQL_SYSTEM_TABLES";
 
@@ -330,11 +328,11 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
           tabIndex={0}
           aria-label={t("settings.database.systemTables.table.scrollLabel")}
           data-testid="system-tables-scroll-region"
-          className="max-h-[27.25rem] max-w-full overflow-auto rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className={`rounded-sm ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         >
           <table className="min-w-[720px] w-full border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 bg-background">
-              <tr className="h-9 border-b border-border text-xs text-muted">
+              <tr className="h-10 border-b border-border text-xs text-muted">
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.name")}</th>
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.status")}</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium">{t("settings.database.systemTables.table.rows")}</th>
@@ -344,7 +342,7 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
             </thead>
             <tbody>
               {data.tables.map((table) => (
-                <tr key={table.name} className="h-10 border-b border-border last:border-b-0">
+                <tr key={table.name} className={`${INFORMATION_TABLE_ROW_CLASS} border-b border-border last:border-b-0`}>
                   <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-foreground">{table.name}</th>
                   <td className="px-3 py-2">
                     <StatusBadge

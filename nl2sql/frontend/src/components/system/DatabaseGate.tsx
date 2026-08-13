@@ -5,10 +5,7 @@ import { useLocation } from "react-router-dom";
 import { Banner } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
-import {
-  DatabaseUnavailableNotice,
-  type DatabaseNoticeStatus,
-} from "@/components/system/DatabaseUnavailableNotice";
+import { DatabaseUnavailableNotice, type DatabaseNoticeStatus } from "@/components/system/DatabaseUnavailableNotice";
 import {
   DATABASE_UNAVAILABLE_EVENT,
   supersedeDatabaseUnavailableProbe,

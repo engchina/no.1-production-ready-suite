@@ -234,6 +234,7 @@ async function mockProfileApi(
     viewItems?: MockDbObjectSummary[];
     profileItems?: typeof profiles;
     dbProfileData?: typeof dbProfiles;
+    schemaObjectTotals?: Partial<Record<"TABLE" | "VIEW", number>>;
   } = {}
 ) {
   const tableItems = options.tableItems ?? [
@@ -309,10 +310,11 @@ async function mockProfileApi(
         column_count: object.columns.length,
         last_ddl_at: "",
       }));
+    const total = options.schemaObjectTotals?.[type.toUpperCase() as "TABLE" | "VIEW"] ?? items.length;
     return fulfillJson(route, {
       items,
       next_cursor: null,
-      total: items.length,
+      total,
       catalog_version: 1,
     });
   });
@@ -411,6 +413,67 @@ async function mockProfileApi(
     })
   );
 }
+
+test("業務プロファイルの対象オブジェクト件数は取得済み件数と API total を分けて表示する", async ({ page }) => {
+  const largeCatalog = {
+    ...schemaCatalog,
+    tables: [
+      ...Array.from({ length: 102 }, (_, index) => {
+        const count = String(index + 1).padStart(2, "0");
+        return {
+          table_name: `TABLE_${count}`,
+          logical_name: `表論理名_${count}`,
+          owner: "APP",
+          table_type: "TABLE",
+          comment: `表コメント_${count}`,
+          row_count: null,
+          columns: [],
+          constraints: [],
+        };
+      }),
+      ...Array.from({ length: 2 }, (_, index) => {
+        const count = String(index + 1).padStart(2, "0");
+        return {
+          table_name: `VIEW_${count}`,
+          logical_name: `ビュー論理名_${count}`,
+          owner: "APP",
+          table_type: "VIEW",
+          comment: `ビューコメント_${count}`,
+          row_count: null,
+          columns: [],
+          constraints: [],
+        };
+      }),
+    ],
+  };
+  const countProfiles = [
+    {
+      ...profiles[0],
+      id: "count-profile",
+      name: "件数確認プロファイル",
+      allowed_tables: ["APP.TABLE_01"],
+      allowed_views: ["APP.VIEW_01", "APP.VIEW_02"],
+    },
+  ];
+
+  await mockProfileApi(page, {
+    catalog: largeCatalog,
+    profileItems: countProfiles,
+    schemaObjectTotals: { TABLE: 310, VIEW: 125 },
+  });
+
+  await page.goto("/profiles?profile=count-profile");
+
+  await expect(page.getByTestId("profile-object-search-toolbar")).toContainText(
+    "104 / 435 件を表示、選択 3 件"
+  );
+  await expect(page.getByTestId("profile-allowed-table-list-footer")).toContainText(
+    "102 / 310 件を表示、選択 1 件"
+  );
+  await expect(page.getByTestId("profile-allowed-view-list-footer")).toContainText(
+    "2 / 125 件を表示、選択 2 件"
+  );
+});
 
 test("業務プロファイルの更新操作はテーブル管理と同じ文言・順序・階層で動作する", async ({ page }) => {
   let profileSearchRequests = 0;
@@ -596,6 +659,8 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByRole("tab", { name: "Oracle Profile", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
   await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
+  await expect(page.getByText("Oracle Profile 反映結果", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("profile-oracle-result")).toHaveCount(0);
   await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
   const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
   await profileRow.locator("td").nth(1).click();
@@ -637,6 +702,9 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByText("V_$SESSION", { exact: true })).toHaveCount(0);
   await expect(tableList.getByText("表論理名_01", { exact: true })).toBeVisible();
   await expect(viewList.getByText("ビュー論理名_02", { exact: true })).toBeVisible();
+  const appTableBulkActions = tableList.getByTestId("profile-allowed-table-list-app-schema-bulk-actions");
+  await expect(appTableBulkActions.getByRole("button", { name: "APP をすべて選択" })).toBeEnabled();
+  await expect(appTableBulkActions.getByRole("button", { name: "APP の選択を解除" })).toBeEnabled();
 
   const objectSection = page.getByTestId("profile-allowed-object-list");
   const objectSearchToolbar = page.getByTestId("profile-object-search-toolbar");
@@ -711,7 +779,8 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
   // 業務 Profile 保存後はすぐに解除され、Oracle 反映は polling で完了を受け取る。
-  await expect(page.getByTestId("profile-oracle-result").getByText("saved")).toBeVisible();
+  await expect(page.getByTestId("profile-oracle-sync-status")).toContainText("Oracle 反映: 完了");
+  await expect(page.getByTestId("profile-oracle-result")).toHaveCount(0);
   const payload = savedPayload as {
     allowed_tables: string[];
     allowed_views: string[];
@@ -891,7 +960,14 @@ test("異なる schema の同名表を別々に選択できる", async ({ page }
   await expect(tableList.getByLabel("APP.ORDERS")).toBeChecked();
   await expect(tableList.getByLabel("SH.ORDERS")).not.toBeChecked();
 
-  await tableList.getByRole("checkbox", { name: "SH schema を一括選択" }).click();
+  const shBulkActions = tableList.getByTestId("profile-allowed-table-list-sh-schema-bulk-actions");
+  await expect(shBulkActions.getByRole("button", { name: "SH の選択を解除" })).toBeDisabled();
+  await shBulkActions.getByRole("button", { name: "SH をすべて選択" }).click();
+  await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
+  await expect(shBulkActions.getByRole("button", { name: "SH の選択を解除" })).toBeEnabled();
+  await shBulkActions.getByRole("button", { name: "SH の選択を解除" }).click();
+  await expect(tableList.getByLabel("SH.ORDERS")).not.toBeChecked();
+  await shBulkActions.getByRole("button", { name: "SH をすべて選択" }).click();
   await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
 
   await page.getByRole("searchbox", { name: "オブジェクト検索" }).fill("SH.ORDERS");
@@ -909,6 +985,9 @@ test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重
   const maxTokens = page.getByLabel("Max Tokens");
   await expect(region).toBeVisible();
   await expect(maxTokens).toBeVisible();
+  await expect(maxTokens).toHaveAttribute("min", "4096");
+  await expect(maxTokens).toHaveAttribute("max", "32000");
+  await expect(maxTokens).toHaveAttribute("step", "1");
 
   const [regionBox, maxTokensBox] = await Promise.all([region.boundingBox(), maxTokens.boundingBox()]);
   expect(regionBox).not.toBeNull();
@@ -923,6 +1002,13 @@ test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重
       regionBottom <= (maxTokensBox?.y ?? 0) ||
       maxTokensBottom <= (regionBox?.y ?? 0)
   ).toBe(true);
+
+  await maxTokens.fill("4095");
+  await maxTokens.blur();
+  await expect(maxTokens).toHaveValue("4096");
+  await maxTokens.fill("32001");
+  await maxTokens.blur();
+  await expect(maxTokens).toHaveValue("32000");
 });
 
 test("名称未入力で保存すると名称欄直下に FieldError が出る", async ({ page }) => {

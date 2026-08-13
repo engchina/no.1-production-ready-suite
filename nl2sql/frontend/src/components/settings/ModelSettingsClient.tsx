@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -1044,11 +1045,7 @@ function FieldLabel({
       <label htmlFor={htmlFor} className="text-sm font-medium text-foreground">
         {label}
       </label>
-      {badge ? (
-        <span className="rounded-full bg-info-bg px-2 py-0.5 text-[11px] font-medium text-info">
-          {badge}
-        </span>
-      ) : null}
+      {badge ? <RequiredIndicator label={badge} /> : null}
     </div>
   );
 }

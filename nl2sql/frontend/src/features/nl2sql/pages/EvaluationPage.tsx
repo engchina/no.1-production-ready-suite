@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,18 +12,19 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   Banner,
-  Button,
   EmptyState,
   StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, apiFetch, apiGet, apiPostForm } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -172,6 +174,16 @@ export function EvaluationPage() {
       capabilities?.engines.filter((item) => engines.includes(item.engine)) ?? [],
     [capabilities?.engines, engines]
   );
+  const availableEngineIds = useMemo(
+    () =>
+      (capabilities?.engines ?? [])
+        .filter((capability) => capability.available)
+        .map((capability) => capability.engine),
+    [capabilities?.engines]
+  );
+  const selectedAvailableEngineCount = availableEngineIds.filter((engine) =>
+    engines.includes(engine)
+  ).length;
   const selectedUnavailable = selectedCapabilities.some((item) => !item.available);
   const running = Boolean(currentJob && ACTIVE_STATUSES.has(currentJob.status));
   const pageLoading = capabilitiesQuery.isLoading || profilesQuery.isLoading;
@@ -203,6 +215,15 @@ export function EvaluationPage() {
 
   const toggleEngine = (engine: QualityEvaluationEngine) => {
     setEngines((current) => toggleQualityEvaluationEngine(current, engine));
+    setFormErrors((current) => ({ ...current, engines: undefined }));
+  };
+  const selectAllEngines = () => {
+    setEngines((current) => [...new Set([...current, ...availableEngineIds])]);
+    setFormErrors((current) => ({ ...current, engines: undefined }));
+  };
+  const clearAllEngines = () => {
+    const availableEngineSet = new Set(availableEngineIds);
+    setEngines((current) => current.filter((engine) => !availableEngineSet.has(engine)));
     setFormErrors((current) => ({ ...current, engines: undefined }));
   };
 
@@ -273,10 +294,18 @@ export function EvaluationPage() {
                 </Banner>
               ) : null}
 
+              <RequiredFieldsNote />
+
               <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-                <label className="grid min-w-0 gap-1.5 text-sm font-medium text-foreground">
-                  <span>{t("qualityEvaluation.profile.label")}</span>
+                <div className="grid min-w-0 gap-1.5 text-sm font-medium text-foreground">
+                  <FieldLabel
+                    htmlFor="quality-evaluation-profile"
+                    label={t("qualityEvaluation.profile.label")}
+                    required
+                  />
                   <select
+                    id="quality-evaluation-profile"
+                    required
                     className={controlClass}
                     value={profileId}
                     onChange={(event) => {
@@ -297,7 +326,7 @@ export function EvaluationPage() {
                       ))}
                   </select>
                   <FieldError id="quality-profile-error" message={formErrors.profile} />
-                </label>
+                </div>
 
                 <div className="grid min-w-0 gap-1.5">
                   <FileDropzone
@@ -310,6 +339,7 @@ export function EvaluationPage() {
                     hint={t("qualityEvaluation.file.hint")}
                     errorText={formErrors.file}
                     icon="spreadsheet"
+                    required
                     disabled={running}
                     dataTestId="quality-evaluation-file"
                     onReject={(reason) =>
@@ -359,6 +389,19 @@ export function EvaluationPage() {
                 <p id="quality-engines-hint" className="text-xs text-muted">
                   {t("qualityEvaluation.engines.hint")}
                 </p>
+                {availableEngineIds.length > 0 ? (
+                  <BulkSelectionActions
+                    selectLabel={t("common.selection.selectAll")}
+                    clearLabel={t("common.selection.clearAll")}
+                    selectDisabled={
+                      running || selectedAvailableEngineCount === availableEngineIds.length
+                    }
+                    clearDisabled={running || selectedAvailableEngineCount === 0}
+                    dataTestId="quality-evaluation-engine-selection-actions"
+                    onSelectAll={selectAllEngines}
+                    onClearAll={clearAllEngines}
+                  />
+                ) : null}
                 <div className="grid min-w-0 gap-3 md:grid-cols-3">
                   {(capabilities?.engines ?? []).map((capability) => {
                     const selected = engines.includes(capability.engine);

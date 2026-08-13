@@ -1,7 +1,8 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { ClipboardCopy, FileCode2 } from "lucide-react";
 
-import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";

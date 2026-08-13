@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
@@ -12,10 +13,7 @@ import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
-import {
-  DbObjectPanelHeader,
-  DbObjectStepIndicator,
-} from "../components/DbObjectManagementShared";
+import { DbObjectPanelHeader, DbObjectStepIndicator } from "../components/DbObjectManagementShared";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import type {
   AnalyzeData,
@@ -350,6 +348,7 @@ export function SqlToQuestionPage() {
                   operationKey={analyzeLoading ? "analyze" : reverseMode}
                   placement="action"
                   testId="sql-to-question-processing"
+                  activityIcon="none"
                 />
               ) : null}
               </section>

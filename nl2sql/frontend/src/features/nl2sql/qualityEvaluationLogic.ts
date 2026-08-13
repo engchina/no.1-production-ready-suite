@@ -1,8 +1,4 @@
-import type {
-  QualityEvaluationEngine,
-  QualityEvaluationEngineCapability,
-  QualityEvaluationStatus,
-} from "./types.ts";
+import type { QualityEvaluationEngine, QualityEvaluationEngineCapability, QualityEvaluationStatus } from "./types.ts";
 
 export type QualityEvaluationValidationCode =
   | "profile_required"

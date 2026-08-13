@@ -1,12 +1,6 @@
-import {
-  EmptyState,
-  ErrorState as UiErrorState,
-} from "@engchina/production-ready-ui";
+import { EmptyState, ErrorState as UiErrorState } from "@engchina/production-ready-ui";
 
-import {
-  TimedLoadingState,
-  type ProcessingPlacement,
-} from "@/components/ProcessingState";
+import { TimedLoadingState, type ProcessingActivityIcon, type ProcessingPlacement } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
 
 export { EmptyState };
@@ -17,11 +11,13 @@ export function LoadingState({
   operationKey,
   onCancel,
   placement = "panel",
+  activityIcon = "spinner",
 }: {
   label: string;
   operationKey?: string | number | null;
   onCancel?: () => void;
   placement?: ProcessingPlacement;
+  activityIcon?: ProcessingActivityIcon;
 }) {
   return (
     <TimedLoadingState
@@ -29,6 +25,7 @@ export function LoadingState({
       operationKey={operationKey}
       onCancel={onCancel}
       placement={placement}
+      activityIcon={activityIcon}
       framed={false}
     />
   );

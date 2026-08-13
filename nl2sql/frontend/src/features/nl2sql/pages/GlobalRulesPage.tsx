@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
-  Button,
   EmptyState,
   Pagination,
   StatusBadge,
@@ -18,11 +18,7 @@ import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
-import {
-  DbManagementLoadingSkeleton,
-  DbObjectManagementPanelShell,
-  DbObjectPanelHeader,
-} from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
 
 const GLOBAL_RULES_ID = "global-rules";
@@ -155,6 +151,7 @@ export function GlobalRulesPage() {
                 placement="workspace"
                 className="rounded-md border border-border bg-background px-3 py-2"
                 testId="global-rules-workspace-processing"
+                activityIcon="none"
               />
             ) : undefined
           }
@@ -181,6 +178,7 @@ export function GlobalRulesPage() {
                 formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
                 replaceText={t("glossary.file.replaceWorkbook")}
                 icon="spreadsheet"
+                required
                 disabled={busy}
                 loading={busy}
                 dataTestId="global-rules-file"

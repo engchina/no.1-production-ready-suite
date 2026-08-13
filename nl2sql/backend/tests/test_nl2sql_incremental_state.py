@@ -39,6 +39,8 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaRefreshJob,
     SchemaRefreshJobStatus,
+    SchemaRefreshMode,
+    SchemaRefreshTargetObject,
     SchemaTable,
     SchemaViewDependency,
 )
@@ -1196,6 +1198,71 @@ def test_schema_refresh_submission_coalesces_active_job_without_running_inline(
     assert called == 0
 
 
+def test_schema_refresh_submission_wakes_coalesced_pending_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_mode", "inprocess")
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "_dispatch_schema_refresh_job",
+        lambda job_id: dispatched.append(job_id) or True,
+    )
+
+    first = service.start_schema_refresh_job(dispatch=False)
+    second = service.start_schema_refresh_job()
+
+    assert second.job_id == first.job_id
+    assert second.status == SchemaRefreshJobStatus.PENDING
+    assert dispatched == [first.job_id]
+
+
+def test_schema_refresh_poll_wakes_expired_running_job_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_mode", "inprocess")
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "_dispatch_schema_refresh_job",
+        lambda job_id: dispatched.append(job_id) or True,
+    )
+    now = datetime.now(UTC)
+    expired = SchemaRefreshJob(
+        job_id="expired-refresh",
+        created_at=now.isoformat(),
+        status=SchemaRefreshJobStatus.RUNNING,
+        lease_expires_at=(now - timedelta(seconds=1)).isoformat(),
+    )
+    active = SchemaRefreshJob(
+        job_id="active-refresh",
+        created_at=now.isoformat(),
+        status=SchemaRefreshJobStatus.RUNNING,
+        lease_expires_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+    repository.save_refresh_job(expired)
+    repository.save_refresh_job(active)
+
+    assert service.get_schema_refresh_job(expired.job_id) is not None
+    assert service.get_schema_refresh_job(active.job_id) is not None
+    assert dispatched == [expired.job_id]
+
+    monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_mode", "external")
+    repository.save_refresh_job(
+        expired.model_copy(update={"job_id": "external-refresh"})
+    )
+    assert service.get_schema_refresh_job("external-refresh") is not None
+    assert dispatched == [expired.job_id]
+
+
 def test_twenty_object_reads_do_not_wait_for_schema_refresh_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1246,11 +1313,18 @@ class _RefreshAdapter:
         self.changed_catalog = changed_catalog
         self.fail = fail
         self.requested_keys: set[tuple[str, str]] = set()
+        self.manifest_requested_keys: set[tuple[str, str]] | None = None
 
-    def fetch_schema_manifest(self) -> dict[tuple[str, str], str]:
+    def fetch_schema_manifest(
+        self,
+        object_keys: set[tuple[str, str]] | None = None,
+    ) -> dict[tuple[str, str], str]:
         if self.fail:
             raise RuntimeError("manifest failed")
-        return dict(self.manifest)
+        self.manifest_requested_keys = set(object_keys) if object_keys is not None else None
+        if object_keys is None:
+            return dict(self.manifest)
+        return {key: value for key, value in self.manifest.items() if key in object_keys}
 
     def fetch_catalog_objects(self, keys: set[tuple[str, str]]) -> SchemaCatalog:
         self.requested_keys = set(keys)
@@ -1308,6 +1382,140 @@ def test_schema_refresh_is_incremental_and_deletes_missing_objects() -> None:
     assert [(item.view_name, item.referenced_name) for item in catalog.view_dependencies] == [
         ("D", "A")
     ]
+
+
+def test_targeted_schema_refresh_fetches_only_target_objects() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    initial = SchemaCatalog(
+        refreshed_at="before",
+        tables=[_table("A"), _table("B")],
+    )
+    repository.apply_schema_refresh(
+        catalog=initial,
+        manifest={("APP", "A"): "v1", ("APP", "B"): "v1"},
+        changed_keys={("APP", "A"), ("APP", "B")},
+        deleted_keys=set(),
+    )
+    adapter = _RefreshAdapter(
+        {("APP", "A"): "v2"},
+        SchemaCatalog(refreshed_at="next", tables=[_table("A", comment="targeted")]),
+    )
+    service = _incremental_service(repository)
+    service._oracle_adapter = adapter  # type: ignore[assignment]  # noqa: SLF001
+    service._use_oracle_runtime = lambda: True  # type: ignore[method-assign]  # noqa: SLF001
+
+    job = service.start_schema_refresh_job(
+        dispatch=False,
+        mode=SchemaRefreshMode.TARGETED,
+        source="test",
+        target_objects=[
+            SchemaRefreshTargetObject(
+                owner="APP",
+                object_name="A",
+                object_type="table",
+                expected_state="present",
+            )
+        ],
+    )
+    service._run_schema_refresh_job(job.job_id)  # noqa: SLF001
+
+    completed = service.get_schema_refresh_job(job.job_id)
+    assert completed is not None
+    assert completed.status == SchemaRefreshJobStatus.DONE
+    assert completed.mode == SchemaRefreshMode.TARGETED
+    assert completed.changed_objects == 1
+    assert completed.deleted_objects == 0
+    assert adapter.manifest_requested_keys == {("APP", "A")}
+    assert adapter.requested_keys == {("APP", "A")}
+    catalog = repository.load_catalog()
+    table_by_name = {table.table_name: table for table in catalog.tables}
+    assert set(table_by_name) == {"A", "B"}
+    assert table_by_name["A"].comment == "targeted"
+    assert repository.schema_manifest() == {("APP", "A"): "v2", ("APP", "B"): "v1"}
+
+
+def test_targeted_schema_refresh_deletes_only_target_object() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    initial = SchemaCatalog(
+        refreshed_at="before",
+        tables=[_table("A"), _table("B")],
+    )
+    repository.apply_schema_refresh(
+        catalog=initial,
+        manifest={("APP", "A"): "v1", ("APP", "B"): "v1"},
+        changed_keys={("APP", "A"), ("APP", "B")},
+        deleted_keys=set(),
+    )
+    adapter = _RefreshAdapter({}, SchemaCatalog(refreshed_at="next", tables=[]))
+    service = _incremental_service(repository)
+    service._oracle_adapter = adapter  # type: ignore[assignment]  # noqa: SLF001
+    service._use_oracle_runtime = lambda: True  # type: ignore[method-assign]  # noqa: SLF001
+
+    job = service.start_schema_refresh_job(
+        dispatch=False,
+        mode=SchemaRefreshMode.TARGETED,
+        source="test",
+        target_objects=[
+            SchemaRefreshTargetObject(
+                owner="APP",
+                object_name="A",
+                object_type="table",
+                expected_state="absent",
+            )
+        ],
+    )
+    service._run_schema_refresh_job(job.job_id)  # noqa: SLF001
+
+    completed = service.get_schema_refresh_job(job.job_id)
+    assert completed is not None
+    assert completed.status == SchemaRefreshJobStatus.DONE
+    assert completed.changed_objects == 0
+    assert completed.deleted_objects == 1
+    assert adapter.manifest_requested_keys == {("APP", "A")}
+    assert adapter.requested_keys == set()
+    assert [table.table_name for table in repository.load_catalog().tables] == ["B"]
+    assert repository.schema_manifest() == {("APP", "B"): "v1"}
+
+
+def test_targeted_schema_refresh_requires_full_when_expected_state_differs() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    initial = SchemaCatalog(refreshed_at="before", tables=[_table("A")])
+    repository.apply_schema_refresh(
+        catalog=initial,
+        manifest={("APP", "A"): "v1"},
+        changed_keys={("APP", "A")},
+        deleted_keys=set(),
+    )
+    adapter = _RefreshAdapter(
+        {("APP", "A"): "v2"},
+        SchemaCatalog(refreshed_at="next", tables=[_table("A", comment="unexpected")]),
+    )
+    service = _incremental_service(repository)
+    service._oracle_adapter = adapter  # type: ignore[assignment]  # noqa: SLF001
+    service._use_oracle_runtime = lambda: True  # type: ignore[method-assign]  # noqa: SLF001
+
+    job = service.start_schema_refresh_job(
+        dispatch=False,
+        mode=SchemaRefreshMode.TARGETED,
+        source="test",
+        target_objects=[
+            SchemaRefreshTargetObject(
+                owner="APP",
+                object_name="A",
+                object_type="table",
+                expected_state="absent",
+            )
+        ],
+    )
+    service._run_schema_refresh_job(job.job_id)  # noqa: SLF001
+
+    failed = service.get_schema_refresh_job(job.job_id)
+    assert failed is not None
+    assert failed.status == SchemaRefreshJobStatus.ERROR
+    assert failed.requires_full_refresh is True
+    assert failed.error_code == "schema_refresh_full_required"
+    assert [table.comment for table in repository.load_catalog().tables] == [""]
+    assert repository.schema_manifest() == {("APP", "A"): "v1"}
 
 
 def test_failed_schema_refresh_keeps_previous_catalog() -> None:

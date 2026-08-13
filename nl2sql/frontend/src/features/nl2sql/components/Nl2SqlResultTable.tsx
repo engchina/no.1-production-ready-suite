@@ -11,6 +11,7 @@ import {
 
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
+import { QueryResultSummary } from "./SqlRowLimitControls";
 
 function formatCell(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -21,7 +22,13 @@ function formatCell(value: unknown) {
 // ponytail: hooks 順を保つため guard 前に無条件呼び出し。空配列は安定参照にして usePagination の再初期化ループを避ける
 const EMPTY_ROWS: Record<string, unknown>[] = [];
 
-export function Nl2SqlResultTable({ results }: { results: QueryResults | null }) {
+export function Nl2SqlResultTable({
+  results,
+  rowLimit,
+}: {
+  results: QueryResults | null;
+  rowLimit?: number | null;
+}) {
   const { page, setPage, totalPages, pageItems, range } = usePagination(
     results?.rows ?? EMPTY_ROWS,
     DEFAULT_PAGE_SIZE,
@@ -35,6 +42,9 @@ export function Nl2SqlResultTable({ results }: { results: QueryResults | null })
         <CardTitle>{t("nl2sql.results.title", { count: results.total })}</CardTitle>
       </CardHeader>
       <CardContent>
+        <div className="mb-2">
+          <QueryResultSummary results={results} rowLimit={rowLimit} />
+        </div>
         {results.rows.length === 0 ? (
           <p className="rounded-md border border-dashed border-border p-6 text-sm text-muted">
             {t("nl2sql.results.empty")}

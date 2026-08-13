@@ -1,11 +1,7 @@
 // Profile Ontology エディタの純ロジック。
 // グラフの正本は backend の GET /nl2sql/profiles/{id}/ontology-view(profile スコープ済み)であり、
 // ここではフロント側でグラフを再構築しない(旧: カタログ全件からのローカル構築は廃止)。
-import type {
-  OntologyCardinality,
-  OntologyGraph,
-  OntologyNode,
-} from "./types";
+import type { OntologyCardinality, OntologyGraph, OntologyNode } from "./types";
 
 export type ProfileOntologyObjectType = "table" | "view";
 

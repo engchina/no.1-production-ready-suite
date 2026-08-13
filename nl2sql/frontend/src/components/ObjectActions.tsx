@@ -18,11 +18,7 @@ import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import {
-  splitObjectActions,
-  visibleEntityActions,
-  type EntityAction,
-} from "./ObjectActionsCore";
+import { splitObjectActions, visibleEntityActions, type EntityAction } from "./ObjectActionsCore";
 
 export {
   splitObjectActions,
@@ -312,10 +308,14 @@ function MenuItems({
 export function RowActionMenu({
   actions,
   ariaLabel,
+  disabled = false,
+  loading = false,
   testId,
 }: {
   actions: readonly EntityAction[];
   ariaLabel: string;
+  disabled?: boolean;
+  loading?: boolean;
   testId?: string;
 }) {
   const visible = useMemo(() => visibleEntityActions(actions), [actions]);
@@ -339,6 +339,8 @@ export function RowActionMenu({
         size="sm"
         variant="ghost"
         className="h-9 w-9 px-0"
+        loading={loading}
+        disabled={disabled}
         aria-label={ariaLabel}
         aria-expanded={open}
         aria-controls={menuId}

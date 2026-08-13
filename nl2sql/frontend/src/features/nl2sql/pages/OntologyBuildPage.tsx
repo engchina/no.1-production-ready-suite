@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Target } from "lucide-react";
@@ -5,7 +6,6 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   Banner,
-  Button,
   EmptyState,
   StatusBadge,
   toast,
@@ -15,11 +15,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import {
-  DbManagementLoadingSkeleton,
-  DbObjectManagementPanelShell,
-  DbObjectPanelHeader,
-} from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   nl2sqlIncrementalKeys,
   useProfileDetail,
@@ -28,24 +24,15 @@ import {
   useSchemaRefreshJob,
   useStartSchemaRefresh,
 } from "../incrementalQueries";
-import {
-  classifyOntologyWorkspaceError,
-  ontologyWorkspaceErrorPresentation,
-} from "../ontologyWorkspaceError";
+import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
 import { OntologyInterchangeSection } from "../ontology/OntologyInterchangeSection";
 import { OntologyMermaidPanel } from "../ontology/OntologyMermaidPanel";
 import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
 import { ProfileOntologyEditor } from "../ontology/ProfileOntologyEditor";
 import { createOntologyRevisionDraft } from "../ontology/api";
-import type {
-  ProfileOntologyDraftPayload,
-  ProfileOntologyDraftState,
-} from "../ontology/ProfileOntologyEditorCore";
-import type {
-  OntologyNode,
-  ProfileOntologyViewData,
-} from "../ontology/types";
+import type { ProfileOntologyDraftPayload, ProfileOntologyDraftState } from "../ontology/ProfileOntologyEditorCore";
+import type { OntologyNode, ProfileOntologyViewData } from "../ontology/types";
 
 /**
  * AI 構築、提案レビュー、業務モデル編集、技術表現を一続きで扱う単一ページ。

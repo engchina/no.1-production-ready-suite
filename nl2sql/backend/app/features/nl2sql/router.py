@@ -73,6 +73,7 @@ from .models import (
     DbAdminObjectPage,
     DbAdminObjectsData,
     DbAdminStatementsRequest,
+    DbAdminTruncateTableRequest,
     DemoLearningData,
     DiagnosticsData,
     ExecuteRequest,
@@ -122,6 +123,7 @@ from .models import (
     SelectAiDbProfileDetailData,
     SelectAiDbProfileDropRequest,
     SelectAiDbProfileMutationData,
+    SelectAiDbProfileRefreshJobData,
     SelectAiDbProfilesData,
     SelectAiDbProfileUpsertRequest,
     SelectAiFeedbackAddData,
@@ -136,7 +138,6 @@ from .models import (
     SimilarHistoryRequest,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
-    SyntheticDataOperationStatusData,
     SyntheticDataResultsData,
 )
 from .oracle_adapter import TabularImportValidationError
@@ -663,6 +664,33 @@ def select_ai_db_profiles(
             include_archived_business_profiles=include_archived_business_profiles,
         )
     )
+
+
+@router.post(
+    "/select-ai/db-profiles/refresh-jobs",
+    response_model=ApiResponse[SelectAiDbProfileRefreshJobData],
+    status_code=202,
+)
+def create_select_ai_db_profile_refresh_job() -> ApiResponse[SelectAiDbProfileRefreshJobData]:
+    """Oracle DBMS_CLOUD_AI profile 一覧を手動で全量再取得する。"""
+    return ApiResponse(data=nl2sql_service.start_select_ai_db_profile_refresh_job())
+
+
+@router.get(
+    "/select-ai/db-profile-refresh-jobs/{job_id}",
+    response_model=ApiResponse[SelectAiDbProfileRefreshJobData],
+)
+def get_select_ai_db_profile_refresh_job(
+    job_id: str,
+) -> ApiResponse[SelectAiDbProfileRefreshJobData]:
+    """Oracle DBMS_CLOUD_AI profile 一覧 refresh job の進捗を返す。"""
+    job = nl2sql_service.get_select_ai_db_profile_refresh_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="指定された DB Profile 一覧 refresh job が見つかりません。",
+        )
+    return ApiResponse(data=job)
 
 
 @router.get(
@@ -1458,6 +1486,12 @@ def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdminExec
     return ApiResponse(data=nl2sql_service.drop_db_admin_table(req))
 
 
+@router.post("/db-admin/truncate-table", response_model=ApiResponse[DbAdminExecuteData])
+def db_admin_truncate_table(req: DbAdminTruncateTableRequest) -> ApiResponse[DbAdminExecuteData]:
+    """DB admin TRUNCATE TABLE execution。"""
+    return ApiResponse(data=nl2sql_service.truncate_db_admin_table(req))
+
+
 @router.post("/db-admin/execute", response_model=ApiResponse[DbAdminExecuteData])
 def db_admin_execute(req: DbAdminExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin SQL executor。通常 NL2SQL 実行 path とは分離する。"""
@@ -1575,17 +1609,6 @@ def generate_synthetic_data(
 ) -> ApiResponse[SyntheticDataOperationData]:
     """DBMS_CLOUD_AI synthetic table data generation execution。"""
     return ApiResponse(data=nl2sql_service.generate_synthetic_data(req))
-
-
-@router.get(
-    "/synthetic-data/operations/{operation_id}",
-    response_model=ApiResponse[SyntheticDataOperationStatusData],
-)
-def synthetic_data_operation_status(
-    operation_id: str,
-) -> ApiResponse[SyntheticDataOperationStatusData]:
-    """DBMS_CLOUD_AI synthetic data operation status を返す。"""
-    return ApiResponse(data=nl2sql_service.synthetic_data_operation_status(operation_id))
 
 
 @router.get("/synthetic-data/results", response_model=ApiResponse[SyntheticDataResultsData])

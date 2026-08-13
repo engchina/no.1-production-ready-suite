@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
@@ -17,10 +18,12 @@ from app.features.nl2sql.models import (
     ClassifierTrainRequest,
     CommentSuggestionRequest,
     DbAdminExecuteRequest,
+    ExecuteRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
     ProfileRecommendationRequest,
+    ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
     QueryResults,
     ReverseSqlRequest,
@@ -91,6 +94,16 @@ class FakeOracleGenerator:
 
     def search_feedback_vector_index(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return []
+
+
+def test_profile_select_ai_config_max_tokens_bounds() -> None:
+    assert ProfileSelectAiConfig(max_tokens=4096).max_tokens == 4096
+    assert ProfileSelectAiConfig(max_tokens=32000).max_tokens == 32000
+
+    with pytest.raises(ValidationError):
+        ProfileSelectAiConfig(max_tokens=4095)
+    with pytest.raises(ValidationError):
+        ProfileSelectAiConfig(max_tokens=32001)
 
 
 class FakeDbAdminSelectAdapter:
@@ -291,6 +304,18 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
     assert confirmation_required.statements[0].status == "confirmation_required"
 
 
+def test_sql_execute_row_limit_accepts_zero_and_unbounded_values() -> None:
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES").row_limit == 100
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
+    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
+    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
+    with pytest.raises(ValidationError):
+        ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
+    with pytest.raises(ValidationError):
+        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
+
+
 def test_db_admin_executor_with_dml_requires_confirmation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
@@ -346,6 +371,22 @@ def test_db_admin_executor_select_uses_oracle_select_data_plane(
     assert selected.statements[0].statement_type == "SELECT"
     assert selected.statements[0].status == "executed"
     assert adapter.select_calls == [("SELECT * FROM INVOICES FETCH FIRST 3 ROWS ONLY", 3)]
+
+
+def test_db_admin_executor_zero_row_limit_does_not_append_fetch_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    adapter = FakeDbAdminSelectAdapter()
+    monkeypatch.setattr(service, "_oracle_adapter", adapter)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    selected = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0)
+    )
+
+    assert selected.executed is True
+    assert adapter.select_calls == [("SELECT * FROM INVOICES", 0)]
 
 
 def test_select_ai_profile_mutation_requires_confirmation() -> None:
@@ -747,10 +788,11 @@ def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
         )
     )
 
-    assert synthetic.status == "submitted"
+    assert synthetic.status == "executed"
     assert synthetic.executed
     assert synthetic.table_name == "INVOICES"
     assert synthetic.object_list == ["INVOICES"]
+    assert "operation_id" not in synthetic.engine_meta
     assert calls == [
         {
             "table_name": "INVOICES",
@@ -800,6 +842,21 @@ def test_profile_learning_material_imports_xlsx_and_exports_xlsx() -> None:
     workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True)
     assert {"terms", "few_shot"}.issubset(set(workbook.sheetnames))
     assert "rules" not in workbook.sheetnames
+
+
+def test_profile_learning_material_rejects_invalid_mode_without_merge_fallback() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    with pytest.raises(ValueError, match="未対応の import mode"):
+        service.import_profile_learning_material(
+            profile_id="default",
+            filename="terms.xlsx",
+            content=_single_sheet_workbook_bytes(
+                "terms",
+                [["TERM", "DEFINITION"], ["粗利", "INVOICES.PROFIT"]],
+            ),
+            mode="append",
+        )
 
 
 def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace() -> None:

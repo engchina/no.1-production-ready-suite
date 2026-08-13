@@ -125,6 +125,11 @@ toast.error(message, opts?)      // = danger トーン
 
 - **破壊的・不可逆操作は必ず確認**(`confirmation-dialogs`)。対象: 文書/モデル/設定の削除、一括削除、上書き、未保存破棄。
 - shadcn/ui の Dialog 準拠で新規作成(現状ライブラリ未導入のため `createPortal` ベースで実装)。
+- **背景色/面の使い分け**:
+  - ConfirmDialog、専用確認ダイアログ、確認語入力領域は **中立面**(`bg-card` / `bg-background`)を基本にする。
+  - 削除・DROP・無効化・破棄などの danger 操作でも、ダイアログヘッダー/本文/対象オブジェクト欄を広い `bg-danger-bg` で塗らない。
+  - danger は左アクセント(`border-l-4 border-l-danger`)、タイトル/補助文、状態 badge、確定ボタンで表現する。
+  - `bg-danger-bg` は小さな badge、icon chip、inline warning/error の補助面に限定し、確認コンテナ全体の背景に使わない。
 - **a11y / 操作**:
   - フォーカストラップ + 開いたら確認ボタンへフォーカス、閉じたらトリガーへ復帰。
   - `Esc` とオーバーレイクリックでキャンセル(`escape-routes` / `modal-escape`)。破棄系は誤操作防止のためオーバーレイクリック無効可。
@@ -180,8 +185,11 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
   自動生成しない。詳細表示をヘッダー直下へ置くのは `placement="page"` の処理だけとする。
 - 初回取得は `TimedLoadingState` + Skeleton で寸法を予約する。明示的な再取得は既存内容を保持し、
   対象領域の先頭へ compact な `ProcessingIndicator` を置く。静かな polling / prefetch は表示しない。
-- 同じ operation に対する詳細表示は 1 つだけにする。起点ボタンの spinner との併用は許可するが、
-  複数パネルへ同じ timer を重複表示しない。
+- 同じ operation に対する詳細表示は 1 つだけにする。**動的 spinner は同じ operation につき 1 つだけ**とし、
+  起点ボタンが `loading` を表示している場合、詳細表示は `activityIcon="none"` で静的ラベル・経過時間・slow hint
+  のみにする。複数パネルへ同じ timer を重複表示しない。
+- `TimedLoadingState placement="result"` は、主操作ボタンと並ぶことが多いため既定で `activityIcon="none"` とする。
+  初期ロードなど結果領域そのものに動的 icon が必要な場合だけ、呼び出し側で `activityIcon="spinner"` を明示する。
 - 実行中は `経過時間 00:00`、durable job や結果カードの完了後は `処理時間 00:00` とする。
   1 時間未満は `mm:ss`、1 時間以上は `h:mm:ss`。数字は `tabular-nums` で幅を固定する。
 - 10 秒を超えたら低干渉の slow hint を追加する。取消可能な処理は同じ領域に取消 action を置く。

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
+import { apiFetch, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
@@ -31,12 +33,13 @@ import type {
   DbAdminJoinWhereData,
   DbAdminJoinWherePromptProfile,
   DbAdminObjectDetail,
-  DbAdminObjectPage,
-  DbAdminObjectsData,
   SchemaRefreshJob,
 } from "../types";
-import { waitForSchemaRefreshJob } from "../incrementalQueries";
-import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
+import {
+  useDbAdminObjects,
+  useSchemaRefreshJob,
+  waitForSchemaRefreshJob,
+} from "../incrementalQueries";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "joinWhere";
@@ -46,6 +49,15 @@ const JOIN_WHERE_PROMPT_PROFILES: DbAdminJoinWherePromptProfile[] = [
   "join_where_strict",
   "sql_structure",
 ];
+
+const useDebouncedValue = <T,>(value: T, delayMs: number) => {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+  return debounced;
+};
 
 function joinWherePromptProfileLabel(profile: DbAdminJoinWherePromptProfile) {
   return profile === "sql_structure"
@@ -63,37 +75,41 @@ function ViewJoinWherePanel({
   detail,
   result,
   loading,
+  ddlLoading,
+  ddlError,
   profile,
   onProfileChange,
   onExtract,
+  onRetryDdl,
 }: {
   detail: DbAdminObjectDetail | null;
   result: DbAdminJoinWhereData | null;
   loading: boolean;
+  ddlLoading: boolean;
+  ddlError: string;
   profile: DbAdminJoinWherePromptProfile;
   onProfileChange: (profile: DbAdminJoinWherePromptProfile) => void;
   onExtract: () => void;
+  onRetryDdl: () => void;
 }) {
+  const ddlStatusId = "view-join-where-ddl-status";
+  const ddlReady = Boolean(detail?.ddl);
+  const ddlStatus = !detail
+    ? t("viewMgmt.joinWhere.ddlStatus.noView")
+    : ddlLoading
+      ? t("viewMgmt.joinWhere.ddlStatus.loading")
+      : ddlError
+        ? t("viewMgmt.joinWhere.ddlStatus.failed", { message: ddlError })
+        : ddlReady
+          ? t("viewMgmt.joinWhere.ddlStatus.ready")
+          : t("viewMgmt.joinWhere.ddlStatus.missing");
+
   return (
     <div className="grid gap-4">
       <DbObjectPanelHeader
         icon={Sparkles}
         title={t("viewMgmt.joinWhere.title")}
         description={t("viewMgmt.joinWhere.subtitle")}
-        action={
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading}
-            disabled={!detail?.ddl}
-            onClick={onExtract}
-          >
-            <Sparkles size={15} aria-hidden="true" />
-            <span>{t("viewMgmt.joinWhere.extract")}</span>
-          </Button>
-        }
       />
 
       <DbObjectStepIndicator
@@ -161,6 +177,49 @@ function ViewJoinWherePanel({
         </div>
       </fieldset>
 
+      <ContentActionBar
+        ariaLabel={t("viewMgmt.joinWhere.actions")}
+        title={t("viewMgmt.joinWhere.ddlStatus.title")}
+        description={
+          <span
+            id={ddlStatusId}
+            className={ddlError ? "text-warning" : undefined}
+            aria-live={ddlLoading || ddlError ? "polite" : undefined}
+          >
+            {ddlStatus}
+          </span>
+        }
+        actionsClassName="w-full sm:w-auto"
+        testId="view-join-where-actions"
+      >
+        {detail && ddlError ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full sm:w-auto"
+            disabled={ddlLoading}
+            onClick={onRetryDdl}
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+            <span>{t("viewMgmt.joinWhere.ddlRetry")}</span>
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full sm:w-auto"
+          loading={loading}
+          disabled={!ddlReady || ddlLoading}
+          aria-describedby={ddlStatusId}
+          onClick={onExtract}
+        >
+          <Sparkles size={15} aria-hidden="true" />
+          <span>{t("viewMgmt.joinWhere.extract")}</span>
+        </Button>
+      </ContentActionBar>
+
       {loading ? (
         <DbManagementLoadingSkeleton
           idPrefix="view-join-where-result"
@@ -217,8 +276,17 @@ function ViewJoinWherePanel({
   );
 }
 
+function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
+  if (!job) return "";
+  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
+  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
+  return t("dataMgmt.schemaJob.progress", {
+    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
+    progress,
+  });
+}
+
 export function ViewManagementPage() {
-  const [views, setViews] = useState<DbAdminObjectsData | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [viewSearch, setViewSearch] = useState("");
@@ -229,10 +297,32 @@ export function ViewManagementPage() {
   const [joinWhereProfile, setJoinWhereProfile] =
     useState<DbAdminJoinWherePromptProfile>("join_where_strict");
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
+  const completedSchemaRefreshJob = useRef("");
+  const autoJoinWhereDdlName = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const debouncedViewSearch = useDebouncedValue(viewSearch, 250);
+  const viewObjectsQuery = useDbAdminObjects(debouncedViewSearch, "view", viewFilter);
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
+  const schemaRefreshing =
+    !schemaRefreshJobQuery.error &&
+    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
+  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
+    ? schemaRefreshJobQuery.error instanceof Error
+      ? schemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : schemaRefreshError;
+  const viewItems = useMemo(
+    () => (viewObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [viewObjectsQuery.data]
+  );
+  const firstViewPage = viewObjectsQuery.data?.pages[0];
+  const totalViewCount = firstViewPage?.total ?? viewItems.length;
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/views",
     loadErrorMessage: t("viewMgmt.error.detail"),
@@ -246,6 +336,7 @@ export function ViewManagementPage() {
   } = detailRequest;
 
   const fetchDetail = async (name: string) => {
+    autoJoinWhereDdlName.current = "";
     setDetailTab("columns");
     setJoinWhere(null);
     await detailRequest.load(name);
@@ -258,82 +349,164 @@ export function ViewManagementPage() {
     void detailRequest.loadDdl(detail.name);
   };
 
-  const load = async (refreshSchema = false, announce = false) => {
+  const returnToList = () => {
+    setActiveView("list");
+    setDetailTab("columns");
+  };
+
+  const refreshObjects = async (announce = false) => {
+    setMessage("");
+    const result = await viewObjectsQuery.refetch();
+    if (result.error) {
+      setMessage(result.error instanceof Error ? result.error.message : t("viewMgmt.error.load"));
+      return;
+    }
+    if (announce) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
+  const refreshSchema = async (announce = false) => {
     const sequence = loadSequence.current + 1;
-    const detailVersionAtStart = detailRequest.requestVersion();
     loadSequence.current = sequence;
-    setLoading(refreshSchema ? "schema-refresh" : "load");
+    setLoading("schema-refresh");
     setMessage("");
     try {
       await runScopedRequest(async (signal) => {
         // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
         // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-        if (refreshSchema) {
-          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-            signal,
-            timeoutMs: API_TIMEOUT_MS.jobControl,
+        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.jobControl,
+        });
+        if (job.job_id) {
+          completedSchemaRefreshJob.current = "";
+          setSchemaRefreshJobId(job.job_id);
+          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
+            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
           });
-          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
-        }
-        const page = filterUserVisibleDbAdminObjectPage(
-          await apiGet<DbAdminObjectPage>(
-            "/api/nl2sql/db-admin/objects?limit=100&type=view&row_state=all",
-            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
-          )
-        );
-        const viewData: DbAdminObjectsData = {
-          runtime: page.runtime,
-          items: page.items,
-          refreshed_at: page.refreshed_at,
-          warnings: page.warnings,
-        };
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setViews(viewData);
-        const nextSelected =
-          viewData.items.find((item) => item.name === selectedViewName)?.name ||
-          viewData.items[0]?.name ||
-          "";
-        if (detailRequest.requestVersion() === detailVersionAtStart) {
-          if (nextSelected) {
-            void fetchDetail(nextSelected);
-          } else {
-            detailRequest.clear();
+          if (completedJob.status === "done") {
+            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
           }
         }
+        if (signal.aborted || sequence !== loadSequence.current) return;
       });
+      if (sequence !== loadSequence.current) return;
+      const result = await viewObjectsQuery.refetch();
+      if (result.error) throw result.error;
       if (announce && sequence === loadSequence.current) {
-        toast.success(
-          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
-        );
+        toast.success(t("common.action.schemaRefreshed"));
       }
     } catch (err) {
       if (isAbortError(err)) {
         return;
       }
-      setMessage(err instanceof Error ? err.message : t("viewMgmt.error.load"));
+      setMessage(
+        isTimeoutError(err)
+          ? t("dataMgmt.schemaJob.timeout")
+          : err instanceof Error
+            ? err.message
+            : t("viewMgmt.error.load")
+      );
     } finally {
       if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
-    void load();
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  const reloadAfterMutation = async (result: { schema_refresh_job_id?: string }) => {
-    if (result.schema_refresh_job_id) {
-      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      toast.success(t("common.action.schemaRefreshed"));
+      void refreshObjects();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const error = job.error_code
+        ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+        : t("dataMgmt.schemaJob.error");
+      setSchemaRefreshError(error);
+      toast.error(t("dataMgmt.schemaJob.error"));
     }
-    await load();
+  }, [schemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
+    const reportKey = `${schemaRefreshJobId}:query-error`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    completedSchemaRefreshJob.current = reportKey;
+    const error =
+      schemaRefreshJobQuery.error instanceof Error
+        ? schemaRefreshJobQuery.error.message
+        : t("dataMgmt.schemaJob.error");
+    setSchemaRefreshError(error);
+    toast.error(t("dataMgmt.schemaJob.error"));
+  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
+
+  useEffect(() => {
+    if (activeView !== "list") return;
+    if (viewObjectsQuery.isPending || detailRequest.loading) return;
+    if (viewObjectsQuery.error && !viewObjectsQuery.data) return;
+    if (viewItems.length === 0) {
+      if (selectedViewName) detailRequest.clear();
+      return;
+    }
+    if (selectedViewName && viewItems.some((item) => item.name === selectedViewName)) return;
+    void fetchDetail(viewItems[0].name);
+  }, [
+    activeView,
+    viewItems,
+    viewObjectsQuery.isPending,
+    viewObjectsQuery.error,
+    viewObjectsQuery.data,
+    selectedViewName,
+    detailRequest.loading,
+  ]);
+
+  useEffect(() => {
+    if (
+      activeView !== "joinWhere" ||
+      !detail ||
+      detail.ddl ||
+      detailRequest.ddlLoading ||
+      detailRequest.ddlError ||
+      autoJoinWhereDdlName.current === detail.name
+    ) {
+      return;
+    }
+    autoJoinWhereDdlName.current = detail.name;
+    void detailRequest.loadDdl(detail.name);
+  }, [
+    activeView,
+    detail?.name,
+    detail?.ddl,
+    detailRequest.ddlLoading,
+    detailRequest.ddlError,
+    detailRequest.loadDdl,
+  ]);
+
+  const reloadAfterMutation = (result: { schema_refresh_job_id?: string }) => {
+    if (result.schema_refresh_job_id) {
+      completedSchemaRefreshJob.current = "";
+      setSchemaRefreshError("");
+      setSchemaRefreshJobId(result.schema_refresh_job_id);
+    }
+    void refreshObjects();
   };
 
   const filteredViews = useMemo(() => {
     const q = viewSearch.trim().toLowerCase();
-    return (views?.items ?? [])
+    return viewItems
       .filter((item) => {
         if (viewFilter === "with_rows" && !(item.row_count != null && item.row_count > 0)) return false;
         if (viewFilter === "empty_rows" && item.row_count !== 0) return false;
@@ -350,7 +523,7 @@ export function ViewManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return viewSort.direction === "asc" ? result : -result;
       });
-  }, [views, viewSearch, viewFilter, viewSort]);
+  }, [viewItems, viewSearch, viewFilter, viewSort]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setViewSort((current) => ({
@@ -452,12 +625,20 @@ export function ViewManagementPage() {
         detail={detail}
         result={joinWhere}
         loading={loading === "join-where"}
+        ddlLoading={detailRequest.ddlLoading}
+        ddlError={detailRequest.ddlError}
         profile={joinWhereProfile}
         onProfileChange={(nextProfile) => {
           setJoinWhereProfile(nextProfile);
           setJoinWhere(null);
         }}
         onExtract={() => void extractJoinWhere()}
+        onRetryDdl={() => {
+          if (detail) {
+            autoJoinWhereDdlName.current = "";
+            void detailRequest.loadDdl(detail.name);
+          }
+        }}
       />
     ) : null;
 
@@ -467,9 +648,25 @@ export function ViewManagementPage() {
         title={t("nav.viewManagement")}
         subtitle={t("viewMgmt.subtitle")}
         meta={
-          views?.refreshed_at
-            ? t("common.schemaRefreshedAt", { date: formatDateTime(views.refreshed_at) })
+          firstViewPage?.refreshed_at
+            ? t("common.schemaRefreshedAt", { date: formatDateTime(firstViewPage.refreshed_at) })
             : undefined
+        }
+        status={
+          schemaRefreshJob ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaRefreshJob.status === "done"
+                    ? "success"
+                    : schemaRefreshJob.status === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={schemaRefreshJobLabel(schemaRefreshJob)}
+              />
+            </span>
+          ) : undefined
         }
         actionsAriaLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
@@ -495,16 +692,17 @@ export function ViewManagementPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  loading: loading === "load",
-                  onClick: () => void load(false, true),
+                  loading: viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage,
+                  onClick: () => void refreshObjects(true),
                 },
                 {
                   id: "refresh-view-schema",
                   kind: "utility",
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  loading: loading === "schema-refresh",
-                  onClick: () => void load(true, true),
+                  loading: loading === "schema-refresh" || schemaRefreshing,
+                  disabled: loading === "schema-refresh" || schemaRefreshing,
+                  onClick: () => void refreshSchema(true),
                 },
               ]
             : []
@@ -515,10 +713,12 @@ export function ViewManagementPage() {
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("viewMgmt.error.retryHint")}` }
+              : visibleSchemaRefreshError
+                ? { tone: "danger", message: visibleSchemaRefreshError }
               : null
           }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("viewMgmt.action.refresh")}</span>
             </Button>
@@ -534,18 +734,22 @@ export function ViewManagementPage() {
               splitId="view-management-list"
               preferredWidePane="right"
               processing={
-                views && (loading === "load" || loading === "schema-refresh") ? (
+                viewObjectsQuery.data &&
+                ((viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage) ||
+                  loading === "schema-refresh" ||
+                  schemaRefreshing) ? (
                   <ProcessingIndicator
                     active
                     label={
-                      loading === "schema-refresh"
+                      loading === "schema-refresh" || schemaRefreshing
                         ? t("viewMgmt.workspace.schemaRefreshing")
                         : t("viewMgmt.workspace.refreshing")
                     }
-                    operationKey={loading}
+                    operationKey={schemaRefreshing ? schemaRefreshJobId : loading}
                     placement="workspace"
                     className="rounded-md border border-border bg-background px-3 py-2"
                     testId="view-management-workspace-processing"
+                    activityIcon="none"
                   />
                 ) : undefined
               }
@@ -556,10 +760,20 @@ export function ViewManagementPage() {
               icon={Eye}
               items={filteredViews}
               selectedName={selectedViewName}
-              loading={loading === "load" && !views}
+              loading={viewObjectsQuery.isPending && !viewObjectsQuery.data}
+              error={
+                viewObjectsQuery.error && !viewObjectsQuery.data
+                  ? viewObjectsQuery.error instanceof Error
+                    ? viewObjectsQuery.error.message
+                    : t("viewMgmt.error.load")
+                  : ""
+              }
               search={viewSearch}
               filter={viewFilter}
               sort={viewSort}
+              totalCount={totalViewCount}
+              hasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
+              loadingNextPage={viewObjectsQuery.isFetchingNextPage}
               labels={{
                 title: t("viewMgmt.list.title"),
                 hint: t("viewMgmt.grid.hint"),
@@ -586,13 +800,15 @@ export function ViewManagementPage() {
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name)}
               onDrop={openDropDialog}
+              onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
+              onRetry={() => void refreshObjects()}
             />
             <DbObjectDetailPanel
               idPrefix={VIEW_MANAGEMENT_ID}
               operationKey={selectedViewName}
               headingId="view-detail-heading"
               detail={detail}
-              loading={detailRequest.loading || (loading === "load" && !views)}
+              loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
               ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
               ddlError={detailRequest.ddlError}
@@ -623,7 +839,7 @@ export function ViewManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView("list")}>
+              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>{t("viewMgmt.action.backToList")}</span>
               </Button>

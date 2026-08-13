@@ -129,6 +129,7 @@ from .models import (
     DbAdminObjectSummary,
     DbAdminStatementResult,
     DbAdminStatementsRequest,
+    DbAdminTruncateTableRequest,
     DemoLearningData,
     DiagnosticCheck,
     DiagnosticConfigGuide,
@@ -195,13 +196,20 @@ from .models import (
     SchemaOwnerSummary,
     SchemaRefreshJob,
     SchemaRefreshJobStatus,
+    SchemaRefreshMode,
     SchemaRefreshPhase,
+    SchemaRefreshTargetObject,
     SchemaTable,
     SelectAiAgentAsset,
     SelectAiAgentAssetsData,
     SelectAiDbProfile,
     SelectAiDbProfileDetailData,
     SelectAiDbProfileMutationData,
+    SelectAiDbProfileRefreshJobData,
+    SelectAiDbProfileRefreshMode,
+    SelectAiDbProfileRefreshPhase,
+    SelectAiDbProfileRefreshStatus,
+    SelectAiDbProfileRefreshTarget,
     SelectAiDbProfilesData,
     SelectAiDbProfileUpsertRequest,
     SelectAiFeedbackAddData,
@@ -220,7 +228,6 @@ from .models import (
     StageTiming,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
-    SyntheticDataOperationStatusData,
     SyntheticDataResultsData,
     TimingEnvelope,
 )
@@ -246,6 +253,10 @@ from .tabular_files import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SELECT_AI_DB_PROFILE_COLLECTION = "select_ai_db_profiles"
+_SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION = "select_ai_db_profile_refresh_jobs"
+_SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION = "select_ai_db_profile_refresh_meta"
 
 
 class Nl2SqlPersistenceUnavailable(RuntimeError):
@@ -298,6 +309,63 @@ class DbAdminOperationFailed(RuntimeError):
         self.target_type = target_type
         self.operation = operation
         self.raw_message = raw_message
+
+
+@dataclass(frozen=True)
+class SchemaRefreshMutationSync:
+    """DDL/metadata mutation 後に UI へ返す schema 同期状態。"""
+
+    job_id: str = ""
+    required: bool = False
+    reason_code: str = ""
+
+
+class SchemaRefreshFullRequired(RuntimeError):
+    """Targeted schema sync が安全に確定できず full refresh が必要な状態。"""
+
+    def __init__(self, reason_code: str = "schema_refresh_full_required") -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+def _schema_refresh_required_warning(reason_code: str) -> str:
+    if reason_code == "schema_refresh_target_unresolved":
+        return (
+            "DB 構造の差分同期対象を安全に特定できませんでした。"
+            "DB 構造を再取得してください。"
+        )
+    return "DB 構造の差分同期で不整合を検出しました。DB 構造を再取得してください。"
+
+
+@dataclass(frozen=True)
+class SelectAiDbProfileListRefreshSync:
+    """DBMS_CLOUD_AI profile 一覧 mutation 後に UI へ返す同期状態。"""
+
+    job_id: str = ""
+    required: bool = False
+    reason_code: str = ""
+
+
+class SelectAiDbProfileListRefreshFullRequired(RuntimeError):
+    """Targeted DB profile list sync が安全に確定できず full refresh が必要な状態。"""
+
+    def __init__(self, reason_code: str = "profile_list_refresh_full_required") -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+def _profile_list_refresh_required_warning(reason_code: str) -> str:
+    if reason_code == "profile_list_refresh_target_unresolved":
+        return (
+            "DB Profile 一覧の差分同期対象を安全に特定できませんでした。"
+            "DB Profile 一覧を再取得してください。"
+        )
+    if reason_code == "profile_list_refresh_submit_failed":
+        return (
+            "DB Profile 一覧の差分同期を開始できませんでした。"
+            "DB Profile 一覧を再取得してください。"
+        )
+    return "DB Profile 一覧の差分同期で不整合を検出しました。DB Profile 一覧を再取得してください。"
 
 
 _ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
@@ -813,6 +881,185 @@ def _statements_change_schema(statements: Sequence[str]) -> bool:
         _admin_statement_type(statement) in {"CREATE", "ALTER", "DROP", "COMMENT"}
         for statement in statements
     )
+
+
+def _split_object_ref_parts(value: str) -> list[str]:
+    """SQL object ref を dot 区切りにする（二重引用符内の dot は保持）。"""
+
+    parts: list[str] = []
+    buffer: list[str] = []
+    in_double = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == '"':
+            buffer.append(char)
+            if in_double and index + 1 < len(value) and value[index + 1] == '"':
+                buffer.append(value[index + 1])
+                index += 2
+                continue
+            in_double = not in_double
+            index += 1
+            continue
+        if char == "." and not in_double:
+            part = "".join(buffer).strip()
+            if part:
+                parts.append(part)
+            buffer = []
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    tail = "".join(buffer).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _normalize_object_ref(value: str) -> str:
+    return ".".join(_split_object_ref_parts(value))
+
+
+def _schema_refresh_target_from_ref(
+    value: str,
+    *,
+    current_owner: str,
+    object_type: Literal["table", "view", "materialized_view", "unknown"],
+    expected_state: Literal["present", "absent", "unknown"],
+) -> SchemaRefreshTargetObject | None:
+    try:
+        identity = parse_object_identity(_normalize_object_ref(value), default_owner=current_owner)
+    except ValueError:
+        return None
+    return SchemaRefreshTargetObject(
+        owner=identity.owner,
+        object_name=identity.object_name,
+        object_type=object_type,
+        expected_state=expected_state,
+    )
+
+
+def _schema_refresh_target_from_column_ref(
+    value: str,
+    *,
+    current_owner: str,
+) -> SchemaRefreshTargetObject | None:
+    parts = _split_object_ref_parts(value)
+    if len(parts) not in {2, 3}:
+        return None
+    return _schema_refresh_target_from_ref(
+        ".".join(parts[:-1]),
+        current_owner=current_owner,
+        object_type="table",
+        expected_state="present",
+    )
+
+
+def _schema_refresh_target_for_statement(
+    statement: str,
+    *,
+    current_owner: str,
+) -> SchemaRefreshTargetObject | None:
+    stripped = _strip_leading_sql_comments(statement).strip().rstrip(";")
+    object_ref = f"({_SQL_OBJECT_REF})"
+    object_end = r"(?=\s|\(|$)"
+    patterns: tuple[
+        tuple[str, Literal["table", "view"], Literal["present", "absent"]],
+        ...,
+    ] = (
+        (
+            rf"^create\s+(?:global\s+temporary\s+)?table\s+{object_ref}{object_end}",
+            "table",
+            "present",
+        ),
+        (
+            rf"^create\s+(?:or\s+replace\s+)?(?:force\s+)?(?:editionable\s+)?view\s+"
+            rf"{object_ref}{object_end}",
+            "view",
+            "present",
+        ),
+        (rf"^drop\s+table\s+{object_ref}{object_end}", "table", "absent"),
+        (rf"^drop\s+view\s+{object_ref}{object_end}", "view", "absent"),
+        (rf"^alter\s+table\s+{object_ref}{object_end}", "table", "present"),
+        (rf"^alter\s+view\s+{object_ref}{object_end}", "view", "present"),
+        (rf"^comment\s+on\s+table\s+{object_ref}\s+is\b", "table", "present"),
+        (rf"^comment\s+on\s+view\s+{object_ref}\s+is\b", "view", "present"),
+    )
+    for pattern, object_type, expected_state in patterns:
+        match = re.match(pattern, stripped, flags=re.IGNORECASE)
+        if match:
+            return _schema_refresh_target_from_ref(
+                match.group(1),
+                current_owner=current_owner,
+                object_type=object_type,
+                expected_state=expected_state,
+            )
+    materialized = re.match(
+        rf"^comment\s+on\s+materialized\s+view\s+{object_ref}\s+is\b",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if materialized:
+        return _schema_refresh_target_from_ref(
+            materialized.group(1),
+            current_owner=current_owner,
+            object_type="materialized_view",
+            expected_state="present",
+        )
+    column = re.match(
+        r"^comment\s+on\s+column\s+(.+?)\s+is\b",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if column:
+        return _schema_refresh_target_from_column_ref(
+            column.group(1),
+            current_owner=current_owner,
+        )
+    return None
+
+
+def _dedupe_schema_refresh_targets(
+    targets: Iterable[SchemaRefreshTargetObject],
+) -> list[SchemaRefreshTargetObject]:
+    merged: dict[tuple[str, str], SchemaRefreshTargetObject] = {}
+    for target in targets:
+        key = (target.owner.upper(), target.object_name.upper())
+        current = merged.get(key)
+        if current is None:
+            merged[key] = target.model_copy(
+                update={"owner": key[0], "object_name": key[1]}
+            )
+            continue
+        expected_state = current.expected_state
+        if target.expected_state != "unknown":
+            expected_state = target.expected_state
+        object_type = current.object_type
+        if target.object_type != "unknown":
+            object_type = target.object_type
+        merged[key] = current.model_copy(
+            update={"object_type": object_type, "expected_state": expected_state}
+        )
+    return list(merged.values())
+
+
+def _schema_refresh_targets_for_statements(
+    statements: Sequence[str],
+    *,
+    current_owner: str,
+) -> list[SchemaRefreshTargetObject] | None:
+    targets: list[SchemaRefreshTargetObject] = []
+    for statement in statements:
+        if _admin_statement_type(statement) not in {"CREATE", "ALTER", "DROP", "COMMENT"}:
+            continue
+        target = _schema_refresh_target_for_statement(
+            statement,
+            current_owner=current_owner,
+        )
+        if target is None:
+            return None
+        targets.append(target)
+    return _dedupe_schema_refresh_targets(targets)
 
 
 def _normalize_admin_statement(sql: str) -> str:
@@ -1535,7 +1782,12 @@ class Nl2SqlService:
         self._incremental_hashes: dict[tuple[str, str], str] = {}
         self._schema_refresh_lock = threading.Lock()
         self._schema_refresh_submit_lock = threading.Lock()
+        self._schema_refresh_dispatch_lock = threading.Lock()
+        self._schema_refresh_dispatching_job_ids: set[str] = set()
         self._schema_refresh_worker_id = f"api:{uuid.uuid4()}"
+        self._profile_list_refresh_lock = threading.Lock()
+        self._profile_list_refresh_dispatch_lock = threading.Lock()
+        self._profile_list_refresh_dispatching_job_ids: set[str] = set()
         self._refresh_job_repository: IncrementalNl2SqlRepository = (
             self._incremental_repository
             if self._incremental_repository is not None
@@ -2302,10 +2554,52 @@ class Nl2SqlService:
         self._persist_state()
         return self._catalog
 
-    def _submit_schema_refresh_after_admin_mutation(self) -> str:
-        """DDL/metadata 更新後に durable job を投入し、HTTP 内では実行しない。"""
+    def _submit_schema_refresh_after_admin_mutation(
+        self,
+        *,
+        target_objects: Sequence[SchemaRefreshTargetObject] | None,
+        source: str,
+    ) -> SchemaRefreshMutationSync:
+        """DDL/metadata 更新後に targeted durable job を投入し、HTTP 内では実行しない。"""
 
-        return self.start_schema_refresh_job().job_id
+        targets = _dedupe_schema_refresh_targets(target_objects or [])
+        if not targets:
+            return SchemaRefreshMutationSync(
+                required=True,
+                reason_code="schema_refresh_target_unresolved",
+            )
+        job = self.start_schema_refresh_job(
+            mode=SchemaRefreshMode.TARGETED,
+            source=source,
+            target_objects=targets,
+        )
+        if job.requires_full_refresh:
+            return SchemaRefreshMutationSync(
+                job_id=job.job_id,
+                required=True,
+                reason_code=job.error_code or "schema_refresh_full_required",
+            )
+        return SchemaRefreshMutationSync(job_id=job.job_id)
+
+    def _schema_refresh_target_for_object_name(
+        self,
+        object_name: str,
+        *,
+        object_type: Literal["table", "view", "materialized_view", "unknown"] = "unknown",
+        expected_state: Literal["present", "absent", "unknown"] = "unknown",
+    ) -> SchemaRefreshTargetObject | None:
+        return _schema_refresh_target_from_ref(
+            object_name,
+            current_owner=self._current_schema_owner(),
+            object_type=object_type,
+            expected_state=expected_state,
+        )
+
+    def _manual_schema_refresh_sync(
+        self,
+        reason_code: str = "schema_refresh_target_unresolved",
+    ) -> SchemaRefreshMutationSync:
+        return SchemaRefreshMutationSync(required=True, reason_code=reason_code)
 
     def get_schema_owners(self) -> SchemaOwnersData:
         """当前数据库用户可访问的非 Oracle 维护 schema。"""
@@ -2521,9 +2815,26 @@ class Nl2SqlService:
             self._schema_cache.put(cache_key, detail)
         return detail
 
-    def start_schema_refresh_job(self, *, dispatch: bool = True) -> SchemaRefreshJob:
+    def start_schema_refresh_job(
+        self,
+        *,
+        dispatch: bool = True,
+        mode: SchemaRefreshMode | str = SchemaRefreshMode.FULL,
+        source: str = "manual",
+        target_objects: Sequence[SchemaRefreshTargetObject] | None = None,
+    ) -> SchemaRefreshJob:
         repository = self._refresh_job_repository
-        candidate = SchemaRefreshJob(job_id=str(uuid.uuid4()), created_at=_utc_now())
+        normalized_mode = SchemaRefreshMode(mode)
+        targets = _dedupe_schema_refresh_targets(target_objects or [])
+        if normalized_mode == SchemaRefreshMode.TARGETED and not targets:
+            raise SchemaRefreshFullRequired("schema_refresh_target_unresolved")
+        candidate = SchemaRefreshJob(
+            job_id=str(uuid.uuid4()),
+            created_at=_utc_now(),
+            mode=normalized_mode,
+            source=source,
+            target_objects=targets,
+        )
         try:
             with self._schema_refresh_submit_lock:
                 job = repository.submit_refresh_job(candidate)
@@ -2541,24 +2852,15 @@ class Nl2SqlService:
             extra={
                 "job_id": job.job_id,
                 "job_status": job.status.value,
+                "refresh_mode": job.mode.value,
+                "refresh_source": job.source,
+                "target_object_count": len(job.target_objects),
                 "coalesced": not created,
                 "worker_mode": worker_mode,
             },
         )
-        if (
-            dispatch
-            and created
-            and settings.nl2sql_schema_refresh_worker_enabled
-            and worker_mode != "external"
-            and job.status == SchemaRefreshJobStatus.PENDING
-        ):
-            thread = threading.Thread(
-                target=self._run_schema_refresh_job,
-                args=(job.job_id,),
-                daemon=True,
-                name=f"schema-refresh-{job.job_id[:8]}",
-            )
-            thread.start()
+        if dispatch:
+            self._wake_schema_refresh_job_if_needed(job, settings=settings)
         if job.status == SchemaRefreshJobStatus.PENDING:
             created_at = datetime.fromisoformat(job.created_at)
             SCHEMA_REFRESH_PENDING_AGE_SECONDS.set(
@@ -2569,18 +2871,92 @@ class Nl2SqlService:
     def get_schema_refresh_job(self, job_id: str) -> SchemaRefreshJob | None:
         repository = self._refresh_job_repository
         try:
-            return repository.get_refresh_job(job_id)
+            job = repository.get_refresh_job(job_id)
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_refresh_job_load",
                 exc=exc,
                 operation_error_code="schema_refresh_job_query_failed",
             )
+        if job is not None:
+            self._wake_schema_refresh_job_if_needed(job)
+        return job
 
     def run_next_schema_refresh_job(self) -> bool:
         """外部 worker 用。pending または lease 切れ job を 1 件だけ処理する。"""
 
         return self._run_schema_refresh_job(None)
+
+    def _wake_schema_refresh_job_if_needed(
+        self,
+        job: SchemaRefreshJob,
+        *,
+        settings: Any | None = None,
+    ) -> bool:
+        """inprocess worker が見逃した pending / lease 切れ job を再起動する。"""
+
+        settings = settings or get_settings()
+        worker_mode = settings.nl2sql_schema_refresh_worker_mode.strip().lower()
+        if not settings.nl2sql_schema_refresh_worker_enabled or worker_mode == "external":
+            return False
+        if job.status == SchemaRefreshJobStatus.PENDING:
+            return self._dispatch_schema_refresh_job(job.job_id)
+        if job.status == SchemaRefreshJobStatus.RUNNING and self._schema_refresh_lease_expired(
+            job
+        ):
+            return self._dispatch_schema_refresh_job(job.job_id)
+        return False
+
+    @staticmethod
+    def _schema_refresh_lease_expired(job: SchemaRefreshJob) -> bool:
+        if not job.lease_expires_at:
+            return True
+        try:
+            expires_at = datetime.fromisoformat(job.lease_expires_at)
+        except ValueError:
+            return True
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return expires_at <= datetime.now(UTC)
+
+    def _dispatch_schema_refresh_job(self, job_id: str) -> bool:
+        with self._schema_refresh_dispatch_lock:
+            if job_id in self._schema_refresh_dispatching_job_ids:
+                return False
+            self._schema_refresh_dispatching_job_ids.add(job_id)
+
+        def run() -> None:
+            try:
+                self._run_schema_refresh_job(job_id)
+            finally:
+                with self._schema_refresh_dispatch_lock:
+                    self._schema_refresh_dispatching_job_ids.discard(job_id)
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name=f"schema-refresh-{job_id[:8]}",
+        )
+        thread.start()
+        return True
+
+    @staticmethod
+    def _schema_refresh_target_keys(job: SchemaRefreshJob) -> set[tuple[str, str]]:
+        return {
+            (target.owner.upper(), target.object_name.upper())
+            for target in job.target_objects
+            if is_user_visible_object_name(target.object_name)
+        }
+
+    @staticmethod
+    def _schema_refresh_expected_state_by_key(
+        job: SchemaRefreshJob,
+    ) -> dict[tuple[str, str], str]:
+        return {
+            (target.owner.upper(), target.object_name.upper()): target.expected_state
+            for target in job.target_objects
+            if is_user_visible_object_name(target.object_name)
+        }
 
     @staticmethod
     def _heartbeat_schema_refresh_job(
@@ -2622,33 +2998,82 @@ class Nl2SqlService:
                 job.model_copy(update={"phase": SchemaRefreshPhase.SCANNING})
             )
             stored_manifest = repository.schema_manifest()
+            target_keys = self._schema_refresh_target_keys(job)
+            expected_state_by_key = self._schema_refresh_expected_state_by_key(job)
+            if job.mode == SchemaRefreshMode.TARGETED and not target_keys:
+                raise SchemaRefreshFullRequired("schema_refresh_target_unresolved")
             if self._use_oracle_runtime():
-                incoming_manifest = self._oracle_adapter.fetch_schema_manifest()
+                incoming_manifest = self._oracle_adapter.fetch_schema_manifest(
+                    target_keys if job.mode == SchemaRefreshMode.TARGETED else None
+                )
             else:
                 deterministic = self._build_default_catalog()
                 incoming_manifest = {
                     (table.owner.upper(), table.table_name.upper()): "deterministic-v1"
                     for table in deterministic.tables
                 }
+                if job.mode == SchemaRefreshMode.TARGETED:
+                    incoming_manifest = {
+                        key: value
+                        for key, value in incoming_manifest.items()
+                        if key in target_keys
+                    }
             SCHEMA_REFRESH_PHASE_SECONDS.labels(phase="scanning").observe(
                 time.monotonic() - phase_started
             )
             phase_started = time.monotonic()
+            refresh_total_objects = (
+                len(target_keys)
+                if job.mode == SchemaRefreshMode.TARGETED
+                else len(incoming_manifest)
+            )
             job = repository.save_refresh_job(
                 self._heartbeat_schema_refresh_job(repository, job).model_copy(
                     update={
                         "phase": SchemaRefreshPhase.FETCHING,
-                        "total_objects": len(incoming_manifest),
+                        "total_objects": refresh_total_objects,
                     }
                 )
             )
             incoming_keys = set(incoming_manifest)
-            changed_keys = {
-                key
-                for key, last_ddl_at in incoming_manifest.items()
-                if stored_manifest.get(key) != last_ddl_at
-            }
-            deleted_keys = set(stored_manifest) - incoming_keys
+            if job.mode == SchemaRefreshMode.TARGETED:
+                missing_present = {
+                    key
+                    for key in target_keys
+                    if expected_state_by_key.get(key) == "present" and key not in incoming_keys
+                }
+                still_present = {
+                    key
+                    for key in target_keys
+                    if expected_state_by_key.get(key) == "absent" and key in incoming_keys
+                }
+                if missing_present or still_present:
+                    raise SchemaRefreshFullRequired("schema_refresh_full_required")
+                changed_keys = {
+                    key
+                    for key, last_ddl_at in incoming_manifest.items()
+                    if key in target_keys and stored_manifest.get(key) != last_ddl_at
+                }
+                deleted_keys = {
+                    key
+                    for key in target_keys
+                    if key not in incoming_keys and key in stored_manifest
+                }
+            else:
+                changed_keys = {
+                    key
+                    for key, last_ddl_at in incoming_manifest.items()
+                    if stored_manifest.get(key) != last_ddl_at
+                }
+                deleted_keys = set(stored_manifest) - incoming_keys
+            publish_manifest = incoming_manifest
+            if job.mode == SchemaRefreshMode.TARGETED:
+                publish_manifest = {
+                    key: value
+                    for key, value in stored_manifest.items()
+                    if key not in deleted_keys
+                }
+                publish_manifest.update(incoming_manifest)
             SCHEMA_CHANGED_OBJECTS.observe(len(changed_keys))
             if not changed_keys and not deleted_keys:
                 SCHEMA_REFRESH_PHASE_SECONDS.labels(phase="fetching").observe(
@@ -2659,7 +3084,7 @@ class Nl2SqlService:
                     job.model_copy(
                         update={
                             "phase": SchemaRefreshPhase.PERSISTING,
-                            "processed_objects": len(incoming_manifest),
+                            "processed_objects": refresh_total_objects,
                         }
                     )
                 )
@@ -2735,13 +3160,13 @@ class Nl2SqlService:
                     job.model_copy(
                         update={
                             "phase": SchemaRefreshPhase.PERSISTING,
-                            "processed_objects": len(incoming_manifest),
+                            "processed_objects": refresh_total_objects,
                         }
                     )
                 )
                 head = repository.apply_schema_refresh(
                     catalog=merged,
-                    manifest=incoming_manifest,
+                    manifest=publish_manifest,
                     changed_keys=changed_keys,
                     deleted_keys=deleted_keys,
                 )
@@ -2760,9 +3185,9 @@ class Nl2SqlService:
                         "finished_at": _utc_now(),
                         "heartbeat_at": _utc_now(),
                         "lease_expires_at": None,
-                        "scanned_objects": len(incoming_manifest),
-                        "processed_objects": len(incoming_manifest),
-                        "total_objects": len(incoming_manifest),
+                        "scanned_objects": refresh_total_objects,
+                        "processed_objects": refresh_total_objects,
+                        "total_objects": refresh_total_objects,
                         "changed_objects": len(changed_keys),
                         "deleted_objects": len(deleted_keys),
                         "catalog_version": head.catalog_version,
@@ -2775,12 +3200,37 @@ class Nl2SqlService:
                 "schema_refresh_job_completed",
                 extra={
                     "job_id": job.job_id,
+                    "refresh_mode": job.mode.value,
                     "catalog_version": head.catalog_version,
                     "changed_objects": len(changed_keys),
                     "deleted_objects": len(deleted_keys),
                 },
             )
             return True
+        except SchemaRefreshFullRequired as exc:
+            logger.warning(
+                "schema_refresh_job_requires_full_refresh",
+                extra={
+                    "job_id": claimed_job_id,
+                    "error_code": exc.reason_code,
+                },
+            )
+            SCHEMA_REFRESH_ERRORS.labels(error_code=exc.reason_code).inc()
+            failed = repository.get_refresh_job(claimed_job_id) if claimed_job_id else None
+            if failed is not None:
+                repository.save_refresh_job(
+                    failed.model_copy(
+                        update={
+                            "status": SchemaRefreshJobStatus.ERROR,
+                            "finished_at": _utc_now(),
+                            "heartbeat_at": _utc_now(),
+                            "lease_expires_at": None,
+                            "error_code": exc.reason_code,
+                            "requires_full_refresh": True,
+                        }
+                    )
+                )
+            return False
         except Exception as exc:
             logger.exception(
                 "schema_refresh_job_failed",
@@ -2831,6 +3281,8 @@ class Nl2SqlService:
         warnings: list[str] = []
         executed = False
         schema_refresh_job_id = ""
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
         confirmation_error = self._sample_confirmation_error(request.confirmation)
         if confirmation_error:
@@ -2852,6 +3304,8 @@ class Nl2SqlService:
             warnings.extend(execution.warnings)
             executed = execution.executed
             schema_refresh_job_id = execution.schema_refresh_job_id
+            schema_refresh_required = execution.schema_refresh_required
+            schema_refresh_reason_code = execution.schema_refresh_reason_code
             if executed:
                 # Schema refresh は非同期なので、直後の Catalog は新規 object をまだ含まない。
                 # 実行した既知の sample DDL から scope を確定し、refresh 完了を待たずに
@@ -2875,6 +3329,8 @@ class Nl2SqlService:
             warnings=warnings,
             profile_id=_SAMPLE_PROFILE_ID,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             timing=self._timing(created_at, started, "sample_data_import"),
         )
 
@@ -2885,6 +3341,8 @@ class Nl2SqlService:
         warnings: list[str] = []
         executed = False
         schema_refresh_job_id = ""
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
         confirmation_error = self._sample_confirmation_error(request.confirmation)
         if confirmation_error:
@@ -2904,6 +3362,8 @@ class Nl2SqlService:
             )
             warnings.extend(execution.warnings)
             schema_refresh_job_id = execution.schema_refresh_job_id
+            schema_refresh_required = execution.schema_refresh_required
+            schema_refresh_reason_code = execution.schema_refresh_reason_code
             results = []
             for index, item in enumerate(execution.statements):
                 if item.status == "error" and self._is_missing_object_error(item.error_message):
@@ -2931,6 +3391,8 @@ class Nl2SqlService:
             warnings=warnings,
             profile_id=_SAMPLE_PROFILE_ID,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             timing=self._timing(created_at, started, "sample_data_delete"),
         )
 
@@ -3616,10 +4078,12 @@ class Nl2SqlService:
         mode: str = "merge",
     ) -> ProfileLearningMaterialImportData:
         warnings: list[str] = []
-        normalized_mode = mode.strip().lower() or "merge"
+        normalized_mode = mode.strip().lower()
         if normalized_mode not in {"merge", "replace"}:
-            warnings.append(f"{mode}: 未対応の import mode のため merge として扱いました。")
-            normalized_mode = "merge"
+            raise ValueError(
+                f"{mode or '空の mode'}: 未対応の import mode です。"
+                "mode は merge または replace を指定してください。"
+            )
         _require_xlsx_template_upload(filename)
         parsed, skipped = self._parse_profile_learning_material_file(
             filename,
@@ -6899,6 +7363,8 @@ class Nl2SqlService:
 
         executed = False
         schema_refresh_job_id = ""
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
         runtime = "deterministic"
         if statements:
             confirmation_error = self._admin_confirmation_error(
@@ -6936,7 +7402,18 @@ class Nl2SqlService:
                         detail={"statement_count": len(statements)},
                     )
                     try:
-                        schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
+                        sync = self._submit_schema_refresh_after_admin_mutation(
+                            target_objects=_schema_refresh_targets_for_statements(
+                                [statement.sql for statement in statements],
+                                current_owner=self._current_schema_owner(),
+                            ),
+                            source="comments_apply",
+                        )
+                        schema_refresh_job_id = sync.job_id
+                        schema_refresh_required = sync.required
+                        schema_refresh_reason_code = sync.reason_code
+                        if sync.required:
+                            warnings.append(_schema_refresh_required_warning(sync.reason_code))
                     except Nl2SqlPersistenceUnavailable as exc:
                         warnings.append(f"COMMENT 適用後の Schema job 投入に失敗しました: {exc}")
                 except OracleAdapterError as exc:
@@ -6957,6 +7434,8 @@ class Nl2SqlService:
             runtime=runtime,
             statements=statements,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             warnings=warnings,
             timing=TimingEnvelope(
                 created_at=created_at,
@@ -7019,6 +7498,8 @@ class Nl2SqlService:
 
         executed = False
         schema_refresh_job_id = ""
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
         runtime = "deterministic"
         if statements:
             confirmation_error = self._admin_confirmation_error(
@@ -7056,7 +7537,18 @@ class Nl2SqlService:
                         detail={"statement_count": len(statements)},
                     )
                     try:
-                        schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
+                        sync = self._submit_schema_refresh_after_admin_mutation(
+                            target_objects=_schema_refresh_targets_for_statements(
+                                [statement.sql for statement in statements],
+                                current_owner=self._current_schema_owner(),
+                            ),
+                            source="annotations_apply",
+                        )
+                        schema_refresh_job_id = sync.job_id
+                        schema_refresh_required = sync.required
+                        schema_refresh_reason_code = sync.reason_code
+                        if sync.required:
+                            warnings.append(_schema_refresh_required_warning(sync.reason_code))
                     except Nl2SqlPersistenceUnavailable as exc:
                         warnings.append(f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}")
                 except OracleAdapterError as exc:
@@ -7077,6 +7569,8 @@ class Nl2SqlService:
             runtime=runtime,
             statements=statements,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             warnings=warnings,
             timing=TimingEnvelope(
                 created_at=created_at,
@@ -7220,7 +7714,6 @@ class Nl2SqlService:
             warnings.append("synthetic data の対象にできる table がありません。")
         executed = False
         status = "error"
-        operation_id = ""
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         row_count = request.rows_per_table or request.row_count
@@ -7254,21 +7747,25 @@ class Nl2SqlService:
                 )
             else:
                 try:
-                    engine_meta.update(
-                        self._oracle_adapter.generate_synthetic_data(
-                            table_name=safe_table_name,
-                            object_list=safe_objects if len(safe_objects) > 1 else [],
-                            row_count=row_count,
-                            profile_name=profile_name,
-                            user_prompt=prompt,
-                            sample_rows=request.sample_rows,
-                            use_comments=request.use_comments,
-                        )
+                    raw_engine_meta = self._oracle_adapter.generate_synthetic_data(
+                        table_name=safe_table_name,
+                        object_list=safe_objects if len(safe_objects) > 1 else [],
+                        row_count=row_count,
+                        profile_name=profile_name,
+                        user_prompt=prompt,
+                        sample_rows=request.sample_rows,
+                        use_comments=request.use_comments,
                     )
-                    operation_id = str(engine_meta.get("operation_id") or "")
+                    engine_meta.update(
+                        {
+                            key: value
+                            for key, value in raw_engine_meta.items()
+                            if key not in {"operation_id", "operationId"}
+                        }
+                    )
                     executed = True
-                    status = "submitted" if operation_id else "executed"
-                    message = "DBMS_CLOUD_AI synthetic data generation を開始しました。"
+                    status = "executed"
+                    message = "DBMS_CLOUD_AI synthetic data generation を実行しました。"
                     self._record_admin_audit(
                         operation="synthetic_data_generate",
                         target=",".join(safe_objects),
@@ -7277,14 +7774,12 @@ class Nl2SqlService:
                         detail={
                             "profile_name": profile_name,
                             "row_count": row_count,
-                            "operation_id": operation_id,
                         },
                     )
                 except OracleAdapterError as exc:
                     status = "error"
                     warnings.append(str(exc))
         return SyntheticDataOperationData(
-            operation_id=operation_id,
             table_name=safe_table_name,
             object_list=safe_objects,
             row_count=row_count,
@@ -7319,34 +7814,6 @@ class Nl2SqlService:
             warnings=warnings
             or ["Oracle runtime ではないため deterministic result preview を返しました。"],
         )
-
-    def synthetic_data_operation_status(
-        self, operation_id: str
-    ) -> SyntheticDataOperationStatusData:
-        if not self._use_oracle_runtime():
-            return SyntheticDataOperationStatusData(
-                operation_id=operation_id,
-                runtime="deterministic",
-                status="requires_oracle",
-                message="operation status の取得には NL2SQL_RUNTIME_MODE=oracle が必要です。",
-            )
-        try:
-            result = self._oracle_adapter.synthetic_data_operation_status(operation_id=operation_id)
-            return SyntheticDataOperationStatusData(
-                operation_id=operation_id,
-                runtime=str(result.get("runtime") or "oracle"),
-                status=str(result.get("status") or "unknown"),
-                message=str(result.get("message") or ""),
-                result=dict(result.get("result") or {}),
-            )
-        except OracleAdapterError as exc:
-            return SyntheticDataOperationStatusData(
-                operation_id=operation_id,
-                runtime="oracle",
-                status="error",
-                message=str(exc),
-                warnings=[str(exc)],
-            )
 
     def diagnostics(self) -> DiagnosticsData:
         env = dotenv_values(Path(".env"))
@@ -8388,10 +8855,80 @@ class Nl2SqlService:
         )
         return execution
 
+    def truncate_db_admin_table(self, request: DbAdminTruncateTableRequest) -> DbAdminExecuteData:
+        table_name = self._sanitize_truncate_table_name(request.table_name)
+        sql = f"TRUNCATE TABLE {_quote_identifier(table_name)}"
+        object_type = self._db_admin_truncate_target_type(table_name)
+        if "view" in object_type:
+            warning = f"{table_name}: ビューは TRUNCATE できません。"
+            return DbAdminExecuteData(
+                executed=False,
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                statements=[
+                    DbAdminStatementResult(
+                        index=1,
+                        statement_type="TRUNCATE",
+                        status="blocked",
+                        sql=sql,
+                        error_message=warning,
+                    )
+                ],
+                warnings=[warning],
+                timing=self._timing(_utc_now(), time.monotonic(), "db_admin_truncate_table"),
+            )
+        confirmation_error = self._admin_confirmation_error(
+            confirmation=request.confirmation,
+            target=table_name,
+        )
+        if confirmation_error:
+            return DbAdminExecuteData(
+                executed=False,
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                statements=[
+                    DbAdminStatementResult(
+                        index=1,
+                        statement_type="TRUNCATE",
+                        status="confirmation_required",
+                        sql=sql,
+                        error_message=confirmation_error,
+                    )
+                ],
+                warnings=[confirmation_error],
+                timing=self._timing(_utc_now(), time.monotonic(), "db_admin_truncate_table"),
+            )
+        return self.execute_db_admin_statements(
+            DbAdminStatementsRequest(
+                sql=sql,
+                policy="data_dml",
+                confirmation="ADMIN_EXECUTE",
+                reason=request.reason,
+            )
+        )
+
+    def _db_admin_truncate_target_type(self, table_name: str) -> str:
+        catalog_object = self._find_catalog_table(table_name)
+        if catalog_object is not None:
+            return catalog_object.table_type.lower()
+        finder = getattr(self._oracle_adapter, "find_db_admin_object_type", None)
+        if not self._use_oracle_runtime() or not callable(finder):
+            return ""
+        try:
+            return str(finder(table_name) or "").lower()
+        except OracleAdapterError:
+            return ""
+
     def execute_db_admin_sql(self, request: DbAdminExecuteRequest) -> DbAdminExecuteData:
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        select_execution_context = (
+            "deepsec_data_plane"
+            if self._use_oracle_runtime() and self._deepsec_enabled
+            else "oracle_data_plane"
+            if self._use_oracle_runtime()
+            else "deterministic"
+        )
         statements = _split_sql_statements(request.sql)
         if not statements:
             warnings.append("SQL statement がありません。")
@@ -8404,7 +8941,8 @@ class Nl2SqlService:
             warnings.append("複数 statement 実行に SELECT は含められません。")
             return DbAdminExecuteData(
                 executed=False,
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                runtime=runtime,
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8420,14 +8958,37 @@ class Nl2SqlService:
             )
         if len(statements) == 1 and select_only_flags == [True]:
             sql = enforce_row_limit(statements[0], request.row_limit)
-            results = (
-                self._oracle_adapter.execute_select(sql, request.row_limit)
-                if self._use_oracle_runtime()
-                else self._mock_execute(sql, request.row_limit)
-            )
+            try:
+                results = (
+                    self._oracle_adapter.execute_select(sql, request.row_limit)
+                    if self._use_oracle_runtime()
+                    else self._mock_execute(sql, request.row_limit)
+                )
+            except OracleAdapterError as exc:
+                warning = str(exc)
+                warnings.append(warning)
+                return DbAdminExecuteData(
+                    executed=False,
+                    runtime="oracle",
+                    execution_context=select_execution_context,
+                    vpd_context_enforced=self._deepsec_enabled,
+                    statements=[
+                        DbAdminStatementResult(
+                            index=1,
+                            statement_type="SELECT",
+                            status="error",
+                            sql=sql,
+                            error_message=warning,
+                        )
+                    ],
+                    warnings=warnings,
+                    timing=self._timing(created_at, started, "db_admin_execute"),
+                )
             return DbAdminExecuteData(
                 executed=True,
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                runtime=runtime,
+                execution_context=select_execution_context,
+                vpd_context_enforced=self._deepsec_enabled and self._use_oracle_runtime(),
                 select_result=results,
                 statements=[
                     DbAdminStatementResult(
@@ -8466,7 +9027,8 @@ class Nl2SqlService:
             warnings.append(confirmation_error)
             return DbAdminExecuteData(
                 executed=False,
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                runtime=runtime,
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8485,6 +9047,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime="deterministic",
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8511,18 +9074,40 @@ class Nl2SqlService:
                 detail={"statement_count": len(statements), "types": statement_types},
             )
             schema_refresh_job_id = ""
-            if ok and _statements_change_schema(statements):
+            schema_refresh_required = False
+            schema_refresh_reason_code = ""
+            has_unresolved_schema_side_effect = any(
+                _admin_statement_type(statement) == "PLSQL" for statement in statements
+            )
+            if ok and (has_unresolved_schema_side_effect or _statements_change_schema(statements)):
                 try:
-                    schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
+                    if has_unresolved_schema_side_effect:
+                        sync = self._manual_schema_refresh_sync()
+                    else:
+                        sync = self._submit_schema_refresh_after_admin_mutation(
+                            target_objects=_schema_refresh_targets_for_statements(
+                                statements,
+                                current_owner=self._current_schema_owner(),
+                            ),
+                            source="db_admin_execute",
+                        )
+                    schema_refresh_job_id = sync.job_id
+                    schema_refresh_required = sync.required
+                    schema_refresh_reason_code = sync.reason_code
+                    if sync.required:
+                        warnings.append(_schema_refresh_required_warning(sync.reason_code))
                 except Nl2SqlPersistenceUnavailable as exc:
                     warnings.append(f"Admin SQL 後の Schema job 投入に失敗しました: {exc}")
             return DbAdminExecuteData(
                 executed=ok,
                 runtime="oracle",
+                execution_context="admin_control_plane",
                 statements=statement_results,
                 committed=ok,
                 rolled_back=not ok,
                 schema_refresh_job_id=schema_refresh_job_id,
+                schema_refresh_required=schema_refresh_required,
+                schema_refresh_reason_code=schema_refresh_reason_code,
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
@@ -8531,6 +9116,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime="oracle",
+                execution_context="admin_control_plane",
                 rolled_back=True,
                 statements=[
                     DbAdminStatementResult(
@@ -8552,6 +9138,12 @@ class Nl2SqlService:
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
+        mode = request.mode.strip().lower()
+        if mode not in {"create", "replace", "append", "truncate"}:
+            raise ValueError(
+                f"{request.mode or '空の mode'}: 未対応 mode です。"
+                "mode は create、replace、append、truncate のいずれかを指定してください。"
+            )
         try:
             content = base64.b64decode(request.content_base64)
         except Exception as exc:
@@ -8560,6 +9152,7 @@ class Nl2SqlService:
             filename=request.filename,
             content=content,
             sheet_name=request.sheet_name,
+            require_sheet_name=True,
         )
         warnings.extend(sheet_warnings)
         settings = get_settings()
@@ -8572,14 +9165,12 @@ class Nl2SqlService:
         )
         warnings.extend(parse_warnings)
         table_name = self._sanitize_import_table_name(request.table_name)
-        mode = request.mode.strip().lower() or "create"
-        if mode not in {"create", "replace", "append", "truncate"}:
-            warnings.append(f"{request.mode}: 未対応 mode のため create として扱いました。")
-            mode = "create"
         ddl = self._csv_import_ddl(table_name, columns)
         insert_sql = self._csv_import_insert_sql(table_name, columns)
         executed = False
         schema_refresh_job_id = ""
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
         confirmation_error = self._admin_confirmation_error(
             confirmation=request.confirmation,
             target="ADMIN_EXECUTE",
@@ -8631,7 +9222,20 @@ class Nl2SqlService:
             )
             if mode in {"create", "replace"}:
                 try:
-                    schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
+                    target = self._schema_refresh_target_for_object_name(
+                        table_name,
+                        object_type="table",
+                        expected_state="present",
+                    )
+                    sync = self._submit_schema_refresh_after_admin_mutation(
+                        target_objects=[target] if target is not None else [],
+                        source="db_admin_import_tabular",
+                    )
+                    schema_refresh_job_id = sync.job_id
+                    schema_refresh_required = sync.required
+                    schema_refresh_reason_code = sync.reason_code
+                    if sync.required:
+                        warnings.append(_schema_refresh_required_warning(sync.reason_code))
                 except Nl2SqlPersistenceUnavailable as exc:
                     warnings.append(f"import 後の Schema job 投入に失敗しました: {exc}")
         else:
@@ -8647,6 +9251,8 @@ class Nl2SqlService:
             ddl=ddl,
             insert_sql=insert_sql,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             warnings=warnings,
             sample_rows=rows[:5],
             timing=self._timing(created_at, started, "db_admin_import_tabular"),
@@ -8722,6 +9328,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime=runtime,
+                execution_context="admin_control_plane",
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
@@ -8737,6 +9344,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime=runtime,
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8759,6 +9367,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime=runtime,
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8777,6 +9386,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime="deterministic",
+                execution_context="admin_control_plane",
                 statements=[
                     DbAdminStatementResult(
                         index=index + 1,
@@ -8799,6 +9409,7 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=False,
                 runtime="oracle",
+                execution_context="admin_control_plane",
                 rolled_back=True,
                 statements=[
                     DbAdminStatementResult(
@@ -8827,15 +9438,27 @@ class Nl2SqlService:
             },
         )
         schema_refresh_job_id = ""
-        if committed and _statements_change_schema(
-            [
-                statements[index]
-                for index, item in enumerate(statement_results)
-                if item.status == "success" and index < len(statements)
-            ]
-        ):
+        schema_refresh_required = False
+        schema_refresh_reason_code = ""
+        successful_schema_statements = [
+            statements[index]
+            for index, item in enumerate(statement_results)
+            if item.status == "success" and index < len(statements)
+        ]
+        if committed and _statements_change_schema(successful_schema_statements):
             try:
-                schema_refresh_job_id = self._submit_schema_refresh_after_admin_mutation()
+                sync = self._submit_schema_refresh_after_admin_mutation(
+                    target_objects=_schema_refresh_targets_for_statements(
+                        successful_schema_statements,
+                        current_owner=self._current_schema_owner(),
+                    ),
+                    source=f"db_admin_statements_{request.policy}",
+                )
+                schema_refresh_job_id = sync.job_id
+                schema_refresh_required = sync.required
+                schema_refresh_reason_code = sync.reason_code
+                if sync.required:
+                    warnings.append(_schema_refresh_required_warning(sync.reason_code))
             except Nl2SqlPersistenceUnavailable as exc:
                 warnings.append(f"実行後の Schema job 投入に失敗しました: {exc}")
         if 0 < success_count < len(statement_results):
@@ -8843,10 +9466,13 @@ class Nl2SqlService:
         return DbAdminExecuteData(
             executed=committed,
             runtime="oracle",
+            execution_context="admin_control_plane",
             statements=statement_results,
             committed=committed,
             rolled_back=not committed,
             schema_refresh_job_id=schema_refresh_job_id,
+            schema_refresh_required=schema_refresh_required,
+            schema_refresh_reason_code=schema_refresh_reason_code,
             warnings=warnings,
             timing=self._timing(created_at, started, "db_admin_statements"),
         )
@@ -9328,7 +9954,12 @@ class Nl2SqlService:
         )
 
     def _tabular_content_to_csv_text(
-        self, *, filename: str, content: bytes, sheet_name: str = ""
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        sheet_name: str = "",
+        require_sheet_name: bool = False,
     ) -> tuple[str, str, list[str]]:
         suffix = Path(filename).suffix.lower()
         warnings: list[str] = []
@@ -9336,6 +9967,7 @@ class Nl2SqlService:
             sheet, sheet_warnings = select_workbook_sheet(
                 read_workbook_sheets(filename, content),
                 sheet_name,
+                require_requested_name=require_sheet_name,
             )
             warnings.extend(sheet_warnings)
             output = io.StringIO()
@@ -9535,6 +10167,14 @@ class Nl2SqlService:
         if not _STRICT_IDENTIFIER.fullmatch(normalized):
             raise ValueError("table_name は英数字と underscore の Oracle 識別子へ変換できません。")
         return normalized
+
+    def _sanitize_truncate_table_name(self, table_name: str) -> str:
+        raw = table_name.strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", raw):
+            raise ValueError(
+                "table_name は英字で始まる英数字と underscore の Oracle 識別子で指定してください。"
+            )
+        return raw.upper()
 
     def _dedupe_csv_column_names(self, raw_header: list[str]) -> list[str]:
         seen: dict[str, int] = {}
@@ -9785,6 +10425,7 @@ class Nl2SqlService:
         business_profiles_only: bool = False,
         include_archived_business_profiles: bool = True,
     ) -> SelectAiDbProfilesData:
+        del include_detail
         warnings: list[str] = []
         business_profile_names = (
             self._business_select_ai_profile_names(
@@ -9793,71 +10434,38 @@ class Nl2SqlService:
             if business_profiles_only
             else None
         )
-        if self._use_oracle_runtime():
-            try:
-                profiles: list[SelectAiDbProfile] = []
-                for item in self._oracle_adapter.list_select_ai_profiles():
-                    profile = SelectAiDbProfile.model_validate(item)
-                    if not self._is_business_select_ai_profile(
-                        profile.name, business_profile_names
-                    ):
-                        continue
-                    if include_detail:
-                        try:
-                            detail = self._oracle_adapter.get_select_ai_profile_detail(
-                                profile_name=profile.name
-                            )
-                            profile = SelectAiDbProfile.model_validate(
-                                {**profile.model_dump(), **detail}
-                            )
-                        except OracleAdapterError as exc:
-                            warnings.append(f"{profile.name}: {exc}")
-                    profiles.append(self._enrich_select_ai_db_profile(profile))
-                return SelectAiDbProfilesData(
-                    runtime="oracle",
-                    profiles=profiles,
-                    warnings=warnings,
-                )
-            except OracleAdapterError as exc:
-                warnings.append(str(exc))
-        with self._lock:
-            profiles = [
-                self._enrich_select_ai_db_profile(
-                    SelectAiDbProfile(
-                        name=data.profile_name,
-                        status=data.status,
-                        attributes=dict(
-                            data.engine_meta.get("profile_attributes") or data.engine_meta
-                        ),
-                        created_at=data.refreshed_at,
-                    )
-                )
-                for data in self._asset_meta.values()
-                if data.profile_name
-                and self._is_business_select_ai_profile(data.profile_name, business_profile_names)
-            ]
+        profiles = [
+            self._enrich_select_ai_db_profile(profile)
+            for profile in self._load_select_ai_db_profile_documents()
+            if self._is_business_select_ai_profile(profile.name, business_profile_names)
+        ]
+        if not profiles and not self._select_ai_db_profile_refresh_initialized():
+            profiles = self._fallback_select_ai_db_profiles_from_asset_meta(business_profile_names)
+            warnings.append(
+                "DB Profile 一覧 read model が未初期化です。"
+                "DB Profile 一覧を再取得してください。"
+            )
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
-        if not self._use_oracle_runtime():
+        if not self._use_oracle_runtime() and not profiles:
             warnings.append("Oracle runtime ではないため保存済み asset metadata を表示しています。")
         return SelectAiDbProfilesData(runtime=runtime, profiles=profiles, warnings=warnings)
 
     def get_select_ai_db_profile(self, profile_name: str) -> SelectAiDbProfileDetailData:
         warnings: list[str] = []
-        if self._use_oracle_runtime():
-            try:
-                return SelectAiDbProfileDetailData(
-                    runtime="oracle",
-                    profile=self._enrich_select_ai_db_profile(
-                        SelectAiDbProfile.model_validate(
-                            self._oracle_adapter.get_select_ai_profile_detail(
-                                profile_name=profile_name
-                            )
-                        )
-                    ),
-                )
-            except OracleAdapterError as exc:
-                warnings.append(str(exc))
-        profiles = self.list_select_ai_db_profiles(include_detail=True)
+        key = self._select_ai_db_profile_key(profile_name)
+        document = self._refresh_job_repository.get_document(
+            _SELECT_AI_DB_PROFILE_COLLECTION,
+            key,
+        )
+        if document is not None:
+            return SelectAiDbProfileDetailData(
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                profile=self._enrich_select_ai_db_profile(
+                    SelectAiDbProfile.model_validate(document)
+                ),
+                warnings=warnings,
+            )
+        profiles = self.list_select_ai_db_profiles()
         profile = next(
             (
                 item
@@ -9937,6 +10545,432 @@ class Nl2SqlService:
             )
             scope.add(identity.qualified_name)
         return scope
+
+    @staticmethod
+    def _select_ai_db_profile_key(profile_name: str) -> str:
+        return profile_name.strip().upper()
+
+    def _load_select_ai_db_profile_documents(self) -> list[SelectAiDbProfile]:
+        documents = self._refresh_job_repository.list_documents(
+            _SELECT_AI_DB_PROFILE_COLLECTION,
+            limit=10000,
+        )
+        profiles: list[SelectAiDbProfile] = []
+        for document in documents:
+            try:
+                profiles.append(SelectAiDbProfile.model_validate(document))
+            except Exception:
+                continue
+        return sorted(profiles, key=lambda item: item.name.upper())
+
+    def _select_ai_db_profile_refresh_initialized(self) -> bool:
+        return (
+            self._refresh_job_repository.get_document(
+                _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION,
+                "head",
+            )
+            is not None
+        )
+
+    def _save_select_ai_db_profile_refresh_meta(
+        self,
+        *,
+        mode: SelectAiDbProfileRefreshMode,
+    ) -> None:
+        self._refresh_job_repository.put_document(
+            _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION,
+            "head",
+            {
+                "refreshed_at": _utc_now(),
+                "mode": mode.value,
+                "profile_count": len(self._load_select_ai_db_profile_documents()),
+            },
+            status="ready",
+        )
+
+    def _save_select_ai_db_profile_refresh_job(
+        self, job: SelectAiDbProfileRefreshJobData
+    ) -> SelectAiDbProfileRefreshJobData:
+        self._refresh_job_repository.put_document(
+            _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+            job.job_id,
+            job.model_dump(mode="json"),
+            status=job.status.value,
+        )
+        return job.model_copy(deep=True)
+
+    def _load_select_ai_db_profile_refresh_job(
+        self,
+        job_id: str,
+    ) -> SelectAiDbProfileRefreshJobData | None:
+        document = self._refresh_job_repository.get_document(
+            _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+            job_id,
+        )
+        if document is None:
+            return None
+        return SelectAiDbProfileRefreshJobData.model_validate(document)
+
+    def get_select_ai_db_profile_refresh_job(
+        self,
+        job_id: str,
+    ) -> SelectAiDbProfileRefreshJobData | None:
+        job = self._load_select_ai_db_profile_refresh_job(job_id)
+        if job is None:
+            return None
+        if job.status in {
+            SelectAiDbProfileRefreshStatus.PENDING,
+            SelectAiDbProfileRefreshStatus.RUNNING,
+        }:
+            self._dispatch_select_ai_db_profile_refresh_job(job.job_id)
+        return job
+
+    def start_select_ai_db_profile_refresh_job(
+        self,
+        *,
+        dispatch: bool = True,
+        mode: SelectAiDbProfileRefreshMode | str = SelectAiDbProfileRefreshMode.FULL,
+        source: str = "manual",
+        target_profiles: Sequence[SelectAiDbProfileRefreshTarget] | None = None,
+    ) -> SelectAiDbProfileRefreshJobData:
+        normalized_mode = SelectAiDbProfileRefreshMode(mode)
+        targets = self._dedupe_select_ai_db_profile_refresh_targets(target_profiles or [])
+        if normalized_mode == SelectAiDbProfileRefreshMode.TARGETED and not targets:
+            raise SelectAiDbProfileListRefreshFullRequired(
+                "profile_list_refresh_target_unresolved"
+            )
+        job = SelectAiDbProfileRefreshJobData(
+            job_id=str(uuid.uuid4()),
+            mode=normalized_mode,
+            source=source,
+            target_profiles=targets,
+            created_at=_utc_now(),
+        )
+        saved = self._save_select_ai_db_profile_refresh_job(job)
+        if dispatch:
+            self._dispatch_select_ai_db_profile_refresh_job(saved.job_id)
+        return saved
+
+    def _dispatch_select_ai_db_profile_refresh_job(self, job_id: str) -> bool:
+        with self._profile_list_refresh_dispatch_lock:
+            if job_id in self._profile_list_refresh_dispatching_job_ids:
+                return False
+            self._profile_list_refresh_dispatching_job_ids.add(job_id)
+
+        def run() -> None:
+            try:
+                self._run_select_ai_db_profile_refresh_job(job_id)
+            finally:
+                with self._profile_list_refresh_dispatch_lock:
+                    self._profile_list_refresh_dispatching_job_ids.discard(job_id)
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name=f"db-profile-refresh-{job_id[:8]}",
+        )
+        thread.start()
+        return True
+
+    @staticmethod
+    def _dedupe_select_ai_db_profile_refresh_targets(
+        targets: Sequence[SelectAiDbProfileRefreshTarget],
+    ) -> list[SelectAiDbProfileRefreshTarget]:
+        merged: dict[str, SelectAiDbProfileRefreshTarget] = {}
+        for target in targets:
+            key = target.profile_name.strip().upper()
+            if not key:
+                continue
+            current = merged.get(key)
+            if current is None or target.expected_state != "unknown":
+                merged[key] = target.model_copy(update={"profile_name": key})
+        return list(merged.values())
+
+    def _submit_select_ai_db_profile_list_refresh_after_mutation(
+        self,
+        *,
+        target_profiles: Sequence[SelectAiDbProfileRefreshTarget] | None,
+        source: str,
+    ) -> SelectAiDbProfileListRefreshSync:
+        targets = self._dedupe_select_ai_db_profile_refresh_targets(target_profiles or [])
+        if not targets:
+            return SelectAiDbProfileListRefreshSync(
+                required=True,
+                reason_code="profile_list_refresh_target_unresolved",
+            )
+        try:
+            job = self.start_select_ai_db_profile_refresh_job(
+                mode=SelectAiDbProfileRefreshMode.TARGETED,
+                source=source,
+                target_profiles=targets,
+            )
+        except SelectAiDbProfileListRefreshFullRequired as exc:
+            return SelectAiDbProfileListRefreshSync(
+                required=True,
+                reason_code=exc.reason_code,
+            )
+        except Exception:
+            logger.warning(
+                "select_ai_db_profile_refresh_submit_failed",
+                exc_info=True,
+                extra={"source": source},
+            )
+            return SelectAiDbProfileListRefreshSync(
+                required=True,
+                reason_code="profile_list_refresh_submit_failed",
+            )
+        if job.requires_full_refresh:
+            return SelectAiDbProfileListRefreshSync(
+                job_id=job.job_id,
+                required=True,
+                reason_code=job.error_code or "profile_list_refresh_full_required",
+            )
+        return SelectAiDbProfileListRefreshSync(job_id=job.job_id)
+
+    @staticmethod
+    def _select_ai_db_profile_target(
+        profile_name: str,
+        *,
+        expected_state: Literal["present", "absent", "unknown"],
+    ) -> SelectAiDbProfileRefreshTarget | None:
+        key = profile_name.strip().upper()
+        if not key:
+            return None
+        return SelectAiDbProfileRefreshTarget(
+            profile_name=key,
+            expected_state=expected_state,
+        )
+
+    def _select_ai_db_profile_upsert_refresh_targets(
+        self,
+        *,
+        profile_name: str,
+        original_name: str,
+    ) -> list[SelectAiDbProfileRefreshTarget]:
+        targets: list[SelectAiDbProfileRefreshTarget] = []
+        old_key = original_name.strip().upper()
+        new_key = profile_name.strip().upper()
+        if old_key and old_key != new_key:
+            old_target = self._select_ai_db_profile_target(
+                original_name,
+                expected_state="absent",
+            )
+            if old_target is not None:
+                targets.append(old_target)
+        new_target = self._select_ai_db_profile_target(
+            profile_name,
+            expected_state="present",
+        )
+        if new_target is not None:
+            targets.append(new_target)
+        return targets
+
+    def _select_ai_db_profile_from_oracle_detail(
+        self,
+        profile_name: str,
+    ) -> SelectAiDbProfile:
+        return self._enrich_select_ai_db_profile(
+            SelectAiDbProfile.model_validate(
+                self._oracle_adapter.get_select_ai_profile_detail(profile_name=profile_name)
+            )
+        )
+
+    def _fallback_select_ai_db_profiles_from_asset_meta(
+        self,
+        business_profile_names: set[str] | None,
+    ) -> list[SelectAiDbProfile]:
+        with self._lock:
+            profiles = [
+                self._enrich_select_ai_db_profile(
+                    SelectAiDbProfile(
+                        name=data.profile_name,
+                        status=data.status,
+                        attributes=dict(
+                            data.engine_meta.get("profile_attributes") or data.engine_meta
+                        ),
+                        created_at=data.refreshed_at,
+                    )
+                )
+                for data in self._asset_meta.values()
+                if data.profile_name
+                and self._is_business_select_ai_profile(data.profile_name, business_profile_names)
+            ]
+        return sorted(profiles, key=lambda item: item.name.upper())
+
+    def _run_select_ai_db_profile_refresh_job(self, job_id: str) -> bool:
+        if not self._profile_list_refresh_lock.acquire(blocking=False):
+            return False
+        try:
+            current = self._load_select_ai_db_profile_refresh_job(job_id)
+            if current is None or current.status not in {
+                SelectAiDbProfileRefreshStatus.PENDING,
+                SelectAiDbProfileRefreshStatus.RUNNING,
+            }:
+                return False
+            job = self._save_select_ai_db_profile_refresh_job(
+                current.model_copy(
+                    update={
+                        "status": SelectAiDbProfileRefreshStatus.RUNNING,
+                        "phase": SelectAiDbProfileRefreshPhase.FETCHING,
+                        "started_at": current.started_at or _utc_now(),
+                        "error_code": "",
+                        "error_message": "",
+                    }
+                )
+            )
+            targets = self._dedupe_select_ai_db_profile_refresh_targets(job.target_profiles)
+            target_names = {target.profile_name for target in targets}
+            if job.mode == SelectAiDbProfileRefreshMode.TARGETED and not target_names:
+                raise SelectAiDbProfileListRefreshFullRequired(
+                    "profile_list_refresh_target_unresolved"
+                )
+
+            existing = {
+                self._select_ai_db_profile_key(profile.name): profile
+                for profile in self._load_select_ai_db_profile_documents()
+            }
+            expected = {target.profile_name: target.expected_state for target in targets}
+            to_upsert: dict[str, SelectAiDbProfile] = {}
+            to_delete: set[str] = set()
+            if self._use_oracle_runtime():
+                present_names = self._oracle_adapter.fetch_select_ai_profile_names(
+                    target_names
+                    if job.mode == SelectAiDbProfileRefreshMode.TARGETED
+                    else None
+                )
+                if job.mode == SelectAiDbProfileRefreshMode.TARGETED:
+                    missing_present = {
+                        name
+                        for name in target_names
+                        if expected.get(name) == "present" and name not in present_names
+                    }
+                    still_present = {
+                        name
+                        for name in target_names
+                        if expected.get(name) == "absent" and name in present_names
+                    }
+                    if missing_present or still_present:
+                        raise SelectAiDbProfileListRefreshFullRequired(
+                            "profile_list_refresh_full_required"
+                        )
+                    scoped_names = target_names
+                else:
+                    scoped_names = present_names
+                for name in sorted(scoped_names):
+                    if name in present_names:
+                        try:
+                            to_upsert[name] = self._select_ai_db_profile_from_oracle_detail(name)
+                        except OracleAdapterError as exc:
+                            if job.mode != SelectAiDbProfileRefreshMode.TARGETED:
+                                raise
+                            raise SelectAiDbProfileListRefreshFullRequired(
+                                "profile_list_refresh_full_required"
+                            ) from exc
+                    elif name in existing:
+                        to_delete.add(name)
+                if job.mode == SelectAiDbProfileRefreshMode.FULL:
+                    to_delete.update(set(existing) - present_names)
+            else:
+                fallback = {
+                    self._select_ai_db_profile_key(profile.name): profile
+                    for profile in self._fallback_select_ai_db_profiles_from_asset_meta(None)
+                }
+                present_names = set(fallback)
+                scoped_names = (
+                    target_names
+                    if job.mode == SelectAiDbProfileRefreshMode.TARGETED
+                    else present_names
+                )
+                for name in sorted(scoped_names):
+                    if name in fallback:
+                        to_upsert[name] = fallback[name]
+                    elif name in existing:
+                        to_delete.add(name)
+                if job.mode == SelectAiDbProfileRefreshMode.FULL:
+                    to_delete.update(set(existing) - present_names)
+
+            changed = {
+                name
+                for name, profile in to_upsert.items()
+                if existing.get(name) != profile
+            }
+            deleted = {name for name in to_delete if name in existing}
+            total_profiles = (
+                len(target_names)
+                if job.mode == SelectAiDbProfileRefreshMode.TARGETED
+                else len(to_upsert)
+            )
+            job = self._save_select_ai_db_profile_refresh_job(
+                job.model_copy(
+                    update={
+                        "phase": SelectAiDbProfileRefreshPhase.PERSISTING,
+                        "total_profiles": total_profiles,
+                        "processed_profiles": total_profiles,
+                    }
+                )
+            )
+            for name in sorted(deleted):
+                self._refresh_job_repository.delete_document(
+                    _SELECT_AI_DB_PROFILE_COLLECTION,
+                    name,
+                )
+            for name in sorted(changed):
+                profile = to_upsert[name]
+                self._refresh_job_repository.put_document(
+                    _SELECT_AI_DB_PROFILE_COLLECTION,
+                    name,
+                    profile.model_dump(mode="json"),
+                    status=profile.status,
+                )
+            self._save_select_ai_db_profile_refresh_meta(mode=job.mode)
+            self._save_select_ai_db_profile_refresh_job(
+                job.model_copy(
+                    update={
+                        "status": SelectAiDbProfileRefreshStatus.DONE,
+                        "phase": SelectAiDbProfileRefreshPhase.DONE,
+                        "finished_at": _utc_now(),
+                        "scanned_profiles": total_profiles,
+                        "changed_profiles": len(changed),
+                        "deleted_profiles": len(deleted),
+                    }
+                )
+            )
+            return True
+        except SelectAiDbProfileListRefreshFullRequired as exc:
+            current = self._load_select_ai_db_profile_refresh_job(job_id)
+            if current is not None:
+                self._save_select_ai_db_profile_refresh_job(
+                    current.model_copy(
+                        update={
+                            "status": SelectAiDbProfileRefreshStatus.ERROR,
+                            "phase": SelectAiDbProfileRefreshPhase.FETCHING,
+                            "requires_full_refresh": True,
+                            "error_code": exc.reason_code,
+                            "error_message": _profile_list_refresh_required_warning(
+                                exc.reason_code
+                            ),
+                            "finished_at": _utc_now(),
+                        }
+                    )
+                )
+            return False
+        except Exception as exc:
+            current = self._load_select_ai_db_profile_refresh_job(job_id)
+            if current is not None:
+                self._save_select_ai_db_profile_refresh_job(
+                    current.model_copy(
+                        update={
+                            "status": SelectAiDbProfileRefreshStatus.ERROR,
+                            "phase": SelectAiDbProfileRefreshPhase.FETCHING,
+                            "error_code": "profile_list_refresh_failed",
+                            "error_message": str(exc),
+                            "finished_at": _utc_now(),
+                        }
+                    )
+                )
+            return False
+        finally:
+            self._profile_list_refresh_lock.release()
 
     def _record_select_ai_scope_state(
         self,
@@ -10282,6 +11316,18 @@ class Nl2SqlService:
                     expected_scope=expected_scope,
                     actual_scope=actual_scope,
                 )
+                sync = self._submit_select_ai_db_profile_list_refresh_after_mutation(
+                    target_profiles=self._select_ai_db_profile_upsert_refresh_targets(
+                        profile_name=profile_name,
+                        original_name=original_name,
+                    ),
+                    source="select_ai_db_profile_upsert_scope_mismatch",
+                )
+                response_warnings = [asset_error.warning]
+                if sync.required:
+                    response_warnings.append(
+                        _profile_list_refresh_required_warning(sync.reason_code)
+                    )
                 return SelectAiDbProfileMutationData(
                     runtime="oracle",
                     executed=False,
@@ -10290,12 +11336,15 @@ class Nl2SqlService:
                     original_name=original_name,
                     ddl=ddl,
                     profile=detail,
-                    warnings=[asset_error.warning],
+                    warnings=response_warnings,
                     engine_meta={
                         **meta,
                         "expected_object_scope": sorted(expected_scope),
                         "actual_object_scope": sorted(actual_scope),
                     },
+                    profile_list_refresh_job_id=sync.job_id,
+                    profile_list_refresh_required=sync.required,
+                    profile_list_refresh_reason_code=sync.reason_code,
                 )
             self._record_select_ai_scope_state(
                 profile_name=profile_name,
@@ -10313,6 +11362,15 @@ class Nl2SqlService:
                     "attributes": self._redact_select_ai_context_attributes(request.attributes),
                 },
             )
+            sync = self._submit_select_ai_db_profile_list_refresh_after_mutation(
+                target_profiles=self._select_ai_db_profile_upsert_refresh_targets(
+                    profile_name=profile_name,
+                    original_name=original_name,
+                ),
+                source="select_ai_db_profile_upsert",
+            )
+            if sync.required:
+                warnings.append(_profile_list_refresh_required_warning(sync.reason_code))
             return SelectAiDbProfileMutationData(
                 runtime="oracle",
                 executed=True,
@@ -10326,6 +11384,9 @@ class Nl2SqlService:
                     **meta,
                     "attributes": self._redact_select_ai_context_attributes(request.attributes),
                 },
+                profile_list_refresh_job_id=sync.job_id,
+                profile_list_refresh_required=sync.required,
+                profile_list_refresh_reason_code=sync.reason_code,
             )
         except OracleAdapterError as exc:
             expected_scope = self._select_ai_object_scope_set(request.attributes.get("object_list"))
@@ -10386,6 +11447,7 @@ class Nl2SqlService:
         warning = ""
         executed = False
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
+        sync = SelectAiDbProfileListRefreshSync()
         confirmation_error = self._admin_confirmation_error(
             confirmation=confirmation,
             target=profile_name,
@@ -10409,6 +11471,21 @@ class Nl2SqlService:
                     reason=reason,
                     detail={},
                 )
+                sync = self._submit_select_ai_db_profile_list_refresh_after_mutation(
+                    target_profiles=[
+                        target
+                        for target in [
+                            self._select_ai_db_profile_target(
+                                profile_name,
+                                expected_state="absent",
+                            )
+                        ]
+                        if target is not None
+                    ],
+                    source="select_ai_db_profile_drop",
+                )
+                if sync.required:
+                    warning = _profile_list_refresh_required_warning(sync.reason_code)
             except OracleAdapterError as exc:
                 warning = str(exc)
         return AssetCleanupData(
@@ -10420,6 +11497,9 @@ class Nl2SqlService:
             warning=warning,
             asset_names={"profile": profile_name},
             engine_meta=engine_meta,
+            profile_list_refresh_job_id=sync.job_id,
+            profile_list_refresh_required=sync.required,
+            profile_list_refresh_reason_code=sync.reason_code,
         )
 
     def run_select_ai_agent_team(self, request: AgentTeamRunRequest) -> AgentTeamRunData:
@@ -10655,6 +11735,7 @@ class Nl2SqlService:
         status = "error"
         executed = False
         engine_meta: dict[str, Any] = {"runtime": "deterministic"}
+        sync = SelectAiDbProfileListRefreshSync()
         if self._use_oracle_runtime():
             try:
                 engine_meta.update(
@@ -10664,6 +11745,21 @@ class Nl2SqlService:
                 executed = True
                 with self._lock:
                     self._asset_meta.pop(Nl2SqlEngine.SELECT_AI, None)
+                sync = self._submit_select_ai_db_profile_list_refresh_after_mutation(
+                    target_profiles=[
+                        target
+                        for target in [
+                            self._select_ai_db_profile_target(
+                                profile_name,
+                                expected_state="absent",
+                            )
+                        ]
+                        if target is not None
+                    ],
+                    source="select_ai_profile_cleanup",
+                )
+                if sync.required:
+                    warning = _profile_list_refresh_required_warning(sync.reason_code)
             except OracleAdapterError as exc:
                 warning = str(exc)
         else:
@@ -10677,6 +11773,9 @@ class Nl2SqlService:
             warning=warning,
             asset_names={"profile": profile_name},
             engine_meta=engine_meta,
+            profile_list_refresh_job_id=sync.job_id,
+            profile_list_refresh_required=sync.required,
+            profile_list_refresh_reason_code=sync.reason_code,
         )
 
     def _cleanup_select_ai_agent_assets(self, profile_id: str | None) -> AssetCleanupData:

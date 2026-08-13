@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   CheckCircle2,
   Pencil,
@@ -5,11 +6,15 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,
@@ -33,11 +38,7 @@ import {
   type IntentEditorSortDraft,
   type IntentEditorValidationErrorCode,
 } from "./IntentEditorCore";
-import type {
-  GraphPatch,
-  OntologyGraph,
-  QuestionIntentGraph,
-} from "./types";
+import type { GraphPatch, OntologyGraph, QuestionIntentGraph } from "./types";
 
 export interface IntentEditorProps {
   intent: QuestionIntentGraph;

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -204,9 +204,17 @@ const prepareManagementScenarios = [
 async function mockObjectManagementApi(
   page: Page,
   scenario: (typeof scenarios)[number],
-  options: { itemCount?: number } = {}
+  options: { itemCount?: number; columnCount?: number } = {}
 ) {
   const itemCount = options.itemCount ?? 30;
+  const columns = Array.from({ length: options.columnCount ?? 0 }, (_, index) => ({
+    column_name: `COLUMN_${String(index + 1).padStart(2, "0")}`,
+    logical_name: `列 ${index + 1}`,
+    data_type: index % 3 === 0 ? "VARCHAR2(200)" : "NUMBER",
+    nullable: index % 2 === 0,
+    comment: `列情報の高さ確認 ${index + 1}`,
+    sample_values: [`sample-${index + 1}`],
+  }));
   const items = Array.from({ length: itemCount }, (_, index) => ({
     name: `${scenario.prefix}_${String(index + 1).padStart(2, "0")}`,
     owner: "APP",
@@ -242,30 +250,32 @@ async function mockObjectManagementApi(
       warnings: [],
     })
   );
-  await page.route("**/api/nl2sql/db-admin/tables/*", (route) =>
-    fulfillJson(route, {
-      name: "TABLE_01",
+  await page.route("**/api/nl2sql/db-admin/tables/*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "TABLE_01");
+    return fulfillJson(route, {
+      name,
       owner: "APP",
       object_type: "table",
       row_count: null,
       comment: "",
-      columns: [],
-      ddl: 'CREATE TABLE "TABLE_01" ("ID" NUMBER)',
+      columns,
+      ddl: `CREATE TABLE "${name}" ("ID" NUMBER)`,
       warnings: [],
-    })
-  );
-  await page.route("**/api/nl2sql/db-admin/views/*", (route) =>
-    fulfillJson(route, {
-      name: "VIEW_01",
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/views/*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "VIEW_01");
+    return fulfillJson(route, {
+      name,
       owner: "APP",
       object_type: "view",
       row_count: null,
       comment: "",
-      columns: [],
-      ddl: 'CREATE OR REPLACE VIEW "VIEW_01" AS SELECT 1 AS ID FROM DUAL',
+      columns,
+      ddl: `CREATE OR REPLACE VIEW "${name}" AS SELECT 1 AS ID FROM DUAL`,
       warnings: [],
-    })
-  );
+    });
+  });
 }
 
 async function mockMetadataManagementApi(page: Page, options: { empty?: boolean } = {}) {
@@ -403,6 +413,51 @@ async function expectSingleLine(locator: Locator) {
   expect(lineCount).toBeLessThanOrEqual(1);
 }
 
+function expectedObjectListRows(testInfo: TestInfo) {
+  return testInfo.project.name === "mobile-375" ? 5 : 8;
+}
+
+async function expectObjectListRowLimit(
+  list: Locator,
+  rowSelector: string,
+  visibleRows: number
+) {
+  const fit = await list.evaluate(
+    (node, { rowSelector: selector, visibleRows: limit }) => {
+      const listBox = node.getBoundingClientRect();
+      const rows = Array.from(node.querySelectorAll(selector)).map((row) =>
+        row.getBoundingClientRect()
+      );
+      const computed = window.getComputedStyle(node);
+      const maxHeight = Number.parseFloat(computed.maxHeight);
+      const rootFontSize = Number.parseFloat(
+        window.getComputedStyle(document.documentElement).fontSize
+      );
+      const limitRow = rows[limit - 1];
+      const nextRow = rows[limit];
+      return {
+        listHeight: listBox.height,
+        maxHeight,
+        rootFontSize,
+        firstInside: rows[0].top >= listBox.top - 1 && rows[0].bottom <= listBox.bottom + 1,
+        limitInside: Boolean(limitRow && limitRow.bottom <= listBox.bottom + 1),
+        nextBelow: Boolean(nextRow && nextRow.bottom > listBox.bottom + 1),
+        lastBelow: rows[rows.length - 1].bottom > listBox.bottom + 1,
+      };
+    },
+    { rowSelector, visibleRows }
+  );
+
+  const expectedMaxHeight = fit.rootFontSize * (2.5 + 3.5 * visibleRows);
+  expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
+  expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
+  expect(fit.firstInside).toBe(true);
+  expect(fit.limitInside).toBe(true);
+  expect(fit.nextBelow).toBe(true);
+  expect(fit.lastBelow).toBe(true);
+}
+
 async function topLevelPanelStyle(page: Page, id: string, idPrefix = "table-management") {
   return page.locator(`#${idPrefix}-panel-${id}`).evaluate((node) => {
     const computed = window.getComputedStyle(node);
@@ -441,31 +496,47 @@ async function compactVisualStyle(locator: Locator) {
 
 for (const scenario of scenarios) {
   test(
-    `${scenario.title}はグリッドの高さを上限内に収める`,
-    async ({ page }) => {
-    await mockObjectManagementApi(page, scenario);
-    await page.goto(scenario.path);
+    `${scenario.title}はデスクトップ8行・モバイル5行の高さに収める`,
+    async ({ page }, testInfo) => {
+      await mockObjectManagementApi(page, scenario);
+      await page.goto(scenario.path);
 
-    const list = page.getByTestId("db-admin-object-list");
-    await expect(page.getByTestId(`${scenario.objectType}-management-grid`).locator("tbody tr")).toHaveCount(30);
+      const list = page.getByTestId("db-admin-object-list");
+      await expect(page.getByTestId(`${scenario.objectType}-management-grid`).locator("tbody tr")).toHaveCount(30);
 
-    const fit = await list.evaluate((node) => {
-      const listBox = node.getBoundingClientRect();
-      const rowSelector = node.querySelector("tbody tr") ? "tbody tr" : "button";
-      const rows = Array.from(node.querySelectorAll(rowSelector)).map((row) => row.getBoundingClientRect());
-      return {
-        listHeight: listBox.height,
-        firstInside: rows[0].top >= listBox.top - 1 && rows[0].bottom <= listBox.bottom + 1,
-        tenthInside: rows[9].bottom <= listBox.bottom + 1,
-        eleventhBelow: rows[10].bottom > listBox.bottom + 1,
-        lastBelow: rows[rows.length - 1].bottom > listBox.bottom + 1,
-      };
-    });
+      await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
+    }
+  );
 
-    expect(fit.listHeight).toBeGreaterThanOrEqual(320);
-    expect(fit.listHeight).toBeLessThanOrEqual(680);
-    expect(fit.firstInside).toBe(true);
-    expect(fit.lastBelow).toBe(true);
+  test(
+    `${scenario.title}の列情報はデスクトップ8行・モバイル5行の高さで内部スクロールする`,
+    async ({ page }, testInfo) => {
+      await mockObjectManagementApi(page, scenario, { columnCount: 30 });
+      await page.goto(scenario.path);
+
+      const detailColumns = page.getByTestId("db-admin-detail-columns");
+      await expect(detailColumns.locator("tbody tr")).toHaveCount(30);
+      await expectObjectListRowLimit(detailColumns, "tbody tr", expectedObjectListRows(testInfo));
+
+      const scrollState = await detailColumns.evaluate((node) => {
+        node.scrollTop = node.scrollHeight;
+        const regionRect = node.getBoundingClientRect();
+        const header = node.querySelector("thead");
+        if (!header) throw new Error("column detail header is missing");
+        const headerRect = header.getBoundingClientRect();
+        return {
+          headerOffset: Math.abs(headerRect.top - regionRect.top),
+          headerPosition: window.getComputedStyle(header).position,
+          scrollTop: node.scrollTop,
+          scrollHeight: node.scrollHeight,
+          clientHeight: node.clientHeight,
+        };
+      });
+      expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+      expect(scrollState.scrollTop).toBeGreaterThan(0);
+      expect(scrollState.headerOffset).toBeLessThanOrEqual(1);
+      expect(scrollState.headerPosition).toBe("sticky");
+      await expectNoHorizontalScroll(page);
     }
   );
 
@@ -487,31 +558,14 @@ for (const scenario of scenarios) {
 }
 
 for (const scenario of metadataScenarios) {
-  test(`${scenario.title}は対象グリッドの高さを上限内に収める`, async ({ page }) => {
+  test(`${scenario.title}は対象グリッドをデスクトップ8行・モバイル5行の高さに収める`, async ({ page }, testInfo) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);
 
     const list = page.getByTestId("db-admin-object-list");
     await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).locator("tbody tr")).toHaveCount(30);
 
-    const fit = await list.evaluate((node) => {
-      const listBox = node.getBoundingClientRect();
-      const rows = Array.from(node.querySelectorAll("tbody tr")).map((row) => row.getBoundingClientRect());
-      return {
-        listHeight: listBox.height,
-        firstInside: rows[0].top >= listBox.top - 1 && rows[0].bottom <= listBox.bottom + 1,
-        tenthInside: rows[9].bottom <= listBox.bottom + 1,
-        eleventhBelow: rows[10].bottom > listBox.bottom + 1,
-        lastBelow: rows[rows.length - 1].bottom > listBox.bottom + 1,
-      };
-    });
-
-    expect(fit.listHeight).toBeGreaterThanOrEqual(320);
-    expect(fit.listHeight).toBeLessThanOrEqual(680);
-    expect(fit.firstInside).toBe(true);
-    expect(fit.tenthInside).toBe(true);
-    expect(fit.eleventhBelow).toBe(true);
-    expect(fit.lastBelow).toBe(true);
+    await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
   });
 }
 
@@ -974,10 +1028,8 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
-  await expect(processing.locator("svg.lucide-loader-circle")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
+  await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+  await expect(processing.locator("svg.lucide-loader-circle")).toHaveCount(0);
 
   refreshGate.release();
   await expect(processing).toHaveCount(0);
@@ -1421,12 +1473,16 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   await expect(importPanel).toBeVisible();
   const fileField = importPanel.getByTestId("table-import-file-field");
   await expect(fileField).toBeVisible();
+  await expect(importPanel.getByText(/必須入力項目です。/)).toBeVisible();
+  await expect(importPanel.locator('label[for="table-import-table-name"] span[aria-hidden="true"]')).toHaveText("*");
+  await expect(importPanel.locator('label[for="table-import-sheet-name"] span[aria-hidden="true"]')).toHaveText("*");
+  await expect(importPanel.getByTestId("table-import-file-field-input")).toHaveAttribute("aria-required", "true");
   await expect(importPanel.getByTestId("table-import-mode-field")).toHaveCount(0);
   await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);
   await expect(importPanel.locator("select")).toHaveCount(0);
 
   const fileFieldBox = await fileField.boundingBox();
-  const filePickerBox = await fileField.locator("label").first().boundingBox();
+  const filePickerBox = await fileField.getByTestId("table-import-file-field-dropzone").boundingBox();
   const clearButtonBox = await fileField.getByRole("button", { name: "取込ファイルをクリア" }).boundingBox();
   const fillsAvailableWidth = await fileField.evaluate((element) => {
     const parent = element.parentElement;

@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   useEffect,
   useId,
@@ -18,7 +19,6 @@ import {
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -32,11 +32,25 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { ActionResultRegion } from "@/components/ActionResultRegion";
 import { ContentActionBar } from "@/components/ContentActionBar";
+import {
+  ExecutionActivityPanel,
+  type ExecutionActivityStatus,
+} from "@/components/ExecutionActivityPanel";
 import { FileDropzone } from "@/components/ui/file-dropzone";
+import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
+import {
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
+import type { OperationTimestamp } from "@/lib/operationTiming";
 import type {
   DbAdminExecuteData,
   DbAdminObjectDetail,
@@ -46,6 +60,7 @@ import type {
   QueryResults,
   SchemaCatalog,
 } from "../types";
+import { QueryResultSummary } from "./SqlRowLimitControls";
 
 /** テキストファイルを SQL としてダウンロードする。 */
 export function downloadText(filename: string, text: string) {
@@ -295,10 +310,7 @@ export function ExecutionConfirmationField({
       ? t("dbAdmin.confirmation.status.mismatch")
       : t("dbAdmin.confirmation.status.pending");
   const isDanger = tone === "danger";
-  const containerClass = [
-    "grid gap-2 rounded-md border border-border bg-background p-3",
-    isDanger ? "border-l-4 border-l-danger" : "",
-  ].join(" ");
+  const containerClass = "grid gap-2 rounded-md border border-border bg-background p-3";
   const inputClass = [
     "h-11 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
     isDanger
@@ -317,9 +329,12 @@ export function ExecutionConfirmationField({
   return (
     <div className={containerClass} data-testid="execution-confirmation-field">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <label htmlFor={id} className={`text-sm font-semibold ${isDanger ? "text-danger" : "text-foreground"}`}>
-          {t("dbAdmin.confirmation.label")}
-        </label>
+        <FieldLabel
+          htmlFor={id}
+          label={t("dbAdmin.confirmation.label")}
+          required
+          className={`font-semibold ${isDanger ? "text-danger" : "text-foreground"}`}
+        />
         <div className="flex flex-wrap items-center gap-2">
           <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-mono text-xs text-foreground">
             {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
@@ -337,6 +352,8 @@ export function ExecutionConfirmationField({
           className={inputClass}
           placeholder={placeholder}
           disabled={disabled}
+          required
+          aria-required="true"
           aria-describedby={helperId}
           aria-invalid={value.trim() && !confirmed ? "true" : undefined}
           autoCapitalize="off"
@@ -360,11 +377,18 @@ export function ExecutionConfirmationField({
   );
 }
 
-export function QueryResultsTable({ results }: { results: QueryResults }) {
+export function QueryResultsTable({
+  results,
+  rowLimit,
+}: {
+  results: QueryResults;
+  rowLimit?: number | null;
+}) {
   const { page, setPage, totalPages, pageItems, range } = usePagination(results.rows, DEFAULT_PAGE_SIZE);
 
   return (
     <div className="grid gap-2">
+      <QueryResultSummary results={results} rowLimit={rowLimit} />
       <DataTable
         testId="query-results-table"
         columns={results.columns.map((column) => ({
@@ -423,6 +447,11 @@ function resultSummary(result: DbAdminExecuteData): { variant: ResultStatusVaria
   if (statuses.includes("confirmation_required")) return { variant: "info", label: t("dbAdmin.result.summary.confirmation") };
   if (statuses.includes("requires_oracle")) return { variant: "info", label: t("dbAdmin.result.summary.requiresOracle") };
   return { variant: "neutral", label: t("dbAdmin.result.summary.notExecuted") };
+}
+
+export function dbAdminExecutionActivityStatus(result: DbAdminExecuteData): ExecutionActivityStatus {
+  const summary = resultSummary(result);
+  return summary.variant === "danger" || summary.variant === "warning" ? "error" : "success";
 }
 
 function oracleErrorGuidance(code: string | null) {
@@ -571,8 +600,15 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
   return <DbAdminErrorNotice error={statement.error_message} />;
 }
 
-export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData }) {
+export function DbAdminExecutionResult({
+  result,
+  rowLimit,
+}: {
+  result: DbAdminExecuteData;
+  rowLimit?: number | null;
+}) {
   const summary = resultSummary(result);
+  const showStatementDetails = !result.select_result;
   return (
     <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
       <div className="flex flex-wrap gap-2">
@@ -586,22 +622,31 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
           {warning}
         </Banner>
       ))}
-      {result.select_result && <QueryResultsTable results={result.select_result} />}
-      <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
-        {result.statements.map((statement) => (
-          <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-card p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-2">
-                <StatusBadge variant="neutral" label={statement.statement_type} />
-                <StatusBadge variant={statusVariant(statement.status)} label={statusLabel(statement.status)} />
+      {result.select_result && <QueryResultsTable results={result.select_result} rowLimit={rowLimit} />}
+      {showStatementDetails ? (
+        <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
+          {result.statements.map((statement) => (
+            <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-card p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge variant="neutral" label={statement.statement_type} />
+                  <StatusBadge variant={statusVariant(statement.status)} label={statusLabel(statement.status)} />
+                  {statement.statement_type !== "SELECT" &&
+                    statement.row_count !== null &&
+                    statement.row_count !== undefined && (
+                      <StatusBadge
+                        variant="neutral"
+                        label={t("dbAdmin.result.affectedRows", { count: statement.row_count })}
+                      />
+                    )}
+                </div>
               </div>
-              <span className="text-xs text-muted">{statement.elapsed_ms}ms</span>
+              <code className="mt-2 block break-words text-xs text-foreground">{statement.sql}</code>
+              {statement.error_message && <DbAdminStatementError statement={statement} />}
             </div>
-            <code className="mt-2 block break-words text-xs text-foreground">{statement.sql}</code>
-            {statement.error_message && <DbAdminStatementError statement={statement} />}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -732,6 +777,20 @@ export function SqlFileInput({
   );
 }
 
+interface DbAdminExecutionRunState {
+  operationKey: string | number;
+  status: ExecutionActivityStatus;
+  startedAt: OperationTimestamp;
+  finishedAt?: OperationTimestamp;
+  elapsedMs?: number | null;
+}
+
+function executionActivityLabel(status: ExecutionActivityStatus) {
+  if (status === "success") return t("executionActivity.execute.success");
+  if (status === "error") return t("executionActivity.execute.error");
+  return t("nl2sql.processing.executeSql");
+}
+
 /** 文種 whitelist 付き SQL 実行カード(テーブル/ビュー作成・データ SQL 共用)。 */
 export function StatementRunnerCard({
   policy,
@@ -762,6 +821,7 @@ export function StatementRunnerCard({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
+  const [executionRun, setExecutionRun] = useState<DbAdminExecutionRunState | null>(null);
 
   useEffect(() => {
     if (initialSql !== undefined) setSql(initialSql);
@@ -770,8 +830,11 @@ export function StatementRunnerCard({
   const run = async () => {
     if (!sql.trim()) return;
     if (!confirmation.trim()) return;
+    const startedAt = Date.now();
+    const operationKey = `statement-runner-${policy}-${startedAt}`;
     setLoading(true);
     setMessage("");
+    setExecutionRun({ operationKey, status: "running", startedAt });
     try {
       const data = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/statements", {
         sql,
@@ -779,12 +842,28 @@ export function StatementRunnerCard({
         confirmation,
         reason: `ui-db-admin-${policy}`,
       });
+      const finishedAt = data.timing.finished_at ?? Date.now();
       setResult(data);
+      setExecutionRun({
+        operationKey,
+        status: dbAdminExecutionActivityStatus(data),
+        startedAt: data.timing.started_at ?? startedAt,
+        finishedAt,
+        elapsedMs: data.timing.elapsed_ms,
+      });
       if (data.executed) {
         await onExecuted?.(data);
       }
     } catch (err) {
+      const finishedAt = Date.now();
       setMessage(err instanceof Error ? err.message : t("dbAdmin.error.statements"));
+      setExecutionRun({
+        operationKey,
+        status: "error",
+        startedAt,
+        finishedAt,
+        elapsedMs: finishedAt - startedAt,
+      });
     } finally {
       setLoading(false);
     }
@@ -840,11 +919,6 @@ export function StatementRunnerCard({
     <>
       {executeOnly && header}
       {progressNode}
-      {message && (
-        <p className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger" role="alert">
-          {message}
-        </p>
-      )}
       <label className="grid gap-1 text-sm font-medium text-foreground">
         <span>{t("dbAdmin.runner.sqlLabel")}</span>
         <textarea
@@ -862,6 +936,7 @@ export function StatementRunnerCard({
             setSql(text);
             setResult(null);
             setMessage("");
+            setExecutionRun(null);
           }}
         />
         <Button
@@ -873,6 +948,8 @@ export function StatementRunnerCard({
           onClick={() => {
             setSql("");
             setResult(null);
+            setMessage("");
+            setExecutionRun(null);
             setSqlFileResetSignal((value) => value + 1);
           }}
         >
@@ -892,7 +969,26 @@ export function StatementRunnerCard({
           confirmationField
         )}
       </div>
-      {result && <DbAdminExecutionResult result={result} />}
+      {executionRun && (
+        <ExecutionActivityPanel
+          status={executionRun.status}
+          label={executionActivityLabel(executionRun.status)}
+          operationKey={executionRun.operationKey}
+          startedAt={executionRun.startedAt}
+          finishedAt={executionRun.finishedAt}
+          elapsedMs={executionRun.elapsedMs}
+          testId={`statement-runner-${policy}-execution-activity`}
+        />
+      )}
+      <ActionResultRegion
+        loading={loading}
+        operationKey={`statement-runner-${policy}`}
+        loadingLabel={t("nl2sql.processing.executeSql")}
+        errorMessage={message}
+        testId={`statement-runner-${policy}-processing`}
+      >
+        {result ? <DbAdminExecutionResult result={result} /> : null}
+      </ActionResultRegion>
     </>
   );
 
@@ -957,7 +1053,7 @@ export function ObjectListPanel({
       {filtered.length === 0 ? (
         <EmptyState title={emptyTitle} hint={emptyHint} />
       ) : (
-        <div className="grid max-h-[44.5rem] gap-2 overflow-auto pr-1" role="list" data-testid="db-admin-object-list">
+        <div className={`grid gap-2 pr-1 ${INFORMATION_LIST_SCROLL_CLASS}`} role="list" data-testid="db-admin-object-list">
           {filtered.map((item) => (
             <button
               key={item.name}
@@ -965,7 +1061,7 @@ export function ObjectListPanel({
               role="listitem"
               aria-current={item.name === selectedName ? "true" : undefined}
               onClick={() => onSelect(item)}
-              className={`min-h-16 cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-ring/40 ${
+              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-ring/40 ${
                 item.name === selectedName
                   ? "border-primary bg-primary/10"
                   : "border-border bg-card hover:bg-background"
@@ -1041,27 +1137,31 @@ export function ObjectDetailPanel({
       ))}
       <div>
         <p className="mb-1 text-sm font-semibold text-foreground">{t("dbAdmin.detail.columns")}</p>
-        <div data-testid="db-admin-detail-columns" className="min-w-0 max-w-full overflow-x-auto rounded-md border border-border">
+        <div
+          data-testid="db-admin-detail-columns"
+          tabIndex={0}
+          className={`min-w-0 rounded-md border border-border ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+        >
           <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
               <col className="w-[18%]" />
               <col className="w-[12%]" />
               <col className="w-[16%]" />
-              <col className="w-[10%]" />
+              <col className="w-[12%]" />
               <col />
             </colgroup>
-            <thead className="bg-background">
-              <tr>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
+            <thead className="sticky top-0 z-10 bg-background">
+              <tr className="h-10">
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/70">
               {detail.columns.map((column) => (
-                <tr key={column.column_name}>
+                <tr key={column.column_name} className={INFORMATION_TABLE_ROW_CLASS}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
                   <td className="px-3 py-2">{column.logical_name}</td>
                   <td className="px-3 py-2">{column.data_type}</td>

@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const source = readFileSync(
+  new URL("../src/components/BulkSelectionActions.tsx", import.meta.url),
+  "utf8"
+);
+
+const migratedPages = [
+  "../src/features/nl2sql/pages/ProfileManagementPage.tsx",
+  "../src/features/nl2sql/pages/QuestionLearningPage.tsx",
+  "../src/features/nl2sql/pages/DataManagementPage.tsx",
+  "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
+  "../src/features/nl2sql/pages/EvaluationPage.tsx",
+  "../src/features/security/SecurityUsersPage.tsx",
+  "../src/features/security/SecurityRolesPage.tsx",
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
+
+test("BulkSelectionActions uses shared Button variants for select and clear", () => {
+  assert.match(source, /from "@\/components\/ui\/button"/u);
+  assert.match(source, /variant="secondary"/u);
+  assert.match(source, /variant="ghost"/u);
+  assert.match(source, /size = "sm"/u);
+  assert.match(source, /disabled=\{busy \|\| selectDisabled\}/u);
+  assert.match(source, /disabled=\{busy \|\| clearDisabled\}/u);
+});
+
+test("BulkSelectionActions exposes distinct aria labels and stable test ids", () => {
+  assert.match(source, /role="group"/u);
+  assert.match(source, /aria-busy=\{busy \|\| undefined\}/u);
+  assert.match(source, /aria-label=\{selectAriaLabel \?\? selectLabel\}/u);
+  assert.match(source, /aria-label=\{clearAriaLabel \?\? clearLabel\}/u);
+  assert.match(source, /\$\{dataTestId\}-select/u);
+  assert.match(source, /\$\{dataTestId\}-clear/u);
+});
+
+test("bulk selection surfaces use the shared component", () => {
+  for (const page of migratedPages) {
+    assert.match(page, /BulkSelectionActions/u);
+  }
+});

@@ -12,19 +12,31 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Button, EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
-import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import {
-  TimedLoadingState,
-  type ProcessingPlacement,
-} from "@/components/ProcessingState";
+  ObjectActionBar,
+  RowActionMenu,
+  type EntityAction,
+  type EntityActionTone,
+} from "@/components/ObjectActions";
+import { TimedLoadingState, type ProcessingPlacement } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import {
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_LIST_SHORT_SCROLL_CLASS,
+  INFORMATION_LIST_VISIBLE_ROWS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import type { DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
@@ -124,6 +136,14 @@ export function rowCountLabel(rowCount?: number | null) {
 
 export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
 
+// 5/8 行の上限を共有し、表形式のみ sticky header 分を含める。
+export const DB_OBJECT_GRID_ROW_CLASS = INFORMATION_TABLE_ROW_CLASS;
+export const DB_OBJECT_PICKER_ROW_CLASS = INFORMATION_LIST_ROW_CLASS;
+export const DB_OBJECT_GRID_SCROLL_CLASS = INFORMATION_TABLE_SCROLL_CLASS;
+export const DB_OBJECT_PICKER_SCROLL_CLASS = INFORMATION_LIST_SCROLL_CLASS;
+export const DB_OBJECT_PICKER_SHORT_SCROLL_CLASS = INFORMATION_LIST_SHORT_SCROLL_CLASS;
+export const DB_OBJECT_LIST_VISIBLE_ROWS = INFORMATION_LIST_VISIBLE_ROWS;
+
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return (
     <div
@@ -167,7 +187,7 @@ export function DbManagementLoadingSkeleton({
         <div className="grid gap-2">
           <SkeletonBlock className="h-11" />
           {Array.from({ length: rows }, (_, index) => (
-            <SkeletonBlock key={index} className="h-12" />
+            <SkeletonBlock key={index} className="h-[3.5rem]" />
           ))}
         </div>
       </TimedLoadingState>
@@ -441,6 +461,7 @@ export function DbObjectSelectionSummary({
 export interface DbObjectPickerItem {
   key: string;
   name: string;
+  kind?: string;
   kindLabel?: string;
   kindVariant?: "neutral" | "info" | "success" | "warning" | "danger";
   rowCountLabel?: string;
@@ -459,8 +480,10 @@ export function DbSingleObjectPickerList({
   noResultsTitle,
   noResultsHint,
   dataTestId,
-  maxHeightClass = "max-h-80",
+  maxHeightClass = DB_OBJECT_PICKER_SCROLL_CLASS,
   onSelect,
+  selectAriaLabel,
+  selectDisabled,
   action,
 }: {
   items: DbObjectPickerItem[];
@@ -475,10 +498,15 @@ export function DbSingleObjectPickerList({
   dataTestId?: string;
   maxHeightClass?: string;
   onSelect: (item: DbObjectPickerItem) => void;
+  selectAriaLabel?: (item: DbObjectPickerItem) => string;
+  selectDisabled?: (item: DbObjectPickerItem) => boolean;
   action?: {
+    id: string;
     label: string;
     icon?: LucideIcon;
+    tone?: EntityActionTone;
     ariaLabel: (item: DbObjectPickerItem) => string;
+    visible?: (item: DbObjectPickerItem) => boolean;
     disabled?: (item: DbObjectPickerItem) => boolean;
     onClick: (item: DbObjectPickerItem) => void;
   };
@@ -495,10 +523,10 @@ export function DbSingleObjectPickerList({
   }
 
   const headerClass = action
-    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
+    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
     : "hidden grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid";
   const rowClass = action
-    ? "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_8.5rem]"
+    ? "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem]"
     : "md:grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)]";
 
   return (
@@ -510,31 +538,56 @@ export function DbSingleObjectPickerList({
         <span>{t("objectSelector.column.owner")}</span>
         {action && <span className="text-right">{t("objectSelector.column.actions")}</span>}
       </div>
-      <div className={`${maxHeightClass} overflow-auto`} role="list" aria-label={listLabel}>
+      <div className={maxHeightClass} role="list" aria-label={listLabel}>
         {items.map((item) => {
           const selected = item.key === selectedKey || item.name === selectedKey;
-          const ActionIcon = action?.icon;
+          const selectionDisabled = Boolean(selectDisabled?.(item));
+          const actionLoading = Boolean(action && loadingKey === item.key);
+          const rowActions: EntityAction[] = action
+            ? [
+                {
+                  id: action.id,
+                  label: action.label,
+                  ariaLabel: action.ariaLabel(item),
+                  icon: action.icon,
+                  tone: action.tone,
+                  visible: action.visible?.(item),
+                  loading: actionLoading,
+                  disabled: action.disabled?.(item),
+                  onSelect: () => action.onClick(item),
+                },
+              ]
+            : [];
+          const hasRowActions = rowActions.some((rowAction) => rowAction.visible !== false);
+          const rowActionsDisabled =
+            rowActions.length > 0 && rowActions.every((rowAction) => rowAction.disabled);
           return (
             <div
               key={item.key}
               role="listitem"
               aria-current={selected ? "true" : undefined}
               className={[
-                "grid w-full min-w-0 cursor-pointer gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0",
+                `grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${DB_OBJECT_PICKER_ROW_CLASS}`,
                 `${rowClass} md:items-center md:py-2`,
-                selected ? "bg-primary/10" : "bg-card hover:bg-background",
+                selectionDisabled ? "cursor-not-allowed" : "cursor-pointer",
+                selected ? "bg-primary/10" : selectionDisabled ? "bg-card" : "bg-card hover:bg-background",
               ].join(" ")}
               onClick={(event) => {
                 if (isInteractiveRowTarget(event.target)) return;
+                if (selectionDisabled) return;
                 onSelect(item);
               }}
             >
               <button
                 type="button"
                 aria-current={selected ? "true" : undefined}
-                aria-label={t("objectSelector.selectObject", { name: item.name })}
+                aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
+                disabled={selectionDisabled}
                 className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-ring/40 md:min-h-0"
-                onClick={() => onSelect(item)}
+                onClick={() => {
+                  if (selectionDisabled) return;
+                  onSelect(item);
+                }}
               >
                 <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
                 {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
@@ -555,23 +608,19 @@ export function DbSingleObjectPickerList({
                 <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.owner")}</span>
                 <span className="break-all">{item.owner || "-"}</span>
               </span>
-              {action && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="w-full whitespace-nowrap md:w-auto"
-                  aria-label={action.ariaLabel(item)}
-                  loading={loadingKey === item.key}
-                  disabled={action.disabled?.(item)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    action.onClick(item);
-                  }}
-                >
-                  {ActionIcon && <ActionIcon size={15} aria-hidden="true" />}
-                  <span>{action.label}</span>
-                </Button>
+              {action && hasRowActions && (
+                <span className="flex items-center justify-between gap-2 md:justify-end">
+                  <span className="text-xs font-medium text-muted md:hidden">
+                    {t("objectSelector.column.actions")}
+                  </span>
+                  <RowActionMenu
+                    actions={rowActions}
+                    ariaLabel={`${t("objectSelector.column.actions")}: ${item.name}`}
+                    loading={actionLoading}
+                    disabled={rowActionsDisabled}
+                    testId={dataTestId ? `${dataTestId}-row-actions-${item.key}` : undefined}
+                  />
+                </span>
               )}
             </div>
           );
@@ -819,11 +868,17 @@ export function DbObjectGrid({
   filter,
   sort,
   labels,
+  totalCount,
+  hasNextPage,
+  loadingNextPage = false,
+  error = "",
   onSearchChange,
   onFilterChange,
   onSortChange,
   onSelect,
   onDrop,
+  onLoadMore,
+  onRetry,
 }: {
   idPrefix: string;
   headingId: string;
@@ -835,11 +890,17 @@ export function DbObjectGrid({
   filter: DbObjectFilter;
   sort: DbObjectSortState;
   labels: DbObjectGridLabels;
+  totalCount?: number;
+  hasNextPage?: boolean;
+  loadingNextPage?: boolean;
+  error?: string;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: DbObjectFilter) => void;
   onSortChange: (key: DbObjectSortKey) => void;
   onSelect: (name: string) => void;
   onDrop: (name: string) => void;
+  onLoadMore?: () => void;
+  onRetry?: () => void;
 }) {
   const hasActiveFilter = Boolean(search.trim()) || filter !== "all";
   return (
@@ -881,6 +942,8 @@ export function DbObjectGrid({
           ariaLabel={labels.loading}
           variant="list"
         />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} />
       ) : items.length === 0 ? (
         <EmptyState
           title={hasActiveFilter ? labels.noResultsTitle : labels.emptyTitle}
@@ -888,7 +951,7 @@ export function DbObjectGrid({
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className="max-h-[42rem] overflow-auto" data-testid="db-admin-object-list">
+          <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
             <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
               <colgroup>
                 <col className="w-[9.5rem]" />
@@ -928,6 +991,7 @@ export function DbObjectGrid({
                       data-selected={selected ? "true" : "false"}
                       aria-current={selected ? "true" : undefined}
                       className={[
+                        DB_OBJECT_GRID_ROW_CLASS,
                         "cursor-pointer transition-colors",
                         selected ? "bg-primary/10" : "hover:bg-background",
                       ].join(" ")}
@@ -963,6 +1027,16 @@ export function DbObjectGrid({
             </table>
           </div>
         </div>
+      )}
+      {!loading && !error && (
+        <DbObjectSelectorFooter
+          visibleCount={items.length}
+          totalCount={totalCount ?? items.length}
+          hasNextPage={hasNextPage}
+          loadingNextPage={loadingNextPage}
+          dataTestId={`${idPrefix}-footer`}
+          onLoadMore={onLoadMore}
+        />
       )}
     </section>
   );
@@ -1173,30 +1247,31 @@ export function DbObjectDetailPanel({
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-columns`}
           data-testid="db-admin-detail-columns"
-          className="min-w-0 max-w-full overflow-x-auto rounded-md border border-border bg-card"
+          tabIndex={0}
+          className={`min-w-0 rounded-md border border-border bg-card ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         >
           <table className="w-full min-w-[52rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
               <col className="w-[18%]" />
               <col className="w-[18%]" />
-              <col className="w-[22%]" />
+              <col className="w-[20%]" />
               <col className="w-[14%]" />
-              <col className="w-[8%]" />
+              <col className="w-[10%]" />
               <col />
             </colgroup>
-            <thead className="bg-background">
-              <tr>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.comment")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
-                <th className="px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
+            <thead className="sticky top-0 z-10 bg-background">
+              <tr className="h-10">
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.comment")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/70">
               {detail.columns.map((column) => (
-                <tr key={column.column_name}>
+                <tr key={column.column_name} className={INFORMATION_TABLE_ROW_CLASS}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
                   <td className="break-words px-3 py-2">{(column.logical_name ?? "").trim() || "-"}</td>
                   <td className="break-words px-3 py-2 text-muted">{(column.comment ?? "").trim() || "-"}</td>
@@ -1342,6 +1417,7 @@ export function DropDbObjectDialog({
   objectName,
   confirmation,
   loading,
+  error,
   labels,
   onConfirmationChange,
   onExecute,
@@ -1350,6 +1426,7 @@ export function DropDbObjectDialog({
   objectName: string;
   confirmation: string;
   loading: boolean;
+  error?: string;
   labels: DbObjectDropDialogLabels;
   onConfirmationChange: (value: string) => void;
   onExecute: () => void;
@@ -1362,14 +1439,14 @@ export function DropDbObjectDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="drop-db-object-dialog-title"
-        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-danger/30 bg-card shadow-xl"
+        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-border bg-card shadow-xl"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-danger/20 bg-danger-bg px-4 py-3">
+        <div className="flex items-start justify-between gap-3 border-b border-border bg-card px-4 py-3">
           <div>
             <h2 id="drop-db-object-dialog-title" className="text-base font-semibold text-danger">
               {labels.title}
             </h2>
-            <p className="mt-1 text-sm text-danger">{labels.subtitle}</p>
+            <p className="mt-1 text-sm text-muted">{labels.subtitle}</p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             <X size={15} aria-hidden="true" />
@@ -1377,12 +1454,20 @@ export function DropDbObjectDialog({
           </Button>
         </div>
         <div className="grid gap-4 p-4">
-          <div className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2">
-            <p className="text-xs font-semibold text-danger">{labels.target}</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-danger">{objectName}</p>
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <p className="text-xs font-semibold text-foreground">{labels.target}</p>
+            <p className="mt-1 break-all font-mono text-sm font-semibold text-foreground">{objectName}</p>
           </div>
+          {error && (
+            <p
+              role="alert"
+              className="rounded-md border border-danger/30 bg-background px-3 py-2 text-sm font-medium text-danger"
+            >
+              {error}
+            </p>
+          )}
           <fieldset className="grid gap-3 rounded-md border border-border bg-background p-3">
-            <legend className="px-1 text-sm font-semibold text-danger">{labels.executeTitle}</legend>
+            <legend className="px-1 text-sm font-semibold text-foreground">{labels.executeTitle}</legend>
             <ExecutionConfirmationField
               value={confirmation}
               onChange={onConfirmationChange}

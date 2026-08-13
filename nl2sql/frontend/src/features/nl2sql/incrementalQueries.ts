@@ -11,6 +11,7 @@ import type {
   SchemaObjectPage,
   SchemaObjectDetail,
   SchemaRefreshJob,
+  SelectAiDbProfileRefreshJobData,
 } from "./types";
 import {
   filterUserVisibleCatalog,
@@ -18,6 +19,10 @@ import {
   filterUserVisibleSchemaObjectPage,
   isUserVisibleObjectName,
 } from "./objectVisibility";
+export {
+  waitForSchemaRefreshJob,
+  type WaitForSchemaRefreshJobOptions,
+} from "./schemaRefreshJob";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
 let legacyCatalogOverride: SchemaCatalog | null = null;
@@ -66,6 +71,8 @@ export const nl2sqlIncrementalKeys = {
   dbAdminObjects: (query: string, objectType: string, rowState: string) =>
     ["nl2sql", "db-admin", "objects", query, objectType, rowState] as const,
   schemaRefreshJob: (jobId: string) => ["schema", "refresh-job", jobId] as const,
+  selectAiDbProfileRefreshJob: (jobId: string) =>
+    ["nl2sql", "select-ai", "db-profile-refresh-job", jobId] as const,
 };
 
 export function useProfileSummaries(query: string) {
@@ -375,28 +382,41 @@ export function useSchemaRefreshJob(jobId: string) {
   });
 }
 
-export async function waitForSchemaRefreshJob(jobId: string, signal?: AbortSignal) {
-  let job = await apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, {
-    signal,
-    timeoutMs: API_TIMEOUT_MS.jobControl,
+export function useStartSelectAiDbProfileRefresh() {
+  return useMutation({
+    mutationFn: () =>
+      apiPost<SelectAiDbProfileRefreshJobData>(
+        "/api/nl2sql/select-ai/db-profiles/refresh-jobs",
+        undefined,
+        {
+          timeoutMs: API_TIMEOUT_MS.jobControl,
+        }
+      ),
   });
-  while (job.status === "pending" || job.status === "running") {
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = window.setTimeout(resolve, 1_000);
-      signal?.addEventListener(
-        "abort",
-        () => {
-          window.clearTimeout(timeoutId);
-          reject(signal.reason);
-        },
-        { once: true }
-      );
-    });
-    job = await apiGet<SchemaRefreshJob>(`/api/schema/refresh-jobs/${jobId}`, {
-      signal,
-      timeoutMs: API_TIMEOUT_MS.jobControl,
-    });
-  }
-  if (job.status === "error") throw new Error(job.error_code || "schema_refresh_failed");
-  return job;
+}
+
+export function useSelectAiDbProfileRefreshJob(jobId: string) {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(jobId),
+    queryFn: ({ signal }) =>
+      apiGet<SelectAiDbProfileRefreshJobData>(
+        `/api/nl2sql/select-ai/db-profile-refresh-jobs/${jobId}`,
+        {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.jobControl,
+        }
+      ),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "done") {
+        void queryClient.invalidateQueries({
+          queryKey: ["nl2sql", "select-ai"],
+        });
+      }
+      return status === "pending" || status === "running" ? 1_000 : false;
+    },
+    retry: false,
+  });
 }

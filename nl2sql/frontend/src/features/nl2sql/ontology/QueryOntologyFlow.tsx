@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   CheckCircle2,
   ChevronDown,
@@ -11,11 +12,15 @@ import {
   Send,
   ShieldAlert,
 } from "lucide-react";
-import { useId, useMemo, useState, type ReactNode } from "react";
+import {
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,

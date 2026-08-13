@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import importlib
 import io
@@ -21,20 +22,26 @@ from app.features.nl2sql.models import (
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewRequest,
+    DbAdminDropTableRequest,
     DbAdminDropViewRequest,
     DbAdminExecuteRequest,
     DbAdminImportTabularRequest,
     DbAdminJoinWhereRequest,
     DbAdminStatementsRequest,
+    DbAdminTruncateTableRequest,
     MetadataSqlGenerateRequest,
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    QueryResults,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
     SchemaColumn,
     SchemaTable,
+    SelectAiDbProfileRefreshMode,
+    SelectAiDbProfileRefreshTarget,
+    SelectAiDbProfileUpsertRequest,
 )
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
@@ -44,7 +51,12 @@ from app.features.nl2sql.oracle_adapter import (
     _normalize_select_ai_object_list,
 )
 from app.features.nl2sql.router import db_admin_import_tabular, db_admin_upload_csv
-from app.features.nl2sql.service import DbAdminOperationFailed, Nl2SqlService, _db_admin_error
+from app.features.nl2sql.service import (
+    DbAdminOperationFailed,
+    Nl2SqlService,
+    SchemaRefreshMutationSync,
+    _db_admin_error,
+)
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.settings import get_settings
 
@@ -89,6 +101,43 @@ class _FakeStatementsAdapter:
         return SchemaCatalog(refreshed_at="2026-07-10T00:00:00+00:00", tables=[])
 
 
+class _FakeAdminSqlAdapter(_FakeStatementsAdapter):
+    """Admin SQL の SELECT/data plane と statement/control plane を分けて記録する。"""
+
+    def __init__(
+        self,
+        *,
+        select_result: QueryResults | None = None,
+        select_error: OracleAdapterError | None = None,
+        statement_results: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(statement_results or [])
+        self.select_result = select_result or QueryResults(
+            columns=["ID"],
+            rows=[{"ID": 1}],
+            total=1,
+        )
+        self.select_error = select_error
+        self.select_calls: list[tuple[str, int | None]] = []
+
+    def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
+        self.select_calls.append((sql, max_rows))
+        if self.select_error is not None:
+            raise self.select_error
+        return self.select_result
+
+
+class _FakeObjectTypeAdapter(_FakeStatementsAdapter):
+    def __init__(self, object_type: str | None) -> None:
+        super().__init__([])
+        self.object_type = object_type
+        self.object_type_calls: list[str] = []
+
+    def find_db_admin_object_type(self, object_name: str) -> str | None:
+        self.object_type_calls.append(object_name)
+        return self.object_type
+
+
 class _FakeMetadataSamplesAdapter:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -115,7 +164,13 @@ class _OracleRuntimeService(Nl2SqlService):
 class _FakeSelectAiProfileAdapter:
     """DBMS_CLOUD_AI profile list/detail を固定で返す fake adapter。"""
 
+    def __init__(self) -> None:
+        self.list_calls = 0
+        self.name_fetch_calls: list[set[str] | None] = []
+        self.detail_calls: list[str] = []
+
     def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
         return [
             {
                 "name": "FINANCE_SELECT_AI",
@@ -125,7 +180,16 @@ class _FakeSelectAiProfileAdapter:
             }
         ]
 
+    def fetch_select_ai_profile_names(
+        self,
+        profile_names: set[str] | None = None,
+    ) -> set[str]:
+        self.name_fetch_calls.append(set(profile_names) if profile_names is not None else None)
+        names = {"FINANCE_SELECT_AI"}
+        return names if profile_names is None else names & {name.upper() for name in profile_names}
+
     def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        self.detail_calls.append(profile_name)
         assert profile_name == "FINANCE_SELECT_AI"
         return {
             "name": profile_name,
@@ -147,14 +211,30 @@ class _FakeMixedSelectAiProfileAdapter:
 
     def __init__(self) -> None:
         self.detail_calls: list[str] = []
+        self.list_calls = 0
+        self.name_fetch_calls: list[set[str] | None] = []
 
     def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
         return [
             {"name": "FINANCE_SELECT_AI", "status": "available"},
             {"name": "ARCHIVED_SELECT_AI", "status": "available"},
             {"name": "NL2SQL_DERIVED_FILTER_PROFILE", "status": "available"},
             {"name": "MANUAL_SELECT_AI", "status": "available"},
         ]
+
+    def fetch_select_ai_profile_names(
+        self,
+        profile_names: set[str] | None = None,
+    ) -> set[str]:
+        self.name_fetch_calls.append(set(profile_names) if profile_names is not None else None)
+        names = {
+            "FINANCE_SELECT_AI",
+            "ARCHIVED_SELECT_AI",
+            "NL2SQL_DERIVED_FILTER_PROFILE",
+            "MANUAL_SELECT_AI",
+        }
+        return names if profile_names is None else names & {name.upper() for name in profile_names}
 
     def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
         self.detail_calls.append(profile_name)
@@ -165,6 +245,84 @@ class _FakeMixedSelectAiProfileAdapter:
                 "object_list": [{"owner": "APP", "name": "INVOICES"}],
             },
         }
+
+
+class _MutableSelectAiProfileAdapter:
+    """Targeted DB profile list refresh 用の可変 fake adapter。"""
+
+    def __init__(self, profiles: dict[str, dict[str, Any]] | None = None) -> None:
+        self.profiles = {
+            name.upper(): {
+                "name": name.upper(),
+                "status": "available",
+                "attributes": dict((profile or {}).get("attributes") or {}),
+            }
+            for name, profile in (profiles or {}).items()
+        }
+        self.list_calls = 0
+        self.name_fetch_calls: list[set[str] | None] = []
+        self.detail_calls: list[str] = []
+        self.upsert_calls: list[tuple[str, str]] = []
+        self.drop_calls: list[str] = []
+
+    def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        return [
+            {"name": name, "status": profile.get("status", "available")}
+            for name, profile in sorted(self.profiles.items())
+        ]
+
+    def fetch_select_ai_profile_names(
+        self,
+        profile_names: set[str] | None = None,
+    ) -> set[str]:
+        self.name_fetch_calls.append(set(profile_names) if profile_names is not None else None)
+        names = set(self.profiles)
+        return names if profile_names is None else names & {name.upper() for name in profile_names}
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        name = profile_name.upper()
+        self.detail_calls.append(name)
+        if name not in self.profiles:
+            raise OracleAdapterError(f"{name} が見つかりません")
+        return dict(self.profiles[name])
+
+    def upsert_select_ai_profile_low_level(
+        self,
+        *,
+        profile_name: str,
+        attributes: dict[str, Any],
+        description: str = "",
+        original_name: str = "",
+    ) -> dict[str, Any]:
+        new_name = profile_name.upper()
+        old_name = original_name.upper()
+        self.upsert_calls.append((new_name, old_name))
+        if old_name and old_name != new_name:
+            self.profiles.pop(old_name, None)
+        self.profiles[new_name] = {
+            "name": new_name,
+            "status": "available",
+            "description": description,
+            "attributes": dict(attributes),
+        }
+        return {"profile_name": new_name, "status": "saved"}
+
+    def drop_select_ai_profile(self, *, profile_name: str) -> dict[str, Any]:
+        name = profile_name.upper()
+        self.drop_calls.append(name)
+        self.profiles.pop(name, None)
+        return {"profile_name": name, "status": "dropped"}
+
+
+def _run_db_profile_refresh(service: Nl2SqlService, job_id: str = "") -> Any:
+    if not job_id:
+        job = service.start_select_ai_db_profile_refresh_job(dispatch=False)
+        job_id = job.job_id
+    assert service._run_select_ai_db_profile_refresh_job(job_id) is True  # noqa: SLF001
+    result = service.get_select_ai_db_profile_refresh_job(job_id)
+    assert result is not None
+    return result
 
 
 def _import_sample(service: Nl2SqlService) -> None:
@@ -221,11 +379,18 @@ def test_admin_mutation_submits_schema_job_only_for_schema_changes(
     )
     service = _OracleRuntimeService(adapter)
     submitted = 0
+    submitted_targets: list[list[tuple[str, str, str]]] = []
 
-    def submit() -> str:
+    def submit(**kwargs: Any) -> SchemaRefreshMutationSync:
         nonlocal submitted
         submitted += 1
-        return "refresh-job-1"
+        submitted_targets.append(
+            [
+                (target.owner, target.object_name, target.expected_state)
+                for target in kwargs["target_objects"]
+            ]
+        )
+        return SchemaRefreshMutationSync(job_id="refresh-job-1")
 
     monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
 
@@ -249,10 +414,39 @@ def test_admin_mutation_submits_schema_job_only_for_schema_changes(
     assert ddl.executed is True
     assert ddl.schema_refresh_job_id == "refresh-job-1"
     assert submitted == 1
+    assert submitted_targets == [[("ADMIN", "ORDERS_ARCHIVE", "present")]]
+
+
+def test_admin_plsql_success_requires_manual_schema_refresh() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "PLSQL",
+                "status": "success",
+                "sql": "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE X (ID NUMBER)'; END;",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="BEGIN EXECUTE IMMEDIATE 'CREATE TABLE X (ID NUMBER)'; END;",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.schema_refresh_job_id == ""
+    assert result.schema_refresh_required is True
+    assert result.schema_refresh_reason_code == "schema_refresh_target_unresolved"
+    assert any("DB 構造を再取得" in warning for warning in result.warnings)
 
 
 def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> None:
-    service = _OracleRuntimeService(_FakeSelectAiProfileAdapter())
+    adapter = _FakeSelectAiProfileAdapter()
+    service = _OracleRuntimeService(adapter)
     cast(Any, service)._catalog = SchemaCatalog(
         refreshed_at="2026-07-10T00:00:00+00:00",
         tables=[
@@ -264,11 +458,15 @@ def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> N
             ),
         ],
     )
+    _run_db_profile_refresh(service)
+    adapter.detail_calls.clear()
 
     data = service.list_select_ai_db_profiles(include_detail=True)
 
     assert data.runtime == "oracle"
     assert data.warnings == []
+    assert adapter.list_calls == 0
+    assert adapter.detail_calls == []
     assert len(data.profiles) == 1
     profile = data.profiles[0]
     assert profile.name == "FINANCE_SELECT_AI"
@@ -321,6 +519,8 @@ def test_select_ai_db_profiles_can_filter_to_business_profile_names() -> None:
             few_shot_examples=[],
         )
     )
+    _run_db_profile_refresh(service)
+    adapter.detail_calls.clear()
 
     data = service.list_select_ai_db_profiles(
         include_detail=True,
@@ -329,11 +529,12 @@ def test_select_ai_db_profiles_can_filter_to_business_profile_names() -> None:
     )
 
     assert [profile.name for profile in data.profiles] == [
-        "FINANCE_SELECT_AI",
         "ARCHIVED_SELECT_AI",
+        "FINANCE_SELECT_AI",
         "NL2SQL_DERIVED_FILTER_PROFILE",
     ]
-    assert "MANUAL_SELECT_AI" not in adapter.detail_calls
+    assert adapter.list_calls == 0
+    assert adapter.detail_calls == []
 
     active_only = service.list_select_ai_db_profiles(
         business_profiles_only=True,
@@ -383,7 +584,8 @@ def test_select_ai_db_profiles_filter_also_applies_to_asset_metadata_fallback() 
 
 
 def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> None:
-    service = _OracleRuntimeService(_FakeMixedSelectAiProfileAdapter())
+    adapter = _FakeMixedSelectAiProfileAdapter()
+    service = _OracleRuntimeService(adapter)
     service.create_profile(
         Nl2SqlProfile(
             id="finance_filter",
@@ -411,6 +613,8 @@ def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> Non
             archived=True,
         )
     )
+    _run_db_profile_refresh(service)
+    adapter.detail_calls.clear()
 
     exported = service.export_select_ai_profiles_json(
         business_profiles_only=True,
@@ -418,8 +622,8 @@ def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> Non
     )
 
     assert [profile.name for profile in exported.profiles] == [
-        "FINANCE_SELECT_AI",
         "ARCHIVED_SELECT_AI",
+        "FINANCE_SELECT_AI",
     ]
 
     active_only = service.export_select_ai_profiles_json(
@@ -428,6 +632,161 @@ def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> Non
     )
 
     assert [profile.name for profile in active_only.profiles] == ["FINANCE_SELECT_AI"]
+    assert adapter.list_calls == 0
+    assert adapter.detail_calls == []
+
+
+def test_select_ai_db_profile_upsert_submits_targeted_refresh_without_full_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _MutableSelectAiProfileAdapter()
+    service = _OracleRuntimeService(adapter)
+    monkeypatch.setattr(
+        service,
+        "_dispatch_select_ai_db_profile_refresh_job",
+        lambda _job_id: False,
+    )
+
+    result = service.upsert_select_ai_db_profile(
+        SelectAiDbProfileUpsertRequest(
+            profile_name="finance_select_ai",
+            attributes={"object_list": []},
+            confirmation="finance_select_ai",
+            reason="pytest",
+        )
+    )
+    adapter.detail_calls.clear()
+
+    assert result.executed is True
+    assert result.profile_list_refresh_job_id
+    assert result.profile_list_refresh_required is False
+    _run_db_profile_refresh(service, result.profile_list_refresh_job_id)
+
+    data = service.list_select_ai_db_profiles()
+    assert [profile.name for profile in data.profiles] == ["FINANCE_SELECT_AI"]
+    assert adapter.list_calls == 0
+    assert adapter.name_fetch_calls[-1] == {"FINANCE_SELECT_AI"}
+    assert adapter.detail_calls == ["FINANCE_SELECT_AI"]
+
+
+def test_select_ai_db_profile_drop_removes_only_target_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _MutableSelectAiProfileAdapter(
+        {
+            "KEEP_SELECT_AI": {"attributes": {"object_list": []}},
+            "DROP_SELECT_AI": {"attributes": {"object_list": []}},
+        }
+    )
+    service = _OracleRuntimeService(adapter)
+    _run_db_profile_refresh(service)
+    monkeypatch.setattr(
+        service,
+        "_dispatch_select_ai_db_profile_refresh_job",
+        lambda _job_id: False,
+    )
+    adapter.detail_calls.clear()
+    adapter.name_fetch_calls.clear()
+
+    result = service.drop_select_ai_db_profile(
+        "DROP_SELECT_AI",
+        confirmation="DROP_SELECT_AI",
+        reason="pytest",
+    )
+
+    assert result.executed is True
+    assert result.profile_list_refresh_job_id
+    _run_db_profile_refresh(service, result.profile_list_refresh_job_id)
+
+    data = service.list_select_ai_db_profiles()
+    assert [profile.name for profile in data.profiles] == ["KEEP_SELECT_AI"]
+    assert adapter.list_calls == 0
+    assert adapter.name_fetch_calls == [{"DROP_SELECT_AI"}]
+    assert adapter.detail_calls == []
+
+
+def test_select_ai_db_profile_rename_deletes_old_and_upserts_new(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _MutableSelectAiProfileAdapter(
+        {"OLD_SELECT_AI": {"attributes": {"object_list": []}}}
+    )
+    service = _OracleRuntimeService(adapter)
+    _run_db_profile_refresh(service)
+    monkeypatch.setattr(
+        service,
+        "_dispatch_select_ai_db_profile_refresh_job",
+        lambda _job_id: False,
+    )
+    adapter.detail_calls.clear()
+    adapter.name_fetch_calls.clear()
+
+    result = service.upsert_select_ai_db_profile(
+        SelectAiDbProfileUpsertRequest(
+            profile_name="NEW_SELECT_AI",
+            original_name="OLD_SELECT_AI",
+            attributes={"object_list": []},
+            confirmation="NEW_SELECT_AI",
+            reason="pytest",
+        )
+    )
+    adapter.detail_calls.clear()
+
+    assert result.executed is True
+    _run_db_profile_refresh(service, result.profile_list_refresh_job_id)
+
+    data = service.list_select_ai_db_profiles()
+    assert [profile.name for profile in data.profiles] == ["NEW_SELECT_AI"]
+    assert adapter.list_calls == 0
+    assert adapter.name_fetch_calls[-1] == {"OLD_SELECT_AI", "NEW_SELECT_AI"}
+    assert adapter.detail_calls == ["NEW_SELECT_AI"]
+
+
+def test_select_ai_db_profile_target_mismatch_keeps_old_read_model() -> None:
+    adapter = _MutableSelectAiProfileAdapter(
+        {"KEEP_SELECT_AI": {"attributes": {"object_list": []}}}
+    )
+    service = _OracleRuntimeService(adapter)
+    _run_db_profile_refresh(service)
+    adapter.detail_calls.clear()
+    adapter.name_fetch_calls.clear()
+
+    job = service.start_select_ai_db_profile_refresh_job(
+        dispatch=False,
+        mode=SelectAiDbProfileRefreshMode.TARGETED,
+        source="pytest",
+        target_profiles=[
+            SelectAiDbProfileRefreshTarget(
+                profile_name="KEEP_SELECT_AI",
+                expected_state="absent",
+            )
+        ],
+    )
+
+    assert service._run_select_ai_db_profile_refresh_job(job.job_id) is False  # noqa: SLF001
+    failed = service.get_select_ai_db_profile_refresh_job(job.job_id)
+    assert failed is not None
+    assert failed.status == "error"
+    assert failed.requires_full_refresh is True
+    assert failed.error_code == "profile_list_refresh_full_required"
+    assert [profile.name for profile in service.list_select_ai_db_profiles().profiles] == [
+        "KEEP_SELECT_AI"
+    ]
+    assert adapter.list_calls == 0
+    assert adapter.detail_calls == []
+
+
+def test_select_ai_db_profile_target_unresolved_requires_manual_refresh() -> None:
+    service = _OracleRuntimeService(_MutableSelectAiProfileAdapter())
+
+    sync = service._submit_select_ai_db_profile_list_refresh_after_mutation(  # noqa: SLF001
+        target_profiles=[],
+        source="pytest",
+    )
+
+    assert sync.job_id == ""
+    assert sync.required is True
+    assert sync.reason_code == "profile_list_refresh_target_unresolved"
 
 
 def test_statement_policy_view_ddl_and_data_dml() -> None:
@@ -548,6 +907,7 @@ def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
         )
     )
     assert missing_confirmation.statements[0].status == "confirmation_required"
+    assert missing_confirmation.execution_context == "admin_control_plane"
 
     requires_oracle = service.execute_db_admin_statements(
         DbAdminStatementsRequest(
@@ -557,7 +917,74 @@ def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
         )
     )
     assert requires_oracle.statements[0].status == "requires_oracle"
+    assert requires_oracle.execution_context == "admin_control_plane"
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in requires_oracle.warnings)
+
+
+def test_admin_sql_single_select_uses_data_plane_without_statement_executor() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="SELECT ID FROM T1",
+            row_limit=50,
+        )
+    )
+
+    assert len(adapter.select_calls) == 1
+    assert adapter.select_calls[0][1] == 50
+    assert adapter.calls == []
+    assert result.executed is True
+    assert result.committed is False
+    assert result.runtime == "oracle"
+    assert result.execution_context == "oracle_data_plane"
+    assert result.vpd_context_enforced is False
+    assert result.statements[0].status == "executed"
+
+
+def test_admin_sql_deepsec_select_error_fails_closed_without_control_fallback() -> None:
+    adapter = _FakeAdminSqlAdapter(
+        select_error=OracleAdapterError(
+            "DeepSec データ接続には認証済み application user が必要です。"
+        )
+    )
+    service = _OracleRuntimeService(adapter)
+    service._deepsec_enabled = True
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT ID FROM T1")
+    )
+
+    assert len(adapter.select_calls) == 1
+    assert adapter.calls == []
+    assert result.executed is False
+    assert result.committed is False
+    assert result.rolled_back is False
+    assert result.runtime == "oracle"
+    assert result.execution_context == "deepsec_data_plane"
+    assert result.vpd_context_enforced is True
+    assert result.statements[0].status == "error"
+    assert "認証済み application user" in result.statements[0].error_message
+
+
+def test_admin_sql_mixed_select_and_dml_stays_blocked_control_plane() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="SELECT ID FROM T1; UPDATE T1 SET ID = 2",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+    assert result.executed is False
+    assert result.execution_context == "admin_control_plane"
+    assert result.vpd_context_enforced is False
+    assert {item.status for item in result.statements} == {"blocked"}
 
 
 def test_statements_partial_success_commits_and_records_audit() -> None:
@@ -593,6 +1020,7 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
     assert result.executed is True
     assert result.committed is True
     assert result.rolled_back is False
+    assert result.execution_context == "admin_control_plane"
     assert any("部分的に成功" in warning for warning in result.warnings)
     assert any(
         item["operation"] == "db_admin_statements_table_ddl" for item in service._admin_audit
@@ -637,6 +1065,8 @@ def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
     assert result.executed is True
     assert result.committed is True
     assert result.rolled_back is False
+    assert result.execution_context == "admin_control_plane"
+    assert result.vpd_context_enforced is False
     assert any("部分的に成功しました(1/2 件)" in warning for warning in result.warnings)
     assert any(
         item["operation"] == "db_admin_statements_data_dml" for item in service._admin_audit
@@ -675,6 +1105,7 @@ def test_admin_sql_commits_when_all_data_dml_statements_succeed() -> None:
     assert result.executed is True
     assert result.committed is True
     assert result.rolled_back is False
+    assert result.execution_context == "admin_control_plane"
     assert result.warnings == []
 
 
@@ -710,6 +1141,7 @@ def test_admin_sql_rolls_back_when_all_data_dml_statements_fail() -> None:
     assert result.executed is False
     assert result.committed is False
     assert result.rolled_back is True
+    assert result.execution_context == "admin_control_plane"
 
 
 def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
@@ -744,6 +1176,7 @@ def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
     assert result.executed is False
     assert result.committed is False
     assert result.rolled_back is True
+    assert result.execution_context == "admin_control_plane"
     assert not any("部分的に成功" in warning for warning in result.warnings)
 
 
@@ -771,6 +1204,7 @@ def test_admin_sql_keeps_plsql_and_with_dml_atomic() -> None:
     assert plsql_adapter.calls[0][1] is True
     assert plsql_result.executed is True
     assert plsql_result.committed is True
+    assert plsql_result.execution_context == "admin_control_plane"
 
     with_dml_adapter = _FakeStatementsAdapter(
         [
@@ -802,6 +1236,7 @@ def test_admin_sql_keeps_plsql_and_with_dml_atomic() -> None:
     assert with_dml_adapter.calls == [([with_dml_sql], True)]
     assert with_dml_result.executed is True
     assert with_dml_result.committed is True
+    assert with_dml_result.execution_context == "admin_control_plane"
 
 
 def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
@@ -1058,6 +1493,99 @@ def test_drop_view_confirmation_and_requires_oracle() -> None:
         DbAdminDropViewRequest(view_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
     )
     assert requires_oracle.statements[0].status == "requires_oracle"
+
+
+def test_truncate_table_requires_target_confirmation_and_oracle() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    missing = service.truncate_db_admin_table(DbAdminTruncateTableRequest(table_name="INVOICES"))
+    assert missing.executed is False
+    assert missing.statements[0].status == "confirmation_required"
+    assert missing.statements[0].statement_type == "TRUNCATE"
+    assert 'TRUNCATE TABLE "INVOICES"' in missing.statements[0].sql
+
+    admin_execute = service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(table_name="INVOICES", confirmation="ADMIN_EXECUTE")
+    )
+    assert admin_execute.executed is False
+    assert admin_execute.statements[0].status == "confirmation_required"
+    assert any("ADMIN_EXECUTE では代替できません" in warning for warning in admin_execute.warnings)
+
+    requires_oracle = service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(table_name="INVOICES", confirmation="INVOICES")
+    )
+    assert requires_oracle.executed is False
+    assert requires_oracle.statements[0].status == "requires_oracle"
+    assert requires_oracle.statements[0].sql == 'TRUNCATE TABLE "INVOICES"'
+
+
+def test_truncate_table_executes_quoted_statement_in_oracle_runtime() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "TRUNCATE",
+                "status": "success",
+                "sql": 'TRUNCATE TABLE "INVOICES"',
+                "row_count": 0,
+                "message": "OK",
+                "elapsed_ms": 1,
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(
+            table_name="INVOICES",
+            confirmation="INVOICES",
+            reason="ui-data-management-truncate",
+        )
+    )
+
+    assert result.executed is True
+    assert result.committed is True
+    assert adapter.calls == [(['TRUNCATE TABLE "INVOICES"'], False)]
+
+
+def test_truncate_table_blocks_catalog_views_and_invalid_names() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="V_EMP_DEPT",
+                logical_name="社員部署ビュー",
+                table_type="view",
+            )
+        ],
+    )
+
+    view = service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(table_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
+    )
+    assert view.executed is False
+    assert view.statements[0].status == "blocked"
+    assert any("ビューは TRUNCATE できません" in warning for warning in view.warnings)
+
+    adapter = _FakeObjectTypeAdapter("VIEW")
+    oracle_service = _OracleRuntimeService(adapter)
+    oracle_service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[],
+    )
+    oracle_view = oracle_service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(table_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
+    )
+    assert oracle_view.executed is False
+    assert oracle_view.statements[0].status == "blocked"
+    assert adapter.object_type_calls == ["V_EMP_DEPT"]
+    assert adapter.calls == []
+
+    with pytest.raises(ValueError):
+        service.truncate_db_admin_table(
+            DbAdminTruncateTableRequest(table_name='INVOICES"; DROP TABLE USERS --')
+        )
 
 
 def test_preview_data_builds_guarded_select() -> None:
@@ -1530,6 +2058,48 @@ def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
     )
     assert admin_confirmation.executed is False
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in admin_confirmation.warnings)
+
+
+def test_import_tabular_create_submits_targeted_schema_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ImportAdapter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def import_tabular_table(self, **kwargs: Any) -> None:
+            self.calls.append(kwargs)
+
+    adapter = ImportAdapter()
+    service = _OracleRuntimeService(adapter)
+    submitted_targets: list[list[tuple[str, str, str]]] = []
+
+    def submit(**kwargs: Any) -> SchemaRefreshMutationSync:
+        submitted_targets.append(
+            [
+                (target.owner, target.object_name, target.expected_state)
+                for target in kwargs["target_objects"]
+            ]
+        )
+        return SchemaRefreshMutationSync(job_id="targeted-import-refresh")
+
+    monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,青山商事\n".encode()).decode()
+    result = service.import_db_admin_tabular(
+        DbAdminImportTabularRequest(
+            table_name="IMPORTED_ORDERS",
+            content_base64=content_base64,
+            filename="orders.csv",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.schema_refresh_job_id == "targeted-import-refresh"
+    assert result.schema_refresh_required is False
+    assert submitted_targets == [[("ADMIN", "IMPORTED_ORDERS", "present")]]
+    assert adapter.calls[0]["table_name"] == "IMPORTED_ORDERS"
 
 
 def test_import_tabular_infers_explicit_char_semantics_for_japanese() -> None:
@@ -2017,7 +2587,6 @@ def test_extract_join_where_unconfigured_keeps_selected_prompt_profile() -> None
 def test_named_target_confirmation_rejects_admin_execute_master_word() -> None:
     """対象名確認を要求する操作は ADMIN_EXECUTE では迂回できない。"""
     from app.features.nl2sql.models import (
-        DbAdminDropTableRequest,
         SyntheticDataGenerateRequest,
     )
 

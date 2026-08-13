@@ -15,12 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  SETTINGS_DETAIL_GRID_CLASS,
-  SettingsSupplementalPanels,
-  formatSettingsEnvValue,
-} from "@/components/settings/SettingsPreviewPanels";
+import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels, formatSettingsEnvValue } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   type UploadStorageBackend,
@@ -29,10 +26,7 @@ import {
 } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import {
-  useUpdateUploadStorageSettings,
-  useUploadStorageSettings,
-} from "@/lib/queries";
+import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/queries";
 import { readStoredOciSettingsDraft } from "@/lib/oci-settings";
 import { cn } from "@/lib/utils";
 
@@ -161,6 +155,7 @@ export function UploadStorageSettingsClient() {
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
+              <RequiredFieldsNote />
               <fieldset className="space-y-3">
                 <legend className="text-sm font-medium text-foreground">
                   {t("settings.uploadStorage.field.backend")}
@@ -196,6 +191,7 @@ export function UploadStorageSettingsClient() {
                   helper={t("settings.uploadStorage.helper.localStorageDir")}
                   placeholder={DEFAULT_LOCAL_STORAGE_DIR}
                   error={errors.localStorageDir}
+                  required
                 />
               ) : (
                 <div className="max-w-xl">
@@ -207,6 +203,7 @@ export function UploadStorageSettingsClient() {
                     helper={t("settings.uploadStorage.helper.objectStorageBucket")}
                     placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
                     error={errors.objectStorageBucket}
+                    required
                   />
                   <FieldError
                     id="uploadStorage-objectStorageNamespace-error"
@@ -296,6 +293,7 @@ function TextField({
   helper,
   placeholder,
   error,
+  required = false,
 }: {
   id: string;
   label: string;
@@ -304,19 +302,20 @@ function TextField({
   helper: string;
   placeholder: string;
   error?: string;
+  required?: boolean;
 }) {
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
-        {label}
-      </label>
+      <FieldLabel htmlFor={id} label={label} required={required} />
       <input
         id={id}
         type="text"
         value={value}
+        required={required}
+        aria-required={required}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         aria-invalid={Boolean(error)}

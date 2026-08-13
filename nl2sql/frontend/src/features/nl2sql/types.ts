@@ -188,13 +188,29 @@ export interface SchemaObjectDetail {
 }
 
 export type SchemaRefreshJobStatus = "pending" | "running" | "done" | "error";
+export type SchemaRefreshJobMode = "full" | "targeted";
+
+export interface SchemaRefreshTargetObject {
+  owner: string;
+  object_name: string;
+  object_type?: "table" | "view" | "materialized_view" | "unknown";
+  expected_state?: "present" | "absent" | "unknown";
+}
 
 export interface SchemaRefreshJob {
   job_id: string;
   status: SchemaRefreshJobStatus;
+  mode?: SchemaRefreshJobMode;
+  source?: string;
+  target_objects?: SchemaRefreshTargetObject[];
+  requires_full_refresh?: boolean;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  worker_id?: string;
+  heartbeat_at?: string | null;
+  lease_expires_at?: string | null;
+  attempt?: number;
   phase?: "queued" | "scanning" | "fetching" | "persisting" | "done";
   processed_objects?: number;
   total_objects?: number;
@@ -764,6 +780,8 @@ export interface CommentApplyData {
   runtime: string;
   statements: CommentApplyStatement[];
   schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -803,6 +821,8 @@ export interface AnnotationApplyData {
   runtime: string;
   statements: AnnotationApplyStatement[];
   schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -868,6 +888,9 @@ export interface AssetCleanupData {
   warning: string;
   asset_names: Record<string, string>;
   engine_meta: Record<string, unknown>;
+  profile_list_refresh_job_id?: string;
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
 }
 
 export interface DbAdminObjectSummary {
@@ -919,11 +942,19 @@ export interface DbAdminStatementResult {
 export interface DbAdminExecuteData {
   executed: boolean;
   runtime: string;
+  execution_context?:
+    | "deterministic"
+    | "oracle_data_plane"
+    | "deepsec_data_plane"
+    | "admin_control_plane";
+  vpd_context_enforced?: boolean;
   select_result?: QueryResults | null;
   statements: DbAdminStatementResult[];
   committed: boolean;
   rolled_back: boolean;
   schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -948,6 +979,8 @@ export interface SampleDataMutationData {
   warnings: string[];
   profile_id: string;
   schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
   timing: TimingEnvelope;
 }
 
@@ -962,6 +995,8 @@ export interface DbAdminImportTabularData {
   ddl: string;
   insert_sql: string;
   schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
   warnings: string[];
   sample_rows: Array<Record<string, string | null>>;
   timing: TimingEnvelope;
@@ -1077,6 +1112,37 @@ export interface SelectAiDbProfileDetailData {
   warnings: string[];
 }
 
+export type SelectAiDbProfileRefreshMode = "full" | "targeted";
+
+export type SelectAiDbProfileRefreshStatus = "pending" | "running" | "done" | "error";
+
+export type SelectAiDbProfileRefreshPhase = "queued" | "fetching" | "persisting" | "done";
+
+export interface SelectAiDbProfileRefreshTarget {
+  profile_name: string;
+  expected_state: "present" | "absent" | "unknown";
+}
+
+export interface SelectAiDbProfileRefreshJobData {
+  job_id: string;
+  status: SelectAiDbProfileRefreshStatus;
+  mode: SelectAiDbProfileRefreshMode;
+  source: string;
+  target_profiles: SelectAiDbProfileRefreshTarget[];
+  requires_full_refresh: boolean;
+  phase: SelectAiDbProfileRefreshPhase;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_profiles: number;
+  processed_profiles: number;
+  scanned_profiles: number;
+  changed_profiles: number;
+  deleted_profiles: number;
+  error_code: string;
+  error_message: string;
+}
+
 export interface SelectAiDbProfileMutationData {
   runtime: string;
   executed: boolean;
@@ -1087,6 +1153,9 @@ export interface SelectAiDbProfileMutationData {
   profile?: SelectAiDbProfile | null;
   warnings: string[];
   engine_meta: Record<string, unknown>;
+  profile_list_refresh_job_id?: string;
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
 }
 
 export interface SelectAiProfilesExportData {
@@ -1194,7 +1263,6 @@ export interface AgentPrivilegeCheckData {
 }
 
 export interface SyntheticDataOperationData {
-  operation_id: string;
   table_name: string;
   object_list?: string[];
   row_count: number;
@@ -1205,15 +1273,6 @@ export interface SyntheticDataOperationData {
   warnings: string[];
   engine_meta: Record<string, unknown>;
   timing: TimingEnvelope;
-}
-
-export interface SyntheticDataOperationStatusData {
-  operation_id: string;
-  runtime: string;
-  status: string;
-  message: string;
-  result: Record<string, unknown>;
-  warnings: string[];
 }
 
 export interface SyntheticDataResultsData {

@@ -26,13 +26,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  SETTINGS_DETAIL_GRID_CLASS,
-  SettingsSupplementalPanels,
-  formatSettingsEnvValue,
-} from "@/components/settings/SettingsPreviewPanels";
+import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels, formatSettingsEnvValue } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   type AdbInfoData,
@@ -265,6 +262,7 @@ export function DatabaseSettingsClient() {
             </CardHeader>
 
             <CardContent className="space-y-5 p-6">
+              <RequiredFieldsNote />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <TextField
                   id="oracle-user"
@@ -757,6 +755,8 @@ function TextField({
         id={id}
         type="text"
         value={value}
+        required={required}
+        aria-required={required}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         aria-invalid={Boolean(error)}
@@ -864,16 +864,7 @@ function RequiredLabel({
   label: string;
   required?: boolean;
 }) {
-  return (
-    <label htmlFor={id} className="text-sm font-medium text-foreground">
-      {label}
-      {required ? (
-        <span aria-hidden="true" className="ml-0.5">
-          *
-        </span>
-      ) : null}
-    </label>
-  );
+  return <FieldLabel htmlFor={id} label={label} required={required} />;
 }
 
 function WalletUploadField({

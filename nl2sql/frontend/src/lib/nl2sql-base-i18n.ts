@@ -22,6 +22,12 @@ export const ja = {
   "common.action.copyFailed": "コピーできませんでした。ブラウザのクリップボード権限を確認して再試行してください。",
   "common.action.downloaded": "ファイルをダウンロードしました。",
   "common.action.downloadFailed": "ファイルをダウンロードできませんでした。ブラウザのダウンロード設定を確認して再試行してください。",
+  "common.selection.selectAll": "すべて選択",
+  "common.selection.selectVisible": "表示中をすべて選択",
+  "common.selection.clearAll": "すべて解除",
+  "common.selection.clearVisible": "表示中の選択を解除",
+  "common.selection.selectGroup": "{name} をすべて選択",
+  "common.selection.clearGroup": "{name} の選択を解除",
   "common.degraded.title": "データベースに接続できません",
   "common.degraded.fallback":
     "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
@@ -57,6 +63,7 @@ export const ja = {
   "common.undo": "元に戻す",
   "common.retry": "再試行",
   "common.required": "必須",
+  "common.requiredFieldsNote": "は必須入力項目です。",
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 

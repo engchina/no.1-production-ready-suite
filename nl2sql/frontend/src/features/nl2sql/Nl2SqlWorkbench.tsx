@@ -1,13 +1,29 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, ChevronDown, Database, Eye, History, Network, Play, RefreshCw, RotateCcw, Sparkles, UserCog, Wand2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  BookOpenText,
+  ChevronDown,
+  Database,
+  Eye,
+  History,
+  Network,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  UserCog,
+  Wand2,
+} from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import {
-  Banner,
-  Button,
-  StatusBadge,
-  toast,
-} from "@engchina/production-ready-ui";
+import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { PageHeader } from "@/components/PageHeader";
@@ -1380,6 +1396,7 @@ function ExecutableNl2SqlWorkbench() {
             }
             placement="result"
             testId="nl2sql-foreground-processing"
+            activityIcon="none"
           />
         ) : null}
 

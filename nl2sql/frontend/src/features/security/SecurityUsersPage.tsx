@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ArrowLeft,
   KeyRound,
@@ -13,7 +20,6 @@ import {
 
 import {
   Banner,
-  Button,
   EmptyState,
   FormStatus,
   StatusBadge,
@@ -27,6 +33,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FieldLabel, FieldLegend, RequiredFieldsNote } from "@/components/ui/required-field";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -48,14 +55,14 @@ type UserPanelView = "list" | "create" | "edit";
 interface UserDraftState {
   loginName: string;
   displayName: string;
-  roleIds: string[];
+  selectedRoleId: string;
   temporaryPassword: string;
 }
 
 const EMPTY_DRAFT: UserDraftState = {
   loginName: "",
   displayName: "",
-  roleIds: [],
+  selectedRoleId: "",
   temporaryPassword: "",
 };
 
@@ -115,12 +122,16 @@ export function SecurityUsersPage() {
   const isSystemAdminRole = (role: SecurityRole) =>
     role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
   const isSystemAdminRoleDisabled = (role: SecurityRole) =>
-    isSystemAdminRole(role) && !canAssignSystemAdmin && !draft.roleIds.includes(role.role_id);
+    isSystemAdminRole(role) && !canAssignSystemAdmin && draft.selectedRoleId !== role.role_id;
   const systemAdminRoleHint = (role: SecurityRole) => {
     if (!isSystemAdminRole(role) || canAssignSystemAdmin) return "";
-    return draft.roleIds.includes(role.role_id)
+    return draft.selectedRoleId === role.role_id
       ? t("security.users.systemAdminLegacyNotice")
       : t("security.users.systemAdminBootstrapOnly");
+  };
+  const selectKnownRoleId = (roleIds: string[]) => {
+    const availableRoleIds = new Set(roles.map((role) => role.role_id));
+    return roleIds.find((roleId) => availableRoleIds.has(roleId)) ?? "";
   };
 
   const filteredUsers = useMemo(() => {
@@ -204,7 +215,7 @@ export function SecurityUsersPage() {
     setDraft({
       loginName: user.login_name,
       displayName: user.display_name,
-      roleIds: user.role_ids,
+      selectedRoleId: selectKnownRoleId(user.role_ids),
       temporaryPassword: "",
     });
     setFormError("");
@@ -220,26 +231,35 @@ export function SecurityUsersPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setBusy(true);
     setFormError("");
     setOneTimePassword("");
+    if (!draft.selectedRoleId) {
+      setFormError(t("security.users.roleRequired"));
+      return;
+    }
+    const selectedRoleIds = [draft.selectedRoleId];
+    setBusy(true);
     try {
       if (activeView === "edit") {
         if (!editingUser) return;
         const updated = await securityApi.updateUser({
           ...editingUser,
           display_name: draft.displayName,
-          role_ids: draft.roleIds,
+          role_ids: selectedRoleIds,
         });
         setUsers((rows) => rows.map((row) => (row.user_id === updated.user_id ? updated : row)));
         setSelectedId(updated.user_id);
-        setDraft((current) => ({ ...current, displayName: updated.display_name, roleIds: updated.role_ids }));
+        setDraft((current) => ({
+          ...current,
+          displayName: updated.display_name,
+          selectedRoleId: selectKnownRoleId(updated.role_ids),
+        }));
         toast.success(t("security.common.saved"));
       } else {
         const created = await securityApi.createUser({
           login_name: draft.loginName,
           display_name: draft.displayName,
-          role_ids: draft.roleIds,
+          role_ids: selectedRoleIds,
           temporary_password: draft.temporaryPassword || undefined,
         });
         setUsers((rows) => [...rows, created.user]);
@@ -250,7 +270,7 @@ export function SecurityUsersPage() {
         setDraft({
           loginName: created.user.login_name,
           displayName: created.user.display_name,
-          roleIds: created.user.role_ids,
+          selectedRoleId: selectKnownRoleId(created.user.role_ids),
           temporaryPassword: "",
         });
         toast.success(t("security.common.saved"));
@@ -346,14 +366,10 @@ export function SecurityUsersPage() {
         ]
       : [];
 
-  const toggleRole = (roleId: string) => {
+  const selectRole = (roleId: string) => {
     setDraft((current) => ({
       ...current,
-      roleIds: current.roleIds.includes(roleId)
-        ? current.roleIds.filter((id) => id !== roleId)
-        : roleId === systemAdminRoleId && !canAssignSystemAdmin
-          ? current.roleIds
-          : [...current.roleIds, roleId],
+      selectedRoleId: roleId,
     }));
   };
 
@@ -486,6 +502,7 @@ export function SecurityUsersPage() {
                     operationKey="security-users-load"
                     placement="panel"
                     testId="security-users-loading"
+                    activityIcon="none"
                   />
                 ) : null}
                 <MasterDetailDataTable
@@ -532,6 +549,7 @@ export function SecurityUsersPage() {
                 headingId="security-users-form-heading"
               />
               <form className="grid gap-4" onSubmit={handleSubmit} aria-labelledby="security-users-form-heading">
+                <RequiredFieldsNote />
                 {oneTimePassword ? (
                   <Banner severity="warning" title={t("security.users.oneTimePassword")}>
                     <code className="mt-2 block select-all break-all rounded bg-background p-2 font-mono text-sm">
@@ -540,9 +558,10 @@ export function SecurityUsersPage() {
                   </Banner>
                 ) : null}
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    <span>{t("security.users.loginName")}</span>
+                  <div className="grid gap-1.5 text-sm font-medium">
+                    <FieldLabel htmlFor="security-user-login-name" label={t("security.users.loginName")} required />
                     <input
+                      id="security-user-login-name"
                       required
                       disabled={activeView === "edit"}
                       className={INPUT_CLASS}
@@ -550,16 +569,17 @@ export function SecurityUsersPage() {
                       value={draft.loginName}
                       onChange={(event) => setDraft((current) => ({ ...current, loginName: event.target.value }))}
                     />
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    <span>{t("security.users.displayName")}</span>
+                  </div>
+                  <div className="grid gap-1.5 text-sm font-medium">
+                    <FieldLabel htmlFor="security-user-display-name" label={t("security.users.displayName")} required />
                     <input
+                      id="security-user-display-name"
                       required
                       className={INPUT_CLASS}
                       value={draft.displayName}
                       onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
                     />
-                  </label>
+                  </div>
                 </div>
                 {activeView === "create" ? (
                   <label className="grid gap-1.5 text-sm font-medium">
@@ -574,30 +594,40 @@ export function SecurityUsersPage() {
                   </label>
                 ) : null}
                 <fieldset className="grid gap-2">
-                  <legend className="text-sm font-semibold">{t("security.users.roles")}</legend>
+                  <FieldLegend id="security-users-role-legend" required>{t("security.users.roles")}</FieldLegend>
                   {roles.length === 0 ? (
                     <p className="text-sm text-muted">{t("security.users.noRole")}</p>
                   ) : (
-                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    <div
+                      className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+                      role="radiogroup"
+                      aria-labelledby="security-users-role-legend"
+                      aria-required="true"
+                    >
                       {roles.map((role) => {
                         const disabled = isSystemAdminRoleDisabled(role);
                         const hint = systemAdminRoleHint(role);
+                        const selected = draft.selectedRoleId === role.role_id;
                         return (
                           <label
                             key={role.role_id}
                             className={cn(
-                              "flex min-h-11 items-start gap-2 rounded-md border border-border p-2.5 text-sm",
+                              "flex min-h-11 items-start gap-2 rounded-md border p-2.5 text-sm transition-colors",
                               disabled
                                 ? "cursor-not-allowed bg-muted/20 text-muted"
-                                : "cursor-pointer hover:bg-background"
+                                : selected
+                                  ? "cursor-pointer border-primary bg-info-bg/40"
+                                  : "cursor-pointer border-border hover:bg-background"
                             )}
                           >
                             <input
                               className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
-                              type="checkbox"
-                              checked={draft.roleIds.includes(role.role_id)}
+                              type="radio"
+                              name="security-users-role"
+                              value={role.role_id}
+                              checked={selected}
                               disabled={disabled}
-                              onChange={() => toggleRole(role.role_id)}
+                              onChange={() => selectRole(role.role_id)}
                             />
                             <span className="min-w-0">
                               <span className="block break-words font-medium">{role.display_name}</span>

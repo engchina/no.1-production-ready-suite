@@ -21,6 +21,10 @@ class TabularFileReadError(ValueError):
     """利用者がファイルを差し替えることで回復できる workbook 読取エラー。"""
 
 
+class TabularSheetSelectionError(ValueError):
+    """利用者が Sheet 名を修正することで回復できる workbook 選択エラー。"""
+
+
 @dataclass(frozen=True)
 class TabularSheet:
     title: str
@@ -122,19 +126,39 @@ def read_workbook_sheets(filename: str, content: bytes) -> list[TabularSheet]:
 def select_workbook_sheet(
     sheets: list[TabularSheet],
     requested_name: str = "",
+    *,
+    require_requested_name: bool = False,
 ) -> tuple[TabularSheet, list[str]]:
     """指定 Sheet、または reader が示す active/先頭 Sheet を返す。"""
 
     warnings: list[str] = []
+    if require_requested_name and not requested_name.strip():
+        available = _available_sheet_names_message(sheets)
+        raise TabularSheetSelectionError(
+            "Excel workbook の Sheet 名は必須です。"
+            f"Sheet 名を入力して再試行してください。{available}"
+        )
     if requested_name:
         selected = next((sheet for sheet in sheets if sheet.title == requested_name), None)
         if selected is not None:
             return selected, warnings
+        if require_requested_name:
+            available = _available_sheet_names_message(sheets)
+            raise TabularSheetSelectionError(
+                f"{requested_name}: Sheet が見つかりません。"
+                "Sheet 名を修正するか、ファイル内の Sheet 名を確認して"
+                f"再試行してください。{available}"
+            )
         warnings.append(
             f"{requested_name}: Sheet が見つからないため active または先頭 Sheet を使用しました。"
         )
     selected = next((sheet for sheet in sheets if sheet.active), sheets[0])
     return selected, warnings
+
+
+def _available_sheet_names_message(sheets: list[TabularSheet]) -> str:
+    sheet_names = "、".join(sheet.title for sheet in sheets)
+    return f"利用可能な Sheet: {sheet_names}。" if sheet_names else ""
 
 
 def normalize_workbook_scalar(value: Any) -> str:

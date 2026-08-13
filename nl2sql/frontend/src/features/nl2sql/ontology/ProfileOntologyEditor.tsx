@@ -1,9 +1,15 @@
-import { CheckCircle2, Network, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  CheckCircle2,
+  Network,
+  RefreshCw,
+  Save,
+  SlidersHorizontal,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,

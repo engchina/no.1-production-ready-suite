@@ -34,6 +34,8 @@ from .models import (
     SchemaObjectSummary,
     SchemaRefreshJob,
     SchemaRefreshJobStatus,
+    SchemaRefreshMode,
+    SchemaRefreshTargetObject,
     SchemaTable,
     SchemaViewDependency,
 )
@@ -76,6 +78,57 @@ def _canonical_json(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
         default=str,
+    )
+
+
+def _merge_refresh_targets(
+    left: Sequence[SchemaRefreshTargetObject],
+    right: Sequence[SchemaRefreshTargetObject],
+) -> list[SchemaRefreshTargetObject]:
+    merged: dict[tuple[str, str], SchemaRefreshTargetObject] = {}
+    for target in [*left, *right]:
+        key = (target.owner.upper(), target.object_name.upper())
+        current = merged.get(key)
+        if current is None:
+            merged[key] = target.model_copy(update={"owner": key[0], "object_name": key[1]})
+            continue
+        expected_state = current.expected_state
+        if target.expected_state != "unknown":
+            expected_state = target.expected_state
+        object_type = current.object_type
+        if target.object_type != "unknown":
+            object_type = target.object_type
+        merged[key] = current.model_copy(
+            update={"object_type": object_type, "expected_state": expected_state}
+        )
+    return list(merged.values())
+
+
+def _coalesce_pending_refresh_job(
+    active: SchemaRefreshJob,
+    candidate: SchemaRefreshJob,
+) -> SchemaRefreshJob:
+    if active.status != SchemaRefreshJobStatus.PENDING:
+        return active
+    if active.mode == SchemaRefreshMode.FULL:
+        return active
+    if candidate.mode == SchemaRefreshMode.FULL:
+        return active.model_copy(
+            update={
+                "mode": SchemaRefreshMode.FULL,
+                "source": candidate.source,
+                "target_objects": [],
+                "requires_full_refresh": False,
+            }
+        )
+    return active.model_copy(
+        update={
+            "target_objects": _merge_refresh_targets(
+                active.target_objects,
+                candidate.target_objects,
+            ),
+            "source": active.source if active.source == candidate.source else "coalesced",
+        }
     )
 
 
@@ -646,9 +699,10 @@ class MemoryIncrementalNl2SqlRepository:
                 in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
             ]
             if active:
-                return min(
-                    active, key=lambda item: (item.created_at, item.job_id)
-                ).model_copy(deep=True)
+                current = min(active, key=lambda item: (item.created_at, item.job_id))
+                coalesced = _coalesce_pending_refresh_job(current, job)
+                self._refresh_jobs[coalesced.job_id] = coalesced.model_copy(deep=True)
+                return coalesced.model_copy(deep=True)
             self._refresh_jobs[job.job_id] = job.model_copy(deep=True)
             return job.model_copy(deep=True)
 
@@ -1474,9 +1528,23 @@ class OracleIncrementalNl2SqlRepository:
                 row = cursor.fetchone()
                 if row is not None:
                     active = SchemaRefreshJob.model_validate_json(_read_lob(row[0]))
+                    coalesced = _coalesce_pending_refresh_job(active, job)
+                    if coalesced != active:
+                        cursor.execute(
+                            "UPDATE NL2SQL_SCHEMA_REFRESH_JOBS SET STATUS = :status, "
+                            "PAYLOAD_JSON = :payload, UPDATED_AT = SYSTIMESTAMP "
+                            "WHERE JOB_ID = :job_id",
+                            {
+                                "job_id": coalesced.job_id,
+                                "status": coalesced.status.value,
+                                "payload": _canonical_json(
+                                    coalesced.model_dump(mode="json")
+                                ),
+                            },
+                        )
                     connection.commit()
                     record_repository("schema_refresh_submit", statements=2, rows=1)
-                    return active
+                    return coalesced
                 cursor.execute(
                     "INSERT INTO NL2SQL_SCHEMA_REFRESH_JOBS "
                     "(JOB_ID, STATUS, PAYLOAD_JSON) VALUES (:job_id, :status, :payload)",

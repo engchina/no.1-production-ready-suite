@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -14,13 +14,10 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import {
-  Button,
-  EmptyState,
-  StatusBadge,
-  toast,
-} from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
 import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader } from "@/components/PageHeader";
@@ -30,9 +27,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useSchemaOwners } from "@/lib/queries";
-import {
-  ExecutionConfirmationField,
-} from "../components/DbAdminShared";
+import { ExecutionConfirmationField } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
@@ -49,7 +44,9 @@ import {
   useSchemaCatalogHead,
   useSchemaObjects,
   useSchemaRefreshJob,
+  useSelectAiDbProfileRefreshJob,
   useStartSchemaRefresh,
+  useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
@@ -63,12 +60,16 @@ import type {
   SchemaObjectSummary,
   SchemaTable,
   SelectAiDbProfileMutationData,
+  SelectAiDbProfileRefreshJobData,
   SelectAiDbProfilesData,
 } from "../types";
 
 type ActiveView = "list" | "editor";
 type SortKey = "name" | "tables" | "views";
 type SortDirection = "asc" | "desc";
+
+const SELECT_AI_MAX_TOKENS_MIN = 4096;
+const SELECT_AI_MAX_TOKENS_MAX = 32000;
 
 function filterProfileObjects(objects: SchemaTable[], query: string) {
   const normalized = query.trim().toLowerCase();
@@ -104,7 +105,7 @@ const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   region: "us-chicago-1",
   model: "xai.grok-4.3",
   embedding_model: "cohere.embed-v4.0",
-  max_tokens: 32000,
+  max_tokens: SELECT_AI_MAX_TOKENS_MAX,
   enforce_object_list: true,
   comments: true,
   annotations: false,
@@ -190,11 +191,34 @@ function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   return [base, ...additions].filter(Boolean).join("\n");
 }
 
+function normalizeSelectAiMaxTokens(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return SELECT_AI_MAX_TOKENS_MAX;
+  return Math.min(SELECT_AI_MAX_TOKENS_MAX, Math.max(SELECT_AI_MAX_TOKENS_MIN, Math.trunc(numeric)));
+}
+
+function parseMaxTokensInput(value: string) {
+  const numeric = Number(value);
+  return value.trim() && Number.isFinite(numeric) ? numeric : SELECT_AI_MAX_TOKENS_MAX;
+}
+
+function schemaObjectQueryTotal(
+  pages: Array<{ total: number | null }> | undefined,
+  loadedCount: number
+) {
+  const total = pages?.[0]?.total;
+  return typeof total === "number" ? Math.max(total, loadedCount) : loadedCount;
+}
+
 function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
+  const selectAiConfig = { ...DEFAULT_SELECT_AI_CONFIG, ...(profile.select_ai_config ?? {}) };
   return {
     ...profile,
     allowed_views: profile.allowed_views ?? [],
-    select_ai_config: { ...DEFAULT_SELECT_AI_CONFIG, ...(profile.select_ai_config ?? {}) },
+    select_ai_config: {
+      ...selectAiConfig,
+      max_tokens: normalizeSelectAiMaxTokens(selectAiConfig.max_tokens),
+    },
   };
 }
 
@@ -234,7 +258,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
       region: form.selectAiConfig.region.trim(),
       model: form.selectAiConfig.model.trim(),
       embedding_model: form.selectAiConfig.embedding_model.trim() || "cohere.embed-v4.0",
-      max_tokens: Number(form.selectAiConfig.max_tokens) || 32000,
+      max_tokens: normalizeSelectAiMaxTokens(form.selectAiConfig.max_tokens),
       role: form.selectAiConfig.role.trim(),
       additional_instructions: form.selectAiConfig.additional_instructions.trim(),
     },
@@ -484,10 +508,12 @@ function SelectAiConfigFields({
           <span>{t("profiles.field.maxTokens")}</span>
           <input
             type="number"
-            min={1}
-            max={128000}
+            min={SELECT_AI_MAX_TOKENS_MIN}
+            max={SELECT_AI_MAX_TOKENS_MAX}
+            step={1}
             value={form.selectAiConfig.max_tokens}
-            onChange={(event) => updateSelectAiConfig(setForm, { max_tokens: Number(event.currentTarget.value) || 32000 })}
+            onChange={(event) => updateSelectAiConfig(setForm, { max_tokens: parseMaxTokensInput(event.currentTarget.value) })}
+            onBlur={(event) => updateSelectAiConfig(setForm, { max_tokens: normalizeSelectAiMaxTokens(event.currentTarget.value) })}
             className={inputClass}
           />
         </label>
@@ -655,6 +681,7 @@ function VirtualizedSchemaOptions({
 function SchemaGroupedSelectionPanel({
   title,
   objects,
+  totalCount,
   selectedItems,
   dataTestId,
   emptyTitle,
@@ -669,6 +696,7 @@ function SchemaGroupedSelectionPanel({
 }: {
   title: string;
   objects: SchemaTable[];
+  totalCount: number;
   selectedItems: string[];
   dataTestId: string;
   emptyTitle: string;
@@ -701,7 +729,14 @@ function SchemaGroupedSelectionPanel({
         ),
       }));
   }, [objects]);
-  const totalCount = Object.values(ownerTotals).reduce((total, count) => total + count, 0) || objects.length;
+  const toggleSchemaSelection = async (owner: string, select: boolean) => {
+    setSchemaSelectionOwner(owner);
+    try {
+      await onToggleSchema(owner, select);
+    } finally {
+      setSchemaSelectionOwner("");
+    }
+  };
 
   return (
     <section
@@ -734,13 +769,14 @@ function SchemaGroupedSelectionPanel({
             ).length;
             const total = ownerTotals[owner] ?? entries.length;
             const allSelected = total > 0 && selectedCount >= total;
+            const noneSelected = selectedCount === 0;
             return (
               <section
                 key={owner}
                 className="rounded-md border border-border bg-background"
                 aria-label={t("profiles.objects.schemaGroup", { owner })}
               >
-                <div className="flex min-h-11 items-center gap-2 border-b border-border bg-muted/15 px-2.5">
+                <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border bg-muted/15 px-2.5 py-1.5">
                   <span className="rounded border border-border bg-card px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
                     {owner}
                   </span>
@@ -750,27 +786,19 @@ function SchemaGroupedSelectionPanel({
                       total,
                     })}
                   </span>
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={allSelected}
-                    aria-busy={schemaSelectionOwner === owner}
-                    aria-label={t("profiles.objects.selectSchema", { owner })}
-                    disabled={Boolean(schemaSelectionOwner)}
-                    className="ml-auto min-h-11 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-wait disabled:opacity-60"
-                    onClick={async () => {
-                      setSchemaSelectionOwner(owner);
-                      try {
-                        await onToggleSchema(owner, !allSelected);
-                      } finally {
-                        setSchemaSelectionOwner("");
-                      }
-                    }}
-                  >
-                    {allSelected
-                      ? t("profiles.objects.clearSchema")
-                      : t("profiles.objects.selectSchemaAction")}
-                  </button>
+                  <BulkSelectionActions
+                    className="ml-auto justify-end"
+                    selectLabel={t("profiles.objects.selectSchemaAction")}
+                    clearLabel={t("profiles.objects.clearSchema")}
+                    selectAriaLabel={t("common.selection.selectGroup", { name: owner })}
+                    clearAriaLabel={t("common.selection.clearGroup", { name: owner })}
+                    selectDisabled={allSelected || Boolean(schemaSelectionOwner)}
+                    clearDisabled={noneSelected || Boolean(schemaSelectionOwner)}
+                    busy={schemaSelectionOwner === owner}
+                    dataTestId={`${dataTestId}-${owner.toLowerCase()}-schema-bulk-actions`}
+                    onSelectAll={() => void toggleSchemaSelection(owner, true)}
+                    onClearAll={() => void toggleSchemaSelection(owner, false)}
+                  />
                 </div>
                 {entries.length > 50 ? (
                   <VirtualizedSchemaOptions
@@ -817,6 +845,8 @@ function ProfileEditor({
   form,
   tableObjects,
   viewObjects,
+  tableObjectTotal,
+  viewObjectTotal,
   tableOwnerTotals,
   viewOwnerTotals,
   tableObjectsLoading,
@@ -828,7 +858,6 @@ function ProfileEditor({
   objectFilter,
   saving,
   nameError,
-  oraclePreview,
   oracleConfirmation,
   rebuildAgentAssets,
   assetRefreshResults,
@@ -855,6 +884,8 @@ function ProfileEditor({
   form: ProfileFormState;
   tableObjects: SchemaTable[];
   viewObjects: SchemaTable[];
+  tableObjectTotal: number;
+  viewObjectTotal: number;
   tableOwnerTotals: Record<string, number>;
   viewOwnerTotals: Record<string, number>;
   tableObjectsLoading: boolean;
@@ -866,7 +897,6 @@ function ProfileEditor({
   objectFilter: string;
   saving: boolean;
   nameError: boolean;
-  oraclePreview: SelectAiDbProfileMutationData | null;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
   assetRefreshResults: AssetRefreshData[];
@@ -964,7 +994,7 @@ function ProfileEditor({
           onSearchChange={onObjectFilterChange}
           resultLabel={t("objectSelector.resultCountWithSelected", {
             visible: tableObjects.length + viewObjects.length,
-            total: tableObjects.length + viewObjects.length,
+            total: tableObjectTotal + viewObjectTotal,
             selected: form.allowedTables.length + form.allowedViews.length,
           })}
           dataTestId="profile-object-search-toolbar"
@@ -973,6 +1003,7 @@ function ProfileEditor({
           <SchemaGroupedSelectionPanel
             title={t("profiles.objects.tablesTitle")}
             objects={tableObjects}
+            totalCount={tableObjectTotal}
             selectedItems={form.allowedTables}
             dataTestId="profile-allowed-table-list"
             emptyTitle={t("profiles.objects.emptyTables")}
@@ -988,6 +1019,7 @@ function ProfileEditor({
           <SchemaGroupedSelectionPanel
             title={t("profiles.objects.viewsTitle")}
             objects={viewObjects}
+            totalCount={viewObjectTotal}
             selectedItems={form.allowedViews}
             dataTestId="profile-allowed-view-list"
             emptyTitle={t("profiles.objects.emptyViews")}
@@ -1041,50 +1073,37 @@ function ProfileEditor({
 
       <SelectAiConfigFields form={form} setForm={onFormChange} />
 
-      <section className="grid gap-3 rounded-md border border-border bg-card p-3">
+      <section className="grid gap-3 rounded-md border border-border bg-card p-3" aria-labelledby="profile-engine-assets-heading">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.oraclePreview")}</h3>
-          <p className="mt-1 text-sm text-muted">{t("profiles.oracle.hint")}</p>
+          <h3 id="profile-engine-assets-heading" className="text-sm font-semibold text-foreground">
+            {t("profiles.oracle.assets.title")}
+          </h3>
+          <p className="mt-1 text-sm text-muted">{t("profiles.oracle.assets.hint")}</p>
         </div>
-        <OracleSyncStatusPanel
-          job={oracleSyncJob}
-          submissionError={oracleSyncSubmissionError}
-          retrying={retryingOracleSync}
-          onRetry={onRetryOracleSync}
-        />
-        {oraclePreview ? (
-          <OracleMutationResult result={oraclePreview} />
-        ) : (
-          <div className="rounded-md border border-dashed border-border bg-background p-4 text-sm text-muted">
-            {t("profiles.oracle.previewEmpty")}
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-background p-3 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={rebuildAgentAssets}
+            onChange={(event) => onRebuildAgentAssetsChange(event.currentTarget.checked)}
+            className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+          />
+          <span>{t("profiles.oracle.assets.refreshAgent")}</span>
+        </label>
+        {assetRefreshResults.length > 0 && (
+          <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
+            {assetRefreshResults.map((result) => (
+              <AssetStatusPanel key={result.engine} result={result} />
+            ))}
           </div>
         )}
-
-        <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="profile-engine-assets-heading">
-          <div>
-            <h4 id="profile-engine-assets-heading" className="text-sm font-semibold text-foreground">
-              {t("profiles.oracle.assets.title")}
-            </h4>
-            <p className="mt-1 text-sm text-muted">{t("profiles.oracle.assets.hint")}</p>
-          </div>
-          <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card p-3 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={rebuildAgentAssets}
-              onChange={(event) => onRebuildAgentAssetsChange(event.currentTarget.checked)}
-              className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-            />
-            <span>{t("profiles.oracle.assets.refreshAgent")}</span>
-          </label>
-          {assetRefreshResults.length > 0 && (
-            <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
-              {assetRefreshResults.map((result) => (
-                <AssetStatusPanel key={result.engine} result={result} />
-              ))}
-            </div>
-          )}
-        </section>
       </section>
+
+      <OracleSyncStatusPanel
+        job={oracleSyncJob}
+        submissionError={oracleSyncSubmissionError}
+        retrying={retryingOracleSync}
+        onRetry={onRetryOracleSync}
+      />
 
       <ExecutionConfirmationField
         value={oracleConfirmation}
@@ -1107,33 +1126,6 @@ function ProfileEditor({
           </Button>
         }
       />
-    </section>
-  );
-}
-
-function OracleMutationResult({ result }: { result: SelectAiDbProfileMutationData }) {
-  return (
-    <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm" data-testid="profile-oracle-result">
-      <div className="flex flex-wrap gap-2">
-        <StatusBadge variant={result.executed ? "success" : result.status === "error" ? "danger" : "neutral"} label={result.status} />
-        <StatusBadge variant="neutral" label={result.runtime} />
-        {result.profile_name && <StatusBadge variant="info" label={result.profile_name} />}
-      </div>
-      {result.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
-          {warning}
-        </p>
-      ))}
-      {result.ddl.length > 0 && (
-        <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
-          <code>{result.ddl.join("\n")}</code>
-        </pre>
-      )}
-      {result.profile && (
-        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg">
-          <code>{JSON.stringify(result.profile.attributes ?? {}, null, 2)}</code>
-        </pre>
-      )}
     </section>
   );
 }
@@ -1237,6 +1229,29 @@ function OracleSyncStatusPanel({
   );
 }
 
+function dbProfileRefreshRequiredMessage(reasonCode: string, fallback = "") {
+  if (reasonCode === "profile_list_refresh_target_unresolved") {
+    return t("profiles.dbProfileRefresh.targetUnresolved");
+  }
+  if (reasonCode === "profile_list_refresh_submit_failed") {
+    return t("profiles.dbProfileRefresh.submitFailed");
+  }
+  if (reasonCode === "profile_list_refresh_full_required") {
+    return t("profiles.dbProfileRefresh.fullRequired");
+  }
+  return fallback || t("profiles.dbProfileRefresh.error");
+}
+
+function dbProfileRefreshProcessingLabel(job: SelectAiDbProfileRefreshJobData | null) {
+  return job?.mode === "targeted"
+    ? t("common.processing.dbProfileListDeltaSyncing")
+    : t("common.processing.dbProfileListRefreshing");
+}
+
+function dbProfileRefreshIsActive(status: string) {
+  return status === "pending" || status === "running";
+}
+
 export function ProfileManagementPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1248,13 +1263,15 @@ export function ProfileManagementPage() {
   const [objectFilter, setObjectFilter] = useState("");
   const [refreshJobId, setRefreshJobId] = useState("");
   const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
-  const [oraclePreview, setOraclePreview] = useState<SelectAiDbProfileMutationData | null>(null);
   const [oracleConfirmation, setOracleConfirmation] = useState("");
   const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
   const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
   const reportedOracleSyncJobId = useRef("");
+  const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
+  const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
+  const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // message は初回ロード失敗の常設 Banner 専用。保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
@@ -1271,10 +1288,17 @@ export function ProfileManagementPage() {
   const schemaOwnersQuery = useSchemaOwners();
   const schemaHeadQuery = useSchemaCatalogHead();
   const startSchemaRefresh = useStartSchemaRefresh();
+  const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
   const schemaRefreshJobQuery = useSchemaRefreshJob(refreshJobId);
   const schemaRefreshStatus = schemaRefreshJobQuery.isError
     ? "error"
     : (schemaRefreshJobQuery.data?.status ?? "");
+  const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
+  const dbProfileRefreshJob = dbProfileRefreshJobQuery.data ?? null;
+  const dbProfileRefreshStatus = dbProfileRefreshJobQuery.isError
+    ? "error"
+    : (dbProfileRefreshJob?.status ?? "");
+  const dbProfileRefreshing = dbProfileRefreshIsActive(dbProfileRefreshStatus);
   const dbProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "business-profiles"],
     queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
@@ -1317,6 +1341,8 @@ export function ProfileManagementPage() {
     () => filterProfileObjects(viewObjects, objectFilter),
     [objectFilter, viewObjects]
   );
+  const tableObjectTotal = schemaObjectQueryTotal(tableObjectsQuery.data?.pages, tableObjects.length);
+  const viewObjectTotal = schemaObjectQueryTotal(viewObjectsQuery.data?.pages, viewObjects.length);
   const tableOwnerTotals = useMemo(
     () =>
       Object.fromEntries(
@@ -1386,6 +1412,42 @@ export function ProfileManagementPage() {
     }
   };
 
+  const runDbProfileRefresh = async () => {
+    try {
+      const job = await startDbProfileRefresh.mutateAsync();
+      setDbProfileRefreshError("");
+      setDbProfileRefreshNeedsFull(false);
+      setDbProfileRefreshJobId(job.job_id);
+      queryClient.setQueryData(nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(job.job_id), job);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
+      setDbProfileRefreshError(message);
+      setDbProfileRefreshNeedsFull(true);
+      toast.error(message);
+    }
+  };
+
+  const trackDbProfileRefreshSignal = useCallback((
+    result: SelectAiDbProfileMutationData | null | undefined
+  ) => {
+    const jobId = result?.profile_list_refresh_job_id ?? "";
+    if (jobId) {
+      setDbProfileRefreshError("");
+      setDbProfileRefreshNeedsFull(false);
+      setDbProfileRefreshJobId(jobId);
+      return true;
+    }
+    if (result?.profile_list_refresh_required) {
+      setDbProfileRefreshError(
+        dbProfileRefreshRequiredMessage(result.profile_list_refresh_reason_code ?? "")
+      );
+      setDbProfileRefreshNeedsFull(true);
+      return true;
+    }
+    return false;
+  }, []);
+
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
     if (!job) return;
@@ -1401,12 +1463,42 @@ export function ProfileManagementPage() {
     }
   }, [schemaRefreshJobQuery.data?.status]);
 
+  useEffect(() => {
+    const job = dbProfileRefreshJobQuery.data;
+    if (!job) return;
+    if (job.status === "done") {
+      setDbProfileRefreshNeedsFull(false);
+      setDbProfileRefreshError("");
+      void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+      toast.success(
+        t("profiles.dbProfileRefresh.done", {
+          changed: job.changed_profiles,
+          deleted: job.deleted_profiles,
+        })
+      );
+    } else if (job.status === "error") {
+      const message = dbProfileRefreshRequiredMessage(job.error_code, job.error_message);
+      setDbProfileRefreshError(message);
+      setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
+      toast.error(message);
+    }
+  }, [dbProfileRefreshJobQuery.data?.status, queryClient]);
+
+  useEffect(() => {
+    if (!dbProfileRefreshJobQuery.isError) return;
+    const message =
+      dbProfileRefreshJobQuery.error instanceof Error
+        ? dbProfileRefreshJobQuery.error.message
+        : t("profiles.dbProfileRefresh.error");
+    setDbProfileRefreshError(message);
+    setDbProfileRefreshNeedsFull(true);
+  }, [dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]);
+
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
   useEffect(() => {
     if (!editTargetKey) return;
     setForm(selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm());
-    setOraclePreview(null);
     setOracleConfirmation("");
     setAssetRefreshResults([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1418,21 +1510,21 @@ export function ProfileManagementPage() {
     if (reportedOracleSyncJobId.current === job.job_id) return;
     reportedOracleSyncJobId.current = job.job_id;
     if (job.status === "succeeded") {
-      if (job.oracle_result) setOraclePreview(job.oracle_result);
       if (job.agent_result) {
         setAssetRefreshResults((current) => [
           job.agent_result as AssetRefreshData,
           ...current.filter((item) => item.engine !== job.agent_result?.engine),
         ]);
       }
-      void queryClient.invalidateQueries({
-        queryKey: ["nl2sql", "select-ai", "business-profiles"],
-      });
+      const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
+      if (!trackingRefresh) {
+        void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+      }
       toast.success(t("profiles.oracle.sync.succeeded"));
     } else if (job.status === "failed") {
       toast.error(t("profiles.oracle.sync.failed"));
     }
-  }, [oracleSyncJobQuery.data, queryClient]);
+  }, [oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal]);
 
   // 無効な id(削除済み等)の deep link は一覧へ縮退
   useEffect(() => {
@@ -1574,7 +1666,6 @@ export function ProfileManagementPage() {
 
     try {
       setOracleSyncSubmissionError("");
-      setOraclePreview(null);
       const job = await apiPost<ProfileSyncJobData>(
         `/api/nl2sql/profiles/${saved.id}/oracle-sync-jobs`,
         {
@@ -1674,6 +1765,8 @@ export function ProfileManagementPage() {
       form={form}
       tableObjects={filteredTableObjects}
       viewObjects={filteredViewObjects}
+      tableObjectTotal={tableObjectTotal}
+      viewObjectTotal={viewObjectTotal}
       tableOwnerTotals={tableOwnerTotals}
       viewOwnerTotals={viewOwnerTotals}
       tableObjectsLoading={tableObjectsQuery.isPending}
@@ -1685,7 +1778,6 @@ export function ProfileManagementPage() {
       objectFilter={objectFilter}
       saving={loading === "save"}
       nameError={nameError}
-      oraclePreview={oraclePreview}
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
       assetRefreshResults={assetRefreshResults}
@@ -1715,6 +1807,61 @@ export function ProfileManagementPage() {
       onRetryOracleSync={() => void retryOracleSync()}
     />
   );
+  const schemaRefreshing =
+    schemaRefreshStatus === "pending" || schemaRefreshStatus === "running";
+  const profileWorkspaceProcessing =
+    loading === "load" || profilesQuery.isFetching || schemaRefreshing || dbProfileRefreshing ? (
+      <ProcessingIndicator
+        active
+        label={
+          dbProfileRefreshing
+            ? dbProfileRefreshProcessingLabel(dbProfileRefreshJob)
+            : schemaRefreshing
+              ? t("common.processing.schemaRefreshing")
+              : t("common.processing.refreshing")
+        }
+        operationKey={
+          dbProfileRefreshing
+            ? dbProfileRefreshJobId || "db-profile-refresh"
+            : schemaRefreshing
+              ? refreshJobId || "schema-refresh"
+              : "profile-refresh"
+        }
+        placement="workspace"
+        className="rounded-md border border-border bg-background px-3 py-2"
+        testId="profile-management-workspace-processing"
+        activityIcon="none"
+      />
+    ) : undefined;
+  const headerRefreshStatus = dbProfileRefreshing
+    ? dbProfileRefreshStatus
+    : schemaRefreshing
+      ? schemaRefreshStatus
+      : dbProfileRefreshStatus || schemaRefreshStatus;
+  const headerRefreshIsDbProfile = dbProfileRefreshing || Boolean(dbProfileRefreshStatus && !schemaRefreshStatus);
+  const workspaceNotice = dbProfileRefreshError
+    ? { tone: "danger" as const, message: dbProfileRefreshError }
+    : message
+      ? { tone: "danger" as const, message: `${message} ${t("profiles.error.retryHint")}` }
+      : null;
+  const workspaceNoticeAction =
+    dbProfileRefreshError && dbProfileRefreshNeedsFull ? (
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        loading={startDbProfileRefresh.isPending}
+        onClick={() => void runDbProfileRefresh()}
+      >
+        <RefreshCw size={15} aria-hidden="true" />
+        <span>{t("profiles.action.dbProfileRefresh")}</span>
+      </Button>
+    ) : (
+      <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+        <RefreshCw size={15} aria-hidden="true" />
+        <span>{t("profiles.action.refresh")}</span>
+      </Button>
+    );
 
   return (
     <>
@@ -1722,17 +1869,21 @@ export function ProfileManagementPage() {
         title={t("nav.profiles")}
         subtitle={t("profiles.subtitle")}
         status={
-          activeView === "list" && schemaRefreshStatus ? (
+          activeView === "list" && headerRefreshStatus ? (
             <span aria-live="polite" aria-atomic="true">
               <StatusBadge
                 variant={
-                  schemaRefreshStatus === "done"
+                  headerRefreshStatus === "done"
                     ? "success"
-                    : schemaRefreshStatus === "error"
+                    : headerRefreshStatus === "error"
                       ? "danger"
                       : "info"
                 }
-                label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+                label={
+                  headerRefreshIsDbProfile
+                    ? t(`profiles.dbProfileRefresh.status.${headerRefreshStatus}`)
+                    : t(`profiles.schemaRefresh.status.${headerRefreshStatus}`)
+                }
               />
             </span>
           ) : undefined
@@ -1761,9 +1912,15 @@ export function ProfileManagementPage() {
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
                   onClick: runSchemaRefresh,
-                  loading:
-                    schemaRefreshStatus === "pending" ||
-                    schemaRefreshStatus === "running",
+                  loading: schemaRefreshing,
+                },
+                {
+                  id: "db-profile-refresh",
+                  kind: "utility",
+                  label: t("profiles.action.dbProfileRefresh"),
+                  icon: RefreshCw,
+                  onClick: runDbProfileRefresh,
+                  loading: dbProfileRefreshing || startDbProfileRefresh.isPending,
                 },
               ]
             : []
@@ -1773,13 +1930,8 @@ export function ProfileManagementPage() {
 
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
-          notice={message ? { tone: "danger", message: `${message} ${t("profiles.error.retryHint")}` } : null}
-          action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("profiles.action.refresh")}</span>
-            </Button>
-          }
+          notice={workspaceNotice}
+          action={workspaceNoticeAction}
         />
 
         {activeView === "list" ? (
@@ -1788,30 +1940,7 @@ export function ProfileManagementPage() {
               role="region"
               idPrefix="profile-management"
               ariaLabel={t("profiles.workspace.label")}
-              processing={
-                profiles.length > 0 &&
-                (loading === "load" ||
-                  profilesQuery.isFetching ||
-                  schemaRefreshStatus === "pending" ||
-                  schemaRefreshStatus === "running") ? (
-                  <ProcessingIndicator
-                    active
-                    label={
-                      schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
-                        ? t("common.processing.schemaRefreshing")
-                        : t("common.processing.refreshing")
-                    }
-                    operationKey={
-                      schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
-                        ? refreshJobId || "schema-refresh"
-                        : "profile-refresh"
-                    }
-                    placement="workspace"
-                    className="rounded-md border border-border bg-background px-3 py-2"
-                    testId="profile-management-workspace-processing"
-                  />
-                ) : undefined
-              }
+              processing={profiles.length > 0 ? profileWorkspaceProcessing : undefined}
             >
               <ProfileList
                 profiles={filteredProfiles}
@@ -1842,6 +1971,7 @@ export function ProfileManagementPage() {
               role="region"
               idPrefix="profile-management"
               ariaLabel={selectedProfile ? t("profiles.editor.edit") : t("profiles.editor.new")}
+              processing={profileWorkspaceProcessing}
             >
               {selectedProfile || profileParam === "new" ? (
                 editor

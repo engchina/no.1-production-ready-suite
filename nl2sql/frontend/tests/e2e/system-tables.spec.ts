@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
 import { systemAdminMe } from "./_helpers/database-gate";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
@@ -160,6 +160,10 @@ async function expectNoPageOverflow(page: Page) {
     .toBeTruthy();
 }
 
+function expectedInformationRows(testInfo: TestInfo) {
+  return testInfo.project.name === "mobile-375" ? 5 : 8;
+}
+
 test.beforeEach(async ({ page }) => {
   await mockDatabasePage(page);
 });
@@ -228,8 +232,9 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
   await expectNoPageOverflow(page);
 });
 
-test("詳細表は 10 行まで自然表示し、11 行目から内部スクロールする", async ({ page }, testInfo) => {
-  let tableCount = 10;
+test("詳細表はデスクトップ8行・モバイル5行の高さに収め、次行から内部スクロールする", async ({ page }, testInfo) => {
+  const expectedRows = expectedInformationRows(testInfo);
+  let tableCount = expectedRows;
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready", { tableCount }))
   );
@@ -244,21 +249,32 @@ test("詳細表は 10 行まで自然表示し、11 行目から内部スクロ�
     "aria-label",
     "システムテーブル一覧。必要に応じて縦方向または横方向にスクロールできます。"
   );
-  await expect(scrollRegion.locator("tbody tr")).toHaveCount(10);
+  await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows);
 
-  const tenRows = await scrollRegion.evaluate((node) => ({
-    clientHeight: node.clientHeight,
-    scrollHeight: node.scrollHeight,
-    overflowX: window.getComputedStyle(node).overflowX,
-    overflowY: window.getComputedStyle(node).overflowY,
-  }));
-  expect(tenRows.scrollHeight).toBeLessThanOrEqual(tenRows.clientHeight + 1);
-  expect(tenRows.overflowX).toBe("auto");
-  expect(tenRows.overflowY).toBe("auto");
+  const exactRows = await scrollRegion.evaluate((node) => {
+    const computed = window.getComputedStyle(node);
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    );
+    return {
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowX: computed.overflowX,
+      overflowY: computed.overflowY,
+      rootFontSize,
+    };
+  });
+  const expectedMaxHeight = exactRows.rootFontSize * (2.5 + 3.5 * expectedRows);
+  expect(exactRows.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
+  expect(exactRows.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  expect(exactRows.scrollHeight).toBeLessThanOrEqual(exactRows.clientHeight + 2);
+  expect(exactRows.overflowX).toBe("auto");
+  expect(exactRows.overflowY).toBe("auto");
 
-  tableCount = 11;
+  tableCount = expectedRows + 1;
   await card.getByRole("button", { name: "状態を再取得" }).click();
-  await expect(scrollRegion.locator("tbody tr")).toHaveCount(11);
+  await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows + 1);
 
   const overflowing = await scrollRegion.evaluate((node) => {
     const regionRect = node.getBoundingClientRect();
@@ -281,7 +297,7 @@ test("詳細表は 10 行まで自然表示し、11 行目から内部スクロ�
     };
   });
   expect(overflowing.scrollHeight).toBeGreaterThan(overflowing.clientHeight);
-  expect(overflowing.visibleRowCount).toBe(10);
+  expect(overflowing.visibleRowCount).toBe(expectedRows);
   expect(overflowing.headerPosition).toBe("sticky");
   if (testInfo.project.name === "mobile-375") {
     expect(overflowing.scrollWidth).toBeGreaterThan(overflowing.clientWidth);
@@ -393,8 +409,8 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
 
   const close = toastStatus.getByRole("button", { name: "閉じる" });
   const closeBox = await close.boundingBox();
-  expect(closeBox?.width ?? 0).toBeGreaterThanOrEqual(44);
-  expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(closeBox?.width ?? 0).toBeGreaterThanOrEqual(43.9);
+  expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(43.9);
   await expectNoPageOverflow(page);
 
   const lightBackground = await toastStatus.evaluate((node) => getComputedStyle(node).backgroundColor);

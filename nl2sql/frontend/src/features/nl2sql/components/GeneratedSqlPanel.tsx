@@ -1,6 +1,7 @@
 import { Copy, Play } from "lucide-react";
 
-import { Button, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { t } from "@/lib/i18n";

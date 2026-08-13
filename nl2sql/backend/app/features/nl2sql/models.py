@@ -224,6 +224,10 @@ class AllowedObjects(BaseModel):
     enforce_table_scope: bool = False
 
 
+SELECT_AI_MAX_TOKENS_MIN = 4096
+SELECT_AI_MAX_TOKENS_MAX = 32000
+
+
 class ProfileSelectAiConfig(BaseModel):
     """業務 profile から Oracle DBMS_CLOUD_AI profile を作るための設定。"""
 
@@ -231,7 +235,11 @@ class ProfileSelectAiConfig(BaseModel):
     region: str = ""
     model: str = ""
     embedding_model: str = "cohere.embed-v4.0"
-    max_tokens: int = Field(default=32000, ge=1, le=128000)
+    max_tokens: int = Field(
+        default=SELECT_AI_MAX_TOKENS_MAX,
+        ge=SELECT_AI_MAX_TOKENS_MIN,
+        le=SELECT_AI_MAX_TOKENS_MAX,
+    )
     enforce_object_list: bool = True
     comments: bool = True
     annotations: bool = False
@@ -307,11 +315,31 @@ class SchemaRefreshPhase(StrEnum):
     DONE = "done"
 
 
+class SchemaRefreshMode(StrEnum):
+    """Schema refresh の実行範囲。"""
+
+    FULL = "full"
+    TARGETED = "targeted"
+
+
+class SchemaRefreshTargetObject(BaseModel):
+    """Targeted schema refresh で Oracle へ確認する object。"""
+
+    owner: str
+    object_name: str
+    object_type: Literal["table", "view", "materialized_view", "unknown"] = "unknown"
+    expected_state: Literal["present", "absent", "unknown"] = "unknown"
+
+
 class SchemaRefreshJob(BaseModel):
     """非同期 schema refresh の公開契約。"""
 
     job_id: str
     status: SchemaRefreshJobStatus = SchemaRefreshJobStatus.PENDING
+    mode: SchemaRefreshMode = SchemaRefreshMode.FULL
+    source: str = "manual"
+    target_objects: list[SchemaRefreshTargetObject] = Field(default_factory=list)
+    requires_full_refresh: bool = False
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -500,6 +528,12 @@ class DbAdminDropTableRequest(AdminExecutionConfirmation):
     purge: bool = True
 
 
+class DbAdminTruncateTableRequest(AdminExecutionConfirmation):
+    """Truncate table data execution request."""
+
+    table_name: str = Field(min_length=1)
+
+
 class DbAdminStatementResult(BaseModel):
     """One admin SQL statement execution result."""
 
@@ -520,7 +554,7 @@ class DbAdminExecuteRequest(AdminExecutionConfirmation):
     """
 
     sql: str = Field(min_length=1)
-    row_limit: int = Field(default=100, ge=1, le=5000)
+    row_limit: int = Field(default=100, ge=0)
 
 
 class DbAdminExecuteData(BaseModel):
@@ -528,11 +562,20 @@ class DbAdminExecuteData(BaseModel):
 
     executed: bool = False
     runtime: str = "deterministic"
+    execution_context: Literal[
+        "deterministic",
+        "oracle_data_plane",
+        "deepsec_data_plane",
+        "admin_control_plane",
+    ] = "deterministic"
+    vpd_context_enforced: bool = False
     select_result: QueryResults | None = None
     statements: list[DbAdminStatementResult] = Field(default_factory=list)
     committed: bool = False
     rolled_back: bool = False
     schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -567,6 +610,8 @@ class SampleDataMutationData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     profile_id: str = "sql_assist_sample"
     schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
     timing: TimingEnvelope
 
 
@@ -765,7 +810,7 @@ class ExecuteRequest(BaseModel):
     sql: str = Field(min_length=1)
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    row_limit: int | None = Field(default=None, ge=1, le=5000)
+    row_limit: int | None = Field(default=100, ge=0)
 
 
 class JobCreateRequest(BaseModel):
@@ -1313,6 +1358,9 @@ class AssetCleanupData(BaseModel):
     warning: str = ""
     asset_names: dict[str, str] = Field(default_factory=dict)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+    profile_list_refresh_job_id: str = ""
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
 
 
 class AssetCleanupRequest(AdminExecutionConfirmation):
@@ -1342,6 +1390,60 @@ class SelectAiDbProfile(BaseModel):
     schema_text: str = ""
     context_ddl: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiDbProfileRefreshMode(StrEnum):
+    """Oracle DB profile list refresh の実行範囲。"""
+
+    FULL = "full"
+    TARGETED = "targeted"
+
+
+class SelectAiDbProfileRefreshStatus(StrEnum):
+    """Oracle DB profile list refresh job の状態。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+class SelectAiDbProfileRefreshPhase(StrEnum):
+    """Oracle DB profile list refresh job の進捗段階。"""
+
+    QUEUED = "queued"
+    FETCHING = "fetching"
+    PERSISTING = "persisting"
+    DONE = "done"
+
+
+class SelectAiDbProfileRefreshTarget(BaseModel):
+    """Targeted DB profile refresh で確認する profile。"""
+
+    profile_name: str
+    expected_state: Literal["present", "absent", "unknown"] = "unknown"
+
+
+class SelectAiDbProfileRefreshJobData(BaseModel):
+    """Oracle DB profile list refresh job."""
+
+    job_id: str
+    status: SelectAiDbProfileRefreshStatus = SelectAiDbProfileRefreshStatus.PENDING
+    mode: SelectAiDbProfileRefreshMode = SelectAiDbProfileRefreshMode.FULL
+    source: str = "manual"
+    target_profiles: list[SelectAiDbProfileRefreshTarget] = Field(default_factory=list)
+    requires_full_refresh: bool = False
+    phase: SelectAiDbProfileRefreshPhase = SelectAiDbProfileRefreshPhase.QUEUED
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    total_profiles: int = 0
+    processed_profiles: int = 0
+    scanned_profiles: int = 0
+    changed_profiles: int = 0
+    deleted_profiles: int = 0
+    error_code: str = ""
+    error_message: str = ""
 
 
 class SelectAiDbProfilesData(BaseModel):
@@ -1386,6 +1488,9 @@ class SelectAiDbProfileMutationData(BaseModel):
     profile: SelectAiDbProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+    profile_list_refresh_job_id: str = ""
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
 
 
 class ProfileSyncJobStatus(StrEnum):
@@ -1692,6 +1797,8 @@ class CommentApplyData(BaseModel):
     runtime: str = "deterministic"
     statements: list[CommentApplyStatement] = Field(default_factory=list)
     schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -1747,6 +1854,8 @@ class AnnotationApplyData(BaseModel):
     runtime: str = "deterministic"
     statements: list[AnnotationApplyStatement] = Field(default_factory=list)
     schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 
@@ -1818,7 +1927,6 @@ class SyntheticDataGenerateRequest(AdminExecutionConfirmation):
 class SyntheticDataOperationData(BaseModel):
     """Synthetic DB data generation operation response."""
 
-    operation_id: str = ""
     table_name: str
     object_list: list[str] = Field(default_factory=list)
     row_count: int
@@ -1829,17 +1937,6 @@ class SyntheticDataOperationData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
     timing: TimingEnvelope
-
-
-class SyntheticDataOperationStatusData(BaseModel):
-    """Synthetic DB data generation operation status."""
-
-    operation_id: str
-    runtime: str = "deterministic"
-    status: str = "unknown"
-    message: str = ""
-    result: dict[str, Any] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
 
 
 class SyntheticDataResultsData(BaseModel):
@@ -1968,6 +2065,8 @@ class DbAdminImportTabularData(BaseModel):
     ddl: str
     insert_sql: str
     schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
     warnings: list[str] = Field(default_factory=list)
     sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
     timing: TimingEnvelope

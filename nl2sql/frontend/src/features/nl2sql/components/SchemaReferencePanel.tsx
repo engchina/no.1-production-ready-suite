@@ -1,12 +1,10 @@
 import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Button, Skeleton, StatusBadge } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { Skeleton, StatusBadge } from "@engchina/production-ready-ui";
 
-import {
-  ProcessingIndicator,
-  TimedLoadingState,
-} from "@/components/ProcessingState";
+import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
 import {
   buildSchemaInsertText,
@@ -197,6 +195,7 @@ export function SchemaReferencePanel({
           placement="panel"
           className="rounded-md border border-border bg-card px-3 py-2"
           testId="schema-reference-refreshing"
+          activityIcon="none"
         />
       ) : null}
 

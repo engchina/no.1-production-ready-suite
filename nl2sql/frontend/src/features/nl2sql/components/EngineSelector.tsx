@@ -1,6 +1,6 @@
 import { Bot, DatabaseZap, Sparkles } from "lucide-react";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
 
 import { t } from "@/lib/i18n";
 import type { Nl2SqlEngine } from "../types";

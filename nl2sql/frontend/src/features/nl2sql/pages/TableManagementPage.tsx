@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
-import {
-  Button,
-  StatusBadge,
-  toast,
-} from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { apiFetch, apiGet, apiPost, isAbortError } from "@/lib/api";
+import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { apiFetch, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
@@ -42,12 +40,13 @@ import type {
   DbAdminExecuteData,
   DbAdminImportTabularData,
   DbAdminObjectDetail,
-  DbAdminObjectPage,
-  DbAdminObjectsData,
   SchemaRefreshJob,
 } from "../types";
-import { waitForSchemaRefreshJob } from "../incrementalQueries";
-import { filterUserVisibleDbAdminObjectPage } from "../objectVisibility";
+import {
+  useDbAdminObjects,
+  useSchemaRefreshJob,
+  waitForSchemaRefreshJob,
+} from "../incrementalQueries";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "import";
@@ -56,6 +55,49 @@ type ImportStep = "file" | "execute";
 const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
 const importControlClass =
   "h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40";
+
+const useDebouncedValue = <T,>(value: T, delayMs: number) => {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+  return debounced;
+};
+
+function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
+  return (
+    <section
+      className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm"
+      aria-label={t("tableMgmt.importWizard.result")}
+      data-testid="table-import-result-panel"
+    >
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
+        <StatusBadge variant="info" label={result.table_name} />
+        <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
+        <StatusBadge variant="neutral" label={result.mode} />
+      </div>
+      {result.warnings.map((warning) => (
+        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
+          {warning}
+        </p>
+      ))}
+      <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
+        <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
+      </pre>
+      {result.sample_rows.length > 0 && (
+        <QueryResultsTable
+          results={{
+            columns: Object.keys(result.sample_rows[0] ?? {}),
+            rows: result.sample_rows,
+            total: result.sample_rows.length,
+          }}
+        />
+      )}
+    </section>
+  );
+}
 
 function ImportWizard({
   table,
@@ -67,6 +109,10 @@ function ImportWizard({
   confirmation,
   loading,
   error,
+  schemaRefreshJob,
+  schemaRefreshing,
+  schemaRefreshError,
+  schemaRefreshNeedsFull,
   onTableChange,
   onSheetChange,
   onFilePick,
@@ -74,6 +120,7 @@ function ImportWizard({
   onExecute,
   onConfirmationChange,
   onReturnToList,
+  onSchemaRefresh,
 }: {
   table: string;
   sheet: string;
@@ -84,6 +131,10 @@ function ImportWizard({
   confirmation: string;
   loading: boolean;
   error: unknown;
+  schemaRefreshJob: SchemaRefreshJob | null;
+  schemaRefreshing: boolean;
+  schemaRefreshError: string;
+  schemaRefreshNeedsFull: boolean;
   onTableChange: (value: string) => void;
   onSheetChange: (value: string) => void;
   onFilePick: (file: File | undefined) => void;
@@ -91,6 +142,7 @@ function ImportWizard({
   onExecute: () => void;
   onConfirmationChange: (value: string) => void;
   onReturnToList: () => void;
+  onSchemaRefresh: () => void;
 }) {
   const steps: Array<{ id: ImportStep; label: string }> = [
     { id: "file", label: t("tableMgmt.importWizard.stepFile") },
@@ -98,7 +150,13 @@ function ImportWizard({
   ];
   const activeIndex = steps.findIndex((item) => item.id === step);
   const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
-  const canExecute = Boolean(table.trim()) && fileReady && isConfirmed;
+  const lowerFilename = filename.trim().toLowerCase();
+  const sheetRequired = lowerFilename ? !lowerFilename.endsWith(".csv") : true;
+  const canExecute =
+    Boolean(table.trim()) &&
+    fileReady &&
+    (!sheetRequired || Boolean(sheet.trim())) &&
+    isConfirmed;
 
   return (
     <div className="grid gap-4">
@@ -115,71 +173,63 @@ function ImportWizard({
         dataTestId="table-import-steps"
       />
 
+      <RequiredFieldsNote />
+
       <div className="grid gap-3 lg:grid-cols-2">
-          <label className={importFieldClass}>
-            <span>{t("dataTools.dbAdmin.tableName")}</span>
-            <input
-              value={table}
-              onChange={(event) => onTableChange(event.currentTarget.value)}
-              className={`${importControlClass} py-2`}
-              placeholder="IMPORTED_ORDERS"
-            />
-          </label>
-          <label className={importFieldClass}>
-            <span>{t("dataTools.dbAdmin.sheet")}</span>
-            <input
-              value={sheet}
-              onChange={(event) => onSheetChange(event.currentTarget.value)}
-              className={`${importControlClass} py-2`}
-              placeholder="Sheet1"
-            />
-          </label>
+        <div className={importFieldClass}>
+          <FieldLabel
+            htmlFor="table-import-table-name"
+            label={t("dataTools.dbAdmin.tableName")}
+            required
+          />
+          <input
+            id="table-import-table-name"
+            value={table}
+            required
+            aria-required="true"
+            onChange={(event) => onTableChange(event.currentTarget.value)}
+            className={`${importControlClass} py-2`}
+            placeholder="IMPORTED_ORDERS"
+          />
         </div>
+        <div className={importFieldClass}>
+          <FieldLabel
+            htmlFor="table-import-sheet-name"
+            label={t("dataTools.dbAdmin.sheet")}
+            required={sheetRequired}
+          />
+          <input
+            id="table-import-sheet-name"
+            value={sheet}
+            required={sheetRequired}
+            aria-required={sheetRequired}
+            onChange={(event) => onSheetChange(event.currentTarget.value)}
+            className={`${importControlClass} py-2`}
+            placeholder="Sheet1"
+          />
+        </div>
+      </div>
 
-          <FileDropzone
-            label={t("dataTools.dbAdmin.file")}
-            accept={CORE_TABULAR_FILE_FORMATS.accept}
-            selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
-            formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
-          actionText={t("common.fileDropzone.action")}
-          replaceText={t("tableMgmt.importWizard.fileReplace")}
-          clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
-          icon="spreadsheet"
-          className="w-full"
-          dataTestId="table-import-file-field"
-          onFiles={([file]) => onFilePick(file)}
-          onClear={onFileClear}
-        />
+      <FileDropzone
+        label={t("dataTools.dbAdmin.file")}
+        accept={CORE_TABULAR_FILE_FORMATS.accept}
+        selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
+        formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+        required
+        actionText={t("common.fileDropzone.action")}
+        replaceText={t("tableMgmt.importWizard.fileReplace")}
+        clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
+        icon="spreadsheet"
+        className="w-full"
+        dataTestId="table-import-file-field"
+        onFiles={([file]) => onFilePick(file)}
+        onClear={onFileClear}
+      />
 
-        {result && (
-          <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("tableMgmt.importWizard.result")}>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-              <StatusBadge variant="info" label={result.table_name} />
-              <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
-              <StatusBadge variant="neutral" label={result.mode} />
-            </div>
-            {result.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
-                {warning}
-              </p>
-            ))}
-            <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
-              <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
-            </pre>
-            {result.sample_rows.length > 0 && (
-              <QueryResultsTable
-                results={{
-                  columns: Object.keys(result.sample_rows[0] ?? {}),
-                  rows: result.sample_rows,
-                  total: result.sample_rows.length,
-                }}
-              />
-            )}
-          </section>
-        )}
-
-      <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
+      <fieldset
+        className="grid gap-3 rounded-md border border-border bg-card p-3"
+        data-testid="table-import-execution-fieldset"
+      >
         <legend className="px-1 text-sm font-semibold text-foreground">{t("tableMgmt.importWizard.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
@@ -208,13 +258,76 @@ function ImportWizard({
             </div>
           }
         />
+        {result && <ImportResultPanel result={result} />}
+        {schemaRefreshing && (
+          <ProcessingIndicator
+            active
+            label={schemaRefreshProcessingLabel(schemaRefreshJob, t("common.processing.schemaRefreshing"))}
+            operationKey={schemaRefreshJob?.job_id ?? "table-import-schema-refresh"}
+            placement="job"
+            className="rounded-md border border-border bg-background px-3 py-2"
+            testId="table-import-schema-refresh-processing"
+          />
+        )}
+        {schemaRefreshError && (
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
+            <span>{schemaRefreshError}</span>
+            {schemaRefreshNeedsFull && (
+              <Button type="button" variant="secondary" size="sm" onClick={onSchemaRefresh}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("common.action.schemaRefresh")}</span>
+              </Button>
+            )}
+          </div>
+        )}
       </fieldset>
     </div>
   );
 }
 
+function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
+  if (!job) return "";
+  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
+  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
+  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
+    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
+    progress,
+  });
+}
+
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
+  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
+}
+
 export function TableManagementPage() {
-  const [tables, setTables] = useState<DbAdminObjectsData | null>(null);
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [tableSearch, setTableSearch] = useState("");
@@ -230,10 +343,46 @@ export function TableManagementPage() {
   const [importConfirmation, setImportConfirmation] = useState("");
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
   const [importError, setImportError] = useState<unknown>(null);
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
+  const [importSchemaRefreshJobId, setImportSchemaRefreshJobId] = useState("");
+  const [importSchemaRefreshError, setImportSchemaRefreshError] = useState("");
+  const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
+  const completedSchemaRefreshJob = useRef("");
+  const completedImportSchemaRefreshJob = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const debouncedTableSearch = useDebouncedValue(tableSearch, 250);
+  const tableObjectsQuery = useDbAdminObjects(debouncedTableSearch, "table", tableFilter);
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
+  const schemaRefreshing =
+    !schemaRefreshJobQuery.error &&
+    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
+  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
+    ? schemaRefreshJobQuery.error instanceof Error
+      ? schemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : schemaRefreshError;
+  const importSchemaRefreshJobQuery = useSchemaRefreshJob(importSchemaRefreshJobId);
+  const importSchemaRefreshJob = importSchemaRefreshJobQuery.data ?? null;
+  const importSchemaRefreshing =
+    !importSchemaRefreshJobQuery.error &&
+    (importSchemaRefreshJob?.status === "pending" || importSchemaRefreshJob?.status === "running");
+  const visibleImportSchemaRefreshError = importSchemaRefreshJobQuery.error
+    ? importSchemaRefreshJobQuery.error instanceof Error
+      ? importSchemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : importSchemaRefreshError;
+  const tableItems = useMemo(
+    () => (tableObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [tableObjectsQuery.data]
+  );
+  const firstTablePage = tableObjectsQuery.data?.pages[0];
+  const totalTableCount = firstTablePage?.total ?? tableItems.length;
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/tables",
     loadErrorMessage: t("tableMgmt.error.detail"),
@@ -259,6 +408,11 @@ export function TableManagementPage() {
     void detailRequest.loadDdl(detail.name);
   };
 
+  const returnToList = () => {
+    setActiveView("list");
+    setDetailTab("columns");
+  };
+
   // 行数バッジは既定で num_rows 統計(一覧と統一・高速)。正確な件数は明示操作で COUNT(*)。
   const handleExactCount = async (name: string) => {
     setLoading("count");
@@ -276,82 +430,199 @@ export function TableManagementPage() {
     }
   };
 
-  const load = async (refreshSchema = false, announce = false) => {
-    const sequence = loadSequence.current + 1;
-    const detailVersionAtStart = detailRequest.requestVersion();
-    loadSequence.current = sequence;
-    setLoading(refreshSchema ? "schema-refresh" : "load");
+  const refreshObjects = async (announce = false) => {
     setMessage("");
+    const result = await tableObjectsQuery.refetch();
+    if (result.error) {
+      setMessage(result.error instanceof Error ? result.error.message : t("tableMgmt.error.load"));
+      return;
+    }
+    if (announce) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
+  const refreshSchema = async (announce = false) => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
+    setLoading("schema-refresh");
+    setMessage("");
+    setSchemaRefreshError("");
+    setSchemaRefreshNeedsFull(false);
     try {
       await runScopedRequest(async (signal) => {
         // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
         // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-        if (refreshSchema) {
-          const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-            signal,
-            timeoutMs: API_TIMEOUT_MS.jobControl,
+        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.jobControl,
+        });
+        if (job.job_id) {
+          completedSchemaRefreshJob.current = "";
+          setSchemaRefreshJobId(job.job_id);
+          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
+            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
           });
-          if (job.job_id) await waitForSchemaRefreshJob(job.job_id, signal);
-        }
-        const page = filterUserVisibleDbAdminObjectPage(
-          await apiGet<DbAdminObjectPage>(
-            "/api/nl2sql/db-admin/objects?limit=100&type=table&row_state=all",
-            { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
-          )
-        );
-        const tableData: DbAdminObjectsData = {
-          runtime: page.runtime,
-          items: page.items,
-          refreshed_at: page.refreshed_at,
-          warnings: page.warnings,
-        };
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setTables(tableData);
-        const nextSelected =
-          tableData.items.find((item) => item.name === selectedTableName)?.name ||
-          tableData.items[0]?.name ||
-          "";
-        if (detailRequest.requestVersion() === detailVersionAtStart) {
-          if (nextSelected) {
-            void fetchDetail(nextSelected);
-          } else {
-            detailRequest.clear();
+          if (completedJob.status === "done") {
+            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
           }
         }
+        if (signal.aborted || sequence !== loadSequence.current) return;
       });
+      if (sequence !== loadSequence.current) return;
+      const result = await tableObjectsQuery.refetch();
+      if (result.error) throw result.error;
       if (announce && sequence === loadSequence.current) {
-        toast.success(
-          t(refreshSchema ? "common.action.schemaRefreshed" : "common.action.refreshed")
-        );
+        toast.success(t("common.action.schemaRefreshed"));
       }
     } catch (err) {
       if (isAbortError(err)) {
         return;
       }
-      setMessage(err instanceof Error ? err.message : t("tableMgmt.error.load"));
+      setMessage(
+        isTimeoutError(err)
+          ? t("dataMgmt.schemaJob.timeout")
+          : err instanceof Error
+            ? err.message
+            : t("tableMgmt.error.load")
+      );
     } finally {
       if (sequence === loadSequence.current) setLoading("");
     }
   };
 
   useEffect(() => {
-    void load();
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  const reloadAfterMutation = async (result: { schema_refresh_job_id?: string }) => {
-    if (result.schema_refresh_job_id) {
-      await waitForSchemaRefreshJob(result.schema_refresh_job_id);
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      toast.success(t("common.action.schemaRefreshed"));
+      void refreshObjects();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
-    await load();
+  }, [schemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
+    const reportKey = `${schemaRefreshJobId}:query-error`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    completedSchemaRefreshJob.current = reportKey;
+    const error =
+      schemaRefreshJobQuery.error instanceof Error
+        ? schemaRefreshJobQuery.error.message
+        : t("dataMgmt.schemaJob.error");
+    setSchemaRefreshError(error);
+    setSchemaRefreshNeedsFull(false);
+    toast.error(t("dataMgmt.schemaJob.error"));
+  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
+
+  useEffect(() => {
+    const job = importSchemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedImportSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedImportSchemaRefreshJob.current = reportKey;
+      setImportSchemaRefreshError("");
+      setImportSchemaRefreshNeedsFull(false);
+      toast.success(t("common.action.schemaRefreshed"));
+      void refreshObjects();
+    } else if (job.status === "error") {
+      completedImportSchemaRefreshJob.current = reportKey;
+      const needsFull = schemaRefreshRequiresFull(job);
+      setImportSchemaRefreshNeedsFull(needsFull);
+      setImportSchemaRefreshError(schemaRefreshErrorMessage(job));
+      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
+    }
+  }, [importSchemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!importSchemaRefreshJobQuery.error || !importSchemaRefreshJobId) return;
+    const reportKey = `${importSchemaRefreshJobId}:query-error`;
+    if (completedImportSchemaRefreshJob.current === reportKey) return;
+    completedImportSchemaRefreshJob.current = reportKey;
+    const error =
+      importSchemaRefreshJobQuery.error instanceof Error
+        ? importSchemaRefreshJobQuery.error.message
+        : t("dataMgmt.schemaJob.error");
+    setImportSchemaRefreshError(error);
+    setImportSchemaRefreshNeedsFull(false);
+    toast.error(t("dataMgmt.schemaJob.error"));
+  }, [importSchemaRefreshJobId, importSchemaRefreshJobQuery.error]);
+
+  useEffect(() => {
+    if (activeView !== "list") return;
+    if (tableObjectsQuery.isPending || detailRequest.loading) return;
+    if (tableObjectsQuery.error && !tableObjectsQuery.data) return;
+    if (tableItems.length === 0) {
+      if (selectedTableName) detailRequest.clear();
+      return;
+    }
+    if (selectedTableName && tableItems.some((item) => item.name === selectedTableName)) return;
+    void fetchDetail(tableItems[0].name);
+  }, [
+    activeView,
+    tableItems,
+    tableObjectsQuery.isPending,
+    tableObjectsQuery.error,
+    tableObjectsQuery.data,
+    selectedTableName,
+    detailRequest.loading,
+  ]);
+
+  const trackSchemaRefreshJob = (jobId: string) => {
+    if (activeView === "import") {
+      completedImportSchemaRefreshJob.current = "";
+      setImportSchemaRefreshError("");
+      setImportSchemaRefreshNeedsFull(false);
+      setImportSchemaRefreshJobId(jobId);
+      return;
+    }
+    completedSchemaRefreshJob.current = "";
+    setSchemaRefreshError("");
+    setSchemaRefreshNeedsFull(false);
+    setSchemaRefreshJobId(jobId);
+  };
+
+  const reloadAfterMutation = (result: {
+    schema_refresh_job_id?: string;
+    schema_refresh_required?: boolean;
+    schema_refresh_reason_code?: string;
+  }) => {
+    if (result.schema_refresh_job_id) {
+      trackSchemaRefreshJob(result.schema_refresh_job_id);
+    } else if (result.schema_refresh_required) {
+      const messageText = schemaRefreshRequiredMessage(result.schema_refresh_reason_code);
+      if (activeView === "import") {
+        setImportSchemaRefreshError(messageText);
+        setImportSchemaRefreshNeedsFull(true);
+      } else {
+        setSchemaRefreshError(messageText);
+        setSchemaRefreshNeedsFull(true);
+      }
+    }
+    void refreshObjects();
   };
 
   const filteredTables = useMemo(() => {
     const q = tableSearch.trim().toLowerCase();
-    return (tables?.items ?? [])
+    return tableItems
       .filter((item) => {
         if (tableFilter === "with_rows" && !(item.row_count != null && item.row_count > 0)) return false;
         if (tableFilter === "empty_rows" && item.row_count !== 0) return false;
@@ -368,7 +639,7 @@ export function TableManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return tableSort.direction === "asc" ? result : -result;
       });
-  }, [tables, tableSearch, tableFilter, tableSort]);
+  }, [tableItems, tableSearch, tableFilter, tableSort]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setTableSort((current) => ({
@@ -384,6 +655,10 @@ export function TableManagementPage() {
     setImportBase64(await fileToBase64(file));
     setImportResult(null);
     setImportError(null);
+    setImportSchemaRefreshJobId("");
+    setImportSchemaRefreshError("");
+    setImportSchemaRefreshNeedsFull(false);
+    completedImportSchemaRefreshJob.current = "";
     setImportStep("file");
   };
 
@@ -392,6 +667,10 @@ export function TableManagementPage() {
     setImportBase64("");
     setImportResult(null);
     setImportError(null);
+    setImportSchemaRefreshJobId("");
+    setImportSchemaRefreshError("");
+    setImportSchemaRefreshNeedsFull(false);
+    completedImportSchemaRefreshJob.current = "";
     setImportStep("file");
   };
 
@@ -400,6 +679,10 @@ export function TableManagementPage() {
     setLoading("import-tabular");
     setMessage("");
     setImportError(null);
+    setImportResult(null);
+    setImportSchemaRefreshJobId("");
+    setImportSchemaRefreshError("");
+    completedImportSchemaRefreshJob.current = "";
     try {
       const result = await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
         table_name: importTable,
@@ -413,7 +696,15 @@ export function TableManagementPage() {
       setImportResult(result);
       setImportStep("execute");
       if (result.executed) {
-        await reloadAfterMutation(result);
+        if (result.schema_refresh_job_id) {
+          setImportSchemaRefreshJobId(result.schema_refresh_job_id);
+          setImportSchemaRefreshNeedsFull(false);
+        } else if (result.schema_refresh_required) {
+          setImportSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
+          setImportSchemaRefreshNeedsFull(true);
+        } else {
+          void refreshObjects();
+        }
       }
     } catch (err) {
       setImportError(err instanceof Error ? err : new Error(t("dataTools.error.import")));
@@ -503,16 +794,28 @@ export function TableManagementPage() {
         confirmation={importConfirmation}
         loading={loading === "import-tabular"}
         error={importError}
+        schemaRefreshJob={importSchemaRefreshJob}
+        schemaRefreshing={importSchemaRefreshing}
+        schemaRefreshError={visibleImportSchemaRefreshError}
+        schemaRefreshNeedsFull={importSchemaRefreshNeedsFull}
         onTableChange={(value) => {
           setImportTable(value);
           setImportResult(null);
           setImportError(null);
+          setImportSchemaRefreshJobId("");
+          setImportSchemaRefreshError("");
+          setImportSchemaRefreshNeedsFull(false);
+          completedImportSchemaRefreshJob.current = "";
           setImportStep("file");
         }}
         onSheetChange={(value) => {
           setImportSheet(value);
           setImportResult(null);
           setImportError(null);
+          setImportSchemaRefreshJobId("");
+          setImportSchemaRefreshError("");
+          setImportSchemaRefreshNeedsFull(false);
+          completedImportSchemaRefreshJob.current = "";
           setImportStep("file");
         }}
         onFilePick={(file) => void pickImportFile(file)}
@@ -523,7 +826,12 @@ export function TableManagementPage() {
           setImportError(null);
           if (value.trim()) setImportStep("execute");
         }}
-        onReturnToList={() => setActiveView("list")}
+        onReturnToList={returnToList}
+        onSchemaRefresh={() => {
+          setImportSchemaRefreshError("");
+          setImportSchemaRefreshNeedsFull(false);
+          void refreshSchema(true);
+        }}
       />
     ) : null;
 
@@ -533,9 +841,25 @@ export function TableManagementPage() {
         title={t("nav.tableManagement")}
         subtitle={t("tableMgmt.subtitle")}
         meta={
-          tables?.refreshed_at
-            ? t("common.schemaRefreshedAt", { date: formatDateTime(tables.refreshed_at) })
+          firstTablePage?.refreshed_at
+            ? t("common.schemaRefreshedAt", { date: formatDateTime(firstTablePage.refreshed_at) })
             : undefined
+        }
+        status={
+          schemaRefreshJob ? (
+            <span aria-live="polite" aria-atomic="true">
+              <StatusBadge
+                variant={
+                  schemaRefreshJob.status === "done"
+                    ? "success"
+                    : schemaRefreshJob.status === "error"
+                      ? "danger"
+                      : "info"
+                }
+                label={schemaRefreshJobLabel(schemaRefreshJob)}
+              />
+            </span>
+          ) : undefined
         }
         actionsAriaLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
@@ -561,16 +885,17 @@ export function TableManagementPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  loading: loading === "load",
-                  onClick: () => void load(false, true),
+                  loading: tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage,
+                  onClick: () => void refreshObjects(true),
                 },
                 {
                   id: "refresh-table-schema",
                   kind: "utility",
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  loading: loading === "schema-refresh",
-                  onClick: () => void load(true, true),
+                  loading: loading === "schema-refresh" || schemaRefreshing,
+                  disabled: loading === "schema-refresh" || schemaRefreshing,
+                  onClick: () => void refreshSchema(true),
                 },
               ]
             : []
@@ -581,12 +906,27 @@ export function TableManagementPage() {
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` }
+              : visibleSchemaRefreshError
+                ? { tone: "danger", message: visibleSchemaRefreshError }
               : null
           }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={
+                schemaRefreshNeedsFull
+                  ? () => void refreshSchema(true)
+                  : () => void refreshObjects()
+              }
+            >
               <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
+              <span>
+                {schemaRefreshNeedsFull
+                  ? t("common.action.schemaRefresh")
+                  : t("tableMgmt.action.refresh")}
+              </span>
             </Button>
           }
         />
@@ -600,18 +940,25 @@ export function TableManagementPage() {
               splitId="table-management-list"
               preferredWidePane="right"
               processing={
-                tables && (loading === "load" || loading === "schema-refresh") ? (
+                tableObjectsQuery.data &&
+                ((tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage) ||
+                  loading === "schema-refresh" ||
+                  schemaRefreshing) ? (
                   <ProcessingIndicator
                     active
                     label={
-                      loading === "schema-refresh"
-                        ? t("tableMgmt.workspace.schemaRefreshing")
+                      loading === "schema-refresh" || schemaRefreshing
+                        ? schemaRefreshProcessingLabel(
+                            schemaRefreshJob,
+                            t("tableMgmt.workspace.schemaRefreshing"),
+                          )
                         : t("tableMgmt.workspace.refreshing")
                     }
-                    operationKey={loading}
+                    operationKey={schemaRefreshing ? schemaRefreshJobId : loading}
                     placement="workspace"
                     className="rounded-md border border-border bg-background px-3 py-2"
                     testId="table-management-workspace-processing"
+                    activityIcon="none"
                   />
                 ) : undefined
               }
@@ -622,10 +969,20 @@ export function TableManagementPage() {
               icon={Table2}
               items={filteredTables}
               selectedName={selectedTableName}
-              loading={loading === "load" && !tables}
+              loading={tableObjectsQuery.isPending && !tableObjectsQuery.data}
+              error={
+                tableObjectsQuery.error && !tableObjectsQuery.data
+                  ? tableObjectsQuery.error instanceof Error
+                    ? tableObjectsQuery.error.message
+                    : t("tableMgmt.error.load")
+                  : ""
+              }
               search={tableSearch}
               filter={tableFilter}
               sort={tableSort}
+              totalCount={totalTableCount}
+              hasNextPage={Boolean(tableObjectsQuery.hasNextPage)}
+              loadingNextPage={tableObjectsQuery.isFetchingNextPage}
               labels={{
                 title: t("tableMgmt.list.title"),
                 hint: t("tableMgmt.grid.hint"),
@@ -652,13 +1009,15 @@ export function TableManagementPage() {
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name)}
               onDrop={openDropDialog}
+              onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
+              onRetry={() => void refreshObjects()}
             />
             <DbObjectDetailPanel
               idPrefix="table-management"
               operationKey={selectedTableName}
               headingId="table-detail-heading"
               detail={detail}
-              loading={detailRequest.loading || (loading === "load" && !tables)}
+              loading={detailRequest.loading || (tableObjectsQuery.isPending && !tableObjectsQuery.data)}
               ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
               ddlError={detailRequest.ddlError}
@@ -693,7 +1052,7 @@ export function TableManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView("list")}>
+              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>{t("tableMgmt.action.backToList")}</span>
               </Button>

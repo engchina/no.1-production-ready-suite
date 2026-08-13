@@ -266,6 +266,18 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await expect(page.getByRole("heading", { name: "評価条件" })).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   const checkboxes = page.getByRole("checkbox");
+  const engineBulkActions = page.getByTestId("quality-evaluation-engine-selection-actions");
+  await expect(engineBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
+  await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
+  await engineBulkActions.getByRole("button", { name: "すべて選択" }).click();
+  await expect(checkboxes.nth(0)).toBeChecked();
+  await expect(checkboxes.nth(1)).toBeDisabled();
+  await expect(checkboxes.nth(1)).not.toBeChecked();
+  await expect(checkboxes.nth(2)).toBeChecked();
+  await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeEnabled();
+  await engineBulkActions.getByRole("button", { name: "すべて解除" }).click();
+  await expect(checkboxes.nth(0)).not.toBeChecked();
+  await expect(checkboxes.nth(2)).not.toBeChecked();
   await checkboxes.nth(0).focus();
   await page.keyboard.press("Space");
   await checkboxes.nth(2).check();

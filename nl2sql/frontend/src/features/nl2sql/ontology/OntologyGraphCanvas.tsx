@@ -35,7 +35,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
 
 import { t } from "@/lib/i18n";
 import { layoutOntologyGraphLayered } from "./graphLayout";

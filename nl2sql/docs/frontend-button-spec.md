@@ -73,6 +73,17 @@
 
 ---
 
+## 4.1 ボタン押下後のスクロール / フォーカス
+
+- **ナビゲーション以外のボタン押下では、ページ全体を自動で先頭へ戻さない。** ローカルな実行・保存・更新・コピーは現在のスクロール位置と作業文脈を保持する。
+- 実行結果・エラー・処理中表示は、影響を受ける最小領域に置く。結果/エラーが現在の表示範囲外に出る場合のみ `scrollIntoView({ block: "nearest", inline: "nearest" })` で最小誘導する。
+- ユーザーが処理中に手動スクロールした場合、その operation 完了時の自動誘導は行わない。ユーザーの移動を優先する。
+- 既存結果を再実行で一時的に消す画面は、共通 `ActionResultRegion` で直前結果領域の高さを保持し、ページ高さの急縮小による `scrollTop` クランプを防ぐ。
+- `prefers-reduced-motion: reduce` ではスクロール挙動を `auto` にする。通常時の誘導は必要最小限の smooth scroll を許容する。
+- URL hash、ブラウザ戻る/進む、サイドナビなど明示的なナビゲーションは、`App` の scroll restoration / hash target ルールを正とし、この規約の対象外とする。
+
+---
+
 ## 5. ページヘッダー操作
 
 ページレベル操作は `PageAction` descriptor で宣言し、`PageActionBar` に表示順・variant・モバイル縮約を委ねる。
@@ -109,6 +120,7 @@
 - **行選択**: 一覧/詳細の単一選択画面では、行の非アクション領域クリックで対象を選択し、右側詳細または編集対象を更新する。`詳細` / `編集` のような純粋な選択導線は `RowActionMenu` に入れない。
 - **詳細**: `ObjectActionBar` は最大 2 個の非破壊・高頻度操作を `secondary` で表示し、残りを `その他の操作` メニューへ入れる。
 - **危険操作**: 無効化・アーカイブ・削除・DROP は一覧行/詳細では menu item として扱い、確定は `ConfirmDialog` または専用確認ダイアログの `danger` ボタンで行う。
+- **危険操作の確認面**: 確認ダイアログ/確認語入力領域は中立背景(`bg-card` / `bg-background`)に統一し、danger は左アクセント・文言色・状態 badge・確定ボタンへ限定する。広い `bg-danger-bg` 面でヘッダー/本文/対象欄を塗らない。
 - **一括操作**: 複数選択を導入する場合は batch action bar を使い、batch mode 中は行内 `RowActionMenu` を disabled または非表示にする。
 - **アクセシビリティ**: menu trigger は `aria-haspopup="menu"` / `aria-expanded` / `aria-controls`、menu は `role="menu"`、item は `role="menuitem"`。Esc で閉じ、ArrowUp/Down/Home/End で移動し、Esc 後は trigger にフォーカスを戻す。
 - **配置**: 行内 trigger は右寄せの icon-only ghost、詳細 action bar はヘッダー右側で `secondary` + overflow。danger item は menu 内で区切り線を置く。menu surface は scroll container 内へ absolute 配置せず、viewport 基準の fixed/portal で表示する。
@@ -127,6 +139,17 @@
 - **構造**: `ContentActionBar` は `aria-label` 必須。複雑な左側状態は `leading`、単純な情報は `title` / `description` / `meta` を使う。
 - **レスポンシブ**: 375px では折り返し可。ただし操作はコンテンツの上に残し、本文やコードの左起点を押し下げすぎない。ページ横スクロールを出さない。
 - **境界**: ページ全体・選択オブジェクト全体に作用する操作は `PageHeader` / `ObjectActionBar` に置き、`ContentActionBar` へ混在させない。
+
+## 5.3 一括選択バー
+
+複数選択リストで全選択を出す場合は、必ず全解除も同じスコープに並べて表示し、
+[`<BulkSelectionActions>`](../frontend/src/components/BulkSelectionActions.tsx) を使う。
+
+- **配置**: リスト直上または group header 右側に置き、対象スコープ(全件 / 表示中 / schema / 権限 group)が変わる位置へ混在させない。
+- **variant**: 全選択は `secondary`、全解除は `ghost`。どちらも `size="sm"` を既定とする。
+- **disabled**: 対象がすべて選択済みなら全選択を disabled、対象の選択が 0 件なら全解除を disabled。読取専用・処理中は両方 disabled。
+- **aria-label**: group 単位の同名ボタンは `"{name} をすべて選択"` / `"{name} の選択を解除"` のように scope 名を含める。
+- **レスポンシブ**: `flex-wrap` で折り返し、375px でも横スクロールを出さない。ボタン文言は `whitespace-nowrap` を保ち、隣接テキストと重ねない。
 
 ---
 
@@ -167,6 +190,10 @@
 - Lucide を使用。ラベル付きは**アイコンを左**に置き(`<Button>` 既定の `gap-1.5`)、`aria-hidden` を付ける。
 - サイズ: §2 の対応(sm/md=14–15、lg=15–16)。`[&>svg]:shrink-0` 済み。
 - 非同期処理は `loading` prop を使う(Loader2 スピナーに置換し自動 disable、`loading-buttons` / `submit-feedback`)。
+  - **同じ operation の動的 spinner は 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する
+    `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的ラベル・経過時間・slow hint
+    のみを表示する。
+  - 結果領域の `TimedLoadingState placement="result"` は既定で iconless。主操作ボタンが唯一の動的 feedback を担う。
   - 例外的に独自アイコンを回したい場合(更新ボタンの `RefreshCw` 回転など)は `disabled` + `className={cn(busy && "animate-spin")}` を使う。
 - emoji をアイコンに使わない(`no-emoji-icons`)。
 

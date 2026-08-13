@@ -2,11 +2,7 @@ import { useMemo } from "react";
 import { Bug, KeyRound, LogOut, UserRound } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import {
-  Sidebar as UiSidebar,
-  type NavSection as UiNavSection,
-  type SidebarLabels,
-} from "@engchina/production-ready-ui";
+import { Sidebar as UiSidebar, type NavSection as UiNavSection, type SidebarLabels } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";

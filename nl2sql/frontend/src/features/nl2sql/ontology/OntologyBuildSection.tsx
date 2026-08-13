@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Ban,
   Check,
@@ -9,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Banner, Button, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
@@ -22,10 +29,7 @@ import { t } from "@/lib/i18n";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
 import { tabularFileFormatConfig } from "@/lib/tabular-file-formats";
-import {
-  DbManagementLoadingSkeleton,
-  DbObjectPanelHeader,
-} from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   acceptOntologyProposal,
   acceptOntologyProposalsBatch,
@@ -588,6 +592,7 @@ export function OntologyBuildSection({
               selectedCount={sourceFiles.length}
               hint={t("profiles.ontologyBuild.sourceFilesHint")}
               icon="file"
+              required
               dataTestId="ontology-build-source-files"
               onFiles={(picked) =>
                 setSourceFiles((current) => mergeUniqueFiles(current, picked))
@@ -692,6 +697,7 @@ export function OntologyBuildSection({
           operationKey="ontology-build-submit"
           placement="action"
           testId="ontology-build-submitting"
+          activityIcon="none"
         />
       ) : null}
 

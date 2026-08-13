@@ -1,21 +1,217 @@
-import type { ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 
-import { ConfirmProvider as UiConfirmProvider } from "@engchina/production-ready-ui";
+import { MessageText, toneIcon, type FeedbackTone } from "@engchina/production-ready-ui";
 
+import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 
-// useConfirm / 型は共有 UI パッケージをそのまま再公開。
-export { useConfirm, type ConfirmOptions } from "@engchina/production-ready-ui";
+export interface ConfirmOptions {
+  title: string;
+  description?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** confirm ボタンのトーン。破壊的操作は "danger"。 */
+  tone?: Extract<FeedbackTone, "danger" | "warning" | "info">;
+  /** オーバーレイクリックでキャンセルを許可（既定 true）。誤操作防止で false にできる。 */
+  dismissOnOverlay?: boolean;
+}
+
+export interface ConfirmDefaultLabels {
+  confirm: string;
+  cancel: string;
+}
+
+type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
+
+const ConfirmContext = createContext<ConfirmFn | null>(null);
+
+export function useConfirm(): ConfirmFn {
+  const ctx = useContext(ConfirmContext);
+  if (!ctx) {
+    throw new Error("useConfirm は <ConfirmProvider> の配下で使用してください。");
+  }
+  return ctx;
+}
+
+interface DialogState {
+  options: ConfirmOptions;
+  resolve: (value: boolean) => void;
+}
 
 /**
- * 確認ダイアログ Provider。共有 UI パッケージへ NL2SQL の i18n（既定文言）を注入する。
+ * 確認ダイアログ Provider。
+ * NL2SQL では確認面を中立背景に統一し、danger はアクセントと確定ボタンだけに限定する。
  */
-export function ConfirmProvider({ children }: { children: ReactNode }) {
+export function ConfirmProvider({
+  children,
+  labels = { confirm: t("common.confirm"), cancel: t("common.cancel") },
+}: {
+  children: ReactNode;
+  labels?: ConfirmDefaultLabels;
+}) {
+  const [state, setState] = useState<DialogState | null>(null);
+
+  const confirm = useCallback<ConfirmFn>((options) => {
+    return new Promise<boolean>((resolve) => {
+      setState({ options, resolve });
+    });
+  }, []);
+
+  const settle = useCallback((value: boolean) => {
+    setState((current) => {
+      current?.resolve(value);
+      return null;
+    });
+  }, []);
+
   return (
-    <UiConfirmProvider
-      labels={{ confirm: t("common.confirm"), cancel: t("common.cancel") }}
-    >
+    <ConfirmContext.Provider value={confirm}>
       {children}
-    </UiConfirmProvider>
+      {state ? (
+        <ConfirmDialog
+          options={state.options}
+          labels={labels}
+          onCancel={() => settle(false)}
+          onConfirm={() => settle(true)}
+        />
+      ) : null}
+    </ConfirmContext.Provider>
+  );
+}
+
+function ConfirmDialog({
+  options,
+  labels,
+  onCancel,
+  onConfirm,
+}: {
+  options: ConfirmOptions;
+  labels: ConfirmDefaultLabels;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { title, description, tone = "danger", dismissOnOverlay = true } = options;
+  const titleId = useId();
+  const descriptionId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocused = useRef<Element | null>(null);
+  const Icon = toneIcon[tone];
+
+  useEffect(() => {
+    previouslyFocused.current = document.activeElement;
+    confirmRef.current?.focus();
+    return () => {
+      if (previouslyFocused.current instanceof HTMLElement) {
+        previouslyFocused.current.focus();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) return;
+      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  const confirmVariant = tone === "danger" ? "danger" : "primary";
+  const toneClass =
+    tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-info";
+  const accentClass =
+    tone === "danger"
+      ? "border-l-danger"
+      : tone === "warning"
+        ? "border-l-warning"
+        : "border-l-info";
+  const iconClass =
+    tone === "danger"
+      ? "border-danger/30 text-danger"
+      : tone === "warning"
+        ? "border-warning/30 text-warning"
+        : "border-info/30 text-info";
+  const footerBorderClass =
+    tone === "danger"
+      ? "border-danger/20"
+      : tone === "warning"
+        ? "border-warning/20"
+        : "border-info/20";
+  const panelClass = [
+    "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border border-l-4 bg-card shadow-xl",
+    accentClass,
+  ].join(" ");
+
+  return createPortal(
+    <div
+      className="animate-overlay-in fixed inset-0 z-[1000] flex items-end justify-center bg-black/50 p-3 sm:items-center sm:p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && dismissOnOverlay) onCancel();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        className={panelClass}
+      >
+        <div className="flex items-start gap-3 bg-card px-5 pt-5">
+          <span
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background ${iconClass}`}
+          >
+            <Icon size={18} aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className={`text-base font-semibold ${toneClass}`}>
+              <MessageText text={title} />
+            </h2>
+            {description ? (
+              <p id={descriptionId} className="mt-1 text-sm leading-relaxed text-muted">
+                <MessageText text={description} />
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <div className={`mt-5 flex justify-end gap-2 border-t bg-background px-5 py-4 ${footerBorderClass}`}>
+          <Button variant="secondary" size="sm" onClick={onCancel}>
+            {options.cancelLabel ?? labels.cancel}
+          </Button>
+          <Button ref={confirmRef} variant={confirmVariant} size="sm" onClick={onConfirm}>
+            {options.confirmLabel ?? labels.confirm}
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }

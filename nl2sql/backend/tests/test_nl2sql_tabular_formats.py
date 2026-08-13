@@ -23,6 +23,7 @@ from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.features.nl2sql.tabular_files import (
     TabularFileReadError,
+    TabularSheetSelectionError,
     read_workbook_sheets,
     select_workbook_sheet,
 )
@@ -67,22 +68,29 @@ def test_real_xls_reader_preserves_sheets_and_scalar_types_case_insensitively() 
     assert warnings == [
         "Missing: Sheet が見つからないため active または先頭 Sheet を使用しました。"
     ]
+    with pytest.raises(TabularSheetSelectionError, match="Missing: Sheet が見つかりません"):
+        select_workbook_sheet(sheets, "Missing", require_requested_name=True)
+    with pytest.raises(TabularSheetSelectionError, match="Sheet 名は必須"):
+        select_workbook_sheet(sheets, require_requested_name=True)
 
 
 @pytest.mark.parametrize(
-    ("filename", "content"),
+    ("filename", "content", "sheet_name"),
     [
-        ("IMPORT.CSV", b"ID,NAME\n1,Aoyama\n"),
-        ("IMPORT.XLSX", _xlsx_fixture()),
+        ("IMPORT.CSV", b"ID,NAME\n1,Aoyama\n", ""),
+        ("IMPORT.XLSX", _xlsx_fixture(), "ImportData"),
     ],
 )
-def test_core_csv_and_xlsx_formats_are_case_insensitive(filename: str, content: bytes) -> None:
+def test_core_csv_and_xlsx_formats_are_case_insensitive(
+    filename: str, content: bytes, sheet_name: str
+) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     imported = service.import_db_admin_tabular(
         DbAdminImportTabularRequest(
             table_name="CORE_IMPORT",
             content_base64=base64.b64encode(content).decode(),
             filename=filename,
+            sheet_name=sheet_name,
         )
     )
 
@@ -100,6 +108,7 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
             table_name="LEGACY_IMPORT",
             content_base64=encoded,
             filename="legacy.XLS",
+            sheet_name="ImportData",
         )
     )
     assert imported.sheet_name == "ImportData"
@@ -159,6 +168,53 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
     extracted = extract_ontology_source(source, content)
     assert any(chunk.locator == "sheet:Secondary;row:2" for chunk in extracted.chunks)
     assert extracted.qa_pairs[0].question == "監査ログを確認したい"
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("missing-sheet.xlsx", _xlsx_fixture()),
+        ("missing-sheet.xls", _xls_fixture()),
+    ],
+)
+def test_db_admin_tabular_import_requires_existing_workbook_sheet(
+    filename: str, content: bytes
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    encoded = base64.b64encode(content).decode()
+
+    with pytest.raises(ValueError, match="Sheet 名は必須"):
+        service.import_db_admin_tabular(
+            DbAdminImportTabularRequest(
+                table_name="STRICT_IMPORT",
+                content_base64=encoded,
+                filename=filename,
+            )
+        )
+
+    with pytest.raises(ValueError, match="Missing: Sheet が見つかりません"):
+        service.import_db_admin_tabular(
+            DbAdminImportTabularRequest(
+                table_name="STRICT_IMPORT",
+                content_base64=encoded,
+                filename=filename,
+                sheet_name="Missing",
+            )
+        )
+
+
+def test_db_admin_tabular_import_rejects_invalid_mode_without_create_fallback() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    with pytest.raises(ValueError, match="未対応 mode"):
+        service.import_db_admin_tabular(
+            DbAdminImportTabularRequest(
+                table_name="STRICT_IMPORT",
+                content_base64=base64.b64encode(b"ID\n1\n").decode(),
+                filename="strict.csv",
+                mode="upsert",
+            )
+        )
 
 
 def test_xls_signature_media_type_and_corruption_errors_are_actionable() -> None:

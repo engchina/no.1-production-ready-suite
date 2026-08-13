@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   CheckSquare,
   BrainCircuit,
@@ -14,9 +20,8 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
+import { buttonVariants } from "@/components/ui/button";
 import {
-  buttonVariants,
-  Button,
   EmptyState,
   ErrorState,
   FormStatus,
@@ -27,6 +32,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
@@ -35,6 +41,10 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import {
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -462,6 +472,7 @@ export function QuestionClassifierModelsPage() {
             placement="workspace"
             className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
             testId="question-learning-workspace-processing"
+            activityIcon="none"
           />
         ) : null}
 
@@ -670,6 +681,7 @@ function TrainingDataPanel({
           replaceText={t("qcm.file.replace")}
           clearAriaLabel={t("qcm.file.clear")}
           icon="spreadsheet"
+          required
           disabled={loading === "classifier-import"}
           loading={loading === "classifier-import"}
           dataTestId="qcm-training-file-field"
@@ -1020,23 +1032,26 @@ function ModelTestPanel({
             </div>
             <CompactFact label={t("qcm.test.predictedCategory")} value={prediction.predicted_category || "-"} />
             {prediction.candidates.length > 0 && (
-              <div className="overflow-hidden rounded-md border border-border bg-card">
+              <div
+                className={`rounded-md border border-border bg-card ${INFORMATION_TABLE_SCROLL_CLASS}`}
+                data-testid="qcm-test-candidates-scroll-region"
+              >
                 <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-sm">
                   <colgroup>
                     <col />
                     <col className="w-[7rem]" />
                     <col className="w-[11rem]" />
                   </colgroup>
-                  <thead className="bg-background text-xs text-muted">
-                    <tr>
-                      <th className="px-3 py-2 text-left">{t("qcm.test.category")}</th>
-                      <th className="px-3 py-2 text-left">{t("qcm.test.probability")}</th>
-                      <th className="px-3 py-2 text-left">{t("nl2sql.profile.label")}</th>
+                  <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+                    <tr className="h-10">
+                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.category")}</th>
+                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.probability")}</th>
+                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("nl2sql.profile.label")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
                     {prediction.candidates.map((candidate) => (
-                      <tr key={candidate.category}>
+                      <tr key={candidate.category} className={INFORMATION_TABLE_ROW_CLASS}>
                         <td className="break-words px-3 py-2 font-semibold text-foreground">{candidate.category}</td>
                         <td className="px-3 py-2 font-mono text-xs text-foreground">{Math.round(candidate.score * 100)}%</td>
                         <td className="break-words px-3 py-2 text-xs text-muted">{candidate.profile_name || "-"}</td>
@@ -1125,8 +1140,7 @@ function TrainingCandidatesPanel({
     (item.status === "profile_missing" && profileOverrides[item.history_id])
   );
   const allSelected = selectable.length > 0 && selectable.every((item) => selected.has(item.history_id));
-  const someSelected = selectable.some((item) => selected.has(item.history_id));
-  const selectPageCheckboxRef = useRef<HTMLInputElement>(null);
+  const selectedOnPageCount = selectable.filter((item) => selected.has(item.history_id)).length;
   const isLoading = loading === "candidates-load" || (loading === "load" && data === null);
   const totalPages = Math.max(
     1,
@@ -1136,16 +1150,15 @@ function TrainingCandidatesPanel({
   const pageStart = items.length > 0 ? (page - 1) * CANDIDATE_PAGE_SIZE + 1 : 0;
   const pageEnd = items.length > 0 ? pageStart + items.length - 1 : 0;
 
-  useEffect(() => {
-    if (selectPageCheckboxRef.current) {
-      selectPageCheckboxRef.current.indeterminate = someSelected && !allSelected;
-    }
-  }, [allSelected, someSelected]);
-
-  const toggleAll = () => {
+  const selectPage = () => {
     const next = new Set(selected);
-    if (allSelected) selectable.forEach((item) => next.delete(item.history_id));
-    else selectable.forEach((item) => next.add(item.history_id));
+    selectable.forEach((item) => next.add(item.history_id));
+    onSelectionChange(next);
+  };
+
+  const clearPage = () => {
+    const next = new Set(selected);
+    selectable.forEach((item) => next.delete(item.history_id));
     onSelectionChange(next);
   };
 
@@ -1232,17 +1245,15 @@ function TrainingCandidatesPanel({
             className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
             data-testid="qcm-candidate-bulk-actions"
           >
-            <label className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 text-sm font-medium text-foreground">
-              <input
-                ref={selectPageCheckboxRef}
-                type="checkbox"
-                checked={allSelected}
-                disabled={selectable.length === 0}
-                onChange={toggleAll}
-                className="h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
-              />
-              <span className="break-words">{t("qcm.candidates.selectPage", { count: selectable.length })}</span>
-            </label>
+            <BulkSelectionActions
+              selectLabel={t("common.selection.selectVisible")}
+              clearLabel={t("common.selection.clearVisible")}
+              selectDisabled={selectable.length === 0 || allSelected}
+              clearDisabled={selectedOnPageCount === 0}
+              dataTestId="qcm-candidate-page-selection-actions"
+              onSelectAll={selectPage}
+              onClearAll={clearPage}
+            />
             <div className="flex min-w-0 flex-col gap-2 sm:items-end">
               <FormStatus tone="danger" message={actionError} className="max-w-xl" />
               <Button

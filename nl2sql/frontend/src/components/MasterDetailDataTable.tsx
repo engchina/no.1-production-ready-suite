@@ -1,10 +1,7 @@
 import type { MouseEvent, ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 
-import type {
-  DataTableColumn,
-  DataTableSort,
-} from "@engchina/production-ready-ui";
+import type { DataTableColumn, DataTableSort } from "@engchina/production-ready-ui";
 
 import { cn } from "@/lib/utils";
 

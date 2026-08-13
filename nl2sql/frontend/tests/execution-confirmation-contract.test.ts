@@ -14,7 +14,13 @@ function sliceBetween(text: string, startMarker: string, endMarker: string): str
   return text.slice(start, end);
 }
 
-test("ExecutionConfirmationField uses a stable neutral surface with a danger accent", () => {
+function sliceFrom(text: string, startMarker: string): string {
+  const start = text.indexOf(startMarker);
+  assert.notEqual(start, -1);
+  return text.slice(start);
+}
+
+test("ExecutionConfirmationField uses a stable neutral surface without a left danger accent", () => {
   const component = sliceBetween(
     source("../src/features/nl2sql/components/DbAdminShared.tsx"),
     "export function ExecutionConfirmationField",
@@ -22,7 +28,7 @@ test("ExecutionConfirmationField uses a stable neutral surface with a danger acc
   );
 
   assert.match(component, /border border-border bg-background p-3/u);
-  assert.match(component, /border-l-4 border-l-danger/u);
+  assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
   assert.doesNotMatch(component, /bg-danger-bg\/70/u);
   assert.match(component, /border border-border bg-card/u);
   assert.match(component, /focus:border-danger focus:ring-2 focus:ring-danger\/40/u);
@@ -43,7 +49,19 @@ test("ExecutionConfirmationField keeps empty, mismatch, and confirmed status ton
 
 test("Drop object dialog does not wrap the confirmation field in a second danger surface", () => {
   const sourceText = source("../src/features/nl2sql/components/DbObjectManagementShared.tsx");
+  const component = sliceFrom(
+    sourceText,
+    "export function DropDbObjectDialog",
+  );
 
   assert.doesNotMatch(sourceText, /fieldset className="grid gap-3 rounded-md border border-danger\/30 bg-danger-bg\/70 p-3"/u);
-  assert.match(sourceText, /fieldset className="grid gap-3 rounded-md border border-border bg-background p-3"/u);
+  assert.match(component, /border border-border bg-card shadow-xl/u);
+  assert.match(component, /border-b border-border bg-card/u);
+  assert.match(component, /border border-border bg-background px-3 py-2/u);
+  assert.match(component, /text-xs font-semibold text-foreground/u);
+  assert.match(component, /fieldset className="grid gap-3 rounded-md border border-border bg-background p-3"/u);
+  assert.match(component, /legend className="px-1 text-sm font-semibold text-foreground"/u);
+  assert.match(component, /tone="danger"/u);
+  assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
+  assert.doesNotMatch(component, /bg-danger-bg/u);
 });

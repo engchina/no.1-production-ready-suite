@@ -1,14 +1,11 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { MessageSquareText } from "lucide-react";
 
-import { Button, EmptyState } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
-import {
-  DbManagementLoadingSkeleton,
-  DbObjectManagementPanelShell,
-  DbObjectPanelHeader,
-} from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { answerOntologyQuestion, type PlaygroundResult } from "./queryPlayground";
 import type { OntologyGraph } from "./types";
 

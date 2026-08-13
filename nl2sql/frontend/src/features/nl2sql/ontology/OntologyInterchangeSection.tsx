@@ -1,17 +1,14 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, Download, LayoutTemplate } from "lucide-react";
 
-import { Banner, Button, EmptyState, toast } from "@engchina/production-ready-ui";
+import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { t } from "@/lib/i18n";
 import { downloadBlob, downloadFilename } from "@/lib/download";
-import {
-  DbManagementLoadingSkeleton,
-  DbObjectManagementPanelShell,
-  DbObjectPanelHeader,
-} from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   applyOntologyTemplate,
   downloadOntologyExport,
@@ -417,6 +414,7 @@ export function OntologyInterchangeSection({
                 accept=".rdf,.owl,.xml,.ttl"
                 selectedText={importFile?.name ?? ""}
                 formatLabel=".RDF / .OWL / .XML / .TTL"
+                required
                 dataTestId="ontology-import-file"
                 onFiles={([file]) => {
                   setImportFile(file);

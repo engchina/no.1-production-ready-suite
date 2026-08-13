@@ -481,5 +481,6 @@ def test_openapi_exposes_new_quality_flow_and_removes_legacy_evaluation_routes()
         "/api/nl2sql/evaluation-runs",
         "/api/nl2sql/compare",
         "/api/nl2sql/synthetic-cases",
+        "/api/nl2sql/synthetic-data/operations/{operation_id}",
     }
     assert removed.isdisjoint(paths)

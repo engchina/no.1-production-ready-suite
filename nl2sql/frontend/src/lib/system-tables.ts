@@ -1,8 +1,4 @@
-import type {
-  SystemTableOperationResult,
-  SystemTableOperationStatus,
-  SystemTableSchemaStatus,
-} from "@/lib/api";
+import type { SystemTableOperationResult, SystemTableOperationStatus, SystemTableSchemaStatus } from "@/lib/api";
 
 export function systemTableStatusLabelKey(status: SystemTableSchemaStatus): string {
   return `settings.database.systemTables.status.${status}`;

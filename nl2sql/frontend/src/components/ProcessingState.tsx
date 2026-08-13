@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Clock3, Loader2 } from "lucide-react";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
 
 import {
   elapsedMsBetween,
@@ -25,6 +25,8 @@ export type ProcessingPlacement =
   | "result"
   | "action"
   | "job";
+
+export type ProcessingActivityIcon = "spinner" | "none";
 
 export interface UseOperationTimingOptions {
   active: boolean;
@@ -111,6 +113,8 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   className?: string;
   testId?: string;
   showSlowMessage?: boolean;
+  /** 同じ operation の主ボタンが loading の場合は "none" にして動的 icon を 1 つへ絞る。 */
+  activityIcon?: ProcessingActivityIcon;
 }
 
 /** 処理ラベル・spinner・経過時間・取消を一列にまとめた全画面共通表示。 */
@@ -122,16 +126,19 @@ export function ProcessingIndicator({
   className = "",
   testId,
   showSlowMessage = true,
+  activityIcon = "spinner",
   ...timingOptions
 }: ProcessingIndicatorProps) {
   const timing = useOperationTiming(timingOptions);
   const displayLabel = timing.active ? label : finalLabel ?? t("common.processing.completed");
+  const showActivityIcon = activityIcon === "spinner";
 
   return (
     <div
       className={`grid min-w-0 gap-2 ${className}`}
       aria-busy={timing.active}
       data-processing-placement={placement}
+      data-processing-activity-icon={activityIcon}
       data-testid={testId}
     >
       {timing.active ? (
@@ -141,15 +148,15 @@ export function ProcessingIndicator({
       ) : null}
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
-          {timing.active ? (
+          {timing.active && showActivityIcon ? (
             <Loader2
               size={16}
               className="shrink-0 animate-spin text-primary motion-reduce:animate-none"
               aria-hidden="true"
             />
-          ) : (
+          ) : !timing.active && showActivityIcon ? (
             <Clock3 size={16} className="shrink-0 text-muted" aria-hidden="true" />
-          )}
+          ) : null}
           <span className="min-w-0 break-words">{displayLabel}</span>
         </span>
         <span className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
@@ -198,6 +205,7 @@ export interface TimedLoadingStateProps {
   className?: string;
   testId?: string;
   framed?: boolean;
+  activityIcon?: ProcessingActivityIcon;
 }
 
 /** Skeleton/結果領域の寸法を保ったまま共通 timer を付ける loading container。 */
@@ -211,7 +219,10 @@ export function TimedLoadingState({
   className = "",
   testId,
   framed = true,
+  activityIcon,
 }: TimedLoadingStateProps) {
+  const effectiveActivityIcon = activityIcon ?? (placement === "result" ? "none" : "spinner");
+
   return (
     <section
       className={`grid min-w-0 gap-3 ${
@@ -230,6 +241,7 @@ export function TimedLoadingState({
         onCancel={onCancel}
         placement={placement}
         testId={testId ? `${testId}-processing` : undefined}
+        activityIcon={effectiveActivityIcon}
       />
       {children}
     </section>

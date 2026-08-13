@@ -16,6 +16,7 @@ test("shared processing state exposes the common hook and loading components", (
   assert.match(processingSource, /export function ProcessingIndicator/u);
   assert.match(processingSource, /export function TimedLoadingState/u);
   assert.match(processingSource, /export type ProcessingPlacement/u);
+  assert.match(processingSource, /export type ProcessingActivityIcon = "spinner" \| "none"/u);
   assert.match(processingSource, /DEFAULT_SLOW_AFTER_MS = 10_000/u);
 });
 
@@ -34,9 +35,20 @@ test("processing placement is semantic and exposed for UI verification", () => {
   assert.match(processingSource, /placement\?: ProcessingPlacement/u);
   assert.match(processingSource, /aria-busy=\{timing\.active\}/u);
   assert.match(processingSource, /data-processing-placement=\{placement\}/u);
+  assert.match(processingSource, /data-processing-activity-icon=\{activityIcon\}/u);
   assert.match(managementShellSource, /processing\?: ReactNode/u);
   assert.match(managementShellSource, /aria-busy=\{processing \? true : undefined\}/u);
   assert.match(managementShellSource, /\{processing\}\s*\{splitPaneId \?/u);
+});
+
+test("processing activity icon defaults protect result areas from duplicate spinners", () => {
+  assert.match(processingSource, /activityIcon\?: ProcessingActivityIcon/u);
+  assert.match(processingSource, /activityIcon = "spinner"/u);
+  assert.match(processingSource, /const effectiveActivityIcon = activityIcon \?\? \(placement === "result" \? "none" : "spinner"\)/u);
+  assert.match(processingSource, /const showActivityIcon = activityIcon === "spinner"/u);
+  assert.match(processingSource, /timing\.active && showActivityIcon/u);
+  assert.match(processingSource, /!timing\.active && showActivityIcon/u);
+  assert.match(processingSource, /activityIcon=\{effectiveActivityIcon\}/u);
 });
 
 test("operation timer resets on operation changes and recovers from background throttling", () => {
