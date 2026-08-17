@@ -5160,6 +5160,7 @@ class Nl2SqlService:
         profile_id: str = "",
         status: str = "",
         query: str = "",
+        actor_user_id: str = "",
     ) -> tuple[list[HistoryItem], str, int]:
         repository = self._incremental_repository
         if repository is not None:
@@ -5171,6 +5172,9 @@ class Nl2SqlService:
                     profile_id=profile_id,
                     status=status,
                     query=query,
+                    payload_filters=(
+                        {"actor_user_id": actor_user_id} if actor_user_id else None
+                    ),
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -5199,6 +5203,7 @@ class Nl2SqlService:
                     or query_key
                     in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
                 )
+                and (not actor_user_id or item.actor_user_id == actor_user_id)
             ]
         total = len(items)
         selected = items[offset : offset + limit]
@@ -5263,12 +5268,21 @@ class Nl2SqlService:
             self._classifier_examples = examples
             self._classifier_artifact = artifact
 
-    def list_history(self) -> HistoryData:
+    def list_history(self, *, actor_user_id: str = "") -> HistoryData:
         if self._incremental_repository is not None:
-            items, _cursor, _total = self._history_page(cursor=None, limit=50)
+            items, _cursor, _total = self._history_page(
+                cursor=None,
+                limit=50,
+                actor_user_id=actor_user_id,
+            )
             return HistoryData(items=items)
         with self._lock:
-            return HistoryData(items=list(reversed(self._history[-50:])))
+            items = [
+                item
+                for item in reversed(self._history)
+                if not actor_user_id or item.actor_user_id == actor_user_id
+            ]
+            return HistoryData(items=items[:50])
 
     def record_ontology_history(
         self,
@@ -5283,6 +5297,7 @@ class Nl2SqlService:
         result: QueryResults,
         ontology_trace_summary: dict[str, Any],
         elapsed_ms: int | None = None,
+        actor_user_id: str = "",
     ) -> HistoryItem:
         """Query Session 実行を legacy history へ一度だけ投影する。"""
 
@@ -5310,6 +5325,7 @@ class Nl2SqlService:
                 result_row_count=result.total,
                 result_columns=result.columns,
                 session_id=session_id,
+                actor_user_id=actor_user_id,
                 ontology_trace_summary=dict(ontology_trace_summary),
             )
             self._history.append(item)
@@ -7061,7 +7077,8 @@ class Nl2SqlService:
                 **structure,
                 "summary": (
                     f"{', '.join(table_labels)} を参照し、"
-                    f"{', '.join(structure['operations']) if structure['operations'] else 'SQL'} 操作を行います。"
+                    f"{', '.join(structure['operations']) if structure['operations'] else 'SQL'} "
+                    "操作を行います。"
                 ),
             }
         question = self._reverse_business_question(
@@ -7127,7 +7144,8 @@ class Nl2SqlService:
                 ),
                 system_prompt=(
                     "Oracle SQL を日本語の自然な業務質問へ逆生成してください。"
-                    "question はSQLの説明文ではなく、業務担当者が検索欄に入力しそうな1文にしてください。"
+                    "question はSQLの説明文ではなく、"
+                    "業務担当者が検索欄に入力しそうな1文にしてください。"
                     "物理テーブル名・列名よりも、schema の logical name、comment、"
                     "glossary の業務語彙を優先してください。"
                     "SQL の列・条件・集計・結合・並び順を省略しないでください。"
@@ -13686,6 +13704,7 @@ class Nl2SqlService:
                 safety_is_safe=result.safety.is_safe,
                 result_row_count=result.results.total,
                 result_columns=result.results.columns,
+                actor_user_id=job.actor_user_id,
             )
             self._history.append(history_item)
         self._persist_entities(

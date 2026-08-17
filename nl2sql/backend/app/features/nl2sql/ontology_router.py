@@ -19,7 +19,7 @@ from threading import RLock
 from typing import Annotated, Any, Literal, NoReturn, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
 from pydantic import Field
 
@@ -1854,12 +1854,17 @@ class OntologyApiRuntime:
         request: SqlConfirmationRequest,
         *,
         idempotency_key: str,
+        actor_user_id: str = "",
     ) -> QueryExecutionData:
         data = self._run_session_idempotent(
             "execute_query_session",
             idempotency_key,
-            {"session_id": session_id, "request": request.model_dump(mode="json")},
-            lambda: self.execute(session_id, request),
+            {
+                "session_id": session_id,
+                "request": request.model_dump(mode="json"),
+                "actor_user_id": actor_user_id,
+            },
+            lambda: self.execute(session_id, request, actor_user_id=actor_user_id),
         )
         payload = data.model_dump()
         if payload.get("result") is None and self._results.get(session_id) is not None:
@@ -2428,6 +2433,8 @@ class OntologyApiRuntime:
         self,
         session_id: str,
         request: SqlConfirmationRequest,
+        *,
+        actor_user_id: str = "",
     ) -> QueryExecutionData:
         with self._lock:
             self._ensure_store()
@@ -2520,6 +2527,7 @@ class OntologyApiRuntime:
                         result=result,
                         ontology_trace_summary=data.ontology_trace_summary,
                         elapsed_ms=elapsed_ms,
+                        actor_user_id=actor_user_id,
                     )
                 except Exception:
                     # SQL は既に実行済みなので history 投影障害で結果を失わせない。
@@ -4011,21 +4019,24 @@ def confirm_query_sql(
 )
 def execute_query_session(
     session_id: str,
-    request: SqlBindingRequest,
+    payload: SqlBindingRequest,
+    http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QueryExecutionData]:
     try:
-        if request.session_id != session_id:
+        if payload.session_id != session_id:
             raise OntologyIntegrityError(
                 "SESSION_BINDING_MISMATCH",
                 "実行 binding の session ID が URL と一致しません。",
             )
+        principal = getattr(http_request.state, "principal", None)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.execute_idempotent,
                 session_id,
-                request.binding(),
+                payload.binding(),
                 idempotency_key=idempotency_key,
+                actor_user_id=str(getattr(principal, "user_id", "")),
             )
         )
     except Exception as exc:

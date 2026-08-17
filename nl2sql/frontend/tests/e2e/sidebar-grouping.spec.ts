@@ -67,6 +67,11 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
+    icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
+  );
+  expect(menuIconSignatures).toHaveLength(27);
+  expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ管理", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toBeVisible();

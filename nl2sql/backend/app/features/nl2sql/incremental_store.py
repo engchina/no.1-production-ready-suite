@@ -338,6 +338,7 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_id: str = "",
         status: str = "",
         query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]: ...
 
 
@@ -812,9 +813,11 @@ class MemoryIncrementalNl2SqlRepository:
         profile_id: str = "",
         status: str = "",
         query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         decoded = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
+        filters = {key: value for key, value in (payload_filters or {}).items() if value}
         with self._lock:
             values = [
                 value
@@ -823,6 +826,10 @@ class MemoryIncrementalNl2SqlRepository:
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
                 and (not query_key or query_key in _canonical_json(value).casefold())
+                and all(
+                    str(value.get(key) or "") == expected
+                    for key, expected in filters.items()
+                )
             ]
             values.sort(
                 key=lambda item: (
@@ -1757,6 +1764,7 @@ class OracleIncrementalNl2SqlRepository:
         profile_id: str = "",
         status: str = "",
         query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         decoded = _decode_cursor(cursor, 2)
         where = ["COLLECTION = :collection"]
@@ -1770,6 +1778,17 @@ class OracleIncrementalNl2SqlRepository:
         if query.strip():
             where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
             filter_binds["query"] = query.strip()
+        for index, (key, value) in enumerate((payload_filters or {}).items()):
+            if not value:
+                continue
+            if not key.replace("_", "").isalnum():
+                raise ValueError("payload filter key が不正です。")
+            bind_name = f"payload_filter_{index}"
+            where.append(
+                "JSON_VALUE(PAYLOAD_JSON, "
+                f"'$.{key}' RETURNING VARCHAR2(4000) NULL ON ERROR) = :{bind_name}"
+            )
+            filter_binds[bind_name] = value
         count_predicate = " AND ".join(where)
         count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"
         page_binds = dict(filter_binds)

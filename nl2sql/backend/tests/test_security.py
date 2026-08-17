@@ -15,6 +15,10 @@ from fastapi import HTTPException, Request, Response
 
 from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
+from app.features.nl2sql import router as nl2sql_router
+from app.features.nl2sql.models import HistoryItem, Nl2SqlEngine
+from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.dependencies import authorize_api_request, local_debug_principal
@@ -728,6 +732,152 @@ def test_api_enforces_menu_permissions(
             )
             assert denied_execute.status_code == 403
             assert (await client.get("/api/security/users")).status_code == 403
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def test_history_api_scopes_items_to_actor_except_system_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    _patch_security_threadpools(monkeypatch)
+    reset_security_service()
+    from app.security.service import get_security_service
+
+    get_security_service().bootstrap()
+
+    history_service = Nl2SqlService(store=MemoryNl2SqlStore())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", history_service)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            login = await client.post(
+                "/api/auth/login",
+                json={"login_name": "ADMIN", "password": "BootstrapPass!123"},
+            )
+            assert login.status_code == 200
+            csrf = client.cookies.get("nl2sql_csrf")
+            assert csrf
+            changed = await client.post(
+                "/api/auth/password/change",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "current_password": "BootstrapPass!123",
+                    "new_password": "IndependentPass!456",
+                },
+            )
+            assert changed.status_code == 200
+            admin_login = await client.post(
+                "/api/auth/login",
+                json={"login_name": "ADMIN", "password": "IndependentPass!456"},
+            )
+            assert admin_login.status_code == 200
+            admin_user_id = admin_login.json()["data"]["user_id"]
+            csrf = client.cookies.get("nl2sql_csrf")
+            assert csrf
+            role_response = await client.post(
+                "/api/security/roles",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "role_code": "HISTORY_OWNER_VIEWER",
+                    "display_name": "履歴閲覧",
+                    "permissions": ["menu.history"],
+                    "data_entitlements": [],
+                },
+            )
+            assert role_response.status_code == 200
+            role_id = role_response.json()["data"]["role_id"]
+            user_response = await client.post(
+                "/api/security/users",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "login_name": "owner.viewer",
+                    "display_name": "履歴所有者",
+                    "temporary_password": "ViewerStart!123",
+                    "role_ids": [role_id],
+                },
+            )
+            assert user_response.status_code == 200
+            viewer_user_id = user_response.json()["data"]["user"]["user_id"]
+
+            history_service._history = [  # noqa: SLF001 - API scope regression fixture
+                HistoryItem(
+                    id="legacy-history",
+                    question="所有者不明",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    generated_sql="SELECT 1 FROM DUAL",
+                    created_at="2026-08-17T00:00:00+00:00",
+                ),
+                HistoryItem(
+                    id="admin-history",
+                    question="管理者履歴",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    generated_sql="SELECT 1 FROM DUAL",
+                    created_at="2026-08-17T00:01:00+00:00",
+                    actor_user_id=admin_user_id,
+                ),
+                HistoryItem(
+                    id="viewer-history",
+                    question="自分の履歴",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    generated_sql="SELECT 1 FROM DUAL",
+                    created_at="2026-08-17T00:02:00+00:00",
+                    actor_user_id=viewer_user_id,
+                ),
+                HistoryItem(
+                    id="other-history",
+                    question="他人の履歴",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    generated_sql="SELECT 1 FROM DUAL",
+                    created_at="2026-08-17T00:03:00+00:00",
+                    actor_user_id="other-user",
+                ),
+            ]
+
+            admin_history = await client.get("/api/nl2sql/history")
+            assert admin_history.status_code == 200
+            assert [item["id"] for item in admin_history.json()["data"]["items"]] == [
+                "other-history",
+                "viewer-history",
+                "admin-history",
+                "legacy-history",
+            ]
+            await client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+
+            await client.post(
+                "/api/auth/login",
+                json={"login_name": "owner.viewer", "password": "ViewerStart!123"},
+            )
+            csrf = client.cookies.get("nl2sql_csrf")
+            assert csrf
+            viewer_changed = await client.post(
+                "/api/auth/password/change",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "current_password": "ViewerStart!123",
+                    "new_password": "ReadOnlyPass!456",
+                },
+            )
+            assert viewer_changed.status_code == 200
+            viewer_login = await client.post(
+                "/api/auth/login",
+                json={"login_name": "owner.viewer", "password": "ReadOnlyPass!456"},
+            )
+            assert viewer_login.status_code == 200
+            scoped_history = await client.get("/api/nl2sql/history")
+            assert scoped_history.status_code == 200
+            assert [item["id"] for item in scoped_history.json()["data"]["items"]] == [
+                "viewer-history"
+            ]
 
     try:
         asyncio.run(exercise())

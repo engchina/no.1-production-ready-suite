@@ -931,9 +931,15 @@ def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
 
 
 @router.get("/history", response_model=ApiResponse[HistoryData])
-def history() -> ApiResponse[HistoryData]:
+def history(request: Request) -> ApiResponse[HistoryData]:
     """NL2SQL 検索履歴。"""
-    return ApiResponse(data=nl2sql_service.list_history())
+    principal = getattr(request.state, "principal", None)
+    if principal is None or bool(getattr(principal, "is_system_admin", False)):
+        return ApiResponse(data=nl2sql_service.list_history())
+    actor_user_id = str(getattr(principal, "user_id", ""))
+    if not actor_user_id:
+        return ApiResponse(data=HistoryData(items=[]))
+    return ApiResponse(data=nl2sql_service.list_history(actor_user_id=actor_user_id))
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])

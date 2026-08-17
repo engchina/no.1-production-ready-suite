@@ -35,6 +35,7 @@ from app.features.nl2sql.incremental_store import (
 )
 from app.features.nl2sql.models import (
     JobCreateRequest,
+    JobStatus,
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
@@ -381,6 +382,86 @@ def test_enterprise_ai_direct_uses_incremental_schema_when_legacy_catalog_is_emp
     assert "table APP.ORDERS" in context
     assert "column ID" in context
     assert "APP.PAYMENTS" not in context
+
+
+def test_job_history_records_actor_user_id_in_incremental_store() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    _apply_incremental_catalog(
+        repository,
+        SchemaCatalog(
+            refreshed_at="2026-08-14T00:00:00+00:00",
+            schema_fingerprint="incremental-schema-v1",
+            current_owner="APP",
+            tables=[
+                _table("ORDERS", comment="注文").model_copy(
+                    update={
+                        "columns": [
+                            SchemaColumn(
+                                column_name="ID",
+                                logical_name="ID",
+                                data_type="NUMBER",
+                                nullable=False,
+                            ),
+                            SchemaColumn(
+                                column_name="ORDER_NAME",
+                                logical_name="注文名",
+                                data_type="VARCHAR2",
+                                nullable=True,
+                                sample_values=["注文A"],
+                            ),
+                            SchemaColumn(
+                                column_name="AMOUNT",
+                                logical_name="金額",
+                                data_type="NUMBER",
+                                nullable=True,
+                            ),
+                            SchemaColumn(
+                                column_name="CREATED_AT",
+                                logical_name="作成日",
+                                data_type="DATE",
+                                nullable=True,
+                            ),
+                        ]
+                    }
+                )
+            ],
+        ),
+    )
+    repository.save_profile(
+        Nl2SqlProfile(
+            id="orders-profile",
+            name="注文管理",
+            allowed_tables=["APP.ORDERS"],
+        ),
+        expected_etag=None,
+    )
+    service = _incremental_service(repository)
+    service._catalog = repository.load_catalog()  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient(  # noqa: SLF001
+        '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="注文一覧を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="orders-profile",
+        ),
+        actor_user_id="user-1",
+    )
+    job = None
+    for _ in range(50):
+        job = service.get_job(created.job_id)
+        if job and job.status == JobStatus.DONE:
+            break
+        time.sleep(0.01)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE, job.error_message
+    own_history = service.list_history(actor_user_id="user-1").items
+    assert len(own_history) == 1
+    assert own_history[0].actor_user_id == "user-1"
+    assert service.list_history(actor_user_id="other-user").items == []
 
 
 def test_enterprise_ai_direct_reports_profile_scope_when_incremental_object_is_missing() -> None:
@@ -786,6 +867,42 @@ def test_oracle_state_document_lobs_are_materialized_before_connection_closes() 
     )
 
 
+def test_oracle_state_document_page_filters_payload_before_paging() -> None:
+    payload = '{"id":"history-own","question":"自分の履歴","actor_user_id":"user-1"}'
+    repository, connections = _oracle_repository(
+        [
+            [(1,)],
+            [
+                (
+                    _LobPayload(payload),
+                    datetime(2026, 7, 20, tzinfo=UTC),
+                    "history-own",
+                )
+            ],
+        ]
+    )
+
+    page, next_cursor, total = repository.list_documents_page(
+        "history",
+        cursor=None,
+        limit=1,
+        payload_filters={"actor_user_id": "user-1"},
+    )
+
+    assert [item["id"] for item in page] == ["history-own"]
+    assert next_cursor is None
+    assert total == 1
+    executed = "\n".join(
+        sql for connection in connections for sql, _binds in connection.executed
+    )
+    assert "JSON_VALUE(PAYLOAD_JSON, '$.actor_user_id'" in executed
+    assert all(
+        binds.get("payload_filter_0") == "user-1"
+        for connection in connections
+        for _sql, binds in connection.executed
+    )
+
+
 @pytest.mark.asyncio
 async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch: pytest.MonkeyPatch,
@@ -800,6 +917,7 @@ async def test_similar_history_lob_read_does_not_block_following_job(
             "generated_sql": "SELECT DEPARTMENT_NAME FROM ADMIN.DEPARTMENT",
             "created_at": "2026-07-20T00:00:00+00:00",
             "feedback_rating": "good",
+            "admin_feedback_rating": "good",
             "profile_id": "default",
             "profile_name": "標準プロファイル",
             "safety_is_safe": True,
@@ -993,6 +1111,32 @@ def test_state_document_page_uses_stable_keyset_cursor() -> None:
     )
     assert [item["id"] for item in second] == ["history-2", "history-1"]
     assert second_total == 6
+
+
+def test_memory_state_document_page_filters_payload_before_paging() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "history",
+        "history-own",
+        {"id": "history-own", "actor_user_id": "user-1"},
+    )
+    for index in range(3):
+        repository.put_document(
+            "history",
+            f"history-other-{index}",
+            {"id": f"history-other-{index}", "actor_user_id": "other-user"},
+        )
+
+    page, next_cursor, total = repository.list_documents_page(
+        "history",
+        cursor=None,
+        limit=1,
+        payload_filters={"actor_user_id": "user-1"},
+    )
+
+    assert [item["id"] for item in page] == ["history-own"]
+    assert next_cursor is None
+    assert total == 1
 
 
 def test_two_services_converge_through_change_token() -> None:
