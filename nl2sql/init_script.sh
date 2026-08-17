@@ -51,10 +51,13 @@ retry_command() {
   local attempt status
   status=0
   for attempt in $(seq 1 "${attempts}"); do
-    if "$@"; then
+    set +e
+    "$@"
+    status="$?"
+    set -e
+    if [ "${status}" -eq 0 ]; then
       return 0
     fi
-    status="$?"
     log "Command failed with status ${status} on attempt ${attempt}/${attempts}: $*"
     sleep $((attempt * 5))
   done
@@ -177,6 +180,9 @@ Type=simple
 User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${BACKEND_DIR}
+Environment=HOME=/home/${APP_USER}
+Environment=PYTHONUNBUFFERED=1
+Environment=UV_NO_PROGRESS=1
 ExecStart=${exec_start}
 Restart=always
 RestartSec=5
@@ -209,7 +215,12 @@ configure_systemd() {
     "Production Ready NL2SQL ontology worker"
 
   systemctl daemon-reload
-  systemctl enable --now \
+  systemctl enable \
+    production-ready-nl2sql-backend.service \
+    production-ready-nl2sql-schema-refresh-worker.service \
+    production-ready-nl2sql-quality-evaluation-worker.service \
+    production-ready-nl2sql-ontology-worker.service
+  systemctl restart \
     production-ready-nl2sql-backend.service \
     production-ready-nl2sql-schema-refresh-worker.service \
     production-ready-nl2sql-quality-evaluation-worker.service \
@@ -270,9 +281,23 @@ EOF
   systemctl reload nginx || systemctl restart nginx
 }
 
+dump_service_diagnostics() {
+  local service="$1"
+  log "Diagnostics for ${service}: systemctl status"
+  systemctl --no-pager --full status "${service}" || true
+  log "Diagnostics for ${service}: recent journal"
+  journalctl -u "${service}" -n 160 --no-pager || true
+}
+
 wait_for_backend() {
   log "Waiting for backend health endpoint."
-  retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/health"
+  if retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/health"; then
+    return 0
+  fi
+  local status="$?"
+  log "Backend did not become healthy on ${BACKEND_HOST}:${BACKEND_PORT}."
+  dump_service_diagnostics production-ready-nl2sql-backend.service
+  return "${status}"
 }
 
 main() {
@@ -286,8 +311,8 @@ main() {
   build_frontend
   initialize_database_schema
   configure_systemd
-  wait_for_backend
   configure_nginx
+  wait_for_backend
   log "Initialization complete. Open http://<compute-ip>/"
 }
 
