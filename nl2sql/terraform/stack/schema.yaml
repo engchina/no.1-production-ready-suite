@@ -30,6 +30,12 @@ variableGroups:
       - app_environment
       - app_auth_cookie_secure
 
+  - title: Application Administrator
+    visible: true
+    variables:
+      - app_admin_username
+      - app_admin_password
+
   - title: Autonomous Database
     visible: true
     variables:
@@ -158,6 +164,23 @@ variables:
     description: "Set true when the app is served through HTTPS."
     default: false
 
+  app_admin_username:
+    type: string
+    required: true
+    visible: true
+    title: "Application administrator username"
+    description: "Login name for the built-in SYSTEM_ADMIN configuration administrator. This is independent from the database connection user."
+    pattern: "^(?!\\s*$).+"
+
+  app_admin_password:
+    type: password
+    required: true
+    visible: true
+    title: "Application administrator password"
+    description: "Login password for the built-in SYSTEM_ADMIN configuration administrator. Uses the same rule as the database password."
+    confirmation: true
+    pattern: "^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$"
+
   adb_display_name:
     type: string
     required: false
@@ -285,7 +308,7 @@ variables:
     required: true
     visible: true
     title: "Database ADMIN password"
-    description: "Used for the ADB ADMIN user, wallet password, Oracle connection password, and first SYSTEM_ADMIN web login."
+    description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password."
     confirmation: true
     pattern: "^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$"
 

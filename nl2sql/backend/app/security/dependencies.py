@@ -36,6 +36,7 @@ def local_debug_principal() -> Principal:
         data_entitlements=[],
         session_id="local-debug",
         csrf_token_hash="",
+        password_change_allowed=False,
     )
 
 

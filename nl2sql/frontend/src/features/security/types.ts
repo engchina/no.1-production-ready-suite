@@ -15,6 +15,7 @@ export interface CurrentUser {
   permissions: string[];
   data_entitlements: DataEntitlement[];
   debug_mode: boolean;
+  password_change_allowed: boolean;
 }
 
 export interface SecurityUser {

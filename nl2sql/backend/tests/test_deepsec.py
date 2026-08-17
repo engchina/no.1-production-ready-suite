@@ -24,6 +24,8 @@ def _settings(
     return Settings.model_construct(
         oracle_user="APP_OWNER",
         oracle_password="ControlPass!123",
+        app_admin_username="app-admin",
+        app_admin_password="AppAdminPass123",
         oracle_dsn="test",
         oracle_driver_mode=driver_mode,
         oracle_client_lib_dir="/opt/oracle/instantclient",

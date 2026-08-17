@@ -40,6 +40,7 @@ The default output is
 Resource Manager and create a stack. Provide the required form values:
 
 - OCI compartment, region, availability domain, VCN, and subnets
+- Application administrator username and password
 - ADB password
 - Compute image, shape, subnet, and SSH public key
 
@@ -94,17 +95,17 @@ sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
 sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 ```
 
-The configured SYSTEM_ADMIN login is the database connection user from
-`backend/.env`:
+The configured `SYSTEM_ADMIN` login comes from the application administrator
+values supplied in Resource Manager:
 
-- username: `ADMIN`
-- password: the ADB password supplied to Resource Manager
+- `APP_ADMIN_USERNAME`
+- `APP_ADMIN_PASSWORD`
 
-This configured administrator does not read from `NL2SQL_APP_USERS` and does not
-require the auth/RBAC tables to exist. Application-local users are checked from
-`NL2SQL_APP_USERS` only after the login name is different from the configured
-database connection user. The database connection password cannot be changed
-from the application password change screen.
+This configured administrator is independent from the database connection user,
+does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables
+to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
+configured administrator password cannot be changed from the application
+password change screen.
 
 For direct HTTP access, the default is `app_environment=local`,
 `DEBUG=false`, and `app_auth_cookie_secure=false`. When serving through HTTPS,

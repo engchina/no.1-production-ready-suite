@@ -88,12 +88,18 @@ jobs:
                   or (name.startswith("wallet") and name.endswith(".zip"))
               }
               mode = archive.getinfo("extract_wallet.sh").external_attr >> 16
+              locals_tf = archive.read("locals.tf").decode()
+              schema_yaml = archive.read("schema.yaml").decode()
           if missing:
               raise SystemExit(f"missing package entries: {sorted(missing)}")
           if forbidden:
               raise SystemExit(f"forbidden package entries: {sorted(forbidden)}")
           if not mode & stat.S_IXUSR:
               raise SystemExit("extract_wallet.sh is not executable in package")
+          if "APP_ADMIN_USERNAME=" not in locals_tf or "APP_ADMIN_PASSWORD=" not in locals_tf:
+              raise SystemExit("APP_ADMIN credentials are missing from backend.env")
+          if "first SYSTEM_ADMIN web login" in schema_yaml:
+              raise SystemExit("ADB password is still described as a web login password")
           print("Terraform package contents verified.")
           PY
 

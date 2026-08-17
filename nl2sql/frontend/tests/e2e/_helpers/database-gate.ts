@@ -22,6 +22,7 @@ export const systemAdminMe = {
   permissions: [],
   data_entitlements: [],
   debug_mode: false,
+  password_change_allowed: false,
 };
 
 /** 通常の E2E は Oracle snapshot が利用可能な状態から開始する。 */

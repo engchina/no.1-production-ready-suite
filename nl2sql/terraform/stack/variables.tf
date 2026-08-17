@@ -40,7 +40,7 @@ variable "adb_name" {
 }
 
 variable "adb_password" {
-  description = "Autonomous Database ADMIN password. Also bootstraps the initial ADMIN web user."
+  description = "Autonomous Database ADMIN password."
   type        = string
   sensitive   = true
   default     = ""
@@ -379,4 +379,33 @@ variable "app_auth_cookie_secure" {
   description = "Set true when the application is served through HTTPS."
   type        = bool
   default     = false
+}
+
+variable "app_admin_username" {
+  description = "Login name for the built-in SYSTEM_ADMIN configuration administrator."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !can(regex("[\r\n]", var.app_admin_username))
+    error_message = "app_admin_username must not contain line breaks."
+  }
+}
+
+variable "app_admin_password" {
+  description = "Login password for the built-in SYSTEM_ADMIN configuration administrator."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      var.app_admin_password == ""
+      || (
+        !can(regex("[\r\n]", var.app_admin_password))
+        && can(regex("^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$", var.app_admin_password))
+      )
+    )
+    error_message = "app_admin_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
+  }
 }

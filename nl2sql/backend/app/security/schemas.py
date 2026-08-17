@@ -209,11 +209,10 @@ class CurrentUserData(BaseModel):
     permissions: list[str]
     data_entitlements: list[DataEntitlementData]
     debug_mode: bool = False
+    password_change_allowed: bool
 
     @classmethod
-    def from_principal(
-        cls, principal: Principal, *, debug_mode: bool = False
-    ) -> CurrentUserData:
+    def from_principal(cls, principal: Principal, *, debug_mode: bool = False) -> CurrentUserData:
         return cls(
             user_id=principal.user_id,
             login_name=principal.login_name,
@@ -226,6 +225,7 @@ class CurrentUserData(BaseModel):
                 DataEntitlementData.from_record(item) for item in principal.data_entitlements
             ],
             debug_mode=debug_mode,
+            password_change_allowed=principal.password_change_allowed and not debug_mode,
         )
 
 

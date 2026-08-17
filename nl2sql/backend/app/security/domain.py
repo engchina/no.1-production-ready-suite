@@ -70,6 +70,7 @@ class Principal:
     data_entitlements: list[DataEntitlementRecord]
     session_id: str
     csrf_token_hash: str
+    password_change_allowed: bool = True
 
     @property
     def is_system_admin(self) -> bool:

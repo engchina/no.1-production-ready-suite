@@ -17,6 +17,7 @@ ENV_ASSIGNMENT_RE = re.compile(
 )
 EXAMPLE_EMPTY_KEYS = frozenset(
     {
+        "APP_ADMIN_PASSWORD",
         "APP_AUTH_SECRET",
         "OCI_COMPARTMENT_ID",
         "OCI_ENTERPRISE_AI_API_KEY",
@@ -32,6 +33,7 @@ EXAMPLE_EMPTY_KEYS = frozenset(
         "ORACLE_WALLET_PASSWORD",
     }
 )
+EXAMPLE_PLACEHOLDER_VALUES = frozenset({"TODO"})
 
 
 @dataclass(frozen=True)
@@ -136,7 +138,9 @@ def audit_configuration(
         sorted(
             key
             for key in EXAMPLE_EMPTY_KEYS
-            if key in example.values and _unquote(example.values[key])
+            if key in example.values
+            and _unquote(example.values[key])
+            and _unquote(example.values[key]) not in EXAMPLE_PLACEHOLDER_VALUES
         )
     )
     if populated_sensitive_keys:

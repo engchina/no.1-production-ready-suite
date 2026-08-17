@@ -3,10 +3,11 @@
 ## 適用範囲
 
 本機能は OCI IAM を使用せず、Oracle に永続化した local application user と role で認証・認可する。
-ただし `backend/.env` の `ORACLE_USER` / `ORACLE_PASSWORD` に一致するデータベース接続ユーザーは、
-認証 table を参照しない構成管理者 `SYSTEM_ADMIN` として扱う。アプリケーション機能権限は FastAPI の
-route manifest で default deny とし、画面表示制御に加えて API 側でも毎回ユーザー状態、role、
-permission を再評価する。
+ただし `backend/.env` の `APP_ADMIN_USERNAME` / `APP_ADMIN_PASSWORD` に一致する構成管理者は、
+認証 table を参照しない `SYSTEM_ADMIN` として扱う。`ORACLE_USER` / `ORACLE_PASSWORD` は database
+connection 専用であり、application login には使用しない。アプリケーション機能権限は FastAPI の route
+manifest で default deny とし、画面表示制御に加えて API 側でも毎回ユーザー状態、role、permission を
+再評価する。
 
 Deep Data Security は共有 local END USER と classic application context を使用する。これは本システムの
 非 IAM 構成向け custom integration であり、Oracle 公式の IAM/database access token を含む local END
@@ -14,9 +15,10 @@ USER 認証フローとは区別する。
 
 ## 初期 migration と構成管理者
 
-Oracle 接続設定を `backend/.env` に設定すると、その接続ユーザーでアプリケーションへログインできる。
-この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` / `NL2SQL_AUTH_SESSIONS` を読まず、認証 table が
-未作成でも利用できる。通常の application user を追加して使う場合は、DB 接続後に次を一度実行する。
+`APP_ADMIN_USERNAME` / `APP_ADMIN_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
+アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` /
+`NL2SQL_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
+使う場合は、DB 接続後に次を一度実行する。
 処理は幂等であり、再実行できる。
 
 ```bash
@@ -25,8 +27,9 @@ uv sync
 uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 ```
 
-通常の application user は、ログイン名が `ORACLE_USER` と異なる場合だけ `NL2SQL_APP_USERS` から
-照合される。データベース接続ユーザーの password は application password 変更画面から変更できない。
+通常の application user は `NL2SQL_APP_USERS` から照合される。構成管理者の password は application
+password 変更画面から変更できないため、変更時は deploy 設定と `backend/.env` を更新して service を
+再起動する。
 
 `SYSTEM_ADMIN` role は構成管理者と旧 bootstrap user 専用とする。ユーザー管理 API/UI は、後続で
 作成したユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に

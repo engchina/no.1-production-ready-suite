@@ -24,6 +24,7 @@ export function AppSidebar() {
   const collapsedSections = useUiStore((state) => state.collapsedSections);
   const toggleSection = useUiStore((state) => state.toggleSection);
   const setSectionCollapsed = useUiStore((state) => state.setSectionCollapsed);
+  const handleLogout = () => void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
 
   const sections = useMemo<UiNavSection[]>(
     () =>
@@ -96,26 +97,46 @@ export function AppSidebar() {
                 ) : null}
               </div>
             ) : (
-              <div className={`flex gap-1 ${collapsed ? "flex-col" : "flex-wrap"}`}>
+              <div className="grid gap-1">
+                {auth.user.password_change_allowed !== false ? (
+                  <Button
+                    size="lg"
+                    variant="ghost"
+                    className={
+                      collapsed
+                        ? "h-14 min-h-14 w-full justify-center px-0 text-sidebar-foreground"
+                        : "h-14 min-h-14 w-full justify-start gap-2 px-2 text-sidebar-foreground"
+                    }
+                    aria-label={t("auth.sidebar.password")}
+                    title={collapsed ? t("auth.sidebar.password") : undefined}
+                    onClick={() => navigate(APP_ROUTES.passwordChange)}
+                  >
+                    <KeyRound size={16} className="shrink-0" aria-hidden />
+                    {!collapsed ? (
+                      <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
+                        {t("auth.sidebar.password")}
+                      </span>
+                    ) : null}
+                  </Button>
+                ) : null}
                 <Button
-                  size="sm"
+                  size="lg"
                   variant="ghost"
-                  className={collapsed ? "w-full px-0 text-sidebar-foreground" : "flex-1 text-sidebar-foreground"}
-                  aria-label={t("auth.sidebar.password")}
-                  onClick={() => navigate(APP_ROUTES.passwordChange)}
-                >
-                  <KeyRound size={14} aria-hidden />
-                  {!collapsed ? t("auth.sidebar.password") : null}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className={collapsed ? "w-full px-0 text-sidebar-foreground" : "flex-1 text-sidebar-foreground"}
+                  className={
+                    collapsed
+                      ? "h-14 min-h-14 w-full justify-center px-0 text-sidebar-foreground"
+                      : "h-14 min-h-14 w-full justify-start gap-2 px-2 text-sidebar-foreground"
+                  }
                   aria-label={t("auth.sidebar.logout")}
-                  onClick={() => void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }))}
+                  title={collapsed ? t("auth.sidebar.logout") : undefined}
+                  onClick={handleLogout}
                 >
-                  <LogOut size={14} aria-hidden />
-                  {!collapsed ? t("auth.sidebar.logout") : null}
+                  <LogOut size={16} className="shrink-0" aria-hidden />
+                  {!collapsed ? (
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
+                      {t("auth.sidebar.logout")}
+                    </span>
+                  ) : null}
                 </Button>
               </div>
             )}

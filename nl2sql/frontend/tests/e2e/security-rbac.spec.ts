@@ -136,6 +136,7 @@ test("外観ページは専用権限だけで表示でき、権限なしでは�
       display_name: "外観閲覧ユーザー",
       role_codes: ["APPEARANCE_VIEWER"],
       permissions: ["menu.settings_appearance"],
+      password_change_allowed: true,
     })
   );
 
@@ -157,6 +158,7 @@ test("外観ページは専用権限だけで表示でき、権限なしでは�
       display_name: "権限なしユーザー",
       role_codes: ["NO_ACCESS"],
       permissions: [],
+      password_change_allowed: true,
     })
   );
 
@@ -173,7 +175,7 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
       await fulfill(route, "ログイン名またはパスワードを確認してください。", 401);
       return;
     }
-    await fulfill(route, { ...systemAdminMe, force_password_change: true });
+    await fulfill(route, { ...systemAdminMe, force_password_change: true, password_change_allowed: true });
   });
   await page.route("**/api/auth/password/change", (route) => fulfill(route, { changed: true }));
 
@@ -186,12 +188,87 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await page.getByLabel("パスワード").fill("BootstrapPass!123");
   await page.getByRole("button", { name: "ログイン" }).click();
   await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ログインへ戻る" })).toBeVisible();
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toHaveCount(0);
 
   await page.getByLabel("現在のパスワード").fill("BootstrapPass!123");
   await page.locator("#auth-password-new").fill("IndependentPass!456");
   await page.getByLabel("新しいパスワード（確認）").fill("IndependentPass!456");
   await page.getByRole("button", { name: "パスワードを変更" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test("構成管理者はパスワード変更入口を表示せず、サイドバー操作は安定した高さを保つ", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.goto("/query");
+
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
+  await expect(logoutButton).toBeVisible();
+  const box = await logoutButton.boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+
+  await page.goto("/password/change");
+  await expect(page.getByText("この構成管理者アカウントのパスワードはアプリケーション内では変更できません。", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("現在のパスワード")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "戻る" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ログアウト" })).toBeVisible();
+});
+
+test("通常ユーザーはパスワード変更ページから元の画面へ戻れる", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/auth/me");
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      ...systemAdminMe,
+      user_id: "query-user",
+      login_name: "query.user",
+      display_name: "SQL 生成ユーザー",
+      role_codes: ["QUERY_MENU"],
+      permissions: ["menu.query"],
+      password_change_allowed: true,
+    })
+  );
+
+  await page.goto("/query");
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
+  const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
+  await expect(passwordButton).toBeVisible();
+  await expect(logoutButton).toBeVisible();
+
+  const footerLayout = await Promise.all([passwordButton, logoutButton].map((button) => button.boundingBox()));
+  expect(footerLayout[0]?.height).toBeGreaterThanOrEqual(44);
+  expect(footerLayout[1]?.height).toBeGreaterThanOrEqual(44);
+  expect((footerLayout[1]?.y ?? 0) - ((footerLayout[0]?.y ?? 0) + (footerLayout[0]?.height ?? 0))).toBeGreaterThanOrEqual(0);
+  await expect(passwordButton).toHaveCSS("white-space", "nowrap");
+  await expect(logoutButton).toHaveCSS("white-space", "nowrap");
+
+  await passwordButton.click();
+  await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();
+  await page.getByRole("button", { name: "戻る" }).click();
+  await expect(page).toHaveURL(/\/query$/);
+});
+
+test("強制パスワード変更中の戻る操作はログインへ戻す", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      ...systemAdminMe,
+      user_id: "forced-user",
+      login_name: "forced.user",
+      display_name: "初回ユーザー",
+      role_codes: ["QUERY_MENU"],
+      permissions: ["menu.query"],
+      force_password_change: true,
+      password_change_allowed: true,
+    })
+  );
+  await page.route("**/api/auth/logout", (route) => fulfill(route, { logged_out: true }));
+
+  await page.goto("/password/change");
+  await expect(page.getByRole("button", { name: "ログインへ戻る" })).toBeVisible();
+  await page.getByRole("button", { name: "ログインへ戻る" }).click();
   await expect(page).toHaveURL(/\/login$/);
 });
 
@@ -204,6 +281,7 @@ test("メニュー権限だけのユーザーはメニューと直達 URL/API �
     display_name: "SQL 生成ユーザー",
     role_codes: ["QUERY_MENU"],
     permissions: ["menu.query"],
+    password_change_allowed: true,
   };
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
   await page.route("**/api/security/users", (route) =>

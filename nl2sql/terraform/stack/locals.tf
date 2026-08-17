@@ -19,6 +19,8 @@ ENABLE_METRICS=true
 DEBUG=false
 
 APP_AUTH_ENABLED=true
+APP_ADMIN_USERNAME=${var.app_admin_username}
+APP_ADMIN_PASSWORD=${var.app_admin_password}
 APP_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
 APP_AUTH_SESSION_COOKIE_NAME=nl2sql_session
 APP_AUTH_CSRF_COOKIE_NAME=nl2sql_csrf

@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { KeyRound, LogIn, ShieldCheck } from "lucide-react";
+import { ArrowLeft, KeyRound, LogIn, LogOut, ShieldCheck } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -143,6 +143,7 @@ export function LoginPage() {
 export function PasswordChangePage() {
   const auth = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -153,6 +154,26 @@ export function PasswordChangePage() {
   if (auth.user?.debug_mode) {
     return <Navigate to={firstAllowedRoute(auth.hasPermission)} replace />;
   }
+
+  const fallbackRoute = firstAllowedRoute(auth.hasPermission);
+  const canChangePassword = auth.user?.password_change_allowed !== false;
+  const handleBack = () => {
+    if (window.history.length > 1 && location.key !== "default") {
+      navigate(-1);
+      return;
+    }
+    navigate(fallbackRoute, { replace: true });
+  };
+  const handleLeavePasswordChange = () => {
+    if (auth.user?.force_password_change) {
+      void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+      return;
+    }
+    handleBack();
+  };
+  const handleLogout = () => {
+    void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+  };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -174,6 +195,32 @@ export function PasswordChangePage() {
       setBusy(false);
     }
   };
+
+  if (!canChangePassword) {
+    return (
+      <AuthSurface>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("auth.password.title")}</CardTitle>
+            <p className="text-sm leading-6 text-muted">{t("auth.password.notAllowedSubtitle")}</p>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <Banner severity="warning">{t("auth.password.notAllowed")}</Banner>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button className="h-11 w-full whitespace-nowrap" variant="secondary" onClick={handleBack}>
+                <ArrowLeft size={16} aria-hidden />
+                {t("auth.password.back")}
+              </Button>
+              <Button className="h-11 w-full whitespace-nowrap" onClick={handleLogout}>
+                <LogOut size={16} aria-hidden />
+                {t("auth.sidebar.logout")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </AuthSurface>
+    );
+  }
 
   return (
     <AuthSurface>
@@ -207,10 +254,22 @@ export function PasswordChangePage() {
               </div>
             ))}
             <div className="border-t border-border pt-4">
-              <Button className="h-11 w-full" loading={busy} type="submit">
-                <KeyRound size={16} aria-hidden />
-                {t("auth.password.submit")}
-              </Button>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+                <Button
+                  className="h-11 w-full whitespace-nowrap"
+                  disabled={busy}
+                  type="button"
+                  variant="secondary"
+                  onClick={handleLeavePasswordChange}
+                >
+                  <ArrowLeft size={16} aria-hidden />
+                  {auth.user?.force_password_change ? t("auth.password.backToLogin") : t("auth.password.back")}
+                </Button>
+                <Button className="h-11 w-full whitespace-nowrap" loading={busy} type="submit">
+                  <KeyRound size={16} aria-hidden />
+                  {t("auth.password.submit")}
+                </Button>
+              </div>
               {busy ? (
                 <ProcessingIndicator
                   active

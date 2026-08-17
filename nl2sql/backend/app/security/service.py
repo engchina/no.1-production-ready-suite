@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import threading
 from datetime import UTC, datetime, timedelta
@@ -84,6 +85,9 @@ _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
 _CONFIGURED_SYSTEM_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002"
 _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
+_APP_ADMIN_PASSWORD_PATTERN = re.compile(
+    r'^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*["]).{12,30}$'
+)
 
 
 def _looks_like_missing_security_schema(exc: Exception) -> bool:
@@ -113,14 +117,15 @@ class SecurityService:
         self._bootstrap_checked = False
 
     def bootstrap(self) -> bool:
-        login_name = self.settings.oracle_user.strip()
-        password = self.settings.oracle_password
-        if not login_name or not password:
+        login_name = self.settings.app_admin_username.strip()
+        password = self.settings.app_admin_password
+        if not login_name or login_name.casefold() == "todo" or not password:
             raise SecurityApiError(
                 503,
                 "初期システム管理者を作成できません。"
-                "ORACLE_USER と ORACLE_PASSWORD を設定してください。",
+                "APP_ADMIN_USERNAME と APP_ADMIN_PASSWORD を設定してください。",
             )
+        self._ensure_configured_system_admin_password_ready()
         password_hash = hash_password(password)
         return self.store.bootstrap(
             login_name=login_name,
@@ -149,7 +154,8 @@ class SecurityService:
     ) -> tuple[Principal, str, str]:
         normalized_login = login_name.strip()
         if self._matches_configured_system_admin_login_name(normalized_login):
-            if _constant_time_equal(password, self.settings.oracle_password):
+            self._ensure_configured_system_admin_password_ready()
+            if _constant_time_equal(password, self.settings.app_admin_password):
                 return self._create_configured_system_admin_session(normalized_login)
             raise LoginFailed()
         try:
@@ -159,7 +165,7 @@ class SecurityService:
                 raise SecurityApiError(
                     503,
                     "認証テーブルが初期化されていません。"
-                    "データベース接続ユーザーでログインして初期設定を完了してください。",
+                    "構成管理者でログインして初期設定を完了してください。",
                 ) from exc
             raise
         now = _now()
@@ -261,7 +267,7 @@ class SecurityService:
         if self._is_configured_system_admin_principal(principal):
             raise SecurityApiError(
                 409,
-                "データベース接続ユーザーのパスワードはアプリケーションから変更できません。",
+                "構成管理者のパスワードはアプリケーションから変更できません。",
             )
         user = self.store.get_user(principal.user_id)
         if user is None or not verify_password(current_password, user.password_hash)[0]:
@@ -474,7 +480,9 @@ class SecurityService:
         return archived
 
     def _matches_configured_system_admin_login_name(self, login_name: str) -> bool:
-        configured_login = self.settings.oracle_user.strip()
+        configured_login = self.settings.app_admin_username.strip()
+        if not configured_login or configured_login.casefold() == "todo":
+            return False
         return bool(configured_login) and _constant_time_equal(
             login_name.casefold(), configured_login.casefold()
         )
@@ -483,6 +491,7 @@ class SecurityService:
         self, login_name: str
     ) -> tuple[Principal, str, str]:
         now = _now()
+        self._ensure_configured_system_admin_password_ready()
         csrf_token = secrets.token_urlsafe(32)
         session_id = f"configured-system-admin:{uuid4()}"
         payload = {
@@ -559,10 +568,24 @@ class SecurityService:
     def _configured_system_admin_token_key(self) -> bytes:
         configured_secret = (
             f"{self.settings.service_name}:"
-            f"{self.settings.oracle_user.strip()}:"
-            f"{self.settings.oracle_password}"
+            f"{self.settings.app_admin_username.strip()}:"
+            f"{self.settings.app_admin_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
+
+    def _ensure_configured_system_admin_password_ready(self) -> None:
+        password = self.settings.app_admin_password
+        if (
+            password == "TODO"
+            or "\r" in password
+            or "\n" in password
+            or not _APP_ADMIN_PASSWORD_PATTERN.match(password)
+        ):
+            raise SecurityApiError(
+                503,
+                "構成管理者の認証情報が設定されていません。"
+                "APP_ADMIN_USERNAME と APP_ADMIN_PASSWORD を設定してください。",
+            )
 
     def _configured_system_admin_principal(
         self,
@@ -574,7 +597,7 @@ class SecurityService:
         return Principal(
             user_id=_CONFIGURED_SYSTEM_ADMIN_USER_ID,
             login_name=login_name,
-            display_name=f"{login_name}（データベース接続管理者）",
+            display_name=f"{login_name}（構成管理者）",
             status="ACTIVE",
             force_password_change=False,
             role_codes=[SYSTEM_ADMIN_ROLE_CODE],
@@ -582,6 +605,7 @@ class SecurityService:
             data_entitlements=[],
             session_id=session_id,
             csrf_token_hash=csrf_token_hash,
+            password_change_allowed=False,
         )
 
     @staticmethod

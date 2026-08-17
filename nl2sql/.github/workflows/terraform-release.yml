@@ -49,6 +49,23 @@ jobs:
       - name: Build Terraform stack package
         run: python scripts/package_terraform_stack.py
 
+      - name: Verify package contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          package = Path("dist/production-ready-nl2sql-terraform-stack.zip")
+          with zipfile.ZipFile(package) as archive:
+              locals_tf = archive.read("locals.tf").decode()
+              schema_yaml = archive.read("schema.yaml").decode()
+          if "APP_ADMIN_USERNAME=" not in locals_tf or "APP_ADMIN_PASSWORD=" not in locals_tf:
+              raise SystemExit("APP_ADMIN credentials are missing from backend.env")
+          if "first SYSTEM_ADMIN web login" in schema_yaml:
+              raise SystemExit("ADB password is still described as a web login password")
+          print("Terraform package APP_ADMIN checks verified.")
+          PY
+
       - name: Write checksum
         run: |
           cd dist
