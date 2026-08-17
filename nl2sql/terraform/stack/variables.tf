@@ -54,7 +54,7 @@ variable "adb_password" {
 variable "adb_workload" {
   description = "Autonomous Database workload type."
   type        = string
-  default     = "DW"
+  default     = "OLTP"
 
   validation {
     condition     = contains(["OLTP", "DW", "AJD", "APEX", "LH"], var.adb_workload)
@@ -384,98 +384,4 @@ variable "app_auth_cookie_secure" {
     condition     = var.app_environment == "local" || var.app_auth_cookie_secure
     error_message = "app_auth_cookie_secure must be true when app_environment is staging or production."
   }
-}
-
-variable "oci_auth_mode" {
-  description = "OCI SDK authentication mode used by runtime clients."
-  type        = string
-  default     = "instance_principal"
-
-  validation {
-    condition     = contains(["config_file", "instance_principal", "resource_principal"], var.oci_auth_mode)
-    error_message = "oci_auth_mode must be config_file, instance_principal, or resource_principal."
-  }
-}
-
-variable "oci_enterprise_ai_endpoint" {
-  description = "OCI Enterprise AI endpoint for LLM/VLM calls."
-  type        = string
-  default     = ""
-}
-
-variable "oci_enterprise_ai_project_ocid" {
-  description = "OCI Enterprise AI project OCID, if required by the endpoint."
-  type        = string
-  default     = ""
-}
-
-variable "oci_enterprise_ai_api_key" {
-  description = "OCI Enterprise AI API key. This secret is written only to the instance backend .env."
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition     = !can(regex("[\r\n]", var.oci_enterprise_ai_api_key))
-    error_message = "oci_enterprise_ai_api_key must not contain line breaks."
-  }
-}
-
-variable "oci_enterprise_ai_models_json" {
-  description = "JSON array for OCI_ENTERPRISE_AI_MODELS."
-  type        = string
-  default     = "[]"
-
-  validation {
-    condition     = can(jsondecode(var.oci_enterprise_ai_models_json))
-    error_message = "oci_enterprise_ai_models_json must be valid JSON."
-  }
-}
-
-variable "oci_enterprise_ai_default_model" {
-  description = "Default OCI Enterprise AI model ID."
-  type        = string
-  default     = ""
-}
-
-variable "oci_enterprise_ai_llm_model" {
-  description = "OCI Enterprise AI model ID for text generation."
-  type        = string
-  default     = ""
-}
-
-variable "oci_enterprise_ai_vlm_model" {
-  description = "OCI Enterprise AI model ID for VLM/OCR."
-  type        = string
-  default     = ""
-}
-
-variable "oci_genai_endpoint" {
-  description = "OCI Generative AI inference endpoint for embedding and rerank."
-  type        = string
-  default     = ""
-}
-
-variable "oci_genai_embed_model_id" {
-  description = "OCI Generative AI embedding model ID."
-  type        = string
-  default     = "cohere.embed-v4.0"
-}
-
-variable "oci_genai_rerank_model_id" {
-  description = "OCI Generative AI rerank model ID."
-  type        = string
-  default     = "cohere.rerank-v4.0-fast"
-}
-
-variable "nl2sql_select_ai_credential_name" {
-  description = "Optional Oracle Select AI credential name."
-  type        = string
-  default     = ""
-}
-
-variable "nl2sql_select_ai_model" {
-  description = "Optional Oracle Select AI model name."
-  type        = string
-  default     = ""
 }

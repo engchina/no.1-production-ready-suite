@@ -41,15 +41,14 @@ Resource Manager and create a stack. Provide the required form values:
 - OCI compartment, region, availability domain, VCN, and subnets
 - ADB password
 - Compute image, shape, subnet, and SSH public key
-- OCI Enterprise AI endpoint, API key, and LLM/VLM model IDs
-- OCI Generative AI endpoint and Cohere embedding/rerank model IDs
 
 After apply completes, use the `application_url` output. The default application
 port is `3001`.
 
-The default `oci_auth_mode` is `instance_principal`. Configure an OCI dynamic
-group and IAM policy that allow the Compute instance to call the required OCI
-Generative AI, Database, and related runtime APIs before using live AI features.
+AI runtime settings are intentionally not collected by the Resource Manager
+stack. After the application starts, configure OCI authentication, OCI
+Enterprise AI, OCI Generative AI, and Select AI from the application System
+Settings pages.
 
 This stack renders deployment secrets into Compute cloud-init so the instance
 can create `backend/.env`. Treat the Resource Manager stack, job history, and

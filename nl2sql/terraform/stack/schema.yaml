@@ -1,5 +1,5 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
-stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous Database 26ai, Docker Compose, OCI Enterprise AI, and OCI Generative AI."
+stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous Database 26ai and Docker Compose. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
 version: "20260813"
 locale: "en"
@@ -54,23 +54,6 @@ variableGroups:
       - adb_acl_subnet_id
       - adb_acl_cidr_blocks
       - adb_is_mtls_connection_required
-
-  - title: AI Runtime
-    visible: true
-    variables:
-      - oci_auth_mode
-      - oci_enterprise_ai_endpoint
-      - oci_enterprise_ai_project_ocid
-      - oci_enterprise_ai_api_key
-      - oci_enterprise_ai_models_json
-      - oci_enterprise_ai_default_model
-      - oci_enterprise_ai_llm_model
-      - oci_enterprise_ai_vlm_model
-      - oci_genai_endpoint
-      - oci_genai_embed_model_id
-      - oci_genai_rerank_model_id
-      - nl2sql_select_ai_credential_name
-      - nl2sql_select_ai_model
 
   - title: Compute
     visible: true
@@ -202,7 +185,7 @@ variables:
       - "AJD"
       - "APEX"
       - "LH"
-    default: "DW"
+    default: "OLTP"
 
   adb_db_version:
     type: enum
@@ -389,97 +372,6 @@ variables:
     visible: true
     title: "Require mutual TLS (mTLS)"
     default: true
-
-  oci_auth_mode:
-    type: enum
-    required: true
-    visible: true
-    title: "OCI runtime auth mode"
-    description: "instance_principal requires a dynamic group and IAM policy for the Compute instance."
-    enum:
-      - "instance_principal"
-      - "config_file"
-      - "resource_principal"
-    default: "instance_principal"
-
-  oci_enterprise_ai_endpoint:
-    type: string
-    required: true
-    visible: true
-    title: "Enterprise AI endpoint"
-
-  oci_enterprise_ai_project_ocid:
-    type: string
-    required: false
-    visible: true
-    title: "Enterprise AI project OCID"
-
-  oci_enterprise_ai_api_key:
-    type: password
-    required: true
-    visible: true
-    title: "Enterprise AI API key"
-    confirmation: true
-    pattern: "^[^\r\n]*$"
-
-  oci_enterprise_ai_models_json:
-    type: string
-    required: false
-    visible: true
-    title: "Enterprise AI models JSON"
-    description: "JSON array for OCI_ENTERPRISE_AI_MODELS. Leave [] to use the model fields below."
-    default: "[]"
-
-  oci_enterprise_ai_default_model:
-    type: string
-    required: false
-    visible: true
-    title: "Enterprise AI default model"
-
-  oci_enterprise_ai_llm_model:
-    type: string
-    required: true
-    visible: true
-    title: "Enterprise AI LLM model"
-
-  oci_enterprise_ai_vlm_model:
-    type: string
-    required: false
-    visible: true
-    title: "Enterprise AI VLM model"
-
-  oci_genai_endpoint:
-    type: string
-    required: true
-    visible: true
-    title: "Generative AI endpoint"
-    description: "Used only for Cohere embedding and rerank."
-
-  oci_genai_embed_model_id:
-    type: string
-    required: true
-    visible: true
-    title: "Embedding model ID"
-    default: "cohere.embed-v4.0"
-
-  oci_genai_rerank_model_id:
-    type: string
-    required: true
-    visible: true
-    title: "Rerank model ID"
-    default: "cohere.rerank-v4.0-fast"
-
-  nl2sql_select_ai_credential_name:
-    type: string
-    required: false
-    visible: true
-    title: "Select AI credential name"
-
-  nl2sql_select_ai_model:
-    type: string
-    required: false
-    visible: true
-    title: "Select AI model"
 
   instance_display_name:
     type: string
