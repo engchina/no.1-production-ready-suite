@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
       role_codes: ["SYSTEM_ADMIN"],
       permissions: [],
       data_entitlements: [],
-      password_change_allowed: false,
+      password_change_allowed: true,
     })
   );
   await page.route("**/api/schema/owners", (route) =>

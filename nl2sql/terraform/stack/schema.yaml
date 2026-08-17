@@ -39,6 +39,26 @@ variableGroups:
   - title: Autonomous Database
     visible: true
     variables:
+      - adb_deployment_mode
+
+  - title: Existing Autonomous Database
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "USE_EXISTING"
+    variables:
+      - existing_adb_ocid
+      - existing_oracle_user
+      - existing_oracle_password
+      - existing_oracle_dsn
+      - existing_oracle_wallet_password
+
+  - title: New Autonomous Database
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "CREATE_NEW"
+    variables:
       - adb_display_name
       - adb_name
       - adb_workload
@@ -169,8 +189,9 @@ variables:
     required: true
     visible: true
     title: "Application administrator username"
-    description: "Login name for the built-in SYSTEM_ADMIN configuration administrator. This is independent from the database connection user."
-    pattern: "^(?!\\s*$).+"
+    description: "Fixed login name for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
+    default: "system_admin"
+    pattern: "^system_admin$"
 
   app_admin_password:
     type: password
@@ -180,6 +201,57 @@ variables:
     description: "Login password for the built-in SYSTEM_ADMIN configuration administrator. Uses the same rule as the database password."
     confirmation: true
     pattern: "^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$"
+
+  adb_deployment_mode:
+    type: enum
+    required: true
+    visible: true
+    title: "Autonomous Database deployment mode"
+    description: "Create a new Autonomous Database, or connect this Compute deployment to an existing Autonomous Database in the selected region."
+    enum:
+      - "CREATE_NEW"
+      - "USE_EXISTING"
+    default: "CREATE_NEW"
+
+  existing_adb_ocid:
+    type: oci:database:autonomousdatabase:id
+    required: false
+    visible: true
+    title: "Existing Autonomous Database"
+    description: "Select the existing ADB. Terraform will generate a wallet for this database and inject the connection settings into backend/.env."
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  existing_oracle_user:
+    type: string
+    required: false
+    visible: true
+    title: "Existing DB username"
+    description: "Value written to ORACLE_USER in backend/.env."
+    default: "ADMIN"
+
+  existing_oracle_password:
+    type: password
+    required: false
+    visible: true
+    title: "Existing DB password"
+    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    confirmation: true
+
+  existing_oracle_dsn:
+    type: string
+    required: false
+    visible: true
+    title: "Existing DB DSN"
+    description: "Value written to ORACLE_DSN in backend/.env, for example nl2sqladb_high."
+
+  existing_oracle_wallet_password:
+    type: password
+    required: false
+    visible: true
+    title: "Existing DB wallet password"
+    description: "Value written to ORACLE_WALLET_PASSWORD and used to generate the wallet. Leave blank to reuse the existing DB password."
+    confirmation: true
 
   adb_display_name:
     type: string
@@ -305,7 +377,7 @@ variables:
 
   adb_password:
     type: password
-    required: true
+    required: false
     visible: true
     title: "Database ADMIN password"
     description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password."
@@ -332,7 +404,7 @@ variables:
 
   adb_subnet_id:
     type: oci:core:subnet:id
-    required: true
+    required: false
     visible:
       eq:
         - adb_network_access_type
@@ -357,7 +429,7 @@ variables:
 
   adb_acl_vcn_id:
     type: oci:core:vcn:id
-    required: true
+    required: false
     visible:
       eq:
         - adb_network_access_type

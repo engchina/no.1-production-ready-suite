@@ -1,12 +1,21 @@
 data "oci_core_subnet" "adb_acl_subnet" {
-  count     = var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS" && var.adb_acl_notation_type == "VCN" && trimspace(var.adb_acl_subnet_id) != "" ? 1 : 0
+  count = (
+    local.create_new_adb
+    && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+    && var.adb_acl_notation_type == "VCN"
+    && trimspace(var.adb_acl_subnet_id) != ""
+  ) ? 1 : 0
   subnet_id = var.adb_acl_subnet_id
 }
 
 locals {
-  adb_display_name             = trimspace(var.adb_display_name) != "" ? var.adb_display_name : var.adb_name
-  adb_private_endpoint_enabled = var.adb_network_access_type == "PRIVATE_ENDPOINT_ONLY" || var.adb_use_private_subnet
-  adb_secure_acl_enabled       = var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+  create_new_adb   = var.adb_deployment_mode == "CREATE_NEW"
+  adb_display_name = trimspace(var.adb_display_name) != "" ? var.adb_display_name : var.adb_name
+  adb_private_endpoint_enabled = (
+    local.create_new_adb
+    && (var.adb_network_access_type == "PRIVATE_ENDPOINT_ONLY" || var.adb_use_private_subnet)
+  )
+  adb_secure_acl_enabled = local.create_new_adb && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
 
   adb_acl_cidr_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "CIDR_BLOCK" && trimspace(var.adb_acl_cidr_blocks) != "" ? [
     for cidr in split(",", var.adb_acl_cidr_blocks) : trimspace(cidr)
@@ -18,9 +27,19 @@ locals {
   ] : []
 
   adb_whitelisted_ips = local.adb_secure_acl_enabled ? concat(local.adb_acl_vcn_entries, local.adb_acl_cidr_entries) : null
+
+  effective_adb_ocid        = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
+  effective_adb_name        = local.create_new_adb ? var.adb_name : var.existing_oracle_dsn
+  effective_oracle_user     = local.create_new_adb ? "ADMIN" : var.existing_oracle_user
+  effective_oracle_password = local.create_new_adb ? var.adb_password : var.existing_oracle_password
+  effective_oracle_dsn      = local.create_new_adb ? "${lower(var.adb_name)}_high" : var.existing_oracle_dsn
+  effective_oracle_wallet_password = local.create_new_adb ? var.adb_password : (
+    trimspace(var.existing_oracle_wallet_password) != "" ? var.existing_oracle_wallet_password : var.existing_oracle_password
+  )
 }
 
 resource "oci_database_autonomous_database" "generated_database_autonomous_database" {
+  count                                          = local.create_new_adb ? 1 : 0
   admin_password                                 = var.adb_password
   autonomous_maintenance_schedule_type           = "REGULAR"
   backup_retention_period_in_days                = var.adb_backup_retention_period_in_days
@@ -54,10 +73,21 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
 }
 
 resource "oci_database_autonomous_database_wallet" "generated_autonomous_database_wallet" {
-  autonomous_database_id = oci_database_autonomous_database.generated_database_autonomous_database.id
-  password               = var.adb_password
+  autonomous_database_id = local.effective_adb_ocid
+  password               = local.effective_oracle_wallet_password
   base64_encode_content  = "true"
   generate_type          = "SINGLE"
+
+  lifecycle {
+    precondition {
+      condition     = trimspace(local.effective_adb_ocid) != ""
+      error_message = "An Autonomous Database OCID is required to generate the wallet."
+    }
+    precondition {
+      condition     = trimspace(local.effective_oracle_wallet_password) != ""
+      error_message = "A wallet password is required to generate the Autonomous Database wallet."
+    }
+  }
 }
 
 # Save the generated wallet ZIP as a local binary file.

@@ -1,6 +1,5 @@
 resource "oci_core_instance" "generated_oci_core_instance" {
   depends_on = [
-    oci_database_autonomous_database.generated_database_autonomous_database,
     data.external.wallet_files
   ]
   availability_config {
@@ -20,7 +19,7 @@ resource "oci_core_instance" "generated_oci_core_instance" {
     are_legacy_imds_endpoints_disabled = "false"
   }
   metadata = {
-    "user_data"           = data.template_cloudinit_config.cloud_init.rendered
+    "user_data"           = local.cloud_init_user_data
     "ssh_authorized_keys" = var.ssh_authorized_keys
   }
   platform_config {
@@ -42,8 +41,39 @@ resource "oci_core_instance" "generated_oci_core_instance" {
 
   lifecycle {
     precondition {
-      condition     = trimspace(var.adb_password) != ""
+      condition     = local.create_new_adb ? trimspace(var.adb_password) != "" : true
       error_message = "adb_password must be configured."
+    }
+    precondition {
+      condition = (
+        local.create_new_adb && local.adb_private_endpoint_enabled
+      ) ? trimspace(var.adb_subnet_id) != "" : true
+      error_message = "adb_subnet_id must be configured when creating a private endpoint Autonomous Database."
+    }
+    precondition {
+      condition = (
+        local.create_new_adb
+        && local.adb_secure_acl_enabled
+        && var.adb_acl_notation_type == "VCN"
+      ) ? trimspace(var.adb_acl_vcn_id) != "" : true
+      error_message = "adb_acl_vcn_id must be configured when creating an Autonomous Database with VCN ACL access."
+    }
+    precondition {
+      condition = (
+        local.create_new_adb
+        && local.adb_secure_acl_enabled
+        && var.adb_acl_notation_type == "CIDR_BLOCK"
+      ) ? length(local.adb_acl_cidr_entries) > 0 : true
+      error_message = "adb_acl_cidr_blocks must be configured when creating an Autonomous Database with CIDR ACL access."
+    }
+    precondition {
+      condition = local.create_new_adb || (
+        trimspace(var.existing_adb_ocid) != ""
+        && trimspace(var.existing_oracle_user) != ""
+        && trimspace(var.existing_oracle_password) != ""
+        && trimspace(var.existing_oracle_dsn) != ""
+      )
+      error_message = "existing_adb_ocid, existing_oracle_user, existing_oracle_password, and existing_oracle_dsn must be configured when adb_deployment_mode is USE_EXISTING."
     }
     precondition {
       condition     = var.app_environment == "local" || var.app_auth_cookie_secure

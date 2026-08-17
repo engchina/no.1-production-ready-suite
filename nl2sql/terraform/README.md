@@ -3,8 +3,8 @@
 This directory contains the OCI Resource Manager stack for Production Ready
 NL2SQL. The stack provisions:
 
-- Oracle Autonomous Database 26ai
-- A generated ADB wallet
+- Oracle Autonomous Database 26ai, or connection settings for an existing ADB
+- A generated ADB wallet for the selected/new ADB
 - One OCI Compute instance
 - A cloud-init bootstrap that clones the repositories and runs the application
   directly on Compute with Nginx and systemd
@@ -40,8 +40,14 @@ The default output is
 Resource Manager and create a stack. Provide the required form values:
 
 - OCI compartment, region, availability domain, VCN, and subnets
-- Application administrator username and password
-- ADB password
+- Application administrator password. The username is fixed to `system_admin`
+  and is case-sensitive.
+- Autonomous Database mode:
+  - `CREATE_NEW`: provide the new ADB sizing, network, license, and password
+    fields.
+  - `USE_EXISTING`: provide the existing ADB OCID plus the values written to
+    `ORACLE_USER`, `ORACLE_PASSWORD`, and `ORACLE_DSN`. The wallet password can
+    be supplied separately, or left blank to reuse `ORACLE_PASSWORD`.
 - Compute image, shape, subnet, and SSH public key
 
 After apply completes, use the `application_url` output. The default application
@@ -98,14 +104,25 @@ sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 The configured `SYSTEM_ADMIN` login comes from the application administrator
 values supplied in Resource Manager:
 
-- `APP_ADMIN_USERNAME`
+- `APP_ADMIN_USERNAME=system_admin`
 - `APP_ADMIN_PASSWORD`
 
 This configured administrator is independent from the database connection user,
 does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables
 to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
-configured administrator password cannot be changed from the application
-password change screen.
+configured administrator password can be changed from the application password
+change screen; the backend writes the new value back to `backend/.env`.
+
+When `adb_deployment_mode=USE_EXISTING`, the stack does not create any ADB
+resource. It generates a wallet from the selected existing ADB OCID and writes
+the supplied database values into `backend/.env`:
+
+- `ORACLE_USER`
+- `ORACLE_PASSWORD`
+- `ORACLE_DSN`
+- `ORACLE_WALLET_PASSWORD`
+- `ORACLE_ADB_OCID`
+- `ORACLE_ADB_REGION`
 
 For direct HTTP access, the default is `app_environment=local`,
 `DEBUG=false`, and `app_auth_cookie_secure=false`. When serving through HTTPS,

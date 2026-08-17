@@ -12,7 +12,10 @@ import secrets
 import threading
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from pathlib import Path
 from uuid import uuid4
+
+from dotenv import dotenv_values
 
 from app.settings import Settings, get_settings
 
@@ -85,6 +88,12 @@ _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
 _CONFIGURED_SYSTEM_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002"
 _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
+_FIXED_APP_ADMIN_USERNAME = "system_admin"
+_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
+_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"
+_APP_AUTH_ENABLED_KEY = "APP_AUTH_ENABLED"
+_BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 _APP_ADMIN_PASSWORD_PATTERN = re.compile(
     r'^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*["]).{12,30}$'
 )
@@ -109,6 +118,37 @@ def _constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
+def _env_assignment_key(line: str) -> str | None:
+    match = _ENV_ASSIGNMENT_RE.match(line)
+    return match.group(1) if match else None
+
+
+def _format_env_value(value: str) -> str:
+    if not value:
+        return '""'
+    if re.search(r"\s|#|=|'|\\", value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def _read_backend_env_value(key: str) -> str | None:
+    if not _BACKEND_ENV_FILE.exists():
+        return None
+    values = dotenv_values(_BACKEND_ENV_FILE)
+    value = values.get(key)
+    return str(value) if value is not None else None
+
+
+def _replace_backend_env_file(content: str) -> None:
+    _BACKEND_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    mode = _BACKEND_ENV_FILE.stat().st_mode & 0o777 if _BACKEND_ENV_FILE.exists() else 0o600
+    temporary_path = _BACKEND_ENV_FILE.with_name(f".{_BACKEND_ENV_FILE.name}.{uuid4().hex}.tmp")
+    temporary_path.write_text(content, encoding="utf-8")
+    temporary_path.chmod(mode)
+    temporary_path.replace(_BACKEND_ENV_FILE)
+
+
 class SecurityService:
     def __init__(self, store: SecurityStore, settings: Settings) -> None:
         self.store = store
@@ -117,21 +157,8 @@ class SecurityService:
         self._bootstrap_checked = False
 
     def bootstrap(self) -> bool:
-        login_name = self.settings.app_admin_username.strip()
-        password = self.settings.app_admin_password
-        if not login_name or login_name.casefold() == "todo" or not password:
-            raise SecurityApiError(
-                503,
-                "初期システム管理者を作成できません。"
-                "APP_ADMIN_USERNAME と APP_ADMIN_PASSWORD を設定してください。",
-            )
-        self._ensure_configured_system_admin_password_ready()
-        password_hash = hash_password(password)
-        return self.store.bootstrap(
-            login_name=login_name,
-            display_name=f"{login_name}（システム管理者）",
-            password_hash=password_hash,
-        )
+        self._ensure_configured_system_admin_ready()
+        return False
 
     def ensure_bootstrapped(self) -> None:
         """process ごとに一度だけ、DB lock 付きで初期管理者を確認する。"""
@@ -153,10 +180,12 @@ class SecurityService:
         client_ip: str = "",
     ) -> tuple[Principal, str, str]:
         normalized_login = login_name.strip()
-        if self._matches_configured_system_admin_login_name(normalized_login):
-            self._ensure_configured_system_admin_password_ready()
-            if _constant_time_equal(password, self.settings.app_admin_password):
-                return self._create_configured_system_admin_session(normalized_login)
+        if normalized_login == _FIXED_APP_ADMIN_USERNAME:
+            _, configured_password = self._ensure_configured_system_admin_ready()
+            if _constant_time_equal(password, configured_password):
+                return self._create_configured_system_admin_session()
+            raise LoginFailed()
+        if normalized_login.casefold() == _FIXED_APP_ADMIN_USERNAME:
             raise LoginFailed()
         try:
             user = self.store.get_user_by_login(normalized_login.casefold())
@@ -265,10 +294,14 @@ class SecurityService:
         client_ip: str = "",
     ) -> Principal:
         if self._is_configured_system_admin_principal(principal):
-            raise SecurityApiError(
-                409,
-                "構成管理者のパスワードはアプリケーションから変更できません。",
-            )
+            _, configured_password = self._ensure_configured_system_admin_ready()
+            if not _constant_time_equal(current_password, configured_password):
+                raise SecurityApiError(400, "現在のパスワードを確認してください。")
+            self._validate_configured_system_admin_password_for_change(new_password)
+            self._write_configured_system_admin_password(new_password)
+            self.settings.app_admin_username = _FIXED_APP_ADMIN_USERNAME
+            self.settings.app_admin_password = new_password
+            return principal
         user = self.store.get_user(principal.user_id)
         if user is None or not verify_password(current_password, user.password_hash)[0]:
             raise SecurityApiError(400, "現在のパスワードを確認してください。")
@@ -295,6 +328,8 @@ class SecurityService:
         normalized_role_ids = list(dict.fromkeys(role_ids))
         if SYSTEM_ADMIN_ROLE_ID in normalized_role_ids:
             raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
+        if login_name.strip().casefold() == _FIXED_APP_ADMIN_USERNAME:
+            raise SecurityApiError(409, "system_admin は構成管理者専用のログイン名です。")
         password = temporary_password or generate_temporary_password()
         self._validate_new_password(password, login_name)
         user = UserRecord(
@@ -480,24 +515,18 @@ class SecurityService:
         return archived
 
     def _matches_configured_system_admin_login_name(self, login_name: str) -> bool:
-        configured_login = self.settings.app_admin_username.strip()
-        if not configured_login or configured_login.casefold() == "todo":
-            return False
-        return bool(configured_login) and _constant_time_equal(
-            login_name.casefold(), configured_login.casefold()
-        )
+        configured_login, _ = self._ensure_configured_system_admin_ready()
+        return _constant_time_equal(login_name, configured_login)
 
-    def _create_configured_system_admin_session(
-        self, login_name: str
-    ) -> tuple[Principal, str, str]:
+    def _create_configured_system_admin_session(self) -> tuple[Principal, str, str]:
         now = _now()
-        self._ensure_configured_system_admin_password_ready()
+        configured_login, _ = self._ensure_configured_system_admin_ready()
         csrf_token = secrets.token_urlsafe(32)
         session_id = f"configured-system-admin:{uuid4()}"
         payload = {
             "type": _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE,
             "sid": session_id,
-            "login": login_name,
+            "login": configured_login,
             "csrf_hash": _hash_token(csrf_token),
             "exp": int(
                 (now + timedelta(hours=self.settings.app_auth_absolute_timeout_hours)).timestamp()
@@ -505,7 +534,7 @@ class SecurityService:
         }
         token = self._sign_configured_system_admin_payload(payload)
         principal = self._configured_system_admin_principal(
-            login_name=login_name,
+            login_name=configured_login,
             session_id=session_id,
             csrf_token_hash=str(payload["csrf_hash"]),
         )
@@ -566,15 +595,36 @@ class SecurityService:
         )
 
     def _configured_system_admin_token_key(self) -> bytes:
+        configured_login, configured_password = self._ensure_configured_system_admin_ready()
         configured_secret = (
             f"{self.settings.service_name}:"
-            f"{self.settings.app_admin_username.strip()}:"
-            f"{self.settings.app_admin_password}"
+            f"{configured_login}:"
+            f"{configured_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 
-    def _ensure_configured_system_admin_password_ready(self) -> None:
-        password = self.settings.app_admin_password
+    def _ensure_configured_system_admin_ready(self) -> tuple[str, str]:
+        username, password = self._configured_system_admin_credentials()
+        if username != _FIXED_APP_ADMIN_USERNAME:
+            raise SecurityApiError(
+                503,
+                "構成管理者の認証情報が正しく設定されていません。"
+                "APP_ADMIN_USERNAME は system_admin に固定してください。",
+            )
+        self._validate_configured_system_admin_password(password)
+        return username, password
+
+    def _configured_system_admin_credentials(self) -> tuple[str, str]:
+        username = _read_backend_env_value(_APP_ADMIN_USERNAME_KEY)
+        password = _read_backend_env_value(_APP_ADMIN_PASSWORD_KEY)
+        if username is None:
+            username = self.settings.app_admin_username
+        if password is None:
+            password = self.settings.app_admin_password
+        return username.strip(), password
+
+    @staticmethod
+    def _validate_configured_system_admin_password(password: str) -> None:
         if (
             password == "TODO"
             or "\r" in password
@@ -586,6 +636,50 @@ class SecurityService:
                 "構成管理者の認証情報が設定されていません。"
                 "APP_ADMIN_USERNAME と APP_ADMIN_PASSWORD を設定してください。",
             )
+
+    @staticmethod
+    def _validate_configured_system_admin_password_for_change(password: str) -> None:
+        if (
+            password == "TODO"
+            or "\r" in password
+            or "\n" in password
+            or not _APP_ADMIN_PASSWORD_PATTERN.match(password)
+        ):
+            raise SecurityApiError(
+                400,
+                "新しいパスワードは12〜30文字で、大文字・小文字・数字を含め、"
+                "admin と二重引用符を含めないでください。",
+            )
+
+    def _write_configured_system_admin_password(self, password: str) -> None:
+        if _BACKEND_ENV_FILE.exists():
+            lines = _BACKEND_ENV_FILE.read_text(encoding="utf-8").splitlines()
+        else:
+            lines = []
+        next_lines = [
+            line
+            for line in lines
+            if _env_assignment_key(line) not in {_APP_ADMIN_USERNAME_KEY, _APP_ADMIN_PASSWORD_KEY}
+        ]
+        admin_lines = [
+            f"{_APP_ADMIN_USERNAME_KEY}={_FIXED_APP_ADMIN_USERNAME}",
+            f"{_APP_ADMIN_PASSWORD_KEY}={_format_env_value(password)}",
+        ]
+        insert_at = next(
+            (
+                index
+                for index, line in enumerate(next_lines)
+                if _env_assignment_key(line) == _APP_AUTH_ENABLED_KEY
+            ),
+            None,
+        )
+        if insert_at is None:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.extend(admin_lines)
+        else:
+            next_lines[insert_at:insert_at] = admin_lines
+        _replace_backend_env_file("\n".join(next_lines).rstrip() + "\n")
 
     def _configured_system_admin_principal(
         self,
@@ -605,7 +699,7 @@ class SecurityService:
             data_entitlements=[],
             session_id=session_id,
             csrf_token_hash=csrf_token_hash,
-            password_change_allowed=False,
+            password_change_allowed=True,
         )
 
     @staticmethod

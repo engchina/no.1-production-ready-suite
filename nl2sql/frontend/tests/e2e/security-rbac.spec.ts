@@ -222,21 +222,24 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("構成管理者はパスワード変更入口を表示せず、サイドバー操作は安定した高さを保つ", async ({ page }) => {
+test("構成管理者はパスワード変更入口を表示し、サイドバー操作は安定した高さを保つ", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.goto("/query");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
-  await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
+  await expect(passwordButton).toBeVisible();
+  await expectSidebarActionMatchesMenuItem(passwordButton, menuItem);
   await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
 
   await page.goto("/password/change");
-  await expect(page.getByText("この構成管理者アカウントのパスワードはアプリケーション内では変更できません。", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("現在のパスワード")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();
+  await expect(page.getByLabel("現在のパスワード")).toBeVisible();
+  await expect(page.locator("#auth-password-new")).toBeVisible();
+  await expect(page.getByLabel("新しいパスワード（確認）")).toBeVisible();
   await expect(page.getByRole("button", { name: "戻る" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ログアウト" })).toBeVisible();
 });
 
 test("通常ユーザーはパスワード変更ページから元の画面へ戻れる", async ({ page }) => {

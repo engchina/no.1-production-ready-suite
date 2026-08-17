@@ -6,6 +6,7 @@ import asyncio
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -61,7 +62,7 @@ def _settings() -> Settings:
     return Settings.model_construct(
         oracle_user="DBADMIN",
         oracle_password="DbAdminPass!123",
-        app_admin_username="app-admin",
+        app_admin_username="system_admin",
         app_admin_password="AppAdminPass123",
         oracle_dsn="test",
         nl2sql_persistence_mode="memory",
@@ -73,6 +74,24 @@ def _settings() -> Settings:
         app_auth_password_min_length=12,
         app_auth_password_max_length=128,
     )
+
+
+def _patch_app_admin_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    username: str = "system_admin",
+    password: str = "AppAdminPass123",
+) -> Path:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"APP_ADMIN_USERNAME={username}\n"
+        f"APP_ADMIN_PASSWORD={password}\n"
+        "APP_AUTH_ENABLED=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
+    return env_file
 
 
 def _service() -> SecurityService:
@@ -267,33 +286,96 @@ def test_bootstrap_login_session_and_password_independence() -> None:
     assert changed.force_password_change is False
 
 
-def test_configured_system_admin_login_uses_app_admin_credentials_without_auth_tables() -> None:
+def test_configured_system_admin_login_uses_app_admin_credentials_without_auth_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_app_admin_env(monkeypatch, tmp_path)
     store = _NoAuthTableStore()
     service = SecurityService(cast(SecurityStore, store), _settings())
 
-    principal, token, csrf = service.login("app-admin", "AppAdminPass123")
+    principal, token, csrf = service.login("system_admin", "AppAdminPass123")
 
     assert principal.is_system_admin
     assert principal.force_password_change is False
-    assert principal.password_change_allowed is False
-    assert principal.login_name == "app-admin"
+    assert principal.password_change_allowed is True
+    assert principal.login_name == "system_admin"
     assert token.startswith("nl2sql-system-admin-v1.")
     assert csrf
     authenticated = service.authenticate_session(token)
     assert authenticated.is_system_admin
     assert authenticated.user_id == principal.user_id
-    assert authenticated.password_change_allowed is False
+    assert authenticated.password_change_allowed is True
     service.verify_csrf(authenticated, csrf, csrf)
     service.logout(authenticated)
     assert store.calls == []
 
 
-def test_configured_system_admin_wrong_password_does_not_touch_auth_tables() -> None:
+def test_configured_system_admin_wrong_password_does_not_touch_auth_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_app_admin_env(monkeypatch, tmp_path)
     store = _NoAuthTableStore()
     service = SecurityService(cast(SecurityStore, store), _settings())
 
     with pytest.raises(LoginFailed):
-        service.login("app-admin", "wrong-password")
+        service.login("system_admin", "wrong-password")
+    assert store.calls == []
+
+
+@pytest.mark.parametrize("login_name", ["System_Admin", "SYSTEM_ADMIN"])
+def test_system_admin_case_variants_do_not_fall_back_to_db_users(
+    login_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_app_admin_env(monkeypatch, tmp_path)
+    store = _NoAuthTableStore()
+    service = SecurityService(cast(SecurityStore, store), _settings())
+
+    with pytest.raises(LoginFailed):
+        service.login(login_name, "AppAdminPass123")
+    assert store.calls == []
+
+
+def test_configured_system_admin_requires_fixed_username(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_app_admin_env(monkeypatch, tmp_path, username="app-admin")
+    service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
+
+    with pytest.raises(SecurityApiError) as error:
+        service.login("system_admin", "AppAdminPass123")
+    assert error.value.status_code == 503
+    assert "system_admin" in error.value.public_message
+
+
+def test_configured_system_admin_password_change_updates_env_without_auth_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = _patch_app_admin_env(monkeypatch, tmp_path)
+    store = _NoAuthTableStore()
+    service = SecurityService(cast(SecurityStore, store), _settings())
+    principal, token, _csrf = service.login("system_admin", "AppAdminPass123")
+
+    changed = service.change_password(principal, "AppAdminPass123", "UpdatedPass123A")
+
+    assert changed.user_id == principal.user_id
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "APP_ADMIN_USERNAME=system_admin" in env_text
+    assert "APP_ADMIN_PASSWORD=UpdatedPass123A" in env_text
+    assert env_text.index("APP_ADMIN_USERNAME=system_admin") < env_text.index(
+        "APP_AUTH_ENABLED=true"
+    )
+    with pytest.raises(SecurityApiError):
+        service.authenticate_session(token)
+    with pytest.raises(LoginFailed):
+        service.login("system_admin", "AppAdminPass123")
+    relogged, _, _ = service.login("system_admin", "UpdatedPass123A")
+    assert relogged.is_system_admin
     assert store.calls == []
 
 
@@ -541,6 +623,29 @@ def test_system_admin_role_cannot_be_assigned_to_new_user() -> None:
     assert service.store.get_user_by_login("extra.admin") is None
 
 
+@pytest.mark.parametrize("login_name", ["system_admin", "System_Admin", "SYSTEM_ADMIN"])
+def test_reserved_system_admin_login_name_cannot_be_created(login_name: str) -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+
+    with pytest.raises(SecurityApiError, match="構成管理者専用"):
+        service.create_user(
+            login_name=login_name,
+            display_name="予約名",
+            role_ids=[role.role_id],
+            temporary_password="ReservedPass123A",
+            actor=actor,
+        )
+
+
 def test_system_admin_role_cannot_be_added_to_non_bootstrap_user() -> None:
     service = _service()
     actor, _, _ = _login(service)
@@ -671,14 +776,16 @@ def test_security_migration_preview_includes_audit_cleanup(
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     _patch_security_threadpools(monkeypatch)
+    _patch_app_admin_env(monkeypatch, tmp_path, password="BootstrapPass123")
     settings = get_settings()
     monkeypatch.setattr(settings, "app_auth_enabled", True)
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "ADMIN")
+    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "BootstrapPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -691,7 +798,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
 
             login = await client.post(
                 "/api/auth/login",
-                json={"login_name": "ADMIN", "password": "BootstrapPass123"},
+                json={"login_name": "system_admin", "password": "BootstrapPass123"},
             )
             assert login.status_code == 200
             assert "HttpOnly" in login.headers.get_list("set-cookie")[0]
@@ -725,7 +832,7 @@ def test_api_enforces_menu_permissions(
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "app-admin")
+    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -833,7 +940,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "app-admin")
+    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     _patch_security_threadpools(monkeypatch)

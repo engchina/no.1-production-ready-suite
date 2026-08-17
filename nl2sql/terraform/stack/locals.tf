@@ -25,14 +25,14 @@ APP_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
 APP_AUTH_SESSION_COOKIE_NAME=nl2sql_session
 APP_AUTH_CSRF_COOKIE_NAME=nl2sql_csrf
 
-ORACLE_USER=ADMIN
-ORACLE_PASSWORD=${var.adb_password}
-ORACLE_DSN=${lower(var.adb_name)}_high
+ORACLE_USER=${local.effective_oracle_user}
+ORACLE_PASSWORD=${local.effective_oracle_password}
+ORACLE_DSN=${local.effective_oracle_dsn}
 ORACLE_DRIVER_MODE=thin
 ORACLE_CLIENT_LIB_DIR=
 ORACLE_WALLET_DIR=${local.wallet_dir_host}
-ORACLE_WALLET_PASSWORD=${var.adb_password}
-ORACLE_ADB_OCID=${oci_database_autonomous_database.generated_database_autonomous_database.id}
+ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
+ORACLE_ADB_OCID=${local.effective_adb_ocid}
 ORACLE_ADB_REGION=${var.region}
 
 OCI_REGION=${var.region}
@@ -55,4 +55,22 @@ NL2SQL_SCHEMA_REFRESH_WORKER_MODE=external
 NL2SQL_QUALITY_EVALUATION_WORKER_MODE=external
 NL2SQL_ONTOLOGY_WORKER_MODE=external
 EOT
+
+  cloud_init_rendered = templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
+    adb_name            = local.effective_adb_name
+    adb_ocid            = local.effective_adb_ocid
+    application_git_ref = var.application_git_ref
+    application_git_url = var.application_git_url
+    application_port    = tostring(var.application_port)
+    backend_env         = base64gzip(local.backend_env)
+    compartment_ocid    = var.compartment_ocid
+    db_dsn              = local.effective_oracle_dsn
+    platform_git_ref    = var.platform_git_ref
+    platform_git_url    = var.platform_git_url
+    region              = var.region
+    wallet_content      = data.external.wallet_files.result.wallet_content
+    wallet_dir_host     = local.wallet_dir_host
+  })
+
+  cloud_init_user_data = base64gzip(local.cloud_init_rendered)
 }

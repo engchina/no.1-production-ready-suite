@@ -22,6 +22,77 @@ variable "vcn_ai_vcn_id" {
   default     = ""
 }
 
+variable "adb_deployment_mode" {
+  description = "Whether to create a new Autonomous Database or connect to an existing one."
+  type        = string
+  default     = "CREATE_NEW"
+
+  validation {
+    condition     = contains(["CREATE_NEW", "USE_EXISTING"], var.adb_deployment_mode)
+    error_message = "adb_deployment_mode must be CREATE_NEW or USE_EXISTING."
+  }
+}
+
+variable "existing_adb_ocid" {
+  description = "Existing Autonomous Database OCID used when adb_deployment_mode is USE_EXISTING."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.existing_adb_ocid == ""
+      || can(regex("^ocid1\\.autonomousdatabase\\.", var.existing_adb_ocid))
+    )
+    error_message = "existing_adb_ocid must be an Autonomous Database OCID."
+  }
+}
+
+variable "existing_oracle_user" {
+  description = "Oracle database username for an existing Autonomous Database."
+  type        = string
+  default     = "ADMIN"
+
+  validation {
+    condition     = !can(regex("[\r\n]", var.existing_oracle_user))
+    error_message = "existing_oracle_user must not contain line breaks."
+  }
+}
+
+variable "existing_oracle_password" {
+  description = "Oracle database password for an existing Autonomous Database."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = !can(regex("[\r\n]", var.existing_oracle_password))
+    error_message = "existing_oracle_password must not contain line breaks."
+  }
+}
+
+variable "existing_oracle_dsn" {
+  description = "Oracle DSN for an existing Autonomous Database, for example nl2sqladb_high."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !can(regex("[\r\n]", var.existing_oracle_dsn))
+    error_message = "existing_oracle_dsn must not contain line breaks."
+  }
+}
+
+variable "existing_oracle_wallet_password" {
+  description = "Wallet password for an existing Autonomous Database. Leave blank to reuse existing_oracle_password."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = !can(regex("[\r\n]", var.existing_oracle_wallet_password))
+    error_message = "existing_oracle_wallet_password must not contain line breaks."
+  }
+}
+
 variable "adb_display_name" {
   description = "Autonomous Database display name. Leave blank to use adb_name."
   type        = string
@@ -382,13 +453,13 @@ variable "app_auth_cookie_secure" {
 }
 
 variable "app_admin_username" {
-  description = "Login name for the built-in SYSTEM_ADMIN configuration administrator."
+  description = "Fixed login name for the built-in SYSTEM_ADMIN configuration administrator."
   type        = string
-  default     = ""
+  default     = "system_admin"
 
   validation {
-    condition     = !can(regex("[\r\n]", var.app_admin_username))
-    error_message = "app_admin_username must not contain line breaks."
+    condition     = var.app_admin_username == "system_admin"
+    error_message = "app_admin_username is fixed and must be exactly system_admin."
   }
 }
 

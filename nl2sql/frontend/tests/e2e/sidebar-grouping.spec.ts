@@ -14,7 +14,7 @@ async function mockApi(page: Page) {
             role_codes: ["SYSTEM_ADMIN"],
             permissions: [],
             data_entitlements: [],
-            password_change_allowed: false,
+            password_change_allowed: true,
           }
         : path === "/api/ready/database"
         ? { status: "ok", check: "ok", detail: null }
