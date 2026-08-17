@@ -68,21 +68,88 @@ write_files:
         printf '[nl2sql-bootstrap] %s\n' "$*"
       }
 
+      trap 'status=$?; log "Bootstrap failed at line $${LINENO} with status $${status}: $${BASH_COMMAND}"; exit "$${status}"' ERR
+
+      run_with_retries() {
+        local attempts="$1"
+        shift
+        local attempt status
+        for attempt in $(seq 1 "$${attempts}"); do
+          if "$@"; then
+            return 0
+          fi
+          status="$?"
+          log "Command failed with status $${status} on attempt $${attempt}/$${attempts}: $*"
+          sleep $((attempt * 5))
+        done
+        return "$${status}"
+      }
+
+      docker_compose() {
+        if docker compose version >/dev/null 2>&1; then
+          docker compose "$@"
+          return
+        fi
+        if command -v docker-compose >/dev/null 2>&1; then
+          docker-compose "$@"
+          return
+        fi
+        log "Neither docker compose plugin nor docker-compose is available."
+        return 127
+      }
+
+      docker_repo_codename() {
+        . /etc/os-release
+        local codename="$${VERSION_CODENAME:-$${UBUNTU_CODENAME:-}}"
+        if [ -n "$${codename}" ]; then
+          printf '%s\n' "$${codename}"
+          return
+        fi
+        case "$${VERSION_ID:-}" in
+          24.04*) printf 'noble\n' ;;
+          22.04*) printf 'jammy\n' ;;
+          20.04*) printf 'focal\n' ;;
+          *) return 1 ;;
+        esac
+      }
+
+      install_docker_from_docker_repo() {
+        log "Installing Docker Engine from the Docker apt repository."
+        install -m 0755 -d /etc/apt/keyrings || return
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc || return
+        chmod a+r /etc/apt/keyrings/docker.asc || return
+        local codename
+        codename="$(docker_repo_codename)" || return
+        log "Using Docker apt repository codename: $${codename}"
+        printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+          "$(dpkg --print-architecture)" \
+          "$${codename}" \
+          > /etc/apt/sources.list.d/docker.list || return
+        run_with_retries 5 apt-get update || return
+        run_with_retries 3 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return
+      }
+
+      install_docker_from_ubuntu_repo() {
+        log "Falling back to Ubuntu repository Docker packages."
+        rm -f /etc/apt/sources.list.d/docker.list || return
+        run_with_retries 5 apt-get update || return
+        if ! run_with_retries 3 apt-get install -y docker.io docker-compose-v2; then
+          run_with_retries 3 apt-get install -y docker.io docker-compose
+        fi
+      }
+
       install_docker() {
-        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        if command -v docker >/dev/null 2>&1 && docker_compose version >/dev/null 2>&1; then
           log "Docker and Docker Compose are already installed."
           return
         fi
-        log "Installing Docker Engine and Compose plugin."
-        install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-        chmod a+r /etc/apt/keyrings/docker.asc
-        . /etc/os-release
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
-        apt-get update
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        if ! install_docker_from_docker_repo; then
+          install_docker_from_ubuntu_repo
+        fi
         systemctl enable --now docker
         usermod -aG docker ubuntu || true
+        docker --version
+        docker_compose version
       }
 
       clone_or_update_repo() {
@@ -190,7 +257,7 @@ write_files:
         cp "$${APP_REPO_DIR}/backend/.env.example" "$${APP_REPO_DIR}/backend/.env"
         (
           cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml build backend frontend schema-refresh-worker quality-evaluation-worker
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml build backend frontend schema-refresh-worker quality-evaluation-worker
         )
       }
 
@@ -203,7 +270,7 @@ write_files:
         log "Initializing NL2SQL system schema."
         (
           cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml run --rm backend uv run python -m app.cli.nl2sql_system_schema --initialize
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml run --rm backend uv run python -m app.cli.nl2sql_system_schema --initialize
         )
       }
 
@@ -211,7 +278,7 @@ write_files:
         log "Starting NL2SQL Docker Compose services."
         (
           cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml up -d backend frontend schema-refresh-worker quality-evaluation-worker
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml up -d backend frontend schema-refresh-worker quality-evaluation-worker
         )
       }
 
