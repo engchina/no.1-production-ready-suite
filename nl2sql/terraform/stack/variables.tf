@@ -379,9 +379,4 @@ variable "app_auth_cookie_secure" {
   description = "Set true when the application is served through HTTPS."
   type        = bool
   default     = false
-
-  validation {
-    condition     = var.app_environment == "local" || var.app_auth_cookie_secure
-    error_message = "app_auth_cookie_secure must be true when app_environment is staging or production."
-  }
 }

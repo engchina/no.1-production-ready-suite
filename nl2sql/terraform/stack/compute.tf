@@ -45,5 +45,9 @@ resource "oci_core_instance" "generated_oci_core_instance" {
       condition     = trimspace(var.adb_password) != ""
       error_message = "adb_password must be configured."
     }
+    precondition {
+      condition     = var.app_environment == "local" || var.app_auth_cookie_secure
+      error_message = "app_auth_cookie_secure must be true when app_environment is staging or production."
+    }
   }
 }
