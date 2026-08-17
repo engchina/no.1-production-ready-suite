@@ -30,6 +30,8 @@ jobs:
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
 
       - name: Format check
         run: terraform fmt -check -recursive terraform/stack
