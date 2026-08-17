@@ -165,6 +165,14 @@ The cloud-init bootstrap:
 7. Starts the backend service with systemd.
 8. Configures Nginx to serve the SPA and same-origin `/api/` path.
 
+Node.js installation uses the NodeSource apt repository first. If apt candidate
+inspection, installation, or post-install validation fails, the init script
+falls back to the official Node.js `latest-v24.x` Linux tarball with
+`SHASUMS256.txt` verification. Override `NODEJS_OFFICIAL_RELEASE_BASE_URL` or
+`NODEJS_OFFICIAL_INSTALL_DIR` only for controlled mirrors or recovery testing;
+`NODEJS_OFFICIAL_BIN_DIR` is also available when the symlink target must be
+isolated.
+
 Backend startup is intentionally independent of database reachability and table
 existence. If the database is not ready yet, the application still starts; run
 schema initialization from the System Settings UI or, for operators who prefer

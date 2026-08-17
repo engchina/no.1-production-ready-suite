@@ -22,6 +22,9 @@ NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesour
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
 NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
+NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://nodejs.org/download/release/latest-v24.x}"
+NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
+NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
 
@@ -113,6 +116,15 @@ install_nodejs() {
     fi
   fi
 
+  if install_nodejs_from_nodesource; then
+    return
+  fi
+
+  log "NodeSource Node.js 24 installation failed; falling back to official Node.js tarball."
+  install_nodejs_from_official_tarball || return 1
+}
+
+install_nodejs_from_nodesource() {
   log "Installing Node.js 24 from NodeSource."
   install_nodesource_apt_repository || return 1
   apt_get update || return 1
@@ -163,6 +175,110 @@ ensure_nodejs_24_candidate() {
     apt-cache policy nodejs || true
     return 1
   fi
+}
+
+resolve_nodejs_official_platform() {
+  local architecture
+
+  NODEJS_OFFICIAL_PLATFORM=""
+  if ! command -v dpkg >/dev/null 2>&1 || ! architecture="$(dpkg --print-architecture)" || [ -z "${architecture}" ]; then
+    architecture="$(uname -m)" || return 1
+  fi
+
+  case "${architecture}" in
+    amd64 | x86_64)
+      NODEJS_OFFICIAL_PLATFORM="linux-x64"
+      ;;
+    arm64 | aarch64)
+      NODEJS_OFFICIAL_PLATFORM="linux-arm64"
+      ;;
+    *)
+      log "Unsupported architecture for official Node.js tarball: ${architecture}"
+      return 1
+      ;;
+  esac
+}
+
+install_nodejs_from_official_tarball() {
+  local node_platform
+  local node_dir
+  local shasums_path
+  local tarball_name
+  local tmp_dir
+
+  resolve_nodejs_official_platform || return 1
+  node_platform="${NODEJS_OFFICIAL_PLATFORM}"
+  tmp_dir="$(mktemp -d)" || return 1
+  shasums_path="${tmp_dir}/SHASUMS256.txt"
+
+  log "Installing Node.js 24 official tarball for ${node_platform}."
+  if ! curl -fsSL "${NODEJS_OFFICIAL_RELEASE_BASE_URL%/}/SHASUMS256.txt" -o "${shasums_path}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  tarball_name="$(
+    awk -v node_platform="${node_platform}" '
+      {
+        filename = $2
+        sub("^[*]", "", filename)
+        sub("^\\./", "", filename)
+      }
+      filename ~ ("^node-v24[.][0-9]+[.][0-9]+-" node_platform "[.]tar[.]gz$") {
+        print filename
+        exit
+      }
+    ' "${shasums_path}"
+  )" || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+  if [ -z "${tarball_name}" ]; then
+    log "No official Node.js 24 tarball found for ${node_platform}."
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  if ! curl -fsSL "${NODEJS_OFFICIAL_RELEASE_BASE_URL%/}/${tarball_name}" -o "${tmp_dir}/${tarball_name}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+  if ! (cd "${tmp_dir}" && sha256sum --ignore-missing -c SHASUMS256.txt); then
+    log "Official Node.js tarball checksum verification failed: ${tarball_name}"
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  node_dir="${tarball_name%.tar.gz}"
+  install -d -m 0755 "${NODEJS_OFFICIAL_INSTALL_DIR}" "${NODEJS_OFFICIAL_BIN_DIR}" || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+  if ! tar -xzf "${tmp_dir}/${tarball_name}" -C "${NODEJS_OFFICIAL_INSTALL_DIR}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+  if ! symlink_official_nodejs_binaries "${NODEJS_OFFICIAL_INSTALL_DIR}/${node_dir}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  rm -rf "${tmp_dir}"
+  hash -r || true
+  validate_nodejs_24 || return 1
+}
+
+symlink_official_nodejs_binaries() {
+  local executable
+  local node_home="$1"
+
+  for executable in node npm npx corepack; do
+    if [ ! -x "${node_home}/bin/${executable}" ]; then
+      log "Official Node.js tarball is missing ${executable}: ${node_home}/bin/${executable}"
+      return 1
+    fi
+    ln -sfn "${node_home}/bin/${executable}" "${NODEJS_OFFICIAL_BIN_DIR}/${executable}" || return 1
+  done
 }
 
 validate_nodejs_24() {
