@@ -480,8 +480,14 @@ variable "app_admin_password" {
     condition = (
       var.app_admin_password == ""
       || (
-        !can(regex("[\r\n]", var.app_admin_password))
-        && can(regex("^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$", var.app_admin_password))
+        length(var.app_admin_password) >= 12
+        && length(var.app_admin_password) <= 30
+        && !can(regex("[\r\n]", var.app_admin_password))
+        && !can(regex("\"", var.app_admin_password))
+        && !can(regex("admin", var.app_admin_password))
+        && can(regex("[0-9]", var.app_admin_password))
+        && can(regex("[a-z]", var.app_admin_password))
+        && can(regex("[A-Z]", var.app_admin_password))
       )
     )
     error_message = "app_admin_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."

@@ -201,7 +201,7 @@ variables:
     title: "Application administrator password"
     description: "Login password for the built-in SYSTEM_ADMIN configuration administrator. Uses the same rule as the database password."
     confirmation: true
-    pattern: "^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$"
+    pattern: '^[^"\r\n]{12,30}$'
 
   adb_deployment_mode:
     type: enum
@@ -383,7 +383,7 @@ variables:
     title: "Database ADMIN password"
     description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password."
     confirmation: true
-    pattern: "^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*[\"]).{12,30}$"
+    pattern: '^$|^[^"\r\n]{12,30}$'
 
   adb_network_access_type:
     type: enum
