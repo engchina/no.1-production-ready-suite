@@ -164,6 +164,11 @@ initialize_database_schema() {
   retry_command 10 run_as_app_user_in_dir "${BACKEND_DIR}" "uv run python -m app.cli.nl2sql_system_schema --initialize"
 }
 
+initialize_security_schema() {
+  log "Initializing application security schema."
+  retry_command 10 run_as_app_user_in_dir "${BACKEND_DIR}" "uv run python -m app.cli.app_security_migrate --apply"
+}
+
 write_systemd_unit() {
   local unit_path="$1"
   local exec_start="$2"
@@ -310,6 +315,7 @@ main() {
   install_backend
   build_frontend
   initialize_database_schema
+  initialize_security_schema
   configure_systemd
   configure_nginx
   wait_for_backend

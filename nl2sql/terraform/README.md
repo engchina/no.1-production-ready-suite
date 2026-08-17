@@ -123,8 +123,10 @@ The cloud-init bootstrap:
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
 6. Builds the shared UI package and `frontend/dist`.
 7. Initializes NL2SQL system tables.
-8. Starts the backend and worker services with systemd.
-9. Configures Nginx to serve the SPA and same-origin `/api/` path.
+8. Applies application auth/RBAC security migrations and creates the initial
+   `ADMIN` web user.
+9. Starts the backend and worker services with systemd.
+10. Configures Nginx to serve the SPA and same-origin `/api/` path.
 
 ## Stack Boundaries
 
