@@ -8,8 +8,26 @@ data "oci_core_subnet" "adb_acl_subnet" {
   subnet_id = var.adb_acl_subnet_id
 }
 
+data "oci_database_autonomous_database" "selected_existing_adb" {
+  count = local.use_existing_adb && trimspace(var.existing_adb_ocid) != "" ? 1 : 0
+
+  autonomous_database_id = var.existing_adb_ocid
+}
+
 locals {
-  create_new_adb   = var.adb_deployment_mode == "CREATE_NEW"
+  adb_deployment_mode_normalized = trimspace(var.adb_deployment_mode)
+  adb_deployment_mode_create_values = [
+    "CREATE_NEW",
+    "新規 Autonomous Database の作成",
+    "新規 Autonomous AI Database の作成"
+  ]
+  adb_deployment_mode_existing_values = [
+    "USE_EXISTING",
+    "既存の Autonomous Database を選択",
+    "既存の Autonomous AI Database を選択"
+  ]
+  create_new_adb   = contains(local.adb_deployment_mode_create_values, local.adb_deployment_mode_normalized)
+  use_existing_adb = contains(local.adb_deployment_mode_existing_values, local.adb_deployment_mode_normalized)
   adb_display_name = trimspace(var.adb_display_name) != "" ? var.adb_display_name : var.adb_name
   adb_private_endpoint_enabled = (
     local.create_new_adb
@@ -28,11 +46,16 @@ locals {
 
   adb_whitelisted_ips = local.adb_secure_acl_enabled ? concat(local.adb_acl_vcn_entries, local.adb_acl_cidr_entries) : null
 
+  existing_adb_db_name = try(data.oci_database_autonomous_database.selected_existing_adb[0].db_name, "")
+  effective_existing_oracle_dsn = trimspace(var.existing_oracle_dsn) != "" ? trimspace(var.existing_oracle_dsn) : (
+    trimspace(local.existing_adb_db_name) != "" ? "${lower(local.existing_adb_db_name)}_high" : ""
+  )
+
   effective_adb_ocid        = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
-  effective_adb_name        = local.create_new_adb ? var.adb_name : var.existing_oracle_dsn
+  effective_adb_name        = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
   effective_oracle_user     = local.create_new_adb ? "ADMIN" : var.existing_oracle_user
   effective_oracle_password = local.create_new_adb ? var.adb_password : var.existing_oracle_password
-  effective_oracle_dsn      = local.create_new_adb ? "${lower(var.adb_name)}_high" : var.existing_oracle_dsn
+  effective_oracle_dsn      = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
   effective_oracle_wallet_password = local.create_new_adb ? var.adb_password : (
     trimspace(var.existing_oracle_wallet_password) != "" ? var.existing_oracle_wallet_password : var.existing_oracle_password
   )
@@ -81,11 +104,11 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_databas
   lifecycle {
     precondition {
       condition     = trimspace(local.effective_adb_ocid) != ""
-      error_message = "An Autonomous Database OCID is required to generate the wallet."
+      error_message = "An Autonomous AI Database OCID is required to generate the wallet."
     }
     precondition {
       condition     = trimspace(local.effective_oracle_wallet_password) != ""
-      error_message = "A wallet password is required to generate the Autonomous Database wallet."
+      error_message = "A wallet password is required to generate the Autonomous AI Database wallet."
     }
   }
 }

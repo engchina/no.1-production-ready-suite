@@ -23,18 +23,25 @@ variable "vcn_ai_vcn_id" {
 }
 
 variable "adb_deployment_mode" {
-  description = "Whether to create a new Autonomous Database or connect to an existing one."
+  description = "Whether to create a new Autonomous AI Database or connect to an existing one."
   type        = string
-  default     = "CREATE_NEW"
+  default     = "新規 Autonomous AI Database の作成"
 
   validation {
-    condition     = contains(["CREATE_NEW", "USE_EXISTING"], var.adb_deployment_mode)
-    error_message = "adb_deployment_mode must be CREATE_NEW or USE_EXISTING."
+    condition = contains([
+      "CREATE_NEW",
+      "USE_EXISTING",
+      "新規 Autonomous Database の作成",
+      "既存の Autonomous Database を選択",
+      "新規 Autonomous AI Database の作成",
+      "既存の Autonomous AI Database を選択"
+    ], var.adb_deployment_mode)
+    error_message = "adb_deployment_mode must be 新規 Autonomous AI Database の作成, 既存の Autonomous AI Database を選択, CREATE_NEW, or USE_EXISTING."
   }
 }
 
 variable "existing_adb_ocid" {
-  description = "Existing Autonomous Database OCID used when adb_deployment_mode is USE_EXISTING."
+  description = "Existing Autonomous AI Database OCID used when adb_deployment_mode selects an existing database."
   type        = string
   default     = ""
 
@@ -43,12 +50,12 @@ variable "existing_adb_ocid" {
       var.existing_adb_ocid == ""
       || can(regex("^ocid1\\.autonomousdatabase\\.", var.existing_adb_ocid))
     )
-    error_message = "existing_adb_ocid must be an Autonomous Database OCID."
+    error_message = "existing_adb_ocid must be an Autonomous AI Database OCID."
   }
 }
 
 variable "existing_oracle_user" {
-  description = "Oracle database username for an existing Autonomous Database."
+  description = "Oracle database username for an existing Autonomous AI Database."
   type        = string
   default     = "ADMIN"
 
@@ -59,7 +66,7 @@ variable "existing_oracle_user" {
 }
 
 variable "existing_oracle_password" {
-  description = "Oracle database password for an existing Autonomous Database."
+  description = "Oracle database password for an existing Autonomous AI Database."
   type        = string
   sensitive   = true
   default     = ""
@@ -71,7 +78,7 @@ variable "existing_oracle_password" {
 }
 
 variable "existing_oracle_dsn" {
-  description = "Oracle DSN for an existing Autonomous Database, for example nl2sqladb_high."
+  description = "Optional Oracle DSN for an existing Autonomous AI Database. Leave blank to use lower(db_name)_high from the selected ADB."
   type        = string
   default     = ""
 
@@ -82,7 +89,7 @@ variable "existing_oracle_dsn" {
 }
 
 variable "existing_oracle_wallet_password" {
-  description = "Wallet password for an existing Autonomous Database. Leave blank to reuse existing_oracle_password."
+  description = "Wallet password for an existing Autonomous AI Database. Leave blank to reuse existing_oracle_password."
   type        = string
   sensitive   = true
   default     = ""
@@ -94,13 +101,13 @@ variable "existing_oracle_wallet_password" {
 }
 
 variable "adb_display_name" {
-  description = "Autonomous Database display name. Leave blank to use adb_name."
+  description = "Autonomous AI Database display name. Leave blank to use adb_name."
   type        = string
   default     = ""
 }
 
 variable "adb_name" {
-  description = "Autonomous Database database name."
+  description = "Autonomous AI Database database name."
   type        = string
   default     = "NL2SQLADB"
 
@@ -111,7 +118,7 @@ variable "adb_name" {
 }
 
 variable "adb_password" {
-  description = "Autonomous Database ADMIN password."
+  description = "Autonomous AI Database ADMIN password."
   type        = string
   sensitive   = true
   default     = ""
@@ -123,7 +130,7 @@ variable "adb_password" {
 }
 
 variable "adb_workload" {
-  description = "Autonomous Database workload type."
+  description = "Autonomous AI Database workload type."
   type        = string
   default     = "OLTP"
 
@@ -134,7 +141,7 @@ variable "adb_workload" {
 }
 
 variable "adb_db_version" {
-  description = "Autonomous Database version."
+  description = "Autonomous AI Database version."
   type        = string
   default     = "26ai"
 
@@ -145,7 +152,7 @@ variable "adb_db_version" {
 }
 
 variable "adb_compute_model" {
-  description = "Autonomous Database compute model."
+  description = "Autonomous AI Database compute model."
   type        = string
   default     = "ECPU"
 
@@ -156,7 +163,7 @@ variable "adb_compute_model" {
 }
 
 variable "adb_compute_count" {
-  description = "Autonomous Database compute count."
+  description = "Autonomous AI Database compute count."
   type        = number
   default     = 2
 
@@ -167,13 +174,13 @@ variable "adb_compute_count" {
 }
 
 variable "adb_is_auto_scaling_enabled" {
-  description = "Enable Autonomous Database compute auto scaling."
+  description = "Enable Autonomous AI Database compute auto scaling."
   type        = bool
   default     = false
 }
 
 variable "adb_data_storage_size_in_tbs" {
-  description = "Autonomous Database storage size in TB."
+  description = "Autonomous AI Database storage size in TB."
   type        = number
   default     = 1
 
@@ -184,19 +191,19 @@ variable "adb_data_storage_size_in_tbs" {
 }
 
 variable "adb_is_auto_scaling_for_storage_enabled" {
-  description = "Enable Autonomous Database storage auto scaling."
+  description = "Enable Autonomous AI Database storage auto scaling."
   type        = bool
   default     = false
 }
 
 variable "adb_is_elastic_pool_enabled" {
-  description = "Enable Autonomous Database elastic pool configuration."
+  description = "Enable Autonomous AI Database elastic pool configuration."
   type        = bool
   default     = false
 }
 
 variable "adb_resource_pool_size" {
-  description = "Autonomous Database elastic pool size. Used when adb_is_elastic_pool_enabled is true."
+  description = "Autonomous AI Database elastic pool size. Used when adb_is_elastic_pool_enabled is true."
   type        = number
   default     = 0
 
@@ -207,7 +214,7 @@ variable "adb_resource_pool_size" {
 }
 
 variable "adb_resource_pool_storage_size_in_tbs" {
-  description = "Autonomous Database elastic pool storage size in TB. Used when adb_is_elastic_pool_enabled is true."
+  description = "Autonomous AI Database elastic pool storage size in TB. Used when adb_is_elastic_pool_enabled is true."
   type        = number
   default     = 0
 
@@ -218,7 +225,7 @@ variable "adb_resource_pool_storage_size_in_tbs" {
 }
 
 variable "license_model" {
-  description = "Autonomous Database license model."
+  description = "Autonomous AI Database license model."
   type        = string
   default     = "LICENSE_INCLUDED"
 
@@ -229,7 +236,7 @@ variable "license_model" {
 }
 
 variable "adb_backup_retention_period_in_days" {
-  description = "Autonomous Database automatic backup retention period in days."
+  description = "Autonomous AI Database automatic backup retention period in days."
   type        = number
   default     = 1
 
@@ -240,7 +247,7 @@ variable "adb_backup_retention_period_in_days" {
 }
 
 variable "adb_network_access_type" {
-  description = "Autonomous Database network access mode."
+  description = "Autonomous AI Database network access mode."
   type        = string
   default     = "PRIVATE_ENDPOINT_ONLY"
 
@@ -261,7 +268,7 @@ variable "adb_use_private_subnet" {
 }
 
 variable "adb_subnet_id" {
-  description = "Private subnet OCID for Autonomous Database private endpoint access."
+  description = "Private subnet OCID for Autonomous AI Database private endpoint access."
   type        = string
   default     = ""
 }
@@ -278,7 +285,7 @@ variable "adb_acl_notation_type" {
 }
 
 variable "adb_acl_vcn_id" {
-  description = "VCN OCID allowed to access Autonomous Database when secure ACL mode is selected."
+  description = "VCN OCID allowed to access Autonomous AI Database when secure ACL mode is selected."
   type        = string
   default     = ""
 }
@@ -290,13 +297,13 @@ variable "adb_acl_subnet_id" {
 }
 
 variable "adb_acl_cidr_blocks" {
-  description = "Comma-separated CIDR blocks allowed to access Autonomous Database when CIDR ACL mode is selected."
+  description = "Comma-separated CIDR blocks allowed to access Autonomous AI Database when CIDR ACL mode is selected."
   type        = string
   default     = ""
 }
 
 variable "adb_is_mtls_connection_required" {
-  description = "Require mutual TLS (mTLS) connections for Autonomous Database."
+  description = "Require mutual TLS (mTLS) connections for Autonomous AI Database."
   type        = bool
   default     = true
 }

@@ -29,7 +29,7 @@ Wallet (`generate_type=SINGLE`)、Dedicated は `generate_type` 省略で OCI Da
 file lock を通過した内容だけを `ORACLE_CLIENT_LIB_DIR/network/admin` へ原子的に配置する。Wallet
 directory は `0700`、配下ファイルは `0600` とし、有効な既存 Wallet は自動上書き・自動輪換しない。
 
-実行 identity には対象 Autonomous Database を読める policy が必要で、Wallet 生成には少なくとも
+実行 identity には対象 Autonomous AI Database を読める policy が必要で、Wallet 生成には少なくとも
 `read autonomous-databases`（permission: `AUTONOMOUS_DATABASE_CONTENT_READ`）を許可する。
 OCI config、region、ADB OCID、IAM policy のいずれかが不足する場合は、Database Settings に常設した
 Wallet ZIP の手動アップロードを復旧経路として使う。

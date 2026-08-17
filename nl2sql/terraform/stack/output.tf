@@ -3,12 +3,12 @@ locals {
 }
 
 output "autonomous_database_ocid" {
-  description = "Autonomous Database OCID."
+  description = "Autonomous AI Database OCID."
   value       = local.effective_adb_ocid
 }
 
 output "autonomous_database_high_connection_string" {
-  description = "Autonomous Database HIGH connection string."
+  description = "Autonomous AI Database HIGH connection string."
   value = local.create_new_adb ? lookup(
     oci_database_autonomous_database.generated_database_autonomous_database[0].connection_strings[0].all_connection_strings,
     "HIGH",

@@ -1,5 +1,5 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
-stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
+stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
 version: "20260817"
 locale: "en"
@@ -10,6 +10,8 @@ variableGroups:
     variables:
       - adb_compute_model
       - adb_use_private_subnet
+      - app_environment
+      - app_auth_cookie_secure
 
   - title: Required Configuration
     visible: true
@@ -27,8 +29,6 @@ variableGroups:
       - platform_git_url
       - platform_git_ref
       - application_port
-      - app_environment
-      - app_auth_cookie_secure
 
   - title: Application Administrator
     visible: true
@@ -36,16 +36,16 @@ variableGroups:
       - app_admin_username
       - app_admin_password
 
-  - title: Autonomous Database
+  - title: Autonomous AI Database
     visible: true
     variables:
       - adb_deployment_mode
 
-  - title: Existing Autonomous Database
+  - title: Existing Autonomous AI Database
     visible:
       eq:
         - adb_deployment_mode
-        - "USE_EXISTING"
+        - "既存の Autonomous AI Database を選択"
     variables:
       - existing_adb_ocid
       - existing_oracle_user
@@ -53,11 +53,11 @@ variableGroups:
       - existing_oracle_dsn
       - existing_oracle_wallet_password
 
-  - title: New Autonomous Database
+  - title: New Autonomous AI Database
     visible:
       eq:
         - adb_deployment_mode
-        - "CREATE_NEW"
+        - "新規 Autonomous AI Database の作成"
     variables:
       - adb_display_name
       - adb_name
@@ -167,7 +167,7 @@ variables:
   app_environment:
     type: enum
     required: true
-    visible: true
+    visible: false
     title: "Application environment"
     description: "Use local for direct HTTP access. Use production only behind HTTPS and set Secure cookies."
     enum:
@@ -179,19 +179,20 @@ variables:
   app_auth_cookie_secure:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "Secure auth cookies"
     description: "Set true when the app is served through HTTPS."
     default: false
 
   app_admin_username:
-    type: string
+    type: enum
     required: true
     visible: true
     title: "Application administrator username"
     description: "Fixed login name for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
+    enum:
+      - "system_admin"
     default: "system_admin"
-    pattern: "^system_admin$"
 
   app_admin_password:
     type: password
@@ -206,18 +207,18 @@ variables:
     type: enum
     required: true
     visible: true
-    title: "Autonomous Database deployment mode"
-    description: "Create a new Autonomous Database, or connect this Compute deployment to an existing Autonomous Database in the selected region."
+    title: "Autonomous AI Database deployment mode"
+    description: "Create a new Autonomous AI Database, or connect this Compute deployment to an existing Autonomous AI Database in the selected region."
     enum:
-      - "CREATE_NEW"
-      - "USE_EXISTING"
-    default: "CREATE_NEW"
+      - "新規 Autonomous AI Database の作成"
+      - "既存の Autonomous AI Database を選択"
+    default: "新規 Autonomous AI Database の作成"
 
   existing_adb_ocid:
     type: oci:database:autonomousdatabase:id
     required: false
     visible: true
-    title: "Existing Autonomous Database"
+    title: "Existing Autonomous AI Database"
     description: "Select the existing ADB. Terraform will generate a wallet for this database and inject the connection settings into backend/.env."
     dependsOn:
       compartmentId: ${compartment_ocid}
@@ -243,7 +244,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Value written to ORACLE_DSN in backend/.env, for example nl2sqladb_high."
+    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example NL2SQLADB -> nl2sqladb_high."
 
   existing_oracle_wallet_password:
     type: password
@@ -544,14 +545,14 @@ variables:
 
 outputs:
   autonomous_database_ocid:
-    title: "Autonomous Database OCID"
-    displayText: "Autonomous Database OCID"
+    title: "Autonomous AI Database OCID"
+    displayText: "Autonomous AI Database OCID"
     type: copyableString
     visible: true
 
   autonomous_database_high_connection_string:
-    title: "Autonomous Database HIGH connection string"
-    displayText: "Autonomous Database HIGH connection string"
+    title: "Autonomous AI Database HIGH connection string"
+    displayText: "Autonomous AI Database HIGH connection string"
     type: copyableString
     visible: true
 

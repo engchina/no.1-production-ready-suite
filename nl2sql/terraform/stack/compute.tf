@@ -48,7 +48,7 @@ resource "oci_core_instance" "generated_oci_core_instance" {
       condition = (
         local.create_new_adb && local.adb_private_endpoint_enabled
       ) ? trimspace(var.adb_subnet_id) != "" : true
-      error_message = "adb_subnet_id must be configured when creating a private endpoint Autonomous Database."
+      error_message = "adb_subnet_id must be configured when creating a private endpoint Autonomous AI Database."
     }
     precondition {
       condition = (
@@ -56,7 +56,7 @@ resource "oci_core_instance" "generated_oci_core_instance" {
         && local.adb_secure_acl_enabled
         && var.adb_acl_notation_type == "VCN"
       ) ? trimspace(var.adb_acl_vcn_id) != "" : true
-      error_message = "adb_acl_vcn_id must be configured when creating an Autonomous Database with VCN ACL access."
+      error_message = "adb_acl_vcn_id must be configured when creating an Autonomous AI Database with VCN ACL access."
     }
     precondition {
       condition = (
@@ -64,16 +64,15 @@ resource "oci_core_instance" "generated_oci_core_instance" {
         && local.adb_secure_acl_enabled
         && var.adb_acl_notation_type == "CIDR_BLOCK"
       ) ? length(local.adb_acl_cidr_entries) > 0 : true
-      error_message = "adb_acl_cidr_blocks must be configured when creating an Autonomous Database with CIDR ACL access."
+      error_message = "adb_acl_cidr_blocks must be configured when creating an Autonomous AI Database with CIDR ACL access."
     }
     precondition {
       condition = local.create_new_adb || (
         trimspace(var.existing_adb_ocid) != ""
         && trimspace(var.existing_oracle_user) != ""
         && trimspace(var.existing_oracle_password) != ""
-        && trimspace(var.existing_oracle_dsn) != ""
       )
-      error_message = "existing_adb_ocid, existing_oracle_user, existing_oracle_password, and existing_oracle_dsn must be configured when adb_deployment_mode is USE_EXISTING."
+      error_message = "existing_adb_ocid, existing_oracle_user, and existing_oracle_password must be configured when adb_deployment_mode selects an existing Autonomous AI Database."
     }
     precondition {
       condition     = var.app_environment == "local" || var.app_auth_cookie_secure

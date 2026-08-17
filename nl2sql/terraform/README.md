@@ -3,7 +3,7 @@
 This directory contains the OCI Resource Manager stack for Production Ready
 NL2SQL. The stack provisions:
 
-- Oracle Autonomous Database 26ai, or connection settings for an existing ADB
+- Oracle Autonomous AI Database 26ai, or connection settings for an existing ADB
 - A generated ADB wallet for the selected/new ADB
 - One OCI Compute instance
 - A cloud-init bootstrap that clones the repositories and runs the application
@@ -42,12 +42,14 @@ Resource Manager and create a stack. Provide the required form values:
 - OCI compartment, region, availability domain, VCN, and subnets
 - Application administrator password. The username is fixed to `system_admin`
   and is case-sensitive.
-- Autonomous Database mode:
-  - `CREATE_NEW`: provide the new ADB sizing, network, license, and password
-    fields.
-  - `USE_EXISTING`: provide the existing ADB OCID plus the values written to
-    `ORACLE_USER`, `ORACLE_PASSWORD`, and `ORACLE_DSN`. The wallet password can
-    be supplied separately, or left blank to reuse `ORACLE_PASSWORD`.
+- Autonomous AI Database mode:
+  - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
+    license, and password fields.
+  - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
+    values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
+    left blank; the stack uses the selected ADB `db_name` with `_high`, for
+    example `NL2SQLADB` becomes `nl2sqladb_high`. The wallet password can be
+    supplied separately, or left blank to reuse `ORACLE_PASSWORD`.
 - Compute image, shape, subnet, and SSH public key
 
 After apply completes, use the `application_url` output. The default application
@@ -113,20 +115,24 @@ to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
 configured administrator password can be changed from the application password
 change screen; the backend writes the new value back to `backend/.env`.
 
-When `adb_deployment_mode=USE_EXISTING`, the stack does not create any ADB
-resource. It generates a wallet from the selected existing ADB OCID and writes
-the supplied database values into `backend/.env`:
+When `adb_deployment_mode` selects an existing ADB (`既存の Autonomous AI
+Database を選択`, or legacy `USE_EXISTING`), the stack does not create any ADB
+resource. It generates a wallet from the selected existing ADB OCID and writes the
+database values into `backend/.env`:
 
 - `ORACLE_USER`
 - `ORACLE_PASSWORD`
-- `ORACLE_DSN`
+- `ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
+  when left blank)
 - `ORACLE_WALLET_PASSWORD`
 - `ORACLE_ADB_OCID`
 - `ORACLE_ADB_REGION`
 
-For direct HTTP access, the default is `app_environment=local`,
-`DEBUG=false`, and `app_auth_cookie_secure=false`. When serving through HTTPS,
-set `app_environment=production` and `app_auth_cookie_secure=true`.
+The Resource Manager form hides the application environment and auth cookie
+security inputs. Direct HTTP deployments keep the internal defaults
+`app_environment=local`, `DEBUG=false`, and `app_auth_cookie_secure=false`.
+If you override these Terraform variables outside the form for HTTPS, use
+`app_environment=production` with `app_auth_cookie_secure=true`.
 
 ## Troubleshooting
 
