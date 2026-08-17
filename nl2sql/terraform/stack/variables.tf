@@ -1,13 +1,13 @@
 variable "region" {
   description = "OCI region used by Resource Manager and runtime clients."
   type        = string
-  default     = ""
+  default     = "ap-osaka-1"
 }
 
 variable "availability_domain" {
   description = "Availability domain for the Compute instance."
   type        = string
-  default     = "bxtG:AP-TOKYO-1-AD-1"
+  default     = ""
 }
 
 variable "compartment_ocid" {
@@ -294,7 +294,7 @@ variable "instance_boot_volume_vpus" {
 variable "instance_image_source_id" {
   description = "Ubuntu image OCID for the Compute instance."
   type        = string
-  default     = "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
+  default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
 }
 
 variable "subnet_ai_subnet_id" {

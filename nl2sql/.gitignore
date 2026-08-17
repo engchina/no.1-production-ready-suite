@@ -25,6 +25,7 @@ frontend/test-results/
 /test-results/
 frontend/playwright-report/
 playwright-report/
+/dist/
 
 # --- local runtime settings ---
 backend/model-settings.json

@@ -15,8 +15,28 @@ The default application source is:
 
 ## Deploy
 
-Upload `terraform/stack` to OCI Resource Manager and create a stack. Provide the
-required form values:
+### One-click Deploy
+
+Click the button below to open OCI Resource Manager with the Osaka region
+(`ap-osaka-1`) selected by default.
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/latest/download/production-ready-nl2sql-terraform-stack.zip)
+
+The button uses the latest GitHub Release asset named
+`production-ready-nl2sql-terraform-stack.zip`. Publish at least one release with
+that asset before using the one-click deploy URL.
+
+### Manual Package and Upload
+
+From the repository root, build the OCI Resource Manager zip package:
+
+```bash
+python scripts/package_terraform_stack.py
+```
+
+The default output is
+`dist/production-ready-nl2sql-terraform-stack.zip`. Upload that zip to OCI
+Resource Manager and create a stack. Provide the required form values:
 
 - OCI compartment, region, availability domain, VCN, and subnets
 - ADB password
@@ -34,6 +54,16 @@ Generative AI, Database, and related runtime APIs before using live AI features.
 This stack renders deployment secrets into Compute cloud-init so the instance
 can create `backend/.env`. Treat the Resource Manager stack, job history, and
 state as sensitive operational material.
+
+## Release Asset
+
+The release workflow publishes:
+
+- `production-ready-nl2sql-terraform-stack.zip`
+- `production-ready-nl2sql-terraform-stack.zip.sha256`
+
+The README deploy button intentionally targets the latest-release download URL so
+future releases can replace the asset without changing documentation.
 
 ## Runtime Notes
 

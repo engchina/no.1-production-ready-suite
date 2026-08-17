@@ -11,6 +11,90 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: no.1-production-ready-nl2sql
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: no.1-production-ready-nl2sql
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Format check
+        run: terraform fmt -check -recursive terraform/stack
+
+      - name: Initialize Terraform
+        working-directory: no.1-production-ready-nl2sql/terraform/stack
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        working-directory: no.1-production-ready-nl2sql/terraform/stack
+        run: terraform validate
+
+      - name: Package stack
+        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-nl2sql-terraform-stack.zip
+
+      - name: Verify package contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import stat
+          import zipfile
+
+          package = Path("/tmp/production-ready-nl2sql-terraform-stack.zip")
+          required = {
+              "schema.yaml",
+              "adb.tf",
+              "compute.tf",
+              "datasources.tf",
+              "locals.tf",
+              "output.tf",
+              "provider.tf",
+              "variables.tf",
+              "versions.tf",
+              "extract_wallet.sh",
+              "cloud_init/bootstrap.template.yaml",
+          }
+          forbidden_names = {
+              ".terraform.lock.hcl",
+              "wallet_full.zip",
+              "wallet_small.zip",
+          }
+          with zipfile.ZipFile(package) as archive:
+              names = set(archive.namelist())
+              missing = required - names
+              forbidden = {
+                  name
+                  for name in names
+                  if name in forbidden_names
+                  or name.startswith(".terraform/")
+                  or name.endswith(".tfstate")
+                  or ".tfstate." in name
+                  or name.endswith(".tfvars")
+                  or name.endswith(".tfvars.json")
+                  or (name.startswith("wallet") and name.endswith(".zip"))
+              }
+              mode = archive.getinfo("extract_wallet.sh").external_attr >> 16
+          if missing:
+              raise SystemExit(f"missing package entries: {sorted(missing)}")
+          if forbidden:
+              raise SystemExit(f"forbidden package entries: {sorted(forbidden)}")
+          if not mode & stat.S_IXUSR:
+              raise SystemExit("extract_wallet.sh is not executable in package")
+          print("Terraform package contents verified.")
+          PY
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
