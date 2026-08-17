@@ -47,6 +47,7 @@ from app.security.store import (
     InMemorySecurityStore,
     OracleSecurityStore,
     SecurityConflict,
+    SecurityStore,
 )
 from app.settings import Settings, get_settings
 
@@ -90,6 +91,26 @@ async def _inline_threadpool(
 def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.security.dependencies.run_in_threadpool", _inline_threadpool)
     monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
+
+
+class _MissingSecuritySchemaOnceStore:
+    def __init__(self) -> None:
+        self.bootstrap_calls = 0
+
+    def bootstrap(self, **_kwargs: object) -> bool:
+        self.bootstrap_calls += 1
+        if self.bootstrap_calls == 1:
+            raise RuntimeError(
+                'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
+            )
+        return True
+
+
+class _MissingSecuritySchemaStore:
+    def bootstrap(self, **_kwargs: object) -> bool:
+        raise RuntimeError(
+            'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
+        )
 
 
 class _RecordingCursor:
@@ -228,6 +249,47 @@ def test_bootstrap_login_session_and_password_independence() -> None:
         service.authenticate_session(token)
     changed, _, _ = service.login("ADMIN", "IndependentPass!456")
     assert changed.force_password_change is False
+
+
+def test_bootstrap_applies_security_migration_when_auth_table_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applied: list[tuple[int, int, int]] = []
+
+    def apply_security_migrations() -> tuple[int, int, int]:
+        applied.append((1, 2, 3))
+        return applied[-1]
+
+    monkeypatch.setattr(
+        "app.cli.app_security_migrate.apply_security_migrations",
+        apply_security_migrations,
+    )
+    store = _MissingSecuritySchemaOnceStore()
+    service = SecurityService(cast(SecurityStore, store), _settings())
+
+    assert service.bootstrap() is True
+    assert applied == [(1, 2, 3)]
+    assert store.bootstrap_calls == 2
+
+
+def test_bootstrap_reports_503_when_on_demand_security_migration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def apply_security_migrations() -> tuple[int, int, int]:
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(
+        "app.cli.app_security_migrate.apply_security_migrations",
+        apply_security_migrations,
+    )
+    service = SecurityService(
+        cast(SecurityStore, _MissingSecuritySchemaStore()), _settings()
+    )
+
+    with pytest.raises(SecurityApiError) as error:
+        service.bootstrap()
+    assert error.value.status_code == 503
+    assert "認証テーブル" in error.value.public_message
 
 
 def test_password_policy_requires_all_character_classes_without_expiry() -> None:

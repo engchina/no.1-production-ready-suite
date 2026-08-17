@@ -100,6 +100,8 @@ The first application login is created from:
 - password: the ADB password supplied to Resource Manager
 
 The application marks this bootstrap administrator for forced password change.
+If the auth/RBAC tables do not exist yet, the first login attempt applies the
+idempotent security migrations and then creates the bootstrap administrator.
 
 For direct HTTP access, the default is `app_environment=local`,
 `DEBUG=false`, and `app_auth_cookie_secure=false`. When serving through HTTPS,

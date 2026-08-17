@@ -8,7 +8,6 @@ from typing import Any
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
 from app.clients.oracle_statement_executor import oracle_statement_executor
-from app.security.service import get_security_service
 
 LEGACY_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
     ("RAG_APP_USERS", "NL2SQL_APP_USERS"),
@@ -41,9 +40,7 @@ def split_ddl(sql: str) -> list[str]:
 
 def _assert_no_namespace_conflicts(connection: Any) -> None:
     with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT OBJECT_NAME FROM USER_OBJECTS WHERE OBJECT_TYPE = 'TABLE'"
-        )
+        cursor.execute("SELECT OBJECT_NAME FROM USER_OBJECTS WHERE OBJECT_TYPE = 'TABLE'")
         tables = {str(row[0]) for row in cursor.fetchall()}
     conflicts = [
         f"{source}/{target}"
@@ -57,15 +54,9 @@ def _assert_no_namespace_conflicts(connection: Any) -> None:
         )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="Oracle へ migration を適用する")
-    parser.add_argument(
-        "--skip-bootstrap",
-        action="store_true",
-        help="初回 SYSTEM_ADMIN の作成を行わない",
-    )
-    args = parser.parse_args()
+def apply_security_migrations() -> tuple[int, int, int]:
+    """Apply idempotent application auth/RBAC migrations without bootstrapping users."""
+
     migration_dir = Path(__file__).resolve().parents[2] / "migrations"
     namespace_migration = migration_dir / "005_security_namespace_nl2sql.sql"
     namespace_statements = split_ddl(namespace_migration.read_text(encoding="utf-8"))
@@ -73,13 +64,6 @@ def main() -> int:
     statements = split_ddl(migration.read_text(encoding="utf-8"))
     cleanup_migration = migration_dir / "009_remove_security_audit_log.sql"
     cleanup_statements = split_ddl(cleanup_migration.read_text(encoding="utf-8"))
-    if not args.apply:
-        print(
-            f"migration=005 statements={len(namespace_statements)} mode=preview "
-            f"migration=004 statements={len(statements)} "
-            f"migration=009 statements={len(cleanup_statements)}"
-        )
-        return 0
 
     with get_oracle_pool_manager().control_connection() as connection:
         _assert_no_namespace_conflicts(connection)
@@ -113,8 +97,38 @@ def main() -> int:
     ]
     if errors:
         raise RuntimeError(str(errors[0].get("error_message") or "security migration failed"))
+    return (len(namespace_statements), len(statements), len(cleanup_statements))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="Oracle へ migration を適用する")
+    parser.add_argument(
+        "--skip-bootstrap",
+        action="store_true",
+        help="初回 SYSTEM_ADMIN の作成を行わない",
+    )
+    args = parser.parse_args()
+    migration_dir = Path(__file__).resolve().parents[2] / "migrations"
+    namespace_migration = migration_dir / "005_security_namespace_nl2sql.sql"
+    namespace_statements = split_ddl(namespace_migration.read_text(encoding="utf-8"))
+    migration = migration_dir / "004_app_security_rbac.sql"
+    statements = split_ddl(migration.read_text(encoding="utf-8"))
+    cleanup_migration = migration_dir / "009_remove_security_audit_log.sql"
+    cleanup_statements = split_ddl(cleanup_migration.read_text(encoding="utf-8"))
+    if not args.apply:
+        print(
+            f"migration=005 statements={len(namespace_statements)} mode=preview "
+            f"migration=004 statements={len(statements)} "
+            f"migration=009 statements={len(cleanup_statements)}"
+        )
+        return 0
+
+    apply_security_migrations()
     bootstrapped = False
     if not args.skip_bootstrap:
+        from app.security.service import get_security_service
+
         bootstrapped = get_security_service().bootstrap()
     print(
         f"migration=005 statements={len(namespace_statements)} mode=applied "

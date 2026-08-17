@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 import threading
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,8 @@ from .store import (
     SecurityStore,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class SecurityApiError(RuntimeError):
     def __init__(self, status_code: int, public_message: str) -> None:
@@ -66,6 +69,25 @@ _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE = (
     "SYSTEM_ADMIN ロールは初期システム管理者にのみ割り当てできます。"
 )
 
+_SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
+    {
+        "NL2SQL_APP_USERS",
+        "NL2SQL_APP_ROLES",
+        "NL2SQL_APP_USER_ROLES",
+        "NL2SQL_APP_ROLE_PERMISSIONS",
+        "NL2SQL_APP_DATA_ENTITLEMENTS",
+        "NL2SQL_AUTH_SESSIONS",
+        "NL2SQL_DEEPSEC_MIGRATIONS",
+    }
+)
+
+
+def _looks_like_missing_security_schema(exc: Exception) -> bool:
+    message = str(exc).upper()
+    return "ORA-00942" in message and any(
+        object_name in message for object_name in _SECURITY_SCHEMA_OBJECT_NAMES
+    )
+
 
 class SecurityService:
     def __init__(self, store: SecurityStore, settings: Settings) -> None:
@@ -83,11 +105,43 @@ class SecurityService:
                 "初期システム管理者を作成できません。"
                 "ORACLE_USER と ORACLE_PASSWORD を設定してください。",
             )
-        return self.store.bootstrap(
-            login_name=login_name,
-            display_name=f"{login_name}（システム管理者）",
-            password_hash=hash_password(password),
-        )
+        password_hash = hash_password(password)
+        try:
+            return self.store.bootstrap(
+                login_name=login_name,
+                display_name=f"{login_name}（システム管理者）",
+                password_hash=password_hash,
+            )
+        except Exception as exc:
+            if not _looks_like_missing_security_schema(exc):
+                raise
+            logger.warning("security_schema_missing_on_bootstrap", exc_info=True)
+        try:
+            self._initialize_security_schema_for_bootstrap()
+        except Exception as exc:
+            logger.exception("security_schema_on_demand_migration_failed")
+            raise SecurityApiError(
+                503,
+                "認証テーブルを初期化できません。DB 接続と Oracle 権限を確認してください。",
+            ) from exc
+        try:
+            return self.store.bootstrap(
+                login_name=login_name,
+                display_name=f"{login_name}（システム管理者）",
+                password_hash=password_hash,
+            )
+        except Exception as exc:
+            logger.exception("security_bootstrap_after_migration_failed")
+            raise SecurityApiError(
+                503,
+                "初期システム管理者を作成できません。認証テーブルの状態を確認してください。",
+            ) from exc
+
+    @staticmethod
+    def _initialize_security_schema_for_bootstrap() -> None:
+        from app.cli.app_security_migrate import apply_security_migrations
+
+        apply_security_migrations()
 
     def ensure_bootstrapped(self) -> None:
         """process ごとに一度だけ、DB lock 付きで初期管理者を確認する。"""
@@ -488,6 +542,7 @@ class SecurityService:
         if isinstance(exc, SecurityNotFound):
             return SecurityApiError(404, str(exc))
         return SecurityApiError(409, str(exc))
+
 
 @lru_cache
 def get_security_service() -> SecurityService:
