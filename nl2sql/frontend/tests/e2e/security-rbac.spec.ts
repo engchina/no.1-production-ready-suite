@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 
@@ -39,6 +39,30 @@ async function expectNoPageHorizontalScroll(page: Page) {
       )
     )
     .toBeTruthy();
+}
+
+async function sidebarComparableStyle(locator: Locator) {
+  await expect(locator).toBeVisible();
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return {
+      height: Math.round(rect.height),
+      borderRadius: style.borderRadius,
+      fontSize: style.fontSize,
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+      transitionProperty: style.transitionProperty,
+    };
+  });
+}
+
+async function expectSidebarActionMatchesMenuItem(action: Locator, menuItem: Locator) {
+  const [actionStyle, menuStyle] = await Promise.all([
+    sidebarComparableStyle(action),
+    sidebarComparableStyle(menuItem),
+  ]);
+  expect(actionStyle).toEqual(menuStyle);
 }
 
 const systemRole = {
@@ -203,11 +227,10 @@ test("構成管理者はパスワード変更入口を表示せず、サイド�
   await page.goto("/query");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
-  await expect(logoutButton).toBeVisible();
-  const box = await logoutButton.boundingBox();
-  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
 
   await page.goto("/password/change");
   await expect(page.getByText("この構成管理者アカウントのパスワードはアプリケーション内では変更できません。", { exact: true })).toBeVisible();
@@ -233,17 +256,18 @@ test("通常ユーザーはパスワード変更ページから元の画面へ�
 
   await page.goto("/query");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
   const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
   await expect(passwordButton).toBeVisible();
   await expect(logoutButton).toBeVisible();
+  await expectSidebarActionMatchesMenuItem(passwordButton, menuItem);
+  await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
 
   const footerLayout = await Promise.all([passwordButton, logoutButton].map((button) => button.boundingBox()));
-  expect(footerLayout[0]?.height).toBeGreaterThanOrEqual(44);
-  expect(footerLayout[1]?.height).toBeGreaterThanOrEqual(44);
   expect((footerLayout[1]?.y ?? 0) - ((footerLayout[0]?.y ?? 0) + (footerLayout[0]?.height ?? 0))).toBeGreaterThanOrEqual(0);
-  await expect(passwordButton).toHaveCSS("white-space", "nowrap");
-  await expect(logoutButton).toHaveCSS("white-space", "nowrap");
+  await expect(passwordButton.locator("span").last()).toHaveCSS("white-space", "nowrap");
+  await expect(logoutButton.locator("span").last()).toHaveCSS("white-space", "nowrap");
 
   await passwordButton.click();
   await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();

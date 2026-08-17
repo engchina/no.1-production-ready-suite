@@ -1,14 +1,18 @@
 import { useMemo } from "react";
-import { Bug, KeyRound, LogOut, UserRound } from "lucide-react";
+import { Bug, KeyRound, LogOut, UserRound, type LucideIcon } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { Sidebar as UiSidebar, type NavSection as UiNavSection, type SidebarLabels } from "@engchina/production-ready-ui";
+import {
+  Sidebar as UiSidebar,
+  cn,
+  type NavSection as UiNavSection,
+  type SidebarLabels,
+} from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useUiStore } from "@/lib/ui-store";
 import { useAuth } from "@/features/security/AuthProvider";
-import { Button } from "@/components/ui/button";
 import { NAV_SECTIONS } from "./nav-config";
 
 /**
@@ -25,6 +29,8 @@ export function AppSidebar() {
   const toggleSection = useUiStore((state) => state.toggleSection);
   const setSectionCollapsed = useUiStore((state) => state.setSectionCollapsed);
   const handleLogout = () => void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+  const passwordChangeActive =
+    pathname === APP_ROUTES.passwordChange || pathname.startsWith(`${APP_ROUTES.passwordChange}/`);
 
   const sections = useMemo<UiNavSection[]>(
     () =>
@@ -97,52 +103,75 @@ export function AppSidebar() {
                 ) : null}
               </div>
             ) : (
-              <div className="grid gap-1">
+              <div className="space-y-1">
                 {auth.user.password_change_allowed !== false ? (
-                  <Button
-                    size="lg"
-                    variant="ghost"
-                    className={
-                      collapsed
-                        ? "h-14 min-h-14 w-full justify-center px-0 text-sidebar-foreground"
-                        : "h-14 min-h-14 w-full justify-start gap-2 px-2 text-sidebar-foreground"
-                    }
-                    aria-label={t("auth.sidebar.password")}
-                    title={collapsed ? t("auth.sidebar.password") : undefined}
+                  <SidebarFooterAction
+                    icon={KeyRound}
+                    label={t("auth.sidebar.password")}
+                    collapsed={collapsed}
+                    active={passwordChangeActive}
                     onClick={() => navigate(APP_ROUTES.passwordChange)}
-                  >
-                    <KeyRound size={16} className="shrink-0" aria-hidden />
-                    {!collapsed ? (
-                      <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
-                        {t("auth.sidebar.password")}
-                      </span>
-                    ) : null}
-                  </Button>
+                  />
                 ) : null}
-                <Button
-                  size="lg"
-                  variant="ghost"
-                  className={
-                    collapsed
-                      ? "h-14 min-h-14 w-full justify-center px-0 text-sidebar-foreground"
-                      : "h-14 min-h-14 w-full justify-start gap-2 px-2 text-sidebar-foreground"
-                  }
-                  aria-label={t("auth.sidebar.logout")}
-                  title={collapsed ? t("auth.sidebar.logout") : undefined}
+                <SidebarFooterAction
+                  icon={LogOut}
+                  label={t("auth.sidebar.logout")}
+                  collapsed={collapsed}
                   onClick={handleLogout}
-                >
-                  <LogOut size={16} className="shrink-0" aria-hidden />
-                  {!collapsed ? (
-                    <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
-                      {t("auth.sidebar.logout")}
-                    </span>
-                  ) : null}
-                </Button>
+                />
               </div>
             )}
           </div>
         ) : null
       }
     />
+  );
+}
+
+interface SidebarFooterActionProps {
+  icon: LucideIcon;
+  label: string;
+  collapsed: boolean;
+  active?: boolean;
+  onClick: () => void;
+}
+
+function SidebarFooterAction({
+  icon: Icon,
+  label,
+  collapsed,
+  active = false,
+  onClick,
+}: SidebarFooterActionProps) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "relative flex h-11 min-h-11 w-full items-center overflow-hidden rounded-md text-sm transition-colors",
+        collapsed ? "justify-center px-0" : "gap-2.5 px-3 py-2 text-left",
+        active ? "bg-sidebar-active text-white" : "hover:bg-white/10"
+      )}
+      aria-current={active ? "page" : undefined}
+      aria-label={label}
+      title={collapsed ? label : undefined}
+      onClick={onClick}
+    >
+      {active ? (
+        <span
+          className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-white"
+          aria-hidden
+        />
+      ) : null}
+      <Icon className="shrink-0" size={18} aria-hidden />
+      <span
+        className={cn(
+          "sidebar-reveal min-w-0 truncate whitespace-nowrap leading-5",
+          collapsed && "w-0"
+        )}
+        aria-hidden={collapsed}
+      >
+        {label}
+      </span>
+    </button>
   );
 }
