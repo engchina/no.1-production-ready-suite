@@ -15,7 +15,7 @@ services:
       NL2SQL_SCHEMA_REFRESH_WORKER_MODE: ${NL2SQL_SCHEMA_REFRESH_WORKER_MODE:-external}
       NL2SQL_QUALITY_EVALUATION_WORKER_MODE: ${NL2SQL_QUALITY_EVALUATION_WORKER_MODE:-external}
     volumes:
-      - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
+      - ontology-source-data:/u01/data/production-ready-nl2sql/ontology-sources
     ports:
       - "8000:8000"
     healthcheck:
@@ -37,7 +37,7 @@ services:
       NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
       NL2SQL_ONTOLOGY_WORKER_MODE: external
     volumes:
-      - ontology-source-data:/u01/production-ready-nl2sql/ontology-sources
+      - ontology-source-data:/u01/data/production-ready-nl2sql/ontology-sources
 
   schema-refresh-worker:
     build:

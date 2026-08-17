@@ -14,6 +14,8 @@ function databaseSettingsFixture(overrides: Record<string, unknown> = {}) {
   return {
     user: "NL2SQL_APP",
     dsn: "nl2sqldb_high",
+    driver_mode: "thick",
+    client_lib_dir: "/u01/aipoc/instantclient_23_26",
     wallet_dir: "/u01/aipoc/instantclient_23_26/network/admin",
     wallet_uploaded: true,
     available_services: ["nl2sqldb_high", "nl2sqldb_low"],
@@ -106,7 +108,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
 
   const uploadStorage = {
     backend: "local",
-    local_storage_dir: "/u01/production-ready-nl2sql",
+    local_storage_dir: "/u01/data/production-ready-nl2sql",
     object_storage_region: "ap-osaka-1",
     object_storage_namespace: "exampletenancy",
     object_storage_bucket: "nl2sql-originals",
@@ -474,7 +476,7 @@ test("OCI 認証設定はブラウザ草稿のダミー値を runtime 空値で�
   await page.route("**/api/settings/upload-storage", async (route) => {
     await fulfillJson(route, {
       backend: "local",
-      local_storage_dir: "/u01/production-ready-nl2sql",
+      local_storage_dir: "/u01/data/production-ready-nl2sql",
       object_storage_region: "",
       object_storage_namespace: "",
       object_storage_bucket: "nl2sql-originals",
@@ -510,7 +512,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
   await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
-    "/u01/production-ready-nl2sql"
+    "/u01/data/production-ready-nl2sql"
   );
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
@@ -535,6 +537,14 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.goto("/settings/database");
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toBeVisible();
+  const databaseEnvPreview = page.getByLabel(".env プレビュー");
+  await expect(databaseEnvPreview).toHaveValue(/ORACLE_DRIVER_MODE=thick/);
+  await expect(databaseEnvPreview).toHaveValue(
+    /ORACLE_CLIENT_LIB_DIR=\/u01\/aipoc\/instantclient_23_26/
+  );
+  await expect(databaseEnvPreview).toHaveValue(
+    /ORACLE_WALLET_DIR=\/u01\/aipoc\/instantclient_23_26\/network\/admin/
+  );
   const databaseSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(page, "oracle-password");
   expect(databaseSavedSecretBadgeStyle).toEqual(modelSavedSecretBadgeStyle);
   await expect(page.getByText("現在の接続ユーザー")).toBeVisible();
@@ -550,6 +560,32 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("独立 Wallet ディレクトリを client lib として .env プレビューに表示しない", async ({
+  page,
+}) => {
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", (route) =>
+    fulfillJson(
+      route,
+      databaseSettingsFixture({
+        driver_mode: "thin",
+        client_lib_dir: "",
+        wallet_dir: "/u01/aipoc/wallet",
+      })
+    )
+  );
+
+  await page.goto("/settings/database");
+
+  const envPreview = page.getByLabel(".env プレビュー");
+  await expect(envPreview).toHaveValue(/ORACLE_DRIVER_MODE=thin/);
+  await expect(envPreview).toHaveValue(
+    /ORACLE_CLIENT_LIB_DIR=\nORACLE_WALLET_DIR=\/u01\/aipoc\/wallet/
+  );
+  await expect(envPreview).not.toHaveValue(/ORACLE_CLIENT_LIB_DIR=\/u01\/aipoc\/wallet/);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -642,7 +678,7 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   await page.route("**/api/settings/upload-storage", (route) =>
     fulfillJson(route, {
       backend: "local",
-      local_storage_dir: "/u01/production-ready-nl2sql",
+      local_storage_dir: "/u01/data/production-ready-nl2sql",
       object_storage_region: "ap-osaka-1",
       object_storage_namespace: "exampletenancy",
       object_storage_bucket: "nl2sql-originals",

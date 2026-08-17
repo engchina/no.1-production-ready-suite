@@ -126,7 +126,7 @@ class Settings(BaseServiceSettings):
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
     model_settings_file: str = DEFAULT_MODEL_SETTINGS_FILE
     upload_storage_backend: str = "local"
-    local_storage_dir: str = "/u01/production-ready-nl2sql"
+    local_storage_dir: str = "/u01/data/production-ready-nl2sql"
     object_storage_region: str = ""
     object_storage_namespace: str = ""
     object_storage_bucket: str = "nl2sql-originals"
@@ -283,13 +283,16 @@ class Settings(BaseServiceSettings):
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:
-        """driver mode に応じた Wallet 配置先を返す。"""
+        """明示 Wallet 配置先を優先し、未指定時だけ Thick の既定位置を返す。"""
+        wallet_dir = self.oracle_wallet_dir.strip()
+        if wallet_dir:
+            return wallet_dir
         if self.oracle_driver_mode.strip().lower() == "thin":
-            return self.oracle_wallet_dir.strip()
+            return ""
         client_lib_dir = self.oracle_client_lib_dir.strip()
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
-        return self.oracle_wallet_dir.strip()
+        return ""
 
     @property
     def resolved_oracle_adb_region(self) -> str:

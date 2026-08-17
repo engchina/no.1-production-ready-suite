@@ -1,7 +1,7 @@
 {
   "data": {
     "backend": "local",
-    "local_storage_dir": "/u01/production-ready-nl2sql",
+    "local_storage_dir": "/u01/data/production-ready-nl2sql",
     "object_storage_region": "ap-osaka-1",
     "object_storage_namespace": "exampletenancy",
     "object_storage_bucket": "nl2sql-originals",

@@ -27,6 +27,8 @@ async function fulfill(
 const databaseSettings = {
   user: "NL2SQL_APP",
   dsn: "nl2sqldb_high",
+  driver_mode: "thin",
+  client_lib_dir: "",
   wallet_dir: "/wallet",
   wallet_uploaded: true,
   available_services: ["nl2sqldb_high"],

@@ -328,4 +328,71 @@ if run_nodejs_case "rejects-official-missing-npm" "v18.19.1" "18.19.1+dfsg-6ubun
   exit 1
 fi
 
-echo "init_script Node.js 24 install test: ok"
+run_data_dir_migration_case() {
+  local scenario="$1"
+  local case_dir="${TEST_TMP_DIR}/${scenario}"
+  local source_script="${REPO_DIR}/init_script.sh"
+
+  mkdir -p "${case_dir}"
+  (
+    export APP_USER
+    export APPLICATION_PORT=80
+    export NL2SQL_INIT_TEST_MODE=true
+    APP_USER="$(id -un)"
+    # shellcheck source=/dev/null
+    source "${source_script}"
+    DATA_DIR="${case_dir}/data/production-ready-nl2sql"
+    LEGACY_DATA_DIR="${case_dir}/production-ready-nl2sql"
+    mkdir -p "$(dirname "${DATA_DIR}")"
+
+    case "${scenario}" in
+      data-dir-legacy-missing)
+        install -d -m 0755 "${DATA_DIR}"
+        migrate_legacy_data_dir
+        test -d "${DATA_DIR}"
+        test -L "${LEGACY_DATA_DIR}"
+        test "$(readlink "${LEGACY_DATA_DIR}")" = "${DATA_DIR}"
+        ;;
+      data-dir-legacy-copied)
+        install -d -m 0755 "${DATA_DIR}" "${LEGACY_DATA_DIR}/nested"
+        printf 'legacy-data\n' > "${LEGACY_DATA_DIR}/nested/source.txt"
+        migrate_legacy_data_dir
+        test "$(cat "${DATA_DIR}/nested/source.txt")" = "legacy-data"
+        test -L "${LEGACY_DATA_DIR}"
+        test "$(readlink "${LEGACY_DATA_DIR}")" = "${DATA_DIR}"
+        local backup_dir
+        backup_dir="$(
+          find "$(dirname "${LEGACY_DATA_DIR}")" \
+            -maxdepth 1 \
+            -type d \
+            -name "$(basename "${LEGACY_DATA_DIR}").legacy-*" \
+            -print \
+            -quit
+        )"
+        test -n "${backup_dir}"
+        test "$(cat "${backup_dir}/nested/source.txt")" = "legacy-data"
+        ;;
+      data-dir-both-populated)
+        install -d -m 0755 "${DATA_DIR}" "${LEGACY_DATA_DIR}"
+        printf 'new-data\n' > "${DATA_DIR}/current.txt"
+        printf 'legacy-data\n' > "${LEGACY_DATA_DIR}/source.txt"
+        local output
+        output="$(migrate_legacy_data_dir)"
+        printf '%s\n' "${output}" | grep -q 'skipping legacy migration to avoid overwrite'
+        test ! -L "${LEGACY_DATA_DIR}"
+        test "$(cat "${DATA_DIR}/current.txt")" = "new-data"
+        test "$(cat "${LEGACY_DATA_DIR}/source.txt")" = "legacy-data"
+        ;;
+      *)
+        echo "unknown data directory migration scenario: ${scenario}" >&2
+        exit 1
+        ;;
+    esac
+  )
+}
+
+run_data_dir_migration_case "data-dir-legacy-missing"
+run_data_dir_migration_case "data-dir-legacy-copied"
+run_data_dir_migration_case "data-dir-both-populated"
+
+echo "init_script Node.js 24 install and data directory migration test: ok"

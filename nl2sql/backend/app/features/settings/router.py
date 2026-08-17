@@ -405,7 +405,7 @@ async def test_database_settings(
             data=DatabaseConnectionTestResult(
                 status="failed",
                 readiness=readiness,
-                message="Oracle 26ai 接続に必要な設定が不足しています。",
+                message=_database_readiness_message(readiness),
                 elapsed_ms=_elapsed_ms(started),
                 troubleshooting=_database_connection_troubleshooting(readiness=readiness),
             )
@@ -1020,6 +1020,8 @@ def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
     return DatabaseSettingsData(
         user=getattr(settings, "oracle_user", ""),
         dsn=getattr(settings, "oracle_dsn", ""),
+        driver_mode=settings.oracle_driver_mode,
+        client_lib_dir=settings.oracle_client_lib_dir,
         wallet_dir=wallet_dir,
         wallet_uploaded=wallet_configured,
         available_services=(
@@ -1186,10 +1188,13 @@ def _install_downloaded_database_wallet(
 
 
 def _database_settings_candidate(base: Settings, payload: DatabaseSettingsUpdate) -> Settings:
+    wallet_dir = payload.wallet_dir.strip() or base.oracle_wallet_dir.strip()
+    if not wallet_dir:
+        wallet_dir = base.resolved_oracle_wallet_dir
     updates = {
         "oracle_user": payload.user.strip(),
         "oracle_dsn": payload.dsn.strip(),
-        "oracle_wallet_dir": base.resolved_oracle_wallet_dir,
+        "oracle_wallet_dir": wallet_dir,
         "oracle_password": _secret_value(
             current=base.oracle_password,
             update=payload.password,
@@ -1218,11 +1223,11 @@ def _persist_database_settings(settings: Settings) -> None:
         "ORACLE_USER": settings.oracle_user,
         "ORACLE_PASSWORD": settings.oracle_password,
         "ORACLE_DSN": settings.oracle_dsn,
+        "ORACLE_DRIVER_MODE": settings.oracle_driver_mode,
         "ORACLE_CLIENT_LIB_DIR": settings.oracle_client_lib_dir,
+        "ORACLE_WALLET_DIR": settings.oracle_wallet_dir,
         "ORACLE_WALLET_PASSWORD": settings.oracle_wallet_password,
     }
-    if not settings.oracle_client_lib_dir.strip() and settings.oracle_wallet_dir.strip():
-        values["ORACLE_WALLET_DIR"] = settings.oracle_wallet_dir
     _write_env_values(
         BACKEND_ENV_FILE,
         values,
@@ -1234,14 +1239,44 @@ def _persist_database_settings(settings: Settings) -> None:
 def _database_readiness(settings: Settings) -> str:
     if not settings.oracle_user.strip() or not settings.oracle_dsn.strip():
         return "missing"
-    if settings.oracle_password.strip():
-        return "ok"
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
+    wallet_configured = bool(wallet_path and _database_wallet_is_configured(wallet_path))
+    if _database_dsn_uses_wallet_alias(settings.oracle_dsn):
+        if not wallet_path or not wallet_configured:
+            return "wallet_not_found"
+        if not _database_wallet_service_exists(wallet_path, settings.oracle_dsn):
+            return "invalid"
+    if settings.oracle_password.strip() or wallet_configured:
+        return "ok"
     if not wallet_dir:
         return "missing_credentials"
-    if not _database_wallet_is_configured(Path(wallet_dir).expanduser()):
-        return "wallet_not_found"
-    return "ok"
+    return "wallet_not_found"
+
+
+def _database_dsn_uses_wallet_alias(dsn: str) -> bool:
+    """TNS alias らしい短い DSN だけを Wallet service 検査の対象にする。"""
+    return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", dsn.strip()))
+
+
+def _database_wallet_service_exists(wallet_path: Path, dsn: str) -> bool:
+    """tnsnames.ora に DSN alias が登録されているかを大小無視で判定する。"""
+    normalized = dsn.strip().lower()
+    return any(service.lower() == normalized for service in _extract_wallet_services(wallet_path))
+
+
+def _database_readiness_message(readiness: str) -> str:
+    if readiness == "invalid":
+        return (
+            "Oracle 26ai 接続設定を確認してください。"
+            "サービス名 / DSN が現在の Wallet の tnsnames.ora に存在しません。"
+        )
+    if readiness == "wallet_not_found":
+        return (
+            "Oracle 26ai 接続に必要な Wallet を確認してください。"
+            "現在の Wallet 保存先に接続用ファイルが揃っていません。"
+        )
+    return "Oracle 26ai 接続に必要な設定が不足しています。"
 
 
 def _adb_info(
@@ -1764,7 +1799,10 @@ def _wallet_storage_root(settings: Settings) -> Path:
     if not wallet_dir:
         raise HTTPException(
             status_code=422,
-            detail="ORACLE_CLIENT_LIB_DIR が未設定のため Wallet 保存先を決定できません。",
+            detail=(
+                "ORACLE_WALLET_DIR または ORACLE_CLIENT_LIB_DIR が未設定のため "
+                "Wallet 保存先を決定できません。"
+            ),
         )
     return Path(wallet_dir).expanduser().resolve()
 
@@ -2255,6 +2293,11 @@ def _database_connection_error_message(exc: Exception, oracle_error_codes: list[
             f"Oracle 26ai へ接続できませんでした{code_label}。"
             "Wallet ZIP と Wallet パスワードを確認してください。"
         )
+    if "DPY-4000" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "サービス名 / DSN が現在の Wallet の tnsnames.ora に存在するか確認してください。"
+        )
     if code_set & {"DPI-1047", "DPI-1072"}:
         return (
             f"Oracle 26ai へ接続できませんでした{code_label}。"
@@ -2299,7 +2342,7 @@ def _database_connection_troubleshooting(
         )
     if "ora-01017" in combined:
         tips.append("ユーザー名または DB パスワードが正しいか確認してください。")
-    if "ora-12154" in combined or "tns" in combined:
+    if "ora-12154" in combined or "dpy-4000" in combined or "tns" in combined:
         tips.append("Wallet サービス名が tnsnames.ora に存在するか確認してください。")
     if "ora-12506" in combined:
         tips.append(
@@ -2314,7 +2357,7 @@ def _database_connection_troubleshooting(
         )
     if "wallet" in combined or "dpy-4011" in combined:
         tips.append(
-            "Wallet ZIP の内容、Wallet パスワード、" "ORACLE_CLIENT_LIB_DIR を確認してください。"
+            "Wallet ZIP の内容、Wallet パスワード、ORACLE_WALLET_DIR を確認してください。"
         )
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(

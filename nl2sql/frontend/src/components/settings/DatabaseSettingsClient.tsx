@@ -1156,7 +1156,9 @@ function buildDatabaseEnvFile(
       secretPreview(form.password, settings.has_password, form.clearPassword),
     ],
     ["ORACLE_DSN", form.dsn],
-    ["ORACLE_CLIENT_LIB_DIR", oracleClientLibDir(settings.wallet_dir)],
+    ["ORACLE_DRIVER_MODE", settings.driver_mode],
+    ["ORACLE_CLIENT_LIB_DIR", settings.client_lib_dir],
+    ["ORACLE_WALLET_DIR", settings.wallet_dir],
     [
       "ORACLE_WALLET_PASSWORD",
       settings.has_wallet_password ? t("settings.preview.secret.saved") : "",
@@ -1172,13 +1174,6 @@ function secretPreview(value: string, hasSavedSecret: boolean, clearSecret = fal
   if (clearSecret) return "";
   if (value.trim()) return t("settings.preview.secret.entered");
   return hasSavedSecret ? t("settings.preview.secret.saved") : "";
-}
-
-function oracleClientLibDir(walletDir: string): string {
-  const suffix = "/network/admin";
-  const normalized = walletDir.trim();
-  if (normalized.endsWith(suffix)) return normalized.slice(0, -suffix.length);
-  return normalized;
 }
 
 function authMethodLabel(settings: DatabaseSettingsData): string {

@@ -322,6 +322,8 @@ def test_upload_database_wallet_extracts_to_resolved_wallet_dir(
     assert resp.status_code == 200
     data = resp.json()["data"]
     wallet_dir = client_lib_dir / "network" / "admin"
+    assert data["driver_mode"] == settings.oracle_driver_mode
+    assert data["client_lib_dir"] == str(client_lib_dir)
     assert data["wallet_dir"] == str(wallet_dir)
     assert data["wallet_uploaded"] is True
     assert "mydb_high" in data["available_services"]
@@ -773,10 +775,94 @@ def test_update_database_settings_preserves_client_lib_dir_in_env(
     )
 
     assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["driver_mode"] == "thick"
+    assert data["client_lib_dir"] == str(client_lib_dir)
+    assert data["wallet_dir"] == str(client_lib_dir / "network" / "admin")
     env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_DRIVER_MODE=thick" in env_text
     assert f"ORACLE_CLIENT_LIB_DIR={client_lib_dir}" in env_text
     assert f"ORACLE_CLIENT_LIB_DIR={client_lib_dir / 'network' / 'admin'}" not in env_text
+    assert f"ORACLE_WALLET_DIR={client_lib_dir / 'network' / 'admin'}" in env_text
     assert "ORACLE_PASSWORD=old-password" in env_text
+
+
+def test_update_database_settings_persists_thin_wallet_dir_separately(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    wallet_dir = tmp_path / "wallet"
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
+    monkeypatch.setattr(settings, "oracle_wallet_dir", str(wallet_dir))
+    monkeypatch.setattr(settings, "oracle_password", "old-password")
+    monkeypatch.setattr(settings, "oracle_wallet_password", "wallet-secret")
+
+    resp = client.patch(
+        "/api/settings/database",
+        json={
+            "user": "ADMIN",
+            "dsn": "mydb_high",
+            "wallet_dir": str(wallet_dir),
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["driver_mode"] == "thin"
+    assert data["client_lib_dir"] == ""
+    assert data["wallet_dir"] == str(wallet_dir)
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_DRIVER_MODE=thin" in env_text
+    assert "ORACLE_CLIENT_LIB_DIR=\n" in env_text
+    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_text
+    assert "ORACLE_WALLET_PASSWORD=wallet-secret" in env_text
+
+
+def test_database_connection_test_rejects_dsn_missing_from_wallet(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("mydb_high = (...)\n", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text(
+        "WALLET_LOCATION=(SOURCE=(METHOD=file))\n",
+        encoding="utf-8",
+    )
+    (wallet_dir / "cwallet.sso").write_text("dummy", encoding="utf-8")
+    (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
+    monkeypatch.setattr(settings, "oracle_wallet_dir", str(wallet_dir))
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_password", "database-secret")
+    monkeypatch.setattr(settings, "oracle_dsn", "missing_high")
+
+    async def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid Wallet DSN must not reach python-oracledb")
+
+    monkeypatch.setattr(settings_router, "test_oracle_connection", fail_if_called)
+
+    resp = client.post(
+        "/api/settings/database/test",
+        json={
+            "user": "ADMIN",
+            "dsn": "missing_high",
+            "wallet_dir": str(wallet_dir),
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["readiness"] == "invalid"
+    assert "tnsnames.ora" in data["message"]
+    assert any("tnsnames.ora" in tip for tip in data["troubleshooting"])
 
 
 def test_update_upload_storage_persists_env_and_keeps_namespace(
@@ -793,7 +879,7 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-nl2sql",
+            "local_storage_dir": "/u01/data/production-ready-nl2sql",
             "object_storage_bucket": "rag-uploads",
         },
     )
@@ -803,7 +889,7 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
     assert data["object_storage_namespace"] == "existingnamespace"
     env_text = env_file.read_text(encoding="utf-8")
     assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
-    assert "LOCAL_STORAGE_DIR=/u01/production-ready-nl2sql" in env_text
+    assert "LOCAL_STORAGE_DIR=/u01/data/production-ready-nl2sql" in env_text
     assert "OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
     assert "OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
     assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
@@ -815,7 +901,7 @@ def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> N
 
     settings = Settings(_env_file=None)
 
-    assert settings.local_storage_dir == "/u01/production-ready-nl2sql"
+    assert settings.local_storage_dir == "/u01/data/production-ready-nl2sql"
     assert settings.object_storage_bucket == "nl2sql-originals"
 
 

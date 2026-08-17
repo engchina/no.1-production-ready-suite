@@ -195,6 +195,8 @@ class DatabaseSettingsData(BaseModel):
 
     user: str
     dsn: str
+    driver_mode: Literal["thin", "thick"]
+    client_lib_dir: str
     wallet_dir: str
     wallet_uploaded: bool
     available_services: list[str]

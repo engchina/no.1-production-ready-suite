@@ -44,7 +44,7 @@ const EMPTY_FORM: UploadStorageForm = {
   objectStorageBucket: "",
 };
 
-const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-nl2sql";
+const DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-nl2sql";
 const DEFAULT_OBJECT_STORAGE_BUCKET = "nl2sql-originals";
 
 /** ドキュメントアップロード原本の保存先設定。 */

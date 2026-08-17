@@ -373,6 +373,8 @@ export interface ModelSettingsTestResult {
 export interface DatabaseSettingsData {
   user: string;
   dsn: string;
+  driver_mode: "thin" | "thick";
+  client_lib_dir: string;
   wallet_dir: string;
   wallet_uploaded: boolean;
   available_services: string[];

@@ -13,7 +13,8 @@ APP_REPO_DIR="${APP_ROOT}/no.1-production-ready-nl2sql"
 PLATFORM_REPO_DIR="${APP_ROOT}/no.1-production-ready-platform"
 BACKEND_DIR="${APP_REPO_DIR}/backend"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
-DATA_DIR="/u01/production-ready-nl2sql"
+DATA_DIR="/u01/data/production-ready-nl2sql"
+LEGACY_DATA_DIR="/u01/production-ready-nl2sql"
 WALLET_DIR="${APP_ROOT}/wallet"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8000"
@@ -317,6 +318,67 @@ install_uv() {
   uv --version
 }
 
+data_dir_has_entries() {
+  local path="$1"
+  [ -d "${path}" ] && find "${path}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+}
+
+backup_legacy_data_dir() {
+  local backup_dir
+  local suffix
+  local timestamp
+
+  timestamp="$(date +%Y%m%d%H%M%S)"
+  backup_dir="${LEGACY_DATA_DIR}.legacy-${timestamp}"
+  suffix=0
+  while [ -e "${backup_dir}" ] || [ -L "${backup_dir}" ]; do
+    suffix=$((suffix + 1))
+    backup_dir="${LEGACY_DATA_DIR}.legacy-${timestamp}.${suffix}"
+  done
+  mv "${LEGACY_DATA_DIR}" "${backup_dir}"
+  printf '%s\n' "${backup_dir}"
+}
+
+link_legacy_data_dir() {
+  if [ -e "${LEGACY_DATA_DIR}" ] || [ -L "${LEGACY_DATA_DIR}" ]; then
+    return
+  fi
+
+  ln -s "${DATA_DIR}" "${LEGACY_DATA_DIR}"
+  chown -h "${APP_USER}:${APP_USER}" "${LEGACY_DATA_DIR}" || true
+}
+
+migrate_legacy_data_dir() {
+  local backup_dir
+  local legacy_target
+
+  if [ -L "${LEGACY_DATA_DIR}" ]; then
+    legacy_target="$(readlink "${LEGACY_DATA_DIR}")" || legacy_target=""
+    if [ "${legacy_target}" = "${DATA_DIR}" ]; then
+      log "Legacy data directory already points to ${DATA_DIR}."
+    else
+      log "Legacy data path ${LEGACY_DATA_DIR} is a symlink to ${legacy_target}; leaving it unchanged."
+    fi
+    return
+  fi
+
+  if [ ! -d "${LEGACY_DATA_DIR}" ]; then
+    link_legacy_data_dir
+    return
+  fi
+
+  if data_dir_has_entries "${DATA_DIR}"; then
+    log "Both ${DATA_DIR} and legacy ${LEGACY_DATA_DIR} contain entries; skipping legacy migration to avoid overwrite."
+    return
+  fi
+
+  log "Migrating legacy data directory ${LEGACY_DATA_DIR} to ${DATA_DIR}."
+  cp -a "${LEGACY_DATA_DIR}/." "${DATA_DIR}/"
+  backup_dir="$(backup_legacy_data_dir)"
+  link_legacy_data_dir
+  log "Legacy data directory moved to ${backup_dir}; ${LEGACY_DATA_DIR} now links to ${DATA_DIR}."
+}
+
 prepare_filesystem() {
   log "Preparing application directories."
   if ! id "${APP_USER}" >/dev/null 2>&1; then
@@ -325,8 +387,10 @@ prepare_filesystem() {
   fi
 
   install -d -m 0755 -o "${APP_USER}" -g "${APP_USER}" "${DATA_DIR}"
+  migrate_legacy_data_dir
   install -d -m 0700 -o "${APP_USER}" -g "${APP_USER}" "${WALLET_DIR}"
   chown -R "${APP_USER}:${APP_USER}" "${APP_REPO_DIR}" "${PLATFORM_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
+  chown -h "${APP_USER}:${APP_USER}" "${LEGACY_DATA_DIR}" 2>/dev/null || true
 }
 
 install_runtime_env() {

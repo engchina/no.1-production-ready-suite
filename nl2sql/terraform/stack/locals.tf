@@ -38,10 +38,10 @@ ORACLE_ADB_REGION=${var.region}
 OCI_REGION=${var.region}
 OCI_COMPARTMENT_ID=${var.compartment_ocid}
 
-MODEL_SETTINGS_FILE=/u01/production-ready-nl2sql/model-settings.json
+MODEL_SETTINGS_FILE=/u01/data/production-ready-nl2sql/model-settings.json
 
 UPLOAD_STORAGE_BACKEND=local
-LOCAL_STORAGE_DIR=/u01/production-ready-nl2sql
+LOCAL_STORAGE_DIR=/u01/data/production-ready-nl2sql
 OBJECT_STORAGE_REGION=${var.region}
 OBJECT_STORAGE_NAMESPACE=
 OBJECT_STORAGE_BUCKET=nl2sql-originals
