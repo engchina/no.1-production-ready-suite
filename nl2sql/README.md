@@ -15,6 +15,9 @@ The button downloads the latest Terraform Resource Manager stack release asset:
 
 `production-ready-nl2sql-terraform-stack.zip`
 
+The Compute deployment serves the frontend through Nginx on HTTP port `80` and
+proxies API calls through the same origin at `/api/...`.
+
 At least one GitHub Release must publish that asset before the one-click deploy
 URL can create a stack. For manual packaging, upload steps, required variables,
 and troubleshooting, see [terraform/README.md](terraform/README.md).

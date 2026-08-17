@@ -9,7 +9,6 @@ packages:
   - curl
   - dos2unix
   - git
-  - gnupg
   - netfilter-persistent
   - unzip
 write_files:
@@ -61,7 +60,6 @@ write_files:
       APP_ROOT="/u01/aipoc"
       APP_REPO_DIR="$${APP_ROOT}/no.1-production-ready-nl2sql"
       PLATFORM_REPO_DIR="$${APP_ROOT}/no.1-production-ready-platform"
-      WALLET_DIR="${wallet_dir_host}"
       APPLICATION_PORT="${application_port}"
 
       log() {
@@ -74,6 +72,7 @@ write_files:
         local attempts="$1"
         shift
         local attempt status
+        status=0
         for attempt in $(seq 1 "$${attempts}"); do
           if "$@"; then
             return 0
@@ -85,84 +84,17 @@ write_files:
         return "$${status}"
       }
 
-      docker_compose() {
-        if docker compose version >/dev/null 2>&1; then
-          docker compose "$@"
-          return
-        fi
-        if command -v docker-compose >/dev/null 2>&1; then
-          docker-compose "$@"
-          return
-        fi
-        log "Neither docker compose plugin nor docker-compose is available."
-        return 127
-      }
-
-      docker_repo_codename() {
-        . /etc/os-release
-        local codename="$${VERSION_CODENAME:-$${UBUNTU_CODENAME:-}}"
-        if [ -n "$${codename}" ]; then
-          printf '%s\n' "$${codename}"
-          return
-        fi
-        case "$${VERSION_ID:-}" in
-          24.04*) printf 'noble\n' ;;
-          22.04*) printf 'jammy\n' ;;
-          20.04*) printf 'focal\n' ;;
-          *) return 1 ;;
-        esac
-      }
-
-      install_docker_from_docker_repo() {
-        log "Installing Docker Engine from the Docker apt repository."
-        install -m 0755 -d /etc/apt/keyrings || return
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc || return
-        chmod a+r /etc/apt/keyrings/docker.asc || return
-        local codename
-        codename="$(docker_repo_codename)" || return
-        log "Using Docker apt repository codename: $${codename}"
-        printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
-          "$(dpkg --print-architecture)" \
-          "$${codename}" \
-          > /etc/apt/sources.list.d/docker.list || return
-        run_with_retries 5 apt-get update || return
-        run_with_retries 3 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return
-      }
-
-      install_docker_from_ubuntu_repo() {
-        log "Falling back to Ubuntu repository Docker packages."
-        rm -f /etc/apt/sources.list.d/docker.list || return
-        run_with_retries 5 apt-get update || return
-        if ! run_with_retries 3 apt-get install -y docker.io docker-compose-v2; then
-          run_with_retries 3 apt-get install -y docker.io docker-compose
-        fi
-      }
-
-      install_docker() {
-        if command -v docker >/dev/null 2>&1 && docker_compose version >/dev/null 2>&1; then
-          log "Docker and Docker Compose are already installed."
-          return
-        fi
-        if ! install_docker_from_docker_repo; then
-          install_docker_from_ubuntu_repo
-        fi
-        systemctl enable --now docker
-        usermod -aG docker ubuntu || true
-        docker --version
-        docker_compose version
-      }
-
       clone_or_update_repo() {
         local url="$1"
         local ref="$2"
         local dest="$3"
         if [ -d "$${dest}/.git" ]; then
           log "Updating $${dest} to $${ref}."
-          git -C "$${dest}" fetch --depth 1 origin "$${ref}"
+          run_with_retries 5 git -C "$${dest}" fetch --depth 1 origin "$${ref}"
           git -C "$${dest}" checkout -f FETCH_HEAD
         else
           log "Cloning $${url} ($${ref}) to $${dest}."
-          git clone --branch "$${ref}" --depth 1 --single-branch "$${url}" "$${dest}"
+          run_with_retries 5 git clone --branch "$${ref}" --depth 1 --single-branch "$${url}" "$${dest}"
         fi
       }
 
@@ -173,125 +105,22 @@ write_files:
         fi
       }
 
-      prepare_wallet() {
-        log "Extracting Autonomous Database wallet."
-        rm -rf "$${WALLET_DIR}"
-        install -m 0700 -d "$${WALLET_DIR}"
-        unzip -q -o "$${APP_ROOT}/props/wallet.zip" -d "$${WALLET_DIR}"
-        chmod 0700 "$${WALLET_DIR}"
-        find "$${WALLET_DIR}" -type f -exec chmod 0600 {} \;
+      run_application_init() {
+        local init_script="$${APP_REPO_DIR}/init_script.sh"
+        if [ ! -f "$${init_script}" ]; then
+          log "Missing application init script: $${init_script}"
+          return 1
+        fi
+        dos2unix "$${init_script}" || true
+        chmod +x "$${init_script}"
+        log "Starting direct Compute initialization via $${init_script}."
+        APPLICATION_PORT="$${APPLICATION_PORT}" APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
       }
 
-      write_resource_manager_compose() {
-        log "Writing Resource Manager Docker Compose file."
-        cat > "$${APP_REPO_DIR}/docker-compose.resource-manager.yml" <<'YAML'
-      services:
-        backend:
-          build:
-            context: ..
-            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
-          env_file:
-            - backend/.env
-          volumes:
-            - nl2sql-data:/u01/production-ready-nl2sql
-            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
-          ports:
-            - "8000:8000"
-          healthcheck:
-            test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
-            interval: 20s
-            timeout: 5s
-            retries: 5
-
-        ontology-worker:
-          profiles: ["ontology"]
-          build:
-            context: ..
-            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
-          command: ["python", "-m", "app.features.nl2sql.ontology_worker"]
-          env_file:
-            - backend/.env
-          volumes:
-            - nl2sql-data:/u01/production-ready-nl2sql
-            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
-
-        schema-refresh-worker:
-          build:
-            context: ..
-            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
-          command: ["python", "-m", "app.cli.nl2sql_schema_refresh_worker", "--poll-seconds", "1"]
-          env_file:
-            - backend/.env
-          volumes:
-            - nl2sql-data:/u01/production-ready-nl2sql
-            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
-
-        quality-evaluation-worker:
-          build:
-            context: ..
-            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
-          command: ["python", "-m", "app.cli.nl2sql_quality_evaluation_worker"]
-          env_file:
-            - backend/.env
-          volumes:
-            - nl2sql-data:/u01/production-ready-nl2sql
-            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
-
-        frontend:
-          build:
-            context: ..
-            dockerfile: no.1-production-ready-nl2sql/frontend/Dockerfile
-          depends_on:
-            backend:
-              condition: service_healthy
-          ports:
-            - "$${APPLICATION_PORT:-3001}:80"
-
-      volumes:
-        nl2sql-data:
-      YAML
-      }
-
-      build_images_without_secrets() {
-        log "Building Docker images without deployment secrets in backend/.env."
-        cp "$${APP_REPO_DIR}/backend/.env.example" "$${APP_REPO_DIR}/backend/.env"
-        (
-          cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml build backend frontend schema-refresh-worker quality-evaluation-worker
-        )
-      }
-
-      write_runtime_env() {
-        log "Writing runtime backend .env."
-        install -m 0600 "$${APP_ROOT}/props/backend.env" "$${APP_REPO_DIR}/backend/.env"
-      }
-
-      initialize_system_schema() {
-        log "Initializing NL2SQL system schema."
-        (
-          cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml run --rm backend uv run python -m app.cli.nl2sql_system_schema --initialize
-        )
-      }
-
-      start_services() {
-        log "Starting NL2SQL Docker Compose services."
-        (
-          cd "$${APP_REPO_DIR}"
-          APPLICATION_PORT="$${APPLICATION_PORT}" docker_compose -f docker-compose.resource-manager.yml up -d backend frontend schema-refresh-worker quality-evaluation-worker
-        )
-      }
-
-      install_docker
       configure_firewall
       clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${APP_REPO_DIR}"
       clone_or_update_repo "${platform_git_url}" "${platform_git_ref}" "$${PLATFORM_REPO_DIR}"
-      prepare_wallet
-      write_resource_manager_compose
-      build_images_without_secrets
-      write_runtime_env
-      initialize_system_schema
-      start_services
-      log "Deployment finished. Frontend listens on TCP port $${APPLICATION_PORT}."
+      run_application_init
+      log "Deployment finished. Nginx listens on TCP port $${APPLICATION_PORT}."
 runcmd:
   - "nohup bash /u01/aipoc/bootstrap-nl2sql.sh >> /var/log/cloud-init-custom.log 2>&1 &"

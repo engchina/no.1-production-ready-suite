@@ -1,7 +1,7 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
-stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous Database 26ai and Docker Compose. Configure AI runtime settings after startup from the application System Settings."
+stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
-version: "20260813"
+version: "20260817"
 locale: "en"
 
 variableGroups:
@@ -135,8 +135,8 @@ variables:
     required: true
     visible: true
     title: "Application port"
-    description: "TCP port exposed by the frontend container and instance firewall."
-    default: 3001
+    description: "TCP port exposed by host Nginx and the instance firewall."
+    default: 80
 
   app_environment:
     type: enum

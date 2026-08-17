@@ -310,9 +310,9 @@ variable "ssh_authorized_keys" {
 }
 
 variable "application_port" {
-  description = "TCP port exposed by the frontend container and instance firewall."
+  description = "TCP port exposed by host Nginx and the instance firewall."
   type        = number
-  default     = 3001
+  default     = 80
 
   validation {
     condition     = floor(var.application_port) == var.application_port && var.application_port >= 1 && var.application_port <= 65535

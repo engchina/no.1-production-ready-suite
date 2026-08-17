@@ -6,7 +6,8 @@ NL2SQL. The stack provisions:
 - Oracle Autonomous Database 26ai
 - A generated ADB wallet
 - One OCI Compute instance
-- A cloud-init bootstrap that clones and runs the application with Docker Compose
+- A cloud-init bootstrap that clones the repositories and runs the application
+  directly on Compute with Nginx and systemd
 
 The default application source is:
 
@@ -43,7 +44,8 @@ Resource Manager and create a stack. Provide the required form values:
 - Compute image, shape, subnet, and SSH public key
 
 After apply completes, use the `application_url` output. The default application
-port is `3001`.
+port is `80`. The public entrypoint is `http://<compute-ip>/`; browser API
+requests use the same origin under `/api/...`.
 
 AI runtime settings are intentionally not collected by the Resource Manager
 stack. After the application starts, configure OCI authentication, OCI
@@ -69,15 +71,20 @@ future releases can replace the asset without changing documentation.
 The bootstrap script writes `/u01/aipoc/no.1-production-ready-nl2sql/backend/.env`
 on the instance and starts in the background from cloud-init, matching the
 proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
-`/var/log/cloud-init-custom.log` until the application containers are ready.
+`/var/log/cloud-init-custom.log` and `/var/log/nl2sql-init.log` until the
+application services are ready.
 The bootstrap starts:
 
-- `backend`
-- `frontend`
-- `schema-refresh-worker`
-- `quality-evaluation-worker`
+- Nginx on the configured application port, default `80`
+- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8000`
+- `production-ready-nl2sql-schema-refresh-worker`
+- `production-ready-nl2sql-quality-evaluation-worker`
+- `production-ready-nl2sql-ontology-worker`
 
-The `ontology-worker` service remains opt-in through the Docker Compose profile.
+Nginx serves `frontend/dist` at `/` and reverse proxies `/api/` to the backend.
+Only TCP `80` needs to be opened publicly for the application. If ADB uses a
+private endpoint, the selected network must still allow Compute to reach ADB on
+TCP `1522`.
 
 The first application login is created from:
 
@@ -96,20 +103,28 @@ On the Compute instance, inspect:
 
 ```bash
 sudo tail -f /var/log/cloud-init-custom.log
+sudo tail -f /var/log/nl2sql-init.log
 cd /u01/aipoc/no.1-production-ready-nl2sql
-sudo docker compose ps
-sudo docker compose logs backend frontend
+sudo systemctl status production-ready-nl2sql-backend
+sudo journalctl -u production-ready-nl2sql-backend -f
+sudo journalctl -u production-ready-nl2sql-schema-refresh-worker -f
+sudo journalctl -u production-ready-nl2sql-quality-evaluation-worker -f
+sudo journalctl -u production-ready-nl2sql-ontology-worker -f
+sudo nginx -t
+sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log
 ```
 
 The cloud-init bootstrap:
 
-1. Installs Docker Engine and Docker Compose plugin.
+1. Installs Nginx, Node.js 22, uv, and build dependencies.
 2. Clones the NL2SQL and shared platform repositories.
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
-4. Builds Docker images without deployment secrets.
-5. Writes the runtime `backend/.env`.
-6. Initializes NL2SQL system tables.
-7. Starts the application services.
+4. Writes the runtime `backend/.env`.
+5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
+6. Builds the shared UI package and `frontend/dist`.
+7. Initializes NL2SQL system tables.
+8. Starts the backend and worker services with systemd.
+9. Configures Nginx to serve the SPA and same-origin `/api/` path.
 
 ## Stack Boundaries
 

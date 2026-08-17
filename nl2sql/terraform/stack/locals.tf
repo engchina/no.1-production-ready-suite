@@ -4,18 +4,17 @@ locals {
     false,
   )
 
-  app_name             = "production-ready-nl2sql"
-  app_repo_dir         = "no.1-production-ready-nl2sql"
-  platform_repo_dir    = "no.1-production-ready-platform"
-  wallet_dir_host      = "/u01/aipoc/wallet"
-  wallet_dir_container = "/u01/aipoc/wallet"
+  app_name          = "production-ready-nl2sql"
+  app_repo_dir      = "no.1-production-ready-nl2sql"
+  platform_repo_dir = "no.1-production-ready-platform"
+  wallet_dir_host   = "/u01/aipoc/wallet"
 
   backend_env = <<-EOT
 APP_VERSION=0.1.0
 LOG_LEVEL=INFO
 ENVIRONMENT=${var.app_environment}
 SERVICE_NAME=${local.app_name}
-CORS_ORIGINS=["http://localhost:${var.application_port}","http://127.0.0.1:${var.application_port}"]
+CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
 ENABLE_METRICS=true
 DEBUG=false
 
@@ -29,7 +28,7 @@ ORACLE_PASSWORD=${var.adb_password}
 ORACLE_DSN=${lower(var.adb_name)}_high
 ORACLE_DRIVER_MODE=thin
 ORACLE_CLIENT_LIB_DIR=
-ORACLE_WALLET_DIR=${local.wallet_dir_container}
+ORACLE_WALLET_DIR=${local.wallet_dir_host}
 ORACLE_WALLET_PASSWORD=${var.adb_password}
 ORACLE_ADB_OCID=${oci_database_autonomous_database.generated_database_autonomous_database.id}
 ORACLE_ADB_REGION=${var.region}
