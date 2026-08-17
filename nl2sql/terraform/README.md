@@ -77,14 +77,22 @@ The bootstrap starts:
 
 - Nginx on the configured application port, default `80`
 - `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8000`
-- `production-ready-nl2sql-schema-refresh-worker`
-- `production-ready-nl2sql-quality-evaluation-worker`
-- `production-ready-nl2sql-ontology-worker`
 
 Nginx serves `frontend/dist` at `/` and reverse proxies `/api/` to the backend.
 Only TCP `80` needs to be opened publicly for the application. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.
+
+Worker systemd units are installed but not started by the bootstrap, so the
+application can boot even when the database is not reachable yet or tables do
+not exist. After database connectivity and schema initialization are ready,
+operators can enable them with:
+
+```bash
+sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
+sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
+sudo systemctl enable --now production-ready-nl2sql-ontology-worker
+```
 
 The first application login is created from:
 
@@ -122,11 +130,20 @@ The cloud-init bootstrap:
 4. Writes the runtime `backend/.env`.
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
 6. Builds the shared UI package and `frontend/dist`.
-7. Initializes NL2SQL system tables.
-8. Applies application auth/RBAC security migrations and creates the initial
-   `ADMIN` web user.
-9. Starts the backend and worker services with systemd.
-10. Configures Nginx to serve the SPA and same-origin `/api/` path.
+7. Starts the backend service with systemd.
+8. Configures Nginx to serve the SPA and same-origin `/api/` path.
+
+Backend startup is intentionally independent of database reachability and table
+existence. If the database is not ready yet, the application still starts; run
+schema initialization from the System Settings UI or, for operators who prefer
+CLI recovery after DB connectivity is available:
+
+```bash
+cd /u01/aipoc/no.1-production-ready-nl2sql/backend
+sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
+sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply
+sudo systemctl restart production-ready-nl2sql-backend
+```
 
 ## Stack Boundaries
 

@@ -9,7 +9,6 @@ from fastapi import FastAPI, Request
 from pr_backend_core import configure_logging, create_app
 from starlette.responses import JSONResponse
 
-from app.api.concurrency import run_sync_io as run_in_threadpool
 from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
 from app.features.nl2sql.ontology_router import OntologyApiRuntime, ontology_runtime
@@ -22,7 +21,7 @@ from app.features.nl2sql.service import (
 )
 from app.readiness import readiness_checks
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
-from app.security.service import SecurityApiError, get_security_service
+from app.security.service import SecurityApiError
 from app.settings import get_settings
 
 settings = get_settings()
@@ -46,8 +45,9 @@ class ServiceContainer:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    # Constructor は client/repository の wiring のみ。auth 有効時だけ、排他制御された
-    # 初回 SYSTEM_ADMIN bootstrap を startup gate として実行する。
+    # Startup is intentionally DB-free. A fresh Compute can boot before the
+    # database, wallet, or any application table is ready; those failures belong
+    # to readiness probes or the first operation that actually needs them.
     application.state.services = ServiceContainer(
         nl2sql=nl2sql_service,
         ontology=ontology_runtime,
@@ -55,8 +55,6 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     runtime_settings = get_settings()
     if runtime_settings.local_debug_enabled:
         logger.warning("local_debug_auth_bypass_enabled")
-    elif runtime_settings.app_auth_enabled:
-        await run_in_threadpool(get_security_service().ensure_bootstrapped)
     try:
         yield
     finally:

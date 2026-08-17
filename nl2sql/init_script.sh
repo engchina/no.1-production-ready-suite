@@ -159,16 +159,6 @@ build_frontend() {
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
 }
 
-initialize_database_schema() {
-  log "Initializing NL2SQL system schema."
-  retry_command 10 run_as_app_user_in_dir "${BACKEND_DIR}" "uv run python -m app.cli.nl2sql_system_schema --initialize"
-}
-
-initialize_security_schema() {
-  log "Initializing application security schema."
-  retry_command 10 run_as_app_user_in_dir "${BACKEND_DIR}" "uv run python -m app.cli.app_security_migrate --apply"
-}
-
 write_systemd_unit() {
   local unit_path="$1"
   local exec_start="$2"
@@ -220,16 +210,12 @@ configure_systemd() {
     "Production Ready NL2SQL ontology worker"
 
   systemctl daemon-reload
-  systemctl enable \
-    production-ready-nl2sql-backend.service \
+  systemctl enable production-ready-nl2sql-backend.service
+  systemctl disable --now \
     production-ready-nl2sql-schema-refresh-worker.service \
     production-ready-nl2sql-quality-evaluation-worker.service \
-    production-ready-nl2sql-ontology-worker.service
-  systemctl restart \
-    production-ready-nl2sql-backend.service \
-    production-ready-nl2sql-schema-refresh-worker.service \
-    production-ready-nl2sql-quality-evaluation-worker.service \
-    production-ready-nl2sql-ontology-worker.service
+    production-ready-nl2sql-ontology-worker.service || true
+  systemctl restart production-ready-nl2sql-backend.service
 }
 
 configure_nginx() {
@@ -314,8 +300,6 @@ main() {
   install_runtime_env
   install_backend
   build_frontend
-  initialize_database_schema
-  initialize_security_schema
   configure_systemd
   configure_nginx
   wait_for_backend

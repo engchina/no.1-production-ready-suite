@@ -88,7 +88,6 @@ async def _inline_threadpool(
 
 
 def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.main.run_in_threadpool", _inline_threadpool)
     monkeypatch.setattr("app.security.dependencies.run_in_threadpool", _inline_threadpool)
     monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
 
