@@ -12,11 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 
 from app.cli.nl2sql_migrate_state import (
     _decode_snapshot_value,
@@ -34,7 +34,11 @@ from app.features.nl2sql.incremental_store import (
     _read_lob,
 )
 from app.features.nl2sql.models import (
+    JobCreateRequest,
+    Nl2SqlEngine,
     Nl2SqlProfile,
+    PreviewRequest,
+    ProfilePatchRequest,
     SchemaCatalog,
     SchemaColumn,
     SchemaRefreshJob,
@@ -43,6 +47,7 @@ from app.features.nl2sql.models import (
     SchemaRefreshTargetObject,
     SchemaTable,
     SchemaViewDependency,
+    SimilarHistoryRequest,
 )
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
 from app.features.nl2sql.service import (
@@ -78,6 +83,22 @@ def _table(name: str, *, comment: str = "") -> SchemaTable:
             )
         ],
     )
+
+
+class _FakeEnterpriseAiClient:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[dict[str, str]] = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "enterprise-nl2sql-model"
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
+        return self.text
 
 
 class _LobPayload:
@@ -185,6 +206,22 @@ def _incremental_service(
     service._persistence_writable = True  # noqa: SLF001
     service._cache_token_poll_seconds = 0.0  # noqa: SLF001
     return service
+
+
+def _apply_incremental_catalog(
+    repository: MemoryIncrementalNl2SqlRepository,
+    catalog: SchemaCatalog,
+) -> None:
+    manifest = {
+        (table.owner.upper(), table.table_name.upper()): catalog.refreshed_at
+        for table in catalog.tables
+    }
+    repository.apply_schema_refresh(
+        catalog=catalog,
+        manifest=manifest,
+        changed_keys=set(manifest),
+        deleted_keys=set(),
+    )
 
 
 def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
@@ -300,6 +337,121 @@ def test_incremental_generation_context_loads_global_material_without_page_read(
         "SELECT のみ",
         "上限 100 件",
     ]
+
+
+def test_enterprise_ai_direct_uses_incremental_schema_when_legacy_catalog_is_empty() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    _apply_incremental_catalog(
+        repository,
+        SchemaCatalog(
+            refreshed_at="2026-08-14T00:00:00+00:00",
+            schema_fingerprint="incremental-schema-v1",
+            current_owner="APP",
+            tables=[_table("ORDERS", comment="注文"), _table("PAYMENTS", comment="支払")],
+        ),
+    )
+    repository.save_profile(
+        Nl2SqlProfile(
+            id="orders-profile",
+            name="注文管理",
+            allowed_tables=["APP.ORDERS"],
+        ),
+        expected_etag=None,
+    )
+    service = _incremental_service(repository)
+    service._catalog = SchemaCatalog(refreshed_at="legacy-empty", tables=[])  # noqa: SLF001
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
+    )
+    service._enterprise_ai_client = fake_client  # noqa: SLF001
+
+    preview = service.preview(
+        PreviewRequest(
+            question="注文一覧を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="orders-profile",
+        )
+    )
+
+    assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+    assert preview.sql == "SELECT ID FROM APP.ORDERS"
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
+    assert fake_client.calls
+    context = fake_client.calls[0]["context"]
+    assert "table APP.ORDERS" in context
+    assert "column ID" in context
+    assert "APP.PAYMENTS" not in context
+
+
+def test_enterprise_ai_direct_reports_profile_scope_when_incremental_object_is_missing() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    _apply_incremental_catalog(
+        repository,
+        SchemaCatalog(
+            refreshed_at="2026-08-14T00:00:00+00:00",
+            schema_fingerprint="incremental-schema-v1",
+            current_owner="APP",
+            tables=[_table("ORDERS", comment="注文")],
+        ),
+    )
+    repository.save_profile(
+        Nl2SqlProfile(
+            id="missing-profile",
+            name="削除済み許可表",
+            allowed_tables=["APP.MISSING_TABLE"],
+        ),
+        expected_etag=None,
+    )
+    service = _incremental_service(repository)
+    service._catalog = SchemaCatalog(refreshed_at="legacy-empty", tables=[])  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT ID FROM APP.MISSING_TABLE","explanation":"should not run"}'
+    )  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="業務 Profile の許可表"):
+        service.preview(
+            PreviewRequest(
+                question="削除済み表を見たい",
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+                profile_id="missing-profile",
+            )
+        )
+
+
+def test_enterprise_ai_direct_deterministic_fallback_uses_incremental_schema_snapshot() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    _apply_incremental_catalog(
+        repository,
+        SchemaCatalog(
+            refreshed_at="2026-08-14T00:00:00+00:00",
+            schema_fingerprint="incremental-schema-v1",
+            current_owner="APP",
+            tables=[_table("ORDERS", comment="注文")],
+        ),
+    )
+    repository.save_profile(
+        Nl2SqlProfile(
+            id="orders-profile",
+            name="注文管理",
+            allowed_tables=["APP.ORDERS"],
+        ),
+        expected_etag=None,
+    )
+    service = _incremental_service(repository)
+    service._catalog = SchemaCatalog(refreshed_at="legacy-empty", tables=[])  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient("説明だけで SQL はありません。")  # noqa: SLF001
+
+    preview = service.preview(
+        PreviewRequest(
+            question="注文一覧を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="orders-profile",
+        )
+    )
+
+    assert preview.sql == "SELECT ID FROM APP.ORDERS"
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
+    assert "enterprise_ai_direct:" in preview.fallback_reason
 
 
 def test_incremental_legacy_material_missing_document_returns_empty() -> None:
@@ -684,27 +836,22 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch.setattr(service, "_persist_job", lambda _job_id: None)
     monkeypatch.setattr(service, "_run_job_safely", lambda _job_id: None)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
-    application = FastAPI()
-    application.include_router(nl2sql_router.router, prefix="/api")
+    similar_response = nl2sql_router.similar_history(
+        SimilarHistoryRequest(question="部署名を検索", profile_id="default", limit=3)
+    )
+    persistence_after_similar = service.persistence_status()
+    job_response = nl2sql_router.create_job(
+        JobCreateRequest(
+            question="部署名を検索",
+            engine="select_ai",
+            profile_id="default",
+        ),
+        SimpleNamespace(state=SimpleNamespace(principal=None)),
+    )
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
-    ) as client:
-        similar_response = await client.post(
-            "/api/nl2sql/similar-history",
-            json={"question": "部署名を検索", "profile_id": "default", "limit": 3},
-        )
-        persistence_after_similar = service.persistence_status()
-        job_response = await client.post(
-            "/api/nl2sql/jobs",
-            json={"question": "部署名を検索", "engine": "select_ai", "profile_id": "default"},
-        )
-
-    assert similar_response.status_code == 200
-    assert len(similar_response.json()["data"]["items"]) == 1
+    assert len(similar_response.data.items) == 1
     assert persistence_after_similar.ready is True
-    assert job_response.status_code == 200
-    assert job_response.json()["data"]["status"] == "pending"
+    assert job_response.data.status == "pending"
     assert connections[0].closed is True
 
 
@@ -891,7 +1038,7 @@ def test_cache_is_used_only_inside_ttl_when_change_token_store_is_unreachable() 
         service.get_profile(stored.id)
 
 
-async def test_profile_api_supports_summary_detail_etag_and_conflict(
+def test_profile_api_supports_summary_detail_etag_and_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.features.nl2sql import router as profile_router
@@ -900,77 +1047,95 @@ async def test_profile_api_supports_summary_detail_etag_and_conflict(
     stored = repository.save_profile(_profile(7), expected_etag=None)
     service = _incremental_service(repository)
     monkeypatch.setattr(profile_router, "nl2sql_service", service)
-    app = FastAPI()
-    app.include_router(profile_router.router, prefix="/api")
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        page_response = await client.get("/api/nl2sql/profiles/search?limit=10&q=0007")
-        page_not_modified = await client.get(
-            "/api/nl2sql/profiles/search?limit=10&q=0007",
-            headers={"If-None-Match": page_response.headers["etag"]},
+    page_response = Response()
+    page = profile_router.search_profiles(
+        page_response,
+        limit=10,
+        q="0007",
+    )
+    page_not_modified = profile_router.search_profiles(
+        Response(),
+        limit=10,
+        q="0007",
+        if_none_match=page_response.headers["etag"],
+    )
+    detail_response = Response()
+    detail = profile_router.get_profile_detail(stored.id, detail_response)
+    not_modified = profile_router.get_profile_detail(
+        stored.id,
+        Response(),
+        if_none_match=detail_response.headers["etag"],
+    )
+
+    with pytest.raises(HTTPException) as missing_precondition:
+        profile_router.update_profile(
+            stored.id,
+            ProfilePatchRequest(name="updated"),
+            Response(),
         )
-        detail_response = await client.get(f"/api/nl2sql/profiles/{stored.id}")
-        not_modified = await client.get(
-            f"/api/nl2sql/profiles/{stored.id}",
-            headers={"If-None-Match": detail_response.headers["etag"]},
-        )
-        missing_precondition = await client.patch(
-            f"/api/nl2sql/profiles/{stored.id}", json={"name": "updated"}
-        )
-        conflict = await client.patch(
-            f"/api/nl2sql/profiles/{stored.id}",
-            headers={"If-Match": '"stale"'},
-            json={"name": "updated"},
+    with pytest.raises(HTTPException) as conflict:
+        profile_router.update_profile(
+            stored.id,
+            ProfilePatchRequest(name="updated"),
+            Response(),
+            if_match='"stale"',
         )
 
-    assert page_response.status_code == 200
+    assert page.data.items[0].id == stored.id
     assert page_not_modified.status_code == 304
-    assert page_response.json()["data"]["items"][0]["id"] == stored.id
-    assert detail_response.status_code == 200
+    assert detail.data.id == stored.id
     assert detail_response.headers["etag"] == f'"{stored.etag}"'
     assert not_modified.status_code == 304
-    assert missing_precondition.status_code == 428
-    assert conflict.status_code == 409
-    assert conflict.headers["etag"] == f'"{stored.etag}"'
+    assert missing_precondition.value.status_code == 428
+    assert conflict.value.status_code == 409
+    assert conflict.value.headers["ETag"] == f'"{stored.etag}"'
 
 
-async def test_schema_api_supports_page_and_detail_etag(
+def test_schema_api_supports_page_and_detail_etag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.features.schema import router as schema_router
 
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
-    catalog = SchemaCatalog(refreshed_at="now", tables=[_table("ORDERS")])
+    catalog = SchemaCatalog(refreshed_at="now", tables=[_table("ORDERS"), _table("PAYMENTS")])
     repository.apply_schema_refresh(
         catalog=catalog,
-        manifest={("APP", "ORDERS"): "v1"},
-        changed_keys={("APP", "ORDERS")},
+        manifest={("APP", "ORDERS"): "v1", ("APP", "PAYMENTS"): "v1"},
+        changed_keys={("APP", "ORDERS"), ("APP", "PAYMENTS")},
         deleted_keys=set(),
     )
     service = _incremental_service(repository)
     monkeypatch.setattr(schema_router, "nl2sql_service", service)
-    app = FastAPI()
-    app.include_router(schema_router.router, prefix="/api")
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        page = await client.get("/api/schema/objects?limit=10")
-        page_304 = await client.get(
-            "/api/schema/objects?limit=10",
-            headers={"If-None-Match": page.headers["etag"]},
-        )
-        detail = await client.get("/api/schema/objects/APP/ORDERS")
-        detail_304 = await client.get(
-            "/api/schema/objects/APP/ORDERS",
-            headers={"If-None-Match": detail.headers["etag"]},
-        )
+    page_response = Response()
+    page = schema_router.search_objects(page_response, limit=1)
+    page_304 = schema_router.search_objects(
+        Response(),
+        limit=1,
+        if_none_match=page_response.headers["etag"],
+    )
+    cursor_page = schema_router.search_objects(
+        Response(),
+        cursor=page.data.next_cursor,
+        limit=1,
+        include_counts=False,
+    )
+    detail_response = Response()
+    detail = schema_router.object_detail("APP", "ORDERS", detail_response)
+    detail_304 = schema_router.object_detail(
+        "APP",
+        "ORDERS",
+        Response(),
+        if_none_match=detail_response.headers["etag"],
+    )
 
-    assert page.status_code == 200
+    assert page.data.counts_included is True
+    assert page_response.headers["etag"] == '"schema-1"'
     assert page_304.status_code == 304
-    assert detail.status_code == 200
+    assert cursor_page.data.counts_included is False
+    assert cursor_page.data.total is None
+    assert detail.data.table.table_name == "ORDERS"
     assert detail_304.status_code == 304
 
 
@@ -988,6 +1153,7 @@ def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
         tables=[
             _table("ORDERS").model_copy(update={"row_count": 10}),
             _table("EMPTY_ORDERS").model_copy(update={"row_count": 0}),
+            _table("PAYMENTS").model_copy(update={"row_count": 5}),
             _table("V_ORDERS").model_copy(
                 update={"table_type": "VIEW", "row_count": None}
             ),
@@ -1033,11 +1199,25 @@ def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
     assert not isinstance(result, Response)
     data = result.data
     assert data is not None
+    next_page = nl2sql_router.db_admin_objects(
+        response=Response(),
+        cursor=data.next_cursor,
+        limit=1,
+        type="table",
+        row_state="with_rows",
+        include_counts=False,
+    )
     assert [item.name for item in data.items] == ["ORDERS"]
-    assert data.total == 1
-    assert data.table_count == 1
+    assert data.total == 2
+    assert data.table_count == 2
     assert data.view_count == 0
+    assert data.counts_included is True
     assert data.catalog_version == 1
+    assert not isinstance(next_page, Response)
+    assert next_page.data is not None
+    assert [item.name for item in next_page.data.items] == ["PAYMENTS"]
+    assert next_page.data.total == 0
+    assert next_page.data.counts_included is False
     assert isinstance(not_modified, Response)
     assert not_modified.status_code == 304
 
@@ -1066,6 +1246,34 @@ def test_schema_query_programming_error_does_not_close_persistence(
     assert status.ready is True
     assert status.writable is True
     assert status.circuit_state == "closed"
+
+
+def test_db_admin_objects_page_filters_by_owner() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.apply_schema_refresh(
+        catalog=SchemaCatalog(
+            refreshed_at="now",
+            tables=[
+                _table("ORDERS").model_copy(update={"owner": "APP"}),
+                _table("ORDERS").model_copy(update={"owner": "ADMIN"}),
+            ],
+        ),
+        manifest={("APP", "ORDERS"): "v1", ("ADMIN", "ORDERS"): "v1"},
+        changed_keys={("APP", "ORDERS"), ("ADMIN", "ORDERS")},
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+
+    page = service.list_db_admin_objects_page(
+        cursor=None,
+        limit=10,
+        query="",
+        object_type="all",
+        row_state="all",
+        owner="ADMIN",
+    )
+
+    assert [item.qualified_name for item in page.items] == ["ADMIN.ORDERS"]
 
 
 def test_connection_failure_opens_circuit_and_next_probe_recovers(
@@ -1725,6 +1933,45 @@ def test_oracle_schema_object_search_aggregates_before_joining_catalog_head() ->
         "object_type": "TABLE",
         "query": "%受注%",
     }
+
+
+def test_oracle_schema_object_search_can_skip_counts() -> None:
+    repository, connections = _oracle_repository(
+        [
+            [
+                (
+                    "APP",
+                    "PAYMENTS",
+                    "TABLE",
+                    "入金",
+                    "",
+                    5,
+                    3,
+                    "2026-07-22T00:00:00+00:00",
+                )
+            ],
+        ],
+    )
+
+    page = repository.search_schema_objects(
+        cursor=None,
+        limit=10,
+        query="",
+        owner="APP",
+        object_type="TABLE",
+        allowed_names=None,
+        row_state="all",
+        include_counts=False,
+    )
+
+    assert [item.object_name for item in page.items] == ["PAYMENTS"]
+    assert page.counts_included is False
+    assert page.total is None
+    assert page.table_count == 0
+    assert page.view_count == 0
+    assert page.catalog_version == 0
+    assert len(connections[0].executed) == 1
+    assert "COUNT(*)" not in connections[0].executed[0][0]
 
 
 def test_legacy_snapshot_migration_validates_aggregate_ids_and_payloads() -> None:

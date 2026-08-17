@@ -165,23 +165,6 @@ const databaseDependentScenarios: Scenario[] = [
     },
   },
   {
-    name: "監査ログ",
-    path: "/settings/security/audit",
-    heading: "監査ログ",
-    setup: async (page, countRequest) => {
-      await page.route(/\/api\/security\/audit\/page(?:\?.*)?$/, (route) => {
-        countRequest();
-        return fulfill(route, {
-          items: [],
-          page: 1,
-          page_size: 10,
-          total: 0,
-          total_pages: 1,
-        });
-      });
-    },
-  },
-  {
     name: "Deep Data Security",
     path: "/settings/security/deepsec",
     heading: "Deep Data Security",

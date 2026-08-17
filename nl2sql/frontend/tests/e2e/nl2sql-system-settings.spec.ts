@@ -271,6 +271,75 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeTruthy();
 }
 
+async function expectSettingsPreviewCopyButtonFits(page: Page, accessibleName: string) {
+  const button = page.getByRole("button", { name: accessibleName }).first();
+  await expect(button).toBeVisible();
+  await expect(button).toHaveText("コピー");
+
+  const metrics = await button.evaluate((element) => {
+    const label = element.querySelector("span");
+    if (!(label instanceof HTMLElement)) {
+      throw new Error("preview copy button label が見つかりません。");
+    }
+
+    const buttonRect = element.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const buttonStyle = getComputedStyle(element);
+    const labelStyle = getComputedStyle(label);
+
+    return {
+      buttonBottom: buttonRect.bottom,
+      buttonLeft: buttonRect.left,
+      buttonOverflowX: buttonStyle.overflowX,
+      buttonRight: buttonRect.right,
+      buttonTop: buttonRect.top,
+      buttonWhiteSpace: buttonStyle.whiteSpace,
+      labelBottom: labelRect.bottom,
+      labelLeft: labelRect.left,
+      labelRight: labelRect.right,
+      labelTop: labelRect.top,
+      labelWhiteSpace: labelStyle.whiteSpace,
+    };
+  });
+
+  expect(metrics.buttonOverflowX).toBe("hidden");
+  expect(metrics.buttonWhiteSpace).toBe("nowrap");
+  expect(metrics.labelWhiteSpace).toBe("nowrap");
+  expect(metrics.labelLeft).toBeGreaterThanOrEqual(metrics.buttonLeft - 1);
+  expect(metrics.labelRight).toBeLessThanOrEqual(metrics.buttonRight + 1);
+  expect(metrics.labelTop).toBeGreaterThanOrEqual(metrics.buttonTop - 1);
+  expect(metrics.labelBottom).toBeLessThanOrEqual(metrics.buttonBottom + 1);
+}
+
+async function expectSettingsPreviewCopyButtonsFit(page: Page) {
+  await expectSettingsPreviewCopyButtonFits(page, ".env をコピー");
+  await expectSettingsPreviewCopyButtonFits(page, "JSON をコピー");
+}
+
+async function getSavedSecretBadgeStyle(page: Page, fieldId: string) {
+  const badge = page
+    .locator(`label[for="${fieldId}"]`)
+    .locator("xpath=..")
+    .getByText("保存済み", { exact: true });
+  await expect(badge).toBeVisible();
+
+  return badge.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderColor: style.borderColor,
+      borderRadius: style.borderRadius,
+      borderStyle: style.borderStyle,
+      className: element.getAttribute("class") ?? "",
+      color: style.color,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      text: element.textContent,
+      whiteSpace: style.whiteSpace,
+    };
+  });
+}
+
 async function expectNoOperationsMemoOrReadiness(page: Page) {
   await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
   await expect(page.getByText(/readiness/i)).toHaveCount(0);
@@ -453,11 +522,21 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(page.getByText("OCI Enterprise AI", { exact: true })).toBeVisible();
   await expect(page.getByText("OCI Generative AI", { exact: true })).toBeVisible();
   await expectNoOperationsMemoOrReadiness(page);
+  await expectSettingsPreviewCopyButtonsFit(page);
+  const modelSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(
+    page,
+    "enterprise-api-key"
+  );
+  expect(modelSavedSecretBadgeStyle.className).toContain("border-success/30");
+  expect(modelSavedSecretBadgeStyle.className).toContain("bg-success-bg");
+  expect(modelSavedSecretBadgeStyle.className).toContain("text-success");
   await expectNoHorizontalOverflow(page);
 
   await page.goto("/settings/database");
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toBeVisible();
+  const databaseSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(page, "oracle-password");
+  expect(databaseSavedSecretBadgeStyle).toEqual(modelSavedSecretBadgeStyle);
   await expect(page.getByText("現在の接続ユーザー")).toBeVisible();
   await expect(page.getByText("APP", { exact: true })).toBeVisible();
   await expect(page.getByText("2 schema", { exact: true })).toBeVisible();
@@ -659,8 +738,11 @@ test("モデル API Key を .env に新規保存して削除でき、JSON previe
   await expect(page.getByLabel("JSON プレビュー")).toContainText('"version": 2');
   await expect(page.getByLabel("JSON プレビュー")).not.toContainText("api_key");
   await expect(page.getByLabel("JSON プレビュー")).not.toContainText("new-key-fixture");
+  await expectSettingsPreviewCopyButtonsFit(page);
   await page.getByRole("button", { name: "モデル設定: 保存" }).click();
-  await expect(page.getByText("モデル設定を保存しました。")).toBeVisible();
+  const notificationRegion = page.getByRole("region", { name: "通知" });
+  await expect(notificationRegion).toContainText("モデル設定を保存しました。");
+  await expect(page.getByText("モデル設定を保存しました。")).toHaveCount(1);
   expect((requests[0].enterprise_ai as Record<string, unknown>).api_key).toBe(
     "new-key-fixture"
   );

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import ast
 import copy
-import json
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 from uuid import uuid4
 
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
@@ -18,7 +16,6 @@ from app.settings import Settings
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
     SYSTEM_ADMIN_ROLE_ID,
-    AuditRecord,
     DataEntitlementRecord,
     RoleRecord,
     SessionRecord,
@@ -71,25 +68,6 @@ class SecurityStore(Protocol):
     ) -> None: ...
     def revoke_session(self, session_id: str) -> None: ...
     def revoke_user_sessions(self, user_id: str) -> None: ...
-    def write_audit(
-        self,
-        *,
-        actor_user_id: str | None,
-        event_type: str,
-        target_type: str,
-        target_id: str,
-        outcome: str,
-        detail: dict[str, object],
-        request_id: str,
-        client_ip: str,
-    ) -> None: ...
-    def list_audit(self, *, limit: int = 200) -> list[AuditRecord]: ...
-    def page_audit(
-        self, *, page: int, page_size: int
-    ) -> tuple[list[AuditRecord], int, int]: ...
-    def list_audit_between(
-        self, *, start_at: datetime, end_at: datetime
-    ) -> list[AuditRecord]: ...
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]: ...
     def set_deepsec_state(
         self,
@@ -108,69 +86,6 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _aware(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
-
-
-def _resolved_page(total: int, requested_page: int, page_size: int) -> int:
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    return min(max(1, requested_page), total_pages)
-
-
-def _audit_detail_warning(code: str, raw_detail: object) -> dict[str, object]:
-    return {"decode_warning": code, "raw_detail": "" if raw_detail is None else str(raw_detail)}
-
-
-def _audit_detail_object(value: object, raw_detail: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        return _audit_detail_warning("audit_detail_not_json_object", raw_detail)
-    try:
-        return cast(
-            dict[str, object],
-            json.loads(json.dumps(value, ensure_ascii=False, separators=(",", ":"))),
-        )
-    except (TypeError, ValueError):
-        return _audit_detail_warning("audit_detail_not_json_serializable", raw_detail)
-
-
-def _decode_audit_detail(value: Any) -> dict[str, object]:
-    read = getattr(value, "read", None)
-    raw_detail = read() if callable(read) else value
-    if raw_detail in (None, ""):
-        return {}
-    if isinstance(raw_detail, Mapping):
-        return _audit_detail_object(raw_detail, raw_detail)
-    if isinstance(raw_detail, bytes):
-        raw_text = raw_detail.decode("utf-8", errors="replace")
-    else:
-        raw_text = str(raw_detail)
-    if not raw_text:
-        return {}
-    try:
-        decoded = json.loads(raw_text)
-    except json.JSONDecodeError:
-        try:
-            decoded = ast.literal_eval(raw_text)
-        except (SyntaxError, ValueError):
-            return _audit_detail_warning("audit_detail_invalid_json", raw_text)
-    return _audit_detail_object(decoded, raw_text)
-
-
-def _audit_record_from_row(row: Any) -> AuditRecord:
-    return AuditRecord(
-        audit_id=int(row[0]),
-        actor_user_id=str(row[1]) if row[1] else None,
-        event_type=str(row[2]),
-        target_type="" if row[3] in (None, "-") else str(row[3]),
-        target_id="" if row[4] in (None, "-") else str(row[4]),
-        outcome=str(row[5]),
-        detail=_decode_audit_detail(row[6]),
-        request_id="" if row[7] in (None, "-") else str(row[7]),
-        client_ip="" if row[8] in (None, "-") else str(row[8]),
-        created_at=row[9],
-    )
-
-
 def _copy_optional[T](value: T | None) -> T | None:
     return copy.deepcopy(value) if value is not None else None
 
@@ -182,7 +97,6 @@ class InMemorySecurityStore:
         self.users: dict[str, UserRecord] = {}
         self.roles: dict[str, RoleRecord] = {}
         self.sessions: dict[str, SessionRecord] = {}
-        self.audit: list[AuditRecord] = []
         self.deepsec_states: dict[tuple[str, int], dict[str, object]] = {}
         self._lock = threading.RLock()
 
@@ -394,75 +308,6 @@ class InMemorySecurityStore:
             for session in self.sessions.values():
                 if session.user_id == user_id and session.revoked_at is None:
                     session.revoked_at = _now()
-
-    def write_audit(
-        self,
-        *,
-        actor_user_id: str | None,
-        event_type: str,
-        target_type: str,
-        target_id: str,
-        outcome: str,
-        detail: dict[str, object],
-        request_id: str,
-        client_ip: str,
-    ) -> None:
-        with self._lock:
-            self.audit.append(
-                AuditRecord(
-                    audit_id=len(self.audit) + 1,
-                    actor_user_id=actor_user_id,
-                    event_type=event_type,
-                    target_type=target_type,
-                    target_id=target_id,
-                    outcome=outcome,
-                    detail=copy.deepcopy(detail),
-                    request_id=request_id,
-                    client_ip=client_ip,
-                    created_at=_now(),
-                )
-            )
-
-    def list_audit(self, *, limit: int = 200) -> list[AuditRecord]:
-        with self._lock:
-            ordered = sorted(
-                self.audit,
-                key=lambda item: (_aware(item.created_at), item.audit_id),
-                reverse=True,
-            )
-            return [copy.deepcopy(item) for item in ordered[:limit]]
-
-    def page_audit(
-        self, *, page: int, page_size: int
-    ) -> tuple[list[AuditRecord], int, int]:
-        with self._lock:
-            ordered = sorted(
-                self.audit,
-                key=lambda item: (_aware(item.created_at), item.audit_id),
-                reverse=True,
-            )
-            total = len(ordered)
-            resolved_page = _resolved_page(total, page, page_size)
-            offset = (resolved_page - 1) * page_size
-            records = ordered[offset : offset + page_size]
-            return [copy.deepcopy(item) for item in records], total, resolved_page
-
-    def list_audit_between(
-        self, *, start_at: datetime, end_at: datetime
-    ) -> list[AuditRecord]:
-        normalized_start = _aware(start_at)
-        normalized_end = _aware(end_at)
-        with self._lock:
-            records = [
-                item
-                for item in self.audit
-                if normalized_start <= _aware(item.created_at) <= normalized_end
-            ]
-            records.sort(
-                key=lambda item: (_aware(item.created_at), item.audit_id),
-                reverse=True,
-            )
-            return [copy.deepcopy(item) for item in records]
 
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
         with self._lock:
@@ -1020,93 +865,6 @@ class OracleSecurityStore:
                 {"user_id": user_id},
             )
             conn.commit()
-
-    def write_audit(
-        self,
-        *,
-        actor_user_id: str | None,
-        event_type: str,
-        target_type: str,
-        target_id: str,
-        outcome: str,
-        detail: dict[str, object],
-        request_id: str,
-        client_ip: str,
-    ) -> None:
-        payload = json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
-        with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO NL2SQL_AUTH_AUDIT_LOG
-                  (ACTOR_USER_ID, EVENT_TYPE, TARGET_TYPE, TARGET_ID, OUTCOME,
-                   DETAIL_JSON, REQUEST_ID, CLIENT_IP)
-                VALUES
-                  (:actor, :event_type, :target_type, :target_id, :outcome,
-                   :detail_json, :request_id, :client_ip)
-                """,
-                {
-                    "actor": actor_user_id,
-                    "event_type": event_type,
-                    "target_type": target_type or "-",
-                    "target_id": target_id or "-",
-                    "outcome": outcome,
-                    "detail_json": payload,
-                    "request_id": request_id or "-",
-                    "client_ip": client_ip or "-",
-                },
-            )
-            conn.commit()
-
-    def list_audit(self, *, limit: int = 200) -> list[AuditRecord]:
-        with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT AUDIT_ID, ACTOR_USER_ID, EVENT_TYPE, TARGET_TYPE, TARGET_ID,
-                       OUTCOME, DETAIL_JSON, REQUEST_ID, CLIENT_IP, CREATED_AT
-                  FROM NL2SQL_AUTH_AUDIT_LOG
-                 ORDER BY CREATED_AT DESC, AUDIT_ID DESC FETCH FIRST :limit ROWS ONLY
-                """,
-                {"limit": limit},
-            )
-            return [_audit_record_from_row(row) for row in cursor.fetchall()]
-
-    def page_audit(
-        self, *, page: int, page_size: int
-    ) -> tuple[list[AuditRecord], int, int]:
-        with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM NL2SQL_AUTH_AUDIT_LOG")
-            count_row = cursor.fetchone()
-            total = int(count_row[0]) if count_row else 0
-            resolved_page = _resolved_page(total, page, page_size)
-            offset = (resolved_page - 1) * page_size
-            cursor.execute(
-                """
-                SELECT AUDIT_ID, ACTOR_USER_ID, EVENT_TYPE, TARGET_TYPE, TARGET_ID,
-                       OUTCOME, DETAIL_JSON, REQUEST_ID, CLIENT_IP, CREATED_AT
-                  FROM NL2SQL_AUTH_AUDIT_LOG
-                 ORDER BY CREATED_AT DESC, AUDIT_ID DESC
-                OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
-                """,
-                {"offset": offset, "page_size": page_size},
-            )
-            records = [_audit_record_from_row(row) for row in cursor.fetchall()]
-            return records, total, resolved_page
-
-    def list_audit_between(
-        self, *, start_at: datetime, end_at: datetime
-    ) -> list[AuditRecord]:
-        with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT AUDIT_ID, ACTOR_USER_ID, EVENT_TYPE, TARGET_TYPE, TARGET_ID,
-                       OUTCOME, DETAIL_JSON, REQUEST_ID, CLIENT_IP, CREATED_AT
-                  FROM NL2SQL_AUTH_AUDIT_LOG
-                 WHERE CREATED_AT >= :start_at AND CREATED_AT <= :end_at
-                 ORDER BY CREATED_AT DESC, AUDIT_ID DESC
-                """,
-                {"start_at": start_at, "end_at": end_at},
-            )
-            return [_audit_record_from_row(row) for row in cursor.fetchall()]
 
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
         with self.connection() as conn, conn.cursor() as cursor:

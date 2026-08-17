@@ -41,13 +41,17 @@ test("ContentActionBar は内容内ツール操作を右寄せし、ARIA group �
   assert.match(componentSource, /role="group"/u);
   assert.match(componentSource, /aria-label=\{ariaLabel\}/u);
   assert.match(componentSource, /justify-end/u);
-  assert.match(componentSource, /sm:justify-between/u);
+  assert.match(componentSource, /flex min-w-0 max-w-full flex-wrap items-start justify-between gap-2/u);
+  assert.doesNotMatch(componentSource, /sm:flex-row/u);
 });
 
 test("ContentActionBar は左側情報と右側操作を分離できる", () => {
   for (const prop of ["leading", "title", "description", "meta"]) {
     assert.match(componentSource, new RegExp(prop, "u"));
   }
+  assert.match(componentSource, /const infoClassName = "min-w-0 max-w-full flex-1 basis-64"/u);
+  assert.match(componentSource, /flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2/u);
+  assert.match(componentSource, /hasInfo && "ml-auto"/u);
   assert.match(componentSource, /actionsClassName/u);
   assert.match(componentSource, /data-testid=\{testId\}/u);
 });
@@ -64,7 +68,7 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   assert.match(viewManagementSource, /aria-describedby=\{ddlStatusId\}/u);
   assert.ok(
     viewManagementSource.indexOf('t("viewMgmt.joinWhere.extract")') >
-      viewManagementSource.indexOf('name="view-join-where-prompt-profile"')
+      viewManagementSource.indexOf('data-testid="view-join-where-advanced-settings"')
   );
 
   assert.match(metadataSqlSource, /testId=\{`\$\{pageId\}-target-actions`\}/u);

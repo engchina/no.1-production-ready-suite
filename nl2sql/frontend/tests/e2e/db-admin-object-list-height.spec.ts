@@ -39,6 +39,12 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+async function pickerRowNames(list: Locator) {
+  return list.getByRole("listitem").evaluateAll((rows) =>
+    rows.map((row) => row.querySelector("button span")?.textContent?.trim() ?? "")
+  );
+}
+
 async function expectContentActionsRightAligned(actions: Locator) {
   const metrics = await actions.evaluate((node) => {
     const group = node.querySelector('[role="group"]');
@@ -94,6 +100,17 @@ const metadataScenarios = [
     idPrefix: "annotation-management",
   },
 ] as const;
+
+const fixedTargetVisibleRows = 5;
+
+type MockAdminObjectItem = {
+  name: string;
+  owner: string;
+  qualified_name?: string;
+  object_type: "table" | "view";
+  row_count: number | null;
+  comment: string;
+};
 
 const sampleProfile = {
   id: "default",
@@ -204,7 +221,7 @@ const prepareManagementScenarios = [
 async function mockObjectManagementApi(
   page: Page,
   scenario: (typeof scenarios)[number],
-  options: { itemCount?: number; columnCount?: number } = {}
+  options: { itemCount?: number; columnCount?: number; extraItems?: MockAdminObjectItem[] } = {}
 ) {
   const itemCount = options.itemCount ?? 30;
   const columns = Array.from({ length: options.columnCount ?? 0 }, (_, index) => ({
@@ -215,13 +232,16 @@ async function mockObjectManagementApi(
     comment: `列情報の高さ確認 ${index + 1}`,
     sample_values: [`sample-${index + 1}`],
   }));
-  const items = Array.from({ length: itemCount }, (_, index) => ({
+  const generatedItems: MockAdminObjectItem[] = Array.from({ length: itemCount }, (_, index) => ({
     name: `${scenario.prefix}_${String(index + 1).padStart(2, "0")}`,
     owner: "APP",
+    qualified_name: `APP.${scenario.prefix}_${String(index + 1).padStart(2, "0")}`,
     object_type: scenario.objectType,
     row_count: null,
     comment: "",
   }));
+  const items = [...generatedItems, ...(options.extraItems ?? [])];
+  const typeItems = items.filter((item) => item.object_type === scenario.objectType);
 
   await page.route("**/api/schema/catalog", (route) =>
     fulfillJson(route, {
@@ -229,10 +249,24 @@ async function mockObjectManagementApi(
       tables: [],
     })
   );
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [
+        {
+          owner: "APP",
+          is_current: true,
+          table_count: typeItems.filter((item) => item.object_type === "table").length,
+          view_count: typeItems.filter((item) => item.object_type === "view").length,
+        },
+      ],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
   await page.route(scenario.apiPath, (route) =>
     fulfillJson(route, {
       runtime: "deterministic",
-      items,
+      items: typeItems,
       warnings: [],
     })
   );
@@ -255,6 +289,7 @@ async function mockObjectManagementApi(
     return fulfillJson(route, {
       name,
       owner: "APP",
+      qualified_name: `APP.${name}`,
       object_type: "table",
       row_count: null,
       comment: "",
@@ -268,6 +303,7 @@ async function mockObjectManagementApi(
     return fulfillJson(route, {
       name,
       owner: "APP",
+      qualified_name: `APP.${name}`,
       object_type: "view",
       row_count: null,
       comment: "",
@@ -278,8 +314,15 @@ async function mockObjectManagementApi(
   });
 }
 
-async function mockMetadataManagementApi(page: Page, options: { empty?: boolean } = {}) {
-  const tableItems = options.empty
+async function mockMetadataManagementApi(
+  page: Page,
+  options: {
+    empty?: boolean;
+    extraTableItems?: MockAdminObjectItem[];
+    extraViewItems?: MockAdminObjectItem[];
+  } = {}
+) {
+  const baseTableItems: MockAdminObjectItem[] = options.empty
     ? []
     : Array.from({ length: 20 }, (_, index) => ({
         name: `META_TABLE_${String(index + 1).padStart(2, "0")}`,
@@ -288,7 +331,7 @@ async function mockMetadataManagementApi(page: Page, options: { empty?: boolean 
         row_count: index,
         comment: `コメント対象テーブル ${index + 1}`,
       }));
-  const viewItems = options.empty
+  const baseViewItems: MockAdminObjectItem[] = options.empty
     ? []
     : Array.from({ length: 10 }, (_, index) => ({
         name: `META_VIEW_${String(index + 1).padStart(2, "0")}`,
@@ -297,12 +340,23 @@ async function mockMetadataManagementApi(page: Page, options: { empty?: boolean 
         row_count: null,
         comment: `コメント対象ビュー ${index + 1}`,
       }));
+  const tableItems = [...baseTableItems, ...(options.extraTableItems ?? [])];
+  const viewItems = [...baseViewItems, ...(options.extraViewItems ?? [])];
   const catalog = {
     refreshed_at: "2026-06-21T10:00:00.000Z",
     tables: [],
   };
 
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, catalog));
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [
+        { owner: "APP", is_current: true, table_count: tableItems.length, view_count: viewItems.length },
+      ],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
   await page.route("**/api/schema/refresh", (route) => fulfillJson(route, catalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, {
@@ -358,6 +412,228 @@ async function mockDataManagementApi(page: Page) {
   await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) =>
     fulfillJson(route, { runtime: "deterministic", profiles: [selectAiProfile], warnings: [] })
   );
+}
+
+async function mockSortableDataManagementApi(page: Page) {
+  const items = [
+    { name: "Z_PAYMENTS", owner: "BILLING", object_type: "table", row_count: 20, comment: "支払一覧" },
+    { name: "A_VIEW", owner: "APP", object_type: "view", row_count: null, comment: "ビュー対象" },
+    { name: "M_EMPTY", owner: "APP", object_type: "table", row_count: 0, comment: "空テーブル" },
+    { name: "B_AUDIT", owner: "APP", object_type: "table", row_count: 3, comment: "監査ログ" },
+  ];
+  const tableItems = items.filter((item) => item.object_type === "table");
+  const viewItems = items.filter((item) => item.object_type === "view");
+
+  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
+  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: tableItems, warnings: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/views", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: viewItems, warnings: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    const type = url.searchParams.get("type") ?? "all";
+    const sourceItems = type === "table" ? tableItems : type === "view" ? viewItems : items;
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items: sourceItems,
+      total: sourceItems.length,
+      table_count: type === "view" ? 0 : tableItems.length,
+      view_count: type === "table" ? 0 : viewItems.length,
+      next_cursor: null,
+      refreshed_at: managementCatalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
+}
+
+async function mockPagedDbAdminObjectsApi(page: Page) {
+  const tableItems = Array.from({ length: 149 }, (_, index) => ({
+    name: `PAGED_TABLE_${String(index + 1).padStart(3, "0")}`,
+    owner: "APP",
+    object_type: "table",
+    row_count: index + 1,
+    comment: `ページング対象テーブル ${index + 1}`,
+  }));
+  const viewItems = Array.from({ length: 2 }, (_, index) => ({
+    name: `PAGED_VIEW_${String(index + 1).padStart(3, "0")}`,
+    owner: "APP",
+    object_type: "view",
+    row_count: null,
+    comment: `ページング対象ビュー ${index + 1}`,
+  }));
+
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(route, {
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      tables: [],
+    })
+  );
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [
+        { owner: "APP", is_current: true, table_count: tableItems.length, view_count: viewItems.length },
+      ],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
+  await page.route("**/api/schema/refresh", (route) =>
+    fulfillJson(route, {
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      tables: [],
+    })
+  );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    const type = url.searchParams.get("type") ?? "all";
+    const cursor = url.searchParams.get("cursor") ?? "";
+    const sourceItems =
+      type === "table" ? tableItems : type === "view" ? viewItems : [...tableItems, ...viewItems];
+    const items = cursor ? sourceItems.slice(100) : sourceItems.slice(0, 100);
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: sourceItems.length,
+      table_count: type === "view" ? 0 : type === "table" ? sourceItems.length : tableItems.length,
+      view_count: type === "table" ? 0 : type === "view" ? sourceItems.length : viewItems.length,
+      next_cursor: !cursor && sourceItems.length > 100 ? "paged-db-admin-objects-2" : null,
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/tables/PAGED_TABLE_*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "PAGED_TABLE_001");
+    return fulfillJson(route, {
+      name,
+      owner: "APP",
+      object_type: "table",
+      row_count: 1,
+      comment: "ページング対象テーブル",
+      columns: [],
+      ddl: "",
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/views/PAGED_VIEW_*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "PAGED_VIEW_001");
+    return fulfillJson(route, {
+      name,
+      owner: "APP",
+      object_type: "view",
+      row_count: null,
+      comment: "ページング対象ビュー",
+      columns: [],
+      ddl: "",
+      warnings: [],
+    });
+  });
+}
+
+async function mockOwnerFilterDbAdminObjectsApi(page: Page) {
+  const items = [
+    {
+      name: "APP_TABLE_01",
+      owner: "APP",
+      object_type: "table",
+      row_count: 3,
+      comment: "APP 所有テーブル",
+    },
+    {
+      name: "BILLING_TABLE_01",
+      owner: "BILLING",
+      object_type: "table",
+      row_count: 7,
+      comment: "BILLING 所有テーブル",
+    },
+    {
+      name: "APP_VIEW_01",
+      owner: "APP",
+      object_type: "view",
+      row_count: null,
+      comment: "APP 所有ビュー",
+    },
+    {
+      name: "BILLING_VIEW_01",
+      owner: "BILLING",
+      object_type: "view",
+      row_count: null,
+      comment: "BILLING 所有ビュー",
+    },
+  ];
+  const tableItems = items.filter((item) => item.object_type === "table");
+  const viewItems = items.filter((item) => item.object_type === "view");
+
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(route, {
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      tables: [],
+    })
+  );
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [
+        { owner: "APP", is_current: true, table_count: 1, view_count: 1 },
+        { owner: "BILLING", is_current: false, table_count: 1, view_count: 1 },
+      ],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    const type = url.searchParams.get("type") ?? "all";
+    const owner = (url.searchParams.get("owner") ?? "").toUpperCase();
+    const sourceItems =
+      type === "table" ? tableItems : type === "view" ? viewItems : items;
+    const filteredItems = sourceItems.filter((item) => !owner || item.owner === owner);
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items: filteredItems,
+      total: filteredItems.length,
+      table_count: type === "view" ? 0 : filteredItems.filter((item) => item.object_type === "table").length,
+      view_count: type === "table" ? 0 : filteredItems.filter((item) => item.object_type === "view").length,
+      next_cursor: null,
+      refreshed_at: "2026-06-21T10:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/tables/*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "APP_TABLE_01");
+    const owner = new URL(route.request().url()).searchParams.get("owner") ?? "APP";
+    return fulfillJson(route, {
+      name,
+      owner,
+      object_type: "table",
+      row_count: name.startsWith("BILLING") ? 7 : 3,
+      comment: "",
+      columns: [],
+      ddl: "",
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/views/*", (route) => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "APP_VIEW_01");
+    const owner = new URL(route.request().url()).searchParams.get("owner") ?? "APP";
+    return fulfillJson(route, {
+      name,
+      owner,
+      object_type: "view",
+      row_count: null,
+      comment: "",
+      columns: [],
+      ddl: "",
+      warnings: [],
+    });
+  });
 }
 
 async function mockSampleDataApi(page: Page) {
@@ -420,7 +696,8 @@ function expectedObjectListRows(testInfo: TestInfo) {
 async function expectObjectListRowLimit(
   list: Locator,
   rowSelector: string,
-  visibleRows: number
+  visibleRows: number,
+  options: { expectedHeightRem?: number; headerHeightRem?: number; rowHeightRem?: number } = {}
 ) {
   const fit = await list.evaluate(
     (node, { rowSelector: selector, visibleRows: limit }) => {
@@ -448,7 +725,10 @@ async function expectObjectListRowLimit(
     { rowSelector, visibleRows }
   );
 
-  const expectedMaxHeight = fit.rootFontSize * (2.5 + 3.5 * visibleRows);
+  const expectedMaxHeight =
+    fit.rootFontSize *
+    (options.expectedHeightRem ??
+      (options.headerHeightRem ?? 2.5) + (options.rowHeightRem ?? 3.5) * visibleRows);
   expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
@@ -551,23 +831,409 @@ for (const scenario of scenarios) {
     const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
     await search.fill("_01");
     await expect(grid.locator("tbody tr")).toHaveCount(1);
-    await expect(grid.getByText(`${scenario.prefix}_01`, { exact: true })).toBeVisible();
+    await expect(grid.getByText(`APP.${scenario.prefix}_01`, { exact: true })).toBeVisible();
     await search.clear();
     await expect(grid.locator("tbody tr")).toHaveCount(30);
+  });
+
+  test(`${scenario.title}は NL2SQL_ システム object を一覧に表示しない`, async ({ page }) => {
+    await mockObjectManagementApi(page, scenario, {
+      itemCount: 1,
+      extraItems: [
+        {
+          name: "NL2SQL_SCHEMA_OBJECTS",
+          owner: "APP",
+          qualified_name: "APP.NL2SQL_SCHEMA_OBJECTS",
+          object_type: scenario.objectType,
+          row_count: null,
+          comment: "system object",
+        },
+        {
+          name: `${scenario.prefix}_OWNER_OK`,
+          owner: "NL2SQL_APP",
+          qualified_name: `NL2SQL_APP.${scenario.prefix}_OWNER_OK`,
+          object_type: scenario.objectType,
+          row_count: null,
+          comment: "business object under NL2SQL_APP",
+        },
+        {
+          name: `TD_NL2SQL_${scenario.prefix}`,
+          owner: "APP",
+          qualified_name: `APP.TD_NL2SQL_${scenario.prefix}`,
+          object_type: scenario.objectType,
+          row_count: null,
+          comment: "business object with middle token",
+        },
+      ],
+    });
+    await page.goto(scenario.path);
+
+    const search = page.getByRole("searchbox", { name: "検索" });
+    const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
+    await expect(grid.getByText(`APP.${scenario.prefix}_01`, { exact: true })).toBeVisible();
+    await expect(
+      grid.getByText(`NL2SQL_APP.${scenario.prefix}_OWNER_OK`, { exact: true })
+    ).toBeVisible();
+    await expect(grid.getByText(`APP.TD_NL2SQL_${scenario.prefix}`, { exact: true })).toBeVisible();
+    await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+
+    await search.fill("NL2SQL_SCHEMA");
+    await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+    await expect(grid.locator("tbody tr")).toHaveCount(0);
   });
 }
 
 for (const scenario of metadataScenarios) {
-  test(`${scenario.title}は対象グリッドをデスクトップ8行・モバイル5行の高さに収める`, async ({ page }, testInfo) => {
+  test(`${scenario.title}は対象グリッドを5行の固定高さに収める`, async ({ page }) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);
 
     const list = page.getByTestId("db-admin-object-list");
     await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).locator("tbody tr")).toHaveCount(30);
 
-    await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
+    await expectObjectListRowLimit(list, "tbody tr", fixedTargetVisibleRows);
+  });
+
+  test(`${scenario.title}は所有者フィルタを種類フィルタの前に表示して絞り込める`, async ({ page }) => {
+    await mockOwnerFilterDbAdminObjectsApi(page);
+    const ownerRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/nl2sql/db-admin/objects") {
+        ownerRequests.push(url.searchParams.get("owner") ?? "");
+      }
+    });
+
+    await page.goto(scenario.path);
+    const toolbar = page.getByTestId(`${scenario.idPrefix}-target-toolbar`);
+    await expect(toolbar.getByLabel("所有者フィルタ")).toBeVisible();
+    await expect(toolbar.getByLabel("種類フィルタ")).toBeVisible();
+    await toolbar.getByLabel("所有者フィルタ").selectOption("BILLING");
+    await expect.poll(() => ownerRequests.includes("BILLING")).toBe(true);
+    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("BILLING.BILLING_TABLE_01", { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.APP_TABLE_01", { exact: true })).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test(`${scenario.title}は NL2SQL_ システム object を対象 picker に表示しない`, async ({ page }) => {
+    await mockMetadataManagementApi(page, {
+      empty: true,
+      extraTableItems: [
+        {
+          name: "NL2SQL_SCHEMA_OBJECTS",
+          owner: "APP",
+          object_type: "table",
+          row_count: null,
+          comment: "system table",
+        },
+        {
+          name: "ORDERS",
+          owner: "NL2SQL_APP",
+          object_type: "table",
+          row_count: null,
+          comment: "business table",
+        },
+        {
+          name: "TD_NL2SQL_ORDERS",
+          owner: "APP",
+          object_type: "table",
+          row_count: null,
+          comment: "business table",
+        },
+      ],
+      extraViewItems: [
+        {
+          name: "NL2SQL_SYSTEM_VIEW",
+          owner: "APP",
+          object_type: "view",
+          row_count: null,
+          comment: "system view",
+        },
+      ],
+    });
+    await page.goto(scenario.path);
+
+    const grid = page.getByTestId(`${scenario.idPrefix}-target-grid`);
+    await expect(grid.getByText("NL2SQL_APP.ORDERS", { exact: true })).toBeVisible();
+    await expect(grid.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
+    await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+    await expect(grid.getByText("APP.NL2SQL_SYSTEM_VIEW", { exact: true })).toHaveCount(0);
+
+    await page.getByRole("searchbox", { name: "検索" }).fill("NL2SQL_SCHEMA");
+    await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+    await expect(grid.locator("tbody tr")).toHaveCount(0);
   });
 }
+
+test("合成データ生成は対象テーブル一覧を5行の固定高さに収める", async ({ page }) => {
+  const syntheticTables = Array.from(
+    { length: 8 },
+    (_, index) => `APP.SYNTHETIC_TABLE_${String(index + 1).padStart(2, "0")}`
+  );
+  await mockDataManagementApi(page);
+  await page.unroute("**/api/nl2sql/select-ai/db-profiles**");
+  await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/NL2SQL_DEFAULT_PROFILE")) {
+      return fulfillJson(route, {
+        runtime: "deterministic",
+        profile: {
+          ...selectAiProfile,
+          object_list: syntheticTables,
+          attributes: { profile_attributes: { object_list: syntheticTables } },
+        },
+        warnings: [],
+      });
+    }
+    return fulfillJson(route, { runtime: "deterministic", profiles: [selectAiProfile], warnings: [] });
+  });
+
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const syntheticPanel = page.locator("#data-management-panel-synthetic");
+  await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
+
+  const list = page.getByTestId("data-synthetic-table-list");
+  await expect(list.locator("label")).toHaveCount(syntheticTables.length);
+  await expectObjectListRowLimit(list, "label", fixedTargetVisibleRows, { expectedHeightRem: 14 });
+});
+
+test("データ管理のテーブル・ビュー件数 badge は API 総数を表示する", async ({ page }) => {
+  await mockPagedDbAdminObjectsApi(page);
+  await page.goto("/data-management");
+
+  const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
+  await expect(controls.getByRole("heading", { name: "テーブル・ビューデータの表示" })).toBeVisible();
+  await expect(controls.getByText("全151件", { exact: true })).toBeVisible();
+  await expect(controls.getByText("テーブル149", { exact: true })).toBeVisible();
+  await expect(controls.getByText("ビュー2", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("data-preview-object-footer")).toContainText("100 / 151 件を表示");
+});
+
+test("データ管理の対象ピッカーはヘッダーで並び替えできる", async ({ page }, testInfo) => {
+  await mockSortableDataManagementApi(page);
+  await page.goto("/data-management");
+
+  const previewList = page.getByTestId("data-preview-object-list");
+  await expect(previewList).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  if (testInfo.project.name === "mobile-375") {
+    return;
+  }
+
+  await expect.poll(() => pickerRowNames(previewList)).toEqual([
+    "APP.A_VIEW",
+    "APP.B_AUDIT",
+    "APP.M_EMPTY",
+    "BILLING.Z_PAYMENTS",
+  ]);
+
+  await previewList.getByRole("button", { name: /対象名/ }).click();
+  await expect.poll(() => pickerRowNames(previewList)).toEqual([
+    "BILLING.Z_PAYMENTS",
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "APP.A_VIEW",
+  ]);
+
+  await previewList.getByRole("button", { name: /種類/ }).click();
+  await expect.poll(() => pickerRowNames(previewList)).toEqual([
+    "BILLING.Z_PAYMENTS",
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "APP.A_VIEW",
+  ]);
+
+  await previewList.getByRole("button", { name: /行数/ }).click();
+  await expect.poll(() => pickerRowNames(previewList)).toEqual([
+    "APP.A_VIEW",
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "BILLING.Z_PAYMENTS",
+  ]);
+
+  await previewList.getByRole("button", { name: /所有者/ }).click();
+  await expect.poll(() => pickerRowNames(previewList)).toEqual([
+    "APP.A_VIEW",
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "BILLING.Z_PAYMENTS",
+  ]);
+
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvList = page.getByTestId("data-csv-table-list");
+  await expect(csvList).toBeVisible();
+  await expect.poll(() => pickerRowNames(csvList)).toEqual([
+    "APP.B_AUDIT",
+    "APP.M_EMPTY",
+    "BILLING.Z_PAYMENTS",
+  ]);
+
+  await csvList.getByRole("button", { name: /対象名/ }).click();
+  await expect.poll(() => pickerRowNames(csvList)).toEqual([
+    "BILLING.Z_PAYMENTS",
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+  ]);
+
+  await csvList.getByRole("button", { name: /行数/ }).click();
+  await expect.poll(() => pickerRowNames(csvList)).toEqual([
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "BILLING.Z_PAYMENTS",
+  ]);
+
+  await csvList.getByRole("button", { name: /所有者/ }).click();
+  await expect.poll(() => pickerRowNames(csvList)).toEqual([
+    "APP.M_EMPTY",
+    "APP.B_AUDIT",
+    "BILLING.Z_PAYMENTS",
+  ]);
+});
+
+test("データ管理の対象 picker は NL2SQL_ システム object を表示しない", async ({ page }) => {
+  const items: MockAdminObjectItem[] = [
+    {
+      name: "ORDERS",
+      owner: "APP",
+      object_type: "table",
+      row_count: 10,
+      comment: "業務テーブル",
+    },
+    {
+      name: "NL2SQL_SCHEMA_OBJECTS",
+      owner: "APP",
+      object_type: "table",
+      row_count: null,
+      comment: "system table",
+    },
+    {
+      name: "NL2SQL_SYSTEM_VIEW",
+      owner: "APP",
+      object_type: "view",
+      row_count: null,
+      comment: "system view",
+    },
+    {
+      name: "ORDERS",
+      owner: "NL2SQL_APP",
+      object_type: "table",
+      row_count: 2,
+      comment: "business owner table",
+    },
+    {
+      name: "TD_NL2SQL_ORDERS",
+      owner: "APP",
+      object_type: "table",
+      row_count: 1,
+      comment: "middle-token business table",
+    },
+  ];
+  const tableItems = items.filter((item) => item.object_type === "table");
+  const viewItems = items.filter((item) => item.object_type === "view");
+
+  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
+  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: tableItems, warnings: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/views", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: viewItems, warnings: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: items.length,
+      table_count: tableItems.length,
+      view_count: viewItems.length,
+      next_cursor: null,
+      refreshed_at: managementCatalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    })
+  );
+
+  await page.goto("/data-management");
+
+  const previewList = page.getByTestId("data-preview-object-list");
+  await expect(previewList.getByText("APP.ORDERS", { exact: true })).toBeVisible();
+  await expect(previewList.getByText("NL2SQL_APP.ORDERS", { exact: true })).toBeVisible();
+  await expect(previewList.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
+  await expect(previewList.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+  await expect(previewList.getByText("APP.NL2SQL_SYSTEM_VIEW", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("searchbox", { name: "対象検索" }).fill("NL2SQL_SCHEMA");
+  await expect(previewList.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+  await expect(previewList.getByText("NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("searchbox", { name: "対象検索" }).clear();
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvList = page.getByTestId("data-csv-table-list");
+  await expect(csvList.getByText("NL2SQL_APP.ORDERS", { exact: true })).toBeVisible();
+  await expect(csvList.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
+  await expect(csvList.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+});
+
+test("コメント管理の対象件数 badge は footer と同じ API 総数を表示する", async ({ page }) => {
+  await mockPagedDbAdminObjectsApi(page);
+  await page.goto("/comment-management");
+
+  const panel = page.locator("#comment-management-panel-targets");
+  await expect(panel.getByRole("heading", { name: "対象選択" })).toBeVisible();
+  await expect(panel.getByText("151 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("comment-management-target-footer")).toContainText("100 / 151 件を表示");
+});
+
+test("テーブル管理・ビュー管理の一覧件数 badge は API 総数を表示する", async ({ page }) => {
+  await mockPagedDbAdminObjectsApi(page);
+  await page.goto("/table-management");
+
+  const tableGrid = page.locator("section[aria-labelledby='table-grid-heading']");
+  await expect(tableGrid.getByText("149 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("table-management-footer")).toContainText("100 / 149 件を表示");
+
+  await page.goto("/view-management");
+  const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
+  await expect(viewGrid.getByText("2 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("view-management-footer")).toContainText("2 / 2 件を表示");
+});
+
+test("テーブル管理・ビュー管理は所有者フィルタで一覧を絞り込む", async ({ page }) => {
+  await mockOwnerFilterDbAdminObjectsApi(page);
+  const ownerRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/nl2sql/db-admin/objects") {
+      ownerRequests.push(url.searchParams.get("owner") ?? "");
+    }
+  });
+
+  await page.goto("/table-management");
+  const tableGrid = page.locator("section[aria-labelledby='table-grid-heading']");
+  await expect(tableGrid.getByLabel("所有者フィルタ")).toBeVisible();
+  await expect(tableGrid.getByLabel("行数フィルタ")).toHaveCount(0);
+  await expect(tableGrid.getByText("APP.APP_TABLE_01", { exact: true })).toBeVisible();
+  await expect(tableGrid.getByText("BILLING.BILLING_TABLE_01", { exact: true })).toBeVisible();
+  await tableGrid.getByLabel("所有者フィルタ").selectOption("BILLING");
+  await expect.poll(() => ownerRequests.includes("BILLING")).toBe(true);
+  await expect(tableGrid.getByText("BILLING.BILLING_TABLE_01", { exact: true })).toBeVisible();
+  await expect(tableGrid.getByText("APP.APP_TABLE_01", { exact: true })).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  await page.goto("/view-management");
+  const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
+  await expect(viewGrid.getByLabel("所有者フィルタ")).toBeVisible();
+  await expect(viewGrid.getByLabel("行数フィルタ")).toHaveCount(0);
+  const requestCountBeforeViewFilter = ownerRequests.length;
+  await viewGrid.getByLabel("所有者フィルタ").selectOption("BILLING");
+  await expect.poll(() => ownerRequests.slice(requestCountBeforeViewFilter).includes("BILLING")).toBe(true);
+  await expect(viewGrid.getByText("BILLING.BILLING_VIEW_01", { exact: true })).toBeVisible();
+  await expect(viewGrid.getByText("APP.APP_VIEW_01", { exact: true })).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
 
 test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタンを折り返さない", async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
@@ -608,7 +1274,7 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   await expect(grid.locator("tbody tr")).toHaveCount(30);
   await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
   await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
-  const rowAction = grid.getByRole("button", { name: /操作: TABLE_01/ });
+  const rowAction = grid.getByRole("button", { name: /操作: APP\.TABLE_01/ });
   await expect(rowAction).toBeVisible();
   await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);
@@ -644,7 +1310,7 @@ test("テーブル管理の行メニューは下端では上方向に開く", as
     node.scrollTop = node.scrollHeight;
   });
 
-  const bottomRowAction = page.getByRole("button", { name: /操作: TABLE_30/ });
+  const bottomRowAction = page.getByRole("button", { name: /操作: APP\.TABLE_30/ });
   await expect(bottomRowAction).toBeVisible();
   const bottomTriggerBox = await bottomRowAction.boundingBox();
   expect(bottomTriggerBox).not.toBeNull();
@@ -670,7 +1336,7 @@ test("テーブル管理の行メニューは少件数の一覧でも裁切さ�
   const shortList = page.getByTestId("db-admin-object-list");
   const shortListBox = await shortList.boundingBox();
   expect(shortListBox).not.toBeNull();
-  const shortRowAction = page.getByRole("button", { name: /操作: TABLE_01/ });
+  const shortRowAction = page.getByRole("button", { name: /操作: APP\.TABLE_01/ });
   await expect(shortRowAction).toBeVisible();
   await shortRowAction.click();
 
@@ -1788,7 +2454,7 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
   if (await ownerHeader.count()) {
     await expectSingleLine(ownerHeader.locator("span").first());
   }
-  const rowAction = grid.getByRole("button", { name: /操作: VIEW_01/ });
+  const rowAction = grid.getByRole("button", { name: /操作: APP\.VIEW_01/ });
   await expect(rowAction).toBeVisible();
   await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);

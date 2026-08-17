@@ -4,7 +4,7 @@ import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, toast } from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
@@ -12,6 +12,7 @@ import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -30,9 +31,11 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
   DropDbObjectDialog,
+  dbAdminObjectQualifiedName,
   dbObjectSortValue,
+  parseDbAdminObjectTarget,
   type DbObjectDetailTab,
-  type DbObjectFilter,
+  type DbObjectOwnerFilter,
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
@@ -47,6 +50,7 @@ import {
   useSchemaRefreshJob,
   waitForSchemaRefreshJob,
 } from "../incrementalQueries";
+import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "import";
@@ -327,11 +331,29 @@ function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: s
   return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
 }
 
+function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("dataMgmt.objectList.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
 export function TableManagementPage() {
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [tableSearch, setTableSearch] = useState("");
-  const [tableFilter, setTableFilter] = useState<DbObjectFilter>("all");
+  const [tableOwnerFilter, setTableOwnerFilter] = useState<DbObjectOwnerFilter>("all");
   const [tableSort, setTableSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
@@ -356,7 +378,9 @@ export function TableManagementPage() {
   const completedImportSchemaRefreshJob = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
   const debouncedTableSearch = useDebouncedValue(tableSearch, 250);
-  const tableObjectsQuery = useDbAdminObjects(debouncedTableSearch, "table", tableFilter);
+  const tableOwnerQuery = tableOwnerFilter === "all" ? "" : tableOwnerFilter;
+  const tableObjectsQuery = useDbAdminObjects(debouncedTableSearch, "table", "all", tableOwnerQuery);
+  const schemaOwnersQuery = useSchemaOwners();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
   const schemaRefreshing =
@@ -382,7 +406,16 @@ export function TableManagementPage() {
     [tableObjectsQuery.data]
   );
   const firstTablePage = tableObjectsQuery.data?.pages[0];
-  const totalTableCount = firstTablePage?.total ?? tableItems.length;
+  const totalTableCount = dbAdminObjectCountsFromPage(firstTablePage, tableItems).totalCount;
+  const tableOwnerOptions = useMemo(
+    () =>
+      (schemaOwnersQuery.data?.owners ?? [])
+        .filter((item) => item.table_count > 0)
+        .map((item) => item.owner.trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, "ja")),
+    [schemaOwnersQuery.data],
+  );
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/tables",
     loadErrorMessage: t("tableMgmt.error.detail"),
@@ -405,7 +438,7 @@ export function TableManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    void detailRequest.loadDdl(detail.name);
+    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
   };
 
   const returnToList = () => {
@@ -417,11 +450,16 @@ export function TableManagementPage() {
   const handleExactCount = async (name: string) => {
     setLoading("count");
     try {
+      const target = parseDbAdminObjectTarget(name);
+      const params = new URLSearchParams({ include_ddl: "0", exact_count: "1" });
+      if (target.owner) params.set("owner", target.owner);
       const full = await apiGet<DbAdminObjectDetail>(
-        `/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}?include_ddl=0&exact_count=1`,
+        `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.name)}?${params.toString()}`,
       );
       setDetail((current) =>
-        current && current.name === name ? { ...current, row_count: full.row_count } : current,
+        current && dbAdminObjectQualifiedName(current) === target.qualifiedName
+          ? { ...current, row_count: full.row_count }
+          : current,
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.exactCount"));
@@ -574,8 +612,8 @@ export function TableManagementPage() {
       if (selectedTableName) detailRequest.clear();
       return;
     }
-    if (selectedTableName && tableItems.some((item) => item.name === selectedTableName)) return;
-    void fetchDetail(tableItems[0].name);
+    if (selectedTableName && tableItems.some((item) => dbAdminObjectQualifiedName(item) === selectedTableName)) return;
+    void fetchDetail(dbAdminObjectQualifiedName(tableItems[0]));
   }, [
     activeView,
     tableItems,
@@ -622,12 +660,13 @@ export function TableManagementPage() {
 
   const filteredTables = useMemo(() => {
     const q = tableSearch.trim().toLowerCase();
+    const ownerKey = tableOwnerFilter.trim().toUpperCase();
     return tableItems
       .filter((item) => {
-        if (tableFilter === "with_rows" && !(item.row_count != null && item.row_count > 0)) return false;
-        if (tableFilter === "empty_rows" && item.row_count !== 0) return false;
+        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
         if (!q) return true;
         return (
+          dbAdminObjectQualifiedName(item).toLowerCase().includes(q) ||
           item.name.toLowerCase().includes(q) ||
           item.comment.toLowerCase().includes(q) ||
           item.owner.toLowerCase().includes(q)
@@ -639,7 +678,7 @@ export function TableManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return tableSort.direction === "asc" ? result : -result;
       });
-  }, [tableItems, tableSearch, tableFilter, tableSort]);
+  }, [tableItems, tableOwnerFilter, tableSearch, tableSort]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setTableSort((current) => ({
@@ -714,10 +753,14 @@ export function TableManagementPage() {
   };
 
   const downloadColumnsXlsx = async (name: string) => {
+    const target = parseDbAdminObjectTarget(name);
+    const params = new URLSearchParams();
+    if (target.owner) params.set("owner", target.owner);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     setLoading("table-export");
     setMessage("");
     try {
-      const response = await apiFetch(`/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}/export.xlsx`, {
+      const response = await apiFetch(`/api/nl2sql/db-admin/tables/${encodeURIComponent(target.name)}/export.xlsx${suffix}`, {
         headers: {
           Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         },
@@ -725,7 +768,7 @@ export function TableManagementPage() {
       if (!response.ok) {
         throw new Error(t("tableMgmt.error.export"));
       }
-      downloadBlob(`${name.toLowerCase()}_columns.xlsx`, await response.blob());
+      downloadBlob(`${target.qualifiedName.toLowerCase().replace(".", "_")}_columns.xlsx`, await response.blob());
       toast.success(t("common.action.downloaded"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tableMgmt.error.export"));
@@ -745,7 +788,8 @@ export function TableManagementPage() {
     setMessage("");
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-table", {
-        table_name: dropTargetName,
+        table_name: parseDbAdminObjectTarget(dropTargetName).name,
+        owner: parseDbAdminObjectTarget(dropTargetName).owner,
         confirmation: dropConfirmation,
         reason: "ui-table-management-drop",
       });
@@ -846,19 +890,11 @@ export function TableManagementPage() {
             : undefined
         }
         status={
-          schemaRefreshJob ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge
-                variant={
-                  schemaRefreshJob.status === "done"
-                    ? "success"
-                    : schemaRefreshJob.status === "error"
-                      ? "danger"
-                      : "info"
-                }
-                label={schemaRefreshJobLabel(schemaRefreshJob)}
-              />
-            </span>
+          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
+            <PageHeaderStatusBadge
+              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
+              label={schemaRefreshJobLabel(schemaRefreshJob)}
+            />
           ) : undefined
         }
         actionsAriaLabel={t("tableMgmt.tabs.label")}
@@ -972,30 +1008,32 @@ export function TableManagementPage() {
               loading={tableObjectsQuery.isPending && !tableObjectsQuery.data}
               error={
                 tableObjectsQuery.error && !tableObjectsQuery.data
-                  ? tableObjectsQuery.error instanceof Error
-                    ? tableObjectsQuery.error.message
-                    : t("tableMgmt.error.load")
+                  ? objectListErrorMessage(tableObjectsQuery.error, "tableMgmt.error.load")
                   : ""
               }
               search={tableSearch}
-              filter={tableFilter}
+              ownerFilter={tableOwnerFilter}
+              ownerOptions={tableOwnerOptions}
               sort={tableSort}
               totalCount={totalTableCount}
               hasNextPage={Boolean(tableObjectsQuery.hasNextPage)}
               loadingNextPage={tableObjectsQuery.isFetchingNextPage}
+              loadMoreError={
+                tableObjectsQuery.isFetchNextPageError && tableObjectsQuery.error
+                  ? objectListLoadMoreErrorMessage(tableObjectsQuery.error, "tableMgmt.error.load")
+                  : ""
+              }
               labels={{
                 title: t("tableMgmt.list.title"),
                 hint: t("tableMgmt.grid.hint"),
-                count: t("tableMgmt.grid.count", { count: filteredTables.length }),
+                count: t("tableMgmt.grid.count", { count: totalTableCount }),
                 loading: t("tableMgmt.list.loading"),
                 emptyTitle: t("tableMgmt.list.emptyTitle"),
                 emptyHint: t("tableMgmt.list.emptyHint"),
                 noResultsTitle: t("tableMgmt.list.noResultsTitle"),
                 noResultsHint: t("tableMgmt.list.noResultsHint"),
-                filter: t("tableMgmt.toolbar.filter"),
-                filterAll: t("tableMgmt.toolbar.filterAll"),
-                filterWithRows: t("tableMgmt.toolbar.filterWithRows"),
-                filterEmptyRows: t("tableMgmt.toolbar.filterEmptyRows"),
+                ownerFilter: t("tableMgmt.toolbar.filter"),
+                ownerFilterAll: t("tableMgmt.toolbar.filterAll"),
                 objectName: t("tableMgmt.grid.tableName"),
                 rows: t("tableMgmt.grid.rows"),
                 owner: t("tableMgmt.grid.owner"),
@@ -1005,11 +1043,12 @@ export function TableManagementPage() {
                 showObject: (name) => t("tableMgmt.grid.showTable", { name }),
               }}
               onSearchChange={setTableSearch}
-              onFilterChange={setTableFilter}
+              onOwnerFilterChange={setTableOwnerFilter}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name)}
               onDrop={openDropDialog}
               onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
+              onRetryLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
             />
             <DbObjectDetailPanel
@@ -1040,7 +1079,7 @@ export function TableManagementPage() {
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedTableName)}
               onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(detail.name);
+                if (detail) void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
               }}
               onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}

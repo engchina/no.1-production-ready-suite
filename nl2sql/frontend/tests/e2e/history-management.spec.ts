@@ -68,7 +68,7 @@ const historyItems = [
 const denseHistoryItem = {
   id: "history-dense-layout",
   question:
-    '対象テーブル："V_EMP_DEPT" 抽出項目："V_EMP_DEPT"."EMPLOYEE_NAME" "V_EMP_DEPT"."DEPARTMENT_NAME" 抽出条件：VERY_LONG_UNBROKEN_IDENTIFIER_WITHOUT_SPACES_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：VERY_LONG_UNBROKEN_IDENTIFIER_WITHOUT_SPACES_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ',
   engine: "select_ai",
   generated_sql:
     'SELECT "EMPLOYEE_NAME", "DEPARTMENT_NAME" FROM "V_EMP_DEPT" WHERE "VERY_LONG_UNBROKEN_FILTER_IDENTIFIER_0123456789" IS NOT NULL',
@@ -89,6 +89,14 @@ const denseHistoryItem = {
 
 async function mockHistory(page: Page, items: readonly Record<string, unknown>[] = historyItems) {
   await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items }));
+}
+
+function createRequestGate() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
 }
 
 async function hasDocumentHorizontalScroll(page: Page) {
@@ -112,6 +120,33 @@ async function expectContained(child: Locator, parent: Locator) {
   expect(childBox!.y).toBeGreaterThanOrEqual(parentBox!.y - 1);
   expect(childBox!.x + childBox!.width).toBeLessThanOrEqual(parentBox!.x + parentBox!.width + 1);
   expect(childBox!.y + childBox!.height).toBeLessThanOrEqual(parentBox!.y + parentBox!.height + 1);
+}
+
+async function expectQuestionLineClamp(question: Locator, lines: number) {
+  const metrics = await question.evaluate((element, expectedLines) => {
+    const style = window.getComputedStyle(element);
+    const lineHeight = Number.parseFloat(style.lineHeight);
+    const height = element.getBoundingClientRect().height;
+    return {
+      clamp: style.getPropertyValue("-webkit-line-clamp"),
+      height,
+      lineHeight,
+      maxHeight: Number.isFinite(lineHeight) ? lineHeight * expectedLines + 8 : null,
+      overflow: style.overflow,
+    };
+  }, lines);
+  expect(metrics.clamp).toBe(String(lines));
+  expect(metrics.overflow).toBe("hidden");
+  if (metrics.maxHeight !== null) {
+    expect(metrics.height).toBeLessThanOrEqual(metrics.maxHeight);
+  }
+}
+
+async function expectQuestionWeightBelow(question: Locator, maxWeight: number) {
+  const fontWeight = await question.evaluate((element) =>
+    Number.parseInt(window.getComputedStyle(element).fontWeight, 10)
+  );
+  expect(fontWeight).toBeLessThan(maxWeight);
 }
 
 async function expectNotOverlapping(first: Locator, second: Locator) {
@@ -159,11 +194,14 @@ async function expectDenseLayoutContained(page: Page) {
   await expect.poll(() => hasDocumentHorizontalScroll(page)).toBe(false);
   const row = historyRows(page).first();
   const rowButton = row.getByRole("button");
-  await expectContained(rowButton.getByTestId("history-question"), rowButton);
+  const rowQuestion = rowButton.getByTestId("history-question");
+  await expectContained(rowQuestion, rowButton);
+  await expectQuestionLineClamp(rowQuestion, 1);
+  await expectQuestionWeightBelow(rowQuestion, 600);
   const detail = page.getByTestId("history-detail");
-  await expectContained(detail.getByRole("heading", { name: denseHistoryItem.question }), detail);
+  await expectContained(detail.getByTestId("history-detail-question"), detail);
   await expectNotOverlapping(
-    detail.getByRole("heading", { name: denseHistoryItem.question }),
+    detail.getByTestId("history-detail-question"),
     detail.getByRole("button", { name: "この質問で再実行" })
   );
 }
@@ -178,7 +216,8 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByText("評価済み件数", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail").getByRole("heading", { name: "未入金の顧客を確認" })).toBeVisible();
+  await expect(page.getByTestId("history-detail").getByRole("heading", { name: "履歴詳細" })).toBeVisible();
+  await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
   await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: "履歴検索" });
@@ -240,10 +279,22 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
 
   await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeVisible();
-  const selectedRow = page.getByRole("button", { name: `${denseHistoryItem.question} の履歴を表示` });
+  const selectedRow = historyRows(page).first().getByRole("button");
+  const selectedRowQuestion = selectedRow.getByTestId("history-question");
   await expect(selectedRow).toHaveAttribute("aria-current", "true");
+  await expect(selectedRowQuestion).toHaveAttribute("title", denseHistoryItem.question);
+  await expect(selectedRowQuestion).toContainText('対象テーブル："部署情報を管理するテーブル" 抽出項目： 抽出条件：');
   await expect(page.getByRole("button", { name: "実行情報: 降順" })).toHaveAttribute("aria-pressed", "true");
   await expectDenseLayoutContained(page);
+  await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
+  await expectQuestionWeightBelow(page.getByTestId("history-detail-question"), 600);
+  await expect(page.getByRole("button", { name: "全文表示" })).toBeVisible();
+  await page.getByRole("button", { name: "全文表示" }).click();
+  await expect(page.getByRole("button", { name: "閉じる" })).toBeVisible();
+  await expect(page.getByTestId("history-detail-question")).toContainText("VERY_LONG_UNBROKEN_IDENTIFIER");
+  await expectDenseLayoutContained(page);
+  await page.getByRole("button", { name: "閉じる" }).click();
+  await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
 
   const pane = page.getByTestId("fixed-split-pane-history-management-list");
   const divider = page.getByTestId("fixed-split-pane-history-management-list-divider");
@@ -290,8 +341,9 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
 });
 
 test("実行履歴は初期読込と空状態を明示する", async ({ page }) => {
+  const historyGate = createRequestGate();
   await page.route("**/api/nl2sql/history", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await historyGate.promise;
     await fulfillJson(route, { items: [] });
   });
 
@@ -304,6 +356,7 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   await expect(page.getByTestId("history-detail-skeleton")).toContainText(
     "履歴詳細を読み込んでいます",
   );
+  historyGate.release();
   await expect(page.getByText("履歴はまだありません")).toBeVisible();
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
 });

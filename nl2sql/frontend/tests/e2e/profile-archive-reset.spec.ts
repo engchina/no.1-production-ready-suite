@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -9,6 +9,16 @@ async function fulfillJson(route: Route, data: unknown) {
     contentType: "application/json",
     body: JSON.stringify({ data }),
   });
+}
+
+async function expectUnifiedConfirmDialogSurface(dialog: Locator) {
+  await expect(dialog).toHaveClass(/max-w-md/);
+  await expect(dialog).toHaveClass(/bg-card/);
+  await expect(dialog).toHaveClass(/border-border/);
+  await expect(dialog).not.toHaveClass(/border-l-danger/);
+  await expect(dialog.locator(".border-l-danger")).toHaveCount(0);
+  await expect(dialog.locator(".bg-danger-bg")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "閉じる", exact: true })).toHaveCount(0);
 }
 
 const selectAiConfig = {
@@ -43,7 +53,10 @@ function profile(id: string, name: string, archived = false) {
   };
 }
 
-async function mockProfileManagement(page: Page) {
+async function mockProfileManagement(
+  page: Page,
+  options: { oracleCleanupWarning?: boolean } = {}
+) {
   let deleteRequests = 0;
   const deleteIfMatchHeaders: string[] = [];
   let profiles = [
@@ -193,7 +206,22 @@ async function mockProfileManagement(page: Page) {
       return;
     }
     profiles = profiles.filter((item) => item.id !== profileId);
-    await fulfillJson(route, target);
+    const oracleCleanup = options.oracleCleanupWarning
+      ? [
+          {
+            engine: "select_ai",
+            executed: false,
+            status: "skipped",
+            cleaned_at: "2026-07-11T00:00:00Z",
+            profile_name: target.select_ai_config.profile_name,
+            team_name: "",
+            warning: "cleanup の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
+            asset_names: { profile: target.select_ai_config.profile_name },
+            engine_meta: { runtime: "deterministic" },
+          },
+        ]
+      : [];
+    await fulfillJson(route, { profile: target, oracle_cleanup: oracleCleanup });
   });
   return {
     deleteRequests: () => deleteRequests,
@@ -343,18 +371,23 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
     editor.getByRole("heading", { name: "プロファイル編集: 標準プロファイル" })
   ).toBeVisible();
   await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeVisible();
-  const deleteButton = editor.getByRole("button", { name: "削除", exact: true });
-  await expect(deleteButton).toBeVisible();
+  const editorActions = editor.getByTestId("profile-editor-actions");
+  const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作", exact: true });
+  await expect(deleteMenuButton).toBeVisible();
+  await expect(editorActions.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
 
-  await deleteButton.click();
+  await deleteMenuButton.click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expect(dialog).toBeVisible();
+  await expectUnifiedConfirmDialogSurface(dialog);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(deleteButton).toBeFocused();
+  await expect(deleteMenuButton).toBeVisible();
   expect(api.deleteRequests()).toBe(0);
 
-  await deleteButton.click();
+  await deleteMenuButton.click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
     .getByRole("button", { name: "削除", exact: true })
@@ -381,10 +414,11 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await salesRow.getByRole("button", { name: /操作:/ }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
+  await expectUnifiedConfirmDialogSurface(dialog);
   await expect(dialog.getByText("プロファイルを削除しますか")).toBeVisible();
   await expect(
     dialog.getByText(
-      "「営業プロファイル」とそのすべての Ontology view を完全に削除します。Oracle DBMS_CLOUD_AI Profile と監査履歴は削除されません。"
+      "「営業プロファイル」とそのすべての Ontology view、Oracle DBMS_CLOUD_AI Profile、Select AI Agent 関連アセットを完全に削除します。監査履歴は削除されません。"
     )
   ).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
@@ -406,7 +440,8 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
-  await page.getByRole("button", { name: "削除", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
     .getByRole("button", { name: "削除", exact: true })
@@ -424,4 +459,22 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
     clientWidth: document.documentElement.clientWidth,
   }));
   expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
+});
+
+test("プロファイル削除時に Oracle 資産 cleanup の警告を表示する", async ({ page }) => {
+  await mockProfileManagement(page, { oracleCleanupWarning: true });
+  await page.goto("/profiles");
+
+  const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
+  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
+    .getByRole("button", { name: "削除", exact: true })
+    .click();
+
+  await expect(page.getByText("「営業プロファイル」を削除しました。")).toBeVisible();
+  await expect(
+    page.getByText("Oracle 資産の削除結果に警告があります。1 件を確認してください。")
+  ).toBeVisible();
 });

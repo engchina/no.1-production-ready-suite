@@ -78,16 +78,5 @@ class Principal:
     def has_permission(self, permission: str) -> bool:
         return self.is_system_admin or permission in self.permissions
 
-
-@dataclass(slots=True)
-class AuditRecord:
-    audit_id: int
-    actor_user_id: str | None
-    event_type: str
-    target_type: str
-    target_id: str
-    outcome: str
-    detail: dict[str, object]
-    request_id: str
-    client_ip: str
-    created_at: datetime
+    def has_any_permission(self, permissions: set[str] | frozenset[str]) -> bool:
+        return self.is_system_admin or bool(self.permissions.intersection(permissions))

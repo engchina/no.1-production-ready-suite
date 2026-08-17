@@ -13,14 +13,21 @@ test("ConfirmDialog is app-local and keeps the existing promise API", () => {
   assert.doesNotMatch(source, /export \{ useConfirm, type ConfirmOptions \} from "@engchina\/production-ready-ui"/u);
 });
 
-test("ConfirmDialog uses a neutral confirmation surface with tone accents only", () => {
-  assert.match(source, /border border-border border-l-4 bg-card shadow-xl/u);
-  assert.match(source, /border-l-danger/u);
-  assert.match(source, /bg-card px-5 pt-5/u);
-  assert.match(source, /border bg-background \$\{iconClass\}/u);
-  assert.match(source, /border-t bg-background px-5 py-4/u);
+test("ConfirmDialog keeps the compact alert layout with DB object delete dialog surface tokens", () => {
+  assert.match(source, /bg-black\/60/u);
+  assert.match(source, /fixed inset-0 z-50/u);
+  assert.match(source, /max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl/u);
+  assert.match(source, /flex items-start gap-3 bg-card px-5 pt-5/u);
+  assert.match(source, /rounded-full border bg-background \$\{iconClass\}/u);
+  assert.match(source, /mt-5 flex justify-end gap-2 border-t border-border bg-background px-5 py-4/u);
   assert.match(source, /tone === "danger" \? "danger" : "primary"/u);
+  assert.match(source, /const Icon = toneIcon\[tone\]/u);
+  assert.match(source, /<Button variant="secondary" size="sm" onClick=\{onCancel\}>/u);
+  assert.match(source, /<Button ref=\{confirmRef\} variant=\{confirmVariant\} size="sm" onClick=\{onConfirm\}>/u);
+  assert.doesNotMatch(source, /border-l-danger/u);
   assert.doesNotMatch(source, /bg-danger-bg/u);
+  assert.doesNotMatch(source, /z-\[1000\]/u);
+  assert.doesNotMatch(source, /command\.hint\.close/u);
 });
 
 test("ConfirmDialog keeps modal accessibility and escape behavior", () => {

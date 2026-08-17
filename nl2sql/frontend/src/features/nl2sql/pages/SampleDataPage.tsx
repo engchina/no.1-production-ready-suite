@@ -18,7 +18,8 @@ import {
   DbObjectPanelHeader,
   type DbObjectTab,
 } from "../components/DbObjectManagementShared";
-import type { SampleDataInfo, SampleDataMutationData } from "../types";
+import { useSchemaRefreshJob, useStartSchemaRefresh } from "../incrementalQueries";
+import type { SampleDataInfo, SampleDataMutationData, SchemaRefreshJob } from "../types";
 
 type SampleStep = "tables" | "views" | "data" | "all";
 type SampleAction = "import" | "delete";
@@ -32,6 +33,35 @@ function sampleStepLabel(step: SampleStep) {
 
 function joinSql(statements: string[]) {
   return statements.join(";\n\n");
+}
+
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
+  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
 }
 
 function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null }) {
@@ -89,10 +119,27 @@ export function SampleDataPage() {
   const [activeAction, setActiveAction] = useState<SampleAction>("import");
   const [sampleConfirmation, setSampleConfirmation] = useState("");
   const [sampleResult, setSampleResult] = useState<SampleDataMutationData | null>(null);
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
+  const completedSchemaRefreshJob = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
+  const startSchemaRefresh = useStartSchemaRefresh();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
+  const schemaRefreshing =
+    !schemaRefreshJobQuery.error &&
+    (startSchemaRefresh.isPending ||
+      schemaRefreshJob?.status === "pending" ||
+      schemaRefreshJob?.status === "running");
+  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
+    ? schemaRefreshJobQuery.error instanceof Error
+      ? schemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : schemaRefreshError;
 
   const expectedConfirmation = sampleInfo?.confirmation ?? "SQL_ASSIST_SAMPLE";
   const confirmationMatched = sampleConfirmation.trim() === expectedConfirmation;
@@ -140,6 +187,57 @@ export function SampleDataPage() {
     setSampleInfo(await apiGet<SampleDataInfo>("/api/nl2sql/sample-data"));
   };
 
+  const refreshSchema = async () => {
+    completedSchemaRefreshJob.current = "";
+    try {
+      const job = await startSchemaRefresh.mutateAsync();
+      setSchemaRefreshJobId(job.job_id);
+      toast.success(t("dataMgmt.schemaJob.accepted"));
+      if (!job.job_id && job.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+        await reloadSampleState();
+      }
+    } catch (err) {
+      setSchemaRefreshError(err instanceof Error ? err.message : t("dataMgmt.schemaJob.submitError"));
+      setSchemaRefreshNeedsFull(true);
+    }
+  };
+
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      toast.success(t("common.action.schemaRefreshed"));
+      void reloadSampleState();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
+    }
+  }, [schemaRefreshJobQuery.data]);
+
+  const trackSchemaRefreshResult = (result: SampleDataMutationData) => {
+    if (result.schema_refresh_job_id) {
+      completedSchemaRefreshJob.current = "";
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      setSchemaRefreshJobId(result.schema_refresh_job_id);
+      return;
+    }
+    if (result.schema_refresh_required) {
+      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
+      setSchemaRefreshNeedsFull(true);
+    }
+  };
+
   const importSampleData = async () => {
     setLoading("sample-import");
     setMessage("");
@@ -151,6 +249,7 @@ export function SampleDataPage() {
       });
       setSampleResult(result);
       if (result.executed) await reloadSampleState();
+      trackSchemaRefreshResult(result);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
@@ -169,6 +268,7 @@ export function SampleDataPage() {
       });
       setSampleResult(result);
       if (result.executed) await reloadSampleState();
+      trackSchemaRefreshResult(result);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
@@ -178,6 +278,12 @@ export function SampleDataPage() {
 
   const actionTitle = isDeleteAction ? t("dataTools.sample.delete") : t("dataTools.sample.import");
   const actionDescription = isDeleteAction ? t("dataTools.sample.deleteHint") : t("dataTools.sample.importHint");
+  const pageNoticeActionLoading = schemaRefreshNeedsFull
+    ? schemaRefreshing || startSchemaRefresh.isPending
+    : loading === "load";
+  const pageNoticeActionDisabled = schemaRefreshNeedsFull
+    ? schemaRefreshing || startSchemaRefresh.isPending
+    : loading === "load" || schemaRefreshing;
 
   return (
     <>
@@ -197,11 +303,32 @@ export function SampleDataPage() {
       />
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
-          notice={message ? { tone: "danger", message } : null}
+          notice={
+            message
+              ? { tone: "danger", message }
+              : visibleSchemaRefreshError
+                ? { tone: "danger", message: visibleSchemaRefreshError }
+                : null
+          }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={pageNoticeActionLoading}
+              disabled={pageNoticeActionDisabled}
+              onClick={
+                schemaRefreshNeedsFull
+                  ? () => void refreshSchema()
+                  : () => void load()
+              }
+            >
               <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("dataTools.sample.refresh")}</span>
+              <span>
+                {schemaRefreshNeedsFull
+                  ? t("common.action.schemaRefresh")
+                  : t("dataTools.sample.refresh")}
+              </span>
             </Button>
           }
         />
@@ -228,11 +355,15 @@ export function SampleDataPage() {
           splitId={`sample-data-${activeAction}`}
           preferredWidePane="right"
           processing={
-            loading === "load" ? (
+            loading === "load" || schemaRefreshing ? (
               <ProcessingIndicator
                 active
-                label={t("common.processing.refreshing")}
-                operationKey="sample-data-refresh"
+                label={
+                  schemaRefreshing
+                    ? schemaRefreshProcessingLabel(schemaRefreshJob, t("common.processing.schemaRefreshing"))
+                    : t("common.processing.refreshing")
+                }
+                operationKey={schemaRefreshing ? schemaRefreshJobId || "sample-data-schema-refresh" : "sample-data-refresh"}
                 placement="workspace"
                 className="rounded-md border border-border bg-background px-3 py-2"
                 testId="sample-data-workspace-processing"

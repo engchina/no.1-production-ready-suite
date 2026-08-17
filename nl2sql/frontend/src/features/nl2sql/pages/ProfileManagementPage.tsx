@@ -19,14 +19,16 @@ import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
-import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
-import { PageHeader } from "@/components/PageHeader";
+import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { FieldLabel } from "@/components/ui/required-field";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useSchemaOwners } from "@/lib/queries";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { ExecutionConfirmationField } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
@@ -48,28 +50,41 @@ import {
   useStartSchemaRefresh,
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
+import { isUserVisibleObjectName } from "../objectVisibility";
+import {
+  sortProfileSummariesForDisplay,
+  type ProfileListSortKey,
+  type ProfileListSortState,
+} from "../profileListState";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import type {
   AssetRefreshData,
   Nl2SqlProfile,
+  ProfileDeleteData,
   ProfileSummary,
   ProfileSelectAiConfig,
   ProfileSyncJobData,
   ProfileUpsertPayload,
   SchemaObjectSummary,
   SchemaTable,
-  SelectAiDbProfileMutationData,
   SelectAiDbProfileRefreshJobData,
   SelectAiDbProfilesData,
 } from "../types";
 
 type ActiveView = "list" | "editor";
-type SortKey = "name" | "tables" | "views";
-type SortDirection = "asc" | "desc";
+type ProfileNameError = "required" | "format" | null;
+type ProfileRequiredField = "category" | "region" | "model" | "maxTokens" | "embeddingModel";
+type ProfileRequiredErrors = Partial<Record<ProfileRequiredField, true>>;
+type DbProfileRefreshSignal = {
+  profile_list_refresh_job_id?: string | null;
+  profile_list_refresh_required?: boolean | null;
+  profile_list_refresh_reason_code?: string | null;
+};
 
 const SELECT_AI_MAX_TOKENS_MIN = 4096;
 const SELECT_AI_MAX_TOKENS_MAX = 32000;
+const PROFILE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/u;
 
 function filterProfileObjects(objects: SchemaTable[], query: string) {
   const normalized = query.trim().toLowerCase();
@@ -85,18 +100,11 @@ function filterProfileObjects(objects: SchemaTable[], query: string) {
   );
 }
 
-interface SortState {
-  key: SortKey;
-  direction: SortDirection;
-}
-
 interface ProfileFormState {
   name: string;
   category: string;
   allowedTables: string[];
   allowedViews: string[];
-  glossaryText: string;
-  fewShotText: string;
   selectAiConfig: ProfileSelectAiConfig;
 }
 
@@ -119,8 +127,6 @@ const EMPTY_FORM: ProfileFormState = {
   category: "",
   allowedTables: [],
   allowedViews: [],
-  glossaryText: "",
-  fewShotText: "",
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
 };
 
@@ -137,46 +143,6 @@ const inputClass =
   "min-h-11 min-w-0 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
 const textareaClass =
   "rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
-
-function glossaryToText(glossary: Record<string, string>) {
-  return Object.entries(glossary)
-    .map(([term, replacement]) => `${term}=${replacement}`)
-    .join("\n");
-}
-
-function textToGlossary(text: string) {
-  return Object.fromEntries(
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const [term, ...rest] = line.split("=");
-        return [term.trim(), rest.join("=").trim()];
-      })
-      .filter(([term, replacement]) => term && replacement)
-  );
-}
-
-function lines(text: string) {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function fewShotToText(examples: Array<Record<string, string>>) {
-  return examples.map((example) => `${example.question ?? ""} => ${example.sql ?? ""}`).join("\n");
-}
-
-function textToFewShot(text: string) {
-  return lines(text)
-    .map((line) => {
-      const [question, ...rest] = line.split("=>");
-      return { question: question.trim(), sql: rest.join("=>").trim() };
-    })
-    .filter((example) => example.question && example.sql);
-}
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -202,6 +168,30 @@ function parseMaxTokensInput(value: string) {
   return value.trim() && Number.isFinite(numeric) ? numeric : SELECT_AI_MAX_TOKENS_MAX;
 }
 
+function normalizeProfileName(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function profileNameError(value: string): ProfileNameError {
+  const normalized = normalizeProfileName(value);
+  if (!normalized) return "required";
+  return PROFILE_NAME_PATTERN.test(normalized) ? null : "format";
+}
+
+function profileRequiredErrors(form: ProfileFormState): ProfileRequiredErrors {
+  const errors: ProfileRequiredErrors = {};
+  if (!form.category.trim()) errors.category = true;
+  if (!form.selectAiConfig.region.trim()) errors.region = true;
+  if (!form.selectAiConfig.model.trim()) errors.model = true;
+  if (!Number.isFinite(Number(form.selectAiConfig.max_tokens))) errors.maxTokens = true;
+  if (!form.selectAiConfig.embedding_model.trim()) errors.embeddingModel = true;
+  return errors;
+}
+
+function hasProfileRequiredErrors(errors: ProfileRequiredErrors) {
+  return Object.keys(errors).length > 0;
+}
+
 function schemaObjectQueryTotal(
   pages: Array<{ total: number | null }> | undefined,
   loadedCount: number
@@ -210,11 +200,21 @@ function schemaObjectQueryTotal(
   return typeof total === "number" ? Math.max(total, loadedCount) : loadedCount;
 }
 
+function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
 function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
   const selectAiConfig = { ...DEFAULT_SELECT_AI_CONFIG, ...(profile.select_ai_config ?? {}) };
   return {
     ...profile,
-    allowed_views: profile.allowed_views ?? [],
+    allowed_tables: (profile.allowed_tables ?? []).filter(isUserVisibleObjectName),
+    allowed_views: (profile.allowed_views ?? []).filter(isUserVisibleObjectName),
     select_ai_config: {
       ...selectAiConfig,
       max_tokens: normalizeSelectAiMaxTokens(selectAiConfig.max_tokens),
@@ -236,25 +236,22 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     category: normalized.category ?? "",
     allowedTables: normalized.allowed_tables,
     allowedViews: normalized.allowed_views,
-    glossaryText: glossaryToText(normalized.glossary),
-    fewShotText: fewShotToText(normalized.few_shot_examples),
     selectAiConfig,
   };
 }
 
 function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
+  const profileName = normalizeProfileName(form.name);
   return {
-    name: form.name.trim(),
+    name: profileName,
     category: form.category.trim(),
     allowed_tables: form.allowedTables,
     allowed_views: form.allowedViews,
-    glossary: textToGlossary(form.glossaryText),
     sql_rules: [],
     safety_policy: "select_only",
-    few_shot_examples: textToFewShot(form.fewShotText),
     select_ai_config: {
       ...form.selectAiConfig,
-      profile_name: form.selectAiConfig.profile_name.trim(),
+      profile_name: profileName,
       region: form.selectAiConfig.region.trim(),
       model: form.selectAiConfig.model.trim(),
       embedding_model: form.selectAiConfig.embedding_model.trim() || "cohere.embed-v4.0",
@@ -263,12 +260,6 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
       additional_instructions: form.selectAiConfig.additional_instructions.trim(),
     },
   };
-}
-
-function profileSortValue(profile: ProfileSummary, key: SortKey) {
-  if (key === "tables") return profile.allowed_table_count;
-  if (key === "views") return profile.allowed_view_count;
-  return profile.name.toLowerCase();
 }
 
 function schemaSummaryToTable(object: SchemaObjectSummary): SchemaTable {
@@ -292,9 +283,9 @@ function SortButton({
   onToggle,
 }: {
   label: string;
-  sortKey: SortKey;
-  sort: SortState;
-  onToggle: (key: SortKey) => void;
+  sortKey: ProfileListSortKey;
+  sort: ProfileListSortState;
+  onToggle: (key: ProfileListSortKey) => void;
 }) {
   const active = sort.key === sortKey;
   return (
@@ -322,6 +313,7 @@ function updateSelectAiConfig(
 
 function ProfileList({
   profiles,
+  totalCount,
   selectedProfileId,
   loading,
   search,
@@ -333,21 +325,26 @@ function ProfileList({
   deletingId,
   hasNextPage,
   loadingNextPage,
+  loadMoreError,
   onLoadMore,
+  onRetryLoadMore,
 }: {
   profiles: ProfileSummary[];
+  totalCount: number;
   selectedProfileId: string;
   loading: boolean;
   search: string;
-  sort: SortState;
+  sort: ProfileListSortState;
   onSearchChange: (value: string) => void;
-  onSortChange: (key: SortKey) => void;
+  onSortChange: (key: ProfileListSortKey) => void;
   onSelect: (profile: ProfileSummary) => void;
   onDelete: (profile: ProfileSummary) => void;
   deletingId: string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
+  loadMoreError: string;
   onLoadMore: () => void;
+  onRetryLoadMore: () => void;
 }) {
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="profile-list-heading">
@@ -357,7 +354,7 @@ function ProfileList({
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
         action={
-          <StatusBadge variant="info" label={t("profiles.objects.count", { count: profiles.length })} />
+          <StatusBadge variant="info" label={t("profiles.objects.count", { count: totalCount })} />
         }
       />
       <div className="grid gap-2 rounded-md border border-border bg-background p-3">
@@ -457,20 +454,20 @@ function ProfileList({
               </tbody>
             </table>
           </div>
-          {hasNextPage && (
-            <div className="flex justify-center border-t border-border p-3">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={loadingNextPage}
-                onClick={onLoadMore}
-              >
-                {t("profiles.action.loadMore")}
-              </Button>
-            </div>
-          )}
         </div>
+      )}
+      {!loading && profiles.length > 0 && (
+        <DbObjectSelectorFooter
+          visibleCount={profiles.length}
+          totalCount={totalCount}
+          hasNextPage={hasNextPage}
+          loadingNextPage={loadingNextPage}
+          loadMoreError={loadMoreError}
+          loadMoreLabel={t("profiles.action.loadMore")}
+          dataTestId="profile-management-footer"
+          onLoadMore={onLoadMore}
+          onRetryLoadMore={onRetryLoadMore}
+        />
       )}
     </section>
   );
@@ -479,62 +476,150 @@ function ProfileList({
 function SelectAiConfigFields({
   form,
   setForm,
+  requiredErrors,
+  onRequiredErrorClear,
 }: {
   form: ProfileFormState;
   setForm: (updater: (current: ProfileFormState) => ProfileFormState) => void;
+  requiredErrors: ProfileRequiredErrors;
+  onRequiredErrorClear: (field: ProfileRequiredField) => void;
 }) {
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-background p-3" aria-label={t("profiles.editor.selectAi")}>
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_10rem]">
-        <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-          <span>{t("profiles.field.profileName")}</span>
-          <input
-            value={form.selectAiConfig.profile_name}
-            placeholder={t("profiles.placeholder.profileName")}
-            onChange={(event) => updateSelectAiConfig(setForm, { profile_name: event.currentTarget.value })}
-            className={inputClass}
+    <section
+      id="profile-select-ai"
+      className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-ring/40"
+      aria-label={t("profiles.editor.selectAi")}
+      tabIndex={-1}
+    >
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(8rem,0.9fr)_minmax(12rem,1.2fr)_minmax(8rem,0.8fr)_minmax(12rem,1.2fr)]">
+        <div className="grid min-w-0 content-start gap-1">
+          <FieldLabel
+            htmlFor="profile-select-ai-region"
+            label={t("profiles.field.region")}
+            required
           />
-        </label>
-        <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-          <span>{t("profiles.field.region")}</span>
           <input
+            id="profile-select-ai-region"
             value={form.selectAiConfig.region}
             placeholder="ap-osaka-1"
-            onChange={(event) => updateSelectAiConfig(setForm, { region: event.currentTarget.value })}
-            className={inputClass}
+            required
+            aria-required="true"
+            aria-invalid={Boolean(requiredErrors.region)}
+            aria-describedby={requiredErrors.region ? "profile-select-ai-region-error" : undefined}
+            onChange={(event) => {
+              updateSelectAiConfig(setForm, { region: event.currentTarget.value });
+              if (requiredErrors.region) onRequiredErrorClear("region");
+            }}
+            className={`${inputClass} ${
+              requiredErrors.region ? "border-danger focus:border-danger focus:ring-danger/40" : ""
+            }`}
           />
-        </label>
-        <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-          <span>{t("profiles.field.maxTokens")}</span>
+          {requiredErrors.region && (
+            <RequiredFieldError id="profile-select-ai-region-error">
+              {t("profiles.error.regionRequired")}
+            </RequiredFieldError>
+          )}
+        </div>
+        <div className="grid min-w-0 content-start gap-1">
+          <FieldLabel
+            htmlFor="profile-select-ai-model"
+            label={t("profiles.field.model")}
+            required
+          />
           <input
+            id="profile-select-ai-model"
+            value={form.selectAiConfig.model}
+            required
+            aria-required="true"
+            aria-invalid={Boolean(requiredErrors.model)}
+            aria-describedby={requiredErrors.model ? "profile-select-ai-model-error" : undefined}
+            onChange={(event) => {
+              updateSelectAiConfig(setForm, { model: event.currentTarget.value });
+              if (requiredErrors.model) onRequiredErrorClear("model");
+            }}
+            className={`${inputClass} ${
+              requiredErrors.model ? "border-danger focus:border-danger focus:ring-danger/40" : ""
+            }`}
+          />
+          {requiredErrors.model && (
+            <RequiredFieldError id="profile-select-ai-model-error">
+              {t("profiles.error.modelRequired")}
+            </RequiredFieldError>
+          )}
+        </div>
+        <div className="grid min-w-0 content-start gap-1">
+          <FieldLabel
+            htmlFor="profile-select-ai-max-tokens"
+            label={t("profiles.field.maxTokens")}
+            required
+          />
+          <input
+            id="profile-select-ai-max-tokens"
             type="number"
             min={SELECT_AI_MAX_TOKENS_MIN}
             max={SELECT_AI_MAX_TOKENS_MAX}
             step={1}
             value={form.selectAiConfig.max_tokens}
-            onChange={(event) => updateSelectAiConfig(setForm, { max_tokens: parseMaxTokensInput(event.currentTarget.value) })}
-            onBlur={(event) => updateSelectAiConfig(setForm, { max_tokens: normalizeSelectAiMaxTokens(event.currentTarget.value) })}
-            className={inputClass}
+            required
+            aria-required="true"
+            aria-invalid={Boolean(requiredErrors.maxTokens)}
+            aria-describedby={
+              requiredErrors.maxTokens ? "profile-select-ai-max-tokens-error" : undefined
+            }
+            onChange={(event) => {
+              updateSelectAiConfig(setForm, {
+                max_tokens: parseMaxTokensInput(event.currentTarget.value),
+              });
+              if (requiredErrors.maxTokens) onRequiredErrorClear("maxTokens");
+            }}
+            onBlur={(event) =>
+              updateSelectAiConfig(setForm, {
+                max_tokens: normalizeSelectAiMaxTokens(event.currentTarget.value),
+              })
+            }
+            className={`${inputClass} ${
+              requiredErrors.maxTokens
+                ? "border-danger focus:border-danger focus:ring-danger/40"
+                : ""
+            }`}
           />
-        </label>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="grid gap-1 text-sm font-medium text-foreground">
-          <span>{t("profiles.field.model")}</span>
-          <input
-            value={form.selectAiConfig.model}
-            onChange={(event) => updateSelectAiConfig(setForm, { model: event.currentTarget.value })}
-            className={inputClass}
+          {requiredErrors.maxTokens && (
+            <RequiredFieldError id="profile-select-ai-max-tokens-error">
+              {t("profiles.error.maxTokensRequired")}
+            </RequiredFieldError>
+          )}
+        </div>
+        <div className="grid min-w-0 content-start gap-1">
+          <FieldLabel
+            htmlFor="profile-select-ai-embedding-model"
+            label={t("profiles.field.embeddingModel")}
+            required
           />
-        </label>
-        <label className="grid gap-1 text-sm font-medium text-foreground">
-          <span>{t("profiles.field.embeddingModel")}</span>
           <input
+            id="profile-select-ai-embedding-model"
             value={form.selectAiConfig.embedding_model}
-            onChange={(event) => updateSelectAiConfig(setForm, { embedding_model: event.currentTarget.value })}
-            className={inputClass}
+            required
+            aria-required="true"
+            aria-invalid={Boolean(requiredErrors.embeddingModel)}
+            aria-describedby={
+              requiredErrors.embeddingModel ? "profile-select-ai-embedding-model-error" : undefined
+            }
+            onChange={(event) => {
+              updateSelectAiConfig(setForm, { embedding_model: event.currentTarget.value });
+              if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
+            }}
+            className={`${inputClass} ${
+              requiredErrors.embeddingModel
+                ? "border-danger focus:border-danger focus:ring-danger/40"
+                : ""
+            }`}
           />
-        </label>
+          {requiredErrors.embeddingModel && (
+            <RequiredFieldError id="profile-select-ai-embedding-model-error">
+              {t("profiles.error.embeddingModelRequired")}
+            </RequiredFieldError>
+          )}
+        </div>
       </div>
       <div className="grid gap-2 md:grid-cols-4">
         {([
@@ -596,6 +681,15 @@ function SelectAiConfigFields({
         </div>
       </div>
     </section>
+  );
+}
+
+function RequiredFieldError({ id, children }: { id: string; children: string }) {
+  return (
+    <p id={id} role="alert" className="flex items-center gap-1.5 text-xs font-normal text-danger">
+      <AlertCircle size={14} aria-hidden="true" />
+      <span>{children}</span>
+    </p>
   );
 }
 
@@ -690,7 +784,9 @@ function SchemaGroupedSelectionPanel({
   loading,
   hasNextPage,
   loadingNextPage,
+  loadMoreError,
   onLoadMore,
+  onRetryLoadMore,
   ownerTotals,
   onToggleSchema,
 }: {
@@ -705,7 +801,9 @@ function SchemaGroupedSelectionPanel({
   loading: boolean;
   hasNextPage: boolean;
   loadingNextPage: boolean;
+  loadMoreError: string;
   onLoadMore: () => void;
+  onRetryLoadMore: () => void;
   ownerTotals: Record<string, number>;
   onToggleSchema: (owner: string, select: boolean) => Promise<void>;
 }) {
@@ -832,9 +930,11 @@ function SchemaGroupedSelectionPanel({
         selectedCount={selectedItems.length}
         hasNextPage={hasNextPage}
         loadingNextPage={loadingNextPage}
+        loadMoreError={loadMoreError}
         loadMoreLabel={t("profiles.action.loadMore")}
         dataTestId={`${dataTestId}-footer`}
         onLoadMore={onLoadMore}
+        onRetryLoadMore={onRetryLoadMore}
       />
     </section>
   );
@@ -855,9 +955,12 @@ function ProfileEditor({
   viewHasNextPage,
   tableLoadingNextPage,
   viewLoadingNextPage,
+  tableLoadMoreError,
+  viewLoadMoreError,
   objectFilter,
   saving,
   nameError,
+  requiredErrors,
   oracleConfirmation,
   rebuildAgentAssets,
   assetRefreshResults,
@@ -868,12 +971,15 @@ function ProfileEditor({
   onObjectFilterChange,
   onFormChange,
   onNameErrorClear,
+  onRequiredErrorClear,
   onToggleTable,
   onToggleView,
   onToggleTableSchema,
   onToggleViewSchema,
   onLoadMoreTables,
   onLoadMoreViews,
+  onRetryLoadMoreTables,
+  onRetryLoadMoreViews,
   onSave,
   onDelete,
   onOracleConfirmationChange,
@@ -894,9 +1000,12 @@ function ProfileEditor({
   viewHasNextPage: boolean;
   tableLoadingNextPage: boolean;
   viewLoadingNextPage: boolean;
+  tableLoadMoreError: string;
+  viewLoadMoreError: string;
   objectFilter: string;
   saving: boolean;
-  nameError: boolean;
+  nameError: ProfileNameError;
+  requiredErrors: ProfileRequiredErrors;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
   assetRefreshResults: AssetRefreshData[];
@@ -907,12 +1016,15 @@ function ProfileEditor({
   onObjectFilterChange: (value: string) => void;
   onFormChange: (updater: (current: ProfileFormState) => ProfileFormState) => void;
   onNameErrorClear: () => void;
+  onRequiredErrorClear: (field: ProfileRequiredField) => void;
   onToggleTable: (name: string) => void;
   onToggleView: (name: string) => void;
   onToggleTableSchema: (owner: string, select: boolean) => Promise<void>;
   onToggleViewSchema: (owner: string, select: boolean) => Promise<void>;
   onLoadMoreTables: () => void;
   onLoadMoreViews: () => void;
+  onRetryLoadMoreTables: () => void;
+  onRetryLoadMoreViews: () => void;
   onSave: () => void;
   onDelete: () => void;
   onOracleConfirmationChange: (value: string) => void;
@@ -920,6 +1032,10 @@ function ProfileEditor({
   onRetryOracleSync: () => void;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
+  const nameDescriptionId = nameError
+    ? "profile-name-helper profile-name-error"
+    : "profile-name-helper";
+  const categoryDescriptionId = requiredErrors.category ? "profile-category-error" : undefined;
   return (
     <section className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
       <DbObjectPanelHeader
@@ -933,52 +1049,101 @@ function ProfileEditor({
         description={t("profiles.editor.hint")}
         action={
           selectedProfile ? (
-            <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
-              <Trash2 size={15} aria-hidden="true" />
-              <span>{t("profiles.action.delete")}</span>
-            </Button>
+            <ObjectActionBar
+              ariaLabel={t("profiles.editor.actions")}
+              testId="profile-editor-actions"
+              actions={[
+                {
+                  id: "delete",
+                  label: t("profiles.action.delete"),
+                  icon: Trash2,
+                  tone: "danger",
+                  loading: deleting,
+                  onSelect: onDelete,
+                },
+              ]}
+            />
           ) : undefined
         }
       />
 
       <section className="grid gap-3 rounded-md border border-border bg-background p-3">
         <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.basic")}</h3>
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem]">
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("profiles.field.name")}</span>
-            <input
-              value={form.name}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                onFormChange((current) => ({ ...current, name: value }));
-                if (nameError) onNameErrorClear();
-              }}
-              aria-invalid={nameError}
-              aria-describedby={nameError ? "profile-name-error" : undefined}
-              className={inputClass}
-            />
-            {nameError && (
-              <p
-                id="profile-name-error"
-                role="alert"
-                className="flex items-center gap-1.5 text-xs font-normal text-danger"
-              >
-                <AlertCircle size={14} aria-hidden="true" />
-                <span>{t("profiles.error.nameRequired")}</span>
-              </p>
-            )}
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("profiles.field.category")}</span>
-            <input
-              value={form.category}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                onFormChange((current) => ({ ...current, category: value }));
-              }}
-              className={inputClass}
-            />
-          </label>
+        <div className="grid gap-x-3 gap-y-1.5 md:grid-cols-2">
+          <FieldLabel
+            htmlFor="profile-name"
+            label={t("profiles.field.name")}
+            required
+            className="order-1 md:order-none"
+          />
+          <FieldLabel
+            htmlFor="profile-category"
+            label={t("profiles.field.category")}
+            required
+            className="order-5 md:order-none"
+          />
+          <input
+            id="profile-name"
+            value={form.name}
+            required
+            aria-required="true"
+            onChange={(event) => {
+              const value = event.currentTarget.value.toUpperCase();
+              onFormChange((current) => ({ ...current, name: value }));
+              if (nameError) onNameErrorClear();
+            }}
+            onBlur={(event) => {
+              const value = normalizeProfileName(event.currentTarget.value);
+              onFormChange((current) => ({ ...current, name: value }));
+            }}
+            aria-invalid={Boolean(nameError)}
+            aria-describedby={nameDescriptionId}
+            className={`${inputClass} order-2 md:order-none ${
+              nameError ? "border-danger focus:border-danger focus:ring-danger/40" : ""
+            }`}
+          />
+          <input
+            id="profile-category"
+            value={form.category}
+            required
+            aria-required="true"
+            aria-invalid={Boolean(requiredErrors.category)}
+            aria-describedby={categoryDescriptionId}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              onFormChange((current) => ({ ...current, category: value }));
+              if (requiredErrors.category) onRequiredErrorClear("category");
+            }}
+            className={`${inputClass} order-6 md:order-none ${
+              requiredErrors.category
+                ? "border-danger focus:border-danger focus:ring-danger/40"
+                : ""
+            }`}
+          />
+          <p
+            id="profile-name-helper"
+            className="order-3 text-xs font-normal leading-5 text-muted md:order-none md:col-span-2 md:whitespace-nowrap"
+          >
+            {t("profiles.field.nameHint")}
+          </p>
+          {nameError && (
+            <div className="order-4 md:order-none md:col-span-2">
+              <RequiredFieldError id="profile-name-error">
+                {t(
+                  nameError === "required"
+                    ? "profiles.error.nameRequired"
+                    : "profiles.error.nameFormat"
+                )}
+              </RequiredFieldError>
+            </div>
+          )}
+          {requiredErrors.category && (
+            <div className="order-7 md:order-none md:col-start-2">
+              <RequiredFieldError id="profile-category-error">
+                {t("profiles.error.categoryRequired")}
+              </RequiredFieldError>
+            </div>
+          )}
         </div>
       </section>
 
@@ -1012,7 +1177,9 @@ function ProfileEditor({
             loading={tableObjectsLoading}
             hasNextPage={tableHasNextPage}
             loadingNextPage={tableLoadingNextPage}
+            loadMoreError={tableLoadMoreError}
             onLoadMore={onLoadMoreTables}
+            onRetryLoadMore={onRetryLoadMoreTables}
             ownerTotals={tableOwnerTotals}
             onToggleSchema={onToggleTableSchema}
           />
@@ -1028,50 +1195,21 @@ function ProfileEditor({
             loading={viewObjectsLoading}
             hasNextPage={viewHasNextPage}
             loadingNextPage={viewLoadingNextPage}
+            loadMoreError={viewLoadMoreError}
             onLoadMore={onLoadMoreViews}
+            onRetryLoadMore={onRetryLoadMoreViews}
             ownerTotals={viewOwnerTotals}
             onToggleSchema={onToggleViewSchema}
           />
         </div>
       </section>
 
-      <section
-        id="profile-learning"
-        className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-ring/40"
-        tabIndex={-1}
-      >
-        <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.learning")}</h3>
-        <div className="grid gap-3 lg:grid-cols-2">
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("profiles.field.glossary")}</span>
-            <textarea
-              value={form.glossaryText}
-              rows={6}
-              placeholder={t("profiles.placeholder.glossary")}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                onFormChange((current) => ({ ...current, glossaryText: value }));
-              }}
-              className={`${textareaClass} font-mono`}
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("profiles.field.fewShot")}</span>
-            <textarea
-              value={form.fewShotText}
-              rows={6}
-              placeholder={t("profiles.placeholder.fewShot")}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                onFormChange((current) => ({ ...current, fewShotText: value }));
-              }}
-              className={`${textareaClass} font-mono`}
-            />
-          </label>
-        </div>
-      </section>
-
-      <SelectAiConfigFields form={form} setForm={onFormChange} />
+      <SelectAiConfigFields
+        form={form}
+        setForm={onFormChange}
+        requiredErrors={requiredErrors}
+        onRequiredErrorClear={onRequiredErrorClear}
+      />
 
       <section className="grid gap-3 rounded-md border border-border bg-card p-3" aria-labelledby="profile-engine-assets-heading">
         <div>
@@ -1089,21 +1227,7 @@ function ProfileEditor({
           />
           <span>{t("profiles.oracle.assets.refreshAgent")}</span>
         </label>
-        {assetRefreshResults.length > 0 && (
-          <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
-            {assetRefreshResults.map((result) => (
-              <AssetStatusPanel key={result.engine} result={result} />
-            ))}
-          </div>
-        )}
       </section>
-
-      <OracleSyncStatusPanel
-        job={oracleSyncJob}
-        submissionError={oracleSyncSubmissionError}
-        retrying={retryingOracleSync}
-        onRetry={onRetryOracleSync}
-      />
 
       <ExecutionConfirmationField
         value={oracleConfirmation}
@@ -1126,13 +1250,59 @@ function ProfileEditor({
           </Button>
         }
       />
+
+      <ProfileSaveResultRegion
+        assetRefreshResults={assetRefreshResults}
+        oracleSyncJob={oracleSyncJob}
+        oracleSyncSubmissionError={oracleSyncSubmissionError}
+        retryingOracleSync={retryingOracleSync}
+        onRetryOracleSync={onRetryOracleSync}
+      />
+    </section>
+  );
+}
+
+function ProfileSaveResultRegion({
+  assetRefreshResults,
+  oracleSyncJob,
+  oracleSyncSubmissionError,
+  retryingOracleSync,
+  onRetryOracleSync,
+}: {
+  assetRefreshResults: AssetRefreshData[];
+  oracleSyncJob: ProfileSyncJobData | null;
+  oracleSyncSubmissionError: string;
+  retryingOracleSync: boolean;
+  onRetryOracleSync: () => void;
+}) {
+  if (!oracleSyncJob && !oracleSyncSubmissionError && assetRefreshResults.length === 0) {
+    return null;
+  }
+  return (
+    <section className="grid gap-3" data-testid="profile-save-result-region">
+      <OracleSyncStatusPanel
+        job={oracleSyncJob}
+        submissionError={oracleSyncSubmissionError}
+        retrying={retryingOracleSync}
+        onRetry={onRetryOracleSync}
+      />
+      {assetRefreshResults.length > 0 && (
+        <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
+          {assetRefreshResults.map((result) => (
+            <AssetStatusPanel key={result.engine} result={result} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
 function AssetStatusPanel({ result }: { result: AssetRefreshData }) {
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-background p-3">
+    <section
+      className="grid gap-3 rounded-md border border-border bg-background p-3"
+      data-testid={`profile-asset-status-${result.engine}`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
           <Bot size={17} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
@@ -1262,7 +1432,10 @@ export function ProfileManagementPage() {
   const [profileSearch, setProfileSearch] = useState("");
   const [objectFilter, setObjectFilter] = useState("");
   const [refreshJobId, setRefreshJobId] = useState("");
-  const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
+  const [profileSort, setProfileSort] = useState<ProfileListSortState>({
+    key: "name",
+    direction: "asc",
+  });
   const [oracleConfirmation, setOracleConfirmation] = useState("");
   const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
   const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
@@ -1275,7 +1448,8 @@ export function ProfileManagementPage() {
   const [loading, setLoading] = useState("");
   // message は初回ロード失敗の常設 Banner 専用。保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
-  const [nameError, setNameError] = useState(false);
+  const [nameError, setNameError] = useState<ProfileNameError>(null);
+  const [requiredErrors, setRequiredErrors] = useState<ProfileRequiredErrors>({});
 
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
@@ -1343,6 +1517,19 @@ export function ProfileManagementPage() {
   );
   const tableObjectTotal = schemaObjectQueryTotal(tableObjectsQuery.data?.pages, tableObjects.length);
   const viewObjectTotal = schemaObjectQueryTotal(viewObjectsQuery.data?.pages, viewObjects.length);
+  const profileTotal = schemaObjectQueryTotal(profilesQuery.data?.pages, profiles.length);
+  const profileLoadMoreError =
+    profilesQuery.isFetchNextPageError && profilesQuery.error
+      ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
+      : "";
+  const tableLoadMoreError =
+    tableObjectsQuery.isFetchNextPageError && tableObjectsQuery.error
+      ? listLoadMoreErrorMessage(tableObjectsQuery.error, "profiles.error.load")
+      : "";
+  const viewLoadMoreError =
+    viewObjectsQuery.isFetchNextPageError && viewObjectsQuery.error
+      ? listLoadMoreErrorMessage(viewObjectsQuery.error, "profiles.error.load")
+      : "";
   const tableOwnerTotals = useMemo(
     () =>
       Object.fromEntries(
@@ -1364,13 +1551,7 @@ export function ProfileManagementPage() {
     [schemaOwnersQuery.data]
   );
   const filteredProfiles = useMemo(() => {
-    return profiles
-      .sort((left, right) => {
-        const a = profileSortValue(left, profileSort.key);
-        const b = profileSortValue(right, profileSort.key);
-        const result = a < b ? -1 : a > b ? 1 : 0;
-        return profileSort.direction === "asc" ? result : -result;
-      });
+    return sortProfileSummariesForDisplay(profiles, profileSort);
   }, [profileSort, profiles]);
 
   const selectProfile = (profile: ProfileSummary) => {
@@ -1428,25 +1609,26 @@ export function ProfileManagementPage() {
     }
   };
 
-  const trackDbProfileRefreshSignal = useCallback((
-    result: SelectAiDbProfileMutationData | null | undefined
-  ) => {
-    const jobId = result?.profile_list_refresh_job_id ?? "";
-    if (jobId) {
-      setDbProfileRefreshError("");
-      setDbProfileRefreshNeedsFull(false);
-      setDbProfileRefreshJobId(jobId);
-      return true;
-    }
-    if (result?.profile_list_refresh_required) {
-      setDbProfileRefreshError(
-        dbProfileRefreshRequiredMessage(result.profile_list_refresh_reason_code ?? "")
-      );
-      setDbProfileRefreshNeedsFull(true);
-      return true;
-    }
-    return false;
-  }, []);
+  const trackDbProfileRefreshSignal = useCallback(
+    (result: DbProfileRefreshSignal | null | undefined) => {
+      const jobId = result?.profile_list_refresh_job_id ?? "";
+      if (jobId) {
+        setDbProfileRefreshError("");
+        setDbProfileRefreshNeedsFull(false);
+        setDbProfileRefreshJobId(jobId);
+        return true;
+      }
+      if (result?.profile_list_refresh_required) {
+        setDbProfileRefreshError(
+          dbProfileRefreshRequiredMessage(result.profile_list_refresh_reason_code ?? "")
+        );
+        setDbProfileRefreshNeedsFull(true);
+        return true;
+      }
+      return false;
+    },
+    []
+  );
 
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
@@ -1501,6 +1683,8 @@ export function ProfileManagementPage() {
     setForm(selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm());
     setOracleConfirmation("");
     setAssetRefreshResults([]);
+    setNameError(null);
+    setRequiredErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTargetKey]);
 
@@ -1535,21 +1719,47 @@ export function ProfileManagementPage() {
 
   useEffect(() => {
     const error =
-      profilesQuery.error ??
-      tableObjectsQuery.error ??
-      viewObjectsQuery.error ??
-      schemaHeadQuery.error;
+      (profilesQuery.error && !profilesQuery.data ? profilesQuery.error : null) ??
+      (tableObjectsQuery.error && !tableObjectsQuery.data ? tableObjectsQuery.error : null) ??
+      (viewObjectsQuery.error && !viewObjectsQuery.data ? viewObjectsQuery.error : null) ??
+      (schemaHeadQuery.error && !schemaHeadQuery.data ? schemaHeadQuery.error : null);
     setMessage(error instanceof Error ? error.message : "");
   }, [
+    profilesQuery.data,
     profilesQuery.error,
+    schemaHeadQuery.data,
     schemaHeadQuery.error,
+    tableObjectsQuery.data,
     tableObjectsQuery.error,
+    viewObjectsQuery.data,
     viewObjectsQuery.error,
   ]);
 
-  // legacy hash 導線: #profile-learning を ?profile= 付き URL へ正規化する
+  // legacy hash 導線: 旧 #profile-learning は Select AI 設定へ正規化する
   useEffect(() => {
-    if (location.hash !== "#profile-learning" || profileParam || !profilesLoaded) return;
+    if (location.hash !== "#profile-learning") return;
+    if (!profileParam && !profilesLoaded) return;
+    const target = profiles.find((profile) => !profile.archived)?.id ?? "new";
+    navigate(
+      {
+        pathname: location.pathname,
+        search: profileParam ? location.search : `?profile=${target}`,
+        hash: "#profile-select-ai",
+      },
+      { replace: true }
+    );
+  }, [
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    profileParam,
+    profiles,
+    profilesLoaded,
+  ]);
+
+  useEffect(() => {
+    if (location.hash !== "#profile-select-ai" || profileParam || !profilesLoaded) return;
     const target = profiles.find((profile) => !profile.archived)?.id ?? "new";
     navigate(
       { pathname: location.pathname, search: `?profile=${target}`, hash: location.hash },
@@ -1558,9 +1768,9 @@ export function ProfileManagementPage() {
   }, [location.hash, location.pathname, navigate, profileParam, profiles, profilesLoaded]);
 
   useEffect(() => {
-    if (location.hash !== "#profile-learning" || activeView !== "editor") return;
+    if (location.hash !== "#profile-select-ai" || activeView !== "editor") return;
     const frame = window.requestAnimationFrame(() => {
-      const target = document.getElementById("profile-learning");
+      const target = document.getElementById("profile-select-ai");
       target?.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
       target?.focus({ preventScroll: true });
     });
@@ -1632,11 +1842,15 @@ export function ProfileManagementPage() {
   };
 
   const save = async () => {
-    if (!form.name.trim()) {
-      setNameError(true);
+    const nextNameError = profileNameError(form.name);
+    const nextRequiredErrors = profileRequiredErrors(form);
+    setNameError(nextNameError);
+    setRequiredErrors(nextRequiredErrors);
+    if (nextNameError || hasProfileRequiredErrors(nextRequiredErrors)) {
       return;
     }
-    setNameError(false);
+    setNameError(null);
+    setRequiredErrors({});
     setLoading("save");
     let saved: Nl2SqlProfile;
     try {
@@ -1654,6 +1868,7 @@ export function ProfileManagementPage() {
       });
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
       setForm(profileToForm(normalizeProfile(saved)));
+      setRequiredErrors({});
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
       }
@@ -1735,29 +1950,62 @@ export function ProfileManagementPage() {
 
     setLoading(`delete-profile-${profile.id}`);
     try {
-      const deleted = await apiDelete<Nl2SqlProfile>(
+      const deleted = await apiDelete<ProfileDeleteData>(
         `/api/nl2sql/profiles/${encodeURIComponent(profile.id)}`,
         { "If-Match": `"${profile.etag || profileDetailQuery.data?.etag || ""}"` }
       );
-      queryClient.removeQueries({ queryKey: nl2sqlIncrementalKeys.profile(deleted.id) });
+      const deletedProfile = deleted.profile;
+      queryClient.removeQueries({ queryKey: nl2sqlIncrementalKeys.profile(deletedProfile.id) });
       await queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
+      const trackingRefresh = deleted.oracle_cleanup.some((item) =>
+        trackDbProfileRefreshSignal(item)
+      );
+      if (!trackingRefresh) {
+        await queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+      }
       if (profileParam) {
         setSearchParams({}, { replace: true });
       }
-      toast.success(t("profiles.message.deleted", { name: deleted.name }));
+      const cleanupWarnings = deleted.oracle_cleanup.filter((item) => item.warning.trim());
+      const cleanupExecuted = deleted.oracle_cleanup.some((item) => item.executed);
+      toast.success(
+        t(
+          cleanupExecuted && cleanupWarnings.length === 0
+            ? "profiles.message.deletedWithOracleCleanup"
+            : "profiles.message.deleted",
+          { name: deletedProfile.name }
+        )
+      );
+      if (cleanupWarnings.length > 0) {
+        toast.warning(
+          t("profiles.message.oracleCleanupWarning", { count: cleanupWarnings.length })
+        );
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("profiles.error.delete"));
+      const fallback =
+        err instanceof ApiError && err.status === 502
+          ? t("profiles.error.deleteOracleCleanup")
+          : t("profiles.error.delete");
+      toast.error(err instanceof Error && err.message ? err.message : fallback);
     } finally {
       setLoading("");
     }
   };
 
-  const toggleSort = (key: SortKey) => {
+  const toggleSort = (key: ProfileListSortKey) => {
     setProfileSort((current) => ({
       key,
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   };
+  const clearRequiredError = useCallback((field: ProfileRequiredField) => {
+    setRequiredErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }, []);
 
   const editor = (
     <ProfileEditor
@@ -1775,9 +2023,12 @@ export function ProfileManagementPage() {
       viewHasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
       tableLoadingNextPage={tableObjectsQuery.isFetchingNextPage}
       viewLoadingNextPage={viewObjectsQuery.isFetchingNextPage}
+      tableLoadMoreError={tableLoadMoreError}
+      viewLoadMoreError={viewLoadMoreError}
       objectFilter={objectFilter}
       saving={loading === "save"}
       nameError={nameError}
+      requiredErrors={requiredErrors}
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
       assetRefreshResults={assetRefreshResults}
@@ -1797,7 +2048,10 @@ export function ProfileManagementPage() {
       }
       onLoadMoreTables={() => void tableObjectsQuery.fetchNextPage()}
       onLoadMoreViews={() => void viewObjectsQuery.fetchNextPage()}
-      onNameErrorClear={() => setNameError(false)}
+      onRetryLoadMoreTables={() => void tableObjectsQuery.fetchNextPage()}
+      onRetryLoadMoreViews={() => void viewObjectsQuery.fetchNextPage()}
+      onNameErrorClear={() => setNameError(null)}
+      onRequiredErrorClear={clearRequiredError}
       onSave={() => void save()}
       onDelete={() => {
         if (selectedProfile) void deleteProfile(selectedProfile);
@@ -1809,8 +2063,9 @@ export function ProfileManagementPage() {
   );
   const schemaRefreshing =
     schemaRefreshStatus === "pending" || schemaRefreshStatus === "running";
+  const profileListRefreshing = profilesQuery.isFetching && !profilesQuery.isFetchingNextPage;
   const profileWorkspaceProcessing =
-    loading === "load" || profilesQuery.isFetching || schemaRefreshing || dbProfileRefreshing ? (
+    loading === "load" || profileListRefreshing || schemaRefreshing || dbProfileRefreshing ? (
       <ProcessingIndicator
         active
         label={
@@ -1833,12 +2088,15 @@ export function ProfileManagementPage() {
         activityIcon="none"
       />
     ) : undefined;
-  const headerRefreshStatus = dbProfileRefreshing
-    ? dbProfileRefreshStatus
-    : schemaRefreshing
-      ? schemaRefreshStatus
-      : dbProfileRefreshStatus || schemaRefreshStatus;
-  const headerRefreshIsDbProfile = dbProfileRefreshing || Boolean(dbProfileRefreshStatus && !schemaRefreshStatus);
+  const showProfileWorkspaceProcessing =
+    Boolean(profileWorkspaceProcessing) &&
+    (profiles.length > 0 || loading === "load" || schemaRefreshing || dbProfileRefreshing);
+  const headerDbProfileRefreshStatus =
+    dbProfileRefreshing || dbProfileRefreshStatus === "error" ? dbProfileRefreshStatus : "";
+  const headerSchemaRefreshStatus =
+    schemaRefreshing || schemaRefreshStatus === "error" ? schemaRefreshStatus : "";
+  const headerRefreshStatus = headerDbProfileRefreshStatus || headerSchemaRefreshStatus;
+  const headerRefreshIsDbProfile = Boolean(headerDbProfileRefreshStatus);
   const workspaceNotice = dbProfileRefreshError
     ? { tone: "danger" as const, message: dbProfileRefreshError }
     : message
@@ -1850,7 +2108,7 @@ export function ProfileManagementPage() {
         type="button"
         variant="secondary"
         size="sm"
-        loading={startDbProfileRefresh.isPending}
+        loading={startDbProfileRefresh.isPending || dbProfileRefreshing}
         onClick={() => void runDbProfileRefresh()}
       >
         <RefreshCw size={15} aria-hidden="true" />
@@ -1870,22 +2128,14 @@ export function ProfileManagementPage() {
         subtitle={t("profiles.subtitle")}
         status={
           activeView === "list" && headerRefreshStatus ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge
-                variant={
-                  headerRefreshStatus === "done"
-                    ? "success"
-                    : headerRefreshStatus === "error"
-                      ? "danger"
-                      : "info"
-                }
-                label={
-                  headerRefreshIsDbProfile
-                    ? t(`profiles.dbProfileRefresh.status.${headerRefreshStatus}`)
-                    : t(`profiles.schemaRefresh.status.${headerRefreshStatus}`)
-                }
-              />
-            </span>
+            <PageHeaderStatusBadge
+              variant={headerRefreshStatus === "error" ? "danger" : "info"}
+              label={
+                headerRefreshIsDbProfile
+                  ? t(`profiles.dbProfileRefresh.status.${headerRefreshStatus}`)
+                  : t(`profiles.schemaRefresh.status.${headerRefreshStatus}`)
+              }
+            />
           ) : undefined
         }
         actions={
@@ -1904,7 +2154,7 @@ export function ProfileManagementPage() {
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
                   onClick: () => load(true),
-                  loading: loading === "load" || profilesQuery.isFetching,
+                  loading: loading === "load" || profileListRefreshing,
                 },
                 {
                   id: "schema-refresh",
@@ -1912,7 +2162,8 @@ export function ProfileManagementPage() {
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
                   onClick: runSchemaRefresh,
-                  loading: schemaRefreshing,
+                  loading: schemaRefreshing || startSchemaRefresh.isPending,
+                  disabled: schemaRefreshing || startSchemaRefresh.isPending,
                 },
                 {
                   id: "db-profile-refresh",
@@ -1921,6 +2172,7 @@ export function ProfileManagementPage() {
                   icon: RefreshCw,
                   onClick: runDbProfileRefresh,
                   loading: dbProfileRefreshing || startDbProfileRefresh.isPending,
+                  disabled: dbProfileRefreshing || startDbProfileRefresh.isPending,
                 },
               ]
             : []
@@ -1940,10 +2192,11 @@ export function ProfileManagementPage() {
               role="region"
               idPrefix="profile-management"
               ariaLabel={t("profiles.workspace.label")}
-              processing={profiles.length > 0 ? profileWorkspaceProcessing : undefined}
+              processing={showProfileWorkspaceProcessing ? profileWorkspaceProcessing : undefined}
             >
               <ProfileList
                 profiles={filteredProfiles}
+                totalCount={profileTotal}
                 selectedProfileId={selectedProfileId}
                 loading={loading === "load" && profiles.length === 0}
                 search={profileSearch}
@@ -1955,7 +2208,9 @@ export function ProfileManagementPage() {
                 deletingId={loading.startsWith("delete-profile-") ? loading.replace("delete-profile-", "") : ""}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
+                loadMoreError={profileLoadMoreError}
                 onLoadMore={() => void profilesQuery.fetchNextPage()}
+                onRetryLoadMore={() => void profilesQuery.fetchNextPage()}
               />
             </DbObjectManagementPanelShell>
         ) : (

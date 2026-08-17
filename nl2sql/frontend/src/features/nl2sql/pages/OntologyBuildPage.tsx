@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Target } from "lucide-react";
+import { AlertCircle, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -12,9 +12,11 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   nl2sqlIncrementalKeys,
@@ -25,6 +27,7 @@ import {
   useStartSchemaRefresh,
 } from "../incrementalQueries";
 import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
+import { profileDisplayLabel } from "../profileDisplay";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
 import { OntologyInterchangeSection } from "../ontology/OntologyInterchangeSection";
 import { OntologyMermaidPanel } from "../ontology/OntologyMermaidPanel";
@@ -33,6 +36,15 @@ import { ProfileOntologyEditor } from "../ontology/ProfileOntologyEditor";
 import { createOntologyRevisionDraft } from "../ontology/api";
 import type { ProfileOntologyDraftPayload, ProfileOntologyDraftState } from "../ontology/ProfileOntologyEditorCore";
 import type { OntologyNode, ProfileOntologyViewData } from "../ontology/types";
+
+function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
 
 /**
  * AI 構築、提案レビュー、業務モデル編集、技術表現を一続きで扱う単一ページ。
@@ -44,6 +56,7 @@ export function OntologyBuildPage() {
   const [pageError, setPageError] = useState("");
   const [materializingOntologyView, setMaterializingOntologyView] = useState(false);
   const [proposalsRefreshToken, setProposalsRefreshToken] = useState(0);
+  const completedSchemaRefreshJob = useRef("");
   const queryClient = useQueryClient();
 
   const profilesQuery = useProfileSummaries("");
@@ -51,6 +64,10 @@ export function OntologyBuildPage() {
     () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [profilesQuery.data]
   );
+  const profileLoadMoreError =
+    profilesQuery.isFetchNextPageError && profilesQuery.error
+      ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
+      : "";
   const profileParam = searchParams.get("profile");
   const selectedProfileSummary = useMemo(() => {
     if (activeProfiles.length === 0) return null;
@@ -184,7 +201,9 @@ export function OntologyBuildPage() {
       const job = await startSchemaRefresh.mutateAsync();
       if (job.status === "done") {
         await Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
+        toast.success(t("common.action.schemaRefreshed"));
       } else {
+        completedSchemaRefreshJob.current = "";
         setRefreshJobId(job.job_id);
       }
     } catch (err) {
@@ -193,13 +212,27 @@ export function OntologyBuildPage() {
   };
 
   useEffect(() => {
-    const status = schemaRefreshJobQuery.data?.status;
-    if (status === "done") {
-      void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
-    } else if (status === "error" || schemaRefreshJobQuery.isError) {
+    const job = schemaRefreshJobQuery.data;
+    if (job) {
+      const reportKey = `${job.job_id}:${job.status}`;
+      if (completedSchemaRefreshJob.current === reportKey) return;
+      if (job.status === "done") {
+        completedSchemaRefreshJob.current = reportKey;
+        void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
+        toast.success(t("common.action.schemaRefreshed"));
+      } else if (job.status === "error") {
+        completedSchemaRefreshJob.current = reportKey;
+        setPageError(t("profiles.schemaRefresh.error"));
+      }
+      return;
+    }
+    if (schemaRefreshJobQuery.isError && refreshJobId) {
+      const reportKey = `${refreshJobId}:query-error`;
+      if (completedSchemaRefreshJob.current === reportKey) return;
+      completedSchemaRefreshJob.current = reportKey;
       setPageError(t("profiles.schemaRefresh.error"));
     }
-  }, [schemaRefreshJobQuery.data?.status, schemaRefreshJobQuery.isError]);
+  }, [refreshJobId, schemaRefreshJobQuery.data, schemaRefreshJobQuery.isError]);
 
   const selectProfile = (id: string) => {
     const next = new URLSearchParams();
@@ -225,10 +258,16 @@ export function OntologyBuildPage() {
       <PageHeader title={t("nav.ontologyBuild")} subtitle={t("ontologyBuild.subtitle")} />
       <main className="grid min-w-0 gap-4 p-4 lg:p-8">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
-        {schemaRefreshStatus ? (
-          <p className="text-sm text-muted" aria-live="polite" aria-atomic="true">
-            {t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
-          </p>
+        {refreshing ? (
+          <ProcessingIndicator
+            active
+            label={t("common.processing.schemaRefreshing")}
+            operationKey={refreshJobId || "ontology-build-schema-refresh"}
+            placement="workspace"
+            className="rounded-md border border-border bg-background px-3 py-2"
+            testId="ontology-build-schema-refresh-processing"
+            activityIcon="none"
+          />
         ) : null}
 
         <DbObjectManagementPanelShell
@@ -267,7 +306,7 @@ export function OntologyBuildPage() {
                 >
                   {activeProfiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
-                      {profile.name}
+                      {profileDisplayLabel(profile)}
                     </option>
                   ))}
                 </select>
@@ -282,6 +321,30 @@ export function OntologyBuildPage() {
                 >
                   {t("profiles.action.loadMore")}
                 </Button>
+              ) : null}
+              {profileLoadMoreError ? (
+                <div
+                  className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:col-span-2"
+                  role="alert"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="flex min-w-0 items-start gap-2">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{profileLoadMoreError}</span>
+                    </span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      loading={profilesQuery.isFetchingNextPage}
+                      onClick={() => void profilesQuery.fetchNextPage()}
+                    >
+                      <RefreshCw size={15} aria-hidden="true" />
+                      <span>{t("common.retry")}</span>
+                    </Button>
+                  </div>
+                </div>
               ) : null}
             </div>
           )}

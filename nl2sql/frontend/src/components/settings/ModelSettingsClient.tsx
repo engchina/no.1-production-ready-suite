@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import { toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -31,6 +32,7 @@ import {
   formatSettingsEnvValue,
   formatSettingsJson,
 } from "@/components/settings/SettingsPreviewPanels";
+import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   ApiError,
   type EnterpriseAiConfiguredModel,
@@ -47,7 +49,6 @@ import { t } from "@/lib/i18n";
 import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-type NoticeTone = "success" | "info" | "error";
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 
 const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
@@ -79,7 +80,6 @@ export function ModelSettingsClient() {
   const [draft, setDraft] = useState<ModelSettingsPayload | null>(null);
   const [baselineData, setBaselineData] = useState<ModelSettingsData | null>(null);
   const [checkData, setCheckData] = useState<ModelSettingsData | null>(null);
-  const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
   const [errorText, setErrorText] = useState("");
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
@@ -121,7 +121,6 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setNotice(null);
     setErrorText("");
   };
 
@@ -139,7 +138,6 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults((current) => ({ ...current, embedding: undefined, rerank: undefined }));
-    setNotice(null);
     setErrorText("");
   };
 
@@ -158,7 +156,6 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setNotice(null);
     setErrorText("");
   };
 
@@ -191,7 +188,6 @@ export function ModelSettingsClient() {
     });
     setCheckData(baselineData);
     setTestResults((current) => ({ ...current, [`enterprise:${index}`]: undefined }));
-    setNotice(null);
     setErrorText("");
   };
 
@@ -212,7 +208,6 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setNotice(null);
     setErrorText("");
   };
 
@@ -246,7 +241,6 @@ export function ModelSettingsClient() {
     });
     setCheckData(baselineData);
     setTestResults({});
-    setNotice(null);
     setErrorText("");
   };
 
@@ -256,7 +250,6 @@ export function ModelSettingsClient() {
   ) => {
     if (!draft) return;
     setErrorText("");
-    setNotice(null);
     setTestingKey(key);
     try {
       const result = await testMutation.mutateAsync({ ...target, settings: draft });
@@ -276,14 +269,13 @@ export function ModelSettingsClient() {
     event.preventDefault();
     if (!draft) return;
     setErrorText("");
-    setNotice(null);
     try {
       const data = await updateMutation.mutateAsync(draft);
       const saved = cloneSettings(data.settings);
       setDraft(saved);
       setBaselineData(data);
       setCheckData(data);
-      setNotice({ tone: "success", message: t("settings.model.saved") });
+      toast.success(t("settings.model.saved"));
     } catch (error) {
       setErrorText(error instanceof ApiError ? error.message : t("settings.model.loadError"));
     }
@@ -329,11 +321,6 @@ export function ModelSettingsClient() {
     <div>
       <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
       <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6 p-8">
-        {notice ? (
-          <Banner severity={notice.tone === "error" ? "danger" : notice.tone}>
-            {notice.message}
-          </Banner>
-        ) : null}
         {legacySecretDetected ? (
           <Banner
             severity="warning"
@@ -950,11 +937,13 @@ function SecretField({
         <label htmlFor={id} className="text-sm font-medium text-foreground">
           {label}
         </label>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
-          {hasSavedSecret
-            ? t("settings.model.enterprise.apiKeySaved")
-            : t("settings.model.enterprise.apiKeyNotSet")}
-        </span>
+        {hasSavedSecret ? (
+          <SavedSecretBadge label={t("settings.model.enterprise.apiKeySaved")} />
+        ) : (
+          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {t("settings.model.enterprise.apiKeyNotSet")}
+          </span>
+        )}
       </div>
       <div className="relative">
         <input

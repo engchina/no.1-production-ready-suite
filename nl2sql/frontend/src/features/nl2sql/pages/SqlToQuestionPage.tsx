@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, StatusBadge } from "@engchina/production-ready-ui";
@@ -8,15 +8,17 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
+import { FieldLabel } from "@/components/ui/required-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { DbObjectPanelHeader, DbObjectStepIndicator } from "../components/DbObjectManagementShared";
+import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { profileDisplayLabel } from "../profileDisplay";
 import type {
-  AnalyzeData,
   Nl2SqlProfile,
   ProfileSummary,
   ProfileSummaryPage,
@@ -25,8 +27,6 @@ import type {
   SchemaObjectPage,
   SchemaTable,
 } from "../types";
-
-type ReverseMode = "standard" | "deep" | "";
 
 // タブではなく 1 画面スクロール + ステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
@@ -41,8 +41,7 @@ export function SqlToQuestionPage() {
   const [structureText, setStructureText] = useState("");
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [analyzeLoading, setAnalyzeLoading] = useState(false);
-  const [reverseMode, setReverseMode] = useState<ReverseMode>("");
+  const [reverseLoading, setReverseLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [referenceRefreshVersion, setReferenceRefreshVersion] = useState(0);
@@ -140,48 +139,27 @@ export function SqlToQuestionPage() {
     };
   }, [abortAll, loadReferenceData]);
 
-  const analyzeStructure = async () => {
+  const generateQuestion = async () => {
     const trimmedSql = sql.trim();
     if (!trimmedSql) return;
-    setAnalyzeLoading(true);
+    setReverseLoading(true);
     setActionError("");
     try {
-      const analysis = await apiPost<AnalyzeData>("/api/nl2sql/analyze", {
+      const data = await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", {
         sql: trimmedSql,
-        use_llm: true,
+        profile_id: selectedProfileId || undefined,
+        use_glossary: useGlossary,
       });
-      setStructureText(analysisToStructureText(analysis));
-    } catch (err) {
-      setActionError(actionableError(err, t("sqlToQuestion.error.analyze")));
-    } finally {
-      setAnalyzeLoading(false);
-    }
-  };
-
-  const generateQuestion = async (deep: boolean) => {
-    const trimmedSql = sql.trim();
-    if (!trimmedSql) return;
-    setReverseMode(deep ? "deep" : "standard");
-    setActionError("");
-    try {
-      const data = await apiPost<ReverseSqlData>(
-        deep ? "/api/nl2sql/reverse/deep" : "/api/nl2sql/reverse",
-        {
-          sql: trimmedSql,
-          profile_id: selectedProfileId || undefined,
-          use_glossary: useGlossary,
-        }
-      );
       setReverse(data);
       if (data.logical_structure) setStructureText(data.logical_structure);
     } catch (err) {
       setActionError(actionableError(err, t("sqlToQuestion.error.reverse")));
     } finally {
-      setReverseMode("");
+      setReverseLoading(false);
     }
   };
 
-  const actionBusy = analyzeLoading || Boolean(reverseMode);
+  const actionBusy = reverseLoading;
   const stepIndex = reverse ? 3 : structureText ? 1 : 0;
 
   return (
@@ -259,15 +237,20 @@ export function SqlToQuestionPage() {
                 >
                   {profiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
-                      {profile.name}
+                      {profileDisplayLabel(profile)}
                     </option>
                   ))}
                 </select>
               </label>
 
-              <label className="grid gap-1 text-sm font-medium text-foreground">
-                <span>{t("sqlToQuestion.sql.label")}</span>
+              <div className="grid gap-1">
+                <FieldLabel
+                  htmlFor="sql-to-question-sql-input"
+                  label={t("sqlToQuestion.sql.label")}
+                  required
+                />
                 <textarea
+                  id="sql-to-question-sql-input"
                   value={sql}
                   onChange={(event) => {
                     setSql(event.currentTarget.value);
@@ -276,10 +259,12 @@ export function SqlToQuestionPage() {
                     setActionError("");
                   }}
                   rows={9}
+                  required
+                  aria-required="true"
                   className="min-h-56 min-w-0 resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
                   disabled={actionBusy}
                 />
-              </label>
+              </div>
 
               <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground">
                 <input
@@ -302,50 +287,20 @@ export function SqlToQuestionPage() {
                   variant="primary"
                   size="lg"
                   className="w-full whitespace-nowrap sm:w-auto"
-                  loading={reverseMode === "standard"}
-                  disabled={!sql.trim() || analyzeLoading || reverseMode === "deep"}
-                  onClick={() => void generateQuestion(false)}
+                  loading={reverseLoading}
+                  disabled={!sql.trim()}
+                  onClick={() => void generateQuestion()}
                 >
                   <ArrowRightLeft size={16} aria-hidden="true" />
                   <span>{t("sqlToQuestion.action.generate")}</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="lg"
-                  className="w-full whitespace-nowrap sm:w-auto"
-                  loading={analyzeLoading}
-                  disabled={!sql.trim() || Boolean(reverseMode)}
-                  onClick={() => void analyzeStructure()}
-                >
-                  <ShieldCheck size={16} aria-hidden="true" />
-                  <span>{t("sqlToQuestion.action.analyze")}</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="lg"
-                  className="w-full whitespace-nowrap sm:w-auto"
-                  loading={reverseMode === "deep"}
-                  disabled={!sql.trim() || analyzeLoading || reverseMode === "standard"}
-                  onClick={() => void generateQuestion(true)}
-                >
-                  <ArrowRightLeft size={16} aria-hidden="true" />
-                  <span>{t("sqlToQuestion.action.deep")}</span>
                 </Button>
                 <FormStatus tone="danger" message={actionError} className="sm:ml-auto" />
               </div>
               {actionBusy ? (
                 <ProcessingIndicator
                   active
-                  label={
-                    analyzeLoading
-                      ? t("sqlToQuestion.action.analyze")
-                      : reverseMode === "deep"
-                        ? t("sqlToQuestion.action.deep")
-                        : t("sqlToQuestion.action.generate")
-                  }
-                  operationKey={analyzeLoading ? "analyze" : reverseMode}
+                  label={t("sqlToQuestion.action.generate")}
+                  operationKey="reverse-deep"
                   placement="action"
                   testId="sql-to-question-processing"
                   activityIcon="none"
@@ -403,7 +358,16 @@ export function SqlToQuestionPage() {
                 <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
                 {useGlossary && <StatusBadge variant="info" label={t("sqlToQuestion.glossaryApplied")} />}
               </div>
-              <CompactFact label={t("sqlToQuestion.result.question")} value={reverse.question} />
+              <div className="min-w-0 rounded-md border border-border bg-card p-3">
+                <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
+                <QuestionText
+                  value={reverse.question}
+                  variant="detail"
+                  maxLines={3}
+                  expandable
+                  className="mt-1 font-semibold"
+                />
+              </div>
               <CompactFact label={t("sqlToQuestion.result.explanation")} value={reverse.explanation} />
               <CompactFact
                 label={t("sqlToQuestion.result.tables")}
@@ -452,7 +416,7 @@ function SchemaPreview({
   return (
     <section className="grid content-start gap-3 rounded-md border border-border bg-background p-3 text-sm">
       <div className="flex flex-wrap gap-2">
-        <StatusBadge variant="neutral" label={profile?.name ?? "-"} />
+        <StatusBadge variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
         <span data-testid="sql-to-question-table-count">
           <StatusBadge variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
         </span>
@@ -506,29 +470,6 @@ function schemaSummaryTable(item: SchemaObjectPage["items"][number]): SchemaTabl
     columns: [],
     constraints: [],
   };
-}
-
-function analysisToStructureText(analysis: AnalyzeData) {
-  const lines = [
-    "SQL 論理構造",
-    `- Statement: ${analysis.statement_type || "SELECT"}`,
-    `- Summary: ${analysis.structure_summary || analysis.explanation}`,
-    `- 参照表: ${(analysis.object_names ?? analysis.safety.referenced_tables).join(", ") || "-"}`,
-    `- 参照列: ${(analysis.column_names ?? analysis.safety.referenced_columns).join(", ") || "-"}`,
-  ];
-  const sections: Array<[string, string[] | undefined]> = [
-    [t("sqlAnalysis.operations"), analysis.operations],
-    [t("sqlAnalysis.filters"), analysis.conditions ?? analysis.filters],
-    [t("sqlAnalysis.joins"), analysis.joins],
-    [t("sqlAnalysis.groupBy"), analysis.group_by],
-    [t("sqlAnalysis.orderBy"), analysis.order_by],
-    [t("sqlAnalysis.aggregations"), analysis.aggregations],
-    [t("sqlAnalysis.riskFindings"), analysis.risk_findings],
-  ];
-  for (const [label, items] of sections) {
-    if (items?.length) lines.push(`- ${label}: ${items.join("; ")}`);
-  }
-  return lines.join("\n");
 }
 
 function TextList({ label, items }: { label: string; items: string[] }) {

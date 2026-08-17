@@ -44,5 +44,6 @@ test("toaster receives localized region and dismiss labels", () => {
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
 
   assert.match(main, /dismissLabel=\{t\("common\.dismiss"\)\}/u);
+  assert.match(main, /placement="bottom-right"/u);
   assert.match(main, /regionLabel=\{t\("common\.notifications"\)\}/u);
 });

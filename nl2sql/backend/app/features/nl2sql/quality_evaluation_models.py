@@ -100,6 +100,7 @@ class QualityEvaluationJobRecord(BaseModel):
     job_id: str
     profile_id: str
     profile_name: str
+    profile_category: str = ""
     engines: list[Nl2SqlEngine]
     repeat_count: int = Field(ge=1, le=10)
     cases: list[QualityEvaluationCase]
@@ -129,6 +130,7 @@ class QualityEvaluationJobSummary(BaseModel):
     job_id: str
     profile_id: str
     profile_name: str
+    profile_category: str = ""
     engines: list[Nl2SqlEngine]
     repeat_count: int
     case_count: int
@@ -192,6 +194,7 @@ def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
         job_id=job.job_id,
         profile_id=job.profile_id,
         profile_name=job.profile_name,
+        profile_category=job.profile_category,
         engines=job.engines,
         repeat_count=job.repeat_count,
         case_count=len(job.cases),

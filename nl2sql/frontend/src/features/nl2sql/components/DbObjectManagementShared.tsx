@@ -1,5 +1,6 @@
 import { Children, type KeyboardEvent, type ReactNode } from "react";
 import {
+  AlertCircle,
   ArrowDownUp,
   Check,
   Code2,
@@ -42,13 +43,20 @@ import type { DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
 export type DbObjectDetailTab = "columns" | "ddl";
-export type DbObjectFilter = "all" | "with_rows" | "empty_rows";
+export type DbObjectOwnerFilter = string;
 export type DbObjectSortKey = "name" | "row_count" | "owner";
 export type DbObjectSortDirection = "asc" | "desc";
+export type DbObjectPickerSortKey = "name" | "kind" | "row_count" | "owner";
+export type DbObjectPickerSortDirection = "asc" | "desc";
 
 export interface DbObjectSortState {
   key: DbObjectSortKey;
   direction: DbObjectSortDirection;
+}
+
+export interface DbObjectPickerSortState {
+  key: DbObjectPickerSortKey;
+  direction: DbObjectPickerSortDirection;
 }
 
 export interface DbObjectGridLabels {
@@ -60,10 +68,8 @@ export interface DbObjectGridLabels {
   emptyHint: string;
   noResultsTitle: string;
   noResultsHint: string;
-  filter: string;
-  filterAll: string;
-  filterWithRows: string;
-  filterEmptyRows: string;
+  ownerFilter: string;
+  ownerFilterAll: string;
   objectName: string;
   rows: string;
   owner: string;
@@ -126,12 +132,50 @@ export function focusDbObjectTabElement(id: string) {
 
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
   if (key === "row_count") return item.row_count ?? -1;
-  if (key === "name") return item.name.toLowerCase();
+  if (key === "name") return dbAdminObjectQualifiedName(item).toLowerCase();
   return item.owner.toLowerCase();
 }
 
 export function rowCountLabel(rowCount?: number | null) {
   return rowCount == null ? "-" : t("dbAdmin.list.rows", { count: rowCount });
+}
+
+export interface DbAdminObjectTarget {
+  owner: string;
+  name: string;
+  qualifiedName: string;
+}
+
+export function dbAdminObjectQualifiedName(item: {
+  name: string;
+  owner?: string;
+  qualified_name?: string;
+}) {
+  const qualifiedName = (item.qualified_name ?? "").trim();
+  if (qualifiedName) return qualifiedName.toUpperCase();
+  const owner = (item.owner ?? "").trim().toUpperCase();
+  const name = item.name.trim().toUpperCase();
+  return owner ? `${owner}.${name}` : name;
+}
+
+export function parseDbAdminObjectTarget(value: string, owner = ""): DbAdminObjectTarget {
+  const normalizedOwner = owner.trim().replaceAll('"', "").toUpperCase();
+  const raw = value.trim().replaceAll('"', "").toUpperCase();
+  const dotIndex = raw.indexOf(".");
+  if (dotIndex >= 0) {
+    const parsedOwner = raw.slice(0, dotIndex);
+    const name = raw.slice(dotIndex + 1);
+    return {
+      owner: parsedOwner,
+      name,
+      qualifiedName: parsedOwner && name ? `${parsedOwner}.${name}` : raw,
+    };
+  }
+  return {
+    owner: normalizedOwner,
+    name: raw,
+    qualifiedName: normalizedOwner ? `${normalizedOwner}.${raw}` : raw,
+  };
 }
 
 export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
@@ -396,44 +440,74 @@ export function DbObjectSelectorFooter({
   selectedCount,
   hasNextPage,
   loadingNextPage = false,
+  loadMoreError = "",
   loadMoreLabel = t("objectSelector.loadMore"),
   dataTestId,
   onLoadMore,
+  onRetryLoadMore,
 }: {
   visibleCount: number;
   totalCount: number;
   selectedCount?: number;
   hasNextPage?: boolean;
   loadingNextPage?: boolean;
+  loadMoreError?: string;
   loadMoreLabel?: string;
   dataTestId?: string;
   onLoadMore?: () => void;
+  onRetryLoadMore?: () => void;
 }) {
   return (
     <div
-      className="flex min-h-10 flex-col gap-2 rounded-md border border-border bg-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+      className="grid min-h-10 gap-2 rounded-md border border-border bg-card px-3 py-2"
       data-testid={dataTestId}
     >
-      <p className="text-xs text-muted" aria-live="polite">
-        {selectedCount == null
-          ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
-          : t("objectSelector.resultCountWithSelected", {
-              visible: visibleCount,
-              total: totalCount,
-              selected: selectedCount,
-            })}
-      </p>
-      {hasNextPage && onLoadMore && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="w-full sm:w-auto"
-          loading={loadingNextPage}
-          onClick={onLoadMore}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted" aria-live="polite">
+          {selectedCount == null
+            ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
+            : t("objectSelector.resultCountWithSelected", {
+                visible: visibleCount,
+                total: totalCount,
+                selected: selectedCount,
+              })}
+        </p>
+        {hasNextPage && onLoadMore && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full sm:w-auto"
+            loading={loadingNextPage}
+            onClick={onLoadMore}
+          >
+            {loadMoreLabel}
+          </Button>
+        )}
+      </div>
+      {loadMoreError && (
+        <div
+          className="flex flex-col gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
+          role="alert"
         >
-          {loadMoreLabel}
-        </Button>
+          <span className="flex min-w-0 items-start gap-2">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{loadMoreError}</span>
+          </span>
+          {onRetryLoadMore && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loadingNextPage}
+              onClick={onRetryLoadMore}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("common.retry")}</span>
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -464,9 +538,77 @@ export interface DbObjectPickerItem {
   kind?: string;
   kindLabel?: string;
   kindVariant?: "neutral" | "info" | "success" | "warning" | "danger";
+  rowCount?: number | null;
   rowCountLabel?: string;
   owner?: string;
   comment?: string;
+}
+
+export function dbObjectPickerSortValue(item: DbObjectPickerItem, key: DbObjectPickerSortKey) {
+  if (key === "row_count") return item.rowCount ?? -1;
+  if (key === "kind") return (item.kind ?? item.kindLabel ?? "").toLowerCase();
+  if (key === "owner") return (item.owner ?? "").toLowerCase();
+  return item.name.toLowerCase();
+}
+
+export function sortDbObjectPickerItems<T extends DbObjectPickerItem>(
+  items: T[],
+  sort: DbObjectPickerSortState
+) {
+  return items.slice().sort((left, right) => {
+    const a = dbObjectPickerSortValue(left, sort.key);
+    const b = dbObjectPickerSortValue(right, sort.key);
+    const comparison =
+      typeof a === "number" && typeof b === "number"
+        ? a - b
+        : String(a).localeCompare(String(b), "ja");
+    return sort.direction === "asc" ? comparison : -comparison;
+  });
+}
+
+function PickerSortHeader({
+  label,
+  sortKey,
+  sort,
+  onSortChange,
+}: {
+  label: string;
+  sortKey: DbObjectPickerSortKey;
+  sort?: DbObjectPickerSortState;
+  onSortChange?: (key: DbObjectPickerSortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  const direction = active
+    ? sort.direction === "asc"
+      ? t("objectSelector.sort.asc")
+      : t("objectSelector.sort.desc")
+    : t("objectSelector.sort.inactive");
+  const ariaSort =
+    !sort || !onSortChange
+      ? undefined
+      : active
+        ? sort.direction === "asc"
+          ? "ascending"
+          : "descending"
+        : "none";
+
+  return (
+    <span role="columnheader" aria-sort={ariaSort}>
+      {sort && onSortChange ? (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+          aria-label={t("objectSelector.sort.button", { label, direction })}
+          onClick={() => onSortChange(sortKey)}
+        >
+          <span>{label}</span>
+          <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+        </button>
+      ) : (
+        label
+      )}
+    </span>
+  );
 }
 
 export function DbSingleObjectPickerList({
@@ -484,6 +626,8 @@ export function DbSingleObjectPickerList({
   onSelect,
   selectAriaLabel,
   selectDisabled,
+  sort,
+  onSortChange,
   action,
 }: {
   items: DbObjectPickerItem[];
@@ -500,6 +644,8 @@ export function DbSingleObjectPickerList({
   onSelect: (item: DbObjectPickerItem) => void;
   selectAriaLabel?: (item: DbObjectPickerItem) => string;
   selectDisabled?: (item: DbObjectPickerItem) => boolean;
+  sort?: DbObjectPickerSortState;
+  onSortChange?: (key: DbObjectPickerSortKey) => void;
   action?: {
     id: string;
     label: string;
@@ -531,12 +677,32 @@ export function DbSingleObjectPickerList({
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card" data-testid={dataTestId}>
-      <div className={headerClass} aria-hidden="true">
-        <span>{t("objectSelector.column.name")}</span>
-        <span>{t("objectSelector.column.kind")}</span>
-        <span>{t("objectSelector.column.rows")}</span>
-        <span>{t("objectSelector.column.owner")}</span>
-        {action && <span className="text-right">{t("objectSelector.column.actions")}</span>}
+      <div className={headerClass}>
+        <PickerSortHeader
+          label={t("objectSelector.column.name")}
+          sortKey="name"
+          sort={sort}
+          onSortChange={onSortChange}
+        />
+        <PickerSortHeader
+          label={t("objectSelector.column.kind")}
+          sortKey="kind"
+          sort={sort}
+          onSortChange={onSortChange}
+        />
+        <PickerSortHeader
+          label={t("objectSelector.column.rows")}
+          sortKey="row_count"
+          sort={sort}
+          onSortChange={onSortChange}
+        />
+        <PickerSortHeader
+          label={t("objectSelector.column.owner")}
+          sortKey="owner"
+          sort={sort}
+          onSortChange={onSortChange}
+        />
+        {action && <span role="columnheader" className="text-right">{t("objectSelector.column.actions")}</span>}
       </div>
       <div className={maxHeightClass} role="list" aria-label={listLabel}>
         {items.map((item) => {
@@ -865,19 +1031,22 @@ export function DbObjectGrid({
   selectedName,
   loading,
   search,
-  filter,
+  ownerFilter,
+  ownerOptions,
   sort,
   labels,
   totalCount,
   hasNextPage,
   loadingNextPage = false,
+  loadMoreError = "",
   error = "",
   onSearchChange,
-  onFilterChange,
+  onOwnerFilterChange,
   onSortChange,
   onSelect,
   onDrop,
   onLoadMore,
+  onRetryLoadMore,
   onRetry,
 }: {
   idPrefix: string;
@@ -887,22 +1056,29 @@ export function DbObjectGrid({
   selectedName: string;
   loading: boolean;
   search: string;
-  filter: DbObjectFilter;
+  ownerFilter: DbObjectOwnerFilter;
+  ownerOptions: string[];
   sort: DbObjectSortState;
   labels: DbObjectGridLabels;
   totalCount?: number;
   hasNextPage?: boolean;
   loadingNextPage?: boolean;
+  loadMoreError?: string;
   error?: string;
   onSearchChange: (value: string) => void;
-  onFilterChange: (value: DbObjectFilter) => void;
+  onOwnerFilterChange: (value: DbObjectOwnerFilter) => void;
   onSortChange: (key: DbObjectSortKey) => void;
   onSelect: (name: string) => void;
   onDrop: (name: string) => void;
   onLoadMore?: () => void;
+  onRetryLoadMore?: () => void;
   onRetry?: () => void;
 }) {
-  const hasActiveFilter = Boolean(search.trim()) || filter !== "all";
+  const ownerSelectOptions =
+    ownerFilter === "all" || ownerOptions.includes(ownerFilter)
+      ? ownerOptions
+      : [ownerFilter, ...ownerOptions];
+  const hasActiveFilter = Boolean(search.trim()) || ownerFilter !== "all";
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId}>
       <DbObjectPanelHeader
@@ -922,15 +1098,18 @@ export function DbObjectGrid({
             onChange={onSearchChange}
           />
           <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{labels.filter}</span>
+            <span>{labels.ownerFilter}</span>
             <select
-              value={filter}
-              onChange={(event) => onFilterChange(event.currentTarget.value as DbObjectFilter)}
+              value={ownerFilter}
+              onChange={(event) => onOwnerFilterChange(event.currentTarget.value)}
               className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
             >
-              <option value="all">{labels.filterAll}</option>
-              <option value="with_rows">{labels.filterWithRows}</option>
-              <option value="empty_rows">{labels.filterEmptyRows}</option>
+              <option value="all">{labels.ownerFilterAll}</option>
+              {ownerSelectOptions.map((owner) => (
+                <option key={owner} value={owner}>
+                  {owner}
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -975,19 +1154,20 @@ export function DbObjectGrid({
               </thead>
               <tbody className="divide-y divide-border/70">
                 {items.map((item) => {
-                  const selected = item.name === selectedName;
+                  const qualifiedName = dbAdminObjectQualifiedName(item);
+                  const selected = qualifiedName === selectedName;
                   const rowActions: EntityAction[] = [
                     {
                       id: "drop",
                       label: labels.drop,
                       icon: Trash2,
                       tone: "danger",
-                      onSelect: () => onDrop(item.name),
+                      onSelect: () => onDrop(qualifiedName),
                     },
                   ];
                   return (
                     <tr
-                      key={item.name}
+                      key={qualifiedName}
                       data-selected={selected ? "true" : "false"}
                       aria-current={selected ? "true" : undefined}
                       className={[
@@ -997,18 +1177,18 @@ export function DbObjectGrid({
                       ].join(" ")}
                       onClick={(event) => {
                         if (isInteractiveRowTarget(event.target)) return;
-                        onSelect(item.name);
+                        onSelect(qualifiedName);
                       }}
                     >
                       <td className="px-3 py-2 align-top">
                         <button
                           type="button"
-                          aria-label={labels.showObject(item.name)}
+                          aria-label={labels.showObject(qualifiedName)}
                           aria-current={selected ? "true" : undefined}
                           className="break-all font-mono text-xs font-semibold text-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-                          onClick={() => onSelect(item.name)}
+                          onClick={() => onSelect(qualifiedName)}
                         >
-                          {item.name}
+                          {qualifiedName}
                         </button>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
@@ -1016,8 +1196,8 @@ export function DbObjectGrid({
                       <td className="whitespace-nowrap px-3 py-2 text-right align-top">
                         <RowActionMenu
                           actions={rowActions}
-                          ariaLabel={`${labels.actions}: ${item.name}`}
-                          testId={`${idPrefix}-row-actions-${item.name}`}
+                          ariaLabel={`${labels.actions}: ${qualifiedName}`}
+                          testId={`${idPrefix}-row-actions-${qualifiedName}`}
                         />
                       </td>
                     </tr>
@@ -1034,8 +1214,10 @@ export function DbObjectGrid({
           totalCount={totalCount ?? items.length}
           hasNextPage={hasNextPage}
           loadingNextPage={loadingNextPage}
+          loadMoreError={loadMoreError}
           dataTestId={`${idPrefix}-footer`}
           onLoadMore={onLoadMore}
+          onRetryLoadMore={onRetryLoadMore}
         />
       )}
     </section>
@@ -1126,6 +1308,7 @@ export function DbObjectDetailPanel({
     { id: "columns", label: labels.columns, icon: Table2 },
     { id: "ddl", label: labels.ddl, icon: Code2 },
   ] as const;
+  const detailQualifiedName = dbAdminObjectQualifiedName(detail);
   const detailActions: EntityAction[] = [
     {
       id: "exact-count",
@@ -1134,7 +1317,7 @@ export function DbObjectDetailPanel({
       visible: Boolean(onExactCount && labels.exactCount && detail.object_type === "table"),
       loading: countingRows,
       onSelect: () => {
-        if (onExactCount) onExactCount(detail.name);
+        if (onExactCount) onExactCount(detailQualifiedName);
       },
     },
     {
@@ -1145,7 +1328,7 @@ export function DbObjectDetailPanel({
       visible: Boolean(onExport && labels.export && labels.exportAria),
       loading: exporting,
       onSelect: () => {
-        if (onExport) onExport(detail.name);
+        if (onExport) onExport(detailQualifiedName);
       },
     },
     {
@@ -1153,7 +1336,7 @@ export function DbObjectDetailPanel({
       label: labels.drop,
       icon: Trash2,
       tone: "danger",
-      onSelect: () => onDrop(detail.name),
+      onSelect: () => onDrop(detailQualifiedName),
     },
   ];
   const handleDetailTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -1181,7 +1364,7 @@ export function DbObjectDetailPanel({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 id={headingId} className="break-all font-mono text-base font-semibold text-foreground">
-              {detail.name}
+              {detailQualifiedName}
             </h2>
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
@@ -1197,7 +1380,7 @@ export function DbObjectDetailPanel({
         </div>
         <ObjectActionBar
           actions={detailActions}
-          ariaLabel={`${labels.actions}: ${detail.name}`}
+          ariaLabel={`${labels.actions}: ${detailQualifiedName}`}
           testId={`${idPrefix}-detail-actions`}
         />
       </div>
@@ -1288,7 +1471,7 @@ export function DbObjectDetailPanel({
       ) : ddlLoading ? (
         <TimedLoadingState
           label={labels.ddlLoading}
-          operationKey={`${idPrefix}-${detail.name}-ddl`}
+          operationKey={`${idPrefix}-${detailQualifiedName}-ddl`}
           onCancel={onCancel}
           placement="tab"
           testId={`${idPrefix}-ddl-skeleton`}
@@ -1327,7 +1510,7 @@ export function DbObjectDetailPanel({
               disabled={!detail.ddl}
               onClick={() => {
                 try {
-                  downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
+                  downloadText(`${detailQualifiedName.toLowerCase().replace(".", "_")}_ddl.sql`, detail.ddl);
                   toast.success(t("common.action.downloaded"));
                 } catch {
                   toast.error(t("common.action.downloadFailed"));

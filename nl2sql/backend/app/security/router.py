@@ -1,4 +1,4 @@
-"""認証、ユーザー、ロール、監査、DeepSec API。"""
+"""認証、ユーザー、ロール、DeepSec API。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from .deepsec import get_deepsec_service
 from .dependencies import current_principal, local_debug_principal, request_context
 from .permissions import PERMISSION_CATALOG
 from .schemas import (
-    AuditData,
-    AuditPageData,
     CurrentUserData,
     DeepSecApplyRequest,
     LoginRequest,
@@ -360,43 +358,6 @@ def archive_role(
 @router.get("/security/permissions", response_model=ApiResponse[list[PermissionData]])
 def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
-
-
-@router.get("/security/audit", response_model=ApiResponse[list[AuditData]])
-def audit_log(limit: int = Query(default=200, ge=1, le=500)) -> ApiResponse[list[AuditData]]:
-    records = get_security_service().store.list_audit(limit=limit)
-    return ApiResponse(data=[AuditData.from_record(record) for record in records])
-
-
-@router.get("/security/audit/page", response_model=ApiResponse[AuditPageData])
-def audit_log_page(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=1, le=100),
-) -> ApiResponse[AuditPageData]:
-    records, total, resolved_page = get_security_service().get_audit_page(
-        page=page,
-        page_size=page_size,
-    )
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    return ApiResponse(
-        data=AuditPageData(
-            items=[AuditData.from_record(record) for record in records],
-            page=resolved_page,
-            page_size=page_size,
-            total=total,
-            total_pages=total_pages,
-        )
-    )
-
-
-@router.get("/security/audit/export.xlsx")
-def export_audit_log_xlsx() -> Response:
-    filename, content = get_security_service().export_audit_log_xlsx()
-    return Response(
-        content=content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 @router.get("/security/deepsec/status", response_model=ApiResponse[dict[str, object]])

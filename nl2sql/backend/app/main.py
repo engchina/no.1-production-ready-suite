@@ -72,7 +72,8 @@ def _assert_route_manifest(application: FastAPI) -> None:
         for method in operations:
             if method.upper() not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
                 continue
-            if permission_for_route(method, route_path) == UNCLASSIFIED_PERMISSION:
+            permissions = permission_for_route(method, route_path)
+            if permissions and UNCLASSIFIED_PERMISSION in permissions:
                 missing.append(f"{method.upper()} {path}")
     if missing:
         raise RuntimeError("未登録の API 権限があります: " + ", ".join(sorted(missing)))

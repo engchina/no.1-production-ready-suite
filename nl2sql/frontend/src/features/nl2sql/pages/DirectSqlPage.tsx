@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Play, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FieldLabel } from "@/components/ui/required-field";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
 import {
@@ -11,6 +12,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { useAuth } from "@/features/security/AuthProvider";
+import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { SqlFileInput } from "../components/DbAdminShared";
@@ -40,7 +42,7 @@ function executionLabel(status: ExecutionActivityStatus) {
  */
 export function DirectSqlPage() {
   const { hasPermission } = useAuth();
-  const canExecute = hasPermission("search.execute");
+  const canExecute = hasPermission(MENU_PERMISSIONS.directSql);
 
   if (!canExecute) {
     return (
@@ -125,18 +127,24 @@ function ExecutableDirectSqlPage() {
       <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
       <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-direct-sql">
         <section className="grid gap-4 rounded-md border border-border bg-card p-4">
-          <label className="grid gap-2 text-sm font-medium text-foreground">
-            <span>{t("nl2sql.sqlRunner.label")}</span>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="direct-sql-input"
+              label={t("nl2sql.sqlRunner.label")}
+              required
+            />
             <textarea
-              aria-label={t("nl2sql.sqlRunner.label")}
+              id="direct-sql-input"
               value={sqlText}
               onChange={(event) => setSqlText(event.currentTarget.value)}
               disabled={loading}
               rows={12}
+              required
+              aria-required="true"
               className="min-h-64 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
               placeholder={t("nl2sql.sqlRunner.placeholder")}
             />
-          </label>
+          </div>
           <SqlFileInput
             resetSignal={sqlFileResetSignal}
             disabled={loading}

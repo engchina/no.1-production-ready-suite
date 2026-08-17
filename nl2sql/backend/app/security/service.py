@@ -4,23 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import importlib
-import io
-import json
 import secrets
 import threading
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from app.settings import Settings, get_settings
 
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
     SYSTEM_ADMIN_ROLE_ID,
-    AuditRecord,
     DataEntitlementRecord,
     Principal,
     RoleRecord,
@@ -34,7 +28,7 @@ from .passwords import (
     validate_password,
     verify_password,
 )
-from .permissions import ALL_PERMISSION_CODES, expand_permissions
+from .permissions import expand_permissions, unknown_permission_codes
 from .store import (
     InMemorySecurityStore,
     OracleSecurityStore,
@@ -68,31 +62,9 @@ def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
-_AUDIT_EXPORT_HEADERS = (
-    "監査 ID",
-    "日時 (JST)",
-    "イベント",
-    "実行者",
-    "対象種別",
-    "対象 ID",
-    "結果",
-    "リクエスト ID",
-    "クライアント IP",
-    "詳細 JSON",
-)
-_EXCEL_MAX_DATA_ROWS_PER_SHEET = 1_048_575
-_JST = ZoneInfo("Asia/Tokyo")
 _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE = (
     "SYSTEM_ADMIN ロールは初期システム管理者にのみ割り当てできます。"
 )
-
-
-def _one_calendar_year_before(value: datetime) -> datetime:
-    try:
-        return value.replace(year=value.year - 1)
-    except ValueError:
-        # うるう日の 1 年前は 2 月末として扱う。
-        return value.replace(year=value.year - 1, day=28)
 
 
 class SecurityService:
@@ -128,106 +100,6 @@ class SecurityService:
             self.bootstrap()
             self._bootstrap_checked = True
 
-    def get_audit_page(
-        self, *, page: int, page_size: int
-    ) -> tuple[list[AuditRecord], int, int]:
-        """監査ログを安定した新着順でページ取得する。"""
-
-        return self.store.page_audit(page=page, page_size=page_size)
-
-    def export_audit_log_xlsx(self, *, now: datetime | None = None) -> tuple[str, bytes]:
-        """直近 12 か月の監査ログを Excel workbook として出力する。"""
-
-        end_at = _aware(now or _now()).astimezone(UTC)
-        start_at = _one_calendar_year_before(end_at)
-        records = self.store.list_audit_between(start_at=start_at, end_at=end_at)
-
-        openpyxl = importlib.import_module("openpyxl")
-        styles = importlib.import_module("openpyxl.styles")
-        write_only_cell = importlib.import_module("openpyxl.cell").WriteOnlyCell
-        workbook = openpyxl.Workbook(write_only=True)
-        header_font = styles.Font(bold=True)
-        header_fill = styles.PatternFill(fill_type="solid", fgColor="E9EEF6")
-        header_alignment = styles.Alignment(vertical="center")
-        detail_alignment = styles.Alignment(vertical="top", wrap_text=True)
-
-        def text_cell(sheet: Any, value: object) -> Any:
-            cell = write_only_cell(sheet, value="" if value is None else str(value))
-            # 「=...」等も formula ではなく監査原文の文字列として保存する。
-            cell.data_type = "s"
-            return cell
-
-        sheet_count = max(
-            1,
-            (len(records) + _EXCEL_MAX_DATA_ROWS_PER_SHEET - 1)
-            // _EXCEL_MAX_DATA_ROWS_PER_SHEET,
-        )
-        for sheet_index in range(sheet_count):
-            offset = sheet_index * _EXCEL_MAX_DATA_ROWS_PER_SHEET
-            sheet_records = records[offset : offset + _EXCEL_MAX_DATA_ROWS_PER_SHEET]
-            sheet_name = "audit_logs" if sheet_count == 1 else f"audit_logs_{sheet_index + 1:03d}"
-            sheet = workbook.create_sheet(sheet_name)
-            sheet.freeze_panes = "A2"
-            sheet.auto_filter.ref = f"A1:J{len(sheet_records) + 1}"
-            for column_letter, width in {
-                "A": 14,
-                "B": 22,
-                "C": 28,
-                "D": 40,
-                "E": 18,
-                "F": 42,
-                "G": 14,
-                "H": 38,
-                "I": 22,
-                "J": 64,
-            }.items():
-                sheet.column_dimensions[column_letter].width = width
-
-            header_cells = [text_cell(sheet, header) for header in _AUDIT_EXPORT_HEADERS]
-            for cell in header_cells:
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-            sheet.append(header_cells)
-
-            for record in sheet_records:
-                created_at_cell = write_only_cell(
-                    sheet,
-                    value=_aware(record.created_at).astimezone(_JST).replace(tzinfo=None),
-                )
-                created_at_cell.number_format = "yyyy-mm-dd hh:mm:ss"
-                detail_cell = text_cell(
-                    sheet,
-                    json.dumps(
-                        record.detail,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        default=str,
-                    ),
-                )
-                detail_cell.alignment = detail_alignment
-                sheet.append(
-                    [
-                        record.audit_id,
-                        created_at_cell,
-                        text_cell(sheet, record.event_type),
-                        text_cell(sheet, record.actor_user_id),
-                        text_cell(sheet, record.target_type),
-                        text_cell(sheet, record.target_id),
-                        text_cell(sheet, record.outcome),
-                        text_cell(sheet, record.request_id),
-                        text_cell(sheet, record.client_ip),
-                        detail_cell,
-                    ]
-                )
-
-        buffer = io.BytesIO()
-        workbook.save(buffer)
-        start_label = start_at.astimezone(_JST).strftime("%Y%m%d")
-        end_label = end_at.astimezone(_JST).strftime("%Y%m%d")
-        return f"nl2sql_audit_logs_{start_label}-{end_label}.xlsx", buffer.getvalue()
-
     def login(
         self,
         login_name: str,
@@ -240,30 +112,10 @@ class SecurityService:
         user = self.store.get_user_by_login(login_name.strip().casefold())
         now = _now()
         if user is None:
-            self._audit(
-                actor=None,
-                event="LOGIN_FAILED",
-                target_type="USER",
-                target_id=login_name.strip().casefold(),
-                outcome="DENIED",
-                detail={"reason": "invalid_credentials"},
-                request_id=request_id,
-                client_ip=client_ip,
-            )
             raise LoginFailed()
         if user.status != "ACTIVE" or (
             user.locked_until is not None and _aware(user.locked_until) > now
         ):
-            self._audit(
-                actor=user.user_id,
-                event="LOGIN_FAILED",
-                target_type="USER",
-                target_id=user.user_id,
-                outcome="DENIED",
-                detail={"reason": "account_unavailable"},
-                request_id=request_id,
-                client_ip=client_ip,
-            )
             raise LoginFailed()
         verified, updated_hash = verify_password(password, user.password_hash)
         if not verified:
@@ -276,16 +128,6 @@ class SecurityService:
                 user.user_id,
                 failed_count=failed_count,
                 locked_until=locked_until,
-            )
-            self._audit(
-                actor=user.user_id,
-                event="LOGIN_FAILED",
-                target_type="USER",
-                target_id=user.user_id,
-                outcome="DENIED",
-                detail={"reason": "invalid_credentials", "locked": locked_until is not None},
-                request_id=request_id,
-                client_ip=client_ip,
             )
             raise LoginFailed()
         self.store.record_login_success(user.user_id, password_hash=updated_hash)
@@ -303,16 +145,6 @@ class SecurityService:
         )
         self.store.create_session(session)
         principal = self._principal_for(user, session)
-        self._audit(
-            actor=user.user_id,
-            event="LOGIN_SUCCEEDED",
-            target_type="USER",
-            target_id=user.user_id,
-            outcome="SUCCESS",
-            detail={},
-            request_id=request_id,
-            client_ip=client_ip,
-        )
         return principal, token, csrf_token
 
     def authenticate_session(self, token: str) -> Principal:
@@ -359,16 +191,6 @@ class SecurityService:
 
     def logout(self, principal: Principal, *, request_id: str = "", client_ip: str = "") -> None:
         self.store.revoke_session(principal.session_id)
-        self._audit(
-            actor=principal.user_id,
-            event="LOGOUT",
-            target_type="SESSION",
-            target_id=principal.session_id,
-            outcome="SUCCESS",
-            detail={},
-            request_id=request_id,
-            client_ip=client_ip,
-        )
 
     def change_password(
         self,
@@ -385,16 +207,6 @@ class SecurityService:
         self._validate_new_password(new_password, user.login_name)
         self.store.set_password(user.user_id, hash_password(new_password), force_change=False)
         self.store.revoke_user_sessions(user.user_id)
-        self._audit(
-            actor=user.user_id,
-            event="PASSWORD_CHANGED",
-            target_type="USER",
-            target_id=user.user_id,
-            outcome="SUCCESS",
-            detail={},
-            request_id=request_id,
-            client_ip=client_ip,
-        )
         # 現 session は revoke 済み。呼び出し側は cookie を削除して再ログインさせる。
         return principal
 
@@ -433,7 +245,6 @@ class SecurityService:
             created = self.store.create_user(user)
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
-        self._audit_mutation(actor, "USER_CREATED", "USER", created.user_id, request_id, client_ip)
         return created, password
 
     def update_user(
@@ -482,7 +293,6 @@ class SecurityService:
             raise self._store_error(exc) from exc
         if status != "ACTIVE":
             self.store.revoke_user_sessions(user_id)
-        self._audit_mutation(actor, "USER_UPDATED", "USER", user_id, request_id, client_ip)
         return updated
 
     def reset_password(
@@ -504,7 +314,6 @@ class SecurityService:
         updated = self.store.get_user(user_id)
         if updated is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
-        self._audit_mutation(actor, "PASSWORD_RESET", "USER", user_id, request_id, client_ip)
         return updated, password
 
     def unlock_user(
@@ -517,7 +326,6 @@ class SecurityService:
         updated = self.store.get_user(user_id)
         if updated is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
-        self._audit_mutation(actor, "USER_UNLOCKED", "USER", user_id, request_id, client_ip)
         return updated
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
@@ -548,7 +356,6 @@ class SecurityService:
             created = self.store.create_role(role)
         except SecurityConflict as exc:
             raise SecurityApiError(409, str(exc)) from exc
-        self._audit_mutation(actor, "ROLE_CREATED", "ROLE", created.role_id, request_id, client_ip)
         return created
 
     def update_role(
@@ -582,7 +389,6 @@ class SecurityService:
             updated = self.store.update_role(role, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
-        self._audit_mutation(actor, "ROLE_UPDATED", "ROLE", role_id, request_id, client_ip)
         return updated
 
     def archive_role(
@@ -603,7 +409,6 @@ class SecurityService:
             archived = self.store.archive_role(role_id, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
-        self._audit_mutation(actor, "ROLE_ARCHIVED", "ROLE", role_id, request_id, client_ip)
         return archived
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
@@ -641,7 +446,7 @@ class SecurityService:
         entitlements: list[tuple[str, str, str]],
         version: int,
     ) -> RoleRecord:
-        unknown = permissions - ALL_PERMISSION_CODES
+        unknown = unknown_permission_codes(permissions)
         if unknown:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
         expanded = expand_permissions(permissions)
@@ -683,50 +488,6 @@ class SecurityService:
         if isinstance(exc, SecurityNotFound):
             return SecurityApiError(404, str(exc))
         return SecurityApiError(409, str(exc))
-
-    def _audit_mutation(
-        self,
-        actor: Principal,
-        event: str,
-        target_type: str,
-        target_id: str,
-        request_id: str,
-        client_ip: str,
-    ) -> None:
-        self._audit(
-            actor=actor.user_id,
-            event=event,
-            target_type=target_type,
-            target_id=target_id,
-            outcome="SUCCESS",
-            detail={},
-            request_id=request_id,
-            client_ip=client_ip,
-        )
-
-    def _audit(
-        self,
-        *,
-        actor: str | None,
-        event: str,
-        target_type: str,
-        target_id: str,
-        outcome: str,
-        detail: dict[str, object],
-        request_id: str,
-        client_ip: str,
-    ) -> None:
-        self.store.write_audit(
-            actor_user_id=actor,
-            event_type=event,
-            target_type=target_type,
-            target_id=target_id,
-            outcome=outcome,
-            detail=detail,
-            request_id=request_id,
-            client_ip=client_ip,
-        )
-
 
 @lru_cache
 def get_security_service() -> SecurityService:

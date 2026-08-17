@@ -108,6 +108,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "008_quality_evaluation_jobs.sql",
         "durable NL2SQL quality evaluation jobs",
     ),
+    MigrationArtifact(
+        9,
+        "009_rbac_permission_cleanup.sql",
+        "RBAC permission cleanup for appearance settings",
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -189,7 +194,6 @@ PRESERVED_TABLES = frozenset(
         "NL2SQL_APP_ROLE_PERMISSIONS",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
         "NL2SQL_AUTH_SESSIONS",
-        "NL2SQL_AUTH_AUDIT_LOG",
         "NL2SQL_DEEPSEC_MIGRATIONS",
         "NL2SQL_FEEDBACK_VECTORS",
     }
@@ -766,6 +770,12 @@ class SystemSchemaManager:
                         if state == "mismatch":
                             raise self._foreign_key_mismatch_error(foreign_key) from exc
                     if code in _IGNORED_APPLY_CODES:
+                        continue
+                    if (
+                        migration.version == 9
+                        and code == "ORA-00942"
+                        and "NL2SQL_APP_ROLE_PERMISSIONS" in statement.upper()
+                    ):
                         continue
                     raise
             cursor.execute(

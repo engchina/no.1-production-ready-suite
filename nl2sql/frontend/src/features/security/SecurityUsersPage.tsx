@@ -39,6 +39,7 @@ import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { useAuth } from "./AuthProvider";
+import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -82,7 +83,7 @@ function userStatusLabel(user: SecurityUser) {
 export function SecurityUsersPage() {
   const confirm = useConfirm();
   const { hasPermission } = useAuth();
-  const canManage = hasPermission("security.users.manage");
+  const canManage = hasPermission(MENU_PERMISSIONS.securityUsers);
   const [users, setUsers] = useState<SecurityUser[]>([]);
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [loading, setLoading] = useState(true);

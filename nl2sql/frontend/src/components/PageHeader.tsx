@@ -10,6 +10,8 @@ import {
 } from "react";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 
+import { StatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
+
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -260,6 +262,28 @@ export function PageActionBar({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function PageHeaderStatusBadge({
+  variant,
+  label,
+  testId,
+}: {
+  variant: StatusVariant;
+  label: string;
+  testId?: string;
+}) {
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-page-header-status="true"
+      data-testid={testId}
+    >
+      <StatusBadge variant={variant} label={label} />
+    </span>
   );
 }
 

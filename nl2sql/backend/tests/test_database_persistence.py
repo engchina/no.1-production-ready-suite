@@ -12,7 +12,7 @@ import pytest
 import app.api.health as health_routes
 import app.features.nl2sql.router as nl2sql_routes
 from app.clients.oracle import OracleConnectionTimeoutError
-from app.features.nl2sql.models import Nl2SqlProfile
+from app.features.nl2sql.models import DbAdminObjectPage, Nl2SqlProfile
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.features.nl2sql.service import (
     Nl2SqlPersistenceUnavailable,
@@ -356,7 +356,7 @@ async def test_profile_api_returns_retryable_503_without_ghost_state(
     ) as client:
         response = await client.post(
             "/api/nl2sql/profiles",
-            json={"name": "保存できないプロファイル"},
+            json={"name": "save_blocked_profile"},
         )
         blocked_read = await client.get("/api/nl2sql/profiles")
         persistence = await client.get("/api/nl2sql/persistence")
@@ -396,3 +396,30 @@ async def test_repository_programming_error_returns_local_500_error_code(
     assert "Retry-After" not in response.headers
     assert response.json()["error_code"] == "schema_object_query_failed"
     assert "ORA-" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_db_admin_objects_route_passes_owner_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Service:
+        kwargs: dict[str, Any] = {}
+
+        def ensure_persistence_available(self) -> None:
+            return None
+
+        def list_db_admin_objects_page(self, **kwargs: Any) -> DbAdminObjectPage:
+            self.kwargs = kwargs
+            return DbAdminObjectPage(owner=kwargs.get("owner", ""), items=[])
+
+    service = Service()
+    monkeypatch.setattr(nl2sql_routes, "nl2sql_service", service)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/nl2sql/db-admin/objects?limit=10&owner=ADMIN")
+
+    assert response.status_code == 200
+    assert service.kwargs["owner"] == "ADMIN"

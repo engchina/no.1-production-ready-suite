@@ -29,6 +29,8 @@ import { ApiError, apiFetch, apiGet, apiPostForm } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
+import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
+import { QuestionText } from "../components/QuestionText";
 import {
   qualityEvaluationPollingInterval,
   toggleQualityEvaluationEngine,
@@ -321,7 +323,7 @@ export function EvaluationPage() {
                       .filter((profile) => !profile.archived)
                       .map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {profile.name}
+                          {profileDisplayLabel(profile)}
                         </option>
                       ))}
                   </select>
@@ -672,7 +674,9 @@ export function EvaluationPage() {
                     >
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-foreground">{job.profile_name}</span>
+                          <span className="font-semibold text-foreground">
+                            {profileRecordDisplayLabel(job)}
+                          </span>
                           <StatusBadge
                             variant={statusVariant(job.status)}
                             label={statusLabel(job.status)}
@@ -888,9 +892,12 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
               <tr key={result.result_id} className="align-top">
                 <td className="max-w-56 px-3 py-3">
                   <div className="font-semibold text-foreground">{result.case_id}</div>
-                  <div className="mt-1 break-words text-xs leading-5 text-muted">
-                    {result.question}
-                  </div>
+                  <QuestionText
+                    value={result.question}
+                    variant="compact"
+                    maxLines={2}
+                    className="mt-1 text-muted"
+                  />
                 </td>
                 <td className="px-3 py-3">
                   <div className="font-medium text-foreground">{engineLabel(result.engine)}</div>
@@ -919,7 +926,12 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
                 <h3 className="break-words font-semibold text-foreground">{result.case_id}</h3>
-                <p className="mt-1 break-words text-xs leading-5 text-muted">{result.question}</p>
+                <QuestionText
+                  value={result.question}
+                  variant="compact"
+                  maxLines={2}
+                  className="mt-1 text-muted"
+                />
               </div>
               <VerdictBadge verdict={result.verdict} />
             </div>

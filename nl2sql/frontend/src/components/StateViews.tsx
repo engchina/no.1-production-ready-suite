@@ -11,7 +11,7 @@ export function LoadingState({
   operationKey,
   onCancel,
   placement = "panel",
-  activityIcon = "spinner",
+  activityIcon,
 }: {
   label: string;
   operationKey?: string | number | null;

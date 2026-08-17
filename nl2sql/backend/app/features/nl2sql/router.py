@@ -24,6 +24,8 @@ from app.settings import get_settings
 
 from .incremental_store import IncrementalVersionConflict
 from .models import (
+    AdminFeedbackReviewData,
+    AdminFeedbackReviewRequest,
     AgentConversationCreateData,
     AgentConversationCreateRequest,
     AgentConversationsData,
@@ -101,17 +103,18 @@ from .models import (
     PersistenceStatusData,
     PreviewData,
     PreviewRequest,
+    ProfileDeleteData,
     ProfileLearningMaterialImportData,
+    ProfilePatchRequest,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
+    ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
     ProfileSummaryPage,
     ProfileSyncJobData,
     ProfileSyncJobRequest,
     ProfileUpsertRequest,
     QueryResults,
-    RepairData,
-    RepairRequest,
     ReverseSqlData,
     ReverseSqlRequest,
     RewriteData,
@@ -139,8 +142,10 @@ from .models import (
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
     SyntheticDataResultsData,
+    normalize_profile_identifier,
+    validate_profile_identifier,
 )
-from .oracle_adapter import TabularImportValidationError
+from .oracle_adapter import OracleAdapterError, TabularImportValidationError
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
     QualityEvaluationJobPage,
@@ -152,10 +157,11 @@ from .quality_evaluation_service import (
     quality_evaluation_service,
 )
 from .service import (
-    is_select_only as _is_select_only,
+    ProfileOracleCleanupFailed,
+    nl2sql_service,
 )
 from .service import (
-    nl2sql_service,
+    is_select_only as _is_select_only,
 )
 
 logger = logging.getLogger(__name__)
@@ -203,6 +209,8 @@ def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
         return ApiResponse(data=nl2sql_service.preview(req))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/execute", response_model=ApiResponse[QueryResults])
@@ -324,7 +332,7 @@ def create_profile(
 @router.patch("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
 def update_profile(
     profile_id: str,
-    req: ProfileUpsertRequest,
+    req: ProfilePatchRequest,
     response: Response,
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> ApiResponse[Nl2SqlProfile]:
@@ -332,9 +340,32 @@ def update_profile(
     try:
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
+        patch_data = req.model_dump(exclude_unset=True, exclude_none=True)
+
+        def apply_profile_patch(current: Nl2SqlProfile) -> Nl2SqlProfile:
+            update = dict(patch_data)
+            profile_name = normalize_profile_identifier(update.get("name", current.name))
+            validate_profile_identifier(profile_name)
+            update["name"] = profile_name
+            select_ai_patch = update.pop("select_ai_config", None)
+            if select_ai_patch is not None:
+                select_ai_config_data = {
+                    **current.select_ai_config.model_dump(),
+                    **select_ai_patch,
+                    "profile_name": profile_name,
+                }
+                update["select_ai_config"] = ProfileSelectAiConfig.model_validate(
+                    select_ai_config_data
+                )
+            else:
+                update["select_ai_config"] = current.select_ai_config.model_copy(
+                    update={"profile_name": profile_name}
+                )
+            return current.model_copy(update=update)
+
         updated = nl2sql_service.update_profile(
             profile_id,
-            lambda current: current.model_copy(update=req.model_dump()),
+            apply_profile_patch,
             expected_etag=if_match.strip('"') if if_match else None,
         )
     except IncrementalVersionConflict as exc:
@@ -354,16 +385,16 @@ def update_profile(
     return ApiResponse(data=updated)
 
 
-@router.delete("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
+@router.delete("/profiles/{profile_id}", response_model=ApiResponse[ProfileDeleteData])
 def delete_profile(
     profile_id: str,
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-) -> ApiResponse[Nl2SqlProfile]:
+) -> ApiResponse[ProfileDeleteData]:
     """NL2SQL profile を物理削除する。"""
     try:
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
-        deleted = nl2sql_service.delete_profile(
+        deleted = nl2sql_service.delete_profile_with_oracle_cleanup(
             profile_id,
             expected_etag=if_match.strip('"') if if_match else None,
         )
@@ -388,6 +419,8 @@ def delete_profile(
                     extra={"profile_id": profile_id, "cleanup": cleanup.__name__},
                 )
         return ApiResponse(data=deleted)
+    except ProfileOracleCleanupFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except IncrementalVersionConflict as exc:
         raise HTTPException(
             status_code=409,
@@ -835,7 +868,10 @@ def run_select_ai_agent_team(
     req: AgentTeamRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent team を実行する。"""
-    return ApiResponse(data=nl2sql_service.run_select_ai_agent_team(req))
+    try:
+        return ApiResponse(data=nl2sql_service.run_select_ai_agent_team(req))
+    except OracleAdapterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/select-ai-agent/run-tool", response_model=ApiResponse[AgentTeamRunData])
@@ -843,7 +879,10 @@ def run_select_ai_agent_tool(
     req: AgentToolRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent tool を明示名で実行する。"""
-    return ApiResponse(data=nl2sql_service.run_select_ai_agent_tool(req))
+    try:
+        return ApiResponse(data=nl2sql_service.run_select_ai_agent_tool(req))
+    except OracleAdapterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post(
@@ -904,6 +943,18 @@ def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
         data = nl2sql_service.save_feedback(req.history_id, req.rating, req.comment)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    return ApiResponse(data=data)
+
+
+@router.post("/feedback/admin-review", response_model=ApiResponse[AdminFeedbackReviewData])
+def admin_review_feedback(req: AdminFeedbackReviewRequest) -> ApiResponse[AdminFeedbackReviewData]:
+    """管理者 review を保存し、必要な場合だけ Select AI feedback へ登録する。"""
+    try:
+        data = nl2sql_service.save_admin_feedback_review(req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=data)
 
 
@@ -1216,17 +1267,6 @@ def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
     )
 
 
-@router.post("/repair", response_model=ApiResponse[RepairData])
-def repair(req: RepairRequest) -> ApiResponse[RepairData]:
-    """Oracle error message に基づいて SELECT SQL の修復候補を返す。"""
-    return ApiResponse(
-        data=nl2sql_service.repair_oracle_error(
-            req,
-            req.row_limit,
-        )
-    )
-
-
 @router.get(
     "/quality-evaluations/capabilities",
     response_model=ApiResponse[QualityEvaluationCapabilities],
@@ -1417,8 +1457,10 @@ def db_admin_objects(
     cursor: str | None = None,
     limit: int = 50,
     q: str = "",
+    owner: str = "",
     type: str = "all",  # noqa: A002 - public query parameter name
     row_state: str = "all",
+    include_counts: bool = True,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[DbAdminObjectPage] | Response:
     """データ管理向け軽量 object page。全量 Catalog/CLOB は読み込まない。"""
@@ -1432,8 +1474,10 @@ def db_admin_objects(
         cursor=cursor,
         limit=limit,
         query=q,
+        owner=owner,
         object_type=type,
         row_state=row_state,
+        include_counts=include_counts,
     )
     quoted_etag = f'"schema-{page.catalog_version}"'
     if if_none_match == quoted_etag:
@@ -1444,18 +1488,21 @@ def db_admin_objects(
 
 @router.get("/db-admin/tables/{table_name}", response_model=ApiResponse[DbAdminObjectDetail])
 def db_admin_table_detail(
-    table_name: str, include_ddl: bool = True, exact_count: bool = False
+    table_name: str, include_ddl: bool = True, exact_count: bool = False, owner: str = ""
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin table 詳細/DDL を返す。
 
     include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
     exact_count=false は num_rows 統計、true のみ COUNT(*) で正確件数を取得。
     """
-    return ApiResponse(
-        data=nl2sql_service.get_db_admin_object(
-            table_name, "table", include_ddl=include_ddl, exact_count=exact_count
+    try:
+        return ApiResponse(
+            data=nl2sql_service.get_db_admin_object(
+                table_name, "table", owner=owner, include_ddl=include_ddl, exact_count=exact_count
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/db-admin/views", response_model=ApiResponse[DbAdminObjectsData])
@@ -1466,30 +1513,39 @@ def db_admin_views() -> ApiResponse[DbAdminObjectsData]:
 
 @router.get("/db-admin/views/{view_name}", response_model=ApiResponse[DbAdminObjectDetail])
 def db_admin_view_detail(
-    view_name: str, include_ddl: bool = True, exact_count: bool = False
+    view_name: str, include_ddl: bool = True, exact_count: bool = False, owner: str = ""
 ) -> ApiResponse[DbAdminObjectDetail]:
     """DB admin view 詳細/DDL を返す。
 
     include_ddl=false で重い GET_DDL を省略(列一覧の初期表示を高速化)。
     exact_count=false は num_rows 統計、true のみ COUNT(*) で正確件数を取得(view は通常 None)。
     """
-    return ApiResponse(
-        data=nl2sql_service.get_db_admin_object(
-            view_name, "view", include_ddl=include_ddl, exact_count=exact_count
+    try:
+        return ApiResponse(
+            data=nl2sql_service.get_db_admin_object(
+                view_name, "view", owner=owner, include_ddl=include_ddl, exact_count=exact_count
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/db-admin/drop-table", response_model=ApiResponse[DbAdminExecuteData])
 def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin DROP TABLE execution。"""
-    return ApiResponse(data=nl2sql_service.drop_db_admin_table(req))
+    try:
+        return ApiResponse(data=nl2sql_service.drop_db_admin_table(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/db-admin/truncate-table", response_model=ApiResponse[DbAdminExecuteData])
 def db_admin_truncate_table(req: DbAdminTruncateTableRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin TRUNCATE TABLE execution。"""
-    return ApiResponse(data=nl2sql_service.truncate_db_admin_table(req))
+    try:
+        return ApiResponse(data=nl2sql_service.truncate_db_admin_table(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/db-admin/execute", response_model=ApiResponse[DbAdminExecuteData])
@@ -1507,7 +1563,10 @@ def db_admin_statements(req: DbAdminStatementsRequest) -> ApiResponse[DbAdminExe
 @router.post("/db-admin/drop-view", response_model=ApiResponse[DbAdminExecuteData])
 def db_admin_drop_view(req: DbAdminDropViewRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin DROP VIEW execution。"""
-    return ApiResponse(data=nl2sql_service.drop_db_admin_view(req))
+    try:
+        return ApiResponse(data=nl2sql_service.drop_db_admin_view(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/db-admin/preview-data", response_model=ApiResponse[DbAdminDataPreviewData])
@@ -1576,12 +1635,16 @@ def db_admin_import_tabular(
 
 
 @router.get("/db-admin/tables/{table_name}/export.xlsx")
-def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
+def db_admin_export_table_xlsx(table_name: str, limit: int = 1000, owner: str = "") -> Response:
     """DB admin table の列情報を Excel workbook として出力する。"""
-    filename, content = nl2sql_service.export_db_admin_table_xlsx(
-        table_name,
-        limit=max(1, min(limit, 50000)),
-    )
+    try:
+        filename, content = nl2sql_service.export_db_admin_table_xlsx(
+            table_name,
+            limit=max(1, min(limit, 50000)),
+            owner=owner,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1590,12 +1653,16 @@ def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
 
 
 @router.get("/db-admin/views/{view_name}/export.xlsx")
-def db_admin_export_view_xlsx(view_name: str, limit: int = 1000) -> Response:
+def db_admin_export_view_xlsx(view_name: str, limit: int = 1000, owner: str = "") -> Response:
     """DB admin view の列情報を Excel workbook として出力する。"""
-    filename, content = nl2sql_service.export_db_admin_view_xlsx(
-        view_name,
-        limit=max(1, min(limit, 50000)),
-    )
+    try:
+        filename, content = nl2sql_service.export_db_admin_view_xlsx(
+            view_name,
+            limit=max(1, min(limit, 50000)),
+            owner=owner,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1608,7 +1675,10 @@ def generate_synthetic_data(
     req: SyntheticDataGenerateRequest,
 ) -> ApiResponse[SyntheticDataOperationData]:
     """DBMS_CLOUD_AI synthetic table data generation execution。"""
-    return ApiResponse(data=nl2sql_service.generate_synthetic_data(req))
+    try:
+        return ApiResponse(data=nl2sql_service.generate_synthetic_data(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/synthetic-data/results", response_model=ApiResponse[SyntheticDataResultsData])
@@ -1617,12 +1687,15 @@ def synthetic_data_results(
     limit: int = 100,
 ) -> ApiResponse[SyntheticDataResultsData]:
     """Synthetic DB data generation 後の table preview を返す。"""
-    return ApiResponse(
-        data=nl2sql_service.synthetic_data_results(
-            table_name=table_name,
-            limit=max(1, min(limit, 1000)),
+    try:
+        return ApiResponse(
+            data=nl2sql_service.synthetic_data_results(
+                table_name=table_name,
+                limit=max(1, min(limit, 1000)),
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/diagnostics", response_model=ApiResponse[DiagnosticsData])

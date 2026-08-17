@@ -9,6 +9,7 @@ import {
 
 import { apiGet, isAbortError, isTimeoutError } from "@/lib/api";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { parseDbAdminObjectTarget } from "./components/DbObjectManagementShared";
 import type { DbAdminObjectDetail } from "./types";
 
 export const DB_OBJECT_DETAIL_TIMEOUT_MS = API_TIMEOUT_MS.interactiveDetail;
@@ -37,6 +38,15 @@ interface DbObjectDetailRequestState {
 function detailLoadError(cause: unknown, fallback: string): string {
   if (!(cause instanceof Error) || !cause.message.trim()) return fallback;
   return `${fallback} ${cause.message}`;
+}
+
+function detailUrl(collectionPath: string, name: string, includeDdl: boolean) {
+  const target = parseDbAdminObjectTarget(name);
+  const params = new URLSearchParams({
+    include_ddl: includeDdl ? "1" : "0",
+  });
+  if (target.owner) params.set("owner", target.owner);
+  return `${collectionPath}/${encodeURIComponent(target.name)}?${params.toString()}`;
 }
 
 /**
@@ -100,7 +110,7 @@ export function useDbObjectDetailRequest({
       setDdlLoading(false);
       try {
         const nextDetail = await apiGet<DbAdminObjectDetail>(
-          `${collectionPath}/${encodeURIComponent(name)}?include_ddl=0`,
+          detailUrl(collectionPath, name, false),
           {
             signal: controller.signal,
             timeoutMs: DB_OBJECT_DETAIL_TIMEOUT_MS,
@@ -130,19 +140,24 @@ export function useDbObjectDetailRequest({
 
   const loadDdl = useCallback(
     async (name: string) => {
-      if (!detail || detail.name !== name || detail.ddl || ddlControllerRef.current?.name === name) {
+      const target = parseDbAdminObjectTarget(name);
+      const detailKey = parseDbAdminObjectTarget(
+        detail?.qualified_name || detail?.name || "",
+        detail?.owner,
+      ).qualifiedName;
+      if (!detail || detailKey !== target.qualifiedName || detail.ddl || ddlControllerRef.current?.name === target.qualifiedName) {
         return;
       }
       const sequence = sequenceRef.current + 1;
       sequenceRef.current = sequence;
       ddlControllerRef.current?.controller.abort();
       const controller = new AbortController();
-      ddlControllerRef.current = { name, controller };
+      ddlControllerRef.current = { name: target.qualifiedName, controller };
       setDdlError("");
       setDdlLoading(true);
       try {
         const nextDetail = await apiGet<DbAdminObjectDetail>(
-          `${collectionPath}/${encodeURIComponent(name)}?include_ddl=1`,
+          detailUrl(collectionPath, target.qualifiedName, true),
           {
             signal: controller.signal,
             timeoutMs: DB_OBJECT_DETAIL_TIMEOUT_MS,
@@ -150,7 +165,13 @@ export function useDbObjectDetailRequest({
         );
         if (sequence === sequenceRef.current && !controller.signal.aborted) {
           setDetail((current) =>
-            current && current.name === name ? { ...current, ddl: nextDetail.ddl } : current,
+            current &&
+            parseDbAdminObjectTarget(
+              current.qualified_name || current.name,
+              current.owner,
+            ).qualifiedName === target.qualifiedName
+              ? { ...current, ddl: nextDetail.ddl }
+              : current,
           );
         }
       } catch (cause) {

@@ -31,10 +31,12 @@ from .models import (
     SchemaTable,
     SchemaViewDependency,
 )
-from .object_identity import parse_object_identity, qualified_object_name
+from .object_identity import OracleObjectIdentity, parse_object_identity, qualified_object_name
 from .object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_object_name,
+    is_user_visible_owner_name,
+    is_user_visible_schema_object,
 )
 
 
@@ -158,6 +160,8 @@ def _normalize_select_ai_object_list(value: Any) -> list[dict[str, Any]]:
                 record.setdefault("owner", owner.strip())
                 break
         owner = str(record.get("owner") or "").strip().upper()
+        if not is_user_visible_schema_object(owner, name):
+            continue
         key = f"{owner}.{name.upper()}"
         if key in seen:
             continue
@@ -234,6 +238,10 @@ def _extract_select_statement(text: str) -> str:
 def _quote_identifier(identifier: str) -> str:
     escaped = identifier.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _quote_object_identity(identity: OracleObjectIdentity) -> str:
+    return f"{_quote_identifier(identity.owner)}.{_quote_identifier(identity.object_name)}"
 
 
 def _strict_sql_name(value: str) -> str:
@@ -505,8 +513,11 @@ class OracleNl2SqlAdapter:
              AND cc.table_name = c.table_name
              AND cc.column_name = c.column_name
             WHERE {owner_filter}
+              AND c.owner NOT LIKE '%$%'
+              AND c.owner NOT LIKE '%#%'
               AND c.table_name NOT LIKE '%$%'
               AND c.table_name NOT LIKE '%#%'
+              AND c.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
               {target_filter}
             ORDER BY c.owner, c.table_name, c.column_id
         """
@@ -575,8 +586,11 @@ class OracleNl2SqlAdapter:
             JOIN all_users u ON u.username = o.owner
             WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND o.status = 'VALID'
+              AND o.owner NOT LIKE '%$%'
+              AND o.owner NOT LIKE '%#%'
               AND o.object_name NOT LIKE '%$%'
               AND o.object_name NOT LIKE '%#%'
+              AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
             GROUP BY o.owner, NVL(u.oracle_maintained, 'N')
             ORDER BY o.owner
         """
@@ -593,6 +607,8 @@ class OracleNl2SqlAdapter:
                     current_owner = owner
                 if oracle_maintained:
                     excluded_maintained.add(owner)
+                    continue
+                if not is_user_visible_owner_name(owner):
                     continue
                 if allowlist and owner not in allowlist:
                     continue
@@ -656,8 +672,11 @@ class OracleNl2SqlAdapter:
             WHERE {owner_filter}
               AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND o.status = 'VALID'
+              AND o.owner NOT LIKE '%$%'
+              AND o.owner NOT LIKE '%#%'
               AND o.object_name NOT LIKE '%$%'
               AND o.object_name NOT LIKE '%#%'
+              AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
               {target_filter}
             ORDER BY o.owner, o.object_name
         """
@@ -670,6 +689,7 @@ class OracleNl2SqlAdapter:
                     else str(last_ddl_time or "")
                 )
                 for owner, object_name, last_ddl_time in cursor
+                if is_user_visible_schema_object(str(owner or ""), str(object_name or ""))
             }
 
     def catalog_fingerprint(self, catalog: SchemaCatalog) -> str:
@@ -696,6 +716,24 @@ class OracleNl2SqlAdapter:
         binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(owners))}
         placeholders = ", ".join(f":{name}" for name in binds)
         return f"{business_owner_filter} AND {column_sql} IN ({placeholders})", binds
+
+    def _db_admin_identity(self, object_name: str, owner: str = "") -> OracleObjectIdentity:
+        requested_owner = owner.strip().strip('"').upper()
+        try:
+            identity = parse_object_identity(
+                object_name,
+                default_owner=requested_owner or self.settings.oracle_user,
+            )
+        except ValueError as exc:
+            raise OracleAdapterError(str(exc)) from exc
+        if requested_owner and identity.owner != requested_owner:
+            raise OracleAdapterError("owner と object_name の owner 指定が一致しません。")
+        if not is_user_visible_schema_object(identity.owner, identity.object_name):
+            raise OracleAdapterError(
+                "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
+                "システムテーブル管理からのみ管理できます。"
+            )
+        return identity
 
     def _load_constraints(
         self,
@@ -800,6 +838,16 @@ class OracleNl2SqlAdapter:
             WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')
               AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
               AND {owner_filter}
+              AND d.owner NOT LIKE '%$%'
+              AND d.owner NOT LIKE '%#%'
+              AND d.name NOT LIKE '%$%'
+              AND d.name NOT LIKE '%#%'
+              AND d.name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
+              AND d.referenced_owner NOT LIKE '%$%'
+              AND d.referenced_owner NOT LIKE '%#%'
+              AND d.referenced_name NOT LIKE '%$%'
+              AND d.referenced_name NOT LIKE '%#%'
+              AND d.referenced_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
               {target_filter}
             ORDER BY d.name, d.referenced_owner, d.referenced_name
             """,
@@ -1060,52 +1108,65 @@ class OracleNl2SqlAdapter:
         )
 
     def list_db_admin_objects(self, object_type: str) -> list[dict[str, Any]]:
-        """List user tables or views for the DB admin console."""
+        """List visible tables or views for the DB admin console."""
         normalized_type = "view" if object_type.lower() == "view" else "table"
         if normalized_type == "view":
+            owner_filter, owner_binds = self._schema_owner_filter("v.owner")
             sql = """
-                SELECT v.view_name, USER, NULL, NVL(c.comments, ' ')
-                FROM user_views v
-                LEFT JOIN user_tab_comments c ON c.table_name = v.view_name
+                SELECT v.view_name, v.owner AS owner_name, NULL, NVL(c.comments, ' ')
+                FROM all_views v
+                LEFT JOIN all_tab_comments c
+                  ON c.owner = v.owner AND c.table_name = v.view_name
                 WHERE v.view_name NOT LIKE '%$%'
                   AND v.view_name NOT LIKE '%#%'
-                ORDER BY v.view_name
+                  AND v.view_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
+                  AND v.owner NOT LIKE '%$%'
+                  AND v.owner NOT LIKE '%#%'
+                  AND {owner_filter}
+                ORDER BY v.owner, v.view_name
             """
         else:
+            owner_filter, owner_binds = self._schema_owner_filter("t.owner")
             sql = """
-                SELECT t.table_name, USER, t.num_rows, NVL(c.comments, ' ')
-                FROM user_tables t
-                LEFT JOIN user_tab_comments c ON c.table_name = t.table_name
+                SELECT t.table_name, t.owner AS owner_name, t.num_rows, NVL(c.comments, ' ')
+                FROM all_tables t
+                LEFT JOIN all_tab_comments c
+                  ON c.owner = t.owner AND c.table_name = t.table_name
                 WHERE t.table_name NOT LIKE '%$%'
                   AND t.table_name NOT LIKE '%#%'
-                ORDER BY t.table_name
+                  AND t.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
+                  AND t.owner NOT LIKE '%$%'
+                  AND t.owner NOT LIKE '%#%'
+                  AND {owner_filter}
+                ORDER BY t.owner, t.table_name
             """
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql)
+            cursor.execute(sql.format(owner_filter=owner_filter), owner_binds)
             rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
         return [
             {
                 "name": str(row[0] or ""),
                 "owner": str(row[1] or ""),
+                "qualified_name": qualified_object_name(str(row[1] or ""), str(row[0] or "")),
                 "object_type": normalized_type,
                 "row_count": int(row[2]) if row[2] is not None else None,
                 "comment": _coerce_text(row[3]) if len(row) > 3 else "",
             }
             for row in rows
-            if is_user_visible_object_name(str(row[0] or ""))
+            if is_user_visible_schema_object(str(row[1] or ""), str(row[0] or ""))
         ]
 
-    def find_db_admin_object_type(self, object_name: str) -> str | None:
+    def find_db_admin_object_type(self, object_name: str, owner: str = "") -> str | None:
         """同名オブジェクトの実種別を、エラー表示の補足用に取得する。"""
-        safe_name = _strict_sql_name(object_name)
+        identity = self._db_admin_identity(object_name, owner)
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT object_type FROM user_objects
-                WHERE object_name = :object_name
+                SELECT object_type FROM all_objects
+                WHERE owner = :owner AND object_name = :object_name
                 ORDER BY CASE object_type WHEN 'TABLE' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
                 """,
-                {"object_name": safe_name},
+                {"owner": identity.owner, "object_name": identity.object_name},
             )
             row = cursor.fetchone()
         return str(row[0]).upper() if row and row[0] else None
@@ -1114,6 +1175,7 @@ class OracleNl2SqlAdapter:
         self,
         *,
         object_name: str,
+        owner: str = "",
         object_type: str,
         include_ddl: bool = True,
         exact_count: bool = False,
@@ -1125,7 +1187,9 @@ class OracleNl2SqlAdapter:
         exact_count=False のときは全表スキャンの COUNT(*) を実行せず row_count=None を返す
         (件数は呼び出し側が num_rows 統計で補完。正確件数は exact_count=True 時のみ)。
         """
-        safe_name = _strict_sql_name(object_name)
+        identity = self._db_admin_identity(object_name, owner)
+        safe_name = identity.object_name
+        quoted_object = _quote_object_identity(identity)
         normalized_type = "VIEW" if object_type.lower() == "view" else "TABLE"
         columns: list[SchemaColumn] = []
         warnings: list[str] = []
@@ -1147,13 +1211,15 @@ class OracleNl2SqlAdapter:
                        END AS data_type,
                        c.nullable,
                        NVL(cc.comments, ' ')
-                FROM user_tab_columns c
-                LEFT JOIN user_col_comments cc
-                  ON cc.table_name = c.table_name AND cc.column_name = c.column_name
-                WHERE c.table_name = :object_name
+                FROM all_tab_columns c
+                LEFT JOIN all_col_comments cc
+                  ON cc.owner = c.owner
+                 AND cc.table_name = c.table_name
+                 AND cc.column_name = c.column_name
+                WHERE c.owner = :owner AND c.table_name = :object_name
                 ORDER BY c.column_id
                 """,
-                {"object_name": safe_name},
+                {"owner": identity.owner, "object_name": safe_name},
             )
             for column_name, data_type, nullable, column_comment in cursor:
                 columns.append(
@@ -1166,15 +1232,18 @@ class OracleNl2SqlAdapter:
                     )
                 )
             cursor.execute(
-                "SELECT comments FROM user_tab_comments WHERE table_name = :object_name",
-                {"object_name": safe_name},
+                """
+                SELECT comments FROM all_tab_comments
+                WHERE owner = :owner AND table_name = :object_name
+                """,
+                {"owner": identity.owner, "object_name": safe_name},
             )
             row = cursor.fetchone()
             comment = _coerce_text(row[0]) if row and row[0] else ""
             if normalized_type == "TABLE" and exact_count:
                 try:
                     cursor.execute(
-                        f"SELECT COUNT(*) FROM {_quote_identifier(safe_name)}"  # nosec B608
+                        f"SELECT COUNT(*) FROM {quoted_object}"  # nosec B608
                     )
                     row = cursor.fetchone()
                     row_count = int(row[0] or 0) if row else None
@@ -1188,12 +1257,12 @@ class OracleNl2SqlAdapter:
                     with suppress(Exception):
                         cursor.execute(
                             """
-                            SELECT object_type FROM user_objects
-                            WHERE object_name = :object_name
+                            SELECT object_type FROM all_objects
+                            WHERE owner = :owner AND object_name = :object_name
                             ORDER BY CASE object_type
                               WHEN 'MATERIALIZED VIEW' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
                             """,
-                            {"object_name": safe_name},
+                            {"owner": identity.owner, "object_name": safe_name},
                         )
                         row = cursor.fetchone()
                         actual = str(row[0] or "").upper() if row else ""
@@ -1203,8 +1272,15 @@ class OracleNl2SqlAdapter:
                             ddl_type = "TABLE"
                 try:
                     cursor.execute(
-                        "SELECT DBMS_METADATA.GET_DDL(:object_type, :object_name) FROM DUAL",
-                        {"object_type": ddl_type, "object_name": safe_name},
+                        (
+                            "SELECT DBMS_METADATA.GET_DDL"
+                            "(:object_type, :object_name, :owner) FROM DUAL"
+                        ),
+                        {
+                            "object_type": ddl_type,
+                            "object_name": safe_name,
+                            "owner": identity.owner,
+                        },
                     )
                     row = cursor.fetchone()
                     ddl = _coerce_text(row[0]) if row and row[0] else ""
@@ -1217,20 +1293,21 @@ class OracleNl2SqlAdapter:
             if comment:
                 escaped_comment = comment.replace("'", "''")
                 ddl += (
-                    f"\nCOMMENT ON {normalized_type} {_quote_identifier(safe_name)} "
+                    f"\nCOMMENT ON {normalized_type} {quoted_object} "
                     f"IS '{escaped_comment}';"
                 )
             for column in columns:
                 if column.comment:
                     escaped_column_comment = column.comment.replace("'", "''")
                     ddl += (
-                        f"\nCOMMENT ON COLUMN {_quote_identifier(safe_name)}."
+                        f"\nCOMMENT ON COLUMN {quoted_object}."
                         f"{_quote_identifier(column.column_name)} "
                         f"IS '{escaped_column_comment}';"
                     )
         return {
             "name": safe_name,
-            "owner": self.settings.oracle_user.strip().upper(),
+            "owner": identity.owner,
+            "qualified_name": identity.qualified_name,
             "object_type": normalized_type.lower(),
             "row_count": row_count,
             "comment": comment,
@@ -1531,6 +1608,7 @@ class OracleNl2SqlAdapter:
         self,
         *,
         table_name: str,
+        owner: str = "",
         columns: list[CsvImportColumn],
         rows: list[dict[str, str | None]],
         truncate: bool,
@@ -1540,21 +1618,24 @@ class OracleNl2SqlAdapter:
         CSV 列名とテーブル列名を大文字比較でマッチングし、行ごとに INSERT して
         エラー先頭 5 件を収集する。成功 1 件以上で commit。
         """
-        safe_table = _strict_sql_name(table_name)
-        quoted_table = _quote_identifier(safe_table)
+        identity = self._db_admin_identity(table_name, owner)
+        safe_table = identity.object_name
+        quoted_table = _quote_object_identity(identity)
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT column_name, data_type
-                FROM user_tab_columns
-                WHERE table_name = :table_name
+                FROM all_tab_columns
+                WHERE owner = :owner AND table_name = :table_name
                 ORDER BY column_id
                 """,
-                {"table_name": safe_table},
+                {"owner": identity.owner, "table_name": safe_table},
             )
             table_columns = [(str(row[0] or ""), str(row[1] or "")) for row in cursor.fetchall()]
             if not table_columns:
-                raise OracleAdapterError(f"{safe_table}: テーブルが見つからないか列がありません。")
+                raise OracleAdapterError(
+                    f"{identity.qualified_name}: テーブルが見つからないか列がありません。"
+                )
             csv_by_upper: dict[str, CsvImportColumn] = {}
             for column in columns:
                 for key in (column.source_name.strip().upper(), column.column_name.upper()):
@@ -1614,7 +1695,7 @@ class OracleNl2SqlAdapter:
         )
         return {
             "runtime": "oracle",
-            "table_name": safe_table,
+            "table_name": identity.qualified_name,
             "matched_columns": [name for name, _type, _column in matched],
             "unmatched_csv_columns": unmatched_csv,
             "row_count": len(rows),
@@ -2222,10 +2303,19 @@ class OracleNl2SqlAdapter:
         use_comments: bool = True,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
-        safe_table = _strict_sql_name(table_name) if table_name.strip() else ""
-        safe_objects = [_strict_sql_name(item) for item in object_list or [] if item.strip()]
-        if not safe_table and not safe_objects:
+        table_identity = (
+            self._db_admin_identity(table_name) if table_name.strip() else None
+        )
+        object_identities = [
+            self._db_admin_identity(item) for item in object_list or [] if item.strip()
+        ]
+        if table_identity is None and not object_identities:
             raise OracleAdapterError("synthetic data 対象 table/object_list が空です。")
+        target_identity = table_identity or object_identities[0]
+        safe_objects = [identity.qualified_name for identity in object_identities]
+        function_table_name = (
+            table_identity.qualified_name if table_identity is not None else safe_objects[0]
+        )
         params_json = json.dumps(
             {
                 "comments": bool(use_comments),
@@ -2244,7 +2334,7 @@ class OracleNl2SqlAdapter:
                 FROM DUAL
                 """,
                 {
-                    "table_name": safe_table or safe_objects[0],
+                    "table_name": function_table_name,
                     "row_count": int(row_count),
                     "profile_name": profile_name or None,
                 },
@@ -2257,12 +2347,12 @@ class OracleNl2SqlAdapter:
                 )
                 FROM DUAL
                 """,
-                {"table_name": safe_table or safe_objects[0], "row_count": int(row_count)},
+                {"table_name": function_table_name, "row_count": int(row_count)},
             ),
         ]
         procedure_candidates: list[tuple[str, dict[str, Any]]] = []
         if profile_name.strip():
-            if safe_objects and not safe_table:
+            if object_identities and table_identity is None:
                 procedure_candidates.append(
                     (
                         """
@@ -2279,11 +2369,11 @@ class OracleNl2SqlAdapter:
                             "object_list": json.dumps(
                                 [
                                     {
-                                        "owner": self.settings.oracle_user.strip().upper(),
-                                        "name": object_name,
+                                        "owner": identity.owner,
+                                        "name": identity.object_name,
                                         "record_count": int(row_count),
                                     }
-                                    for object_name in safe_objects
+                                    for identity in object_identities
                                 ],
                                 ensure_ascii=False,
                             ),
@@ -2308,8 +2398,8 @@ class OracleNl2SqlAdapter:
                         """,
                         {
                             "profile_name": profile_name,
-                            "object_name": safe_table or safe_objects[0],
-                            "owner_name": self.settings.oracle_user.strip().upper(),
+                            "object_name": target_identity.object_name,
+                            "owner_name": target_identity.owner,
                             "row_count": int(row_count),
                             "user_prompt": user_prompt or None,
                             "params": params_json,
@@ -2326,7 +2416,7 @@ class OracleNl2SqlAdapter:
                     return {
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
-                        "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
+                        "table_name": target_identity.qualified_name,
                         "object_list": safe_objects,
                         "row_count": int(row_count),
                     }
@@ -2346,7 +2436,7 @@ class OracleNl2SqlAdapter:
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
                         "mode": "procedure",
-                        "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
+                        "table_name": target_identity.qualified_name,
                         "object_list": safe_objects,
                         "row_count": int(row_count),
                     }
@@ -2460,7 +2550,8 @@ class OracleNl2SqlAdapter:
             filters.append("PROFILE_ID = :profile_id")
             binds["profile_id"] = profile_id
         if not include_bad:
-            filters.append("(FEEDBACK_RATING IS NULL OR FEEDBACK_RATING <> 'bad')")
+            filters.append("FEEDBACK_RATING = :feedback_rating")
+            binds["feedback_rating"] = "good"
         where_clause = " AND ".join(filters)
         query = (
             "SELECT HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, FEEDBACK_RATING, "
@@ -2488,7 +2579,7 @@ class OracleNl2SqlAdapter:
             )
         return results
 
-    def generate_select_ai_sql(
+    def generate_select_ai_text(
         self,
         *,
         profile_name: str,
@@ -2496,7 +2587,7 @@ class OracleNl2SqlAdapter:
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
     ) -> str:
-        """Oracle Select AI profile で SQL を生成する。
+        """Oracle Select AI profile で DBMS_CLOUD_AI.GENERATE の生テキストを返す。
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         """
@@ -2534,7 +2625,39 @@ class OracleNl2SqlAdapter:
                 )
             row = cursor.fetchone()
             text = _coerce_text(row[0] if row else "")
+        return text
+
+    def generate_select_ai_sql(
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        action: str = "showsql",
+        attributes: dict[str, str] | None = None,
+    ) -> str:
+        """Oracle Select AI profile で SQL を生成する。"""
+        text = self.generate_select_ai_text(
+            profile_name=profile_name,
+            question=question,
+            action=action,
+            attributes=attributes,
+        )
         return _extract_select_statement(text)
+
+    def generate_select_ai_prompt(
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        attributes: dict[str, str] | None = None,
+    ) -> str:
+        """Oracle Select AI profile の showprompt 結果を返す。"""
+        return self.generate_select_ai_text(
+            profile_name=profile_name,
+            question=question,
+            action="showprompt",
+            attributes=attributes,
+        )
 
     def refresh_select_ai_profile(
         self,
@@ -2763,13 +2886,29 @@ class OracleNl2SqlAdapter:
     def run_select_ai_agent_team(
         self, *, team_name: str, question: str, tool_name: str | None = None
     ) -> tuple[str, str]:
-        conversation_id = ""
         try:
             conversation_id = self.create_agent_conversation()
-        except OracleAdapterError:
-            conversation_id = ""
+        except OracleAdapterError as exc:
+            if tool_name and tool_name.strip():
+                try:
+                    return self.run_select_ai_agent_tool(
+                        tool_name=tool_name.strip(),
+                        question=question,
+                    )
+                except OracleAdapterError as tool_exc:
+                    raise OracleAdapterError(
+                        "Select AI Agent conversation_id を作成できず、RUN_TOOL にも失敗しました。"
+                        "Agent assets を再作成し、DBMS_CLOUD_AI_AGENT の権限と接続状態を"
+                        "確認してください。"
+                        f" conversation 原因: {exc}; RUN_TOOL 原因: {tool_exc}"
+                    ) from tool_exc
+            raise OracleAdapterError(
+                "Select AI Agent conversation_id を作成できませんでした。"
+                "Agent assets を再作成し、DBMS_CLOUD_AI_AGENT の権限と接続状態を確認してください。"
+                f" 原因: {exc}"
+            ) from exc
         params = json.dumps(
-            {"conversation_id": conversation_id} if conversation_id else {},
+            {"conversation_id": conversation_id},
             ensure_ascii=False,
             separators=(",", ":"),
         )

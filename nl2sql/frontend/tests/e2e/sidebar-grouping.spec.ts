@@ -97,9 +97,10 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
 
-  for (const label of ["SQL 生成", "SELECT SQL を実行", "SQL 確認・修復", "SQL から質問を生成", "実行履歴"]) {
+  for (const label of ["SQL 生成", "SELECT SQL を実行", "SQL から質問を生成", "実行履歴"]) {
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
+  await expect(sidebar.getByText("SQL 確認・修復", { exact: true })).toHaveCount(0);
 
   const adminSqlBox = await sidebar.getByText("管理 SQL を実行", { exact: true }).boundingBox();
   const tableManagementBox = await sidebar.getByText("テーブルの管理", { exact: true }).boundingBox();
@@ -122,7 +123,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
 
-  const securityLabels = ["ユーザー管理", "ロール・権限管理", "Deep Data Security", "監査ログ"];
+  const securityLabels = ["ユーザー管理", "ロール・権限管理", "Deep Data Security"];
   const securityItemBoxes = await Promise.all(
     securityLabels.map(async (label) => {
       const item = sidebar.getByText(label, { exact: true });
@@ -136,6 +137,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   for (let index = 1; index < securityItemBoxes.length; index += 1) {
     expect(securityItemBoxes[index - 1]!.y).toBeLessThan(securityItemBoxes[index]!.y);
   }
+  await expect(sidebar.getByRole("link", { name: "監査ログ" })).toHaveCount(0);
 });
 
 test("削除済みの安全境界 URL は専用 API を呼ばず、既存の全体 fallback へ移動する", async ({ page }) => {
@@ -151,6 +153,20 @@ test("削除済みの安全境界 URL は専用 API を呼ばず、既存の全�
   await expect(page.getByRole("heading", { name: "NL2SQL 安全境界・Readiness" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "安全境界" })).toHaveCount(0);
   expect(diagnosticsRequests).toBe(0);
+});
+
+test("削除済みの監査ログ URL は専用 API を呼ばず、既存の全体 fallback へ移動する", async ({ page }) => {
+  let auditRequests = 0;
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/security/audit")) auditRequests += 1;
+  });
+
+  await page.goto("/settings/security/audit");
+
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(page.getByRole("link", { name: "監査ログ" })).toHaveCount(0);
+  expect(auditRequests).toBe(0);
 });
 
 test("共通ルールは用語・同義語の直下に独立メニューとして並び、専用ページへ遷移する", async ({
@@ -230,7 +246,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
   await toggle.press("Enter");
 
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
-  await expect(sidebar.getByText("監査ログ", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "セキュリティ管理 を展開" })).toHaveAttribute(
     "aria-expanded",
     "false"
@@ -238,7 +254,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
 
   await sidebar.getByRole("button", { name: "セキュリティ管理 を展開" }).press(" ");
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeVisible();
-  await expect(sidebar.getByText("監査ログ", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
 });
 
 test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リンクへ到達できる", async ({ page }) => {
@@ -256,7 +272,7 @@ test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リ
   await expect(sidebar.getByRole("link", { name: "ユーザー管理" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "ロール・権限管理" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Deep Data Security" })).toBeVisible();
-  await expect(sidebar.getByRole("link", { name: "監査ログ" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "監査ログ" })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "データベース設定" })).toBeVisible();
   expect(
     await page.evaluate(

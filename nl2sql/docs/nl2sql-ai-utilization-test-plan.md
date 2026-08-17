@@ -10,7 +10,6 @@
 | --- | --- | --- |
 | SQL 生成 | `/query` | 自然言語から SQL 生成、profile 推薦、schema 参照、rewrite、similar history、preview、job 実行、preview SQL 実行、feedback、業務確認 flow |
 | SELECT SQL を実行 | `/direct-sql` | SELECT / WITH の直接実行、SQL ファイル読込、SELECT-only 安全境界 |
-| SQL 確認・修復 | `/sql-analysis` | SQL safety analysis、LLM 補助解析、実行可能 SQL、Oracle error 修復 |
 | SQL から質問を生成 | `/sql-to-question` | SQL 逆生成、deep 逆生成、論理構造解析、profile / schema 参照 |
 | 実行履歴 | `/history` | 履歴一覧、検索、feedback / safety filter、sort、detail、再実行導線 |
 
@@ -32,7 +31,7 @@
 
 | ID | 観点 | 手順 | 期待結果 | テストデータ |
 | --- | --- | --- | --- | --- |
-| AI-COM-001 | サイドナビ導線 | AI 活用の 5 メニューを順にクリック | ページタイトル、選択状態、URL が一致する | - |
+| AI-COM-001 | サイドナビ導線 | AI 活用の 4 メニューを順にクリック | ページタイトル、選択状態、URL が一致する | - |
 | AI-COM-002 | 権限制御 | `search.view` のみで表示し、`search.execute` なしで実行系画面を開く | 閲覧は可能、実行ボタンは非表示/disabled または権限 banner | - |
 | AI-COM-003 | persistence 未準備 | `/api/nl2sql/persistence` または対象 GET を失敗させる | 画面全体が落ちず、復旧/再試行導線が表示される | `mock-responses/error.persistence-unavailable.json` |
 | AI-COM-004 | loading | API 応答を 1 秒以上遅延 | `TimedLoadingState` / skeleton / processing indicator が表示され、多重実行できない | `mock-responses/*.json` |
@@ -77,7 +76,7 @@
 | QRY-005 | engine 切替 | `select_ai` / `select_ai_agent` / `enterprise_ai_direct` / `auto` を選択 | POST payload の `engine` が選択値になる | `api/preview.request.json`、`api/job-create.request.json` |
 | QRY-006 | Select AI override | engine `select_ai` で詳細設定を開き role / additional instructions を入力 | `select_ai_overrides` が payload に含まれる | `api/preview-select-ai-overrides.request.json` |
 | QRY-007 | override 不正組合せ | engine `enterprise_ai_direct` で override 付き payload を送る | backend validation で 400 になり、UI はエラーを表示 | `api/preview-invalid-overrides.request.json` |
-| QRY-008 | 質問 rewrite | 用語集/Schema 利用 checkbox を ON にし rewrite を実行 | 書き換え候補、source、model、適用ボタンが表示される | `api/rewrite.request.json`、`mock-responses/rewrite.success.json` |
+| QRY-008 | 質問 rewrite | 用語・同義語/Schema 利用 checkbox を ON にし rewrite を実行 | 書き換え候補、source、model、適用ボタンが表示される | `api/rewrite.request.json`、`mock-responses/rewrite.success.json` |
 | QRY-009 | similar history | 質問入力後 650ms 待つ | 類似履歴の score、reason、SQL snippet が表示される | `api/similar-history.request.json`、`mock-responses/similar-history.success.json` |
 | QRY-010 | preview 成功 | `SQL プレビュー` を実行 | SQL、safety badge、推奨事項、`preview SQL を実行` 導線が表示される | `api/preview.request.json`、`mock-responses/preview.safe.json` |
 | QRY-011 | preview block | DML を誘導する質問で preview | blocked badge、blocked reason、実行ボタン disabled | `mock-responses/preview.blocked.json` |
@@ -109,26 +108,7 @@
 | DIR-007 | SQL ファイル読込 | `.sql` / `.txt` を drop または選択 | textarea に内容が反映される | `sql/direct-select.sql`、`sql/direct-select.txt` |
 | DIR-008 | クリア | 実行後にクリア | SQL、結果、エラー、file input が初期化される | - |
 
-## 6. SQL 確認・修復
-
-対象 API:
-
-- `POST /api/nl2sql/analyze`
-- `POST /api/nl2sql/execute`
-- `POST /api/nl2sql/repair`
-
-| ID | 機能 | 手順 | 期待結果 | テストデータ |
-| --- | --- | --- | --- | --- |
-| ANA-001 | 初期表示 | `/sql-analysis` を開く | 解析、実行、修復の step indicator と 3 section が表示される | - |
-| ANA-002 | deterministic 解析 | SELECT を入力し解析 | safe / select-only / row limit / structure / recommendations が表示される | `api/analyze-safe.request.json`、`mock-responses/analyze.safe.json` |
-| ANA-003 | LLM 補助解析 | `OCI Enterprise AI` checkbox を ON にして解析 | `llm_enhanced=true` badge または warning が表示される | `api/analyze-llm.request.json` |
-| ANA-004 | DML 解析 | UPDATE SQL を解析 | blocked badge、blocked reason、実行ボタン disabled | `api/analyze-dml-blocked.request.json`、`mock-responses/analyze.blocked.json` |
-| ANA-005 | 解析後実行 | safe 解析後に実行 | `analysis.executable_sql` が `/api/nl2sql/execute` へ送信される | `mock-responses/execute.success.json` |
-| ANA-006 | 実行 API エラー | execute を 400 にする | 実行 section に retry hint 付き error が表示される | `mock-responses/error.select-only.json` |
-| ANA-007 | Oracle error 修復 | SQL と `ORA-00904` を入力し修復 | error_code、repaired_sql、recommendations、safety が表示される | `api/repair-ora00904.request.json`、`mock-responses/repair.ora00904.success.json` |
-| ANA-008 | 修復必須入力 | SQL または error message を空にする | 修復ボタン disabled | - |
-
-## 7. SQL から質問を生成
+## 6. SQL から質問を生成
 
 対象 API:
 
@@ -142,15 +122,15 @@
 
 | ID | 機能 | 手順 | 期待結果 | テストデータ |
 | --- | --- | --- | --- | --- |
-| REV-001 | 初期表示 | `/sql-to-question` を開く | profile selector、SQL textarea、用語集 checkbox、schema preview、3 step が表示される | `mock-responses/profiles-search.success.json` |
+| REV-001 | 初期表示 | `/sql-to-question` を開く | profile selector、SQL textarea、用語・同義語 checkbox、schema preview、3 step が表示される | `mock-responses/profiles-search.success.json` |
 | REV-002 | 参照データ読込 | profile を選択 | profile detail と schema object detail が読み込まれ、参照 schema が表示される | `mock-responses/profile-detail.default.json`、`mock-responses/schema-object-detail.orders.json` |
 | REV-003 | 標準逆生成 | SQL を入力し「質問を生成」 | question、explanation、referenced_tables、logical_steps が表示される | `api/reverse.request.json`、`mock-responses/reverse.success.json` |
 | REV-004 | deep 逆生成 | SQL を入力し deep を実行 | source が Enterprise AI 系になり、logical_structure が更新される | `api/reverse-deep.request.json`、`mock-responses/reverse.deep.success.json` |
 | REV-005 | 構造解析 | 「SQL 構造を解析」を押す | analysis 結果から structure text が生成される | `api/analyze-safe.request.json`、`mock-responses/analyze.safe.json` |
-| REV-006 | 用語集 OFF | `use_glossary=false` で逆生成 | request payload が false になり、用語置換をしない説明が返る | `api/reverse-no-glossary.request.json` |
+| REV-006 | 用語・同義語 OFF | `use_glossary=false` で逆生成 | request payload が false になり、用語置換をしない説明が返る | `api/reverse-no-glossary.request.json` |
 | REV-007 | reference load error | profile/schema GET を 500 にする | PageNotice と再読込ボタンが表示される | `mock-responses/error.persistence-unavailable.json` |
 
-## 8. 実行履歴
+## 7. 実行履歴
 
 対象 API:
 
@@ -169,7 +149,7 @@
 | HIS-009 | refresh | 表示更新を押す | loading indicator 後に toast success | `mock-responses/history.success.json` |
 | HIS-010 | load error | history GET を 500 にする | retry hint と再試行ボタンが表示される | `mock-responses/error.persistence-unavailable.json` |
 
-## 9. 推奨 Playwright fixture 利用例
+## 8. 推奨 Playwright fixture 利用例
 
 ```ts
 import { test, expect } from "@playwright/test";
@@ -187,10 +167,9 @@ test("SQL 生成 preview の結果を表示できる", async ({ page }) => {
 });
 ```
 
-## 10. 後片付け
+## 9. 後片付け
 
 - 実 Oracle で検証した場合は、履歴と feedback が検証用 profile に保存されていることを確認する。
 - DML / DDL fixture は実行禁止。安全境界でブロックされることだけを確認する。
 - Select AI feedback add は DBMS_CLOUD_AI profile へ学習データを追加する可能性があるため、専用検証 profile で実施する。
 - query session / ontology flow は versioned state を作成するため、検証後に対象 session/proposal をアーカイブまたは検証 DB を破棄する。
-

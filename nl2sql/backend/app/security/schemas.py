@@ -7,8 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from .domain import AuditRecord, DataEntitlementRecord, Principal, RoleRecord, UserRecord
-from .permissions import PermissionDefinition
+from .domain import DataEntitlementRecord, Principal, RoleRecord, UserRecord
+from .permissions import PermissionDefinition, normalize_permission_codes
 
 
 class LoginRequest(BaseModel):
@@ -158,7 +158,7 @@ class RoleData(BaseModel):
             is_built_in=role.is_built_in,
             archived=role.archived,
             version=role.version,
-            permissions=sorted(role.permissions),
+            permissions=sorted(normalize_permission_codes(role.permissions)),
             data_entitlements=[DataEntitlementData.from_record(item) for item in role.entitlements],
         )
 
@@ -245,39 +245,3 @@ class PermissionData(BaseModel):
             description=definition.description,
             implies=list(definition.implies),
         )
-
-
-class AuditData(BaseModel):
-    audit_id: int
-    actor_user_id: str | None
-    event_type: str
-    target_type: str
-    target_id: str
-    outcome: str
-    detail: dict[str, object]
-    request_id: str
-    client_ip: str
-    created_at: datetime
-
-    @classmethod
-    def from_record(cls, record: AuditRecord) -> AuditData:
-        return cls(
-            audit_id=record.audit_id,
-            actor_user_id=record.actor_user_id,
-            event_type=record.event_type,
-            target_type=record.target_type,
-            target_id=record.target_id,
-            outcome=record.outcome,
-            detail=record.detail,
-            request_id=record.request_id,
-            client_ip=record.client_ip,
-            created_at=record.created_at,
-        )
-
-
-class AuditPageData(BaseModel):
-    items: list[AuditData]
-    page: int
-    page_size: int
-    total: int
-    total_pages: int

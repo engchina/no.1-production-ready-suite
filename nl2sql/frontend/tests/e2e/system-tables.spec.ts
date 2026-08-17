@@ -109,9 +109,9 @@ function systemTables(
         }));
   return {
     status,
-    schema_head: 8,
-    applied_versions: ready ? [0, 1, 2, 3, 5, 6, 7, 8] : [0, 1, 2, 3, 5, 6],
-    pending_versions: ready ? [] : [7, 8],
+    schema_head: 9,
+    applied_versions: ready ? [0, 1, 2, 3, 5, 6, 7, 8, 9] : [0, 1, 2, 3, 5, 6],
+    pending_versions: ready ? [] : [7, 8, 9],
     expected_object_count: 53,
     existing_object_count: 53 - missingCount,
     expected_table_count: 28,
@@ -158,6 +158,17 @@ async function expectNoPageOverflow(page: Page) {
       )
     )
     .toBeTruthy();
+}
+
+async function expectToastStackBottomRight(page: Page) {
+  const region = page.getByRole("region", { name: "通知" });
+  const [box, viewport] = await Promise.all([region.boundingBox(), page.viewportSize()]);
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(viewport!.width - (box!.x + box!.width)).toBeGreaterThanOrEqual(0);
+  expect(viewport!.width - (box!.x + box!.width)).toBeLessThanOrEqual(24);
+  expect(viewport!.height - (box!.y + box!.height)).toBeGreaterThanOrEqual(0);
+  expect(viewport!.height - (box!.y + box!.height)).toBeLessThanOrEqual(24);
 }
 
 function expectedInformationRows(testInfo: TestInfo) {
@@ -343,7 +354,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "initialized",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
       dropped_object_count: 0,
       created_object_count: 53,
     });
@@ -360,7 +371,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
   await card.getByText("システムテーブルの詳細を表示").click();
-  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8/)).toBeVisible();
+  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9/)).toBeVisible();
   await expect(
     page
       .getByRole("region", { name: "通知" })
@@ -379,7 +390,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
     fulfill(route, {
       ...systemTables("ready"),
       operation: "no_op",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
       dropped_object_count: 0,
       created_object_count: 0,
     })
@@ -394,6 +405,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   await expect(region).toHaveAttribute("aria-live", "polite");
   const toastStatus = region.getByRole("status");
   await expect(toastStatus).toContainText("システムテーブルは最新です。変更はありません。");
+  await expectToastStackBottomRight(page);
   expect(
     await page.evaluate(() => document.activeElement?.closest('[role="region"]') != null)
   ).toBe(false);
@@ -435,7 +447,7 @@ test("全再作成は実行確認語の完全一致まで実行できない", as
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "recreated",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8],
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
       dropped_object_count: 52,
       created_object_count: 52,
     });
@@ -495,7 +507,7 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
     `Oracle の対象オブジェクトのロックが 30 秒以内に解放されませんでした (ORA-00054)。` +
     `${"状態競合の原因を確認するための長い識別情報".repeat(24)}` +
     "実行中の schema refresh、Ontology、品質評価 job を完了または停止してから、状態を再取得して再試行してください。";
-  await page.route("**/api/settings/database/system-tables", (route) =>
+  await page.route("**/api/settings/database/system-tables**", (route) =>
     loadFails
       ? fulfill(route, null, 503, ["Oracle に接続できませんでした (ORA-12514)。"])
       : fulfill(

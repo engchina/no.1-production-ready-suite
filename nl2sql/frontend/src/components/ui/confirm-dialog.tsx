@@ -50,7 +50,7 @@ interface DialogState {
 
 /**
  * 確認ダイアログ Provider。
- * NL2SQL では確認面を中立背景に統一し、danger はアクセントと確定ボタンだけに限定する。
+ * NL2SQL では確認面を中立背景に統一し、danger はアイコン・タイトル・確定ボタンに限定する。
  */
 export function ConfirmProvider({
   children,
@@ -147,32 +147,18 @@ function ConfirmDialog({
   const confirmVariant = tone === "danger" ? "danger" : "primary";
   const toneClass =
     tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-info";
-  const accentClass =
-    tone === "danger"
-      ? "border-l-danger"
-      : tone === "warning"
-        ? "border-l-warning"
-        : "border-l-info";
   const iconClass =
     tone === "danger"
       ? "border-danger/30 text-danger"
       : tone === "warning"
         ? "border-warning/30 text-warning"
         : "border-info/30 text-info";
-  const footerBorderClass =
-    tone === "danger"
-      ? "border-danger/20"
-      : tone === "warning"
-        ? "border-warning/20"
-        : "border-info/20";
-  const panelClass = [
-    "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border border-l-4 bg-card shadow-xl",
-    accentClass,
-  ].join(" ");
+  const panelClass =
+    "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl";
 
   return createPortal(
     <div
-      className="animate-overlay-in fixed inset-0 z-[1000] flex items-end justify-center bg-black/50 p-3 sm:items-center sm:p-4"
+      className="animate-overlay-in fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center sm:p-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && dismissOnOverlay) onCancel();
       }}
@@ -202,7 +188,7 @@ function ConfirmDialog({
             ) : null}
           </div>
         </div>
-        <div className={`mt-5 flex justify-end gap-2 border-t bg-background px-5 py-4 ${footerBorderClass}`}>
+        <div className="mt-5 flex justify-end gap-2 border-t border-border bg-background px-5 py-4">
           <Button variant="secondary" size="sm" onClick={onCancel}>
             {options.cancelLabel ?? labels.cancel}
           </Button>

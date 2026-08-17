@@ -1,8 +1,6 @@
-import { apiFetch, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 import type {
-  AuditPage,
-  AuditRecord,
   CurrentUser,
   DataEntitlement,
   DeepSecPlan,
@@ -82,20 +80,6 @@ export const securityApi = {
     }),
   permissions: (options: ApiRequestOptions = {}) =>
     apiGet<PermissionDefinition[]>("/api/security/permissions", options),
-  audit: (options: ApiRequestOptions = {}) =>
-    apiGet<AuditRecord[]>("/api/security/audit", options),
-  auditPage: (page = 1, pageSize = 10, options: ApiRequestOptions = {}) =>
-    apiGet<AuditPage>(
-      `/api/security/audit/page?page=${page}&page_size=${pageSize}`,
-      options
-    ),
-  exportAudit: (options: ApiRequestOptions = {}) =>
-    apiFetch("/api/security/audit/export.xlsx", {
-      headers: {
-        Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      },
-      signal: options.signal,
-    }),
   deepSecStatus: (options: ApiRequestOptions = {}) =>
     apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
   deepSecPlan: (options: ApiRequestOptions = {}) =>

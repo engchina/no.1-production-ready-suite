@@ -14,9 +14,11 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
+    AllowedObjects,
     AssetRefreshData,
     CsvImportColumn,
     DbAdminAiAnalysisRequest,
@@ -133,8 +135,8 @@ class _FakeObjectTypeAdapter(_FakeStatementsAdapter):
         self.object_type = object_type
         self.object_type_calls: list[str] = []
 
-    def find_db_admin_object_type(self, object_name: str) -> str | None:
-        self.object_type_calls.append(object_name)
+    def find_db_admin_object_type(self, object_name: str, owner: str = "") -> str | None:
+        self.object_type_calls.append(f"{owner}.{object_name}" if owner else object_name)
         return self.object_type
 
 
@@ -159,6 +161,32 @@ class _OracleRuntimeService(Nl2SqlService):
 
     def _use_oracle_runtime(self) -> bool:
         return True
+
+
+class _FakeCsvUploadAdapter:
+    def __init__(self, result: dict[str, Any]) -> None:
+        self.result = result
+        self.calls: list[dict[str, Any]] = []
+
+    def upload_csv_to_existing_table(
+        self,
+        *,
+        table_name: str,
+        owner: str = "",
+        columns: list[CsvImportColumn],
+        rows: list[dict[str, str | None]],
+        truncate: bool,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "table_name": table_name,
+                "owner": owner,
+                "columns": columns,
+                "rows": rows,
+                "truncate": truncate,
+            }
+        )
+        return self.result
 
 
 class _FakeSelectAiProfileAdapter:
@@ -583,6 +611,42 @@ def test_select_ai_db_profiles_filter_also_applies_to_asset_metadata_fallback() 
     assert [profile.name for profile in data.profiles] == ["FINANCE_SELECT_AI"]
 
 
+def test_select_ai_db_profiles_reports_uninitialized_read_model() -> None:
+    service = _OracleRuntimeService(_MutableSelectAiProfileAdapter())
+
+    data = service.list_select_ai_db_profiles()
+
+    assert data.profiles == []
+    assert data.profile_list_refresh_required is True
+    assert data.profile_list_refresh_reason_code == "profile_list_read_model_uninitialized"
+    assert any("read model が未初期化" in warning for warning in data.warnings)
+
+
+def test_select_ai_db_profiles_initialized_empty_list_does_not_require_refresh() -> None:
+    service = _OracleRuntimeService(_MutableSelectAiProfileAdapter())
+    _run_db_profile_refresh(service)
+
+    data = service.list_select_ai_db_profiles()
+
+    assert data.profiles == []
+    assert data.profile_list_refresh_required is False
+    assert data.profile_list_refresh_reason_code == ""
+    assert not any("read model が未初期化" in warning for warning in data.warnings)
+
+
+def test_select_ai_db_profiles_existing_profile_does_not_require_refresh() -> None:
+    service = _OracleRuntimeService(
+        _MutableSelectAiProfileAdapter({"FINANCE_SELECT_AI": {"attributes": {"object_list": []}}})
+    )
+    _run_db_profile_refresh(service)
+
+    data = service.list_select_ai_db_profiles()
+
+    assert [profile.name for profile in data.profiles] == ["FINANCE_SELECT_AI"]
+    assert data.profile_list_refresh_required is False
+    assert data.profile_list_refresh_reason_code == ""
+
+
 def test_select_ai_profiles_export_can_filter_to_business_profile_names() -> None:
     adapter = _FakeMixedSelectAiProfileAdapter()
     service = _OracleRuntimeService(adapter)
@@ -824,6 +888,80 @@ def test_statement_policy_view_ddl_and_data_dml() -> None:
         DbAdminStatementsRequest(sql="SELECT * FROM T1", policy="data_dml")
     )
     assert select_ng.statements[0].status == "blocked"
+
+
+def test_db_admin_statements_block_nl2sql_system_objects_before_oracle() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "DDL",
+                "status": "success",
+                "sql": "",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    create_table = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="CREATE TABLE NL2SQL_SCHEMA_OBJECTS (ID NUMBER)",
+            policy="table_ddl",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    create_view_ref = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="CREATE OR REPLACE VIEW V_SYSTEM AS SELECT * FROM NL2SQL_SCHEMA_OBJECTS",
+            policy="view_ddl",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    dml = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="UPDATE NL2SQL_SCHEMA_OBJECTS SET ID = 1",
+            policy="data_dml",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert create_table.statements[0].status == "blocked"
+    assert create_view_ref.statements[0].status == "blocked"
+    assert dml.statements[0].status == "blocked"
+    assert all("システムテーブル管理" in item.error_message for item in [
+        create_table.statements[0],
+        create_view_ref.statements[0],
+        dml.statements[0],
+    ])
+    assert adapter.calls == []
+
+
+def test_db_admin_execute_blocks_nl2sql_select_dml_and_plsql_before_oracle() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    select_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT * FROM APP.NL2SQL_SCHEMA_OBJECTS", row_limit=10)
+    )
+    dml_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="DELETE FROM NL2SQL_SCHEMA_OBJECTS",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    plsql_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="BEGIN EXECUTE IMMEDIATE 'DROP TABLE NL2SQL_SCHEMA_OBJECTS'; END;",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert [item.status for item in select_result.statements] == ["blocked"]
+    assert [item.status for item in dml_result.statements] == ["blocked"]
+    assert [item.status for item in plsql_result.statements] == ["blocked"]
+    assert "システムテーブル管理" in select_result.statements[0].error_message
+    assert adapter.select_calls == []
+    assert adapter.calls == []
 
 
 def test_statement_policy_comment_and_annotation_sql() -> None:
@@ -1393,7 +1531,9 @@ def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None
         )
     )
 
-    assert result.sql.index('ALTER TABLE "A_TABLE"') < result.sql.index('ALTER TABLE "B_TABLE"')
+    assert result.sql.index('ALTER TABLE "ADMIN"."A_TABLE"') < result.sql.index(
+        'ALTER TABLE "ADMIN"."B_TABLE"'
+    )
     assert "O''Brien" in result.sql
     assert "ADD IF NOT EXISTS UI_Display" in result.sql
     assert 'MODIFY ("V_ID"' not in result.sql
@@ -1487,7 +1627,7 @@ def test_drop_view_confirmation_and_requires_oracle() -> None:
     missing = service.drop_db_admin_view(DbAdminDropViewRequest(view_name="V_EMP_DEPT"))
     assert missing.executed is False
     assert missing.statements[0].status == "confirmation_required"
-    assert 'DROP VIEW "V_EMP_DEPT"' in missing.statements[0].sql
+    assert 'DROP VIEW "ADMIN"."V_EMP_DEPT"' in missing.statements[0].sql
 
     requires_oracle = service.drop_db_admin_view(
         DbAdminDropViewRequest(view_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
@@ -1502,7 +1642,7 @@ def test_truncate_table_requires_target_confirmation_and_oracle() -> None:
     assert missing.executed is False
     assert missing.statements[0].status == "confirmation_required"
     assert missing.statements[0].statement_type == "TRUNCATE"
-    assert 'TRUNCATE TABLE "INVOICES"' in missing.statements[0].sql
+    assert 'TRUNCATE TABLE "ADMIN"."INVOICES"' in missing.statements[0].sql
 
     admin_execute = service.truncate_db_admin_table(
         DbAdminTruncateTableRequest(table_name="INVOICES", confirmation="ADMIN_EXECUTE")
@@ -1516,7 +1656,83 @@ def test_truncate_table_requires_target_confirmation_and_oracle() -> None:
     )
     assert requires_oracle.executed is False
     assert requires_oracle.statements[0].status == "requires_oracle"
-    assert requires_oracle.statements[0].sql == 'TRUNCATE TABLE "INVOICES"'
+    assert requires_oracle.statements[0].sql == 'TRUNCATE TABLE "ADMIN"."INVOICES"'
+
+
+def test_db_admin_direct_object_operations_block_nl2sql_namespace() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    csv_text = "ID\n1\n"
+    encoded = base64.b64encode(csv_text.encode()).decode()
+
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.get_db_admin_object("NL2SQL_SCHEMA_OBJECTS", "table")
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.preview_db_admin_data(
+            DbAdminDataPreviewRequest(object_name="NL2SQL_SCHEMA_OBJECTS")
+        )
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.drop_db_admin_table(
+            DbAdminDropTableRequest(
+                table_name="NL2SQL_SCHEMA_OBJECTS",
+                confirmation="NL2SQL_SCHEMA_OBJECTS",
+            )
+        )
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.truncate_db_admin_table(
+            DbAdminTruncateTableRequest(
+                table_name="NL2SQL_SCHEMA_OBJECTS",
+                confirmation="NL2SQL_SCHEMA_OBJECTS",
+            )
+        )
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.upload_db_admin_csv(
+            DbAdminCsvUploadRequest(
+                table_name="NL2SQL_SCHEMA_OBJECTS",
+                content_base64=encoded,
+                filename="upload.csv",
+                confirmation="NL2SQL_SCHEMA_OBJECTS",
+            )
+        )
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.import_db_admin_tabular(
+            DbAdminImportTabularRequest(
+                table_name="NL2SQL_IMPORTED",
+                content_base64=encoded,
+                filename="import.csv",
+                confirmation="ADMIN_EXECUTE",
+            )
+        )
+
+
+def test_nl2sql_execute_safety_blocks_system_tables() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(  # noqa: SLF001
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                owner="APP",
+                table_name="NL2SQL_SCHEMA_OBJECTS",
+                logical_name="system",
+                columns=[
+                    SchemaColumn(
+                        column_name="ID",
+                        logical_name="ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            )
+        ],
+    )
+
+    safety, _sql, results = service.execute_sql(
+        "SELECT * FROM NL2SQL_SCHEMA_OBJECTS",
+        AllowedObjects(enforce_table_scope=False),
+        10,
+    )
+
+    assert safety.is_safe is False
+    assert "システムテーブル管理" in safety.blocked_reason
+    assert results.total == 0
 
 
 def test_truncate_table_executes_quoted_statement_in_oracle_runtime() -> None:
@@ -1545,7 +1761,7 @@ def test_truncate_table_executes_quoted_statement_in_oracle_runtime() -> None:
 
     assert result.executed is True
     assert result.committed is True
-    assert adapter.calls == [(['TRUNCATE TABLE "INVOICES"'], False)]
+    assert adapter.calls == [(['TRUNCATE TABLE "ADMIN"."INVOICES"'], False)]
 
 
 def test_truncate_table_blocks_catalog_views_and_invalid_names() -> None:
@@ -1579,7 +1795,7 @@ def test_truncate_table_blocks_catalog_views_and_invalid_names() -> None:
     )
     assert oracle_view.executed is False
     assert oracle_view.statements[0].status == "blocked"
-    assert adapter.object_type_calls == ["V_EMP_DEPT"]
+    assert adapter.object_type_calls == ["ADMIN.V_EMP_DEPT"]
     assert adapter.calls == []
 
     with pytest.raises(ValueError):
@@ -1593,7 +1809,7 @@ def test_preview_data_builds_guarded_select() -> None:
 
     plain = service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name="INVOICES"))
     assert plain.runtime == "deterministic"
-    assert plain.sql == 'SELECT * FROM "INVOICES" FETCH FIRST 100 ROWS ONLY'
+    assert plain.sql == 'SELECT * FROM "ADMIN"."INVOICES" FETCH FIRST 100 ROWS ONLY'
     assert plain.results.columns
 
     filtered = service.preview_db_admin_data(
@@ -1621,13 +1837,11 @@ def test_preview_data_builds_guarded_select() -> None:
     assert "WHERE STATUS = 'X'" in normalized.sql
     assert "WHERE WHERE" not in normalized.sql
 
-    # Oracle の既存 object 名に有効な `$` を import 用 sanitizer で変換しない。
-    special = service.preview_db_admin_data(
-        DbAdminDataPreviewRequest(object_name="DBTOOLS$EXECUTION_HISTORY")
-    )
-    assert special.sql == (
-        'SELECT * FROM "DBTOOLS$EXECUTION_HISTORY" FETCH FIRST 100 ROWS ONLY'
-    )
+    # システム object は import 用 sanitizer で別名化せず、preview 前に止める。
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.preview_db_admin_data(
+            DbAdminDataPreviewRequest(object_name="DBTOOLS$EXECUTION_HISTORY")
+        )
 
     with pytest.raises(ValueError, match="Oracle 識別子"):
         service.preview_db_admin_data(
@@ -1672,13 +1886,163 @@ def test_preview_data_exports_xlsx() -> None:
 
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    assert filename == "invoices_preview.xlsx"
+    assert filename == "admin_invoices_preview.xlsx"
     assert workbook.sheetnames == ["data", "query"]
     assert workbook["data"].max_row >= 1
     assert (
         workbook["query"]["A2"].value
-        == "SELECT * FROM \"INVOICES\" WHERE STATUS = 'A' FETCH FIRST 10 ROWS ONLY"
+        == "SELECT * FROM \"ADMIN\".\"INVOICES\" WHERE STATUS = 'A' FETCH FIRST 10 ROWS ONLY"
     )
+
+
+def test_cross_schema_management_resolves_duplicate_object_names() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        current_owner="APP",
+        tables=[
+            SchemaTable(
+                table_name="ORDERS",
+                logical_name="自社注文",
+                owner="APP",
+                row_count=2,
+                columns=[
+                    SchemaColumn(
+                        column_name="ORDER_ID",
+                        logical_name="注文ID",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="ORDER_NAME",
+                        logical_name="注文名",
+                        data_type="VARCHAR2(100)",
+                    ),
+                    SchemaColumn(
+                        column_name="AMOUNT",
+                        logical_name="金額",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="ORDER_DATE",
+                        logical_name="注文日",
+                        data_type="DATE",
+                    ),
+                ],
+            ),
+            SchemaTable(
+                table_name="ORDERS",
+                logical_name="共有注文",
+                owner="SH",
+                row_count=8,
+                columns=[
+                    SchemaColumn(
+                        column_name="ORDER_ID",
+                        logical_name="注文ID",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="ORDER_NAME",
+                        logical_name="注文名",
+                        data_type="VARCHAR2(100)",
+                    ),
+                    SchemaColumn(
+                        column_name="AMOUNT",
+                        logical_name="金額",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="ORDER_DATE",
+                        logical_name="注文日",
+                        data_type="DATE",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    page = service.list_db_admin_objects_page(
+        cursor=None,
+        limit=10,
+        query="orders",
+        object_type="table",
+        row_state="all",
+    )
+    assert {item.qualified_name for item in page.items} == {"APP.ORDERS", "SH.ORDERS"}
+
+    detail = service.get_db_admin_object("ORDERS", "table", owner="SH", include_ddl=False)
+    assert detail.owner == "SH"
+    assert detail.qualified_name == "SH.ORDERS"
+    assert detail.row_count == 8
+
+    preview = service.preview_db_admin_data(
+        DbAdminDataPreviewRequest(object_name="ORDERS", owner="SH", limit=5)
+    )
+    assert preview.sql == 'SELECT * FROM "SH"."ORDERS" FETCH FIRST 5 ROWS ONLY'
+
+
+def test_cross_schema_mutations_and_metadata_sql_use_qualified_targets() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "TRUNCATE",
+                "status": "success",
+                "sql": 'TRUNCATE TABLE "SH"."ORDERS"',
+                "row_count": 0,
+                "message": "OK",
+                "elapsed_ms": 1,
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        current_owner="APP",
+        tables=[
+            SchemaTable(
+                table_name="ORDERS",
+                logical_name="共有注文",
+                owner="SH",
+                row_count=8,
+                comment="共有注文",
+                columns=[
+                    SchemaColumn(
+                        column_name="ORDER_ID",
+                        logical_name="注文ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            )
+        ],
+    )
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    result = service.truncate_db_admin_table(
+        DbAdminTruncateTableRequest(
+            table_name="ORDERS",
+            owner="SH",
+            confirmation="SH.ORDERS",
+            reason="cross-schema-test",
+        )
+    )
+    assert result.executed is True
+    assert adapter.calls == [(['TRUNCATE TABLE "SH"."ORDERS"'], False)]
+
+    comment = service.generate_comment_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"owner": "SH", "object_name": "ORDERS", "object_type": "TABLE"}],
+            structure_text="OBJECT: SH.ORDERS",
+        )
+    )
+    assert 'COMMENT ON TABLE "SH"."ORDERS"' in comment.sql
+
+    annotation = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"owner": "SH", "object_name": "ORDERS", "object_type": "table"}],
+            structure_text="OBJECT: SH.ORDERS",
+        )
+    )
+    assert 'ALTER TABLE "SH"."ORDERS"' in annotation.sql
 
 
 def test_table_export_xlsx_contains_column_information_only() -> None:
@@ -1718,7 +2082,7 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
 
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    assert filename == "invoices_columns.xlsx"
+    assert filename == "app_invoices_columns.xlsx"
     assert workbook.sheetnames == ["columns"]
     sheet = workbook["columns"]
     assert [sheet.cell(row=1, column=index).value for index in range(1, 7)] == [
@@ -1778,7 +2142,7 @@ def test_view_export_xlsx_contains_column_information_only() -> None:
 
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    assert filename == "v_emp_dept_columns.xlsx"
+    assert filename == "app_v_emp_dept_columns.xlsx"
     assert workbook.sheetnames == ["columns"]
     sheet = workbook["columns"]
     assert [sheet.cell(row=1, column=index).value for index in range(1, 7)] == [
@@ -1984,6 +2348,73 @@ def test_upload_csv_validates_confirmation_and_matches_catalog_columns() -> None
     )
     assert requires_oracle.executed is False
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in requires_oracle.warnings)
+
+
+def test_upload_csv_oracle_empty_unmatched_overrides_stale_catalog() -> None:
+    """Oracle 実行結果の空配列を正とし、事前 catalog 照合の古い不一致列へ戻さない。"""
+
+    adapter = _FakeCsvUploadAdapter(
+        {
+            "matched_columns": ["ID", "NAME"],
+            "unmatched_csv_columns": [],
+            "success_count": 2,
+            "error_count": 0,
+            "row_errors": [],
+            "hint": "",
+        }
+    )
+    service = _OracleRuntimeService(adapter)
+    service._catalog = SchemaCatalog(refreshed_at="2026-07-11T09:30:00+00:00", tables=[])
+    csv_text = "ID,NAME\n123,456\n666,777\n"
+
+    result = service.upload_db_admin_csv(
+        DbAdminCsvUploadRequest(
+            table_name="TEST_TABLE",
+            content_base64=base64.b64encode(csv_text.encode()).decode(),
+            filename="Book2.csv",
+            confirmation="TEST_TABLE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.matched_columns == ["ID", "NAME"]
+    assert result.unmatched_csv_columns == []
+    assert result.success_count == 2
+    assert result.error_count == 0
+    assert adapter.calls[0]["table_name"] == "TEST_TABLE"
+    assert [column.column_name for column in adapter.calls[0]["columns"]] == ["ID", "NAME"]
+
+
+def test_upload_csv_oracle_keeps_actual_unmatched_file_columns() -> None:
+    """Oracle 実行結果が返した追加ファイル列だけを不一致として表示用 response に残す。"""
+
+    adapter = _FakeCsvUploadAdapter(
+        {
+            "matched_columns": ["ID", "NAME"],
+            "unmatched_csv_columns": ["UNKNOWN_COLUMN"],
+            "success_count": 1,
+            "error_count": 0,
+            "row_errors": [],
+            "hint": "",
+        }
+    )
+    service = _OracleRuntimeService(adapter)
+    service._catalog = SchemaCatalog(refreshed_at="2026-07-11T09:30:00+00:00", tables=[])
+    csv_text = "ID,NAME,UNKNOWN_COLUMN\n123,456,extra\n"
+
+    result = service.upload_db_admin_csv(
+        DbAdminCsvUploadRequest(
+            table_name="TEST_TABLE",
+            content_base64=base64.b64encode(csv_text.encode()).decode(),
+            filename="Book2.csv",
+            confirmation="TEST_TABLE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.matched_columns == ["ID", "NAME"]
+    assert result.unmatched_csv_columns == ["UNKNOWN_COLUMN"]
+    assert result.sample_rows == [{"ID": "123", "NAME": "456", "UNKNOWN_COLUMN": "extra"}]
 
 
 def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
@@ -2510,10 +2941,15 @@ def test_analyze_error_uses_enterprise_ai_and_falls_back() -> None:
     assert unconfigured.warnings
 
 
-def test_extract_join_where_parses_strict_format_and_falls_back() -> None:
+def test_extract_join_where_defaults_to_sql_structure_and_falls_back() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     fake_client = FakeEnterpriseAiClient(
-        "JOIN:\n[INNER] e(EMPLOYEE).DEPT_ID = d(DEPARTMENT).DEPT_ID\nWHERE:\ne.STATUS = 'A'"
+        "## SQL構造分析\n\n"
+        "### JOIN句\n"
+        "- **JOIN**: EMPLOYEE(e) JOIN DEPARTMENT(d)\n"
+        "  - ON: EMPLOYEE(e).DEPT_ID = DEPARTMENT(d).DEPT_ID\n\n"
+        "### WHERE句\n"
+        "- EMPLOYEE(e).STATUS = 'A'\n"
     )
     cast(Any, service)._enterprise_ai_client = fake_client
     ddl = (
@@ -2523,15 +2959,16 @@ def test_extract_join_where_parses_strict_format_and_falls_back() -> None:
     )
     extracted = service.extract_db_admin_join_where(DbAdminJoinWhereRequest(ddl=ddl))
     assert extracted.source == "oci_enterprise_ai"
-    assert extracted.prompt_profile == "join_where_strict"
+    assert extracted.prompt_profile == "sql_structure"
     assert "EMPLOYEE" in extracted.join_text
-    assert extracted.where_text == "e.STATUS = 'A'"
-    assert "Extract ONLY JOIN and WHERE" in fake_client.calls[0]["prompt"]
+    assert extracted.where_text == "EMPLOYEE(e).STATUS = 'A'"
+    assert "SQL構造分析" in extracted.structure_markdown
+    assert "Analyze the SQL query" in fake_client.calls[0]["prompt"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient("整形されていない応答")
     fallback = service.extract_db_admin_join_where(DbAdminJoinWhereRequest(ddl=ddl))
     assert fallback.source == "deterministic"
-    assert fallback.prompt_profile == "join_where_strict"
+    assert fallback.prompt_profile == "sql_structure"
     assert fallback.warnings
     assert "JOIN" in fallback.join_text.upper() or fallback.join_text == "None"
     assert fallback.where_text != ""
@@ -2567,6 +3004,14 @@ def test_extract_join_where_uses_sql_structure_prompt_profile() -> None:
     assert extracted.where_text == "EMPLOYEE(e).STATUS = 'A'"
     assert "SQL構造分析" in extracted.structure_markdown
     assert "Analyze the SQL query" in fake_client.calls[0]["prompt"]
+
+
+def test_extract_join_where_rejects_legacy_strict_prompt_profile() -> None:
+    with pytest.raises(ValidationError):
+        DbAdminJoinWhereRequest(
+            ddl="CREATE OR REPLACE VIEW V1 AS SELECT * FROM EMPLOYEE",
+            prompt_profile="join_where_strict",
+        )
 
 
 def test_extract_join_where_unconfigured_keeps_selected_prompt_profile() -> None:

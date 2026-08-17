@@ -32,6 +32,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
+import { QuestionText } from "../components/QuestionText";
 import { IntentEditor } from "./IntentEditor";
 import { OntologyWorkspace } from "./OntologyWorkspace";
 import {
@@ -421,7 +422,13 @@ function IntentPatchPreview({
         {patch.suggested_question ? (
           <div className="rounded-lg border border-primary/30 bg-primary/10 p-3">
             <p className="text-xs font-semibold text-primary">{labels.suggestedQuestion}</p>
-            <p className="mt-1 text-sm leading-6 text-foreground">{patch.suggested_question}</p>
+            <QuestionText
+              value={patch.suggested_question}
+              variant="detail"
+              maxLines={3}
+              expandable
+              className="mt-1"
+            />
           </div>
         ) : null}
         <ol className="grid gap-2">
@@ -717,16 +724,24 @@ export function QueryOntologyFlow({
                 <div className="grid gap-3 lg:grid-cols-2">
                   <div className="rounded-lg border border-border bg-card p-3">
                     <p className="text-xs font-semibold text-muted">{labels.originalQuestion}</p>
-                    <p className="mt-2 text-sm leading-6 text-foreground">
-                      {session.original_question || intent?.question_original || session.question || labels.noValue}
-                    </p>
+                    <QuestionText
+                      value={session.original_question || intent?.question_original || session.question || labels.noValue}
+                      variant="detail"
+                      maxLines={3}
+                      expandable
+                      className="mt-2"
+                    />
                   </div>
                   {session.suggested_question || intent?.question_effective || intent?.rewritten_question ? (
                     <div className="rounded-lg border border-primary/30 bg-primary/10 p-3">
                       <p className="text-xs font-semibold text-primary">{labels.suggestedQuestion}</p>
-                      <p className="mt-2 text-sm leading-6 text-foreground">
-                        {session.suggested_question || intent?.question_effective || intent?.rewritten_question}
-                      </p>
+                      <QuestionText
+                        value={session.suggested_question || intent?.question_effective || intent?.rewritten_question || labels.noValue}
+                        variant="detail"
+                        maxLines={3}
+                        expandable
+                        className="mt-2"
+                      />
                     </div>
                   ) : null}
                 </div>

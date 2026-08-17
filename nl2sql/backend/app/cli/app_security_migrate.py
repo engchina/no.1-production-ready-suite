@@ -1,4 +1,4 @@
-"""Application auth/RBAC migration 004 を idempotent に適用する。"""
+"""Application auth/RBAC security migrations を idempotent に適用する。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ LEGACY_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
     ("RAG_APP_ROLE_PERMISSIONS", "NL2SQL_APP_ROLE_PERMISSIONS"),
     ("RAG_APP_DATA_ENTITLEMENTS", "NL2SQL_APP_DATA_ENTITLEMENTS"),
     ("RAG_AUTH_SESSIONS", "NL2SQL_AUTH_SESSIONS"),
-    ("RAG_AUTH_AUDIT_LOG", "NL2SQL_AUTH_AUDIT_LOG"),
     ("RAG_DEEPSEC_MIGRATIONS", "NL2SQL_DEEPSEC_MIGRATIONS"),
 )
 
@@ -72,10 +71,13 @@ def main() -> int:
     namespace_statements = split_ddl(namespace_migration.read_text(encoding="utf-8"))
     migration = migration_dir / "004_app_security_rbac.sql"
     statements = split_ddl(migration.read_text(encoding="utf-8"))
+    cleanup_migration = migration_dir / "009_remove_security_audit_log.sql"
+    cleanup_statements = split_ddl(cleanup_migration.read_text(encoding="utf-8"))
     if not args.apply:
         print(
             f"migration=005 statements={len(namespace_statements)} mode=preview "
-            f"migration=004 statements={len(statements)}"
+            f"migration=004 statements={len(statements)} "
+            f"migration=009 statements={len(cleanup_statements)}"
         )
         return 0
 
@@ -97,19 +99,27 @@ def main() -> int:
             include_sql=False,
             ignored_error_codes=frozenset({"ORA-00955", "ORA-00001"}),
         )
+        cleanup_results = oracle_statement_executor.execute(
+            connection,
+            cleanup_statements,
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=frozenset({"ORA-00942", "ORA-01418"}),
+        )
     errors = [
         result
-        for result in (*namespace_results, *results)
+        for result in (*namespace_results, *results, *cleanup_results)
         if result["status"] == "error"
     ]
     if errors:
-        raise RuntimeError(str(errors[0].get("error_message") or "migration 004 failed"))
+        raise RuntimeError(str(errors[0].get("error_message") or "security migration failed"))
     bootstrapped = False
     if not args.skip_bootstrap:
         bootstrapped = get_security_service().bootstrap()
     print(
         f"migration=005 statements={len(namespace_statements)} mode=applied "
         f"migration=004 statements={len(statements)} "
+        f"migration=009 statements={len(cleanup_statements)} "
         f"bootstrap_created={str(bootstrapped).lower()}"
     )
     return 0

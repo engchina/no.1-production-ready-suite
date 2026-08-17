@@ -93,11 +93,10 @@
 |---|---|---|---|
 | DP-VIEW-001 | setup 済み views | 一覧で `V_TD_NL2SQL` を検索 | 3 views が表示される |
 | DP-VIEW-002 | `V_TD_NL2SQL_OPEN_ORDERS` | 詳細/DDL を開く | columns と DDL が表示される |
-| DP-VIEW-003 | 同上 | JOIN/WHERE 抽出 `join_where_strict` | JOIN 条件と `STATUS IN (...)` / `TOTAL_AMOUNT > 0` が抽出される |
-| DP-VIEW-004 | 同上 | JOIN/WHERE 抽出 `sql_structure` | `structure_markdown` が表示される。Enterprise AI 未設定時は deterministic warning |
-| DP-VIEW-005 | view create | `CREATE OR REPLACE VIEW V_TD_NL2SQL_REVIEW_QUEUE ...` を実行 | view が作成され、schema refresh 後に一覧へ出る |
-| DP-VIEW-006 | drop view | confirmation に `ADMIN_EXECUTE` | 対象名確認エラー |
-| DP-VIEW-007 | drop view | confirmation に view 名 | drop success |
+| DP-VIEW-003 | 同上 | JOIN/WHERE 抽出 `sql_structure` | JOIN 条件と `STATUS IN (...)` / `TOTAL_AMOUNT > 0` が抽出され、`structure_markdown` が表示される。Enterprise AI 未設定時は deterministic warning |
+| DP-VIEW-004 | view create | `CREATE OR REPLACE VIEW V_TD_NL2SQL_REVIEW_QUEUE ...` を実行 | view が作成され、schema refresh 後に一覧へ出る |
+| DP-VIEW-005 | drop view | confirmation に `ADMIN_EXECUTE` | 対象名確認エラー |
+| DP-VIEW-006 | drop view | confirmation に view 名 | drop success |
 
 ## データの管理
 

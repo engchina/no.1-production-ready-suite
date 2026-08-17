@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 
 import { ApiError, apiGet, apiGetWithMetadata, apiPost } from "@/lib/api";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -17,8 +17,9 @@ import {
   filterUserVisibleCatalog,
   filterUserVisibleDbAdminObjectPage,
   filterUserVisibleSchemaObjectPage,
-  isUserVisibleObjectName,
+  isUserVisibleSchemaObject,
 } from "./objectVisibility";
+import { profileSummaryPageFromLegacyList } from "./profileListState";
 export {
   waitForSchemaRefreshJob,
   type WaitForSchemaRefreshJobOptions,
@@ -31,23 +32,6 @@ const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
 
 export function isLegacyCompatibilityError(error: unknown): boolean {
   return error instanceof ApiError && LEGACY_COMPATIBILITY_STATUSES.has(error.status);
-}
-
-function profileSummary(profile: Nl2SqlProfile) {
-  return {
-    id: profile.id,
-    name: profile.name,
-    category: profile.category ?? "",
-    description: profile.description,
-    archived: profile.archived,
-    allowed_table_count: profile.allowed_tables.length,
-    allowed_view_count: profile.allowed_views.length,
-    glossary_count: Object.keys(profile.glossary).length,
-    few_shot_count: profile.few_shot_examples.length,
-    version: profile.version ?? 1,
-    etag: profile.etag ?? "",
-    updated_at: profile.updated_at ?? "",
-  };
 }
 
 async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
@@ -68,8 +52,8 @@ export const nl2sqlIncrementalKeys = {
   schemaHead: ["schema", "catalog", "head"] as const,
   schemaObjects: (query: string, objectType: string, profileId: string, rowState: string) =>
     ["schema", "objects", query, objectType, profileId, rowState] as const,
-  dbAdminObjects: (query: string, objectType: string, rowState: string) =>
-    ["nl2sql", "db-admin", "objects", query, objectType, rowState] as const,
+  dbAdminObjects: (query: string, objectType: string, rowState: string, owner = "") =>
+    ["nl2sql", "db-admin", "objects", query, objectType, rowState, owner] as const,
   schemaRefreshJob: (jobId: string) => ["schema", "refresh-job", jobId] as const,
   selectAiDbProfileRefreshJob: (jobId: string) =>
     ["nl2sql", "select-ai", "db-profile-refresh-job", jobId] as const,
@@ -92,17 +76,7 @@ export function useProfileSummaries(query: string) {
             signal,
             timeoutMs: API_TIMEOUT_MS.interactiveList,
           });
-          const normalizedQuery = query.trim().toLowerCase();
-          const items = profiles
-            .filter(
-              (profile) =>
-                !profile.archived &&
-                (!normalizedQuery ||
-                  profile.name.toLowerCase().includes(normalizedQuery) ||
-                  (profile.category ?? "").toLowerCase().includes(normalizedQuery))
-            )
-            .map(profileSummary);
-          return { items, next_cursor: null, total: items.length, change_token: 0 };
+          return profileSummaryPageFromLegacyList(profiles, query);
         }
       );
     },
@@ -178,7 +152,8 @@ export function useSchemaObjects(
   query: string,
   objectType: string,
   profileId = "",
-  rowState = ""
+  rowState = "",
+  enabled = true
 ) {
   return useInfiniteQuery({
     queryKey: nl2sqlIncrementalKeys.schemaObjects(query.trim(), objectType, profileId, rowState),
@@ -190,6 +165,7 @@ export function useSchemaObjects(
         type: objectType,
       });
       if (pageParam) params.set("cursor", pageParam);
+      if (pageParam) params.set("include_counts", "false");
       if (profileId) params.set("profile_id", profileId);
       if (rowState) params.set("row_state", rowState);
       return apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
@@ -202,7 +178,7 @@ export function useSchemaObjects(
         const items = catalog.tables
           .filter(
             (table) =>
-              isUserVisibleObjectName(table.table_name) &&
+              isUserVisibleSchemaObject(table.owner, table.table_name) &&
               (!objectType || table.table_type.toUpperCase() === objectType.toUpperCase()) &&
               (!normalizedQuery ||
                 `${table.owner} ${table.table_name} ${table.logical_name} ${table.comment}`
@@ -228,13 +204,14 @@ export function useSchemaObjects(
       });
     },
     getNextPageParam: (page) => page.next_cursor ?? undefined,
+    enabled,
     staleTime: 5_000,
   });
 }
 
-export function useDbAdminObjects(query: string, objectType: string, rowState: string) {
+export function useDbAdminObjects(query: string, objectType: string, rowState: string, owner = "") {
   return useInfiniteQuery({
-    queryKey: nl2sqlIncrementalKeys.dbAdminObjects(query.trim(), objectType, rowState),
+    queryKey: nl2sqlIncrementalKeys.dbAdminObjects(query.trim(), objectType, rowState, owner.trim()),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({
@@ -244,6 +221,8 @@ export function useDbAdminObjects(query: string, objectType: string, rowState: s
         row_state: rowState || "all",
       });
       if (pageParam) params.set("cursor", pageParam);
+      if (pageParam) params.set("include_counts", "false");
+      if (owner.trim()) params.set("owner", owner.trim());
       return apiGet<DbAdminObjectPage>(`/api/nl2sql/db-admin/objects?${params}`, {
         signal,
         timeoutMs: API_TIMEOUT_MS.interactiveList,
@@ -270,6 +249,7 @@ export async function getSchemaObjectSnapshot(
         limit: "100",
         owner: owner.trim().toUpperCase(),
         type: objectType.trim().toUpperCase(),
+        include_counts: "false",
       });
       if (cursor) params.set("cursor", cursor);
       const page = await apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
@@ -277,7 +257,7 @@ export async function getSchemaObjectSnapshot(
         timeoutMs: API_TIMEOUT_MS.interactiveList,
       });
       for (const object of page.items) {
-        if (!isUserVisibleObjectName(object.object_name)) continue;
+        if (!isUserVisibleSchemaObject(object.owner, object.object_name)) continue;
         names.add(`${object.owner}.${object.object_name}`.toUpperCase());
       }
       const next = page.next_cursor ?? "";
@@ -292,7 +272,7 @@ export async function getSchemaObjectSnapshot(
     return catalog.tables
       .filter(
         (table) =>
-          isUserVisibleObjectName(table.table_name) &&
+          isUserVisibleSchemaObject(table.owner, table.table_name) &&
           table.owner.toUpperCase() === owner.trim().toUpperCase() &&
           (objectType.toUpperCase() === "VIEW"
             ? ["VIEW", "MATERIALIZED VIEW"].includes(table.table_type.toUpperCase())
@@ -360,7 +340,6 @@ export function useStartSchemaRefresh() {
 }
 
 export function useSchemaRefreshJob(jobId: string) {
-  const queryClient = useQueryClient();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.schemaRefreshJob(jobId),
     queryFn: ({ signal }) =>
@@ -371,11 +350,6 @@ export function useSchemaRefreshJob(jobId: string) {
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "done") {
-        void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
-        void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
-        void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
-      }
       return status === "pending" || status === "running" ? 1_000 : false;
     },
     retry: false,
@@ -396,7 +370,6 @@ export function useStartSelectAiDbProfileRefresh() {
 }
 
 export function useSelectAiDbProfileRefreshJob(jobId: string) {
-  const queryClient = useQueryClient();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(jobId),
     queryFn: ({ signal }) =>
@@ -410,11 +383,6 @@ export function useSelectAiDbProfileRefreshJob(jobId: string) {
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "done") {
-        void queryClient.invalidateQueries({
-          queryKey: ["nl2sql", "select-ai"],
-        });
-      }
       return status === "pending" || status === "running" ? 1_000 : false;
     },
     retry: false,

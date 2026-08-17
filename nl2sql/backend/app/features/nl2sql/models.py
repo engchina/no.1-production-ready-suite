@@ -6,10 +6,11 @@ service 層の adapter に閉じ込め、API と UI は同じ shape を使い続
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from .object_identity import qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
@@ -203,6 +204,7 @@ class SchemaObjectPage(BaseModel):
     total: int | None = None
     table_count: int = 0
     view_count: int = 0
+    counts_included: bool = True
     refreshed_at: str = ""
     catalog_version: int = 0
 
@@ -226,6 +228,19 @@ class AllowedObjects(BaseModel):
 
 SELECT_AI_MAX_TOKENS_MIN = 4096
 SELECT_AI_MAX_TOKENS_MAX = 32000
+PROFILE_IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def normalize_profile_identifier(value: str) -> str:
+    return value.strip().upper()
+
+
+def validate_profile_identifier(value: str) -> str:
+    if not PROFILE_IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(
+            "名称は英字で開始し、英字・数字・アンダースコアのみ使用できます。"
+        )
+    return value
 
 
 class ProfileSelectAiConfig(BaseModel):
@@ -246,6 +261,26 @@ class ProfileSelectAiConfig(BaseModel):
     constraints: bool = False
     role: str = ""
     additional_instructions: str = ""
+
+
+class ProfileSelectAiConfigPatch(BaseModel):
+    """Profile PATCH 用の Select AI 設定差分。"""
+
+    profile_name: str | None = None
+    region: str | None = None
+    model: str | None = None
+    embedding_model: str | None = None
+    max_tokens: int | None = Field(
+        default=None,
+        ge=SELECT_AI_MAX_TOKENS_MIN,
+        le=SELECT_AI_MAX_TOKENS_MAX,
+    )
+    enforce_object_list: bool | None = None
+    comments: bool | None = None
+    annotations: bool | None = None
+    constraints: bool | None = None
+    role: str | None = None
+    additional_instructions: str | None = None
 
 
 class Nl2SqlProfile(BaseModel):
@@ -372,6 +407,53 @@ class ProfileUpsertRequest(BaseModel):
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_profile_identifier(value)
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return validate_profile_identifier(value)
+
+    @model_validator(mode="after")
+    def align_select_ai_profile_name(self) -> ProfileUpsertRequest:
+        self.select_ai_config = self.select_ai_config.model_copy(
+            update={"profile_name": self.name}
+        )
+        return self
+
+
+class ProfilePatchRequest(BaseModel):
+    """Profile 更新 request。省略された項目は既存値を保持する。"""
+
+    name: str | None = Field(default=None, min_length=1)
+    category: str | None = None
+    description: str | None = None
+    allowed_tables: list[str] | None = None
+    allowed_views: list[str] | None = None
+    glossary: dict[str, str] | None = None
+    sql_rules: list[str] | None = None
+    default_row_limit: int | None = Field(default=None, ge=1, le=5000)
+    safety_policy: str | None = None
+    few_shot_examples: list[dict[str, str]] | None = None
+    select_ai_config: ProfileSelectAiConfigPatch | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_profile_identifier(value)
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        return validate_profile_identifier(value) if value is not None else value
+
 
 class StrictMutationRequest(BaseModel):
     """Reject stale mutation fields instead of silently changing their meaning."""
@@ -478,9 +560,17 @@ class DbAdminObjectSummary(BaseModel):
 
     name: str
     owner: str = ""
+    qualified_name: str = ""
     object_type: str = "table"
     row_count: int | None = None
     comment: str = ""
+
+    @model_validator(mode="after")
+    def fill_qualified_name(self) -> DbAdminObjectSummary:
+        if self.qualified_name or not self.owner:
+            return self
+        self.qualified_name = qualified_object_name(self.owner, self.name)
+        return self
 
 
 class DbAdminObjectDetail(BaseModel):
@@ -488,6 +578,7 @@ class DbAdminObjectDetail(BaseModel):
 
     name: str
     owner: str = ""
+    qualified_name: str = ""
     object_type: str = "table"
     row_count: int | None = None
     comment: str = ""
@@ -495,6 +586,13 @@ class DbAdminObjectDetail(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     ddl: str = ""
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def fill_qualified_name(self) -> DbAdminObjectDetail:
+        if self.qualified_name or not self.owner:
+            return self
+        self.qualified_name = qualified_object_name(self.owner, self.name)
+        return self
 
 
 class DbAdminObjectsData(BaseModel):
@@ -515,6 +613,7 @@ class DbAdminObjectPage(BaseModel):
     total: int = 0
     table_count: int = 0
     view_count: int = 0
+    counts_included: bool = True
     next_cursor: str | None = None
     refreshed_at: str = ""
     catalog_version: int = 0
@@ -525,6 +624,7 @@ class DbAdminDropTableRequest(AdminExecutionConfirmation):
     """Drop table execution request."""
 
     table_name: str = Field(min_length=1)
+    owner: str = ""
     purge: bool = True
 
 
@@ -532,6 +632,7 @@ class DbAdminTruncateTableRequest(AdminExecutionConfirmation):
     """Truncate table data execution request."""
 
     table_name: str = Field(min_length=1)
+    owner: str = ""
 
 
 class DbAdminStatementResult(BaseModel):
@@ -646,12 +747,14 @@ class DbAdminDropViewRequest(AdminExecutionConfirmation):
     """Drop view execution request."""
 
     view_name: str = Field(min_length=1)
+    owner: str = ""
 
 
 class DbAdminDataPreviewRequest(BaseModel):
     """テーブル/ビューのデータ表示 request。"""
 
     object_name: str = Field(min_length=1)
+    owner: str = ""
     limit: int = Field(default=100, ge=1, le=10000)
     where_clause: str = ""
 
@@ -669,6 +772,7 @@ class DbAdminCsvUploadRequest(AdminExecutionConfirmation):
     """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)request。"""
 
     table_name: str = Field(min_length=1)
+    owner: str = ""
     content_base64: str = Field(min_length=1)
     filename: str = "upload.csv"
     mode: Literal["insert", "truncate_insert"] = "insert"
@@ -715,7 +819,7 @@ class DbAdminJoinWhereRequest(BaseModel):
     """ビュー DDL の JOIN/WHERE 条件抽出 request。"""
 
     ddl: str = Field(min_length=1)
-    prompt_profile: Literal["join_where_strict", "sql_structure"] = "join_where_strict"
+    prompt_profile: Literal["sql_structure"] = "sql_structure"
 
 
 class DbAdminJoinWhereData(BaseModel):
@@ -725,13 +829,14 @@ class DbAdminJoinWhereData(BaseModel):
     where_text: str = "None"
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
-    prompt_profile: Literal["join_where_strict", "sql_structure"] = "join_where_strict"
+    prompt_profile: Literal["sql_structure"] = "sql_structure"
     structure_markdown: str = ""
 
 
 class Nl2SqlResult(BaseModel):
     """NL2SQL job result."""
 
+    history_id: str = ""
     engine: Nl2SqlEngine
     engine_meta: dict[str, Any] = Field(default_factory=dict)
     fallback_reason: str = ""
@@ -746,6 +851,67 @@ class Nl2SqlResult(BaseModel):
     optimization_hints: list[str] = Field(default_factory=list)
     results: QueryResults
     timing: TimingEnvelope
+    interpretation: Nl2SqlInterpretationArtifact | None = None
+    show_prompt: Nl2SqlShowPromptArtifact | None = None
+
+
+class Nl2SqlQuestionInterpretation(BaseModel):
+    """検索質問を業務実行向けに解釈した表示用 artifact。"""
+
+    available: bool = False
+    source: str = "deterministic"
+    original_question: str = ""
+    rewritten_question: str = ""
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    target_objects: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    row_limit: int | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlSqlInterpretation(BaseModel):
+    """生成 SQL の意味構造を表示する artifact。"""
+
+    available: bool = False
+    source: str = "sql_semantics"
+    summary: str = ""
+    statement_type: str = ""
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    joins: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    limit: int | None = None
+    semantic_graph: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlInterpretationArtifact(BaseModel):
+    """質問解釈と SQL 意味グラフの表示用 artifact。"""
+
+    available: bool = False
+    question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
+    sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlShowPromptArtifact(BaseModel):
+    """Select AI showprompt の表示用 artifact。"""
+
+    available: bool = False
+    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    action: str = "showprompt"
+    prompt: str = ""
+    unavailable_reason: str = ""
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SelectAiRequestOverrides(BaseModel):
@@ -822,6 +988,8 @@ class JobCreateRequest(BaseModel):
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
+    include_interpretation: bool = False
+    include_show_prompt: bool = False
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> JobCreateRequest:
@@ -865,6 +1033,7 @@ class HistoryItem(BaseModel):
     feedback_rating: FeedbackRating | None = None
     profile_id: str = ""
     profile_name: str = ""
+    profile_category: str = ""
     rewritten_question: str = ""
     executable_sql: str = ""
     safety_is_safe: bool = True
@@ -872,6 +1041,9 @@ class HistoryItem(BaseModel):
     result_columns: list[str] = Field(default_factory=list)
     feedback_comment: str = ""
     feedback_updated_at: str = ""
+    admin_feedback_rating: FeedbackRating | None = None
+    admin_feedback_content: str = ""
+    admin_feedback_updated_at: str = ""
     session_id: str = ""
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
@@ -901,6 +1073,16 @@ class FeedbackRequest(BaseModel):
     history_id: str
     rating: FeedbackRating
     comment: str = ""
+    feedback_content: str = ""
+
+    @model_validator(mode="after")
+    def normalize_feedback_content(self) -> FeedbackRequest:
+        """UI の feedback_content 名と既存 comment 名を互換にする。"""
+        if not self.comment and self.feedback_content:
+            self.comment = self.feedback_content
+        elif not self.feedback_content and self.comment:
+            self.feedback_content = self.comment
+        return self
 
 
 class FeedbackData(BaseModel):
@@ -910,6 +1092,7 @@ class FeedbackData(BaseModel):
     rating: FeedbackRating
     saved: bool
     comment: str = ""
+    feedback_content: str = ""
 
 
 class FeedbackClearData(BaseModel):
@@ -968,8 +1151,12 @@ class FeedbackVectorEntry(BaseModel):
     generated_sql: str
     profile_id: str = ""
     profile_name: str = ""
+    profile_category: str = ""
     feedback_rating: FeedbackRating | None = None
     feedback_comment: str = ""
+    admin_feedback_rating: FeedbackRating | None = None
+    admin_feedback_content: str = ""
+    admin_feedback_updated_at: str = ""
     indexed: bool = False
     created_at: str = ""
 
@@ -1057,6 +1244,7 @@ class ProfileRecommendationData(BaseModel):
 
     recommended_profile_id: str
     recommended_profile_name: str
+    recommended_profile_category: str = ""
     confidence: float
     reason: str
     rewritten_question: str
@@ -1075,6 +1263,7 @@ class ClassifierTrainingExample(BaseModel):
     text: str
     profile_id: str = ""
     profile_name: str = ""
+    profile_category: str = ""
     source: str = ""
     source_type: Literal["file", "feedback"] = "file"
     source_history_id: str = ""
@@ -1096,6 +1285,7 @@ class ClassifierTrainingCandidate(BaseModel):
     question: str
     profile_id: str = ""
     profile_name: str = ""
+    profile_category: str = ""
     feedback_rating: FeedbackRating | None = None
     feedback_comment: str = ""
     created_at: str = ""
@@ -1243,6 +1433,7 @@ class ClassifierPredictionCandidate(BaseModel):
     score: float
     profile_id: str = ""
     profile_name: str = ""
+    profile_category: str = ""
 
 
 class ClassifierPredictionData(BaseModel):
@@ -1312,26 +1503,6 @@ class AnalyzeData(BaseModel):
     llm_warnings: list[str] = Field(default_factory=list)
 
 
-class RepairRequest(BaseModel):
-    """Oracle error message を使った SQL repair request."""
-
-    sql: str = Field(min_length=1)
-    error_message: str = Field(min_length=1)
-    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    row_limit: int | None = Field(default=None, ge=1, le=5000)
-
-
-class RepairData(BaseModel):
-    """Oracle error-aware SQL repair response."""
-
-    error_code: str = ""
-    repaired_sql: str = ""
-    explanation: str
-    recommendations: list[str] = Field(default_factory=list)
-    safety: SafetyReport
-    executable_sql: str = ""
-
-
 class AssetRefreshData(BaseModel):
     """Select AI / Agent asset refresh response."""
 
@@ -1370,6 +1541,13 @@ class AssetCleanupRequest(AdminExecutionConfirmation):
     engines: list[Nl2SqlEngine] = Field(
         default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
     )
+
+
+class ProfileDeleteData(BaseModel):
+    """業務 profile 削除と Oracle asset cleanup の結果。"""
+
+    profile: Nl2SqlProfile
+    oracle_cleanup: list[AssetCleanupData] = Field(default_factory=list)
 
 
 class SelectAiDbProfile(BaseModel):
@@ -1452,6 +1630,8 @@ class SelectAiDbProfilesData(BaseModel):
     runtime: str = "deterministic"
     profiles: list[SelectAiDbProfile] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
 
 
 class SelectAiDbProfileDropRequest(AdminExecutionConfirmation):
@@ -1623,6 +1803,27 @@ class SelectAiFeedbackAddData(BaseModel):
     plsql_preview: str = ""
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminFeedbackReviewRequest(BaseModel):
+    """管理者によるアプリ内 feedback review request。"""
+
+    history_id: str = Field(min_length=1)
+    rating: FeedbackRating
+    feedback_content: str = ""
+    register_select_ai_feedback: bool = False
+    select_ai_response: str = ""
+    select_ai_profile_name: str = ""
+
+
+class AdminFeedbackReviewData(BaseModel):
+    """管理者 feedback review response."""
+
+    history_id: str
+    rating: FeedbackRating
+    saved: bool
+    feedback_content: str = ""
+    select_ai_feedback: SelectAiFeedbackAddData | None = None
 
 
 class SelectAiFeedbackMutationData(BaseModel):
@@ -1863,8 +2064,14 @@ class AnnotationApplyData(BaseModel):
 class MetadataSqlTarget(BaseModel):
     """Comment / annotation generation target object."""
 
+    owner: str = ""
     object_name: str = Field(min_length=1, max_length=260)
-    object_type: Literal["table", "view"] = "table"
+    object_type: Literal["table", "view", "TABLE", "VIEW"] = "table"
+
+    @field_validator("object_type", mode="before")
+    @classmethod
+    def normalize_object_type(cls, value: str) -> str:
+        return str(value or "table").lower()
 
 
 class MetadataSqlSampleTarget(MetadataSqlTarget):

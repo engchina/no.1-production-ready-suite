@@ -32,6 +32,7 @@ createRoot(root).render(
             <App />
             <Toaster
               dismissLabel={t("common.dismiss")}
+              placement="bottom-right"
               regionLabel={t("common.notifications")}
             />
           </ConfirmProvider>

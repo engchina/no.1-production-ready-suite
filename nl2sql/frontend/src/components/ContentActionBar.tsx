@@ -24,20 +24,21 @@ export function ContentActionBar({
   title?: ReactNode;
 }) {
   const hasInfo = leading || title || description || meta;
+  const infoClassName = "min-w-0 max-w-full flex-1 basis-64";
 
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between",
-        !hasInfo && "sm:items-center sm:justify-end",
+        "flex min-w-0 max-w-full flex-wrap items-start justify-between gap-2",
+        !hasInfo && "items-center justify-end",
         className
       )}
       data-testid={testId}
     >
       {leading ? (
-        <div className="min-w-0">{leading}</div>
+        <div className={infoClassName}>{leading}</div>
       ) : hasInfo ? (
-        <div className="min-w-0 space-y-1">
+        <div className={cn(infoClassName, "space-y-1")}>
           {title ? <div className="text-sm font-semibold text-foreground">{title}</div> : null}
           {description ? (
             <div className="text-sm leading-6 text-muted">{description}</div>
@@ -49,7 +50,8 @@ export function ContentActionBar({
         role="group"
         aria-label={ariaLabel}
         className={cn(
-          "flex min-w-0 flex-wrap items-center justify-end gap-2",
+          "flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2",
+          hasInfo && "ml-auto",
           !hasInfo && "w-full",
           actionsClassName
         )}

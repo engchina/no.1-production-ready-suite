@@ -17,11 +17,24 @@ const migratedPages = [
   "../src/features/nl2sql/pages/FeedbackManagementPage.tsx",
   "../src/features/nl2sql/pages/QuestionLearningPage.tsx",
   "../src/features/nl2sql/pages/SampleDataPage.tsx",
-  "../src/features/nl2sql/pages/SqlAnalysisPage.tsx",
   "../src/features/nl2sql/pages/SqlToQuestionPage.tsx",
   "../src/features/security/SecurityUsersPage.tsx",
   "../src/features/security/SecurityRolesPage.tsx",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
+
+const pageHeaderStatusPages = [
+  "../src/features/nl2sql/Nl2SqlWorkbench.tsx",
+  "../src/features/nl2sql/pages/TableManagementPage.tsx",
+  "../src/features/nl2sql/pages/ViewManagementPage.tsx",
+  "../src/features/nl2sql/pages/DataManagementPage.tsx",
+  "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
+  "../src/features/nl2sql/pages/ProfileManagementPage.tsx",
+  "../src/features/nl2sql/pages/QuestionLearningPage.tsx",
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
+const profileManagementPage = readFileSync(
+  new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
+  "utf8",
+);
 
 test("PageAction descriptor と固定優先順位をローカル実装が保持する", () => {
   assert.match(source, /export interface PageAction/u);
@@ -72,6 +85,40 @@ test("ページ操作はボタンの loading のみを担当し、詳細な処�
   assert.doesNotMatch(source, /ProcessingIndicator/u);
   assert.doesNotMatch(source, /loadingAction/u);
   assert.doesNotMatch(source, /data-processing-placement/u);
+});
+
+test("PageHeaderStatusBadge は短いページ状態を live region として公開する", () => {
+  assert.match(source, /export function PageHeaderStatusBadge/u);
+  assert.match(source, /role="status"/u);
+  assert.match(source, /aria-live="polite"/u);
+  assert.match(source, /aria-atomic="true"/u);
+  assert.match(source, /data-page-header-status="true"/u);
+  assert.match(source, /<StatusBadge variant=\{variant\} label=\{label\}/u);
+});
+
+test("ヘッダー横の状態 badge は共通 PageHeaderStatusBadge を使う", () => {
+  for (const page of pageHeaderStatusPages) {
+    assert.match(page, /PageHeaderStatusBadge/u);
+    assert.doesNotMatch(page, /<span[^>]+aria-live="polite"[^>]*>\s*<StatusBadge/u);
+  }
+});
+
+test("refresh 系の完了状態はヘッダー横 badge に残さない", () => {
+  for (const page of pageHeaderStatusPages.slice(0, 5)) {
+    assert.match(page, /!== "done"/u);
+  }
+  assert.match(profileManagementPage, /dbProfileRefreshStatus === "error"/u);
+  assert.match(profileManagementPage, /schemaRefreshStatus === "error"/u);
+  assert.doesNotMatch(profileManagementPage, /headerRefreshStatus === "done"/u);
+});
+
+test("業務プロファイルの schema / DB Profile refresh ボタンは loading と disabled を揃える", () => {
+  assert.match(profileManagementPage, /id: "schema-refresh"/u);
+  assert.match(profileManagementPage, /loading: schemaRefreshing \|\| startSchemaRefresh\.isPending/u);
+  assert.match(profileManagementPage, /disabled: schemaRefreshing \|\| startSchemaRefresh\.isPending/u);
+  assert.match(profileManagementPage, /id: "db-profile-refresh"/u);
+  assert.match(profileManagementPage, /loading: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);
+  assert.match(profileManagementPage, /disabled: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);
 });
 
 test("移行対象ページはローカル PageHeader を使い、旧トップ概覧カードを表示しない", () => {

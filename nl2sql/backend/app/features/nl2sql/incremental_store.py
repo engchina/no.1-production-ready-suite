@@ -41,7 +41,7 @@ from .models import (
 )
 from .object_visibility import (
     filter_user_visible_catalog,
-    is_user_visible_object_name,
+    is_user_visible_schema_object,
 )
 from .oracle_lob import configure_clob_fetch_as_text
 
@@ -274,6 +274,7 @@ class IncrementalNl2SqlRepository(Protocol):
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
+        include_counts: bool = True,
     ) -> SchemaObjectPage: ...
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None: ...
@@ -536,6 +537,7 @@ class MemoryIncrementalNl2SqlRepository:
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
+        include_counts: bool = True,
     ) -> SchemaObjectPage:
         after = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
@@ -546,7 +548,7 @@ class MemoryIncrementalNl2SqlRepository:
             tables = [
                 table
                 for table in self._catalog.tables
-                if is_user_visible_object_name(table.table_name)
+                if is_user_visible_schema_object(table.owner, table.table_name)
                 and (not owner_key or table.owner.upper() == owner_key)
                 and (
                     not type_key
@@ -584,12 +586,16 @@ class MemoryIncrementalNl2SqlRepository:
                 )
             ]
             tables.sort(key=lambda item: (item.owner.upper(), item.table_name.upper()))
-            total = len(tables)
-            table_count = sum(
-                item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"}
-                for item in tables
+            total = len(tables) if include_counts else None
+            table_count = (
+                sum(
+                    item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"}
+                    for item in tables
+                )
+                if include_counts
+                else 0
             )
-            view_count = total - table_count
+            view_count = (total - table_count) if total is not None else 0
             if after:
                 tables = [
                     item
@@ -609,12 +615,13 @@ class MemoryIncrementalNl2SqlRepository:
                 total=total,
                 table_count=table_count,
                 view_count=view_count,
+                counts_included=include_counts,
                 refreshed_at=self._catalog.refreshed_at,
                 catalog_version=self._catalog_version,
             )
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
-        if not is_user_visible_object_name(object_name):
+        if not is_user_visible_schema_object(owner, object_name):
             return None
         owner_key = owner.upper()
         name_key = object_name.upper()
@@ -659,7 +666,7 @@ class MemoryIncrementalNl2SqlRepository:
             self._manifest = {
                 key: value
                 for key, value in manifest.items()
-                if is_user_visible_object_name(key[1])
+                if is_user_visible_schema_object(key[0], key[1])
             }
             self._catalog_version += 1
             self._tokens[SCHEMA_NAMESPACE] += 1
@@ -1223,9 +1230,16 @@ class OracleIncrementalNl2SqlRepository:
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
+        include_counts: bool = True,
     ) -> SchemaObjectPage:
         after = _decode_cursor(cursor, 2)
-        where = ["o.OBJECT_NAME NOT LIKE '%$%'", "o.OBJECT_NAME NOT LIKE '%#%'"]
+        where = [
+            "o.OWNER_NAME NOT LIKE '%$%'",
+            "o.OWNER_NAME NOT LIKE '%#%'",
+            "o.OBJECT_NAME NOT LIKE '%$%'",
+            "o.OBJECT_NAME NOT LIKE '%#%'",
+            "o.OBJECT_NAME NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+        ]
         binds: dict[str, Any] = {"limit": limit + 1}
         if owner.strip():
             where.append("o.OWNER_NAME = :owner")
@@ -1264,7 +1278,9 @@ class OracleIncrementalNl2SqlRepository:
         if allowed_names is not None:
             normalized = sorted({name.upper() for name in allowed_names})
             if not normalized:
-                return SchemaObjectPage(catalog_version=self.get_catalog_head().catalog_version)
+                if include_counts:
+                    return SchemaObjectPage(catalog_version=self.get_catalog_head().catalog_version)
+                return SchemaObjectPage(total=None, counts_included=False)
             where.append(
                 "EXISTS (SELECT 1 FROM JSON_TABLE(:allowed_names_json, '$[*]' "
                 "COLUMNS (ALLOWED_NAME VARCHAR2(512) PATH '$')) allowed "
@@ -1285,30 +1301,36 @@ class OracleIncrementalNl2SqlRepository:
                 _set_clob_bind(db_cursor, "allowed_names_json")
             db_cursor.execute(sql, binds)
             rows = db_cursor.fetchall()
-            count_where = [part for part in where if not part.startswith("(o.OWNER_NAME >")]
-            count_binds = {
-                key: value
-                for key, value in binds.items()
-                if key not in {"limit", "after_owner", "after_name"}
-            }
-            # Oracle は aggregate と scalar subquery を同じ SELECT level に混在させると
-            # ORA-00937 を返す。件数を一行の derived table に確定してから head を結合する。
-            db_cursor.execute(
-                "SELECT stats.TOTAL_COUNT, stats.TABLE_COUNT, stats.VIEW_COUNT, "
-                "h.CATALOG_VERSION, h.REFRESHED_AT "
-                "FROM (SELECT COUNT(*) TOTAL_COUNT, "
-                "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
-                "THEN 0 ELSE 1 END) TABLE_COUNT, "
-                "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
-                "THEN 1 ELSE 0 END) VIEW_COUNT "
-                "FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
-                + " AND ".join(count_where)
-                + ") stats LEFT JOIN NL2SQL_SCHEMA_CATALOG_HEAD h "
-                "ON h.HEAD_KEY = 'active'",
-                count_binds,
-            )
-            count_row = db_cursor.fetchone()
-        record_repository("schema_search", statements=2, rows=len(rows) + 1)
+            count_row = None
+            if include_counts:
+                count_where = [part for part in where if not part.startswith("(o.OWNER_NAME >")]
+                count_binds = {
+                    key: value
+                    for key, value in binds.items()
+                    if key not in {"limit", "after_owner", "after_name"}
+                }
+                # Oracle は aggregate と scalar subquery を同じ SELECT level に混在させると
+                # ORA-00937 を返す。件数を一行の derived table に確定してから head を結合する。
+                db_cursor.execute(
+                    "SELECT stats.TOTAL_COUNT, stats.TABLE_COUNT, stats.VIEW_COUNT, "
+                    "h.CATALOG_VERSION, h.REFRESHED_AT "
+                    "FROM (SELECT COUNT(*) TOTAL_COUNT, "
+                    "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
+                    "THEN 0 ELSE 1 END) TABLE_COUNT, "
+                    "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
+                    "THEN 1 ELSE 0 END) VIEW_COUNT "
+                    "FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
+                    + " AND ".join(count_where)
+                    + ") stats LEFT JOIN NL2SQL_SCHEMA_CATALOG_HEAD h "
+                    "ON h.HEAD_KEY = 'active'",
+                    count_binds,
+                )
+                count_row = db_cursor.fetchone()
+        record_repository(
+            "schema_search",
+            statements=2 if include_counts else 1,
+            rows=len(rows) + (1 if include_counts else 0),
+        )
         has_more = len(rows) > limit
         rows = rows[:limit]
         items = [
@@ -1331,15 +1353,16 @@ class OracleIncrementalNl2SqlRepository:
         return SchemaObjectPage(
             items=items,
             next_cursor=next_cursor,
-            total=int(count_row[0]) if count_row else 0,
+            total=int(count_row[0]) if count_row else (0 if include_counts else None),
             table_count=int(count_row[1] or 0) if count_row else 0,
             view_count=int(count_row[2] or 0) if count_row else 0,
+            counts_included=include_counts,
             refreshed_at=str(count_row[4] or "") if count_row else "",
             catalog_version=int(count_row[3] or 0) if count_row else 0,
         )
 
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
-        if not is_user_visible_object_name(object_name):
+        if not is_user_visible_schema_object(owner, object_name):
             return None
         owner_key = owner.upper()
         object_key = object_name.upper()
@@ -1357,7 +1380,12 @@ class OracleIncrementalNl2SqlRepository:
     def schema_manifest(self) -> dict[tuple[str, str], str]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT OWNER_NAME, OBJECT_NAME, LAST_DDL_AT FROM NL2SQL_SCHEMA_OBJECTS"
+                "SELECT OWNER_NAME, OBJECT_NAME, LAST_DDL_AT FROM NL2SQL_SCHEMA_OBJECTS "
+                "WHERE OWNER_NAME NOT LIKE '%$%' "
+                "AND OWNER_NAME NOT LIKE '%#%' "
+                "AND OBJECT_NAME NOT LIKE '%$%' "
+                "AND OBJECT_NAME NOT LIKE '%#%' "
+                "AND OBJECT_NAME NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'"
             )
             rows = cursor.fetchall()
         record_repository("schema_manifest", rows=len(rows))
@@ -1375,10 +1403,10 @@ class OracleIncrementalNl2SqlRepository:
         manifest = {
             key: value
             for key, value in manifest.items()
-            if is_user_visible_object_name(key[1])
+            if is_user_visible_schema_object(key[0], key[1])
         }
         changed_keys = {
-            key for key in changed_keys if is_user_visible_object_name(key[1])
+            key for key in changed_keys if is_user_visible_schema_object(key[0], key[1])
         }
         table_by_key = {
             (table.owner.upper(), table.table_name.upper()): table for table in catalog.tables

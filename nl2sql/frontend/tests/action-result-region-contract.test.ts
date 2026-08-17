@@ -27,6 +27,11 @@ test("action result region does not render execution timing inside results", () 
   assert.match(actionResultRegionSource, /\{loading \? null : hasError \?/u);
 });
 
+test("action result region can attach recovery actions to local errors", () => {
+  assert.match(actionResultRegionSource, /errorAction\?: ReactNode/u);
+  assert.match(actionResultRegionSource, /<Banner severity="danger" action=\{errorAction\}>/u);
+});
+
 test("action result region uses minimal result/error scroll guidance", () => {
   assert.match(actionResultRegionSource, /operation\.userScrolled/u);
   assert.match(actionResultRegionSource, /scrollIntoView\(\{/u);
@@ -37,6 +42,19 @@ test("action result region uses minimal result/error scroll guidance", () => {
 
 test("app button defaults to non-submit actions unless explicitly overridden", () => {
   assert.match(buttonSource, /type = "button"/u);
-  assert.match(buttonSource, /<BaseButton type=\{type\}/u);
+  assert.match(buttonSource, /<BaseButton\s+type=\{type\}/u);
   assert.match(buttonSource, /export type ButtonProps = BaseButtonProps/u);
+});
+
+test("app button variants restore safe Japanese text line height", () => {
+  assert.match(buttonSource, /BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5"/u);
+  assert.match(
+    buttonSource,
+    /cn\(sharedButtonVariants\(options\), BUTTON_TEXT_LAYOUT_CLASSNAME\)/u
+  );
+  assert.match(
+    buttonSource,
+    /className=\{cn\(BUTTON_TEXT_LAYOUT_CLASSNAME, className\)\}/u
+  );
+  assert.doesNotMatch(buttonSource, /\bleading-none\b/u);
 });

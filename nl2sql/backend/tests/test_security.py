@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -14,13 +13,13 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request, Response
 
+from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
 from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.dependencies import authorize_api_request, local_debug_principal
 from app.security.domain import (
     SYSTEM_ADMIN_ROLE_ID,
-    AuditRecord,
     DataEntitlementRecord,
     Principal,
     RoleRecord,
@@ -29,23 +28,21 @@ from app.security.domain import (
 from app.security.passwords import PasswordPolicyError, validate_password
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
+    PERMISSION_CATALOG,
     UNCLASSIFIED_PERMISSION,
     permission_for_route,
 )
 from app.security.router import (
-    audit_log_page,
     change_password,
-    export_audit_log_xlsx,
     logout,
     me,
 )
-from app.security.schemas import DataEntitlementInput, PasswordChangeRequest, UserData
+from app.security.schemas import DataEntitlementInput, PasswordChangeRequest, RoleData, UserData
 from app.security.service import SecurityApiError, SecurityService, reset_security_service
 from app.security.store import (
     InMemorySecurityStore,
     OracleSecurityStore,
     SecurityConflict,
-    _audit_record_from_row,
 )
 from app.settings import Settings, get_settings
 
@@ -84,29 +81,6 @@ async def _inline_threadpool(
 ) -> object:
     """AnyIO worker が使えない sandbox でも API 契約だけを検証する。"""
     return function(*args, **kwargs)
-
-
-class _AuditDetailLob:
-    def __init__(self, value: object) -> None:
-        self._value = value
-
-    def read(self) -> object:
-        return self._value
-
-
-def _audit_row(detail: object) -> tuple[object, ...]:
-    return (
-        1,
-        None,
-        "LOGIN_SUCCESS",
-        "USER",
-        "target-1",
-        "SUCCESS",
-        detail,
-        "request-1",
-        "127.0.0.1",
-        datetime(2026, 7, 20, tzinfo=UTC),
-    )
 
 
 def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,6 +241,59 @@ def test_security_migration_splitter_never_executes_comment_only_buffers() -> No
     ]
 
 
+def test_dashboard_permission_is_retired_for_appearance_settings() -> None:
+    assert "dashboard.view" not in ALL_PERMISSION_CODES
+    assert "menu.settings_appearance" in ALL_PERMISSION_CODES
+
+    service = _service()
+    actor, _, _ = _login(service)
+
+    role = service.create_role(
+        role_code="LEGACY_DASHBOARD",
+        display_name="旧ダッシュボード",
+        description="",
+        permissions={"dashboard.view"},
+        entitlements=[],
+        actor=actor,
+    )
+    assert role.permissions == {"menu.settings_appearance"}
+
+
+def test_stale_permission_codes_are_hidden_from_role_api_and_principals() -> None:
+    store = InMemorySecurityStore()
+    service = SecurityService(store, _settings())
+    assert service.bootstrap() is True
+    actor, _, _ = _login(service)
+
+    store.create_role(
+        RoleRecord(
+            role_id="role-stale",
+            role_code="STALE_ROLE",
+            display_name="旧権限を含むロール",
+            description="",
+            is_built_in=False,
+            archived=False,
+            version=1,
+            permissions={"dashboard.view", "menu.settings_appearance", "search.view"},
+        )
+    )
+    service.create_user(
+        login_name="stale.user",
+        display_name="旧権限ユーザー",
+        role_ids=["role-stale"],
+        temporary_password="IndependentPass!456",
+        actor=actor,
+    )
+
+    stale_role = store.get_role("role-stale")
+    assert stale_role is not None
+    assert "dashboard.view" not in RoleData.from_record(stale_role).permissions
+
+    principal, _, _ = service.login("stale.user", "IndependentPass!456")
+    assert "dashboard.view" not in principal.permissions
+    assert {"menu.settings_appearance", "menu.query", "menu.direct_sql"} <= principal.permissions
+
+
 def test_data_entitlement_capability_is_structured() -> None:
     with pytest.raises(ValueError, match="capability"):
         DataEntitlementInput(
@@ -370,7 +397,12 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
     )
     assert password == "QueryUserPass!123"
     principal, _, _ = service.login(user.login_name, password)
-    assert principal.permissions >= {"search.view", "search.execute"}
+    assert principal.permissions >= {
+        "menu.query",
+        "menu.direct_sql",
+        "menu.sql_to_question",
+        "menu.history",
+    }
     assert {
         (item.scope_code, item.capability) for item in principal.data_entitlements
     } == {("SALES", "ROW_READ"), ("SALES", "SENSITIVE_READ")}
@@ -501,205 +533,6 @@ def test_login_lockout_is_generic() -> None:
     assert user.locked_until > datetime.now(UTC)
 
 
-def test_audit_store_pages_ten_rows_and_clamps_to_last_page() -> None:
-    store = InMemorySecurityStore()
-    base = datetime(2026, 7, 20, tzinfo=UTC)
-    store.audit = [
-        AuditRecord(
-            audit_id=index,
-            actor_user_id=f"actor-{index}",
-            event_type=f"EVENT_{index}",
-            target_type="USER",
-            target_id=f"target-{index}",
-            outcome="SUCCESS",
-            detail={},
-            request_id=f"request-{index}",
-            client_ip="127.0.0.1",
-            created_at=base + timedelta(minutes=index),
-        )
-        for index in range(1, 13)
-    ]
-
-    first_page, total, resolved_page = store.page_audit(page=1, page_size=10)
-    assert [record.audit_id for record in first_page] == list(range(12, 2, -1))
-    assert total == 12
-    assert resolved_page == 1
-
-    last_page, total, resolved_page = store.page_audit(page=99, page_size=10)
-    assert [record.audit_id for record in last_page] == [2, 1]
-    assert total == 12
-    assert resolved_page == 2
-
-    empty_page, total, resolved_page = InMemorySecurityStore().page_audit(
-        page=99, page_size=10
-    )
-    assert empty_page == []
-    assert total == 0
-    assert resolved_page == 1
-
-
-def test_audit_row_detail_accepts_oracle_native_json_mapping() -> None:
-    record = _audit_record_from_row(_audit_row({"reason": "native", "count": 2}))
-
-    assert record.detail == {"reason": "native", "count": 2}
-
-
-def test_audit_row_detail_accepts_lob_and_bytes_json() -> None:
-    lob_record = _audit_record_from_row(_audit_row(_AuditDetailLob('{"reason":"lob"}')))
-    bytes_record = _audit_record_from_row(_audit_row(_AuditDetailLob(b'{"reason":"bytes"}')))
-
-    assert lob_record.detail == {"reason": "lob"}
-    assert bytes_record.detail == {"reason": "bytes"}
-
-
-def test_audit_row_detail_accepts_legacy_python_dict_literal() -> None:
-    record = _audit_record_from_row(_audit_row("{'reason': 'legacy', 'locked': True}"))
-
-    assert record.detail == {"reason": "legacy", "locked": True}
-
-
-def test_audit_row_detail_reports_unparseable_values_without_raising() -> None:
-    invalid_record = _audit_record_from_row(_audit_row("{bad json"))
-    non_object_record = _audit_record_from_row(_audit_row('["unexpected"]'))
-
-    assert invalid_record.detail == {
-        "decode_warning": "audit_detail_invalid_json",
-        "raw_detail": "{bad json",
-    }
-    assert non_object_record.detail == {
-        "decode_warning": "audit_detail_not_json_object",
-        "raw_detail": '["unexpected"]',
-    }
-
-
-def test_audit_export_contains_rolling_year_full_fields_and_literal_text() -> None:
-    service = SecurityService(InMemorySecurityStore(), _settings())
-    store = cast(InMemorySecurityStore, service.store)
-    now = datetime(2026, 7, 20, 3, 4, 5, tzinfo=UTC)
-    start_at = datetime(2025, 7, 20, 3, 4, 5, tzinfo=UTC)
-    store.audit = [
-        AuditRecord(
-            audit_id=1,
-            actor_user_id=None,
-            event_type="BOUNDARY_EVENT",
-            target_type="SYSTEM",
-            target_id="NL2SQL",
-            outcome="SUCCESS",
-            detail={"境界": True},
-            request_id="boundary-request",
-            client_ip="127.0.0.1",
-            created_at=start_at,
-        ),
-        AuditRecord(
-            audit_id=2,
-            actor_user_id="actor-2",
-            event_type='=HYPERLINK("https://invalid.example")',
-            target_type="USER",
-            target_id="target-2",
-            outcome="DENIED",
-            detail={"message": "日本語"},
-            request_id="request-2",
-            client_ip="192.0.2.10",
-            created_at=now,
-        ),
-        AuditRecord(
-            audit_id=3,
-            actor_user_id="old",
-            event_type="TOO_OLD",
-            target_type="USER",
-            target_id="old",
-            outcome="SUCCESS",
-            detail={},
-            request_id="old",
-            client_ip="192.0.2.11",
-            created_at=start_at - timedelta(microseconds=1),
-        ),
-        AuditRecord(
-            audit_id=4,
-            actor_user_id="future",
-            event_type="FUTURE",
-            target_type="USER",
-            target_id="future",
-            outcome="SUCCESS",
-            detail={},
-            request_id="future",
-            client_ip="192.0.2.12",
-            created_at=now + timedelta(microseconds=1),
-        ),
-    ]
-
-    filename, content = service.export_audit_log_xlsx(now=now)
-    assert filename == "nl2sql_audit_logs_20250720-20260720.xlsx"
-
-    openpyxl = pytest.importorskip("openpyxl")
-    workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
-    sheet = workbook["audit_logs"]
-    assert [cell.value for cell in sheet[1]] == [
-        "監査 ID",
-        "日時 (JST)",
-        "イベント",
-        "実行者",
-        "対象種別",
-        "対象 ID",
-        "結果",
-        "リクエスト ID",
-        "クライアント IP",
-        "詳細 JSON",
-    ]
-    assert sheet.max_row == 3
-    assert sheet["A2"].value == 2
-    assert sheet["B2"].value == datetime(2026, 7, 20, 12, 4, 5)
-    assert sheet["B2"].number_format == "yyyy-mm-dd hh:mm:ss"
-    assert sheet["C2"].value == '=HYPERLINK("https://invalid.example")'
-    assert sheet["C2"].data_type == "s"
-    assert sheet["J2"].value == '{"message":"日本語"}'
-    assert sheet["A3"].value == 1
-    assert sheet.freeze_panes == "A2"
-    assert sheet.auto_filter.ref == "A1:J3"
-
-
-def test_audit_page_and_export_router_contract(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = SecurityService(InMemorySecurityStore(), _settings())
-    store = cast(InMemorySecurityStore, service.store)
-    now = datetime.now(UTC)
-    store.audit = [
-        AuditRecord(
-            audit_id=index,
-            actor_user_id=None,
-            event_type=f"EVENT_{index}",
-            target_type="SYSTEM",
-            target_id="NL2SQL",
-            outcome="SUCCESS",
-            detail={},
-            request_id=f"request-{index}",
-            client_ip="127.0.0.1",
-            created_at=now + timedelta(seconds=index),
-        )
-        for index in range(1, 13)
-    ]
-    monkeypatch.setattr("app.security.router.get_security_service", lambda: service)
-    monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
-
-    page_response = audit_log_page(page=99, page_size=10)
-    assert page_response.data is not None
-    assert page_response.data.page == 2
-    assert page_response.data.page_size == 10
-    assert page_response.data.total == 12
-    assert page_response.data.total_pages == 2
-    assert [record.audit_id for record in page_response.data.items] == [2, 1]
-
-    export_response = export_audit_log_xlsx()
-    assert export_response.media_type == (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    assert export_response.headers["content-disposition"].startswith(
-        'attachment; filename="nl2sql_audit_logs_'
-    )
-    assert bytes(export_response.body).startswith(b"PK")
-
-
 def test_every_api_route_is_classified_by_manifest() -> None:
     for path, operations in app.openapi()["paths"].items():
         if not path.startswith("/api"):
@@ -719,15 +552,42 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 "/auth/logout",
                 "/auth/password/change",
             }:
-                assert permission != UNCLASSIFIED_PERMISSION, (
+                assert not (permission and UNCLASSIFIED_PERMISSION in permission), (
                     f"unclassified route: {method.upper()} {path}"
                 )
 
-    assert permission_for_route("POST", "/nl2sql/execute") == "search.execute"
+    assert permission_for_route("POST", "/nl2sql/execute") == frozenset(
+        {"menu.query", "menu.direct_sql"}
+    )
     assert (
         permission_for_route("POST", "/nl2sql/db-admin/execute")
-        == "settings.database.sql_execute"
+        == frozenset({"menu.admin_sql"})
     )
+
+
+def test_security_audit_permission_and_api_are_removed() -> None:
+    catalog_codes = {item.code for item in PERMISSION_CATALOG}
+
+    assert "menu.security_audit" not in catalog_codes
+    assert "security.audit.view" not in ALL_PERMISSION_CODES
+    assert permission_for_route("GET", "/security/audit/page") == frozenset(
+        {UNCLASSIFIED_PERMISSION}
+    )
+    assert not any(path.startswith("/api/security/audit") for path in app.openapi()["paths"])
+
+
+def test_security_migration_preview_includes_audit_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("sys.argv", ["app_security_migrate"])
+
+    assert security_migrate_main() == 0
+
+    output = capsys.readouterr().out
+    assert "migration=004" in output
+    assert "migration=005" in output
+    assert "migration=009" in output
 
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(
@@ -777,7 +637,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
         reset_security_service()
 
 
-def test_api_enforces_view_and_execute_permissions_independently(
+def test_api_enforces_menu_permissions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_security_threadpools(monkeypatch)
@@ -819,9 +679,9 @@ def test_api_enforces_view_and_execute_permissions_independently(
                 "/api/security/roles",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "role_code": "QUERY_VIEWER",
-                    "display_name": "検索閲覧",
-                    "permissions": ["search.view"],
+                    "role_code": "HISTORY_VIEWER",
+                    "display_name": "履歴閲覧",
+                    "permissions": ["menu.history"],
                     "data_entitlements": [],
                 },
             )
@@ -832,7 +692,7 @@ def test_api_enforces_view_and_execute_permissions_independently(
                 headers={"X-CSRF-Token": csrf},
                 json={
                     "login_name": "viewer.user",
-                    "display_name": "検索閲覧ユーザー",
+                    "display_name": "履歴閲覧ユーザー",
                     "temporary_password": "ViewerStart!123",
                     "role_ids": [role_id],
                 },
@@ -868,8 +728,6 @@ def test_api_enforces_view_and_execute_permissions_independently(
             )
             assert denied_execute.status_code == 403
             assert (await client.get("/api/security/users")).status_code == 403
-            assert (await client.get("/api/security/audit/page")).status_code == 403
-            assert (await client.get("/api/security/audit/export.xlsx")).status_code == 403
 
     try:
         asyncio.run(exercise())

@@ -384,14 +384,6 @@ class DeepSecService:
                 error_message="",
                 executed_by=actor.user_id,
             )
-            self.security._audit_mutation(
-                actor,
-                "DEEPSEC_STEP_APPLIED",
-                "DEEPSEC_STEP",
-                f"{PLAN_VERSION}:{step.step_no}",
-                "",
-                "",
-            )
             return {
                 "version": PLAN_VERSION,
                 "step_no": step.step_no,
@@ -408,16 +400,6 @@ class DeepSecService:
                 status="FAILED",
                 error_message=safe_error,
                 executed_by=actor.user_id,
-            )
-            self.security._audit(
-                actor=actor.user_id,
-                event="DEEPSEC_STEP_FAILED",
-                target_type="DEEPSEC_STEP",
-                target_id=f"{PLAN_VERSION}:{step.step_no}",
-                outcome="FAILED",
-                detail={"error": safe_error},
-                request_id="",
-                client_ip="",
             )
             if isinstance(exc, SecurityApiError):
                 raise
@@ -497,28 +479,10 @@ class DeepSecService:
                 )
         except Exception as exc:
             safe_error = self._safe_error(exc)
-            self.security._audit(
-                actor=actor.user_id,
-                event="DEEPSEC_VERIFICATION_FAILED",
-                target_type="DEEPSEC_PLAN",
-                target_id=PLAN_VERSION,
-                outcome="FAILED",
-                detail={"error": safe_error},
-                request_id="",
-                client_ip="",
-            )
             raise SecurityApiError(
                 500, f"DeepSec 検証に失敗しました: {safe_error}"
             ) from exc
         passed = all(bool(item["passed"]) for item in checks)
-        self.security._audit_mutation(
-            actor,
-            "DEEPSEC_VERIFIED" if passed else "DEEPSEC_VERIFICATION_INCOMPLETE",
-            "DEEPSEC_PLAN",
-            PLAN_VERSION,
-            "",
-            "",
-        )
         return {
             "version": PLAN_VERSION,
             "passed": passed,

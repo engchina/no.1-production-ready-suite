@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,11 @@ export function SchemaReferencePanel({
   onSearchQueryChange,
   hasMore = false,
   loadingMore = false,
+  loadMoreError = "",
+  detailLoadError = "",
   onLoadMore,
+  onRetryLoadMore,
+  onDismissDetailLoadError,
   onExpandTable,
   onInsert,
 }: {
@@ -60,7 +64,11 @@ export function SchemaReferencePanel({
   onSearchQueryChange?: (value: string) => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  loadMoreError?: string;
+  detailLoadError?: string;
   onLoadMore?: () => void;
+  onRetryLoadMore?: () => void;
+  onDismissDetailLoadError?: () => void;
   onExpandTable?: (table: SchemaTable) => void;
   onInsert: (text: string) => void;
 }) {
@@ -199,6 +207,30 @@ export function SchemaReferencePanel({
         />
       ) : null}
 
+      {!loading && detailLoadError ? (
+        <div
+          className="grid gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          role="alert"
+          data-testid="nl2sql-schema-detail-error"
+        >
+          <span className="flex min-w-0 items-start gap-2">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{detailLoadError}</span>
+          </span>
+          {onDismissDetailLoadError ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={disabled}
+              onClick={onDismissDetailLoadError}
+            >
+              {t("common.dismiss")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       {!loading && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
         <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-muted">
           <p className="[overflow-wrap:anywhere]">{t("nl2sql.schema.emptyCatalog")}</p>
@@ -250,6 +282,30 @@ export function SchemaReferencePanel({
           >
             {t("profiles.action.loadMore")}
           </Button>
+        )}
+        {loadMoreError && (
+          <div
+            className="grid gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+            role="alert"
+          >
+            <span className="flex min-w-0 items-start gap-2">
+              <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{loadMoreError}</span>
+            </span>
+            {onRetryLoadMore && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={loadingMore}
+                disabled={disabled}
+                onClick={onRetryLoadMore}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("common.retry")}</span>
+              </Button>
+            )}
+          </div>
         )}
       </div>
       )}

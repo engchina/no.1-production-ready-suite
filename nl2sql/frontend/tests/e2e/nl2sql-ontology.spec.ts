@@ -605,7 +605,7 @@ test("質問と SQL の Ontology を二段階確認して hash binding で実行
   const payloads = await mockApi(page);
   await page.goto("/query");
 
-  await page.getByLabel("検索クエリ").fill("受注件数を表示");
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
   await startConfirmedOntologySession(page);
   await expect(page.getByRole("tab", { name: "質問の解釈" })).toBeVisible();
   await expect(page.getByText("受注件数", { exact: true }).filter({ visible: true }).first()).toBeVisible();
@@ -639,7 +639,7 @@ test("非 SQL 利用者が質問の解釈をフォームで修正し、明示操
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
 
-  await page.getByLabel("検索クエリ").fill("受注件数を表示");
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
   await startConfirmedOntologySession(page);
 
   const openEditor = page.getByRole("button", { name: "解釈を編集" });

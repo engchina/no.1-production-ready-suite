@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, X } from "lucide-react";
+import { Play, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FieldLabel } from "@/components/ui/required-field";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
 import {
@@ -10,6 +11,8 @@ import {
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
 import { PageHeader } from "@/components/PageHeader";
+import { ProcessingIndicator } from "@/components/ProcessingState";
+import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import { t } from "@/lib/i18n";
@@ -20,7 +23,12 @@ import {
   dbAdminExecutionActivityStatus,
 } from "../components/DbAdminShared";
 import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
-import type { DbAdminExecuteData } from "../types";
+import {
+  nl2sqlIncrementalKeys,
+  useSchemaRefreshJob,
+  useStartSchemaRefresh,
+} from "../incrementalQueries";
+import type { DbAdminExecuteData, SchemaRefreshJob } from "../types";
 
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const MUTATING_SQL_TOKEN =
@@ -67,6 +75,35 @@ function executionLabel(status: ExecutionActivityStatus) {
   return t("nl2sql.processing.executeSql");
 }
 
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
+  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
+}
+
 /** 管理者向け SQL 実行ページ。更新系 SQL は確認語・RBAC・監査を必須とする。 */
 export function AdminSqlPage() {
   const queryClient = useQueryClient();
@@ -77,8 +114,25 @@ export function AdminSqlPage() {
   const [rowLimitInput, setRowLimitInput] = useState(String(DEFAULT_SQL_ROW_LIMIT));
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const completedSchemaRefreshJob = useRef("");
+  const startSchemaRefresh = useStartSchemaRefresh();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
+  const schemaRefreshing =
+    !schemaRefreshJobQuery.error &&
+    (startSchemaRefresh.isPending ||
+      schemaRefreshJob?.status === "pending" ||
+      schemaRefreshJob?.status === "running");
+  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
+    ? schemaRefreshJobQuery.error instanceof Error
+      ? schemaRefreshJobQuery.error.message
+      : t("dataMgmt.schemaJob.error")
+    : schemaRefreshError;
   const trimmedSql = sqlText.trim();
   const requiresConfirmation = Boolean(trimmedSql) && !isSingleSelectSql(trimmedSql);
   const confirmed = confirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
@@ -90,6 +144,79 @@ export function AdminSqlPage() {
     !loading &&
     (requiresConfirmation || rowLimit !== null) &&
     (!requiresConfirmation || confirmed);
+
+  const refreshSchemaReadModels = () => {
+    void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
+    void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
+    void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
+  };
+
+  const trackSchemaRefreshResult = (data: {
+    schema_refresh_job_id?: string;
+    schema_refresh_required?: boolean;
+    schema_refresh_reason_code?: string;
+  }) => {
+    if (data.schema_refresh_job_id) {
+      completedSchemaRefreshJob.current = "";
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      setSchemaRefreshJobId(data.schema_refresh_job_id);
+      return true;
+    }
+    if (data.schema_refresh_required) {
+      setSchemaRefreshError(schemaRefreshRequiredMessage(data.schema_refresh_reason_code));
+      setSchemaRefreshNeedsFull(true);
+      return true;
+    }
+    return false;
+  };
+
+  const refreshSchema = async () => {
+    completedSchemaRefreshJob.current = "";
+    try {
+      const job = await startSchemaRefresh.mutateAsync();
+      setSchemaRefreshJobId(job.job_id);
+      if (!job.job_id && job.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+        refreshSchemaReadModels();
+      }
+    } catch (err) {
+      setSchemaRefreshError(err instanceof Error ? err.message : t("dataMgmt.schemaJob.submitError"));
+      setSchemaRefreshNeedsFull(true);
+    }
+  };
+
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      refreshSchemaReadModels();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+    }
+  }, [schemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
+    const reportKey = `${schemaRefreshJobId}:query-error`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    completedSchemaRefreshJob.current = reportKey;
+    const message =
+      schemaRefreshJobQuery.error instanceof Error
+        ? schemaRefreshJobQuery.error.message
+        : t("dataMgmt.schemaJob.error");
+    setSchemaRefreshError(message);
+    setSchemaRefreshNeedsFull(false);
+  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
   const execute = async () => {
     if (!canExecute) return;
@@ -123,10 +250,9 @@ export function AdminSqlPage() {
         finishedAt,
         elapsedMs: data.timing.elapsed_ms,
       });
-      if (data.committed) {
-        void queryClient.invalidateQueries({
-          queryKey: ["nl2sql", "db-admin", "objects"],
-        });
+      const schemaRefreshTracked = trackSchemaRefreshResult(data);
+      if (data.committed && !schemaRefreshTracked) {
+        void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
       }
     } catch (err) {
       const finishedAt = Date.now();
@@ -188,19 +314,47 @@ export function AdminSqlPage() {
     <>
       <PageHeader title={t("nav.adminSql")} subtitle={t("nl2sql.adminSqlRunner.description")} />
       <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-admin-sql">
+        <PageNotice
+          notice={
+            visibleSchemaRefreshError
+              ? { tone: "danger", message: visibleSchemaRefreshError }
+              : null
+          }
+          action={
+            schemaRefreshNeedsFull ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={schemaRefreshing || startSchemaRefresh.isPending}
+                disabled={schemaRefreshing || startSchemaRefresh.isPending}
+                onClick={() => void refreshSchema()}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("common.action.schemaRefresh")}</span>
+              </Button>
+            ) : null
+          }
+        />
         <section className="grid gap-4 rounded-md border border-border bg-card p-4">
-          <label className="grid gap-2 text-sm font-medium text-foreground">
-            <span>{t("nl2sql.adminSqlRunner.label")}</span>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="admin-sql-input"
+              label={t("nl2sql.adminSqlRunner.label")}
+              required
+            />
             <textarea
-              aria-label={t("nl2sql.adminSqlRunner.label")}
+              id="admin-sql-input"
               value={sqlText}
               onChange={(event) => setSqlText(event.currentTarget.value)}
               disabled={loading}
               rows={12}
+              required
+              aria-required="true"
               className="min-h-64 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
               placeholder={t("nl2sql.adminSqlRunner.placeholder")}
             />
-          </label>
+          </div>
           <SqlFileInput
             resetSignal={sqlFileResetSignal}
             disabled={loading}
@@ -261,6 +415,17 @@ export function AdminSqlPage() {
               <DbAdminExecutionResult result={result} rowLimit={executedRowLimit} />
             ) : null}
           </ActionResultRegion>
+          {schemaRefreshing ? (
+            <ProcessingIndicator
+              active
+              label={schemaRefreshProcessingLabel(schemaRefreshJob, t("common.processing.schemaRefreshing"))}
+              operationKey={schemaRefreshJobId || "admin-sql-schema-refresh"}
+              placement="workspace"
+              className="rounded-md border border-border bg-background px-3 py-2"
+              testId="admin-sql-schema-refresh-processing"
+              activityIcon="none"
+            />
+          ) : null}
         </section>
       </main>
     </>

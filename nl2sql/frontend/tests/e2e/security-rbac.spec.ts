@@ -125,6 +125,45 @@ test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、�
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
 });
 
+test("外観ページは専用権限だけで表示でき、権限なしでは直達できない", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/auth/me");
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      ...systemAdminMe,
+      user_id: "appearance-viewer",
+      login_name: "appearance.viewer",
+      display_name: "外観閲覧ユーザー",
+      role_codes: ["APPEARANCE_VIEWER"],
+      permissions: ["menu.settings_appearance"],
+    })
+  );
+
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
+  await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "外観" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+
+  await page.unroute("**/api/auth/me");
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      ...systemAdminMe,
+      user_id: "no-access",
+      login_name: "no.access",
+      display_name: "権限なしユーザー",
+      role_codes: ["NO_ACCESS"],
+      permissions: [],
+    })
+  );
+
+  await page.goto("/settings/appearance");
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+});
+
 test("ログイン失敗を一般化して表示し、初回パスワード変更へ誘導する", async ({ page }) => {
   let loginAttempts = 0;
   await page.route("**/api/auth/me", (route) => fulfill(route, "ログインしてください。", 401));
@@ -156,15 +195,15 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("表示権限だけのユーザーはメニューと直達 URL/API の双方で制限される", async ({ page }) => {
+test("メニュー権限だけのユーザーはメニューと直達 URL/API の双方で制限される", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const limited = {
     ...systemAdminMe,
     user_id: "limited",
     login_name: "limited.user",
-    display_name: "検索閲覧ユーザー",
-    role_codes: ["QUERY_VIEWER"],
-    permissions: ["search.view"],
+    display_name: "SQL 生成ユーザー",
+    role_codes: ["QUERY_MENU"],
+    permissions: ["menu.query"],
   };
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
   await page.route("**/api/security/users", (route) =>
@@ -173,17 +212,14 @@ test("表示権限だけのユーザーはメニューと直達 URL/API の双�
   await page.goto("/query");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
-  await expect(page.getByText("このページは参照できますが、SQL の生成・実行には「検索を実行」権限が必要です。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "実行" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "実行" })).toBeVisible();
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toHaveCount(0);
   await expect(sidebar.getByText("セキュリティ管理", { exact: true })).toHaveCount(0);
-  await expect(sidebar.getByRole("link", { name: "SELECT SQL を実行" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "SELECT SQL を実行" })).toHaveCount(0);
   await expect(sidebar.getByText("管理 SQL を実行", { exact: true })).toHaveCount(0);
 
   await page.goto("/direct-sql");
-  await expect(page.getByRole("heading", { level: 1, name: "SELECT SQL を実行" })).toBeVisible();
-  await expect(page.getByText("このページは参照できますが、SQL の生成・実行には「検索を実行」権限が必要です。", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("SQL", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 
   await page.goto("/admin-sql");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
@@ -220,7 +256,7 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
     role_code: "QUERY_VIEWER",
     display_name: "検索閲覧",
     is_built_in: false,
-    permissions: ["search.view"],
+    permissions: ["menu.query"],
     data_entitlements: [],
   };
   const runnerRole = {
@@ -229,7 +265,7 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
     role_code: "QUERY_RUNNER",
     display_name: "検索実行",
     is_built_in: false,
-    permissions: ["search.execute"],
+    permissions: ["menu.query"],
     data_entitlements: [],
   };
   await page.route("**/api/security/roles?include_archived=false", (route) =>
@@ -329,7 +365,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
         role_code: "QUERY_VIEWER",
         display_name: "検索閲覧",
         is_built_in: false,
-        permissions: ["search.view"],
+        permissions: ["menu.query"],
         data_entitlements: [],
       },
     ])
@@ -398,18 +434,25 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await mockDatabaseGateReady(page);
   const permissionRows = [
     {
-      code: "security.users.view",
-      group: "security",
-      label: "ユーザーを表示",
-      description: "ユーザー管理を表示します。",
+      code: "menu.settings_appearance",
+      group: "システム設定",
+      label: "外観",
+      description: "外観を表示し、関連操作を利用できます。",
       implies: [],
     },
     {
-      code: "security.users.manage",
-      group: "security",
-      label: "ユーザーを管理",
-      description: "ユーザーを作成・更新します。",
-      implies: ["security.users.view"],
+      code: "menu.security_users",
+      group: "セキュリティ管理",
+      label: "ユーザー管理",
+      description: "ユーザー管理を表示し、関連操作を利用できます。",
+      implies: [],
+    },
+    {
+      code: "menu.security_roles",
+      group: "セキュリティ管理",
+      label: "ロール・権限管理",
+      description: "ロール・権限管理を表示し、関連操作を利用できます。",
+      implies: [],
     },
   ];
   const viewerRole = {
@@ -419,7 +462,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
     display_name: "セキュリティ閲覧",
     description: "表示のみ",
     is_built_in: false,
-    permissions: ["security.users.view"],
+    permissions: ["menu.security_users"],
     data_entitlements: [],
   };
   await page.route("**/api/security/roles?include_archived=true", (route) =>
@@ -437,7 +480,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   const grid = page.getByTestId("security-roles-grid");
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
-  await expect(grid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "メニュー権限" })).toBeVisible();
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const systemRoleAction = page.getByTestId("security-roles-row-actions-role-system-trigger");
   await expect(systemRoleAction).toBeVisible();
@@ -446,6 +489,15 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   const viewerRoleRow = grid.locator("tbody tr").filter({ hasText: "セキュリティ閲覧" });
   await viewerRoleRow.locator("td").nth(2).click();
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  const customRoleEditActions = page.getByRole("group", { name: "ロール編集操作" });
+  await expect(customRoleEditActions.getByRole("button", { name: "保存" })).toBeVisible();
+  await expect(customRoleEditActions.getByRole("button", { name: "キャンセル" })).toBeVisible();
+  await expect(customRoleEditActions.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
+  await customRoleEditActions.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "アーカイブ" })).toHaveAttribute("data-form-action-tone", "danger");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
   await page.getByTestId("security-roles-search").fill("閲覧");
   await expect(grid.getByText("セキュリティ閲覧")).toBeVisible();
   await expect(grid.getByText("システム管理者")).toHaveCount(0);
@@ -453,23 +505,33 @@ test("ロール・権限管理はカード型リストではなくテーブル�
 
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
   expect(await topLevelPanelStyle(page, "create", "security-roles")).toEqual(listStyle);
+  await expect(page.getByText("ダッシュボード表示", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("security.users.view", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("security.users.manage", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: /外観/ })).toBeVisible();
   const permissionBulkActions = page.getByTestId("security-roles-permission-selection-actions");
   await expect(permissionBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
   await expect(permissionBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
   await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
-  await expect(page.getByRole("checkbox", { name: /ユーザーを表示/ })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: /ユーザーを管理/ })).toBeChecked();
-  const securityGroupBulkActions = page.getByTestId("security-roles-security-permission-selection-actions");
-  await expect(securityGroupBulkActions.getByRole("button", { name: "security の選択を解除" })).toBeEnabled();
-  await securityGroupBulkActions.getByRole("button", { name: "security の選択を解除" }).click();
-  await expect(page.getByRole("checkbox", { name: /ユーザーを表示/ })).not.toBeChecked();
-  await expect(page.getByRole("checkbox", { name: /ユーザーを管理/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /外観/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).toBeChecked();
+  const securityGroupBulkActions = page.getByTestId("security-roles-セキュリティ管理-permission-selection-actions");
+  await expect(securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択を解除" })).toBeEnabled();
+  await securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択を解除" }).click();
+  await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 
   await page.getByTestId("security-roles-row-actions-role-system-trigger").click();
   await page.getByRole("menuitem", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(listStyle);
+  const roleEditActions = page.getByRole("group", { name: "ロール編集操作" });
+  await expect(roleEditActions.getByRole("button", { name: "保存" })).toHaveCount(0);
+  await expect(roleEditActions.getByRole("button", { name: "キャンセル" })).toBeVisible();
+  await expect(roleEditActions.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
+  await expect(roleEditActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });

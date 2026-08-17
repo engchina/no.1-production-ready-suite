@@ -1120,10 +1120,10 @@ def test_oracle_runtime_does_not_append_rules_to_select_ai_questions(
 
     assert len(fake_oracle.questions) == 2
     for question in fake_oracle.questions:
-        # Oracle SELECT AI ではルールは question へ追記せず additional_instructions 属性で渡す。
+        # Oracle SELECT AI では app 側の glossary / rules を question へ追記しない。
         assert "=== Rules ===" not in question
-        assert "売上=INVOICES.TOTAL_AMOUNT" in question
-        assert "請求金額=INVOICES.TAX_AMOUNT" in question
+        assert "売上=INVOICES.TOTAL_AMOUNT" not in question
+        assert "請求金額=INVOICES.TAX_AMOUNT" not in question
         assert "共通ルール" not in question
         assert "大阪ルール" not in question
         assert "東京ルール" not in question
@@ -1340,15 +1340,45 @@ def test_rewrite_uses_enterprise_ai_and_falls_back_on_generation_error() -> None
     assert fallback.warnings
 
 
+def test_rewrite_preserves_empty_filter_template_and_skips_enterprise_ai() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake = FakeEnterpriseAiClient("部署情報を管理するテーブルから、管理部門の情報を検索する。")
+    cast(Any, service)._enterprise_ai_client = fake
+    question = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：'
+
+    rewritten = service.rewrite(RewriteRequest(question=question, profile_id="default"))
+
+    assert rewritten.source == "deterministic"
+    assert rewritten.rewritten_question == question
+    assert "管理部門" not in rewritten.rewritten_question
+    assert rewritten.warnings == ["抽出条件が空欄のため条件追加を抑止しました。"]
+    assert fake.calls == []
+
+
+def test_rewrite_allows_enterprise_ai_when_filter_slot_has_value() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake = FakeEnterpriseAiClient("部署名が管理部門の部署を検索する。")
+    cast(Any, service)._enterprise_ai_client = fake
+    question = "対象テーブル：部署\n抽出項目：\n抽出条件：部署名 = '管理部門'"
+
+    rewritten = service.rewrite(RewriteRequest(question=question, profile_id="default"))
+
+    assert rewritten.source == "oci_enterprise_ai"
+    assert rewritten.rewritten_question == "部署名が管理部門の部署を検索する。"
+    assert fake.calls
+    assert "抽出条件" in fake.calls[0]["system_prompt"]
+
+
 def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     request = ReverseSqlRequest(sql="SELECT TOTAL_AMOUNT FROM INVOICES")
-    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
+    fake = FakeEnterpriseAiClient(
         '{"question":"請求金額を確認したい",'
         '"explanation":"INVOICES から TOTAL_AMOUNT を取得します。",'
         '"logical_structure":"SQL 論理構造",'
         '"logical_steps":["INVOICES を参照","TOTAL_AMOUNT を選択"]}'
     )
+    cast(Any, service)._enterprise_ai_client = fake
 
     reversed_sql = service.reverse_sql_deep(request)
 
@@ -1356,6 +1386,9 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
     assert reversed_sql.question == "請求金額を確認したい"
     assert reversed_sql.logical_structure == "SQL 論理構造"
     assert reversed_sql.logical_steps == ["INVOICES を参照", "TOTAL_AMOUNT を選択"]
+    assert fake.calls
+    assert "業務担当者が検索欄に入力しそうな1文" in fake.calls[0]["system_prompt"]
+    assert "業務語彙を優先" in fake.calls[0]["system_prompt"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient("not json")
 
@@ -1421,3 +1454,5 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
         ReverseSqlRequest(sql="SELECT TOTAL_AMOUNT FROM INVOICES", profile_id="billing")
     )
     assert "請求表" in deterministic.question
+    assert "請求金額" in deterministic.question
+    assert "INVOICES" not in deterministic.question

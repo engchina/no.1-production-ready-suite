@@ -10,7 +10,6 @@ import fcntl
 import importlib
 import io
 import json
-import logging
 import re
 import secrets
 import shutil
@@ -25,7 +24,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pr_backend_core import ApiResponse
 from starlette.responses import JSONResponse
 
@@ -82,8 +81,6 @@ from app.schemas.settings import (
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
 )
-from app.security.request_actor import current_actor_user_id
-from app.security.service import get_security_service
 from app.settings import (
     EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
 )
@@ -97,7 +94,6 @@ from app.settings import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 run_in_threadpool = run_sync_io
-logger = logging.getLogger(__name__)
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_FILE_MODE = 0o600
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -260,23 +256,15 @@ def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
 )
 def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
-    request: Request,
 ) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
     """明示操作として system table を作成・更新または全再作成する。"""
 
-    operation_name = "recreate" if payload.recreate else "initialize"
     try:
         data = system_schema_manager.initialize(
             recreate=payload.recreate,
             confirmation=payload.confirmation,
         )
     except SystemSchemaError as exc:
-        _audit_system_schema_operation(
-            request,
-            operation_name,
-            "FAILURE",
-            exc.code,
-        )
         headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
         return JSONResponse(
             status_code=exc.status_code,
@@ -293,12 +281,6 @@ def initialize_system_tables(
             schema_epoch=int(data["operation_state"]["schema_epoch"]),
         )
     except Exception as exc:
-        _audit_system_schema_operation(
-            request,
-            operation_name,
-            "FAILURE",
-            "SCHEMA_RUNTIME_RECOVERY_FAILED",
-        )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -306,50 +288,12 @@ def initialize_system_tables(
                 "状態を再取得してから再試行してください。"
             ),
         ) from exc
-    _audit_system_schema_operation(
-        request,
-        operation_name,
-        "SUCCESS",
-        None,
-    )
     return ApiResponse(data=SystemTablesOperationData.model_validate(data))
 
 
 def _safe_schema_error_code(exc: Exception) -> str:
     code = oracle_error_code(exc)
     return code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
-
-
-def _audit_system_schema_operation(
-    request: Request,
-    operation: str,
-    outcome: str,
-    error_code: str | None,
-) -> None:
-    """認証有効時だけ、保全対象の security audit table へ結果を記録する。"""
-
-    if not get_settings().app_auth_enabled:
-        return
-    principal = getattr(request.state, "principal", None)
-    actor = str(getattr(principal, "user_id", "") or current_actor_user_id()) or None
-    request_id = request.headers.get("X-Request-ID", "")[:128]
-    client_ip = request.client.host[:128] if request.client else ""
-    try:
-        get_security_service().store.write_audit(
-            actor_user_id=actor,
-            event_type=f"SYSTEM_SCHEMA_{operation.upper()}",
-            target_type="SYSTEM_SCHEMA",
-            target_id="NL2SQL",
-            outcome=outcome,
-            detail={"error_code": error_code} if error_code else {},
-            request_id=request_id,
-            client_ip=client_ip,
-        )
-    except Exception as exc:  # noqa: BLE001 - DDL は rollback 不可。監査失敗を別ログへ残す。
-        logger.warning(
-            "nl2sql_system_schema_audit_failed",
-            extra={"operation": operation, "exception_type": type(exc).__name__},
-        )
 
 
 @router.patch("/database", response_model=ApiResponse[DatabaseSettingsData])

@@ -235,6 +235,7 @@ async function mockProfileApi(
     profileItems?: typeof profiles;
     dbProfileData?: typeof dbProfiles;
     schemaObjectTotals?: Partial<Record<"TABLE" | "VIEW", number>>;
+    profileSearchTotal?: number;
   } = {}
 ) {
   const tableItems = options.tableItems ?? [
@@ -343,9 +344,19 @@ async function mockProfileApi(
     }
     await route.fallback();
   });
-  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
-    fulfillJson(route, {
-      items: profileItems.map((profile) => ({
+  await page.route("**/api/nl2sql/profiles/search?*", (route) => {
+    const query = (new URL(route.request().url()).searchParams.get("q") ?? "").trim().toLowerCase();
+    const filteredProfiles = profileItems.filter(
+      (profile) =>
+        !profile.archived &&
+        (!query ||
+          profile.name.toLowerCase().includes(query) ||
+          (profile.category ?? "").toLowerCase().includes(query) ||
+          (profile.description ?? "").toLowerCase().includes(query))
+    );
+    const total = query ? filteredProfiles.length : (options.profileSearchTotal ?? filteredProfiles.length);
+    return fulfillJson(route, {
+      items: filteredProfiles.map((profile) => ({
         id: profile.id,
         name: profile.name,
         category: profile.category,
@@ -359,11 +370,11 @@ async function mockProfileApi(
         etag: `etag-${profile.id}`,
         updated_at: "2026-07-19T00:00:00Z",
       })),
-      next_cursor: null,
-      total: profileItems.length,
+      next_cursor: total > filteredProfiles.length ? "profile-page-2" : null,
+      total,
       change_token: 1,
-    })
-  );
+    });
+  });
   await page.route("**/api/nl2sql/profiles/*", (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith("/search")) return route.fallback();
@@ -413,6 +424,71 @@ async function mockProfileApi(
     })
   );
 }
+
+async function expectNoDocumentHorizontalOverflow(page: Page) {
+  const width = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    bodyClientWidth: document.body.clientWidth,
+  }));
+  expect(width.scrollWidth).toBeLessThanOrEqual(width.clientWidth + 1);
+  expect(width.bodyScrollWidth).toBeLessThanOrEqual(width.bodyClientWidth + 1);
+}
+
+test("業務プロファイル一覧検索はAPI totalを件数表示に使い検索結果だけを表示する", async ({ page }) => {
+  const searchableProfiles = [
+    {
+      ...profiles[0],
+      id: "profile-dept",
+      name: "PROFILE_DEPT",
+      category: "DEPT",
+      description: "部署 profile",
+      allowed_tables: ["APP.TABLE_01"],
+      allowed_views: [],
+    },
+    {
+      ...profiles[0],
+      id: "profile-emp",
+      name: "PROFILE_EMP",
+      category: "EMPLOYEE",
+      description: "社員 profile",
+      allowed_tables: ["APP.TABLE_02"],
+      allowed_views: [],
+    },
+  ];
+  await mockProfileApi(page, {
+    profileItems: searchableProfiles,
+    profileSearchTotal: 128,
+  });
+
+  await page.goto("/profiles");
+
+  const listPanel = page.locator("#profile-management-panel-list");
+  await expect(listPanel.getByText("128 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("profile-management-footer")).toContainText("2 / 128 件を表示");
+  await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toBeVisible();
+  await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toBeVisible();
+  await expectNoDocumentHorizontalOverflow(page);
+
+  const search = page.getByRole("searchbox", { name: "プロファイル検索" });
+  await search.fill("PROFILE_DEPT");
+
+  await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toBeVisible();
+  await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toHaveCount(0);
+  await expect(listPanel.getByText("1 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("profile-management-footer")).toContainText("1 / 1 件を表示");
+
+  await search.fill("NO_MATCH_PROFILE");
+  await expect(listPanel.getByText("一致するプロファイルがありません")).toBeVisible();
+  await expect(page.getByTestId("profile-management-footer")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await search.fill("PROFILE_EMP");
+  await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toBeVisible();
+  await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toHaveCount(0);
+  await expectNoDocumentHorizontalOverflow(page);
+});
 
 test("業務プロファイルの対象オブジェクト件数は取得済み件数と API total を分けて表示する", async ({ page }) => {
   const largeCatalog = {
@@ -475,10 +551,74 @@ test("業務プロファイルの対象オブジェクト件数は取得済み�
   );
 });
 
+test("業務プロファイル基本情報は名称とカテゴリの行を揃えて表示する", async ({ page }) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles?profile=new");
+
+  await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
+
+  const nameInput = page.locator("#profile-name");
+  const categoryInput = page.locator("#profile-category");
+  await expect(nameInput).toBeVisible();
+  await expect(categoryInput).toBeVisible();
+  await expect(nameInput).toHaveAccessibleName("名称 必須");
+  await expect(categoryInput).toHaveAccessibleName("カテゴリ 必須");
+
+  const layout = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      if (!rect) return null;
+      return {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        right: rect.right,
+        bottom: rect.bottom,
+      };
+    };
+    return {
+      viewportWidth: window.innerWidth,
+      nameLabel: box('label[for="profile-name"]'),
+      categoryLabel: box('label[for="profile-category"]'),
+      nameInput: box("#profile-name"),
+      categoryInput: box("#profile-category"),
+      helper: box("#profile-name-helper"),
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    };
+  });
+
+  expect(layout.nameLabel).not.toBeNull();
+  expect(layout.categoryLabel).not.toBeNull();
+  expect(layout.nameInput).not.toBeNull();
+  expect(layout.categoryInput).not.toBeNull();
+  expect(layout.helper).not.toBeNull();
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+
+  if (layout.viewportWidth >= 768) {
+    expect(Math.abs(layout.nameLabel!.y - layout.categoryLabel!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.nameInput!.y - layout.categoryInput!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.nameInput!.height - layout.categoryInput!.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.nameInput!.width - layout.categoryInput!.width)).toBeLessThanOrEqual(1);
+    expect(layout.helper!.y).toBeGreaterThan(layout.nameInput!.bottom - 1);
+    expect(layout.helper!.height).toBeLessThanOrEqual(22);
+    expect(layout.helper!.right).toBeGreaterThanOrEqual(layout.categoryInput!.right - 1);
+  } else {
+    expect(layout.nameLabel!.y).toBeLessThan(layout.nameInput!.y);
+    expect(layout.nameInput!.y).toBeLessThan(layout.helper!.y);
+    expect(layout.helper!.y).toBeLessThan(layout.categoryLabel!.y);
+    expect(layout.categoryLabel!.y).toBeLessThan(layout.categoryInput!.y);
+  }
+});
+
 test("業務プロファイルの更新操作はテーブル管理と同じ文言・順序・階層で動作する", async ({ page }) => {
   let profileSearchRequests = 0;
   let schemaRefreshSubmissions = 0;
   let schemaRefreshPolls = 0;
+  let dbProfileRefreshSubmissions = 0;
+  let dbProfileRefreshPolls = 0;
+  let dbProfileRefreshCanComplete = false;
 
   page.on("request", (request) => {
     if (
@@ -518,6 +658,49 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
       error_code: "",
     });
   });
+  await page.route("**/api/nl2sql/select-ai/db-profiles/refresh-jobs", async (route) => {
+    dbProfileRefreshSubmissions += 1;
+    await fulfillJson(route, {
+      job_id: "profile-db-profile-refresh",
+      status: "pending",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: false,
+      phase: "queued",
+      created_at: "2026-07-23T00:00:01Z",
+      total_profiles: 0,
+      processed_profiles: 0,
+      scanned_profiles: 0,
+      changed_profiles: 0,
+      deleted_profiles: 0,
+      error_code: "",
+      error_message: "",
+    });
+  });
+  await page.route("**/api/nl2sql/select-ai/db-profile-refresh-jobs/profile-db-profile-refresh", async (route) => {
+    dbProfileRefreshPolls += 1;
+    const done = dbProfileRefreshCanComplete && dbProfileRefreshPolls >= 2;
+    await fulfillJson(route, {
+      job_id: "profile-db-profile-refresh",
+      status: done ? "done" : "running",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: false,
+      phase: done ? "done" : "fetching",
+      created_at: "2026-07-23T00:00:01Z",
+      started_at: "2026-07-23T00:00:01Z",
+      finished_at: done ? "2026-07-23T00:00:02Z" : null,
+      total_profiles: 2,
+      processed_profiles: done ? 2 : 1,
+      scanned_profiles: done ? 2 : 1,
+      changed_profiles: done ? 1 : 0,
+      deleted_profiles: 0,
+      error_code: "",
+      error_message: "",
+    });
+  });
 
   await page.goto("/profiles");
 
@@ -540,7 +723,11 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
 
     const menu = page.getByRole("menu");
     await expect(moreButton).toHaveAttribute("aria-expanded", "true");
-    await expect(menu.getByRole("menuitem")).toHaveText(["表示を更新", "DB 構造を再取得"]);
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "表示を更新",
+      "DB 構造を再取得",
+      "DB Profile 一覧を再取得",
+    ]);
     await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(moreButton).toBeFocused();
@@ -559,8 +746,23 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await moreButton.click();
     await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeDisabled();
     await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
-    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toBeVisible();
+    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
     await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeEnabled();
+
+    await menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" }).click();
+    await expect.poll(() => dbProfileRefreshSubmissions).toBe(1);
+    const headerStatus = page.locator('header [data-page-header-status="true"]');
+    await expect(headerStatus).toContainText(/DB Profile 一覧更新: (待機中|実行中)/);
+    await expect(page.getByTestId("profile-management-workspace-processing")).toContainText(
+      "DB Profile 一覧を再取得しています"
+    );
+    await moreButton.click();
+    await expect(menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    dbProfileRefreshCanComplete = true;
+    await expect.poll(() => dbProfileRefreshPolls).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText("DB Profile 一覧更新: 完了", { exact: true })).toHaveCount(0);
+    await expect(headerStatus).toHaveCount(0);
   } else {
     const actionButtons = actions.getByRole("button");
     const refreshButton = actions.getByRole("button", { name: "表示を更新", exact: true });
@@ -568,29 +770,47 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
       name: "DB 構造を再取得",
       exact: true,
     });
+    const dbProfileRefreshButton = actions.getByRole("button", {
+      name: "DB Profile 一覧を再取得",
+      exact: true,
+    });
 
-    await expect(actionButtons).toHaveText(["新規作成", "表示を更新", "DB 構造を再取得"]);
+    await expect(actionButtons).toHaveText([
+      "新規作成",
+      "表示を更新",
+      "DB 構造を再取得",
+      "DB Profile 一覧を再取得",
+    ]);
     await expect(actions.locator('[data-page-action-group="utility"][data-page-action-group-start="true"]')).toBeVisible();
     await expect(createButton).toHaveClass(/\bbg-primary\b/);
     await expect(refreshButton).toHaveClass(/\bbg-card\b/);
     await expect(schemaRefreshButton).toHaveClass(/\bbg-card\b/);
 
-    const [createBox, refreshBox, schemaRefreshBox] = await Promise.all([
+    const [createBox, refreshBox, schemaRefreshBox, dbProfileRefreshBox] = await Promise.all([
       createButton.boundingBox(),
       refreshButton.boundingBox(),
       schemaRefreshButton.boundingBox(),
+      dbProfileRefreshButton.boundingBox(),
     ]);
     expect(createBox).not.toBeNull();
     expect(refreshBox).not.toBeNull();
     expect(schemaRefreshBox).not.toBeNull();
-    expect(refreshBox!.x).toBeGreaterThan(createBox!.x);
-    expect(schemaRefreshBox!.x).toBeGreaterThan(refreshBox!.x);
+    expect(dbProfileRefreshBox).not.toBeNull();
+    const visuallyAfter = (
+      previous: NonNullable<typeof createBox>,
+      next: NonNullable<typeof createBox>
+    ) => next.y > previous.y + previous.height / 2 || next.x > previous.x;
+    expect(visuallyAfter(createBox!, refreshBox!)).toBe(true);
+    expect(visuallyAfter(refreshBox!, schemaRefreshBox!)).toBe(true);
+    expect(visuallyAfter(schemaRefreshBox!, dbProfileRefreshBox!)).toBe(true);
 
     await createButton.focus();
     await page.keyboard.press("Tab");
     await expect(refreshButton).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(schemaRefreshButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(dbProfileRefreshButton).toBeFocused();
 
     const requestsBeforeRefresh = profileSearchRequests;
     await refreshButton.click();
@@ -602,8 +822,21 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toBeVisible();
     await expect(schemaRefreshButton).toBeDisabled();
     await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
-    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toBeVisible();
+    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
     await expect(schemaRefreshButton).toBeEnabled();
+
+    await dbProfileRefreshButton.click();
+    await expect.poll(() => dbProfileRefreshSubmissions).toBe(1);
+    const headerStatus = page.locator('header [data-page-header-status="true"]');
+    await expect(headerStatus).toContainText(/DB Profile 一覧更新: (待機中|実行中)/);
+    await expect(page.getByTestId("profile-management-workspace-processing")).toContainText(
+      "DB Profile 一覧を再取得しています"
+    );
+    await expect(dbProfileRefreshButton).toBeDisabled();
+    dbProfileRefreshCanComplete = true;
+    await expect.poll(() => dbProfileRefreshPolls).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText("DB Profile 一覧更新: 完了", { exact: true })).toHaveCount(0);
+    await expect(headerStatus).toHaveCount(0);
   }
 
   const viewportWidth = await page.evaluate(() => ({
@@ -668,26 +901,15 @@ test("業務プロファイルは表とビューを固定高リストで管理�
     page.getByRole("heading", { name: "プロファイル編集: 既定プロファイル" })
   ).toBeVisible();
   await expect(page.getByLabel("名称")).toHaveValue("既定プロファイル");
+  await expect(page.getByLabel("Oracle Profile 名")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Drop 実行" })).toHaveCount(0);
 
-  const glossaryField = page.getByRole("textbox", { name: "語彙・同義語" });
-  const fewShotField = page.getByRole("textbox", { name: "few-shot 例" });
-  await expect(glossaryField).toBeVisible();
-  await expect(fewShotField).toBeVisible();
+  await expect(page.getByText("語彙・few-shot", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "語彙・同義語" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "few-shot 例" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "SQL ルール" })).toHaveCount(0);
-  const [glossaryBox, fewShotBox] = await Promise.all([
-    glossaryField.boundingBox(),
-    fewShotField.boundingBox(),
-  ]);
-  expect(glossaryBox).not.toBeNull();
-  expect(fewShotBox).not.toBeNull();
-  if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    expect(fewShotBox!.x).toBeGreaterThan(glossaryBox!.x);
-    expect(Math.abs(fewShotBox!.y - glossaryBox!.y)).toBeLessThanOrEqual(1);
-  } else {
-    expect(fewShotBox!.y).toBeGreaterThan(glossaryBox!.y);
-    expect(fewShotBox!.width).toBeGreaterThanOrEqual(glossaryBox!.width - 1);
-  }
+  await expect(page.locator("#profile-select-ai")).toBeVisible();
+  await expect(page.locator("#profile-select-ai-additional-instructions")).toBeVisible();
 
   // 対象オブジェクト選択はタブなしで常時表示される
   const tableList = page.getByTestId("profile-allowed-table-list");
@@ -705,6 +927,13 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   const appTableBulkActions = tableList.getByTestId("profile-allowed-table-list-app-schema-bulk-actions");
   await expect(appTableBulkActions.getByRole("button", { name: "APP をすべて選択" })).toBeEnabled();
   await expect(appTableBulkActions.getByRole("button", { name: "APP の選択を解除" })).toBeEnabled();
+  await expect(appTableBulkActions.getByText("全選択", { exact: true })).toBeVisible();
+  await expect(appTableBulkActions.getByText("全解除", { exact: true })).toBeVisible();
+  const appViewBulkActions = viewList.getByTestId("profile-allowed-view-list-app-schema-bulk-actions");
+  await expect(appViewBulkActions.getByRole("button", { name: "APP をすべて選択" })).toBeEnabled();
+  await expect(appViewBulkActions.getByRole("button", { name: "APP の選択を解除" })).toBeEnabled();
+  await expect(appViewBulkActions.getByText("全選択", { exact: true })).toBeVisible();
+  await expect(appViewBulkActions.getByText("全解除", { exact: true })).toBeVisible();
 
   const objectSection = page.getByTestId("profile-allowed-object-list");
   const objectSearchToolbar = page.getByTestId("profile-object-search-toolbar");
@@ -770,6 +999,9 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   const roleBox = await roleField.boundingBox();
   const instructionsBox = await instructionsField.boundingBox();
   expect(roleBox?.height).toBe(instructionsBox?.height);
+  const nameField = page.getByLabel("名称");
+  await nameField.fill("sales_profile");
+  await expect(nameField).toHaveValue("SALES_PROFILE");
   await roleField.fill("財務分析向け Oracle SQL アシスタント");
   await instructionsField.fill("日付は DATE 型で返す。");
   // ADMIN_EXECUTE ゲートを満たすと保存ボタンが有効になり、Oracle 反映 job を投入する。
@@ -782,14 +1014,17 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByTestId("profile-oracle-sync-status")).toContainText("Oracle 反映: 完了");
   await expect(page.getByTestId("profile-oracle-result")).toHaveCount(0);
   const payload = savedPayload as {
+    name: string;
     allowed_tables: string[];
     allowed_views: string[];
     select_ai_config: Record<string, unknown>;
   } | null;
+  expect(payload?.name).toBe("SALES_PROFILE");
   expect(payload?.allowed_tables).toEqual(["APP.TABLE_01", "APP.TABLE_03"]);
   expect(payload?.allowed_views).toEqual(["APP.VIEW_02", "APP.VIEW_04"]);
   expect(payload).toHaveProperty("sql_rules", []);
   expect(payload?.select_ai_config).toMatchObject({
+    profile_name: "SALES_PROFILE",
     embedding_model: "cohere.embed-v4.0",
     enforce_object_list: true,
     role: "財務分析向け Oracle SQL アシスタント",
@@ -814,14 +1049,6 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   expect(mobileToolbarBox).not.toBeNull();
   expect(mobileSearchBox).not.toBeNull();
   expect(mobileSearchBox!.width).toBeGreaterThanOrEqual(mobileToolbarBox!.width - 26);
-  const [mobileGlossaryBox, mobileFewShotBox] = await Promise.all([
-    glossaryField.boundingBox(),
-    fewShotField.boundingBox(),
-  ]);
-  expect(mobileGlossaryBox).not.toBeNull();
-  expect(mobileFewShotBox).not.toBeNull();
-  expect(mobileFewShotBox!.y).toBeGreaterThan(mobileGlossaryBox!.y);
-  expect(mobileFewShotBox!.width).toBeGreaterThanOrEqual(mobileGlossaryBox!.width - 1);
 
   const bodyWidth = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -885,6 +1112,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   await page.goto("/profiles");
   const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
   await profileRow.locator("td").nth(1).click();
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   const save = page.getByRole("button", { name: "保存", exact: true });
   await save.click();
@@ -975,33 +1203,191 @@ test("異なる schema の同名表を別々に選択できる", async ({ page }
   await expect(tableList.getByLabel("APP.ORDERS")).toHaveCount(0);
 });
 
-test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重ならない", async ({ page }) => {
+test("$ と NL2SQL_ のシステム object は業務プロファイルの対象オブジェクトに表示しない", async ({ page }) => {
+  const catalog = {
+    ...schemaCatalog,
+    tables: [
+      {
+        table_name: "ORDERS",
+        qualified_name: "APP.ORDERS",
+        logical_name: "受注",
+        owner: "APP",
+        table_type: "TABLE",
+        comment: "業務受注",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "V_ORDERS",
+        qualified_name: "APP.V_ORDERS",
+        logical_name: "受注ビュー",
+        owner: "APP",
+        table_type: "VIEW",
+        comment: "業務受注ビュー",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "NL2SQL_SCHEMA_OBJECTS",
+        qualified_name: "APP.NL2SQL_SCHEMA_OBJECTS",
+        logical_name: "NL2SQL schema objects",
+        owner: "APP",
+        table_type: "TABLE",
+        comment: "system table",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "NL2SQL_SYSTEM_VIEW",
+        qualified_name: "APP.NL2SQL_SYSTEM_VIEW",
+        logical_name: "NL2SQL system view",
+        owner: "APP",
+        table_type: "VIEW",
+        comment: "system view",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "ORDERS",
+        qualified_name: "NL2SQL_APP.ORDERS",
+        logical_name: "NL2SQL owner business table",
+        owner: "NL2SQL_APP",
+        table_type: "TABLE",
+        comment: "business table",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "RC_BACKUP_ARCHIVELOG_DETAILS",
+        qualified_name: "RMAN$CATALOG.RC_BACKUP_ARCHIVELOG_DETAILS",
+        logical_name: "RMAN backup details",
+        owner: "RMAN$CATALOG",
+        table_type: "VIEW",
+        comment: "system view",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "RC_ARCHIVED_LOG",
+        qualified_name: "RMAN$CATALOG.RC_ARCHIVED_LOG",
+        logical_name: "RMAN archived log",
+        owner: "RMAN$CATALOG",
+        table_type: "TABLE",
+        comment: "system table",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+    ],
+  };
+  await mockProfileApi(page, {
+    catalog,
+    profileItems: [
+      {
+        ...profiles[0],
+        allowed_tables: [
+          "APP.ORDERS",
+          "APP.NL2SQL_SCHEMA_OBJECTS",
+          "NL2SQL_APP.ORDERS",
+          "RMAN$CATALOG.RC_ARCHIVED_LOG",
+        ],
+        allowed_views: [
+          "APP.V_ORDERS",
+          "APP.NL2SQL_SYSTEM_VIEW",
+          "RMAN$CATALOG.RC_BACKUP_ARCHIVELOG_DETAILS",
+        ],
+      },
+    ],
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const viewList = page.getByTestId("profile-allowed-view-list");
+  await expect(tableList.getByLabel("APP.ORDERS", { exact: true })).toBeChecked();
+  await expect(tableList.getByLabel("NL2SQL_APP.ORDERS", { exact: true })).toBeChecked();
+  await expect(viewList.getByLabel("APP.V_ORDERS", { exact: true })).toBeChecked();
+  await expect(tableList.getByText("RMAN$CATALOG")).toHaveCount(0);
+  await expect(viewList.getByText("RMAN$CATALOG")).toHaveCount(0);
+  await expect(tableList.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
+  await expect(viewList.getByText("APP.NL2SQL_SYSTEM_VIEW", { exact: true })).toHaveCount(0);
+  await expect(tableList.getByText("RC_ARCHIVED_LOG", { exact: true })).toHaveCount(0);
+  await expect(viewList.getByText("RC_BACKUP_ARCHIVELOG_DETAILS", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("searchbox", { name: "オブジェクト検索" }).fill("NL2SQL_SCHEMA");
+  await expect(tableList.getByText("選択できるテーブルがありません。")).toBeVisible();
+  await expect(viewList.getByText("選択できるビューがありません。")).toBeVisible();
+
+  await page.getByRole("searchbox", { name: "オブジェクト検索" }).fill("RMAN");
+  await expect(tableList.getByText("選択できるテーブルがありません。")).toBeVisible();
+  await expect(viewList.getByText("選択できるビューがありません。")).toBeVisible();
+});
+
+test("Select AI 設定は requested order で並び狭い幅でも重ならない", async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles");
 
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
 
+  await expect(page.getByLabel("Oracle Profile 名")).toHaveCount(0);
+  for (const fieldId of [
+    "profile-name",
+    "profile-category",
+    "profile-select-ai-region",
+    "profile-select-ai-model",
+    "profile-select-ai-max-tokens",
+    "profile-select-ai-embedding-model",
+  ]) {
+    await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("*");
+    await expect(page.locator(`#${fieldId}`)).toHaveAttribute("required", "");
+    await expect(page.locator(`#${fieldId}`)).toHaveAttribute("aria-required", "true");
+  }
   const region = page.getByLabel("Region");
+  const model = page.getByLabel("LLM Model");
   const maxTokens = page.getByLabel("Max Tokens");
+  const embeddingModel = page.getByLabel("Embedding Model");
   await expect(region).toBeVisible();
+  await expect(model).toBeVisible();
   await expect(maxTokens).toBeVisible();
+  await expect(embeddingModel).toBeVisible();
   await expect(maxTokens).toHaveAttribute("min", "4096");
   await expect(maxTokens).toHaveAttribute("max", "32000");
   await expect(maxTokens).toHaveAttribute("step", "1");
 
-  const [regionBox, maxTokensBox] = await Promise.all([region.boundingBox(), maxTokens.boundingBox()]);
+  const [regionBox, modelBox, maxTokensBox, embeddingModelBox] = await Promise.all([
+    region.boundingBox(),
+    model.boundingBox(),
+    maxTokens.boundingBox(),
+    embeddingModel.boundingBox(),
+  ]);
   expect(regionBox).not.toBeNull();
+  expect(modelBox).not.toBeNull();
   expect(maxTokensBox).not.toBeNull();
-  const regionRight = (regionBox?.x ?? 0) + (regionBox?.width ?? 0);
-  const maxTokensRight = (maxTokensBox?.x ?? 0) + (maxTokensBox?.width ?? 0);
-  const regionBottom = (regionBox?.y ?? 0) + (regionBox?.height ?? 0);
-  const maxTokensBottom = (maxTokensBox?.y ?? 0) + (maxTokensBox?.height ?? 0);
-  expect(
-    regionRight <= (maxTokensBox?.x ?? 0) ||
-      maxTokensRight <= (regionBox?.x ?? 0) ||
-      regionBottom <= (maxTokensBox?.y ?? 0) ||
-      maxTokensBottom <= (regionBox?.y ?? 0)
-  ).toBe(true);
+  expect(embeddingModelBox).not.toBeNull();
+  const viewportWidth = page.viewportSize()?.width ?? 1280;
+  if (viewportWidth >= 768) {
+    expect(Math.abs(regionBox!.y - modelBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(regionBox!.y - maxTokensBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(regionBox!.y - embeddingModelBox!.y)).toBeLessThanOrEqual(1);
+    expect(regionBox!.x).toBeLessThan(modelBox!.x);
+    expect(modelBox!.x).toBeLessThan(maxTokensBox!.x);
+    expect(maxTokensBox!.x).toBeLessThan(embeddingModelBox!.x);
+  } else {
+    expect(regionBox!.y).toBeLessThanOrEqual(modelBox!.y);
+    expect(modelBox!.y).toBeLessThanOrEqual(maxTokensBox!.y);
+    expect(maxTokensBox!.y).toBeLessThanOrEqual(embeddingModelBox!.y);
+    const bodyWidth = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
+  }
 
   await maxTokens.fill("4095");
   await maxTokens.blur();
@@ -1009,9 +1395,51 @@ test("Oracle Profile の Region と Max Tokens は狭い編集ペインでも重
   await maxTokens.fill("32001");
   await maxTokens.blur();
   await expect(maxTokens).toHaveValue("32000");
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  const mobileViewport = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(mobileViewport.scrollWidth).toBeLessThanOrEqual(mobileViewport.clientWidth + 1);
 });
 
-test("名称未入力で保存すると名称欄直下に FieldError が出る", async ({ page }) => {
+test("業務プロファイル必須項目は空欄保存を止める", async ({ page }) => {
+  await mockProfileApi(page);
+  let saveRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/nl2sql/profiles" && request.method() === "POST") {
+      saveRequests += 1;
+    }
+  });
+  await page.goto("/profiles");
+
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await page.getByLabel("カテゴリ").fill("販売");
+  await page.getByLabel("Region").fill("");
+  await page.getByLabel("LLM Model").fill("");
+  await page.getByLabel("Embedding Model").fill("");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page.getByRole("alert").filter({ hasText: "Region を入力してください。" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "LLM Model を入力してください。" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toBeVisible();
+  await expect(page.getByLabel("Region")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("LLM Model")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Embedding Model")).toHaveAttribute("aria-invalid", "true");
+  expect(saveRequests).toBe(0);
+
+  await page.getByLabel("Region").fill("ap-osaka-1");
+  await page.getByLabel("LLM Model").fill("cohere.command-r-plus");
+  await page.getByLabel("Embedding Model").fill("cohere.embed-v4.0");
+  await expect(page.getByRole("alert").filter({ hasText: "Region を入力してください。" })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({ hasText: "LLM Model を入力してください。" })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toHaveCount(0);
+});
+
+test("名称は英字開始の識別子だけ保存でき小文字は自動大文字化する", async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles");
 
@@ -1024,11 +1452,28 @@ test("名称未入力で保存すると名称欄直下に FieldError が出る",
   // spec §2 error-placement: 該当欄の直下に role=alert で表示される。
   const fieldError = page.getByRole("alert").filter({ hasText: "名称を入力してください。" });
   await expect(fieldError).toBeVisible();
+  const categoryError = page.getByRole("alert").filter({ hasText: "カテゴリを入力してください。" });
+  await expect(categoryError).toBeVisible();
   await expect(page.getByLabel("名称")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("カテゴリ")).toHaveAttribute("aria-invalid", "true");
 
-  // 入力し直すとエラーは消える。
   await page.getByLabel("名称").fill("新プロファイル");
   await expect(fieldError).toHaveCount(0);
+  await page.getByLabel("カテゴリ").fill("販売");
+  await expect(categoryError).toHaveCount(0);
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  const formatError = page
+    .getByRole("alert")
+    .filter({ hasText: "名称は英字で開始し、英字・数字・アンダースコアのみ使用してください。" });
+  await expect(formatError).toBeVisible();
+
+  await page.getByLabel("名称").fill("1PROFILE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(formatError).toBeVisible();
+
+  await page.getByLabel("名称").fill("sales_profile");
+  await expect(page.getByLabel("名称")).toHaveValue("SALES_PROFILE");
+  await expect(formatError).toHaveCount(0);
 });
 
 test("業務プロファイルはcatalogが空のときDB管理用の現在schema一覧を混在させない", async ({ page }) => {
@@ -1168,10 +1613,14 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
 
   await unresolved.getByRole("button", { name: "スキーマ情報を更新" }).click();
 
-  await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toBeVisible();
-  await expect(unresolved).toBeVisible();
+  const schemaRefreshProcessing = page.getByTestId("ontology-build-schema-refresh-processing");
+  await expect(schemaRefreshProcessing).toBeVisible();
+  await expect(schemaRefreshProcessing).toContainText("DB 構造を再取得しています");
+  await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
-  await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toBeVisible();
+  await expect(schemaRefreshProcessing).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
+  await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
   await expect(page.getByText("3 ノード", { exact: true })).toBeVisible();
   expect(schemaRefreshed).toBe(true);
   expect(ontologyViewCalls).toBeGreaterThanOrEqual(2);

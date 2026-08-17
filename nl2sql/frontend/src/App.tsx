@@ -49,11 +49,6 @@ const DirectSqlPage = lazy(() =>
     default: module.DirectSqlPage,
   }))
 );
-const SqlAnalysisPage = lazy(() =>
-  import("@/features/nl2sql/pages/SqlAnalysisPage").then((module) => ({
-    default: module.SqlAnalysisPage,
-  }))
-);
 const SqlToQuestionPage = lazy(() =>
   import("@/features/nl2sql/pages/SqlToQuestionPage").then((module) => ({
     default: module.SqlToQuestionPage,
@@ -174,11 +169,6 @@ const SecurityRolesPage = lazy(() =>
     default: module.SecurityRolesPage,
   }))
 );
-const SecurityAuditPage = lazy(() =>
-  import("@/features/security/SecurityAuditPage").then((module) => ({
-    default: module.SecurityAuditPage,
-  }))
-);
 const SecurityDeepSecPage = lazy(() =>
   import("@/features/security/SecurityDeepSecPage").then((module) => ({
     default: module.SecurityDeepSecPage,
@@ -191,7 +181,6 @@ const SecurityDeepSecPage = lazy(() =>
  */
 const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
-  { path: APP_ROUTES.sqlAnalysis, element: <SqlAnalysisPage /> },
   { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
   { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
 ];
@@ -285,7 +274,7 @@ function AuthenticatedApplication() {
         <Suspense fallback={<RouteLoadingFallback />}>
           <KeepAlivePages />
           <Routes>
-            <Route path={APP_ROUTES.dashboard} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+            <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
             <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
             <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
             <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
@@ -327,11 +316,10 @@ function AuthenticatedApplication() {
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
-            <Route path={APP_ROUTES.securityAudit} element={<SecurityAuditPage />} />
             <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
             <Route
               path={APP_ROUTES.legacyNl2sqlModelLearning}
-              element={<Navigate to={`${APP_ROUTES.profiles}#profile-learning`} replace />}
+              element={<Navigate to={`${APP_ROUTES.profiles}#profile-select-ai`} replace />}
             />
             <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
             <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />

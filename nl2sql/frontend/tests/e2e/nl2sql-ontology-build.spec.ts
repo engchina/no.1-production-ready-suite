@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 
@@ -10,6 +10,31 @@ async function fulfillJson(route: Route, data: unknown) {
     contentType: "application/json",
     body: JSON.stringify({ data }),
   });
+}
+
+async function expectButtonLabelFits(button: Locator) {
+  const label = button.locator("span").last();
+  await expect(label).toBeVisible();
+  const metrics = await label.evaluate((element) => {
+    const buttonElement = element.closest("button");
+    if (!(buttonElement instanceof HTMLButtonElement)) {
+      throw new Error("Button label is not inside a button.");
+    }
+    const labelRect = element.getBoundingClientRect();
+    const buttonRect = buttonElement.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return {
+      buttonBottom: buttonRect.bottom,
+      buttonTop: buttonRect.top,
+      fontSize: Number.parseFloat(style.fontSize),
+      labelBottom: labelRect.bottom,
+      labelTop: labelRect.top,
+      lineHeight: Number.parseFloat(style.lineHeight),
+    };
+  });
+  expect(metrics.lineHeight).toBeGreaterThan(metrics.fontSize);
+  expect(metrics.labelTop).toBeGreaterThanOrEqual(metrics.buttonTop - 0.5);
+  expect(metrics.labelBottom).toBeLessThanOrEqual(metrics.buttonBottom + 0.5);
 }
 
 const profiles = [
@@ -459,7 +484,9 @@ test("AI オントロジー構築の実行 → 進捗 → 提案承認 → 公�
 
   // 公開
   await expect(proposalList.getByText("rev v4", { exact: false })).toBeVisible();
-  await proposalList.getByRole("button", { name: "Ontology を公開" }).click();
+  const publishButton = proposalList.getByRole("button", { name: "Ontology を公開" });
+  await expectButtonLabelFits(publishButton);
+  await publishButton.click();
   // 公開完了の“瞬間”は toast(document.body 直下)で通知する(spec §9)。section 外なので page スコープで確認。
   await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
   expect(state.published).toBe(true);

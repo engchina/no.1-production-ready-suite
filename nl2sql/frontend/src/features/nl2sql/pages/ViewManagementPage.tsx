@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader } from "@/components/PageHeader";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
@@ -21,9 +22,11 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
   DropDbObjectDialog,
+  dbAdminObjectQualifiedName,
   dbObjectSortValue,
+  parseDbAdminObjectTarget,
   type DbObjectDetailTab,
-  type DbObjectFilter,
+  type DbObjectOwnerFilter,
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
@@ -40,15 +43,14 @@ import {
   useSchemaRefreshJob,
   waitForSchemaRefreshJob,
 } from "../incrementalQueries";
+import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "joinWhere";
 
 const VIEW_MANAGEMENT_ID = "view-management";
-const JOIN_WHERE_PROMPT_PROFILES: DbAdminJoinWherePromptProfile[] = [
-  "join_where_strict",
-  "sql_structure",
-];
+const JOIN_WHERE_PROMPT_PROFILE: DbAdminJoinWherePromptProfile = "sql_structure";
+const JOIN_WHERE_OUTPUT_SCOPE_KEYS = ["join", "where", "structure"] as const;
 
 const useDebouncedValue = <T,>(value: T, delayMs: number) => {
   const [debounced, setDebounced] = useState(value);
@@ -59,16 +61,12 @@ const useDebouncedValue = <T,>(value: T, delayMs: number) => {
   return debounced;
 };
 
-function joinWherePromptProfileLabel(profile: DbAdminJoinWherePromptProfile) {
-  return profile === "sql_structure"
-    ? t("viewMgmt.joinWhere.profile.sqlStructure")
-    : t("viewMgmt.joinWhere.profile.strict");
+function joinWherePromptProfileLabel() {
+  return t("viewMgmt.joinWhere.profile.sqlStructure");
 }
 
-function joinWherePromptProfileDescription(profile: DbAdminJoinWherePromptProfile) {
-  return profile === "sql_structure"
-    ? t("viewMgmt.joinWhere.profile.sqlStructureHint")
-    : t("viewMgmt.joinWhere.profile.strictHint");
+function joinWherePromptProfileDescription() {
+  return t("viewMgmt.joinWhere.profile.sqlStructureHint");
 }
 
 function ViewJoinWherePanel({
@@ -77,8 +75,6 @@ function ViewJoinWherePanel({
   loading,
   ddlLoading,
   ddlError,
-  profile,
-  onProfileChange,
   onExtract,
   onRetryDdl,
 }: {
@@ -87,8 +83,6 @@ function ViewJoinWherePanel({
   loading: boolean;
   ddlLoading: boolean;
   ddlError: string;
-  profile: DbAdminJoinWherePromptProfile;
-  onProfileChange: (profile: DbAdminJoinWherePromptProfile) => void;
   onExtract: () => void;
   onRetryDdl: () => void;
 }) {
@@ -134,48 +128,46 @@ function ViewJoinWherePanel({
         <EmptyState title={t("viewMgmt.joinWhere.emptyTitle")} hint={t("viewMgmt.joinWhere.empty")} />
       )}
 
-      <fieldset className="grid gap-2">
-        <legend className="text-sm font-semibold text-foreground">
-          {t("viewMgmt.joinWhere.profileLabel")}
-        </legend>
-        <div
-          role="radiogroup"
-          aria-label={t("viewMgmt.joinWhere.profileAria")}
-          className="grid gap-2 sm:grid-cols-2"
-        >
-          {JOIN_WHERE_PROMPT_PROFILES.map((option) => {
-            const selected = profile === option;
-            return (
-              <label
-                key={option}
-                className={[
-                  "flex min-h-24 cursor-pointer gap-3 rounded-md border p-3 text-left transition-colors",
-                  selected
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border bg-card text-foreground hover:border-border",
-                ].join(" ")}
-              >
-                <input
-                  type="radio"
-                  name="view-join-where-prompt-profile"
-                  value={option}
-                  checked={selected}
-                  onChange={() => onProfileChange(option)}
-                  className="mt-1 h-4 w-4 flex-none accent-primary"
-                />
-                <span className="grid min-w-0 gap-1">
-                  <span className="text-sm font-semibold">
-                    {joinWherePromptProfileLabel(option)}
-                  </span>
-                  <span className="text-xs leading-5 text-muted">
-                    {joinWherePromptProfileDescription(option)}
-                  </span>
-                </span>
-              </label>
-            );
-          })}
+      <section
+        aria-label={t("viewMgmt.joinWhere.advancedSettings")}
+        className="grid gap-3 rounded-md border border-border bg-background p-3"
+        data-testid="view-join-where-advanced-settings"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="grid min-w-0 gap-1">
+            <h3 className="text-sm font-semibold text-foreground">
+              {t("viewMgmt.joinWhere.advancedSettings")}
+            </h3>
+            <p className="max-w-prose text-xs leading-5 text-muted">
+              {t("viewMgmt.joinWhere.advancedSettingsHint")}
+            </p>
+          </div>
+          <StatusBadge variant="info" label={joinWherePromptProfileLabel()} />
         </div>
-      </fieldset>
+        <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+          <p className="text-sm font-medium text-foreground">
+            {t("viewMgmt.joinWhere.profileLabel")}
+          </p>
+          <p className="max-w-prose text-xs leading-5 text-muted">
+            {joinWherePromptProfileDescription()}
+          </p>
+          <div
+            role="list"
+            className="flex flex-wrap gap-2"
+            aria-label={t("viewMgmt.joinWhere.outputScope")}
+          >
+            {JOIN_WHERE_OUTPUT_SCOPE_KEYS.map((scope) => (
+              <span
+                key={scope}
+                role="listitem"
+                className="inline-flex min-h-8 items-center rounded-full border border-info/30 bg-info-bg px-3 text-xs font-medium text-info"
+              >
+                {t(`viewMgmt.joinWhere.outputScope.${scope}`)}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
 
       <ContentActionBar
         ariaLabel={t("viewMgmt.joinWhere.actions")}
@@ -225,6 +217,7 @@ function ViewJoinWherePanel({
           idPrefix="view-join-where-result"
           ariaLabel={t("viewMgmt.joinWhere.loading")}
           variant="detail"
+          placement="result"
         />
       ) : result ? (
         <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
@@ -232,7 +225,7 @@ function ViewJoinWherePanel({
             <StatusBadge variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
             <StatusBadge
               variant="info"
-              label={joinWherePromptProfileLabel(result.prompt_profile ?? "join_where_strict")}
+              label={joinWherePromptProfileLabel()}
             />
           </div>
           {result.warnings.map((warning) => (
@@ -280,25 +273,71 @@ function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
   if (!job) return "";
   const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
   const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
-  return t("dataMgmt.schemaJob.progress", {
+  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
     phase: t(`dataMgmt.schemaJob.phase.${phase}`),
     progress,
   });
+}
+
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
+  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
+}
+
+function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("dataMgmt.objectList.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
 }
 
 export function ViewManagementPage() {
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [viewSearch, setViewSearch] = useState("");
-  const [viewFilter, setViewFilter] = useState<DbObjectFilter>("all");
+  const [viewOwnerFilter, setViewOwnerFilter] = useState<DbObjectOwnerFilter>("all");
   const [viewSort, setViewSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
-  const [joinWhereProfile, setJoinWhereProfile] =
-    useState<DbAdminJoinWherePromptProfile>("join_where_strict");
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
@@ -306,7 +345,9 @@ export function ViewManagementPage() {
   const autoJoinWhereDdlName = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
   const debouncedViewSearch = useDebouncedValue(viewSearch, 250);
-  const viewObjectsQuery = useDbAdminObjects(debouncedViewSearch, "view", viewFilter);
+  const viewOwnerQuery = viewOwnerFilter === "all" ? "" : viewOwnerFilter;
+  const viewObjectsQuery = useDbAdminObjects(debouncedViewSearch, "view", "all", viewOwnerQuery);
+  const schemaOwnersQuery = useSchemaOwners();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
   const schemaRefreshing =
@@ -322,7 +363,16 @@ export function ViewManagementPage() {
     [viewObjectsQuery.data]
   );
   const firstViewPage = viewObjectsQuery.data?.pages[0];
-  const totalViewCount = firstViewPage?.total ?? viewItems.length;
+  const totalViewCount = dbAdminObjectCountsFromPage(firstViewPage, viewItems).totalCount;
+  const viewOwnerOptions = useMemo(
+    () =>
+      (schemaOwnersQuery.data?.owners ?? [])
+        .filter((item) => item.view_count > 0)
+        .map((item) => item.owner.trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, "ja")),
+    [schemaOwnersQuery.data],
+  );
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/views",
     loadErrorMessage: t("viewMgmt.error.detail"),
@@ -346,7 +396,7 @@ export function ViewManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    void detailRequest.loadDdl(detail.name);
+    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
   };
 
   const returnToList = () => {
@@ -371,6 +421,8 @@ export function ViewManagementPage() {
     loadSequence.current = sequence;
     setLoading("schema-refresh");
     setMessage("");
+    setSchemaRefreshError("");
+    setSchemaRefreshNeedsFull(false);
     try {
       await runScopedRequest(async (signal) => {
         // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
@@ -428,15 +480,15 @@ export function ViewManagementPage() {
     if (job.status === "done") {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
       toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
-      const error = job.error_code
-        ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-        : t("dataMgmt.schemaJob.error");
-      setSchemaRefreshError(error);
-      toast.error(t("dataMgmt.schemaJob.error"));
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [schemaRefreshJobQuery.data]);
 
@@ -450,6 +502,7 @@ export function ViewManagementPage() {
         ? schemaRefreshJobQuery.error.message
         : t("dataMgmt.schemaJob.error");
     setSchemaRefreshError(error);
+    setSchemaRefreshNeedsFull(false);
     toast.error(t("dataMgmt.schemaJob.error"));
   }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
@@ -461,8 +514,8 @@ export function ViewManagementPage() {
       if (selectedViewName) detailRequest.clear();
       return;
     }
-    if (selectedViewName && viewItems.some((item) => item.name === selectedViewName)) return;
-    void fetchDetail(viewItems[0].name);
+    if (selectedViewName && viewItems.some((item) => dbAdminObjectQualifiedName(item) === selectedViewName)) return;
+    void fetchDetail(dbAdminObjectQualifiedName(viewItems[0]));
   }, [
     activeView,
     viewItems,
@@ -480,12 +533,12 @@ export function ViewManagementPage() {
       detail.ddl ||
       detailRequest.ddlLoading ||
       detailRequest.ddlError ||
-      autoJoinWhereDdlName.current === detail.name
+      autoJoinWhereDdlName.current === dbAdminObjectQualifiedName(detail)
     ) {
       return;
     }
-    autoJoinWhereDdlName.current = detail.name;
-    void detailRequest.loadDdl(detail.name);
+    autoJoinWhereDdlName.current = dbAdminObjectQualifiedName(detail);
+    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
   }, [
     activeView,
     detail?.name,
@@ -495,23 +548,32 @@ export function ViewManagementPage() {
     detailRequest.loadDdl,
   ]);
 
-  const reloadAfterMutation = (result: { schema_refresh_job_id?: string }) => {
+  const reloadAfterMutation = (result: {
+    schema_refresh_job_id?: string;
+    schema_refresh_required?: boolean;
+    schema_refresh_reason_code?: string;
+  }) => {
     if (result.schema_refresh_job_id) {
       completedSchemaRefreshJob.current = "";
       setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(result.schema_refresh_job_id);
+    } else if (result.schema_refresh_required) {
+      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
+      setSchemaRefreshNeedsFull(true);
     }
     void refreshObjects();
   };
 
   const filteredViews = useMemo(() => {
     const q = viewSearch.trim().toLowerCase();
+    const ownerKey = viewOwnerFilter.trim().toUpperCase();
     return viewItems
       .filter((item) => {
-        if (viewFilter === "with_rows" && !(item.row_count != null && item.row_count > 0)) return false;
-        if (viewFilter === "empty_rows" && item.row_count !== 0) return false;
+        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
         if (!q) return true;
         return (
+          dbAdminObjectQualifiedName(item).toLowerCase().includes(q) ||
           item.name.toLowerCase().includes(q) ||
           item.comment.toLowerCase().includes(q) ||
           item.owner.toLowerCase().includes(q)
@@ -523,7 +585,7 @@ export function ViewManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return viewSort.direction === "asc" ? result : -result;
       });
-  }, [viewItems, viewSearch, viewFilter, viewSort]);
+  }, [viewItems, viewOwnerFilter, viewSearch, viewSort]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setViewSort((current) => ({
@@ -533,10 +595,14 @@ export function ViewManagementPage() {
   };
 
   const downloadColumnsXlsx = async (name: string) => {
+    const target = parseDbAdminObjectTarget(name);
+    const params = new URLSearchParams();
+    if (target.owner) params.set("owner", target.owner);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     setLoading("view-export");
     setMessage("");
     try {
-      const response = await apiFetch(`/api/nl2sql/db-admin/views/${encodeURIComponent(name)}/export.xlsx`, {
+      const response = await apiFetch(`/api/nl2sql/db-admin/views/${encodeURIComponent(target.name)}/export.xlsx${suffix}`, {
         headers: {
           Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         },
@@ -544,7 +610,7 @@ export function ViewManagementPage() {
       if (!response.ok) {
         throw new Error(t("viewMgmt.error.export"));
       }
-      downloadBlob(`${name.toLowerCase()}_columns.xlsx`, await response.blob());
+      downloadBlob(`${target.qualifiedName.toLowerCase().replace(".", "_")}_columns.xlsx`, await response.blob());
       toast.success(t("common.action.downloaded"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("viewMgmt.error.export"));
@@ -564,7 +630,8 @@ export function ViewManagementPage() {
     setMessage("");
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-view", {
-        view_name: dropTargetName,
+        view_name: parseDbAdminObjectTarget(dropTargetName).name,
+        owner: parseDbAdminObjectTarget(dropTargetName).owner,
         confirmation: dropConfirmation,
         reason: "ui-view-management-drop",
       });
@@ -590,7 +657,7 @@ export function ViewManagementPage() {
       setJoinWhere(
         await apiPost<DbAdminJoinWhereData>("/api/nl2sql/db-admin/extract-join-where", {
           ddl: detail.ddl,
-          prompt_profile: joinWhereProfile,
+          prompt_profile: JOIN_WHERE_PROMPT_PROFILE,
         })
       );
     } catch (err) {
@@ -616,6 +683,22 @@ export function ViewManagementPage() {
           />
         )}
         confirmationTitle={t("viewMgmt.create.executeTitle")}
+        footerProcessing={
+          schemaRefreshing ? (
+            <ProcessingIndicator
+              active
+              label={schemaRefreshProcessingLabel(
+                schemaRefreshJob,
+                t("viewMgmt.workspace.schemaRefreshing"),
+              )}
+              operationKey={schemaRefreshJobId || "view-create-schema-refresh"}
+              placement="workspace"
+              className="rounded-md border border-border bg-background px-3 py-2"
+              testId="view-create-schema-refresh-processing"
+              activityIcon="none"
+            />
+          ) : null
+        }
         executeOnly
         framed={false}
         onExecuted={reloadAfterMutation}
@@ -627,16 +710,11 @@ export function ViewManagementPage() {
         loading={loading === "join-where"}
         ddlLoading={detailRequest.ddlLoading}
         ddlError={detailRequest.ddlError}
-        profile={joinWhereProfile}
-        onProfileChange={(nextProfile) => {
-          setJoinWhereProfile(nextProfile);
-          setJoinWhere(null);
-        }}
         onExtract={() => void extractJoinWhere()}
         onRetryDdl={() => {
           if (detail) {
             autoJoinWhereDdlName.current = "";
-            void detailRequest.loadDdl(detail.name);
+            void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
           }
         }}
       />
@@ -653,19 +731,11 @@ export function ViewManagementPage() {
             : undefined
         }
         status={
-          schemaRefreshJob ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge
-                variant={
-                  schemaRefreshJob.status === "done"
-                    ? "success"
-                    : schemaRefreshJob.status === "error"
-                      ? "danger"
-                      : "info"
-                }
-                label={schemaRefreshJobLabel(schemaRefreshJob)}
-              />
-            </span>
+          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
+            <PageHeaderStatusBadge
+              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
+              label={schemaRefreshJobLabel(schemaRefreshJob)}
+            />
           ) : undefined
         }
         actionsAriaLabel={t("viewMgmt.tabs.label")}
@@ -718,9 +788,22 @@ export function ViewManagementPage() {
               : null
           }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={
+                schemaRefreshNeedsFull
+                  ? () => void refreshSchema(true)
+                  : () => void refreshObjects()
+              }
+            >
               <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("viewMgmt.action.refresh")}</span>
+              <span>
+                {schemaRefreshNeedsFull
+                  ? t("common.action.schemaRefresh")
+                  : t("viewMgmt.action.refresh")}
+              </span>
             </Button>
           }
         />
@@ -742,7 +825,10 @@ export function ViewManagementPage() {
                     active
                     label={
                       loading === "schema-refresh" || schemaRefreshing
-                        ? t("viewMgmt.workspace.schemaRefreshing")
+                        ? schemaRefreshProcessingLabel(
+                            schemaRefreshJob,
+                            t("viewMgmt.workspace.schemaRefreshing"),
+                          )
                         : t("viewMgmt.workspace.refreshing")
                     }
                     operationKey={schemaRefreshing ? schemaRefreshJobId : loading}
@@ -763,30 +849,32 @@ export function ViewManagementPage() {
               loading={viewObjectsQuery.isPending && !viewObjectsQuery.data}
               error={
                 viewObjectsQuery.error && !viewObjectsQuery.data
-                  ? viewObjectsQuery.error instanceof Error
-                    ? viewObjectsQuery.error.message
-                    : t("viewMgmt.error.load")
+                  ? objectListErrorMessage(viewObjectsQuery.error, "viewMgmt.error.load")
                   : ""
               }
               search={viewSearch}
-              filter={viewFilter}
+              ownerFilter={viewOwnerFilter}
+              ownerOptions={viewOwnerOptions}
               sort={viewSort}
               totalCount={totalViewCount}
               hasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
               loadingNextPage={viewObjectsQuery.isFetchingNextPage}
+              loadMoreError={
+                viewObjectsQuery.isFetchNextPageError && viewObjectsQuery.error
+                  ? objectListLoadMoreErrorMessage(viewObjectsQuery.error, "viewMgmt.error.load")
+                  : ""
+              }
               labels={{
                 title: t("viewMgmt.list.title"),
                 hint: t("viewMgmt.grid.hint"),
-                count: t("viewMgmt.grid.count", { count: filteredViews.length }),
+                count: t("viewMgmt.grid.count", { count: totalViewCount }),
                 loading: t("viewMgmt.list.loading"),
                 emptyTitle: t("viewMgmt.list.emptyTitle"),
                 emptyHint: t("viewMgmt.list.emptyHint"),
                 noResultsTitle: t("viewMgmt.list.noResultsTitle"),
                 noResultsHint: t("viewMgmt.list.noResultsHint"),
-                filter: t("viewMgmt.toolbar.filter"),
-                filterAll: t("viewMgmt.toolbar.filterAll"),
-                filterWithRows: t("viewMgmt.toolbar.filterWithRows"),
-                filterEmptyRows: t("viewMgmt.toolbar.filterEmptyRows"),
+                ownerFilter: t("viewMgmt.toolbar.filter"),
+                ownerFilterAll: t("viewMgmt.toolbar.filterAll"),
                 objectName: t("viewMgmt.grid.viewName"),
                 rows: t("viewMgmt.grid.rows"),
                 owner: t("viewMgmt.grid.owner"),
@@ -796,11 +884,12 @@ export function ViewManagementPage() {
                 showObject: (name) => t("viewMgmt.grid.showView", { name }),
               }}
               onSearchChange={setViewSearch}
-              onFilterChange={setViewFilter}
+              onOwnerFilterChange={setViewOwnerFilter}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name)}
               onDrop={openDropDialog}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
+              onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
             />
             <DbObjectDetailPanel
@@ -828,7 +917,7 @@ export function ViewManagementPage() {
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedViewName)}
               onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(detail.name);
+                if (detail) void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
               }}
               onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}

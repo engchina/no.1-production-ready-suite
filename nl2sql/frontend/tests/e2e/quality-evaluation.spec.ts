@@ -69,12 +69,16 @@ const summary = [
   },
 ];
 
+const longEvaluationQuestion =
+  '対象テーブル："部署情報を管理するテーブル" 抽出項目："DEPARTMENT_ID", "DEPARTMENT_NAME", "LOCATION", "CREATED_AT" 抽出条件：未入金の請求金額を確認し、VERY_LONG_UNBROKEN_EVALUATION_QUERY_IDENTIFIER_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ を含めて取得してください';
+
 function job(status: "pending" | "running" | "completed_with_errors" | "failed") {
   const terminal = status === "completed_with_errors" || status === "failed";
   return {
     job_id: "job-001",
     profile_id: "default",
     profile_name: "標準プロファイル",
+    profile_category: "品質評価",
     engines: ["select_ai", "enterprise_ai_direct"],
     repeat_count: 2,
     case_count: 1,
@@ -102,7 +106,7 @@ const results = [
     case_no: 1,
     case_id: "CASE-001",
     excel_row: 2,
-    question: "未入金の請求金額を取得してください",
+    question: longEvaluationQuestion,
     expected_sql: "SELECT TOTAL_AMOUNT FROM INVOICES WHERE STATUS = 'UNPAID'",
     engine: "select_ai",
     repetition_no: 1,
@@ -137,7 +141,7 @@ const results = [
     case_no: 1,
     case_id: "CASE-001",
     excel_row: 2,
-    question: "未入金の請求金額を取得してください",
+    question: longEvaluationQuestion,
     expected_sql: "SELECT TOTAL_AMOUNT FROM INVOICES WHERE STATUS = 'UNPAID'",
     engine: "enterprise_ai_direct",
     repetition_no: 2,
@@ -172,6 +176,7 @@ async function mockQualityApi(
       {
         id: "default",
         name: "標準プロファイル",
+        category: "品質評価",
         description: "",
         allowed_tables: [],
         allowed_views: [],
@@ -264,6 +269,14 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await page.goto("/evaluation");
 
   await expect(page.getByRole("heading", { name: "評価条件" })).toBeVisible();
+  const profileSelect = page.locator("#quality-evaluation-profile");
+  await expect(profileSelect).toHaveValue("default");
+  await expect(
+    profileSelect.locator("option", { hasText: "標準プロファイル（品質評価）" })
+  ).toHaveCount(1);
+  await expect(
+    page.getByText("標準プロファイル（品質評価）").filter({ visible: true }).first()
+  ).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   const checkboxes = page.getByRole("checkbox");
   const engineBulkActions = page.getByTestId("quality-evaluation-engine-selection-actions");
@@ -328,7 +341,7 @@ test("mobile restores completed results as cards without page overflow", async (
   await expect(
     page
       .locator("article")
-      .filter({ hasText: "未入金の請求金額を取得してください", visible: true })
+      .filter({ hasText: "対象テーブル", visible: true })
       .first()
   ).toBeVisible();
   await expect(page.locator("table")).toBeHidden();

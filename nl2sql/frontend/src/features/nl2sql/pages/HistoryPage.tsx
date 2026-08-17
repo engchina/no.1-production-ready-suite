@@ -35,6 +35,7 @@ import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { QuestionText } from "../components/QuestionText";
 import {
   filterAndSortHistory,
   selectedVisibleHistoryId,
@@ -44,6 +45,7 @@ import {
   type HistorySortState,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
+import { profileRecordDisplayLabel } from "../profileDisplay";
 import { historyRerunUrl } from "../queryPrefillState";
 import type { HistoryData, HistoryItem } from "../types";
 
@@ -262,13 +264,13 @@ function HistoryGrid({
                         }`}
                         onClick={() => onSelect(item, true)}
                       >
-                        <span
-                          className="line-clamp-2 min-w-0 break-words text-sm font-semibold leading-5 text-primary [overflow-wrap:anywhere]"
-                          data-testid="history-question"
-                          title={item.question}
-                        >
-                          {item.question}
-                        </span>
+                        <QuestionText
+                          value={item.question}
+                          variant="select"
+                          maxLines={1}
+                          className="font-medium text-foreground"
+                          testId="history-question"
+                        />
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                           <span className="font-mono text-xs tabular-nums text-foreground">
                             {formatDateTime(item.created_at)}
@@ -388,8 +390,19 @@ function HistoryDetailPanel({
             tabIndex={-1}
             className="min-w-0 break-words text-base font-semibold leading-6 text-foreground [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
-            {item.question}
+            {t("history.detail.title")}
           </h2>
+          <div className="mt-2 rounded-md border border-border bg-card p-3">
+            <p className="text-xs font-medium text-muted">{t("history.grid.question")}</p>
+            <QuestionText
+              value={item.question}
+              variant="detail"
+              maxLines={3}
+              expandable
+              className="mt-1 text-sm font-normal"
+              testId="history-detail-question"
+            />
+          </div>
           <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
             <StatusBadge variant="info" label={engineLabel(item.engine)} />
@@ -445,7 +458,7 @@ function HistoryDetailPanel({
       {tab === "overview" ? (
         <div id="history-detail-panel-overview" role="tabpanel" aria-labelledby="history-detail-tab-overview" className="grid gap-3">
           <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]">
-            <HistoryFact icon={Database} label={t("history.profile")} value={item.profile_name || item.profile_id || "—"} />
+            <HistoryFact icon={Database} label={t("history.profile")} value={profileRecordDisplayLabel(item)} />
             <HistoryFact icon={Rows3} label={t("history.rows")} value={formatNumber(item.result_row_count)} />
             <HistoryFact icon={Columns3} label={t("history.columns")} value={formatNumber(item.result_columns.length)} />
           </div>
@@ -487,7 +500,11 @@ function HistoryDetailSection({ title, value, mono = false }: { title: string; v
   return (
     <div className="rounded-md border border-border bg-card p-3">
       <p className="text-xs font-medium text-muted">{title}</p>
-      <p className={`mt-1 break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere] ${mono ? "font-mono text-xs" : ""}`}>{value}</p>
+      {mono ? (
+        <p className="mt-1 break-words font-mono text-xs leading-6 text-foreground [overflow-wrap:anywhere]">{value}</p>
+      ) : (
+        <QuestionText value={value} variant="detail" maxLines={3} expandable className="mt-1" />
+      )}
     </div>
   );
 }

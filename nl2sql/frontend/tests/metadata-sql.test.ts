@@ -42,7 +42,7 @@ test("buildMetadataInputTexts builds structure constraints and samples", () => {
     ],
   };
   const texts = buildMetadataInputTexts([metadataDetail], 1);
-  assert.match(texts.structureText, /OBJECT: ORDERS/);
+  assert.match(texts.structureText, /OBJECT: ADMIN\.ORDERS/);
   assert.match(texts.primaryKeyText, /PK_ORDERS/);
   assert.match(texts.foreignKeyText, /FK_ORDERS_CUSTOMER/);
   assert.match(texts.sampleText, /ORDER_ID: 100/);

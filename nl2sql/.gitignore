@@ -36,6 +36,9 @@ backend/model-settings.json
 .claude/worktrees/
 .learnings/
 
+# --- local terraform ---
+terraform/stack/.terraform.lock.hcl
+
 # --- local reference sources / internal source material ---
 /DataClaw-main/
 /docs/Oracle AI Database 26ai for AgenticApps_v3_internal_deep_data_security.pptx

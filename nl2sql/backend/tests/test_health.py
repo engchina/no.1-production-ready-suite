@@ -1,27 +1,33 @@
 """health / NL2SQL preview の疎通テスト（Oracle 不要）。"""
 
 import asyncio
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
+from fastapi import HTTPException, Response
 
 from app.features.nl2sql.models import (
+    AdminFeedbackReviewRequest,
     AgentTeamRunRequest,
+    AllowedObjects,
     FeedbackIndexRequest,
     FeedbackRating,
     HistoryItem,
     JobCreateRequest,
     JobStatus,
+    JobStepStatus,
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
+    SchemaColumn,
     SchemaTable,
     SelectAiFeedbackAddRequest,
     SelectAiFeedbackDeleteRequest,
@@ -29,6 +35,7 @@ from app.features.nl2sql.models import (
     SimilarHistoryRequest,
 )
 from app.features.nl2sql.oracle_adapter import (
+    OracleAdapterError,
     OracleNl2SqlAdapter,
     _extract_select_statement,
 )
@@ -39,6 +46,7 @@ from app.features.nl2sql.service import (
     _extract_referenced_tables,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
+from app.features.schema import router as schema_router
 from app.main import app
 from app.settings import get_settings
 
@@ -74,10 +82,14 @@ class _FakeOracleDb:
         self.run_team_signature_failures = 0
         self.run_team_calls = 0
         self.run_team_profile_loss = False
+        self.agent_conversation_id = "conversation-001"
+        self.create_conversation_error = ""
+        self.run_tool_error = ""
         self.create_team_profile_exists_failures = 0
         self.create_team_calls = 0
         self.synthetic_function_signature_failures = 0
         self.synthetic_procedure_calls = 0
+        self.show_prompt_text = "PROMPT: Select AI will generate SQL for the question."
 
     def connection(self) -> "_FakeOracleConnection":
         return _FakeOracleConnection(self)
@@ -159,9 +171,14 @@ class _FakeOracleCursor:
             if self.db.select_ai_feedback_missing:
                 raise RuntimeError("ORA-00942: table or view does not exist")
         elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
-            self._row = ("conversation-001",)
+            if self.db.create_conversation_error:
+                raise RuntimeError(self.db.create_conversation_error)
+            self._row = (self.db.agent_conversation_id,)
         elif "DBMS_CLOUD_AI.GENERATE(" in normalized_sql:
-            self._row = ("SELECT TOTAL_AMOUNT FROM INVOICES",)
+            if str((params or {}).get("action") or "").lower() == "showprompt":
+                self._row = (self.db.show_prompt_text,)
+            else:
+                self._row = ("SELECT TOTAL_AMOUNT FROM INVOICES",)
         elif "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA" in normalized_sql:
             if normalized_sql.startswith("SELECT"):
                 if self.db.synthetic_function_signature_failures > 0:
@@ -184,6 +201,8 @@ class _FakeOracleCursor:
                 )
             self._row = ('{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES"}',)
         elif "DBMS_CLOUD_AI_AGENT.RUN_TOOL" in normalized_sql:
+            if self.db.run_tool_error:
+                raise RuntimeError(self.db.run_tool_error)
             self._row = ("SELECT TOTAL_AMOUNT FROM INVOICES",)
 
     def setinputsizes(self, **kwargs: object) -> None:
@@ -264,10 +283,14 @@ class _FakeRuntimeOracleAdapter(OracleNl2SqlAdapter):
 
 
 class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
-    def __init__(self, db: _FakeOracleDb) -> None:
+    def __init__(
+        self, db: _FakeOracleDb, generated_sql: str = "SELECT TOTAL_AMOUNT FROM INVOICES"
+    ) -> None:
         super().__init__(db)
+        self.generated_sql = generated_sql
         self.questions: list[str] = []
         self.attributes: list[dict[str, str] | None] = []
+        self.actions: list[str] = []
 
     def generate_select_ai_sql(
         self,
@@ -277,10 +300,24 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
     ) -> str:
-        del profile_name, action
+        del profile_name
         self.questions.append(question)
         self.attributes.append(attributes)
-        return "SELECT TOTAL_AMOUNT FROM INVOICES"
+        self.actions.append(action)
+        return self.generated_sql
+
+    def generate_select_ai_prompt(
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        attributes: dict[str, str] | None = None,
+    ) -> str:
+        del profile_name
+        self.questions.append(question)
+        self.attributes.append(attributes)
+        self.actions.append("showprompt")
+        return "PROMPT: Select AI will generate SQL for the question."
 
     def run_select_ai_agent_team(
         self, *, team_name: str, question: str, tool_name: str | None = None
@@ -333,19 +370,33 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
         include_samples: bool = True,
         object_keys: set[tuple[str, str]] | None = None,
     ) -> SchemaCatalog:
-        _ = (include_samples, object_keys)
+        _ = include_samples
+        current_owner = get_settings().oracle_user.strip().upper() or "APP"
+        sample_names = [
+            "DEPARTMENT",
+            "EMPLOYEE",
+            "PROJECT",
+            "V_EMP_DEPT",
+            "V_DEPT_PROJECT",
+        ]
+        if object_keys:
+            requested = {
+                (owner.upper(), object_name.upper()) for owner, object_name in object_keys
+            }
+            tables = [
+                SchemaTable(table_name=name, logical_name=name, owner=current_owner)
+                for name in sample_names
+                if (current_owner, name) in requested
+            ]
+        else:
+            tables = [
+                SchemaTable(table_name=name, logical_name=name, owner=current_owner)
+                for name in sample_names
+            ]
         return SchemaCatalog(
             refreshed_at="2026-06-23T00:00:00+00:00",
-            tables=[
-                SchemaTable(table_name=name, logical_name=name)
-                for name in [
-                    "DEPARTMENT",
-                    "EMPLOYEE",
-                    "PROJECT",
-                    "V_EMP_DEPT",
-                    "V_DEPT_PROJECT",
-                ]
-            ],
+            current_owner=current_owner,
+            tables=tables,
         )
 
 
@@ -358,6 +409,51 @@ class _FakeEmbeddingClient:
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [[0.01 for _ in range(1536)] for _text in texts]
+
+
+def _similar_history_sample_catalog() -> SchemaCatalog:
+    return SchemaCatalog(
+        refreshed_at="2026-08-17T00:00:00+00:00",
+        current_owner="APP",
+        tables=[
+            SchemaTable(
+                table_name="DEPARTMENT",
+                logical_name="部署",
+                owner="APP",
+                comment="部署情報を管理するテーブル",
+                columns=[
+                    SchemaColumn(
+                        column_name="DEPARTMENT_ID",
+                        logical_name="部署ID",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="DEPARTMENT_NAME",
+                        logical_name="部署名",
+                        data_type="VARCHAR2",
+                    ),
+                ],
+            ),
+            SchemaTable(
+                table_name="PROJECT",
+                logical_name="プロジェクト",
+                owner="APP",
+                comment="プロジェクト情報を管理するテーブル",
+                columns=[
+                    SchemaColumn(
+                        column_name="PROJECT_ID",
+                        logical_name="プロジェクトID",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="PROJECT_NAME",
+                        logical_name="プロジェクト名",
+                        data_type="VARCHAR2",
+                    ),
+                ],
+            ),
+        ],
+    )
 
 
 class _OracleRuntimeNl2SqlService(Nl2SqlService):
@@ -402,6 +498,16 @@ async def _api_import_sample(client: httpx.AsyncClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["executed"] is True
+
+
+def _wait_for_job(service: Nl2SqlService, job_id: str) -> Any:
+    job = service.get_job(job_id)
+    for _ in range(100):
+        if job is not None and job.status not in {JobStatus.PENDING, JobStatus.RUNNING}:
+            return job
+        time.sleep(0.01)
+        job = service.get_job(job_id)
+    return job
 
 
 async def test_health() -> None:
@@ -502,7 +608,7 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert "FETCH FIRST" not in fake_client.calls[0]["system_prompt"]
 
 
-def test_oracle_runtime_question_includes_learning_examples() -> None:
+def test_oracle_runtime_question_does_not_include_custom_learning_examples() -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
     profile = service.create_profile(
@@ -528,10 +634,172 @@ def test_oracle_runtime_question_includes_learning_examples() -> None:
 
     assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert adapter.questions
-    assert "learning_examples:" in adapter.questions[0]
-    assert "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" in adapter.questions[0]
-    assert "今回の質問:" in adapter.questions[0]
-    assert "請求金額を確認したい" in adapter.questions[0]
+    assert adapter.questions[0] == "請求金額を確認したい"
+    assert "learning_examples:" not in adapter.questions[0]
+    assert "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" not in adapter.questions[0]
+    assert "今回の質問:" not in adapter.questions[0]
+    assert "learning_examples" not in preview.engine_meta
+
+
+def test_select_ai_job_blocks_where_when_filter_slot_is_empty() -> None:
+    adapter = _QuestionCaptureOracleAdapter(
+        _FakeOracleDb(),
+        generated_sql=(
+            'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT" '
+            'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+        ),
+    )
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="dept_empty_filter",
+            name="部署",
+            allowed_tables=["APP.DEPARTMENT"],
+        )
+    )
+    question = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：'
+
+    created = service.start_job(
+        JobCreateRequest(
+            question=question,
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.ERROR
+    assert job.result is not None
+    assert job.result.safety.is_safe is False
+    assert "抽出条件が空欄" in job.result.safety.blocked_reason
+    assert job.result.executable_sql == ""
+    assert job.result.results.total == 0
+    assert "WHERE 句" in adapter.questions[0]
+
+
+def test_select_ai_allows_where_when_filter_slot_has_value() -> None:
+    adapter = _QuestionCaptureOracleAdapter(
+        _FakeOracleDb(),
+        generated_sql=(
+            'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT" '
+            'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+        ),
+    )
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="dept_explicit_filter",
+            name="部署",
+            allowed_tables=["APP.DEPARTMENT"],
+        )
+    )
+
+    preview = service.preview(
+        PreviewRequest(
+            question="対象テーブル：部署\n抽出項目：\n抽出条件：部署名 = '管理部門'",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        )
+    )
+
+    assert preview.is_safe is True
+    assert "WHERE 句" not in adapter.questions[0]
+    assert "管理部門" in preview.sql
+
+
+def test_interpretation_separates_empty_input_filter_from_sql_filter() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    question = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：'
+    sql = (
+        'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
+        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+    )
+    profile = service.get_profile("sql_assist_sample")
+    allowed = AllowedObjects(table_names=["DEPARTMENT"])
+    analysis = service.analyze_sql(sql, allowed, None)
+    analysis = cast(Any, service)._apply_empty_filter_generation_guard(question, analysis)
+
+    artifact = cast(Any, service)._build_interpretation_artifact(
+        request=JobCreateRequest(
+            question=question,
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        ),
+        profile=profile,
+        rewritten_question=question,
+        generated_sql=sql,
+        executable_sql=analysis.executable_sql,
+        analysis=analysis,
+        safety=analysis.safety,
+        row_limit=None,
+    )
+
+    assert artifact.question.filters == []
+    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
+    assert artifact.question.warnings
+    assert artifact.sql.warnings
+    assert "抽出条件が空欄" in " ".join(artifact.warnings)
+
+
+def test_interpretation_uses_only_explicit_template_filter_for_question_filters() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    question = "対象テーブル：部署\n抽出項目：部署名\n抽出条件：部署名 = '管理部門'"
+    sql = (
+        'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
+        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+    )
+    profile = service.get_profile("sql_assist_sample")
+    analysis = service.analyze_sql(sql, AllowedObjects(table_names=["DEPARTMENT"]), None)
+
+    artifact = cast(Any, service)._build_interpretation_artifact(
+        request=JobCreateRequest(
+            question=question,
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        ),
+        profile=profile,
+        rewritten_question=question,
+        generated_sql=sql,
+        executable_sql=analysis.executable_sql,
+        analysis=analysis,
+        safety=analysis.safety,
+        row_limit=None,
+    )
+
+    assert artifact.question.filters == ["部署名 = '管理部門'"]
+    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
+
+
+def test_interpretation_does_not_infer_question_filters_from_free_text() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    sql = (
+        'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
+        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+    )
+    profile = service.get_profile("sql_assist_sample")
+    analysis = service.analyze_sql(sql, AllowedObjects(table_names=["DEPARTMENT"]), None)
+
+    artifact = cast(Any, service)._build_interpretation_artifact(
+        request=JobCreateRequest(
+            question="管理部門の部署を検索したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        ),
+        profile=profile,
+        rewritten_question="管理部門の部署を検索したい",
+        generated_sql=sql,
+        executable_sql=analysis.executable_sql,
+        analysis=analysis,
+        safety=analysis.safety,
+        row_limit=None,
+    )
+
+    assert artifact.question.filters == []
+    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
 
 
 def test_select_ai_request_overrides_use_effective_profile_context() -> None:
@@ -568,7 +836,9 @@ def test_select_ai_request_overrides_use_effective_profile_context() -> None:
     assert attributes["role"] == "今回だけ CFO 向けに説明するアシスタント"
     instructions = attributes["additional_instructions"]
     assert "## 業務説明" not in instructions
-    assert instructions.index("- 四半期:") < instructions.index("- 売上:")
+    assert "## 業務用語集" not in instructions
+    assert "- 四半期:" not in instructions
+    assert "- 売上:" not in instructions
     assert "## SQL 生成ルール" not in instructions
     assert "## プロファイル追加指示" in instructions
     assert "SELECT/WITH のみ" in instructions
@@ -622,6 +892,104 @@ def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
         "## 今回の追加指示\n最新月だけを対象にする。"
         in adapter.attributes[0]["additional_instructions"]
     )
+
+
+def test_job_create_request_artifact_flags_default_false() -> None:
+    request = JobCreateRequest(question="社員一覧を確認したい")
+
+    assert request.include_interpretation is False
+    assert request.include_show_prompt is False
+
+
+def test_select_ai_job_returns_interpretation_and_showprompt_artifacts() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="artifact_profile",
+            name="Artifact profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            include_interpretation=True,
+            include_show_prompt=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert job.result.explanation == "SQL を生成しました。"
+    assert job.result.interpretation is not None
+    assert job.result.interpretation.available is True
+    assert job.result.interpretation.question.rewritten_question == "請求金額を確認したい"
+    assert any(table.endswith(".INVOICES") for table in job.result.interpretation.sql.tables)
+    assert job.result.show_prompt is not None
+    assert job.result.show_prompt.available is True
+    assert "Select AI" in job.result.show_prompt.prompt
+    assert adapter.actions == ["showsql", "showprompt"]
+
+
+def test_interpretation_failure_keeps_job_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+
+    def fail_interpretation(**_kwargs: object) -> object:
+        raise RuntimeError("artifact boom")
+
+    monkeypatch.setattr(service, "_build_interpretation_artifact", fail_interpretation)
+    created = service.start_job(
+        JobCreateRequest(
+            question="社員一覧を確認したい",
+            profile_id="sql_assist_sample",
+            include_interpretation=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert job.result.interpretation is not None
+    assert job.result.interpretation.available is False
+    assert "artifact boom" in " ".join(job.result.interpretation.warnings)
+
+
+def test_showprompt_is_unavailable_without_select_ai_engine() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="agent_artifact_profile",
+            name="Agent artifact profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            profile_id=profile.id,
+            include_show_prompt=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert job.result.show_prompt is not None
+    assert job.result.show_prompt.available is False
+    assert "Select AI" in job.result.show_prompt.unavailable_reason
+    assert "showprompt" not in adapter.actions
 
 
 def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
@@ -719,6 +1087,22 @@ def test_oracle_adapter_generate_select_ai_sql_binds_unicode_attributes() -> Non
     assert "attributes => :attributes" in fake_db.executed[-1]
     params = fake_db.executed_params[-1] or {}
     assert '"role": "財務 SQL アシスタント"' in str(params["attributes"])
+
+
+def test_oracle_adapter_generate_select_ai_prompt_uses_showprompt_action() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    prompt = adapter.generate_select_ai_prompt(
+        profile_name="FINANCE_PROFILE",
+        question="前四半期の売上は?",
+        attributes={"role": "財務 SQL アシスタント"},
+    )
+
+    assert prompt == fake_db.show_prompt_text
+    params = fake_db.executed_params[-1] or {}
+    assert params["action"] == "showprompt"
+    assert "attributes => :attributes" in fake_db.executed[-1]
 
 
 async def test_select_ai_overrides_require_select_ai_engine() -> None:
@@ -820,6 +1204,15 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
         f"{current_owner}.V_EMP_DEPT",
         f"{current_owner}.V_DEPT_PROJECT",
     }
+    info = service.sample_data_info()
+    assert info.imported_objects == [
+        "DEPARTMENT",
+        "EMPLOYEE",
+        "PROJECT",
+        "V_EMP_DEPT",
+        "V_DEPT_PROJECT",
+    ]
+    assert info.warnings == []
 
     missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
     service._oracle_adapter = missing_adapter
@@ -839,51 +1232,64 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
 
 
-async def test_job_supports_select_ai_agent_and_timing() -> None:
-    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
-        await _api_import_sample(client)
-        resp = await client.post(
-            "/api/nl2sql/jobs",
-            json={
-                "question": "社員一覧を見たい",
-                "engine": "select_ai_agent",
-                "allowed_objects": {
-                    "table_names": ["EMPLOYEE"],
-                    "columns": {"EMPLOYEE": ["EMPLOYEE_ID"]},
-                },
+def test_auto_job_supports_select_ai_agent_and_timing() -> None:
+    service = Nl2SqlService()
+    _import_sample(service)
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="社員一覧を見たい",
+            engine=Nl2SqlEngine.AUTO,
+            allowed_objects={
+                "table_names": ["EMPLOYEE"],
+                "columns": {"EMPLOYEE": ["EMPLOYEE_ID"]},
             },
         )
-        assert resp.status_code == 200
-        job_id = resp.json()["data"]["job_id"]
+    )
+    data = service.get_job(created.job_id)
+    for _ in range(10):
+        if data and data.status == JobStatus.DONE:
+            break
+        time.sleep(0.01)
+        data = service.get_job(created.job_id)
 
-        result_resp = await client.get(f"/api/nl2sql/jobs/{job_id}")
-        assert result_resp.status_code == 200
-        data = result_resp.json()["data"]
-        # background thread may still be running on very fast machines; poll once more if needed.
-        if data["status"] in {"pending", "running"}:
-            result_resp = await client.get(f"/api/nl2sql/jobs/{job_id}")
-            data = result_resp.json()["data"]
-    assert data["status"] in {"done", "running", "pending"}
-    assert [step["stage"] for step in data["steps"]] == EXPECTED_NL2SQL_JOB_STAGES
-    if data["status"] == "done":
-        assert [step["status"] for step in data["steps"]] == ["done"] * 5
-        assert all(step["elapsed_ms"] is not None for step in data["steps"])
-        assert data["result"]["engine"] == "select_ai_agent"
-        assert data["result"]["engine_meta"]["team_name"].endswith("_TEAM")
-        assert data["result"]["timing"]["elapsed_ms"] >= 0
+    assert data is not None
+    assert data.status in {JobStatus.DONE, JobStatus.RUNNING, JobStatus.PENDING}
+    assert [step.stage for step in data.steps] == EXPECTED_NL2SQL_JOB_STAGES
+    if data.status == JobStatus.DONE:
+        assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
+        assert all(step.elapsed_ms is not None for step in data.steps)
+        assert data.result is not None
+        assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
+        assert data.result.engine_meta["team_name"].endswith("_TEAM")
+        assert data.result.timing.elapsed_ms >= 0
 
 
-async def test_auto_falls_back_from_agent_to_select_ai() -> None:
-    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
-        await _api_import_sample(client)
-        resp = await client.post(
-            "/api/nl2sql/preview",
-            json={"question": "select_ai_agent_fail 社員一覧", "engine": "auto"},
-        )
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["engine"] == "select_ai"
-    assert "select_ai_agent" in data["fallback_reason"]
+def test_auto_falls_back_from_agent_to_select_ai() -> None:
+    service = Nl2SqlService()
+    _import_sample(service)
+
+    data = service.preview(
+        PreviewRequest(question="select_ai_agent_fail 社員一覧", engine=Nl2SqlEngine.AUTO)
+    )
+
+    assert data.engine == Nl2SqlEngine.SELECT_AI
+    assert "select_ai_agent" in data.fallback_reason
+
+
+def test_schema_objects_invalid_profile_returns_400() -> None:
+    with pytest.raises(HTTPException) as exc:
+        schema_router.search_objects(Response(), profile_id="missing-profile")
+    assert exc.value.status_code == 400
+    assert "profile" in str(exc.value.detail)
+
+
+def test_explicit_select_ai_agent_without_oracle_runtime_returns_error() -> None:
+    service = Nl2SqlService()
+    _import_sample(service)
+
+    with pytest.raises(RuntimeError, match="Oracle runtime"):
+        service.preview(PreviewRequest(question="社員一覧", engine=Nl2SqlEngine.SELECT_AI_AGENT))
 
 
 async def test_execute_rejects_unsafe_sql() -> None:
@@ -966,45 +1372,6 @@ async def test_analyze_repairs_first_select_from_multi_statement() -> None:
     assert "修復候補" in " ".join(data["recommendations"])
 
 
-async def test_repair_oracle_error_replaces_invalid_column_with_allowed_columns() -> None:
-    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/nl2sql/repair",
-            json={
-                "sql": "SELECT BAD_COLUMN FROM INVOICES",
-                "error_message": 'ORA-00904: "BAD_COLUMN": invalid identifier',
-                "allowed_objects": {
-                    "table_names": ["INVOICES"],
-                    "columns": {"INVOICES": ["INVOICE_ID", "TOTAL_AMOUNT"]},
-                },
-            },
-        )
-
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["error_code"] == "ORA-00904"
-    assert data["repaired_sql"] == "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES"
-    assert data["safety"]["is_safe"] is True
-    assert "列名" in data["explanation"]
-
-
-async def test_repair_oracle_error_converts_limit_syntax() -> None:
-    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/nl2sql/repair",
-            json={
-                "sql": "SELECT INVOICE_ID FROM INVOICES LIMIT 10;",
-                "error_message": "ORA-00933: SQL command not properly ended",
-            },
-        )
-
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["error_code"] == "ORA-00933"
-    assert data["repaired_sql"] == "SELECT INVOICE_ID FROM INVOICES FETCH FIRST 10 ROWS ONLY"
-    assert "FETCH FIRST" in " ".join(data["recommendations"])
-
-
 async def test_asset_refresh() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         await _api_import_sample(client)
@@ -1040,7 +1407,7 @@ def test_history_item_drops_legacy_needs_review_rating() -> None:
 
 async def test_profile_crud_create_update_archive_delete() -> None:
     payload = {
-        "name": "請求分析",
+        "name": "invoice_profile",
         "description": "請求テーブルだけを見る profile",
         "allowed_tables": ["INVOICES"],
         "glossary": {"売上": "INVOICES.TOTAL_AMOUNT"},
@@ -1048,22 +1415,34 @@ async def test_profile_crud_create_update_archive_delete() -> None:
         "default_row_limit": 25,
         "safety_policy": "select_only",
         "few_shot_examples": [{"question": "請求一覧", "sql": "SELECT INVOICE_ID FROM INVOICES"}],
+        "select_ai_config": {"profile_name": "LEGACY_PROFILE"},
     }
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        invalid_resp = await client.post(
+            "/api/nl2sql/profiles", json={**payload, "name": "1PROFILE"}
+        )
+        assert invalid_resp.status_code == 422
+
         create_resp = await client.post("/api/nl2sql/profiles", json=payload)
         assert create_resp.status_code == 200
         created = create_resp.json()["data"]
         profile_id = created["id"]
+        assert created["name"] == "INVOICE_PROFILE"
+        assert created["select_ai_config"]["profile_name"] == "INVOICE_PROFILE"
         assert created["allowed_tables"] == ["APP.INVOICES"]
         assert created["sql_rules"] == []
         assert "SELECT/WITH のみ" in created["select_ai_config"]["additional_instructions"]
 
         update_resp = await client.patch(
             f"/api/nl2sql/profiles/{profile_id}",
-            json={**payload, "name": "請求分析 v2", "default_row_limit": 50},
+            json={**payload, "name": "invoice_profile_v2", "default_row_limit": 50},
         )
         assert update_resp.status_code == 200
-        assert update_resp.json()["data"]["name"] == "請求分析 v2"
+        assert update_resp.json()["data"]["name"] == "INVOICE_PROFILE_V2"
+        assert (
+            update_resp.json()["data"]["select_ai_config"]["profile_name"]
+            == "INVOICE_PROFILE_V2"
+        )
         assert update_resp.json()["data"]["default_row_limit"] == 50
         assert update_resp.json()["data"]["sql_rules"] == []
 
@@ -1114,7 +1493,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
 
 async def test_profile_training_examples_update() -> None:
     payload = {
-        "name": "モデル訓練",
+        "name": "model_training",
         "description": "few-shot 訓練データを管理する profile",
         "allowed_tables": ["EMPLOYEE"],
         "glossary": {"社員": "EMPLOYEE.EMPLOYEE_NAME"},
@@ -1142,13 +1521,24 @@ async def test_profile_training_examples_update() -> None:
         assert updated["few_shot_examples"] == training_examples
         assert updated["sql_rules"] == []
 
+        partial_update_resp = await client.patch(
+            f"/api/nl2sql/profiles/{profile_id}",
+            json={"name": "model_training_v2"},
+        )
+        assert partial_update_resp.status_code == 200
+        partially_updated = partial_update_resp.json()["data"]
+        assert partially_updated["name"] == "MODEL_TRAINING_V2"
+        assert partially_updated["glossary"] == {"社員": "EMPLOYEE.EMPLOYEE_NAME"}
+        assert partially_updated["few_shot_examples"] == training_examples
+
         archive_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/archive")
         assert archive_resp.status_code == 200
 
 
 async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
     payload = {
-        "name": "入金分析",
+        "name": "payment_profile",
+        "category": "入金",
         "description": "入金と支払状況を確認する profile",
         "allowed_tables": ["PAYMENTS"],
         "glossary": {"入金": "PAYMENTS.PAID_AMOUNT"},
@@ -1171,9 +1561,11 @@ async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
         assert recommend_resp.status_code == 200
         data = recommend_resp.json()["data"]
         assert data["recommended_profile_id"] == profile_id
+        assert data["recommended_profile_category"] == "入金"
         assert data["recommended_allowed_objects"]["table_names"] == ["APP.PAYMENTS"]
         assert "PAYMENTS.PAID_AMOUNT" in data["rewritten_question"]
         assert data["candidates"]
+        assert data["candidates"][0]["category"] == "入金"
 
         archive_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/archive")
         assert archive_resp.status_code == 200
@@ -1184,7 +1576,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         await _api_import_sample(client)
         job_resp = await client.post(
             "/api/nl2sql/jobs",
-            json={"question": "社員一覧を確認したい", "engine": "select_ai_agent"},
+            json={"question": "社員一覧を確認したい", "engine": "auto"},
         )
         assert job_resp.status_code == 200
         job_id = job_resp.json()["data"]["job_id"]
@@ -1201,6 +1593,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert history_resp.status_code == 200
         history_item = history_resp.json()["data"]["items"][0]
         assert history_item["profile_id"] == "default"
+        assert "profile_category" in history_item
         assert history_item["result_columns"]
 
         feedback_resp = await client.post(
@@ -1213,6 +1606,25 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         )
         assert feedback_resp.status_code == 200
         assert feedback_resp.json()["data"]["comment"] == "few-shot に使える"
+
+        similar_before_admin_resp = await client.post(
+            "/api/nl2sql/similar-history",
+            json={"question": "社員一覧をもう一度確認したい", "profile_id": "default"},
+        )
+        assert similar_before_admin_resp.status_code == 200
+        assert similar_before_admin_resp.json()["data"]["items"] == []
+
+        admin_feedback_resp = await client.post(
+            "/api/nl2sql/feedback/admin-review",
+            json={
+                "history_id": history_item["id"],
+                "rating": "good",
+                "feedback_content": "管理者確認済み",
+                "register_select_ai_feedback": False,
+            },
+        )
+        assert admin_feedback_resp.status_code == 200
+        assert admin_feedback_resp.json()["data"]["feedback_content"] == "管理者確認済み"
 
         index_status_resp = await client.get("/api/nl2sql/feedback-index")
         assert index_status_resp.status_code == 200
@@ -1241,11 +1653,16 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         similar = similar_resp.json()["data"]["items"]
         assert similar
         assert similar[0]["item"]["feedback_rating"] == "good"
+        assert similar[0]["item"]["admin_feedback_rating"] == "good"
         assert similar[0]["score"] > 0
 
         preview_resp = await client.post(
             "/api/nl2sql/preview",
-            json={"question": "社員一覧をもう一度確認したい", "profile_id": "default"},
+            json={
+                "question": "社員一覧をもう一度確認したい",
+                "engine": "enterprise_ai_direct",
+                "profile_id": "default",
+            },
         )
         assert preview_resp.status_code == 200
         examples = preview_resp.json()["data"]["engine_meta"]["similar_history_examples"]
@@ -1446,7 +1863,7 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     job_info = service.start_job(
         JobCreateRequest(
             question="社員一覧を確認したい",
-            engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            engine=Nl2SqlEngine.AUTO,
             profile_id=profile.id,
         )
     )
@@ -1465,6 +1882,13 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
+    service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id=history_item.id,
+            rating=FeedbackRating.GOOD,
+            feedback_content="管理者確認済み",
+        )
+    )
     reloaded = Nl2SqlService(store=store)
     assert reloaded.get_profile(profile.id).name == "永続化テスト"
     restored_job = reloaded.get_job(job_info.job_id)
@@ -1477,6 +1901,8 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_history.id == history_item.id
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
+    assert restored_history.admin_feedback_rating == FeedbackRating.GOOD
+    assert restored_history.admin_feedback_content == "管理者確認済み"
 def test_nl2sql_store_deletes_default_profile_without_reseeding() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
@@ -1656,12 +2082,13 @@ def test_oracle_adapter_apply_comment_statements_strips_semicolon() -> None:
     assert fake_db.commits == 1
 
 
-def test_similar_history_returns_only_good_feedback() -> None:
+def test_similar_history_returns_only_admin_good_feedback() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    for suffix, rating in (
-        ("good", FeedbackRating.GOOD),
-        ("bad", FeedbackRating.BAD),
-        ("none", None),
+    for suffix, user_rating, admin_rating in (
+        ("user-good", FeedbackRating.GOOD, None),
+        ("admin-good", FeedbackRating.BAD, FeedbackRating.GOOD),
+        ("admin-bad", FeedbackRating.GOOD, FeedbackRating.BAD),
+        ("none", None, None),
     ):
         service._history.append(
             HistoryItem(
@@ -1670,7 +2097,8 @@ def test_similar_history_returns_only_good_feedback() -> None:
                 engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
                 generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
                 created_at="2026-06-21T10:00:00+00:00",
-                feedback_rating=rating,
+                feedback_rating=user_rating,
+                admin_feedback_rating=admin_rating,
                 profile_id="default",
                 profile_name="既定プロファイル",
             )
@@ -1680,7 +2108,150 @@ def test_similar_history_returns_only_good_feedback() -> None:
         SimilarHistoryRequest(question="請求金額をもう一度確認したい", profile_id="default")
     ).items
 
-    assert [entry.item.id for entry in items] == ["hist-good"]
+    assert [entry.item.id for entry in items] == ["hist-admin-good"]
+
+
+def test_similar_history_excludes_admin_good_when_target_table_mismatches() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _similar_history_sample_catalog()
+    service._history.append(
+        HistoryItem(
+            id="hist-department-good",
+            question='対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：',
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql='SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT"',
+            created_at="2026-08-17T00:00:00Z",
+            feedback_rating=FeedbackRating.GOOD,
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="project",
+            profile_name="PROFILE_PRJ",
+        )
+    )
+
+    items = service.similar_history(
+        SimilarHistoryRequest(
+            question='対象テーブル："PROJECT"\n抽出項目：\n抽出条件：',
+            profile_id="project",
+        )
+    ).items
+
+    assert items == []
+
+
+def test_similar_history_keeps_matching_project_without_good_profile_score_inflation() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _similar_history_sample_catalog()
+    service._history.append(
+        HistoryItem(
+            id="hist-project-good",
+            question='対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：',
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql='SELECT "PROJECT_ID", "PROJECT_NAME" FROM "APP"."PROJECT"',
+            created_at="2026-08-17T00:00:00Z",
+            feedback_rating=FeedbackRating.GOOD,
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="project",
+            profile_name="PROFILE_PRJ",
+        )
+    )
+
+    items = service.similar_history(
+        SimilarHistoryRequest(
+            question='対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：',
+            profile_id="project",
+        )
+    ).items
+
+    assert [entry.item.id for entry in items] == ["hist-project-good"]
+    assert 0 < items[0].score < 1.0
+    assert "対象テーブルが一致" in items[0].reason
+
+
+def test_similar_history_resolves_target_table_from_catalog_comment() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _similar_history_sample_catalog()
+    service._history.append(
+        HistoryItem(
+            id="hist-department-comment",
+            question='対象テーブル："部署情報を管理するテーブル"\n抽出項目：部署名\n抽出条件：',
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql='SELECT "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT"',
+            created_at="2026-08-17T00:00:00Z",
+            feedback_rating=FeedbackRating.GOOD,
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="department",
+            profile_name="PROFILE_DEPT",
+        )
+    )
+
+    items = service.similar_history(
+        SimilarHistoryRequest(
+            question='対象テーブル："部署情報を管理するテーブル"\n抽出項目：部署名\n抽出条件：',
+            profile_id="department",
+        )
+    ).items
+
+    assert [entry.item.id for entry in items] == ["hist-department-comment"]
+
+
+def test_service_similar_history_filters_oracle_vector_result_by_target_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    fake_db = _FakeOracleDb()
+    fake_db.feedback_vector_rows = [
+        (
+            "hist-department-vector",
+            "project",
+            "部署一覧を確認したい",
+            "SELECT DEPARTMENT_ID FROM APP.DEPARTMENT",
+            "good",
+            0.01,
+        ),
+        (
+            "hist-project-vector",
+            "project",
+            "プロジェクト一覧を確認したい",
+            "SELECT PROJECT_ID FROM APP.PROJECT",
+            "good",
+            0.2,
+        ),
+    ]
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+    service._catalog = _similar_history_sample_catalog()
+    service._history = [
+        HistoryItem(
+            id="hist-department-vector",
+            question="部署一覧を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT DEPARTMENT_ID FROM APP.DEPARTMENT",
+            created_at="2026-08-17T00:00:00Z",
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="project",
+            profile_name="PROFILE_PRJ",
+        ),
+        HistoryItem(
+            id="hist-project-vector",
+            question="プロジェクト一覧を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT PROJECT_ID FROM APP.PROJECT",
+            created_at="2026-08-17T00:00:01Z",
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="project",
+            profile_name="PROFILE_PRJ",
+        ),
+    ]
+
+    similar = service.similar_history(
+        SimilarHistoryRequest(
+            question='対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：',
+            profile_id="project",
+        )
+    )
+
+    assert [entry.item.id for entry in similar.items] == ["hist-project-vector"]
+    assert similar.items[0].score == 0.8
 
 
 def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table() -> None:
@@ -1695,10 +2266,12 @@ def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table()
             generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
             created_at="2026-06-21T10:00:00+00:00",
             feedback_rating=FeedbackRating.GOOD,
+            admin_feedback_rating=FeedbackRating.GOOD,
             profile_id="default",
             profile_name="既定プロファイル",
             rewritten_question="請求金額を確認したい",
             feedback_comment="正しい SQL",
+            admin_feedback_content="管理者確認済み",
         )
     )
 
@@ -1928,6 +2501,18 @@ def test_service_similar_history_uses_oracle_vector_search(
     ]
     service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
+    service._history = [
+        HistoryItem(
+            id="hist-vector-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-06-21T10:00:00+00:00",
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+        )
+    ]
 
     similar = service.similar_history(
         SimilarHistoryRequest(question="請求金額を見たい", profile_id="default")
@@ -1938,6 +2523,17 @@ def test_service_similar_history_uses_oracle_vector_search(
     assert similar.items[0].score == 0.92
     assert "Oracle 26ai vector search" in similar.items[0].reason
     assert any("VECTOR_DISTANCE" in sql for sql in fake_db.executed)
+    vector_queries = [sql for sql in fake_db.executed if "VECTOR_DISTANCE" in sql]
+    assert vector_queries
+    assert all("FEEDBACK_RATING = :feedback_rating" in sql for sql in vector_queries)
+    assert all("FEEDBACK_RATING <> 'bad'" not in sql for sql in vector_queries)
+    vector_query_params = [
+        params
+        for sql, params in zip(fake_db.executed, fake_db.executed_params, strict=False)
+        if "VECTOR_DISTANCE" in sql
+    ]
+    assert vector_query_params
+    assert all((params or {}).get("feedback_rating") == "good" for params in vector_query_params)
     assert any("TO_VECTOR(:embedding_json)" in sql for sql in fake_db.executed)
 
 
@@ -1959,9 +2555,35 @@ def test_service_preview_marks_oracle_vector_few_shot_source(
     ]
     service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
+    service._history = [
+        HistoryItem(
+            id="hist-vector-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-08-13T00:00:00Z",
+            admin_feedback_rating=FeedbackRating.GOOD,
+        )
+    ]
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-08-13T00:00:00Z",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                columns=[
+                    SchemaColumn(
+                        column_name="TOTAL_AMOUNT",
+                        logical_name="請求金額",
+                        data_type="NUMBER",
+                    ),
+                ],
+            )
+        ],
+    )
 
     preview = service.preview(
-        PreviewRequest(question="請求金額を見たい", engine=Nl2SqlEngine.SELECT_AI)
+        PreviewRequest(question="請求金額を見たい", engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
     )
 
     assert preview.engine_meta["similar_history_source"] == "oracle_vector"
@@ -2100,6 +2722,58 @@ def test_oracle_adapter_run_select_ai_agent_team_uses_explicit_tool_on_profile_l
     assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
 
 
+def test_oracle_adapter_run_select_ai_agent_team_uses_tool_when_conversation_unavailable() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM",
+        tool_name="NL2SQL_DEFAULT_TOOL",
+        question="請求金額を確認したい",
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "run_tool:NL2SQL_DEFAULT_TOOL"
+    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
+    assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_oracle_adapter_run_select_ai_agent_team_rejects_empty_conversation_without_tool() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.agent_conversation_id = ""
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    with pytest.raises(OracleAdapterError, match="conversation_id"):
+        adapter.run_select_ai_agent_team(
+            team_name="NL2SQL_DEFAULT_TEAM",
+            question="請求金額を確認したい",
+        )
+
+    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_service_run_select_ai_agent_team_does_not_deterministic_fallback_on_oracle_error() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
+    fake_db.run_tool_error = "ORA-20000: tool not ready"
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    with pytest.raises(OracleAdapterError, match="tool not ready"):
+        service.run_select_ai_agent_team(
+            AgentTeamRunRequest(
+                profile_id="default",
+                team_name="NL2SQL_DEFAULT_TEAM",
+                prompt="請求金額を確認したい",
+            )
+        )
+
+    assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
 def test_service_preview_select_ai_agent_returns_oracle_conversation_meta() -> None:
     fake_db = _FakeOracleDb()
     service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
@@ -2112,6 +2786,33 @@ def test_service_preview_select_ai_agent_returns_oracle_conversation_meta() -> N
     assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert preview.engine_meta["runtime"] == "oracle"
     assert preview.engine_meta["conversation_id"] == "conversation-001"
+
+
+def test_service_preview_select_ai_agent_uses_tool_when_conversation_unavailable() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
+    )
+
+    assert preview.engine == Nl2SqlEngine.SELECT_AI_AGENT
+    assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert preview.engine_meta["runtime"] == "oracle"
+    assert preview.engine_meta["conversation_id"] == "run_tool:NL2SQL_DEFAULT_TOOL"
+    assert preview.fallback_reason == ""
+
+
+def test_service_preview_explicit_select_ai_agent_does_not_deterministic_fallback() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.unsupported_agent_runtime = True
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    with pytest.raises(RuntimeError, match="Select AI Agent runtime API"):
+        service.preview(
+            PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
+        )
 
 
 def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
@@ -2134,9 +2835,56 @@ def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
     assert oracle_attributes["additional_instructions_applied"] is False
     assert agent.status == "ready"
     assert agent.engine_meta["runtime"] == "oracle"
+    assert agent.asset_names == {
+        "profile": "NL2SQL_DEFAULT_PROFILE",
+        "tool": "NL2SQL_DEFAULT_TOOL",
+        "agent": "NL2SQL_DEFAULT_AGENT",
+        "task": "NL2SQL_DEFAULT_TASK",
+        "team": "NL2SQL_DEFAULT_TEAM",
+    }
     assert agent.asset_names["team"].endswith("_TEAM")
     assert any("DBMS_CLOUD_AI.CREATE_PROFILE" in sql for sql in fake_db.executed)
     assert any("DBMS_CLOUD_AI_AGENT.CREATE_TEAM" in sql for sql in fake_db.executed)
+
+
+def test_service_refresh_agent_sanitizes_uuid_profile_id_for_oracle_assets() -> None:
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="65e2dacb-a70b-4754-a9ce-c1ca9e7b06bb",
+            name="HR_PROFILE",
+            allowed_tables=["INVOICES"],
+            select_ai_config={"profile_name": "HR_PROFILE"},
+        )
+    )
+
+    agent = service.refresh_select_ai_agent_assets(profile.id)
+
+    expected_stem = "NL2SQL_65E2DACB_A70B_4754_A9CE_C1CA9E7B06BB"
+    assert agent.status == "ready"
+    assert agent.asset_names == {
+        "profile": "HR_PROFILE",
+        "tool": f"{expected_stem}_TOOL",
+        "agent": f"{expected_stem}_AGENT",
+        "task": f"{expected_stem}_TASK",
+        "team": f"{expected_stem}_TEAM",
+    }
+    for name in agent.asset_names.values():
+        assert "-" not in name
+        assert re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", name)
+
+    created_asset_names = {
+        str(params.get("name"))
+        for sql, params in zip(fake_db.executed, fake_db.executed_params, strict=True)
+        if params is not None and "DBMS_CLOUD_AI_AGENT.CREATE_" in sql
+    }
+    assert {
+        f"{expected_stem}_TOOL",
+        f"{expected_stem}_AGENT",
+        f"{expected_stem}_TASK",
+        f"{expected_stem}_TEAM",
+    } <= created_asset_names
 
 
 def test_service_refresh_agent_uses_versioned_team_when_generated_profile_remains() -> None:

@@ -13,23 +13,26 @@ import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader } from "@/components/PageHeader";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
+import { useSchemaOwners } from "@/lib/queries";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DB_OBJECT_GRID_ROW_CLASS,
-  DB_OBJECT_GRID_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
+  dbAdminObjectQualifiedName,
+  parseDbAdminObjectTarget,
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
@@ -38,6 +41,7 @@ import {
   useSchemaRefreshJob,
   waitForSchemaRefreshJob,
 } from "../incrementalQueries";
+import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 
 // タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
@@ -66,6 +70,7 @@ interface TargetSortState {
 
 interface MetadataTargetItem extends MetadataSqlTarget {
   key: string;
+  qualifiedName: string;
   owner: string;
   row_count?: number | null;
   comment: string;
@@ -101,10 +106,57 @@ function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
   if (!job) return "";
   const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
   const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
-  return t("dataMgmt.schemaJob.progress", {
+  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
     phase: t(`dataMgmt.schemaJob.phase.${phase}`),
     progress,
   });
+}
+
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
+  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
+}
+
+function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("dataMgmt.objectList.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
 }
 
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
@@ -116,21 +168,33 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
   const [targetSearch, setTargetSearch] = useState("");
+  const [targetOwnerFilter, setTargetOwnerFilter] = useState("all");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
   const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
-  const objectsQuery = useDbAdminObjects(debouncedTargetSearch, targetFilter, "all");
-  const objectPages = objectsQuery.data?.pages ?? [];
+  const targetOwnerQuery = targetOwnerFilter === "all" ? "" : targetOwnerFilter;
+  const objectsQuery = useDbAdminObjects(debouncedTargetSearch, targetFilter, "all", targetOwnerQuery);
+  const schemaOwnersQuery = useSchemaOwners();
   const objectItems = useMemo(
-    () => objectPages.flatMap((page) => page.items),
-    [objectPages]
+    () => (objectsQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [objectsQuery.data]
   );
-  const firstObjectPage = objectPages[0];
-  const totalTargetCount = firstObjectPage?.total ?? objectItems.length;
+  const firstObjectPage = objectsQuery.data?.pages[0];
+  const totalTargetCount = dbAdminObjectCountsFromPage(firstObjectPage, objectItems).totalCount;
+  const targetOwnerOptions = useMemo(
+    () =>
+      (schemaOwnersQuery.data?.owners ?? [])
+        .filter((item) => item.table_count > 0 || item.view_count > 0)
+        .map((item) => item.owner.trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, "ja")),
+    [schemaOwnersQuery.data],
+  );
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const loadSequence = useRef(0);
   const completedSchemaRefreshJob = useRef("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
@@ -162,11 +226,14 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
   const filteredTargets = useMemo(() => {
     const q = targetSearch.trim().toLowerCase();
+    const ownerKey = targetOwnerFilter.trim().toUpperCase();
     return allTargets
       .filter((item) => {
+        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
         if (targetFilter !== "all" && item.object_type !== targetFilter) return false;
         if (!q) return true;
         return (
+          item.qualifiedName.toLowerCase().includes(q) ||
           item.object_name.toLowerCase().includes(q) ||
           item.owner.toLowerCase().includes(q) ||
           item.comment.toLowerCase().includes(q) ||
@@ -179,7 +246,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return targetSort.direction === "asc" ? result : -result;
       });
-  }, [allTargets, targetFilter, targetSearch, targetSort]);
+  }, [allTargets, targetFilter, targetOwnerFilter, targetSearch, targetSort]);
 
   const refreshObjects = async (announce = false) => {
     setMessage("");
@@ -198,6 +265,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     loadSequence.current = sequence;
     setLoading("schema-refresh");
     setMessage("");
+    setSchemaRefreshError("");
+    setSchemaRefreshNeedsFull(false);
     try {
       await runScopedRequest(async (signal) => {
         const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
@@ -253,15 +322,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     if (job.status === "done") {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
       toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
-      const error = job.error_code
-        ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-        : t("dataMgmt.schemaJob.error");
-      setSchemaRefreshError(error);
-      toast.error(t("dataMgmt.schemaJob.error"));
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [schemaRefreshJobQuery.data]);
 
@@ -275,6 +344,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         ? schemaRefreshJobQuery.error.message
         : t("dataMgmt.schemaJob.error");
     setSchemaRefreshError(error);
+    setSchemaRefreshNeedsFull(false);
     toast.error(t("dataMgmt.schemaJob.error"));
   }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
@@ -282,7 +352,11 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     if (result.schema_refresh_job_id) {
       completedSchemaRefreshJob.current = "";
       setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(result.schema_refresh_job_id);
+    } else if (result.schema_refresh_required) {
+      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
+      setSchemaRefreshNeedsFull(true);
     }
     void refreshObjects();
   };
@@ -326,17 +400,21 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setMessage("");
     try {
       const nextDetails = await Promise.all(
-        selectedTargets.map((target) =>
-          apiGet<DbAdminObjectDetail>(
+        selectedTargets.map((target) => {
+          const params = new URLSearchParams();
+          if (target.owner) params.set("owner", target.owner);
+          const suffix = params.toString() ? `?${params.toString()}` : "";
+          return apiGet<DbAdminObjectDetail>(
             target.object_type === "view"
-              ? `/api/nl2sql/db-admin/views/${encodeURIComponent(target.object_name)}`
-              : `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.object_name)}`
-          )
-        )
+              ? `/api/nl2sql/db-admin/views/${encodeURIComponent(target.object_name)}${suffix}`
+              : `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.object_name)}${suffix}`
+          );
+        })
       );
       setDetails(nextDetails);
       setRefreshedSampleText(null);
       setGenerated(null);
+      toast.success(t("metadataSql.toast.detailsLoaded", { count: nextDetails.length }));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.details"));
     } finally {
@@ -354,6 +432,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     try {
       const samplePayload: MetadataSqlSamplePayload = {
         targets: details.map((detail) => ({
+          owner: detail.owner,
           object_name: detail.name,
           object_type: detail.object_type === "view" ? "view" : "table",
           columns: detail.columns.map((column) => column.column_name),
@@ -376,6 +455,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           : "/api/nl2sql/annotations/generate-sql";
       const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
       setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
+      toast.success(t("metadataSql.toast.generated"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
     } finally {
@@ -400,34 +480,22 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             : undefined
         }
         status={
-          schemaRefreshJob ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge
-                variant={
-                  schemaRefreshJob.status === "done"
-                    ? "success"
-                    : schemaRefreshJob.status === "error"
-                      ? "danger"
-                      : "info"
-                }
-                label={schemaRefreshJobLabel(schemaRefreshJob)}
-              />
-            </span>
-          ) : visibleSchemaRefreshError ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge variant="warning" label={visibleSchemaRefreshError} />
-            </span>
+          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
+            <PageHeaderStatusBadge
+              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
+              label={schemaRefreshJobLabel(schemaRefreshJob)}
+            />
           ) : undefined
         }
         actions={[
-          {
-            id: "refresh",
-            kind: "utility",
-            label: t("common.action.refresh"),
-            icon: RefreshCw,
-            onClick: () => void refreshObjects(true),
-            loading: objectsQuery.isFetching,
-          },
+            {
+              id: "refresh",
+              kind: "utility",
+              label: t("common.action.refresh"),
+              icon: RefreshCw,
+              onClick: () => void refreshObjects(true),
+              loading: objectsQuery.isFetching && !objectsQuery.isFetchingNextPage,
+            },
           {
             id: "schema-refresh",
             kind: "utility",
@@ -445,22 +513,40 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             message
               ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
               : visibleSchemaRefreshError
-                ? { tone: "warning", message: visibleSchemaRefreshError }
+                ? { tone: "danger", message: visibleSchemaRefreshError }
               : null
           }
           action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={
+                schemaRefreshNeedsFull
+                  ? () => void refreshSchema(true)
+                  : () => void refreshObjects()
+              }
+            >
               <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("tableMgmt.action.refresh")}</span>
+              <span>
+                {schemaRefreshNeedsFull
+                  ? t("common.action.schemaRefresh")
+                  : t("tableMgmt.action.refresh")}
+              </span>
             </Button>
           }
         />
-        {(objectsQuery.isFetching && Boolean(objectsQuery.data)) || loading === "schema-refresh" || schemaRefreshing ? (
+        {((objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data)) ||
+          loading === "schema-refresh" ||
+          schemaRefreshing) ? (
           <ProcessingIndicator
             active
             label={
               loading === "schema-refresh" || schemaRefreshing
-                ? t("common.processing.schemaRefreshing")
+                ? schemaRefreshProcessingLabel(
+                    schemaRefreshJob,
+                    t("common.processing.schemaRefreshing"),
+                  )
                 : t("common.processing.refreshing")
             }
             operationKey={
@@ -495,23 +581,30 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             loading={objectsQuery.isPending && !objectsQuery.data}
             error={
               objectsQuery.error && !objectsQuery.data
-                ? objectsQuery.error instanceof Error
-                  ? objectsQuery.error.message
-                  : t("metadataSql.error.load")
+                ? objectListErrorMessage(objectsQuery.error, "metadataSql.error.load")
                 : ""
             }
             search={targetSearch}
+            ownerFilter={targetOwnerFilter}
+            ownerOptions={targetOwnerOptions}
             filter={targetFilter}
             sort={targetSort}
             hasNextPage={Boolean(objectsQuery.hasNextPage)}
             loadingNextPage={objectsQuery.isFetchingNextPage}
+            loadMoreError={
+              objectsQuery.isFetchNextPageError && objectsQuery.error
+                ? objectListLoadMoreErrorMessage(objectsQuery.error, "metadataSql.error.load")
+                : ""
+            }
             onSearchChange={setTargetSearch}
+            onOwnerFilterChange={setTargetOwnerFilter}
             onFilterChange={setTargetFilter}
             onSortChange={toggleSort}
             onToggle={toggleTarget}
             onBulkSelect={bulkSelectTargets}
             onRetry={() => void refreshObjects()}
             onLoadMore={() => void objectsQuery.fetchNextPage()}
+            onRetryLoadMore={() => void objectsQuery.fetchNextPage()}
             onFetchDetails={() => void fetchDetails()}
             fetchingDetails={loading === "details"}
           />
@@ -560,18 +653,23 @@ function MetadataTargetGrid({
   loading,
   error,
   search,
+  ownerFilter,
+  ownerOptions,
   filter,
   sort,
   hasNextPage,
   loadingNextPage,
+  loadMoreError,
   fetchingDetails,
   onSearchChange,
+  onOwnerFilterChange,
   onFilterChange,
   onSortChange,
   onToggle,
   onBulkSelect,
   onRetry,
   onLoadMore,
+  onRetryLoadMore,
   onFetchDetails,
 }: {
   pageId: string;
@@ -581,21 +679,30 @@ function MetadataTargetGrid({
   loading: boolean;
   error: string;
   search: string;
+  ownerFilter: string;
+  ownerOptions: string[];
   filter: TargetFilter;
   sort: TargetSortState;
   hasNextPage: boolean;
   loadingNextPage: boolean;
+  loadMoreError: string;
   fetchingDetails: boolean;
   onSearchChange: (value: string) => void;
+  onOwnerFilterChange: (value: string) => void;
   onFilterChange: (value: TargetFilter) => void;
   onSortChange: (key: TargetSortKey) => void;
   onToggle: (target: MetadataSqlTarget) => void;
   onBulkSelect: (targets: MetadataTargetItem[], selected: boolean) => void;
   onRetry: () => void;
   onLoadMore: () => void;
+  onRetryLoadMore: () => void;
   onFetchDetails: () => void;
 }) {
-  const hasActiveFilter = Boolean(search.trim()) || filter !== "all";
+  const ownerSelectOptions =
+    ownerFilter === "all" || ownerOptions.includes(ownerFilter)
+      ? ownerOptions
+      : [ownerFilter, ...ownerOptions];
+  const hasActiveFilter = Boolean(search.trim()) || ownerFilter !== "all" || filter !== "all";
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const selectedVisibleCount = items.filter((item) => selectedSet.has(item.key)).length;
   const allVisibleSelected = items.length > 0 && selectedVisibleCount === items.length;
@@ -611,7 +718,7 @@ function MetadataTargetGrid({
           <>
             <StatusBadge
               variant="neutral"
-              label={t("command.count", { count: items.length })}
+              label={t("command.count", { count: totalCount })}
             />
             <StatusBadge variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
           </>
@@ -630,6 +737,21 @@ function MetadataTargetGrid({
         })}
         dataTestId={`${pageId}-target-toolbar`}
       >
+        <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
+          <span>{t("metadataSql.targets.ownerFilter")}</span>
+          <select
+            value={ownerFilter}
+            onChange={(event) => onOwnerFilterChange(event.currentTarget.value)}
+            className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+          >
+            <option value="all">{t("metadataSql.targets.ownerFilterAll")}</option>
+            {ownerSelectOptions.map((owner) => (
+              <option key={owner} value={owner}>
+                {owner}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
           <span>{t("metadataSql.targets.typeFilter")}</span>
           <select
@@ -671,7 +793,7 @@ function MetadataTargetGrid({
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
+          <div className={INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS} data-testid="db-admin-object-list">
             <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
                 <col className="w-[16rem]" />
@@ -711,7 +833,7 @@ function MetadataTargetGrid({
                           />
                           <span className="min-w-0">
                             <span className="block break-all font-mono text-xs font-semibold text-primary">
-                              {item.object_name}
+                              {item.qualifiedName}
                             </span>
                             <span className="sr-only">
                               {t("metadataSql.targets.grid.toggleHint")}
@@ -743,8 +865,10 @@ function MetadataTargetGrid({
           selectedCount={selectedKeys.length}
           hasNextPage={hasNextPage}
           loadingNextPage={loadingNextPage}
+          loadMoreError={loadMoreError}
           dataTestId={`${pageId}-target-footer`}
           onLoadMore={onLoadMore}
+          onRetryLoadMore={onRetryLoadMore}
         />
       )}
       {!loading && (
@@ -816,6 +940,7 @@ function MetadataInputPanel({
           idPrefix={`${pageId}-input`}
           ariaLabel={t("metadataSql.input.loading")}
           variant="detail"
+          placement="result"
         />
       ) : (
         <>
@@ -923,6 +1048,7 @@ function MetadataExecutePanel({
           idPrefix={`${pageId}-execute-result`}
           ariaLabel={t("metadataSql.execute.loading")}
           variant="detail"
+          placement="result"
         />
       ) : (
         <>
@@ -997,13 +1123,16 @@ function TargetSortButton({
 function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
   return items.map((item): MetadataTargetItem => {
     const objectType: MetadataSqlTarget["object_type"] = item.object_type === "view" ? "view" : "table";
+    const qualifiedName = dbAdminObjectQualifiedName(item);
     const target: MetadataSqlTarget = {
+      owner: item.owner,
       object_name: item.name,
       object_type: objectType,
     };
     return {
       ...target,
       key: targetKey(target),
+      qualifiedName,
       owner: item.owner,
       row_count: item.row_count,
       comment: item.comment,
@@ -1014,7 +1143,7 @@ function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
 function targetSortValue(item: MetadataTargetItem, key: TargetSortKey) {
   if (key === "object_type") return item.object_type;
   if (key === "owner") return item.owner.toLowerCase();
-  return item.object_name.toLowerCase();
+  return item.qualifiedName.toLowerCase();
 }
 
 function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {
@@ -1022,12 +1151,14 @@ function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {
 }
 
 function targetKey(target: MetadataSqlTarget) {
-  return `${target.object_type}:${target.object_name}`;
+  const qualifiedName = parseDbAdminObjectTarget(target.object_name, target.owner).qualifiedName;
+  return `${target.object_type}:${qualifiedName}`;
 }
 
 function targetFromKey(key: string): MetadataSqlTarget | null {
   const [objectType, ...nameParts] = key.split(":");
-  const objectName = nameParts.join(":");
-  if ((objectType !== "table" && objectType !== "view") || !objectName) return null;
-  return { object_name: objectName, object_type: objectType };
+  const qualifiedName = nameParts.join(":");
+  if ((objectType !== "table" && objectType !== "view") || !qualifiedName) return null;
+  const target = parseDbAdminObjectTarget(qualifiedName);
+  return { owner: target.owner, object_name: target.name, object_type: objectType };
 }

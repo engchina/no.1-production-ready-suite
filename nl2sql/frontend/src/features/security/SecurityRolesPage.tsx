@@ -28,6 +28,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
+import { FormActionBar } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
@@ -38,6 +39,7 @@ import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { useAuth } from "./AuthProvider";
+import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -89,7 +91,7 @@ function roleStatusText(role: SecurityRole) {
 export function SecurityRolesPage() {
   const confirm = useConfirm();
   const { hasPermission } = useAuth();
-  const canManage = hasPermission("security.roles.manage");
+  const canManage = hasPermission(MENU_PERMISSIONS.securityRoles);
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [permissions, setPermissions] = useState<PermissionDefinition[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -103,6 +105,7 @@ export function SecurityRolesPage() {
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
+  const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
@@ -536,7 +539,12 @@ export function SecurityRolesPage() {
                 description={t("security.roles.formHint")}
                 headingId="security-roles-form-heading"
               />
-              <form className="grid gap-6" onSubmit={handleSubmit} aria-labelledby="security-roles-form-heading">
+              <form
+                ref={formRef}
+                className="grid gap-6"
+                onSubmit={handleSubmit}
+                aria-labelledby="security-roles-form-heading"
+              >
                 <RequiredFieldsNote />
                 {editingRole?.role_code === "SYSTEM_ADMIN" ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
@@ -704,23 +712,43 @@ export function SecurityRolesPage() {
                   )}
                 </fieldset>
 
-                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                  {!readOnly ? (
-                    <Button loading={busy} type="submit">
-                      {activeView === "edit" ? t("security.common.save") : t("security.common.create")}
-                    </Button>
-                  ) : null}
-                  {editingRole && !editingRole.is_built_in && !editingRole.archived ? (
-                    <Button type="button" variant="danger" onClick={() => void handleArchive(editingRole)}>
-                      <Archive size={15} aria-hidden />
-                      {t("security.roles.archive")}
-                    </Button>
-                  ) : null}
-                  <Button type="button" variant="secondary" onClick={returnToList}>
-                    {t("security.common.cancel")}
-                  </Button>
-                  <FormStatus tone="danger" message={formError} className="w-full" />
-                </div>
+                <FormActionBar
+                  ariaLabel={t("security.roles.editActions")}
+                  primaryActions={
+                    !readOnly
+                      ? [
+                          {
+                            id: "save",
+                            label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
+                            loading: busy,
+                            onClick: () => {
+                              formRef.current?.requestSubmit();
+                            },
+                          },
+                        ]
+                      : []
+                  }
+                  secondaryActions={[
+                    {
+                      id: "cancel",
+                      label: t("security.common.cancel"),
+                      onClick: returnToList,
+                    },
+                  ]}
+                  dangerActions={
+                    editingRole && !editingRole.is_built_in && !editingRole.archived
+                      ? [
+                          {
+                            id: "archive",
+                            label: t("security.roles.archive"),
+                            icon: Archive,
+                            onClick: () => void handleArchive(editingRole),
+                          },
+                        ]
+                      : []
+                  }
+                  status={<FormStatus tone="danger" message={formError} />}
+                />
               </form>
             </SecurityManagementPanelShell>
           </>

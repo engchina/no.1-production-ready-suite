@@ -1,0 +1,230 @@
+#cloud-config
+output: {all: '| tee -a /var/log/cloud-init-custom.log'}
+bootcmd:
+  - mkdir -p /u01/aipoc/props ${wallet_dir_host}
+package_update: true
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - dos2unix
+  - git
+  - gnupg
+  - netfilter-persistent
+  - unzip
+write_files:
+  - path: "/u01/aipoc/props/backend.env"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${backend_env}
+  - path: "/u01/aipoc/props/wallet.zip"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "base64"
+    content: |
+      ${wallet_content}
+  - path: "/u01/aipoc/props/adb_name.txt"
+    permissions: "0644"
+    content: |
+      ${adb_name}
+  - path: "/u01/aipoc/props/adb_dsn.txt"
+    permissions: "0644"
+    content: |
+      ${db_dsn}
+  - path: "/u01/aipoc/props/adb_ocid.txt"
+    permissions: "0644"
+    content: |
+      ${adb_ocid}
+  - path: "/u01/aipoc/props/compartment_ocid.txt"
+    permissions: "0644"
+    content: |
+      ${compartment_ocid}
+  - path: "/u01/aipoc/props/region.txt"
+    permissions: "0644"
+    content: |
+      ${region}
+  - path: "/u01/aipoc/props/application_port.txt"
+    permissions: "0644"
+    content: |
+      ${application_port}
+  - path: "/u01/aipoc/bootstrap-nl2sql.sh"
+    permissions: "0755"
+    owner: "root:root"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      APP_ROOT="/u01/aipoc"
+      APP_REPO_DIR="$${APP_ROOT}/no.1-production-ready-nl2sql"
+      PLATFORM_REPO_DIR="$${APP_ROOT}/no.1-production-ready-platform"
+      WALLET_DIR="${wallet_dir_host}"
+      APPLICATION_PORT="${application_port}"
+
+      log() {
+        printf '[nl2sql-bootstrap] %s\n' "$*"
+      }
+
+      install_docker() {
+        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+          log "Docker and Docker Compose are already installed."
+          return
+        fi
+        log "Installing Docker Engine and Compose plugin."
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        . /etc/os-release
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        systemctl enable --now docker
+        usermod -aG docker ubuntu || true
+      }
+
+      clone_or_update_repo() {
+        local url="$1"
+        local ref="$2"
+        local dest="$3"
+        if [ -d "$${dest}/.git" ]; then
+          log "Updating $${dest} to $${ref}."
+          git -C "$${dest}" fetch --depth 1 origin "$${ref}"
+          git -C "$${dest}" checkout -f FETCH_HEAD
+        else
+          log "Cloning $${url} ($${ref}) to $${dest}."
+          git clone --branch "$${ref}" --depth 1 --single-branch "$${url}" "$${dest}"
+        fi
+      }
+
+      configure_firewall() {
+        if command -v iptables >/dev/null 2>&1; then
+          iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$${APPLICATION_PORT}" -j ACCEPT || true
+          netfilter-persistent save || true
+        fi
+      }
+
+      prepare_wallet() {
+        log "Extracting Autonomous Database wallet."
+        rm -rf "$${WALLET_DIR}"
+        install -m 0700 -d "$${WALLET_DIR}"
+        unzip -q -o "$${APP_ROOT}/props/wallet.zip" -d "$${WALLET_DIR}"
+        chmod 0700 "$${WALLET_DIR}"
+        find "$${WALLET_DIR}" -type f -exec chmod 0600 {} \;
+      }
+
+      write_resource_manager_compose() {
+        log "Writing Resource Manager Docker Compose file."
+        cat > "$${APP_REPO_DIR}/docker-compose.resource-manager.yml" <<'YAML'
+      services:
+        backend:
+          build:
+            context: ..
+            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+          env_file:
+            - backend/.env
+          volumes:
+            - nl2sql-data:/u01/production-ready-nl2sql
+            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
+          ports:
+            - "8000:8000"
+          healthcheck:
+            test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+            interval: 20s
+            timeout: 5s
+            retries: 5
+
+        ontology-worker:
+          profiles: ["ontology"]
+          build:
+            context: ..
+            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+          command: ["python", "-m", "app.features.nl2sql.ontology_worker"]
+          env_file:
+            - backend/.env
+          volumes:
+            - nl2sql-data:/u01/production-ready-nl2sql
+            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
+
+        schema-refresh-worker:
+          build:
+            context: ..
+            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+          command: ["python", "-m", "app.cli.nl2sql_schema_refresh_worker", "--poll-seconds", "1"]
+          env_file:
+            - backend/.env
+          volumes:
+            - nl2sql-data:/u01/production-ready-nl2sql
+            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
+
+        quality-evaluation-worker:
+          build:
+            context: ..
+            dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+          command: ["python", "-m", "app.cli.nl2sql_quality_evaluation_worker"]
+          env_file:
+            - backend/.env
+          volumes:
+            - nl2sql-data:/u01/production-ready-nl2sql
+            - /u01/aipoc/wallet:/u01/aipoc/wallet:ro
+
+        frontend:
+          build:
+            context: ..
+            dockerfile: no.1-production-ready-nl2sql/frontend/Dockerfile
+          depends_on:
+            backend:
+              condition: service_healthy
+          ports:
+            - "$${APPLICATION_PORT:-3001}:80"
+
+      volumes:
+        nl2sql-data:
+      YAML
+      }
+
+      build_images_without_secrets() {
+        log "Building Docker images without deployment secrets in backend/.env."
+        cp "$${APP_REPO_DIR}/backend/.env.example" "$${APP_REPO_DIR}/backend/.env"
+        (
+          cd "$${APP_REPO_DIR}"
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml build backend frontend schema-refresh-worker quality-evaluation-worker
+        )
+      }
+
+      write_runtime_env() {
+        log "Writing runtime backend .env."
+        install -m 0600 "$${APP_ROOT}/props/backend.env" "$${APP_REPO_DIR}/backend/.env"
+      }
+
+      initialize_system_schema() {
+        log "Initializing NL2SQL system schema."
+        (
+          cd "$${APP_REPO_DIR}"
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml run --rm backend uv run python -m app.cli.nl2sql_system_schema --initialize
+        )
+      }
+
+      start_services() {
+        log "Starting NL2SQL Docker Compose services."
+        (
+          cd "$${APP_REPO_DIR}"
+          APPLICATION_PORT="$${APPLICATION_PORT}" docker compose -f docker-compose.resource-manager.yml up -d backend frontend schema-refresh-worker quality-evaluation-worker
+        )
+      }
+
+      install_docker
+      configure_firewall
+      clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${APP_REPO_DIR}"
+      clone_or_update_repo "${platform_git_url}" "${platform_git_ref}" "$${PLATFORM_REPO_DIR}"
+      prepare_wallet
+      write_resource_manager_compose
+      build_images_without_secrets
+      write_runtime_env
+      initialize_system_schema
+      start_services
+      log "Deployment finished. Frontend listens on TCP port $${APPLICATION_PORT}."
+runcmd:
+  - bash /u01/aipoc/bootstrap-nl2sql.sh

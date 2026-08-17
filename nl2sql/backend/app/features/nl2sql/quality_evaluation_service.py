@@ -358,6 +358,7 @@ class QualityEvaluationService:
             job_id=str(uuid.uuid4()),
             profile_id=profile.id,
             profile_name=profile.name,
+            profile_category=profile.category,
             engines=deduplicated_engines,
             repeat_count=repeat_count,
             cases=cases,

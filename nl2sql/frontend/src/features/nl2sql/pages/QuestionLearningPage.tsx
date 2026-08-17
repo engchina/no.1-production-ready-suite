@@ -33,7 +33,8 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { PageHeader } from "@/components/PageHeader";
+import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -56,6 +57,13 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
 } from "../components/DbObjectManagementShared";
+import { QuestionText } from "../components/QuestionText";
+import {
+  profileDisplayLabel,
+  profileNameLabel,
+  profileRecordDisplayLabel,
+  profileSelectOption,
+} from "../profileDisplay";
 import type {
   ClassifierImportData,
   ClassifierFeedbackImportData,
@@ -416,24 +424,23 @@ export function QuestionClassifierModelsPage() {
         subtitle={t("qcm.subtitle")}
         status={
           classifierStatus ? (
-            <span data-testid="qcm-model-status" aria-live="polite">
-              <StatusBadge
-                variant={
-                  classifierStatus.ready
-                    ? classifierStatus.stale
-                      ? "warning"
-                      : "success"
-                    : "neutral"
-                }
-                label={
-                  classifierStatus.ready
-                    ? classifierStatus.stale
-                      ? t("learning.classifier.stale")
-                      : t("learning.classifier.ready")
-                    : t("learning.classifier.notReady")
-                }
-              />
-            </span>
+            <PageHeaderStatusBadge
+              testId="qcm-model-status"
+              variant={
+                classifierStatus.ready
+                  ? classifierStatus.stale
+                    ? "warning"
+                    : "success"
+                  : "neutral"
+              }
+              label={
+                classifierStatus.ready
+                  ? classifierStatus.stale
+                    ? t("learning.classifier.stale")
+                    : t("learning.classifier.ready")
+                  : t("learning.classifier.notReady")
+              }
+            />
           ) : undefined
         }
         meta={
@@ -817,6 +824,24 @@ function TrainingDataTable({
             <tbody className="divide-y divide-border/70">
               {visibleExamples.map((example) => {
                 const editing = editingExampleId === example.id;
+                const rowActions: EntityAction[] = editing
+                  ? []
+                  : [
+                      {
+                        id: "edit",
+                        label: t("qcm.training.edit"),
+                        icon: Pencil,
+                        onSelect: () => onStartEdit(example),
+                      },
+                      {
+                        id: "delete",
+                        label: t("qcm.training.delete"),
+                        icon: Trash2,
+                        tone: "danger",
+                        loading: loading === `training-delete-${example.id}`,
+                        onSelect: () => onDelete(example),
+                      },
+                    ];
                 return (
                   <tr key={example.id} className="hover:bg-background">
                     <td className="break-words px-3 py-2 align-top text-xs font-semibold text-foreground">
@@ -828,14 +853,11 @@ function TrainingDataTable({
                           className={controlClass}
                         >
                           {profiles.filter((profile) => !profile.archived).map((profile) => (
-                            <option key={profile.id} value={profile.id}>{profile.name}</option>
+                            <option key={profile.id} value={profile.id}>{profileDisplayLabel(profile)}</option>
                           ))}
                         </select>
                       ) : (
-                        <>
-                          <span className="block">{example.profile_name || example.profile_id || "-"}</span>
-                          <span className="mt-1 block font-mono font-normal text-muted">{example.profile_id || "-"}</span>
-                        </>
+                        <span className="block">{profileRecordDisplayLabel(example)}</span>
                       )}
                     </td>
                     <td className="break-words px-3 py-2 align-top leading-6 text-foreground">
@@ -858,7 +880,7 @@ function TrainingDataTable({
                       <span className="mt-1 block font-mono">{example.source || "-"}</span>
                     </td>
                     <td className="px-3 py-2 align-top">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
                         {editing ? (
                           <>
                             <Button
@@ -875,22 +897,12 @@ function TrainingDataTable({
                             </Button>
                           </>
                         ) : (
-                          <>
-                            <Button type="button" variant="secondary" size="sm" onClick={() => onStartEdit(example)}>
-                              <Pencil size={14} aria-hidden="true" />
-                              <span>{t("qcm.training.edit")}</span>
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="danger"
-                              size="sm"
-                              loading={loading === `training-delete-${example.id}`}
-                              onClick={() => onDelete(example)}
-                            >
-                              <Trash2 size={14} aria-hidden="true" />
-                              <span>{t("qcm.training.delete")}</span>
-                            </Button>
-                          </>
+                          <RowActionMenu
+                            actions={rowActions}
+                            ariaLabel={t("qcm.training.rowActions", { text: example.text })}
+                            loading={loading === `training-delete-${example.id}`}
+                            testId={`qcm-training-row-actions-${example.id}`}
+                          />
                         )}
                       </div>
                     </td>
@@ -1054,7 +1066,9 @@ function ModelTestPanel({
                       <tr key={candidate.category} className={INFORMATION_TABLE_ROW_CLASS}>
                         <td className="break-words px-3 py-2 font-semibold text-foreground">{candidate.category}</td>
                         <td className="px-3 py-2 font-mono text-xs text-foreground">{Math.round(candidate.score * 100)}%</td>
-                        <td className="break-words px-3 py-2 text-xs text-muted">{candidate.profile_name || "-"}</td>
+                        <td className="break-words px-3 py-2 text-xs text-muted">
+                          {profileRecordDisplayLabel(candidate)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1130,11 +1144,7 @@ function TrainingCandidatesPanel({
 }) {
   const activeProfiles = profiles.filter((profile) => !profile.archived);
   const items = data?.items ?? [];
-  const profileOptions = activeProfiles.map((profile) => ({
-    value: profile.id,
-    label: profile.name,
-    description: profile.id,
-  }));
+  const profileOptions = activeProfiles.map(profileSelectOption);
   const selectable = items.filter((item) =>
     item.status === "pending" ||
     (item.status === "profile_missing" && profileOverrides[item.history_id])
@@ -1232,6 +1242,7 @@ function TrainingCandidatesPanel({
           ariaLabel={t("qcm.candidates.loading")}
           variant="list"
           rows={3}
+          placement={loading === "candidates-load" ? "result" : "panel"}
         />
       ) : error ? (
         <ErrorState
@@ -1282,18 +1293,24 @@ function TrainingCandidatesPanel({
                 (item.status === "profile_missing" && Boolean(profileOverrides[item.history_id]));
               const fallbackProfileOption =
                 override && !profileOptions.some((option) => option.value === override)
-                  ? [{ value: override, label: item.profile_name || override, description: override }]
+                  ? [{
+                      value: override,
+                      label: profileNameLabel(item.profile_name),
+                      description: item.profile_category || "-",
+                    }]
                   : [];
               const itemProfileOptions = [
                 ...(!override ? [{ value: "", label: t("qcm.candidates.selectProfile") }] : []),
                 ...fallbackProfileOption,
                 ...profileOptions,
               ];
-              const resolvedProfileName =
-                activeProfiles.find((profile) => profile.id === override)?.name ||
-                item.profile_name ||
-                item.profile_id ||
-                "-";
+              const resolvedProfile = activeProfiles.find((profile) => profile.id === override);
+              const resolvedProfileName = resolvedProfile
+                ? profileDisplayLabel(resolvedProfile)
+                : profileRecordDisplayLabel(item);
+              const conflictProfileLabels = item.conflict_profile_ids
+                .map((id) => activeProfiles.find((profile) => profile.id === id))
+                .map((profile) => (profile ? profileDisplayLabel(profile) : "-"));
               const selectedItem = selected.has(item.history_id);
               const statusVariant =
                 item.status === "pending"
@@ -1332,9 +1349,14 @@ function TrainingCandidatesPanel({
                       />
                     </label>
                     <div className="min-w-0 pt-0.5">
-                      <h3 className="break-words text-sm font-semibold leading-6 text-foreground [overflow-wrap:anywhere]">
-                        {item.question}
-                      </h3>
+                      <div className="min-w-0 text-sm leading-6 text-foreground">
+                        <QuestionText
+                          value={item.question}
+                          variant="select"
+                          maxLines={1}
+                          testId="qcm-candidate-question"
+                        />
+                      </div>
                       {item.feedback_comment && (
                         <p className="mt-1 break-words border-l-2 border-primary/30 pl-2 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
                           {item.feedback_comment}
@@ -1345,7 +1367,7 @@ function TrainingCandidatesPanel({
                       </p>
                       {item.conflict_profile_ids.length > 0 && (
                         <p className="mt-1 break-words text-sm text-warning [overflow-wrap:anywhere]">
-                          {t("qcm.candidates.conflicts", { profiles: item.conflict_profile_ids.join(", ") })}
+                          {t("qcm.candidates.conflicts", { profiles: conflictProfileLabels.join(", ") })}
                         </p>
                       )}
                     </div>

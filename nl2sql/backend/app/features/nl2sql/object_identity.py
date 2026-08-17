@@ -1,8 +1,4 @@
-"""NL2SQL 查询链路使用的 Oracle 对象限定名。
-
-管理型 DDL 仍使用 service.py 既有的简单 identifier helper；本模块只负责
-只读 NL2SQL scope，避免跨 schema 支持意外扩散到写操作。
-"""
+"""NL2SQL / 管理画面で共有する Oracle owner-qualified object identity。"""
 
 from __future__ import annotations
 
@@ -15,9 +11,15 @@ _SIMPLE_IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_$#]{0,127}$")
 def normalize_object_part(value: str) -> str:
     """规范化一个 Oracle owner/object 标识符。"""
 
-    normalized = str(value or "").strip().strip('"').upper()
+    raw = str(value or "").strip()
+    if '"' in raw:
+        if len(raw) >= 2 and raw[0] == raw[-1] == '"' and raw.count('"') == 2:
+            raw = raw[1:-1]
+        else:
+            raise ValueError(f"{value}: Oracle 識別子が不正です。")
+    normalized = raw.upper()
     if not normalized or not _SIMPLE_IDENTIFIER.fullmatch(normalized):
-        raise ValueError(f"{value}: Oracle 对象标识符不合法。")
+        raise ValueError(f"{value}: Oracle 識別子が不正です。")
     return normalized
 
 

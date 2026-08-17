@@ -26,6 +26,7 @@ import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { useAuth } from "./AuthProvider";
+import { MENU_PERMISSIONS } from "./menu-permissions";
 import { securityApi } from "./api";
 import type { DeepSecPlan, DeepSecStatus, DeepSecStep, DeepSecVerification } from "./types";
 
@@ -45,8 +46,8 @@ function stepStatus(step: DeepSecStep) {
 export function SecurityDeepSecPage() {
   const confirm = useConfirm();
   const { hasPermission } = useAuth();
-  const mayApply = hasPermission("security.deepsec.apply");
-  const mayVerify = hasPermission("security.deepsec.verify");
+  const mayApply = hasPermission(MENU_PERMISSIONS.securityDeepSec);
+  const mayVerify = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const [status, setStatus] = useState<DeepSecStatus | null>(null);
   const [plan, setPlan] = useState<DeepSecPlan | null>(null);
   const [verification, setVerification] = useState<DeepSecVerification | null>(null);

@@ -73,10 +73,10 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
             )
         if principal.force_password_change and route_path not in AUTHENTICATED_WITHOUT_PERMISSION:
             raise SecurityApiError(403, "初回パスワード変更を完了してください。")
-        permission = permission_for_route(request.method, route_path)
-        if permission == UNCLASSIFIED_PERMISSION:
+        permissions = permission_for_route(request.method, route_path)
+        if permissions and UNCLASSIFIED_PERMISSION in permissions:
             raise SecurityApiError(403, "この API は権限一覧に登録されていません。")
-        if permission is not None and not principal.has_permission(permission):
+        if permissions is not None and not principal.has_any_permission(permissions):
             raise SecurityApiError(403, "この機能を利用する権限がありません。")
     except SecurityApiError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc

@@ -11,6 +11,7 @@ from app.features.nl2sql.models import (
     AssetRefreshData,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    SampleDataStep,
     SchemaCatalog,
     SchemaTable,
 )
@@ -37,6 +38,16 @@ def _service(*tables: SchemaTable, current_owner: str = "APP") -> Nl2SqlService:
         tables=list(tables),
     )
     return service
+
+
+SAMPLE_OBJECTS = ["DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"]
+
+
+def _sample_tables(owner: str) -> list[SchemaTable]:
+    return [
+        _table(owner, name, table_type="VIEW" if name.startswith("V_") else "TABLE")
+        for name in SAMPLE_OBJECTS
+    ]
 
 
 def test_schema_table_exposes_canonical_qualified_name() -> None:
@@ -77,6 +88,7 @@ def test_schema_owner_discovery_excludes_maintained_and_intersects_allowlist(
         ("APP", "N", 1, 4, 1),
         ("SH", "N", 0, 8, 2),
         ("SSB", "N", 0, 6, 0),
+        ("RMAN$CATALOG", "N", 0, 123, 2),
         ("SYS", "Y", 0, 100, 50),
     ]
 
@@ -108,7 +120,7 @@ def test_schema_owner_discovery_excludes_maintained_and_intersects_allowlist(
         yield Connection()
 
     settings = get_settings().model_copy(
-        update={"nl2sql_schema_owner_allowlist": ["SH"], "oracle_user": "APP"}
+        update={"nl2sql_schema_owner_allowlist": ["SH", "RMAN$CATALOG"], "oracle_user": "APP"}
     )
     adapter = OracleNl2SqlAdapter(settings)
     monkeypatch.setattr(adapter, "connection", connection)
@@ -194,6 +206,42 @@ def test_legacy_empty_scope_snapshots_current_owner_only() -> None:
 
     assert migrated.allowed_tables == ["APP.LOCAL_TABLE"]
     assert migrated.object_scope_version == 2
+
+
+def test_sample_imported_status_is_scoped_to_current_owner() -> None:
+    service = _service(*_sample_tables("SH"), current_owner="APP")
+
+    assert service.sample_data_info().imported_objects == []
+
+    service._catalog.current_owner = "SH"  # noqa: SLF001 - owner scoped sample status
+
+    assert service.sample_data_info().imported_objects == SAMPLE_OBJECTS
+
+
+def test_sample_import_catalog_state_keeps_other_owner_duplicates() -> None:
+    service = _service(_table("SH", "DEPARTMENT"), current_owner="APP")
+
+    service._apply_sample_import_to_catalog(SampleDataStep.ALL)  # noqa: SLF001
+
+    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
+    assert ("SH", "DEPARTMENT") in remaining
+    assert ("APP", "DEPARTMENT") in remaining
+    assert service.sample_data_info().imported_objects == SAMPLE_OBJECTS
+
+
+def test_sample_delete_removes_current_owner_only() -> None:
+    service = _service(*_sample_tables("APP"), *_sample_tables("SH"), current_owner="APP")
+
+    service._remove_sample_from_state()  # noqa: SLF001 - regression for owner scoped deletion
+
+    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
+    assert not {("APP", name) for name in SAMPLE_OBJECTS} & remaining
+    assert {("SH", name) for name in SAMPLE_OBJECTS} <= remaining
+    assert service.sample_data_info().imported_objects == []
+
+    service._catalog.current_owner = "SH"  # noqa: SLF001 - verify other owner remains imported
+
+    assert service.sample_data_info().imported_objects == SAMPLE_OBJECTS
 
 
 def test_legacy_empty_scope_migration_is_persisted_as_a_snapshot() -> None:

@@ -177,6 +177,7 @@ export interface SchemaObjectPage {
   total: number | null;
   table_count?: number;
   view_count?: number;
+  counts_included?: boolean;
   catalog_version: number;
 }
 
@@ -227,11 +228,11 @@ export interface ProfileUpsertPayload {
   description?: string;
   allowed_tables: string[];
   allowed_views: string[];
-  glossary: Record<string, string>;
-  sql_rules: string[];
+  glossary?: Record<string, string>;
+  sql_rules?: string[];
   default_row_limit?: number;
   safety_policy: string;
-  few_shot_examples: Array<Record<string, string>>;
+  few_shot_examples?: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
 }
 
@@ -264,6 +265,7 @@ export interface ProfileRecommendationCandidate {
 export interface ProfileRecommendationData {
   recommended_profile_id: string;
   recommended_profile_name: string;
+  recommended_profile_category?: string;
   confidence: number;
   reason: string;
   rewritten_question: string;
@@ -280,6 +282,7 @@ export interface ClassifierTrainingExample {
   text: string;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
   source: string;
   source_type: "file" | "feedback";
   source_history_id: string;
@@ -300,6 +303,7 @@ export interface ClassifierTrainingCandidate {
   question: string;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
   feedback_rating?: FeedbackRating | null;
   feedback_comment: string;
   created_at: string;
@@ -372,6 +376,7 @@ export interface ClassifierPredictionCandidate {
   score: number;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
 }
 
 export interface ClassifierPredictionData {
@@ -407,7 +412,59 @@ export interface QueryResults {
   total: number;
 }
 
+export interface Nl2SqlQuestionInterpretation {
+  available: boolean;
+  source: string;
+  original_question: string;
+  rewritten_question: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  target_objects: string[];
+  filters: string[];
+  group_by: string[];
+  order_by: string[];
+  aggregations: string[];
+  row_limit?: number | null;
+  confidence: number;
+  warnings: string[];
+}
+
+export interface Nl2SqlSqlInterpretation {
+  available: boolean;
+  source: string;
+  summary: string;
+  statement_type: string;
+  tables: string[];
+  columns: string[];
+  joins: string[];
+  filters: string[];
+  aggregations: string[];
+  group_by: string[];
+  order_by: string[];
+  limit?: number | null;
+  semantic_graph: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface Nl2SqlInterpretationArtifact {
+  available: boolean;
+  question: Nl2SqlQuestionInterpretation;
+  sql: Nl2SqlSqlInterpretation;
+  warnings: string[];
+}
+
+export interface Nl2SqlShowPromptArtifact {
+  available: boolean;
+  engine: Nl2SqlEngine;
+  action: string;
+  prompt: string;
+  unavailable_reason: string;
+  warnings: string[];
+}
+
 export interface Nl2SqlResult {
+  history_id?: string;
   engine: Nl2SqlEngine;
   engine_meta: Record<string, unknown>;
   fallback_reason: string;
@@ -422,6 +479,8 @@ export interface Nl2SqlResult {
   optimization_hints: string[];
   results: QueryResults;
   timing: TimingEnvelope;
+  interpretation?: Nl2SqlInterpretationArtifact | null;
+  show_prompt?: Nl2SqlShowPromptArtifact | null;
 }
 
 export interface GeneratedSqlPanelData {
@@ -436,6 +495,8 @@ export interface GeneratedSqlPanelData {
   repaired_sql: string;
   optimization_hints: string[];
   rewritten_question: string;
+  interpretation?: Nl2SqlInterpretationArtifact | null;
+  show_prompt?: Nl2SqlShowPromptArtifact | null;
 }
 
 export interface PreviewData {
@@ -485,6 +546,7 @@ export interface HistoryItem {
   feedback_rating?: "good" | "bad" | null;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
   rewritten_question: string;
   executable_sql: string;
   safety_is_safe: boolean;
@@ -492,6 +554,9 @@ export interface HistoryItem {
   result_columns: string[];
   feedback_comment: string;
   feedback_updated_at?: string;
+  admin_feedback_rating?: FeedbackRating | null;
+  admin_feedback_content?: string;
+  admin_feedback_updated_at?: string;
 }
 
 export interface HistoryData {
@@ -505,6 +570,7 @@ export interface FeedbackData {
   rating: FeedbackRating;
   saved: boolean;
   comment: string;
+  feedback_content: string;
 }
 
 export interface FeedbackRecord extends HistoryItem {
@@ -547,8 +613,12 @@ export interface FeedbackVectorEntry {
   generated_sql: string;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
   feedback_rating?: FeedbackRating | null;
   feedback_comment: string;
+  admin_feedback_rating?: FeedbackRating | null;
+  admin_feedback_content?: string;
+  admin_feedback_updated_at?: string;
   indexed: boolean;
   created_at: string;
 }
@@ -635,6 +705,7 @@ export interface QualityEvaluationJobSummary {
   job_id: string;
   profile_id: string;
   profile_name: string;
+  profile_category?: string;
   engines: QualityEvaluationEngine[];
   repeat_count: number;
   case_count: number;
@@ -737,15 +808,6 @@ export interface AnalyzeData {
   aggregations?: string[];
   llm_enhanced?: boolean;
   llm_warnings?: string[];
-}
-
-export interface RepairData {
-  error_code: string;
-  repaired_sql: string;
-  explanation: string;
-  recommendations: string[];
-  safety: SafetyReport;
-  executable_sql: string;
 }
 
 export interface CommentSuggestion {
@@ -893,9 +955,15 @@ export interface AssetCleanupData {
   profile_list_refresh_reason_code?: string;
 }
 
+export interface ProfileDeleteData {
+  profile: Nl2SqlProfile;
+  oracle_cleanup: AssetCleanupData[];
+}
+
 export interface DbAdminObjectSummary {
   name: string;
   owner: string;
+  qualified_name?: string;
   object_type: string;
   row_count?: number | null;
   comment: string;
@@ -922,6 +990,7 @@ export interface DbAdminObjectPage {
   total: number;
   table_count: number;
   view_count: number;
+  counts_included?: boolean;
   next_cursor: string | null;
   refreshed_at: string;
   catalog_version: number;
@@ -1010,6 +1079,7 @@ export type DbAdminStatementPolicy =
   | "annotation_sql";
 
 export interface MetadataSqlTarget {
+  owner?: string;
   object_name: string;
   object_type: "table" | "view";
 }
@@ -1071,7 +1141,7 @@ export interface DbAdminCsvUploadData {
   timing: TimingEnvelope;
 }
 
-export type DbAdminJoinWherePromptProfile = "join_where_strict" | "sql_structure";
+export type DbAdminJoinWherePromptProfile = "sql_structure";
 
 export interface DbAdminJoinWhereData {
   join_text: string;
@@ -1104,6 +1174,8 @@ export interface SelectAiDbProfilesData {
   runtime: string;
   profiles: SelectAiDbProfile[];
   warnings: string[];
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
 }
 
 export interface SelectAiDbProfileDetailData {
@@ -1195,6 +1267,14 @@ export interface SelectAiFeedbackAddData {
   plsql_preview: string;
   warnings: string[];
   engine_meta: Record<string, unknown>;
+}
+
+export interface AdminFeedbackReviewData {
+  history_id: string;
+  rating: FeedbackRating;
+  saved: boolean;
+  feedback_content: string;
+  select_ai_feedback?: SelectAiFeedbackAddData | null;
 }
 
 export interface SelectAiFeedbackMutationData {

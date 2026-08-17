@@ -60,6 +60,31 @@ async function expectButtonBelowInput(input: Locator, button: Locator) {
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
 }
 
+function nl2sqlQuestionInput(scope: Page | Locator) {
+  return scope.locator("#nl2sql-question-input");
+}
+
+function directSqlInput(scope: Page | Locator) {
+  return scope.locator("#direct-sql-input");
+}
+
+function adminSqlInput(scope: Page | Locator) {
+  return scope.locator("#admin-sql-input");
+}
+
+function sqlToQuestionInput(scope: Page | Locator) {
+  return scope.locator("#sql-to-question-sql-input");
+}
+
+async function expectRequiredTextarea(scope: Page | Locator, id: string, label: string) {
+  const field = scope.locator(`#${id}`);
+  const fieldLabel = scope.locator(`label[for="${id}"]`);
+  await expect(fieldLabel).toContainText(label);
+  await expect(fieldLabel.locator('[aria-hidden="true"]')).toHaveText("*");
+  await expect(field).toHaveAttribute("required", "");
+  await expect(field).toHaveAttribute("aria-required", "true");
+}
+
 async function expectSameVisualWidth(actual: Locator, expected: Locator, tolerance = 4) {
   await expect(actual).toBeVisible();
   await expect(expected).toBeVisible();
@@ -108,9 +133,13 @@ async function expectMainScrolledBelowTop(page: Page) {
 }
 
 export async function expectNeutralDangerConfirmationSurface(surface: Locator) {
-  await expect(surface).toHaveClass(/bg-(card|background)/);
-  await expect(surface).toHaveClass(/border-l-danger/);
+  await expect(surface).toHaveClass(/max-w-md/);
+  await expect(surface).toHaveClass(/bg-card/);
+  await expect(surface).toHaveClass(/border-border/);
+  await expect(surface).not.toHaveClass(/border-l-danger/);
   await expect(surface).not.toHaveClass(/bg-danger-bg/);
+  await expect(surface.locator(".border-l-danger")).toHaveCount(0);
+  await expect(surface.getByRole("button", { name: "閉じる" })).toHaveCount(0);
 }
 
 async function expectExecutionConfirmationFieldNoLeftAccent(surface: Locator) {
@@ -133,8 +162,10 @@ type JsonValue = Record<string, unknown> | unknown[];
 interface MockApiState {
   previewPayload: Record<string, unknown> | null;
   executePayload: Record<string, unknown> | null;
+  jobPayload: Record<string, unknown> | null;
   adminExecutePayload: Record<string, unknown> | null;
   feedbackPayload: Record<string, unknown> | null;
+  adminFeedbackPayload: Record<string, unknown> | null;
   feedbackConfigPayload: Record<string, unknown> | null;
   feedbackEntriesDeletePayload: Record<string, unknown> | null;
   selectAiFeedbackAddPayload: Record<string, unknown> | null;
@@ -163,6 +194,7 @@ interface MockApiState {
   reverseDeepPayload: Record<string, unknown> | null;
   classifierTrainingImportBody: string | null;
   classifierFeedbackImportPayload: Record<string, unknown> | null;
+  classifierTrainingDeleteId: string | null;
   classifierModelListRequests: number;
 }
 
@@ -302,11 +334,31 @@ const historyItem = {
   feedback_rating: null,
   profile_id: "default",
   profile_name: "既定プロファイル",
+  profile_category: "既定プロファイル",
   rewritten_question: "履歴から再実行したい請求金額",
   safety_is_safe: true,
   result_row_count: 1,
   result_columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
   feedback_comment: "",
+  admin_feedback_rating: null,
+  admin_feedback_content: "",
+  admin_feedback_updated_at: "",
+};
+
+const longQuestionText =
+  '対象テーブル："部署情報を管理するテーブル" 抽出項目："DEPARTMENT_ID", "DEPARTMENT_NAME", "LOCATION", "CREATED_AT" 抽出条件：管理部門および地方拠点を含むすべての部署を確認し、VERY_LONG_UNBROKEN_BUSINESS_QUERY_IDENTIFIER_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ も条件として扱う';
+
+const longHistoryItem = {
+  ...historyItem,
+  id: "hist-long-query",
+  question: longQuestionText,
+  rewritten_question: longQuestionText,
+  elapsed_ms: 9400,
+  feedback_rating: "good",
+  feedback_comment: "長い質問でも一覧と詳細の表示が崩れないことを確認します。",
+  admin_feedback_rating: "good",
+  admin_feedback_content: "管理者確認済みの長い質問です。",
+  admin_feedback_updated_at: "2026-06-21T10:02:00.000Z",
 };
 
 const classifierTrainingExamples = Array.from({ length: 12 }, (_, index) => {
@@ -322,6 +374,8 @@ const classifierTrainingExamples = Array.from({ length: 12 }, (_, index) => {
           ? "ページング対象 02: 未入金の請求を確認したい"
           : `ページング対象 ${paddedNumber}: 訓練データ確認 ${number}`,
     profile_id: index % 2 === 0 ? "default" : "payment",
+    profile_name: index % 2 === 0 ? "既定プロファイル" : "入金管理",
+    profile_category: index % 2 === 0 ? "既定プロファイル" : "入金管理",
     source: "training_data.xlsx",
   };
 });
@@ -359,8 +413,10 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   const state: MockApiState = {
     previewPayload: null,
     executePayload: null,
+    jobPayload: null,
     adminExecutePayload: null,
     feedbackPayload: null,
+    adminFeedbackPayload: null,
     feedbackConfigPayload: null,
     feedbackEntriesDeletePayload: null,
     selectAiFeedbackAddPayload: null,
@@ -389,11 +445,21 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     reverseDeepPayload: null,
     classifierTrainingImportBody: null,
     classifierFeedbackImportPayload: null,
+    classifierTrainingDeleteId: null,
     classifierModelListRequests: 0,
   };
   let classifierExamples: Record<string, unknown>[] = [...classifierTrainingExamples];
   let classifierIsStale = false;
   let feedbackCandidateAdded = false;
+  let appAdminFeedbackRating: "good" | "bad" | null = "good";
+  let appAdminFeedbackContent = "管理者確認済み";
+  let appAdminFeedbackUpdatedAt = "2026-06-21T10:03:00.000Z";
+  const classifierTrainingDataResponse = () => ({
+    total_examples: classifierExamples.length,
+    categories: Array.from(new Set(classifierExamples.map((example) => String(example.category)))),
+    warnings: [],
+    examples: classifierExamples,
+  });
   const sampleObjects = ["DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"];
   const sampleSql = {
     tables: [
@@ -473,6 +539,13 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   ];
 
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, schemaCatalog));
+  await page.route("**/api/schema/owners", (route) =>
+    fulfillJson(route, {
+      current_owner: "APP",
+      owners: [{ owner: "APP", is_current: true, table_count: 3, view_count: 1 }],
+      excluded_oracle_maintained_count: 0,
+    })
+  );
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfillJson(route, {
       catalog_version: 1,
@@ -585,6 +658,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           name: "INVOICES",
           owner: "APP",
+          qualified_name: "APP.INVOICES",
           object_type: "table",
           row_count: 2,
           comment: "請求情報",
@@ -592,6 +666,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           name: "PAYMENTS",
           owner: "APP",
+          qualified_name: "APP.PAYMENTS",
           object_type: "table",
           row_count: 1,
           comment: "入金情報",
@@ -599,6 +674,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           name: "AUDIT_LOG",
           owner: "APP",
+          qualified_name: "APP.AUDIT_LOG",
           object_type: "table",
           row_count: 1,
           comment: "監査ログ",
@@ -614,6 +690,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           name: "V_EMP_DEPT",
           owner: "APP",
+          qualified_name: "APP.V_EMP_DEPT",
           object_type: "view",
           row_count: null,
           comment: "社員と部署",
@@ -626,17 +703,19 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     const url = new URL(route.request().url());
     const objectType = url.searchParams.get("type") ?? "all";
     const rowState = url.searchParams.get("row_state") ?? "all";
+    const owner = (url.searchParams.get("owner") ?? "").toUpperCase();
     const query = (url.searchParams.get("q") ?? "").toLowerCase();
     const cursor = url.searchParams.get("cursor") ?? "";
     const allItems = [
-      { name: "INVOICES", owner: "APP", object_type: "table", row_count: 2, comment: "請求情報" },
-      { name: "PAYMENTS", owner: "APP", object_type: "table", row_count: 1, comment: "入金情報" },
-      { name: "AUDIT_LOG", owner: "APP", object_type: "table", row_count: 1, comment: "監査ログ" },
-      { name: "V_EMP_DEPT", owner: "APP", object_type: "view", row_count: null, comment: "社員と部署" },
-      { name: "DBTOOLS$EXECUTION_HISTORY", owner: "APP", object_type: "table", row_count: 4, comment: "内部履歴" },
-      { name: "SYS#AUDIT_VIEW", owner: "APP", object_type: "view", row_count: null, comment: "内部監査" },
+      { name: "INVOICES", owner: "APP", qualified_name: "APP.INVOICES", object_type: "table", row_count: 2, comment: "請求情報" },
+      { name: "PAYMENTS", owner: "APP", qualified_name: "APP.PAYMENTS", object_type: "table", row_count: 1, comment: "入金情報" },
+      { name: "AUDIT_LOG", owner: "APP", qualified_name: "APP.AUDIT_LOG", object_type: "table", row_count: 1, comment: "監査ログ" },
+      { name: "V_EMP_DEPT", owner: "APP", qualified_name: "APP.V_EMP_DEPT", object_type: "view", row_count: null, comment: "社員と部署" },
+      { name: "DBTOOLS$EXECUTION_HISTORY", owner: "APP", qualified_name: "APP.DBTOOLS$EXECUTION_HISTORY", object_type: "table", row_count: 4, comment: "内部履歴" },
+      { name: "SYS#AUDIT_VIEW", owner: "APP", qualified_name: "APP.SYS#AUDIT_VIEW", object_type: "view", row_count: null, comment: "内部監査" },
     ];
     const items = allItems.filter((item) => {
+      if (owner && item.owner.toUpperCase() !== owner) return false;
       if (objectType !== "all" && item.object_type !== objectType) return false;
       if (rowState === "with_rows" && !(typeof item.row_count === "number" && item.row_count > 0)) return false;
       if (rowState === "empty_rows" && item.row_count !== 0) return false;
@@ -668,6 +747,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       return fulfillJson(route, {
         name: "INVOICES",
         owner: "APP",
+        qualified_name: "APP.INVOICES",
         object_type: "table",
         row_count: 2,
         comment: "請求情報",
@@ -683,6 +763,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       name: "INVOICES",
       owner: "APP",
+      qualified_name: "APP.INVOICES",
       object_type: "table",
       row_count: 2,
       comment: "請求情報",
@@ -691,7 +772,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       warnings: [],
     })
   );
-  await page.route("**/api/nl2sql/db-admin/tables/INVOICES/export.xlsx", (route) =>
+  await page.route("**/api/nl2sql/db-admin/tables/INVOICES/export.xlsx**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -705,6 +786,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       name: "V_EMP_DEPT",
       owner: "APP",
+      qualified_name: "APP.V_EMP_DEPT",
       object_type: "view",
       row_count: null,
       comment: "社員と部署",
@@ -728,6 +810,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       return fulfillJson(route, {
         name: "V_EMP_DEPT",
         owner: "APP",
+        qualified_name: "APP.V_EMP_DEPT",
         object_type: "view",
         row_count: null,
         comment: "社員と部署",
@@ -748,7 +831,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       });
     }
   );
-  await page.route("**/api/nl2sql/db-admin/views/V_EMP_DEPT/export.xlsx", (route) =>
+  await page.route("**/api/nl2sql/db-admin/views/V_EMP_DEPT/export.xlsx**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -760,13 +843,17 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   );
   await page.route("**/api/nl2sql/db-admin/preview-data", (route) => {
     state.previewDataPayload = route.request().postDataJSON() as Record<string, unknown>;
-    const rows = Array.from({ length: 12 }, (_, index) => ({
+    const owner = String(state.previewDataPayload.owner ?? "").trim();
+    const objectName = String(state.previewDataPayload.object_name ?? "INVOICES");
+    const rowLimit = Number(state.previewDataPayload.limit ?? 10);
+    const objectRef = owner ? `"${owner}"."${objectName}"` : `"${objectName}"`;
+    const rows = Array.from({ length: rowLimit }, (_, index) => ({
       CUSTOMER_NAME: `顧客${String(index + 1).padStart(2, "0")}`,
       TOTAL_AMOUNT: (index + 1) * 1000,
     }));
     return fulfillJson(route, {
       runtime: "deterministic",
-      sql: 'SELECT * FROM "INVOICES" FETCH FIRST 100 ROWS ONLY',
+      sql: `SELECT * FROM ${objectRef} FETCH FIRST ${rowLimit} ROWS ONLY`,
       results: {
         columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
         rows,
@@ -789,8 +876,10 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/db-admin/upload-csv", (route) => {
     state.csvUploadPayload = route.request().postDataJSON() as Record<string, unknown>;
     const executed = true;
+    const uploadOwner = String(state.csvUploadPayload.owner ?? "").trim();
+    const uploadTable = String(state.csvUploadPayload.table_name ?? "INVOICES");
     return fulfillJson(route, {
-      table_name: String(state.csvUploadPayload.table_name ?? "INVOICES"),
+      table_name: uploadOwner ? `${uploadOwner}.${uploadTable}` : uploadTable,
       filename: "upload.csv",
       mode: "insert",
       matched_columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
@@ -962,6 +1051,8 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/db-admin/drop-table", (route) => {
     state.dropTablePayload = route.request().postDataJSON() as Record<string, unknown>;
     const tableName = String(state.dropTablePayload.table_name ?? "INVOICES");
+    const owner = String(state.dropTablePayload.owner ?? "").trim();
+    const tableRef = owner ? `"${owner}"."${tableName}"` : `"${tableName}"`;
     const executed = true;
     return fulfillJson(route, {
       executed,
@@ -972,7 +1063,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           index: 1,
           statement_type: "DROP",
           status: "executed",
-          sql: `DROP TABLE "${tableName}" PURGE`,
+          sql: `DROP TABLE ${tableRef} PURGE`,
           row_count: null,
           message: "executed",
           elapsed_ms: 0,
@@ -988,6 +1079,8 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/db-admin/truncate-table", (route) => {
     state.truncateTablePayload = route.request().postDataJSON() as Record<string, unknown>;
     const tableName = String(state.truncateTablePayload.table_name ?? "INVOICES");
+    const owner = String(state.truncateTablePayload.owner ?? "").trim();
+    const tableRef = owner ? `"${owner}"."${tableName}"` : `"${tableName}"`;
     return fulfillJson(route, {
       executed: true,
       runtime: "deterministic",
@@ -997,7 +1090,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           index: 1,
           statement_type: "TRUNCATE",
           status: "success",
-          sql: `TRUNCATE TABLE "${tableName}"`,
+          sql: `TRUNCATE TABLE ${tableRef}`,
           row_count: 0,
           message: "executed",
           elapsed_ms: 0,
@@ -1012,6 +1105,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   });
   await page.route("**/api/nl2sql/db-admin/drop-view", (route) => {
     state.dropViewPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const viewName = String(state.dropViewPayload.view_name ?? "V_EMP_DEPT");
+    const owner = String(state.dropViewPayload.owner ?? "").trim();
+    const viewRef = owner ? `"${owner}"."${viewName}"` : `"${viewName}"`;
     const executed = true;
     return fulfillJson(route, {
       executed,
@@ -1022,7 +1118,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           index: 1,
           statement_type: "DROP",
           status: "executed",
-          sql: 'DROP VIEW "V_EMP_DEPT"',
+          sql: `DROP VIEW ${viewRef}`,
           row_count: null,
           message: "executed",
           elapsed_ms: 0,
@@ -1037,22 +1133,15 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   });
   await page.route("**/api/nl2sql/db-admin/extract-join-where", (route) => {
     state.extractJoinWherePayload = route.request().postDataJSON() as Record<string, unknown>;
-    const promptProfile = String(
-      state.extractJoinWherePayload.prompt_profile ?? "join_where_strict"
-    );
     return fulfillJson(route, {
       join_text:
-        promptProfile === "sql_structure"
-          ? "JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\nON: EMPLOYEE(e).DEPARTMENT_ID = DEPARTMENT(d).DEPARTMENT_ID"
-          : "[INNER] E(EMPLOYEE).DEPARTMENT_ID = D(DEPARTMENT).DEPARTMENT_ID",
-      where_text: promptProfile === "sql_structure" ? "EMPLOYEE(e).STATUS = 'A'" : "None",
+        "JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\nON: EMPLOYEE(e).DEPARTMENT_ID = DEPARTMENT(d).DEPARTMENT_ID",
+      where_text: "EMPLOYEE(e).STATUS = 'A'",
       source: "deterministic",
       warnings: [],
-      prompt_profile: promptProfile,
+      prompt_profile: "sql_structure",
       structure_markdown:
-        promptProfile === "sql_structure"
-          ? "## SQL構造分析\n\n### JOIN句\n- JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\n\n### WHERE句\n- EMPLOYEE(e).STATUS = 'A'"
-          : "",
+        "## SQL構造分析\n\n### JOIN句\n- JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\n\n### WHERE句\n- EMPLOYEE(e).STATUS = 'A'",
     });
   });
   await page.route("**/api/schema/refresh", (route) => fulfillJson(route, schemaCatalog));
@@ -1144,6 +1233,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
             ...historyItem,
             feedback_rating: "good",
             feedback_comment: "SQL は期待通りです",
+            admin_feedback_rating: appAdminFeedbackRating,
+            admin_feedback_content: appAdminFeedbackContent,
+            admin_feedback_updated_at: appAdminFeedbackUpdatedAt,
             training_status: feedbackCandidateAdded ? "added" : "pending",
             training_example_id: feedbackCandidateAdded ? "feedback-hist-001" : "",
           },
@@ -1158,11 +1250,50 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       rating: "good",
       saved: true,
       comment: "SQL は期待通りです",
+      feedback_content: "SQL は期待通りです",
     });
   });
-  await page.route("**/api/nl2sql/feedback/*", (route) =>
-    fulfillJson(route, { history_id: "hist-001", cleared: true })
-  );
+  await page.route("**/api/nl2sql/feedback/admin-review", (route) => {
+    state.adminFeedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const content = String(state.adminFeedbackPayload.feedback_content ?? "");
+    const rating = state.adminFeedbackPayload.rating === "bad" ? "bad" : "good";
+    const registerSelectAi = Boolean(state.adminFeedbackPayload.register_select_ai_feedback);
+    appAdminFeedbackRating = rating;
+    appAdminFeedbackContent = content;
+    appAdminFeedbackUpdatedAt = "2026-06-21T10:04:00.000Z";
+    return fulfillJson(route, {
+      history_id: state.adminFeedbackPayload.history_id ?? "hist-001",
+      rating,
+      saved: true,
+      feedback_content: content,
+      select_ai_feedback: registerSelectAi
+        ? {
+            runtime: "oracle",
+            executed: true,
+            status: "added",
+            profile_name: state.adminFeedbackPayload.select_ai_profile_name ?? "NL2SQL_DEFAULT_PROFILE",
+            index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
+            table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
+            sql_text: "select ai showsql 請求金額を一覧で見たい",
+            stored_feedback_type: "POSITIVE",
+            plsql_preview: "BEGIN DBMS_CLOUD_AI.FEEDBACK(operation => 'ADD'); END;",
+            warnings: [],
+            engine_meta: {},
+          }
+        : null,
+    });
+  });
+  await page.route("**/api/nl2sql/feedback/*", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/admin-review")) {
+      return route.fallback();
+    }
+    if (route.request().method() === "DELETE") {
+      appAdminFeedbackRating = null;
+      appAdminFeedbackContent = "";
+      appAdminFeedbackUpdatedAt = "";
+    }
+    return fulfillJson(route, { history_id: "hist-001", cleared: true });
+  });
   await page.route("**/api/nl2sql/demo/learning", (route) =>
     fulfillJson(route, {
       seeded_history_count: 3,
@@ -1250,6 +1381,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           profile_name: "既定プロファイル",
           feedback_rating: null,
           feedback_comment: "",
+          admin_feedback_rating: "good",
+          admin_feedback_content: "管理者確認済み",
+          admin_feedback_updated_at: "2026-06-21T10:03:00.000Z",
           indexed: false,
           created_at: historyItem.created_at,
         },
@@ -1301,13 +1435,44 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     return route.abort();
   });
   await page.route("**/api/nl2sql/classifier/training-data", (route) =>
-    fulfillJson(route, {
-      total_examples: classifierExamples.length,
-      categories: ["既定プロファイル", "入金管理"],
-      warnings: [],
-      examples: classifierExamples,
-    })
+    fulfillJson(route, classifierTrainingDataResponse())
   );
+  await page.route("**/api/nl2sql/classifier/training-data/*", (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/from-feedback") || url.pathname.endsWith("/import")) {
+      return route.fallback();
+    }
+
+    const id = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if (request.method() === "PATCH") {
+      const payload = request.postDataJSON() as Record<string, unknown>;
+      const profile = profiles.find((item) => item.id === payload.profile_id);
+      classifierExamples = classifierExamples.map((example) =>
+        example.id === id
+          ? {
+              ...example,
+              text: payload.text ?? example.text,
+              profile_id: payload.profile_id ?? example.profile_id,
+              profile_name: profile?.name ?? example.profile_name,
+              profile_category: profile?.category ?? example.profile_category,
+              category: profile?.category ?? example.category,
+              updated_at: "2026-06-21T10:07:00.000Z",
+            }
+          : example
+      );
+      classifierIsStale = true;
+      return fulfillJson(route, classifierTrainingDataResponse());
+    }
+    if (request.method() === "DELETE") {
+      state.classifierTrainingDeleteId = id;
+      classifierExamples = classifierExamples.filter((example) => example.id !== id);
+      classifierIsStale = true;
+      return fulfillJson(route, classifierTrainingDataResponse());
+    }
+
+    return route.fallback();
+  });
   await page.route("**/api/nl2sql/classifier/training-candidates*", (route) =>
     fulfillJson(route, {
       items: [
@@ -1743,6 +1908,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       recommended_profile_id: "default",
       recommended_profile_name: "既定プロファイル",
+      recommended_profile_category: "既定プロファイル",
       confidence: 0.94,
       reason: "請求関連の語彙に一致しました。",
       rewritten_question: "請求金額を一覧で見たい",
@@ -1754,6 +1920,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           profile_id: "default",
           profile_name: "既定プロファイル",
+          category: "既定プロファイル",
           score: 0.94,
           matched_terms: ["請求金額"],
           allowed_tables: ["INVOICES"],
@@ -1765,9 +1932,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       items: [
         {
-          item: historyItem,
+          item: { ...historyItem, admin_feedback_rating: "good", admin_feedback_content: "管理者確認済み" },
           score: 0.9,
-          reason: "請求金額の履歴と近い質問です。",
+          reason: "請求金額の履歴と近い質問です。管理者の良い feedback が付いています。",
         },
       ],
     })
@@ -1905,7 +2072,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.metadataSamplesPayload = route.request().postDataJSON() as Record<string, unknown>;
     const sampleLimit = state.metadataSamplesPayload.sample_limit;
     return fulfillJson(route, {
-      sample_text: sampleLimit === 0 ? "" : "OBJECT: INVOICES\nCUSTOMER_NAME: 青山商事, 鈴木商店",
+      sample_text: sampleLimit === 0 ? "" : "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 青山商事, 鈴木商店",
       sample_count: sampleLimit === 0 ? 0 : 2,
       runtime: "oracle",
       warnings: [],
@@ -1914,7 +2081,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/comments/generate-sql", (route) => {
     state.commentGeneratePayload = route.request().postDataJSON() as Record<string, unknown>;
     return fulfillJson(route, {
-      sql: "COMMENT ON COLUMN \"INVOICES\".\"TOTAL_AMOUNT\" IS '税込請求金額';",
+      sql: "COMMENT ON COLUMN \"APP\".\"INVOICES\".\"TOTAL_AMOUNT\" IS '税込請求金額';",
       source: "deterministic",
       warnings: [],
       timing,
@@ -1930,7 +2097,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           object_name: "INVOICES.TOTAL_AMOUNT",
           object_type: "column",
           comment: "税込請求金額",
-          sql: "COMMENT ON COLUMN \"INVOICES\".\"TOTAL_AMOUNT\" IS '税込請求金額';",
+          sql: "COMMENT ON COLUMN \"APP\".\"INVOICES\".\"TOTAL_AMOUNT\" IS '税込請求金額';",
           status: "requires_oracle",
           error_message: "",
         },
@@ -1955,7 +2122,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   );
   await page.route("**/api/nl2sql/annotations/generate-sql", (route) =>
     fulfillJson(route, {
-      sql: "ALTER TABLE \"INVOICES\" MODIFY (\"TOTAL_AMOUNT\" ANNOTATIONS (ADD IF NOT EXISTS UI_Display '税込請求金額'));",
+      sql: "ALTER TABLE \"APP\".\"INVOICES\" MODIFY (\"TOTAL_AMOUNT\" ANNOTATIONS (ADD IF NOT EXISTS UI_Display '税込請求金額'));",
       source: "deterministic",
       warnings: [],
       timing,
@@ -1971,7 +2138,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           object_type: "column",
           annotation_name: "DISPLAY",
           annotation_value: "税込請求金額",
-          sql: "ALTER TABLE \"INVOICES\" MODIFY \"TOTAL_AMOUNT\" ANNOTATIONS (DISPLAY '税込請求金額');",
+          sql: "ALTER TABLE \"APP\".\"INVOICES\" MODIFY \"TOTAL_AMOUNT\" ANNOTATIONS (DISPLAY '税込請求金額');",
           status: "requires_oracle",
           error_message: "",
         },
@@ -2005,7 +2172,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           : [];
     const rowCount = Number(state.syntheticDataPayload.rows_per_table ?? state.syntheticDataPayload.row_count ?? 1);
     return fulfillJson(route, {
-      table_name: "AUDIT_LOG",
+      table_name: selectedTables[0] ?? "APP.INVOICES",
       object_list: selectedTables,
       row_count: rowCount,
       executed,
@@ -2021,7 +2188,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   });
   await page.route("**/api/nl2sql/synthetic-data/results**", (route) =>
     fulfillJson(route, {
-      table_name: "INVOICES",
+      table_name: "APP.INVOICES",
       runtime: "deterministic",
       results: {
         columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
@@ -2058,16 +2225,63 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       total: 1,
     });
   });
-  await page.route("**/api/nl2sql/repair", (route) =>
-    fulfillJson(route, {
-      error_code: "ORA-00904",
-      repaired_sql: "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
-      explanation: "存在しない列名または alias を参照している可能性があります。",
-      recommendations: ["Schema catalog の列名・alias を確認してください。"],
-      safety,
-      executable_sql: "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
-    })
-  );
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    state.jobPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      job_id: "job-default-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/jobs/job-default-001", (route) => {
+    const question = String(state.jobPayload?.question ?? "請求金額を一覧で見たい");
+    const engine = String(state.jobPayload?.engine ?? "select_ai");
+    return fulfillJson(route, {
+      job_id: "job-default-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-001",
+        engine,
+        engine_meta: engine === "select_ai" ? { profile: "mock_agent_profile" } : {},
+        fallback_reason: "",
+        original_question: question,
+        rewritten_question: question,
+        generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        executable_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        explanation: "請求情報を取得します。",
+        safety,
+        recommendations: ["許可された表だけを参照しています。"],
+        repaired_sql: "",
+        optimization_hints: ["TOTAL_AMOUNT に索引を検討できます。"],
+        results: {
+          columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
+          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          total: 1,
+        },
+        timing,
+      },
+    });
+  });
   await page.route("**/api/nl2sql/compare-history**", (route) =>
     fulfillJson(route, {
       items: [
@@ -2181,6 +2395,50 @@ async function expectNoHorizontalScroll(page: Page) {
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+}
+
+async function expectNoElementHorizontalOverflow(locator: Locator) {
+  const size = await locator.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth + 1);
+}
+
+async function expectQuestionClamp(locator: Locator, fullText: string, lines: number) {
+  await expect(locator).toHaveAttribute("title", fullText);
+  await expect(locator).toHaveAttribute("aria-label", fullText);
+  const metrics = await locator.evaluate((element, expectedLines) => {
+    const style = window.getComputedStyle(element);
+    const lineHeight = Number.parseFloat(style.lineHeight);
+    const height = element.getBoundingClientRect().height;
+    return {
+      clamp: style.getPropertyValue("-webkit-line-clamp"),
+      fontWeight: Number.parseInt(style.fontWeight, 10),
+      height,
+      maxHeight: Number.isFinite(lineHeight) ? lineHeight * expectedLines + 8 : null,
+      overflow: style.overflow,
+    };
+  }, lines);
+  expect(metrics.clamp).toBe(String(lines));
+  expect(metrics.overflow).toBe("hidden");
+  expect(metrics.fontWeight).toBeLessThan(600);
+  if (metrics.maxHeight !== null) {
+    expect(metrics.height).toBeLessThanOrEqual(metrics.maxHeight);
+  }
+}
+
+const SPLIT_PANE_RENDER_TIMEOUT_MS = 15_000;
+
+async function expectToastStackBottomRight(page: Page) {
+  const region = page.getByRole("region", { name: "通知" });
+  const [box, viewport] = await Promise.all([region.boundingBox(), page.viewportSize()]);
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(viewport!.width - (box!.x + box!.width)).toBeGreaterThanOrEqual(0);
+  expect(viewport!.width - (box!.x + box!.width)).toBeLessThanOrEqual(24);
+  expect(viewport!.height - (box!.y + box!.height)).toBeGreaterThanOrEqual(0);
+  expect(viewport!.height - (box!.y + box!.height)).toBeLessThanOrEqual(24);
 }
 
 function expectedInformationRows(testInfo: TestInfo) {
@@ -2361,6 +2619,110 @@ async function expectQuerySingleColumnLayout(page: Page) {
   await expectNoHorizontalScroll(page);
 }
 
+test("query workbench waits for a real profile id before profile detail and schema requests", async ({ page }) => {
+  const profileId = "0f2767ed-da07-4d35-bee0-52b5a92ec694";
+  const profile = {
+    ...profiles[0],
+    id: profileId,
+    name: "部門分析プロファイル",
+    allowed_tables: ["APP.DEPARTMENT"],
+    allowed_views: [],
+  };
+  const unexpectedDefaultRequests: string[] = [];
+  const schemaProfileIds: string[] = [];
+  let profileDetailRequests = 0;
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname === "/api/nl2sql/profiles/default" ||
+      url.searchParams.get("profile_id") === "default"
+    ) {
+      unexpectedDefaultRequests.push(request.url());
+    }
+  });
+
+  await page.route("**/api/nl2sql/persistence", (route) =>
+    fulfillJson(route, { mode: "oracle", ready: true, writable: true, reason_code: "" })
+  );
+  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [] }));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfillJson(route, {
+      catalog_version: 1,
+      schema_fingerprint: "uuid-profile-catalog",
+      refreshed_at: "2026-08-14T00:00:00.000Z",
+      object_count: 1,
+      column_count: 0,
+      change_token: 1,
+      etag: "uuid-profile-catalog",
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          id: profile.id,
+          name: profile.name,
+          category: profile.category,
+          description: profile.description,
+          archived: false,
+          allowed_table_count: profile.allowed_tables.length,
+          allowed_view_count: profile.allowed_views.length,
+          glossary_count: 0,
+          few_shot_count: 0,
+          version: 1,
+          etag: `etag-${profile.id}`,
+          updated_at: "2026-08-14T00:00:00.000Z",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 1,
+    })
+  );
+  await page.route(`**/api/nl2sql/profiles/${profileId}`, (route) => {
+    profileDetailRequests += 1;
+    return fulfillJson(route, profile);
+  });
+  await page.route("**/api/nl2sql/profiles/default", (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "unexpected default profile request" }),
+    })
+  );
+  await page.route("**/api/schema/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    schemaProfileIds.push(url.searchParams.get("profile_id") ?? "");
+    return fulfillJson(route, {
+      items: [
+        {
+          owner: "APP",
+          object_name: "DEPARTMENT",
+          object_type: "TABLE",
+          logical_name: "部門",
+          comment: "部門情報",
+          row_count: null,
+          column_count: 0,
+          last_ddl_at: "",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      catalog_version: 1,
+    });
+  });
+
+  await page.goto("/query");
+
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue(profileId);
+  await expect.poll(() => profileDetailRequests).toBe(1);
+  await expect.poll(() => schemaProfileIds.includes(profileId)).toBe(true);
+  expect(schemaProfileIds).not.toContain("");
+  expect(schemaProfileIds).not.toContain("default");
+  expect(unexpectedDefaultRequests).toEqual([]);
+});
+
 test("query workbench keeps the schema picker inside a single column with long identifiers", async ({ page }) => {
   await mockNl2SqlApi(page);
   await useOverflowSchemaCatalog(page);
@@ -2391,10 +2753,46 @@ test("実行エンジンは自動を廃し Select AI を既定にする", async 
   await expect(engineGroup.getByRole("button")).toHaveCount(3);
 });
 
+test("SQL 系の必須入力欄は既存の必須マークと required 属性で統一する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+
+  await page.goto("/query");
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectRequiredTextarea(page, "nl2sql-question-input", "検索クエリ");
+  const runQueryButton = page.getByRole("button", { name: "検索を実行" });
+  await expect(runQueryButton).toBeDisabled();
+  await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
+  await expect(runQueryButton).toBeEnabled();
+
+  await page.goto("/direct-sql");
+  const directSql = page.getByTestId("nl2sql-direct-sql");
+  await expectRequiredTextarea(directSql, "direct-sql-input", "SQL");
+  const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
+  await expect(directExecuteButton).toBeDisabled();
+  await directSqlInput(directSql).fill("SELECT 1 FROM DUAL");
+  await expect(directExecuteButton).toBeEnabled();
+
+  await page.goto("/sql-to-question");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
+  await expectRequiredTextarea(page, "sql-to-question-sql-input", "対象 SQL");
+  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(generateButton).toBeDisabled();
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await expect(generateButton).toBeEnabled();
+
+  await page.goto("/admin-sql");
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  await expectRequiredTextarea(adminSql, "admin-sql-input", "管理 SQL");
+  const adminExecuteButton = adminSql.getByRole("button", { name: "SQL 実行" });
+  await expect(adminExecuteButton).toBeDisabled();
+  await adminSqlInput(adminSql).fill("SELECT 1 FROM DUAL");
+  await expect(adminExecuteButton).toBeEnabled();
+});
+
 test("スキーマ参照から連続挿入すると各項目が改行区切りになる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   await openSchemaPicker(page);
   await page.getByRole("button", { name: "請求 を開閉" }).click();
   const column = page.getByRole("button", { name: /^請求金額 TOTAL_AMOUNT/ });
@@ -2408,7 +2806,7 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
 test("検索クエリのテンプレートボタンで穴埋めテンプレートを全置換挿入できる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
 
   // 「テンプレート:」行が textarea の上に見える
   await expect(page.getByText("テンプレート:", { exact: true })).toBeVisible();
@@ -2461,7 +2859,7 @@ test("スキーマピッカーは compact（checkbox なし・挿入でページ
   await column.scrollIntoViewIfNeeded();
   const before = await page.evaluate(() => window.scrollY);
   await column.click();
-  await expect(page.getByLabel("検索クエリ")).toHaveValue("\"請求\".\"請求金額\"");
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("\"請求\".\"請求金額\"");
   const after = await page.evaluate(() => window.scrollY);
   expect(Math.abs(after - before)).toBeLessThanOrEqual(2);
 });
@@ -2492,7 +2890,7 @@ test("スキーマ参照はアコーディオンで、表名クリックで表�
   await expect(lastColumn).toBeVisible();
 
   // 表名クリック=表名（論理名）を挿入。chevron クリックでは挿入されない。
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   await expect(question).toHaveValue("");
   await page.getByRole("button", { name: /^請求 INVOICES/ }).click();
   await expect(question).toHaveValue("\"請求\"");
@@ -2503,7 +2901,7 @@ test("スキーマ参照はアコーディオンで、表名クリックで表�
 test("検索クエリとスキーマ参照は desktop で左右並置、mobile で縦積みになる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   const picker = page.getByTestId("nl2sql-schema-reference");
   await expect(question).toBeVisible();
   await expect(picker).toBeVisible();
@@ -2528,7 +2926,7 @@ test("検索クエリとスキーマ参照は desktop で左右並置、mobile �
 test("検索クエリは内容に応じて最大10行まで自動拡張し、挿入行へ内部スクロールする", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
 
   // 少量入力では既定高（5 行相当 = min-h-36 = 144px）付近
   await question.fill("1行だけ");
@@ -2634,12 +3032,12 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
   ).toBeVisible();
 
   const workspace = page.getByTestId("nl2sql-workspace-shell");
-  await page.getByLabel("検索クエリ").fill("未入金の請求を確認したい");
+  await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
   await expect(
     workspace.getByRole("button", { name: "プロファイルを自動判定" })
   ).toBeDisabled();
-  await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toBeDisabled();
-  await expect(workspace.getByRole("button", { name: "質問を解釈" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
+  await expect(workspace.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "検索を実行" })).toBeDisabled();
 
   await page.setViewportSize({ width: 375, height: 812 });
@@ -2690,6 +3088,7 @@ test("質問から業務プロファイルを自動判定して選択できる",
     fulfillJson(route, {
       recommended_profile_id: "payment",
       recommended_profile_name: "入金管理",
+      recommended_profile_category: "入金管理",
       confidence: 0.82,
       reason: "入金関連の語彙に一致しました。",
       rewritten_question: "",
@@ -2705,12 +3104,81 @@ test("質問から業務プロファイルを自動判定して選択できる",
 
   const detect = page.getByRole("button", { name: "プロファイルを自動判定" });
   await expect(detect).toBeDisabled(); // 質問未入力では押せない
-  await page.getByLabel("検索クエリ").fill("未入金の請求を確認したい");
+  await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
   await expect(detect).toBeEnabled();
   await detect.click();
 
   await expect(profileSelect).toHaveValue("payment");
-  await expect(page.getByText(/入金管理 を選択しました/)).toBeVisible();
+  await expect(page.getByText(/入金管理（入金管理） を選択しました/)).toBeVisible();
+});
+
+test("低信頼度の業務プロファイル自動判定は選択を変更しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const paymentProfile = {
+    ...profiles[0],
+    id: "payment",
+    name: "入金管理",
+    category: "入金管理",
+    allowed_tables: ["INVOICES"],
+    allowed_views: [],
+  };
+  await page.unroute("**/api/nl2sql/profiles");
+  await page.route("**/api/nl2sql/profiles", (route) =>
+    fulfillJson(route, [profiles[0], paymentProfile])
+  );
+  await page.unroute("**/api/nl2sql/profiles/search?*");
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: [profiles[0], paymentProfile].map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: false,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: Object.keys(profile.glossary).length,
+        few_shot_count: profile.few_shot_examples.length,
+        version: 1,
+        etag: `etag-${profile.id}`,
+        updated_at: "2026-06-21T10:00:00.000Z",
+      })),
+      next_cursor: null,
+      total: 2,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/payment", (route) => fulfillJson(route, paymentProfile));
+  await page.unroute("**/api/nl2sql/recommend-profile");
+  await page.route("**/api/nl2sql/recommend-profile", (route) =>
+    fulfillJson(route, {
+      recommended_profile_id: "payment",
+      recommended_profile_name: "入金管理",
+      recommended_profile_category: "入金管理",
+      confidence: 0.2,
+      reason: "入金関連の語彙に少し一致しました。",
+      rewritten_question: "",
+      recommended_allowed_objects: { table_names: ["INVOICES"], columns: {} },
+      candidates: [],
+      recommendation_source: "deterministic",
+    })
+  );
+
+  await page.goto("/query");
+  const profileSelect = page.locator("#nl2sql-profile-select");
+  await expect(profileSelect).toHaveValue("default");
+
+  const detect = page.getByRole("button", { name: "プロファイルを自動判定" });
+  await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
+  await expect(detect).toBeEnabled();
+  await detect.click();
+
+  await expect(profileSelect).toHaveValue("default");
+  await expect(page.getByTestId("nl2sql-recommend-low-confidence")).toContainText(
+    "十分な信頼度で自動判定できませんでした"
+  );
+  await expect(page.getByText(/入金管理（入金管理） を選択しました/)).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
 });
 
 test("catalog 空のときスキーマ参照からスキーマを更新して表を取得できる", async ({ page }) => {
@@ -2800,7 +3268,7 @@ test("owner 付きの許可表でもスキーマ参照が対象表に絞り込�
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("query workbench previews SQL and executes the preview result", async ({ page }) => {
+test("query workbench generates SQL through the job flow and shows results", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -2817,7 +3285,7 @@ test("query workbench previews SQL and executes the preview result", async ({ pa
     await expect(page.getByRole("button", { name: sample, exact: true })).toHaveCount(0);
   }
 
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   const placeholder = (await question.getAttribute("placeholder")) ?? "";
   for (const sample of removedSamples) expect(placeholder).not.toContain(sample);
   await openSchemaPicker(page);
@@ -2829,62 +3297,372 @@ test("query workbench previews SQL and executes the preview result", async ({ pa
   // 推薦は現在の profile（default）と同一のため、progressive-disclosure によりヒントは出さない。
   await expect(page.getByTestId("nl2sql-recommend-hint")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "SQL プレビュー" }).click();
+  await page.getByRole("button", { name: "検索を実行" }).click();
 
   const generatedSqlStep = page.getByTestId("nl2sql-job-step-generate_sql");
   await expect(generatedSqlStep).toContainText("SQL を生成");
   await expect(generatedSqlStep.getByRole("code")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
   );
-  await page.getByRole("button", { name: "この SQL を実行" }).click();
 
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "1200000" })).toBeVisible();
 
-  const feedbackResponse = page.getByLabel("response");
-  await expect(page.getByRole("heading", { name: "DBMS_CLOUD_AI feedback" })).toBeVisible();
+  const feedbackResponse = page.getByLabel("生成 SQL");
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
   await expect(feedbackResponse).toHaveValue("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   // 結果フィードバックカードは廃止され、良い/違うボタンへ統合された。
   await expect(page.getByRole("heading", { name: "結果フィードバック" })).toHaveCount(0);
-  // response は常に編集可（種類 select 廃止）。
-  await expect(feedbackResponse).toHaveJSProperty("readOnly", false);
+  await expect(feedbackResponse).toHaveJSProperty("readOnly", true);
 
-  // 「良い」= positive。preview 実行のみでは一致する履歴が無いため DBMS_CLOUD_AI のみ保存する。
+  // 「良い」はユーザー feedback としてアプリ DB にだけ保存する。
   await page.getByLabel("feedback_content").fill("期待どおりの SQL です");
-  await page.getByRole("button", { name: "良い" }).click();
+  await page.getByRole("button", { name: "良い", exact: true }).click();
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
-  expect(api.selectAiFeedbackAddPayload).toMatchObject({
-    profile_id: "default",
-    question: "請求金額を一覧で見たい",
-    feedback_type: "positive",
-    response: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+  expect(api.feedbackPayload).toEqual({
+    history_id: "hist-001",
+    rating: "good",
     feedback_content: "期待どおりの SQL です",
-    generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+    comment: "期待どおりの SQL です",
   });
-  // 一致履歴なし → 結果フィードバック保存はスキップ。
-  expect(api.feedbackPayload).toBeNull();
+  expect(api.selectAiFeedbackAddPayload).toBeNull();
 
   // 「違う」= negative。feedback_content 未入力なら送信をブロックする。
   await page.getByLabel("feedback_content").fill("");
-  await feedbackResponse.fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "違う" }).click();
+  await page.getByRole("button", { name: "違う", exact: true }).click();
   await expect(page.getByText("「違う」の場合は feedback_content の入力が必須です。")).toBeVisible();
 
   await page.getByLabel("feedback_content").fill("列を請求金額だけに修正");
-  await page.getByRole("button", { name: "違う" }).click();
-  expect(api.selectAiFeedbackAddPayload).toMatchObject({
-    feedback_type: "negative",
-    response: "SELECT TOTAL_AMOUNT FROM INVOICES",
+  await page.getByRole("button", { name: "違う", exact: true }).click();
+  expect(api.feedbackPayload).toEqual({
+    history_id: "hist-001",
+    rating: "bad",
     feedback_content: "列を請求金額だけに修正",
+    comment: "列を請求金額だけに修正",
   });
   // checkbox 廃止後、スコープは profile / 推薦適用が決める（手動選択なしは空）。
-  expect(api.previewPayload?.allowed_objects).toEqual({
+  expect(api.jobPayload?.allowed_objects).toEqual({
     table_names: [],
     columns: {},
   });
-  expect(api.executePayload?.sql).toBe("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  expect(api.executePayload).toBeNull();
   await expectNoHorizontalScroll(page);
+});
+
+test("query workbench shows job action errors below the execution buttons", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const agentError =
+    "Oracle Select AI Agent 実行に失敗しました: Select AI Agent conversation_id を作成できませんでした。";
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: agentError }),
+    })
+  );
+
+  await page.goto("/query");
+  await page.getByRole("button", { name: /Select AI Agent/ }).click();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  const runButton = page.getByRole("button", { name: "検索を実行" });
+  await runButton.click();
+
+  const actionError = page.getByTestId("nl2sql-action-feedback-error");
+  await expect(actionError).toContainText(agentError);
+  await expect(actionError).toContainText("入力内容と接続状態を確認して再試行してください。");
+  await expect(page.getByText(agentError)).toHaveCount(1);
+  await expectTopToBottomOrder(runButton, actionError);
+});
+
+test("query workbench keeps schema detail errors inside the schema panel when schema list is populated", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const schemaEmptyError =
+    "Schema catalog が空です。Oracle schema を refresh するか、Data Tools から sample data を明示的に import してください。";
+  await page.unroute("**/api/schema/objects/*/*");
+  await page.route("**/api/schema/objects/*/*", (route) =>
+    route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: schemaEmptyError }),
+    })
+  );
+
+  await page.goto("/query");
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  await page.getByLabel("表・項目検索").fill("請求");
+
+  const schemaDetailError = page.getByTestId("nl2sql-schema-detail-error");
+  await expect(schemaDetailError).toContainText(schemaEmptyError);
+  await expect(page.getByText("Schema catalog が空です")).toHaveCount(1);
+  await expect(page.getByTestId("nl2sql-schema-reference")).toContainText("請求");
+  await expectNoHorizontalScroll(page);
+});
+
+test("Enterprise AI Direct job does not show schema-empty when schema reference is populated", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+
+  await page.goto("/query");
+  await expect(page.getByTestId("nl2sql-schema-reference")).toContainText("参照可能な表");
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
+  await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
+    "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
+  );
+  await expect(page.getByText("Schema catalog が空です")).toHaveCount(0);
+  await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("検索実行開始時に前回の生成 SQL・実行結果を先に消す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+
+  await page.goto("/query");
+  const question = nl2sqlQuestionInput(page);
+  await question.fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
+    "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
+  );
+  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+
+  const jobsGate = createRequestGate();
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    await jobsGate.promise;
+    return fulfillJson(route, {
+      job_id: "job-preview-reset-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/jobs/job-preview-reset-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-preview-reset-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.040Z",
+      elapsed_ms: 40,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 18 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 6 },
+        { stage: "format_results", status: "done", elapsed_ms: 4 },
+      ],
+      timing: null,
+      result: {
+        engine: "select_ai",
+        original_question: "請求金額だけを確認したい",
+        rewritten_question: "請求金額だけを確認したい",
+        generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+        executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+        explanation: "請求金額だけを取得します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["TOTAL_AMOUNT"], rows: [{ TOTAL_AMOUNT: 1200000 }], total: 1 },
+        timing,
+      },
+    })
+  );
+
+  await question.fill("請求金額だけを確認したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
+  await expect(question).toHaveValue("請求金額だけを確認したい");
+
+  jobsGate.release();
+  await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
+    "SELECT TOTAL_AMOUNT FROM INVOICES"
+  );
+  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+});
+
+test("検索実行開始時に前回の結果表を先に消す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+
+  await page.goto("/query");
+  const question = nl2sqlQuestionInput(page);
+  await question.fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+
+  const createdAt = "2026-06-21T10:00:00.000Z";
+  const jobsGate = createRequestGate();
+  let jobPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    jobPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await jobsGate.promise;
+    return fulfillJson(route, {
+      job_id: "job-reset-001",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/jobs/job-reset-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-reset-001",
+      status: "done",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 40,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 6 },
+        { stage: "format_results", status: "done", elapsed_ms: 2 },
+      ],
+      timing: null,
+      result: {
+        engine: "select_ai",
+        engine_meta: {},
+        fallback_reason: "",
+        original_question: "請求件数を数えたい",
+        rewritten_question: "請求件数を数えたい",
+        generated_sql: "SELECT COUNT(*) AS INVOICE_COUNT FROM INVOICES",
+        executable_sql: "SELECT COUNT(*) AS INVOICE_COUNT FROM INVOICES",
+        explanation: "請求件数を集計します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["INVOICE_COUNT"],
+          rows: [{ INVOICE_COUNT: 2 }],
+          total: 1,
+        },
+        timing: null,
+      },
+    })
+  );
+
+  await question.fill("請求件数を数えたい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect.poll(() => jobPayload?.question).toBe("請求件数を数えたい");
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
+  await expect(question).toHaveValue("請求件数を数えたい");
+
+  jobsGate.release();
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+  await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
+    "SELECT COUNT(*) AS INVOICE_COUNT FROM INVOICES"
+  );
+  await expect(page.getByRole("cell", { name: "2" })).toBeVisible();
+});
+
+test("検索実行開始時に前回の生成結果を先に消し、現在の質問で job を作成できる", async ({ page }) => {
+  await mockNl2SqlApi(page);
+
+  await page.goto("/query");
+  const question = nl2sqlQuestionInput(page);
+  await question.fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+
+  const jobsGate = createRequestGate();
+  let jobPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    jobPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await jobsGate.promise;
+    return fulfillJson(route, {
+      job_id: "job-current-question-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/jobs/job-current-question-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-current-question-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.040Z",
+      elapsed_ms: 40,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 18 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 6 },
+        { stage: "format_results", status: "done", elapsed_ms: 4 },
+      ],
+      timing: null,
+      result: {
+        engine: "select_ai",
+        original_question: "請求金額を業務用語で解釈したい",
+        rewritten_question: "請求金額を業務用語で解釈したい",
+        generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        executable_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        explanation: "請求情報を取得します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
+          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          total: 1,
+        },
+        timing,
+      },
+    })
+  );
+
+  await question.fill("請求金額を業務用語で解釈したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
+  await expect(question).toHaveValue("請求金額を業務用語で解釈したい");
+  await expect.poll(() => jobPayload?.question).toBe("請求金額を業務用語で解釈したい");
+
+  jobsGate.release();
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+  expect(jobPayload).toMatchObject({
+    question: "請求金額を業務用語で解釈したい",
+    profile_id: "default",
+    engine: "select_ai",
+  });
 });
 
 test("参考履歴は既定で折りたたまれ、ヘッダークリックで過去 SQL を展開できる", async ({ page }) => {
@@ -2894,10 +3672,11 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
   await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
 
   // 4 文字以上の質問を入力すると参考履歴を取得する（debounce 650ms）。
-  await page.getByLabel("検索クエリ").fill("請求金額を一覧で見たい");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
 
-  const header = page.getByRole("button", { name: "参考履歴" });
+  const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
+  await expect(header).toContainText("管理者の良い評価のみ");
   // 既定は折りたたみ: 中身（類似度・過去 SQL）は表示されない。
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByText("類似度 90%")).toHaveCount(0);
@@ -2908,21 +3687,159 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
   await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
 });
 
+test("参考履歴は API が空の場合に表示しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let requested = false;
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", (route) => {
+    requested = true;
+    return fulfillJson(route, { items: [] });
+  });
+
+  await page.goto("/query");
+  await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+
+  await nl2sqlQuestionInput(page).fill('対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：');
+
+  await expect.poll(() => requested).toBe(true);
+  await expect(page.getByRole("button", { name: /参考履歴/ })).toHaveCount(0);
+});
+
+test("参考履歴は管理者の良い評価の履歴だけを表示する", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          item: {
+            ...longHistoryItem,
+            id: "hist-good",
+            feedback_rating: "good",
+            admin_feedback_rating: "good",
+            admin_feedback_content: "管理者が確認しました。",
+          },
+          score: 0.92,
+          reason: "請求金額が一致し、管理者の良い feedback が付いています。",
+        },
+        {
+          item: {
+            ...historyItem,
+            feedback_rating: "good",
+            admin_feedback_rating: null,
+            admin_feedback_content: "",
+            id: "hist-user-good",
+            question: "ユーザーだけ良い評価の請求金額",
+          },
+          score: 0.98,
+          reason: "ユーザー評価のみのため表示しません。",
+        },
+        {
+          item: {
+            ...historyItem,
+            id: "hist-bad",
+            question: "違う評価の請求金額",
+            feedback_rating: "bad",
+            admin_feedback_rating: "bad",
+          },
+          score: 0.96,
+          reason: "高スコアでも bad のため表示しません。",
+        },
+        {
+          item: {
+            ...historyItem,
+            id: "hist-unrated",
+            question: "未評価の請求金額",
+            feedback_rating: null,
+          },
+          score: 0.94,
+          reason: "未評価のため表示しません。",
+        },
+      ],
+    })
+  );
+
+  await page.goto("/query");
+  const workspace = page.getByRole("region", { name: "SQL 生成ワークスペース" });
+  await expect(workspace).toBeVisible();
+
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toBeVisible();
+  await expect(header).toContainText("管理者の良い評価のみ");
+  await header.click();
+
+  const panel = page.getByTestId("nl2sql-similar-history");
+  const rows = panel.getByTestId("nl2sql-similar-history-item");
+  const similarQuestion = rows.first().getByTestId("nl2sql-similar-history-question");
+  await expect(rows).toHaveCount(1);
+  await expect(similarQuestion).toContainText("対象テーブル");
+  await expectQuestionClamp(similarQuestion, longHistoryItem.question, 1);
+  await expect(panel).toContainText("類似度 92%");
+  await expect(panel).not.toContainText("ユーザーだけ良い評価の請求金額");
+  await expect(panel).not.toContainText("違う評価の請求金額");
+  await expect(panel).not.toContainText("未評価の請求金額");
+  await expectNoHorizontalScroll(page);
+  await expectNoElementHorizontalOverflow(header);
+  await expectNoElementHorizontalOverflow(panel);
+  await expectNoElementHorizontalOverflow(rows.first());
+  await expectNoElementHorizontalOverflow(similarQuestion);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(header).toBeVisible();
+  await expect(panel).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await expectNoElementHorizontalOverflow(header);
+  await expectNoElementHorizontalOverflow(panel);
+  await expectNoElementHorizontalOverflow(rows.first());
+  await expectNoElementHorizontalOverflow(similarQuestion);
+});
+
 test("検索結果は 10 件ごとにページングする", async ({ page }) => {
   await mockNl2SqlApi(page);
-  // 実行結果を 12 件へ上書き（後勝ちルートで mockNl2SqlApi の execute を差し替える）
+  // 実行結果を 12 件へ上書き（後勝ちルートで mockNl2SqlApi の job result を差し替える）
   const rows = Array.from({ length: 12 }, (_, index) => ({
     CUSTOMER_NAME: `顧客${String(index + 1).padStart(2, "0")}`,
     TOTAL_AMOUNT: (index + 1) * 1000,
   }));
-  await page.route("**/api/nl2sql/execute", (route) =>
-    fulfillJson(route, { columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"], rows, total: rows.length })
+  await page.route("**/api/nl2sql/jobs/job-default-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-default-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        engine: "select_ai",
+        original_question: "請求金額を一覧で見たい",
+        rewritten_question: "請求金額を一覧で見たい",
+        generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        executable_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        explanation: "請求情報を取得します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"], rows, total: rows.length },
+        timing,
+      },
+    })
   );
 
   await page.goto("/query");
-  await page.getByLabel("検索クエリ").fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "SQL プレビュー" }).click();
-  await page.getByRole("button", { name: "この SQL を実行" }).click();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
 
   await expect(page.getByText("検索結果（12件）")).toBeVisible();
   // 1 ページ目 = 先頭 10 件。11 件目以降は次ページ。
@@ -3015,6 +3932,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
       steps: stageTimings.map((item) => ({ ...item, status: "done" })),
       timing: finishedTiming,
       result: {
+        history_id: "hist-run-001",
         engine: "select_ai_agent",
         engine_meta: { team_name: "mock_team" },
         fallback_reason: "",
@@ -3038,7 +3956,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   });
 
   await page.goto("/query");
-  await page.getByLabel("検索クエリ").fill(questionText);
+  await nl2sqlQuestionInput(page).fill(questionText);
   await page.getByRole("button", { name: "検索を実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
@@ -3101,21 +4019,18 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expect(page.getByRole("alert").filter({ hasText: "コピーできませんでした。" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
 
-  // 実行結果が履歴と一致するため、良い 押下で DBMS_CLOUD_AI と結果フィードバックへ同時保存する。
-  await expect(page.getByRole("heading", { name: "DBMS_CLOUD_AI feedback" })).toBeVisible();
+  // 実行結果の「良い」はユーザー feedback としてアプリ DB に保存する。
+  await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
   await page.getByLabel("feedback_content").fill("想定どおりの SQL です");
-  await page.getByRole("button", { name: "良い" }).click();
+  await page.getByRole("button", { name: "良い", exact: true }).click();
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
-  expect(api.selectAiFeedbackAddPayload).toMatchObject({
-    feedback_type: "positive",
-    response: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-    generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-  });
   expect(api.feedbackPayload).toEqual({
     history_id: "hist-run-001",
     rating: "good",
+    feedback_content: "想定どおりの SQL です",
     comment: "想定どおりの SQL です",
   });
+  expect(api.selectAiFeedbackAddPayload).toBeNull();
 
   await expectNoHorizontalScroll(page);
 });
@@ -3161,7 +4076,7 @@ test("検索ジョブの失敗段階を示し、入力を保持して再実行�
   );
 
   await page.goto("/query");
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   await question.fill(questionText);
   await page.getByRole("button", { name: "検索を実行" }).click();
 
@@ -3251,7 +4166,7 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
   );
 
   await page.goto("/query");
-  await page.getByLabel("検索クエリ").fill(questionText);
+  await nl2sqlQuestionInput(page).fill(questionText);
   await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
@@ -3259,7 +4174,144 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
   // ジョブへ渡す question が書き換え後の文になっている
   expect(jobPayload).toMatchObject({ question: rewrittenText, engine: "select_ai" });
   // 入力欄は書き換えずユーザー入力のまま保持する
-  await expect(page.getByLabel("検索クエリ")).toHaveValue(questionText);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue(questionText);
+});
+
+test("空の抽出条件では rewrite warning を表示し、条件を増やさずジョブ投入する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const questionText = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：';
+  const warning = "抽出条件が空欄のため条件追加を抑止しました。";
+  const blockedReason = "抽出条件が空欄の質問に対して WHERE 条件が生成されたため、SQL を実行しません。";
+  const generatedWhere = 'UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'';
+  const blockedSafety = {
+    ...safety,
+    is_safe: false,
+    blocked_reason: blockedReason,
+    warnings: [blockedReason],
+    referenced_tables: ["ADMIN.DEPARTMENT"],
+    referenced_columns: ["ADMIN.DEPARTMENT.DEPARTMENT_ID", "ADMIN.DEPARTMENT.DEPARTMENT_NAME"],
+  };
+  const createdAt = "2026-06-21T10:00:00.000Z";
+
+  let jobPayload: Record<string, unknown> | null = null;
+  await page.unroute("**/api/nl2sql/rewrite");
+  await page.route("**/api/nl2sql/rewrite", (route) =>
+    fulfillJson(route, {
+      original_question: questionText,
+      rewritten_question: questionText,
+      source: "deterministic",
+      model: "",
+      warnings: [warning],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    jobPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      job_id: "job-empty-filter-rewrite-001",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/jobs/job-empty-filter-rewrite-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-empty-filter-rewrite-001",
+      status: "error",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 20,
+      error_message: blockedReason,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 5 },
+        { stage: "safety_check", status: "error", elapsed_ms: 2 },
+        { stage: "execute_sql", status: "skipped", elapsed_ms: 0 },
+        { stage: "format_results", status: "done", elapsed_ms: 1 },
+      ],
+      timing: null,
+      result: {
+        engine: "select_ai",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: `SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "ADMIN"."DEPARTMENT" WHERE ${generatedWhere}`,
+        executable_sql: "",
+        explanation: blockedReason,
+        safety: blockedSafety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["DEPARTMENT_ID", "DEPARTMENT_NAME"], rows: [], total: 0 },
+        timing: null,
+        interpretation: {
+          available: true,
+          warnings: [blockedReason],
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_DEPT",
+            target_objects: ["ADMIN.DEPARTMENT"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.4,
+            warnings: [blockedReason],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.DEPARTMENT を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.DEPARTMENT"],
+            columns: ["ADMIN.DEPARTMENT.DEPARTMENT_ID", "ADMIN.DEPARTMENT.DEPARTMENT_NAME"],
+            joins: [],
+            filters: [generatedWhere],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            semantic_graph: {},
+            warnings: [blockedReason],
+          },
+        },
+        show_prompt: null,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByLabel("用語・同義語を使う").check();
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect(page.getByText("生成に使用される質問")).toBeVisible();
+  await expect(page.getByText(warning)).toBeVisible();
+  expect(jobPayload).toMatchObject({ question: questionText, engine: "select_ai" });
+  const submittedJobPayload = jobPayload as Record<string, unknown> | null;
+  expect(String(submittedJobPayload?.question ?? "")).not.toContain("管理部門");
+  const interpretation = page.getByTestId("nl2sql-interpretation-panel");
+  await expect(interpretation.getByText("入力と SQL が一致していません")).toBeVisible();
+  await expect(interpretation.getByText("条件なし（空欄）")).toBeVisible();
+  await expect(interpretation.getByText("生成された条件")).toBeVisible();
+  await expect(interpretation.getByText(generatedWhere)).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(page.getByText("生成に使用される質問")).toBeVisible();
+  await expect(page.getByText(warning)).toBeVisible();
+  await expect(interpretation.getByText("条件なし（空欄）")).toBeVisible();
+  await expect(interpretation.getByText(generatedWhere)).toBeVisible();
+  await expectNoHorizontalScroll(page);
 });
 
 test("schema catalog が空のとき、ジョブ失敗からサンプルデータ投入で復旧できる", async ({ page }) => {
@@ -3355,7 +4407,7 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   // catalog 空のときは「スキーマ未取得」+「スキーマを更新」導線を表示する。
   await expect(page.getByText(/スキーマ未取得/)).toBeVisible();
 
-  await page.getByLabel("検索クエリ").fill("すべてプロジェクトを教えてください。");
+  await nl2sqlQuestionInput(page).fill("すべてプロジェクトを教えてください。");
   await page.getByRole("button", { name: "検索を実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
@@ -3369,23 +4421,30 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   await expectNoHorizontalScroll(page);
 });
 
-test("Select AI の今回指示を preview に渡し、reset で消去できる", async ({ page }) => {
+test("Select AI の今回だけの生成条件を job に渡し、reset で消去できる", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 375, height: 900 });
   await page.goto("/query");
 
   await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
-  const disclosure = page.getByRole("button", { name: "今回の Select AI 指示" });
+  const disclosure = page.getByRole("button", { name: "今回だけの生成条件" });
+  await expectButtonBelowInput(nl2sqlQuestionInput(page), disclosure);
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "true");
 
-  await page.getByLabel("今回のアシスタントロール").fill("CFO 向け財務 SQL アシスタント");
-  await page.getByLabel("今回の追加指示").fill("現在日付を基準に四半期を計算する。");
-  await page.getByLabel("検索クエリ").fill("前四半期の売上を確認したい");
-  await page.getByRole("button", { name: "SQL プレビュー" }).click();
+  await page.getByLabel("今回の追加条件").fill("現在日付を基準に四半期を計算する。");
+  const roleDisclosure = page.getByRole("button", { name: "ロールを上書き" });
+  await expect(roleDisclosure).toHaveAttribute("aria-expanded", "false");
+  await roleDisclosure.click();
+  await expect(roleDisclosure).toHaveAttribute("aria-expanded", "true");
+  await page.getByLabel("アシスタントロール").fill("CFO 向け財務 SQL アシスタント");
+  await expect(disclosure.getByText("条件あり")).toBeVisible();
+  await nl2sqlQuestionInput(page).fill("前四半期の売上を確認したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
 
-  expect(api.previewPayload).toMatchObject({
+  await expect.poll(() => api.jobPayload?.question).toBe("前四半期の売上を確認したい");
+  expect(api.jobPayload).toMatchObject({
     engine: "select_ai",
     select_ai_overrides: {
       role: "CFO 向け財務 SQL アシスタント",
@@ -3396,8 +4455,19 @@ test("Select AI の今回指示を preview に渡し、reset で消去できる"
   await page.getByRole("button", { name: "リセット" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
-  await expect(page.getByLabel("今回のアシスタントロール")).toHaveValue("");
-  await expect(page.getByLabel("今回の追加指示")).toHaveValue("");
+  await expect(page.getByLabel("今回の追加条件")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "ロールを上書き" })).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("button", { name: "ロールを上書き" }).click();
+  await expect(page.getByLabel("アシスタントロール")).toHaveValue("");
+
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
+  expect(api.jobPayload).toMatchObject({
+    engine: "enterprise_ai_direct",
+    select_ai_overrides: null,
+  });
   await expectNoHorizontalScroll(page);
 });
 
@@ -3432,7 +4502,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   const directSql = page.getByTestId("nl2sql-direct-sql");
   await expect(directSql).toBeVisible();
 
-  const sqlInput = page.getByLabel("SQL", { exact: true });
+  const sqlInput = directSqlInput(page);
   const rowLimitInput = directSql.getByLabel("取得件数上限");
   await expect(rowLimitInput).toHaveValue("100");
   await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
@@ -3506,7 +4576,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
 
   await page.goto("/direct-sql");
   const directSql = page.getByTestId("nl2sql-direct-sql");
-  await directSql.getByLabel("SQL", { exact: true }).fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  await directSqlInput(directSql).fill("SELECT CUSTOMER_NAME FROM INVOICES");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   const directRequest = page.waitForRequest("**/api/nl2sql/execute");
   await directExecuteButton.click();
@@ -3562,9 +4632,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
 
   await page.goto("/admin-sql");
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  await adminSql
-    .getByLabel("管理 SQL", { exact: true })
-    .fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  await adminSqlInput(adminSql).fill("SELECT CUSTOMER_NAME FROM INVOICES");
   const adminExecuteButton = adminSql.getByRole("button", { name: "SQL 実行" });
   const adminRequest = page.waitForRequest("**/api/nl2sql/db-admin/execute");
   await adminExecuteButton.focus();
@@ -3614,7 +4682,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
 
   await page.goto("/direct-sql");
   const directSql = page.getByTestId("nl2sql-direct-sql");
-  await directSql.getByLabel("SQL", { exact: true }).fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await directSqlInput(directSql).fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await directExecuteButton.click();
   await expect(directSql.getByText("検索結果（16件）")).toBeVisible();
@@ -3668,7 +4736,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
 
   await page.goto("/admin-sql");
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  await adminSql.getByLabel("管理 SQL", { exact: true }).fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await adminSqlInput(adminSql).fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   const adminExecuteButton = adminSql.getByRole("button", { name: "SQL 実行" });
   await adminExecuteButton.click();
   await expect(adminSql.getByTestId("query-results-table")).toBeVisible();
@@ -3697,7 +4765,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
 
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  const sqlInput = adminSql.getByLabel("管理 SQL", { exact: true });
+  const sqlInput = adminSqlInput(adminSql);
   const rowLimitInput = adminSql.getByLabel("取得件数上限");
   await expect(rowLimitInput).toHaveValue("100");
   await expectButtonBelowInput(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
@@ -3814,7 +4882,7 @@ test("管理 SQL の純 DML バッチは部分成功を警告し、成功文だ�
   await page.goto("/admin-sql");
 
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  const sqlInput = adminSql.getByLabel("管理 SQL", { exact: true });
+  const sqlInput = adminSqlInput(adminSql);
   const partialSql =
     "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('青山商事'); " +
     "UPDATE MISSING_TABLE SET STATUS = 'REVIEWED' WHERE ID = 1";
@@ -3866,9 +4934,7 @@ test("管理 SQL のコミット後はデータ管理のオブジェクト一覧
 
   await page.getByRole("link", { name: "管理 SQL を実行" }).click();
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  await adminSql
-    .getByLabel("管理 SQL", { exact: true })
-    .fill("UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1");
+  await adminSqlInput(adminSql).fill("UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1");
   await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
   await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
@@ -3876,6 +4942,216 @@ test("管理 SQL のコミット後はデータ管理のオブジェクト一覧
   await page.getByRole("link", { name: "データの管理" }).click();
   await expect(page).toHaveURL(/\/data-management$/);
   await expect.poll(() => objectRequestCount).toBeGreaterThan(initialObjectRequestCount);
+});
+
+test("管理 SQL の CREATE TABLE 後はDB構造差分同期を表示し完了後に消す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let schemaRefreshPolls = 0;
+  await page.unroute("**/api/nl2sql/db-admin/execute");
+  await page.route("**/api/nl2sql/db-admin/execute", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    const sql = String(payload.sql ?? "CREATE TABLE ADMIN_SQL_TABLE (ID NUMBER)");
+    await fulfillJson(route, {
+      executed: true,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "CREATE",
+          status: "success",
+          sql,
+          row_count: null,
+          message: "OK",
+          elapsed_ms: 1,
+          error_message: "",
+        },
+      ],
+      committed: true,
+      rolled_back: false,
+      schema_refresh_job_id: "admin-sql-schema-refresh-done",
+      warnings: [],
+      timing,
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/admin-sql-schema-refresh-done", async (route) => {
+    schemaRefreshPolls += 1;
+    const done = schemaRefreshPolls >= 2;
+    await fulfillJson(route, {
+      job_id: "admin-sql-schema-refresh-done",
+      status: done ? "done" : "running",
+      mode: "targeted",
+      source: "db_admin_execute",
+      target_objects: [
+        {
+          owner: "APP",
+          object_name: "ADMIN_SQL_TABLE",
+          object_type: "table",
+          expected_state: "present",
+        },
+      ],
+      requires_full_refresh: false,
+      phase: done ? "done" : "fetching",
+      created_at: "2026-07-22T00:00:00.000Z",
+      scanned_objects: done ? 1 : 0,
+      changed_objects: done ? 1 : 0,
+      deleted_objects: 0,
+      catalog_version: done ? 2 : 0,
+      error_code: "",
+    });
+  });
+
+  await page.goto("/admin-sql");
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  await adminSqlInput(adminSql).fill("CREATE TABLE ADMIN_SQL_TABLE (ID NUMBER)");
+  await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+
+  await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
+  await expect(
+    adminSql.getByTestId("admin-sql-processing-region").getByText("CREATE TABLE ADMIN_SQL_TABLE")
+  ).toBeVisible();
+  const schemaSync = adminSql.getByTestId("admin-sql-schema-refresh-processing");
+  await expect(schemaSync).toContainText("DB 構造の差分を同期しています");
+  await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
+  await expect(schemaSync).toHaveCount(0);
+});
+
+test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let manualRefreshStarted = 0;
+  let manualRefreshPolls = 0;
+  const manualRefreshGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/db-admin/execute");
+  await page.route("**/api/nl2sql/db-admin/execute", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    const sql = String(payload.sql ?? "CREATE TABLE ADMIN_SQL_TABLE (ID NUMBER)");
+    await fulfillJson(route, {
+      executed: true,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "CREATE",
+          status: "success",
+          sql,
+          row_count: null,
+          message: "OK",
+          elapsed_ms: 1,
+          error_message: "",
+        },
+      ],
+      committed: true,
+      rolled_back: false,
+      schema_refresh_job_id: "admin-sql-schema-refresh-error",
+      warnings: [],
+      timing,
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/admin-sql-schema-refresh-error", async (route) => {
+    await fulfillJson(route, {
+      job_id: "admin-sql-schema-refresh-error",
+      status: "error",
+      mode: "targeted",
+      source: "db_admin_execute",
+      target_objects: [
+        {
+          owner: "APP",
+          object_name: "ADMIN_SQL_TABLE",
+          object_type: "table",
+          expected_state: "present",
+        },
+      ],
+      requires_full_refresh: true,
+      phase: "fetching",
+      created_at: "2026-07-22T00:00:00.000Z",
+      scanned_objects: 1,
+      changed_objects: 0,
+      deleted_objects: 0,
+      catalog_version: 0,
+      error_code: "schema_refresh_full_required",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    manualRefreshStarted += 1;
+    await fulfillJson(route, {
+      job_id: "admin-sql-manual-full-refresh",
+      status: "pending",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "queued",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 0,
+      changed_objects: 0,
+      deleted_objects: 0,
+      catalog_version: null,
+      error_code: "",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/admin-sql-manual-full-refresh", async (route) => {
+    manualRefreshPolls += 1;
+    if (manualRefreshPolls === 1) {
+      await fulfillJson(route, {
+        job_id: "admin-sql-manual-full-refresh",
+        status: "running",
+        mode: "full",
+        source: "manual",
+        target_objects: [],
+        requires_full_refresh: false,
+        phase: "fetching",
+        created_at: "2026-07-22T00:00:01.000Z",
+        scanned_objects: 1,
+        changed_objects: 0,
+        deleted_objects: 0,
+        catalog_version: null,
+        error_code: "",
+      });
+      return;
+    }
+    await manualRefreshGate.promise;
+    await fulfillJson(route, {
+      job_id: "admin-sql-manual-full-refresh",
+      status: "done",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "done",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 2,
+      changed_objects: 1,
+      deleted_objects: 0,
+      catalog_version: 2,
+      error_code: "",
+    });
+  });
+
+  await page.goto("/admin-sql");
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  await adminSqlInput(adminSql).fill("CREATE TABLE ADMIN_SQL_TABLE (ID NUMBER)");
+  await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+
+  await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
+  await expect(adminSql).toContainText("DB 構造の差分同期で不整合を検出しました。");
+  const refreshButton = adminSql.getByRole("button", { name: "DB 構造を再取得" });
+  await expect(refreshButton).toBeVisible();
+  await refreshButton.click();
+  await expect.poll(() => manualRefreshStarted).toBe(1);
+  await expect(refreshButton).toBeDisabled();
+  await expect(refreshButton.locator("svg.animate-spin")).toBeVisible();
+  const schemaSync = adminSql.getByTestId("admin-sql-schema-refresh-processing");
+  await expect(schemaSync).toContainText("DB 構造を再取得しています");
+  await expectNoHorizontalScroll(page);
+
+  manualRefreshGate.release();
+  await expect.poll(() => manualRefreshPolls).toBeGreaterThanOrEqual(2);
+  await expect(schemaSync).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
 });
 
 test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロップで読み込める", async ({ page }) => {
@@ -3886,7 +5162,7 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
   await page.getByRole("link", { name: "管理 SQL を実行" }).click();
 
   const adminSql = page.getByTestId("nl2sql-admin-sql");
-  const sqlInput = adminSql.getByLabel("管理 SQL", { exact: true });
+  const sqlInput = adminSqlInput(adminSql);
   const fileInput = adminSql.getByLabel("SQL ファイル読込 (.sql/.txt)");
   const dropzone = adminSql.getByTestId("sql-file-input-dropzone");
 
@@ -4053,32 +5329,32 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await page.goto("/query");
 
   // SQL 生成に検索クエリを入力する。
-  const question = page.getByLabel("検索クエリ");
+  const question = nl2sqlQuestionInput(page);
   await question.fill("保持テスト: 未入金の請求金額を確認したい");
 
   // SPA ナビで SELECT SQL 実行へ移動し、そちらにも入力する。
   await page.getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
-  const directSql = page.getByLabel("SQL", { exact: true });
+  const directSql = directSqlInput(page);
   await directSql.fill("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // SQL 生成へ戻ると入力が残っている(unmount で破棄されない = keep-alive)。
   await page.getByRole("link", { name: /SQL 生成/ }).first().click();
   await expect(page).toHaveURL(/\/query$/);
-  await expect(page.getByLabel("検索クエリ")).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
 
   // SELECT SQL 実行へ再び移動しても入力が残っている。
   await page.getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
-  await expect(page.getByLabel("SQL", { exact: true })).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
+  await expect(directSqlInput(page)).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // クリアは明示ボタンでのみ行われる(ナビ切替では消えない)。
   await page.getByRole("button", { name: "クリア" }).click();
-  await expect(page.getByLabel("SQL", { exact: true })).toHaveValue("");
+  await expect(directSqlInput(page)).toHaveValue("");
 
   await page.getByRole("link", { name: /SQL 生成/ }).first().click();
   await page.getByRole("button", { name: "リセット" }).click();
-  await expect(page.getByLabel("検索クエリ")).toHaveValue("");
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("");
 });
 
 test("history rerun deep-links back to query with question, engine, and profile", async ({ page }) => {
@@ -4095,7 +5371,7 @@ test("history rerun deep-links back to query with question, engine, and profile"
   await page.getByRole("button", { name: "この質問で再実行" }).click();
 
   await expect(page).toHaveURL(/\/query\?/);
-  await expect(page.getByLabel("検索クエリ")).toHaveValue("履歴から再実行したい請求金額");
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
   await expect(page.getByRole("button", { name: /Select AI Agent/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
   await expectNoHorizontalScroll(page);
@@ -4119,7 +5395,7 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
   await expect(page.getByRole("link", { name: /業務プロファイル/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /用語・同義語/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /SQL 生成/ }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: /SQL 確認・修復/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /SQL 確認・修復/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /SQL から質問を生成/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "SELECT SQL を実行" })).toBeVisible();
   await expect(page.getByRole("link", { name: "管理 SQL を実行" })).toBeVisible();
@@ -4137,106 +5413,21 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
   await expectNoHorizontalScroll(page);
 });
 
-test("sql analysis page analyzes SQL and repairs Oracle errors", async ({ page }) => {
+test("SQL 確認・修復 surface is removed and legacy URL falls back", async ({ page }) => {
   await mockNl2SqlApi(page);
 
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: /SQL 確認・修復/ })).toHaveCount(0);
+
   await page.goto("/sql-analysis");
-  await expect(page.locator("#sql-analysis-panel-analysis")).toBeVisible();
-  await expect(page.getByText("SQL は未分析です")).toBeVisible();
-  await expect(page.getByTestId("sql-analysis-result-count")).toHaveCount(0);
-
-  await page.getByLabel("分析する SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await expect(page.getByRole("button", { name: "SQL を分析" })).toBeEnabled();
-  await page.getByRole("button", { name: "SQL を分析" }).click();
-  await expect(page.getByText("SELECT 文として安全に実行できます。")).toBeVisible();
-  await expect(page.getByText("SELECT TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY")).toBeVisible();
-  await page.getByRole("button", { name: "SELECT を実行" }).click();
-  await expect(page.locator("#sql-analysis-panel-execution")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
-  await expect(page.getByTestId("sql-analysis-result-count")).toContainText("1");
-
-  // 入力を変えると分析・実行結果は無効化される（タブ切替なしで同一画面上）。
-  await page.getByLabel("分析する SQL").fill("SELECT INVOICE_ID FROM INVOICES");
-  await expect(page.getByRole("button", { name: "SELECT を実行" })).toBeDisabled();
-  await expect(page.getByText("SQL は未分析です")).toBeVisible();
-  await expect(page.getByTestId("sql-analysis-result-count")).toHaveCount(0);
-
-  await expect(page.locator("#sql-analysis-panel-repair")).toBeVisible();
-  await expect(page.getByText("修復候補は未生成です")).toBeVisible();
-  await page.getByLabel("修復する SQL").fill("SELECT BAD_COL FROM INVOICES");
-  await page.getByLabel("Oracle error message").fill("ORA-00904: invalid identifier");
-  await expect(page.getByRole("button", { name: "修復案を生成" })).toBeEnabled();
-  await page.getByRole("button", { name: "修復案を生成" }).click();
-  await expect(page.getByText("ORA-00904", { exact: true })).toBeVisible();
-  await expect(page.getByText("SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY")).toBeVisible();
-
-  await page.getByLabel("Oracle error message").fill("ORA-00942: table or view does not exist");
-  await expect(page.getByText("修復候補は未生成です")).toBeVisible();
-  await expect(page.getByText("ORA-00904", { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" })).toBeVisible();
+  await expect(page.locator("#sql-analysis-panel-analysis")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "SQL を分析" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 
-test("sql analysis page uses the shared panel styling and step indicator responsively", async ({ page }) => {
-  await mockNl2SqlApi(page);
-  await page.setViewportSize({ width: 1365, height: 900 });
-  await page.goto("/sql-analysis");
-
-  const panelStyle = async (id: string) =>
-    page.locator(`#sql-analysis-panel-${id}`).evaluate((node) => {
-      const style = window.getComputedStyle(node);
-      return {
-        backgroundColor: style.backgroundColor,
-        borderTopWidth: style.borderTopWidth,
-        paddingTop: style.paddingTop,
-      };
-    });
-
-  const analysisStyle = await panelStyle("analysis");
-  expect(analysisStyle.backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(analysisStyle.borderTopWidth).toBe("1px");
-  expect(Number.parseFloat(analysisStyle.paddingTop)).toBeGreaterThan(0);
-
-  // タブではなく工程ステッパー。3 工程セクションは常時縦積みで同じカード枠を共有する。
-  await expect(page.getByTestId("sql-analysis-steps")).toBeVisible();
-  await expect(page.getByRole("tab")).toHaveCount(0);
-  await expect(page.locator("#sql-analysis-panel-execution")).toBeVisible();
-  expect(await panelStyle("execution")).toEqual(analysisStyle);
-  await expect(page.locator("#sql-analysis-panel-repair")).toBeVisible();
-  expect(await panelStyle("repair")).toEqual(analysisStyle);
-  await expectNoHorizontalScroll(page);
-
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/sql-analysis");
-  await expect(page.getByTestId("sql-analysis-steps")).toBeVisible();
-  await expect(page.getByRole("button", { name: "SQL を分析" })).toBeVisible();
-  await expectNoHorizontalScroll(page);
-});
-
-test("sql analysis page shows actionable errors beside the active action", async ({ page }) => {
-  await mockNl2SqlApi(page);
-  await page.unroute("**/api/nl2sql/analyze");
-  await page.route("**/api/nl2sql/analyze", (route) =>
-    route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "SQL 分析サービスに接続できません。" }),
-    })
-  );
-
-  await page.goto("/sql-analysis");
-  await page.getByLabel("分析する SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  const analyzeButton = page.getByRole("button", { name: "SQL を分析" });
-  await analyzeButton.click();
-  const error = page.getByRole("alert");
-  await expect(error).toContainText("SQL 分析サービスに接続できません。");
-  await expect(error).toContainText("接続状態と入力内容を確認して再試行してください。");
-  await expect(analyzeButton).toBeEnabled();
-  // エラーはボタン行から独立した行に置かれ、長文でも回り込み/横溢れを起こさない。
-  await expect(error).toHaveCount(1);
-  await expectNoHorizontalScroll(page);
-});
-
-test("sql to question page analyzes structure and reverse-generates a question", async ({ page }) => {
+test("sql to question page reverse-generates a business question with one primary action", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/sql-to-question");
@@ -4246,37 +5437,28 @@ test("sql to question page analyzes structure and reverse-generates a question",
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
 
-  await page.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByLabel("用語集を利用").check();
-  await expect(page.getByRole("button", { name: "質問を生成" })).toBeEnabled();
-  await page.getByRole("button", { name: "SQL 構造を分析" }).click();
-  await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
-  await expect(page.getByText("SELECT 文として安全に実行できます。")).toBeVisible();
-  await expect.poll(() => api.analyzePayload).toEqual({
-    sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-    use_llm: true,
-  });
-
-  await expect(page.getByLabel("対象 SQL")).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await expect(page.getByLabel("用語集を利用")).toBeChecked();
-  await page.getByRole("button", { name: "質問を生成" }).click();
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByLabel("用語・同義語を使う").check();
+  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(generateButton).toBeEnabled();
+  await expect(page.getByRole("button", { name: "SQL 構造を分析" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Deep 逆生成" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "質問を生成", exact: true })).toHaveCount(0);
+  await expect(sqlToQuestionInput(page)).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
+  await generateButton.click();
   await expect(page.locator("#sql-to-question-panel-result")).toBeVisible();
-  await expect(page.getByText("請求金額を一覧で確認したい")).toBeVisible();
-  await expect.poll(() => api.reversePayload).toEqual({
-    sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-    profile_id: "default",
-    use_glossary: true,
-  });
+  await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   await expect(page.getByText("SQL 論理構造").first()).toBeVisible();
-  await expect(page.getByText("SELECT: TOTAL_AMOUNT")).toBeVisible();
-  await page.getByRole("button", { name: "Deep 逆生成" }).click();
-  await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
+  await expect(page.getByText("SELECT: 請求金額")).toBeVisible();
   await expect.poll(() => api.reverseDeepPayload).toEqual({
     sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     profile_id: "default",
     use_glossary: true,
   });
+  expect(api.reversePayload).toBeNull();
+  expect(api.analyzePayload).toBeNull();
   await expectNoHorizontalScroll(page);
 });
 
@@ -4361,7 +5543,7 @@ test("sql to question page shows a reserved loading state and retries reference-
 
   await page.goto("/sql-to-question");
   await expect(page.getByTestId("sql-to-question-schema-skeleton")).toBeVisible();
-  await expect(page.getByRole("button", { name: "質問を生成" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeDisabled();
   releaseFirstObjectRequest?.();
 
   const errorBanner = page.getByRole("alert");
@@ -4428,18 +5610,18 @@ test("sql to question page invalidates stale results when inputs change", async 
   );
   await page.goto("/sql-to-question");
 
-  await page.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "質問を生成" }).click();
-  await expect(page.getByText("請求金額を一覧で確認したい")).toBeVisible();
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
   await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("alternate");
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 
-  await page.getByRole("button", { name: "質問を生成" }).click();
-  await expect(page.getByText("請求金額を一覧で確認したい")).toBeVisible();
-  await page.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
-  await expect(page.getByRole("button", { name: "質問を生成" })).toBeEnabled();
+  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
+  await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeEnabled();
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 });
@@ -4450,13 +5632,14 @@ test("sql to question page keeps controls usable without page overflow at 375px"
   await page.goto("/sql-to-question");
 
   await expect(page.getByTestId("sql-to-question-steps")).toBeVisible();
-  await page.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  for (const label of ["質問を生成", "SQL 構造を分析", "Deep 逆生成"]) {
-    const button = page.getByRole("button", { name: label });
-    await expect(button).toBeVisible();
-    const box = await button.boundingBox();
-    expect(box?.width ?? 0).toBeGreaterThan(250);
-  }
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await expect(page.getByLabel("用語・同義語を使う")).toBeVisible();
+  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(generateButton).toBeVisible();
+  const box = await generateButton.boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThan(250);
+  await expect(page.getByRole("button", { name: "SQL 構造を分析" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Deep 逆生成" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 
@@ -4468,46 +5651,47 @@ test("sql to question page remains usable at 150 percent zoom", async ({ page })
     document.documentElement.style.zoom = "1.5";
   });
 
-  await page.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await expect(page.getByLabel("用語・同義語を使う")).toBeVisible();
   const steps = page.getByTestId("sql-to-question-steps");
   for (const label of ["SQL入力・生成", "SQL論理構造", "質問候補"]) {
     await expect(steps.getByText(label)).toBeVisible();
   }
-  for (const label of ["質問を生成", "SQL 構造を分析", "Deep 逆生成"]) {
-    const button = page.getByRole("button", { name: label });
-    await expect(button).toBeVisible();
-    await expect(button).toHaveCSS("white-space", "nowrap");
-  }
+  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(generateButton).toBeVisible();
+  await expect(generateButton).toHaveCSS("white-space", "nowrap");
+  await expect(page.getByRole("button", { name: "SQL 構造を分析" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Deep 逆生成" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 
-test("sql to question page reports analyze errors beside the action bar", async ({ page }) => {
+test("sql to question page reports generation errors beside the action bar", async ({ page }) => {
   await mockNl2SqlApi(page);
-  await page.unroute("**/api/nl2sql/analyze");
-  let releaseAnalyze: (() => void) | undefined;
-  const analyzeGate = new Promise<void>((resolve) => {
-    releaseAnalyze = resolve;
+  await page.unroute("**/api/nl2sql/reverse/deep");
+  let releaseReverse: (() => void) | undefined;
+  const reverseGate = new Promise<void>((resolve) => {
+    releaseReverse = resolve;
   });
-  await page.route("**/api/nl2sql/analyze", async (route) => {
-    await analyzeGate;
+  await page.route("**/api/nl2sql/reverse/deep", async (route) => {
+    await reverseGate;
     await route.fulfill({
       status: 500,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "SQL analysis unavailable" }),
+      body: JSON.stringify({ detail: "SQL reverse unavailable" }),
     });
   });
   await page.goto("/sql-to-question");
 
   const inputPanel = page.locator("#sql-to-question-panel-input");
-  await inputPanel.getByLabel("対象 SQL").fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await inputPanel.getByRole("button", { name: "SQL 構造を分析" }).click();
-  await expect(inputPanel.getByLabel("対象 SQL")).toBeDisabled();
+  await sqlToQuestionInput(inputPanel).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await inputPanel.getByRole("button", { name: "業務質問を生成" }).click();
+  await expect(sqlToQuestionInput(inputPanel)).toBeDisabled();
   await expect(inputPanel.getByRole("combobox", { name: "業務プロファイル" })).toBeDisabled();
-  await expect(inputPanel.getByLabel("用語集を利用")).toBeDisabled();
-  releaseAnalyze?.();
+  await expect(inputPanel.getByLabel("用語・同義語を使う")).toBeDisabled();
+  releaseReverse?.();
 
   await expect(inputPanel.getByRole("alert")).toContainText("接続状態と入力内容を確認して再試行してください。");
-  await expect(inputPanel.getByLabel("対象 SQL")).toBeEnabled();
+  await expect(sqlToQuestionInput(inputPanel)).toBeEnabled();
 });
 
 test("feedback management page mirrors Select AI feedback operations", async ({ page }, testInfo) => {
@@ -4515,6 +5699,12 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
 
   await page.goto("/feedback-management");
   await expect(page.getByRole("heading", { name: "フィードバック管理" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveText([
+    "アプリ内フィードバック",
+    "Select AI feedback",
+    "Select AI ベクトルインデックス",
+    "類似検索インデックス",
+  ]);
   await expect(page.getByRole("tab", { name: "Select AI feedback" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "Select AI ベクトルインデックス" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toBeVisible();
@@ -4548,7 +5738,8 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
 
   await page.getByRole("button", { name: "sql-001 の feedback を選択" }).click();
   await expect(page.getByLabel("選択された SQL_TEXT")).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "選択したフィードバックを削除" }).click();
+  await page.getByTestId("feedback-selected-sql-actions").getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "選択したフィードバックを削除" }).click();
   await page
     .getByRole("alertdialog")
     .getByRole("button", { name: "選択したフィードバックを削除" })
@@ -4597,30 +5788,79 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     name: "フィードバック保存",
   });
   const openCandidateLink = appFeedbackActions.getByRole("link", { name: "学習候補で確認" });
-  const clearAppFeedbackButton = appFeedbackActions.getByRole("button", {
-    name: "フィードバックを解除",
-  });
+  const appFeedbackMoreButton = appFeedbackActions.getByRole("button", { name: "その他の操作" });
   await expect(appFeedbackActions).toHaveClass(/\bborder-t\b/);
   await expect(saveAppFeedbackButton).toHaveClass(/\bh-10\b/);
   await expect(saveAppFeedbackButton).toHaveClass(/\bbg-primary\b/);
   await expect(openCandidateLink).toHaveClass(/\bh-10\b/);
   await expect(openCandidateLink).toHaveClass(/\bbg-card\b/);
-  await expect(clearAppFeedbackButton).toHaveClass(/\bh-10\b/);
-  await expect(clearAppFeedbackButton).toHaveClass(/\bbg-danger\b/);
+  await expect(appFeedbackMoreButton).toHaveClass(/\bh-10\b/);
+  await expect(appFeedbackMoreButton).toHaveClass(/\bbg-card\b/);
+  await expect(appFeedbackActions.getByRole("button", { name: "フィードバックを解除" })).toHaveCount(0);
   await expect(openCandidateLink).toHaveAttribute(
     "href",
     /question-classifier-models\?tab=candidates&history_id=hist-001/
   );
-  await page.getByRole("combobox", { name: "評価", exact: true }).selectOption("good");
-  await page.getByLabel("コメント（任意）").fill("SQL は期待通りです");
+  await expect(page.getByText("ユーザー評価", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("ユーザー feedback_content")).toHaveValue("SQL は期待通りです");
+  await page.getByRole("button", { name: "ユーザー内容を反映" }).click();
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("SQL は期待通りです");
+  const registerSelectAiCheckbox = page.getByRole("checkbox", {
+    name: "Select AI feedback に登録する",
+  });
+  await expect(registerSelectAiCheckbox).not.toBeChecked();
+  await page.getByRole("combobox", { name: "管理者評価", exact: true }).selectOption("good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
-  expect(api.feedbackPayload).toEqual({
+  await expect(page.getByText("管理者フィードバックを保存しました。")).toBeVisible();
+  expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
     rating: "good",
-    comment: "SQL は期待通りです",
+    feedback_content: "SQL は期待通りです",
+    register_select_ai_feedback: false,
+    select_ai_response: historySql,
+    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
   });
-  await page.getByRole("button", { name: "フィードバックを解除" }).click();
+  expect(api.selectAiFeedbackAddPayload).toBeNull();
+  await expect(registerSelectAiCheckbox).not.toBeChecked();
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("SQL は期待通りです");
+
+  await page.getByRole("combobox", { name: "管理者評価", exact: true }).selectOption("bad");
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveAttribute("required", "");
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveAttribute("aria-required", "true");
+  await page.getByLabel("管理者 feedback_content").fill("");
+  await page.getByRole("button", { name: "フィードバック保存" }).click();
+  await expect(page.getByText("「違う」の場合は feedback_content の入力が必須です。")).toBeVisible();
+  await expect(page.getByLabel("管理者 feedback_content")).toBeFocused();
+  expect(api.adminFeedbackPayload).toEqual({
+    history_id: "hist-001",
+    rating: "good",
+    feedback_content: "SQL は期待通りです",
+    register_select_ai_feedback: false,
+    select_ai_response: historySql,
+    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+  });
+
+  await registerSelectAiCheckbox.check();
+  await expect(page.getByLabel("Select AI response SQL")).toHaveValue(historySql);
+  await page.getByLabel("管理者 feedback_content").fill("Select AI 登録用の管理者確認メモ");
+  await page.getByRole("button", { name: "フィードバック保存" }).click();
+  await expect(page.getByText("管理者フィードバックを保存し、Select AI feedback に登録しました。")).toBeVisible();
+  expect(api.adminFeedbackPayload).toEqual({
+    history_id: "hist-001",
+    rating: "bad",
+    feedback_content: "Select AI 登録用の管理者確認メモ",
+    register_select_ai_feedback: true,
+    select_ai_response: historySql,
+    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+  });
+  await expect(page.getByRole("combobox", { name: "管理者評価", exact: true })).toHaveValue("bad");
+  await expect(registerSelectAiCheckbox).toBeChecked();
+  await expect(page.getByLabel("Select AI response SQL")).toHaveValue(historySql);
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("Select AI 登録用の管理者確認メモ");
+  await appFeedbackMoreButton.click();
+  const clearAppFeedbackMenuItem = page.getByRole("menuitem", { name: "フィードバックを解除" });
+  await expect(clearAppFeedbackMenuItem).toHaveAttribute("data-form-action-tone", "danger");
+  await clearAppFeedbackMenuItem.click();
   const clearAppFeedbackDialog = page.getByRole("alertdialog", {
     name: "フィードバックを解除しますか",
   });
@@ -4629,6 +5869,9 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(clearAppFeedbackDialog.locator(".bg-danger-bg")).toHaveCount(0);
   await clearAppFeedbackDialog.getByRole("button", { name: "フィードバックを解除" }).click();
   await expect(page.getByText("フィードバックを解除しました。")).toBeVisible();
+  await expect(registerSelectAiCheckbox).not.toBeChecked();
+  await expect(page.getByLabel("Select AI response SQL")).toHaveCount(0);
+  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("");
   const feedbackFilterOptions = page.getByLabel("評価フィルター").locator("option");
   await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
   await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
@@ -4660,22 +5903,23 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   await expect(page.getByRole("heading", { name: "類似検索インデックス" })).toBeVisible();
   await expect(page.getByText("oracle_26ai")).toBeVisible();
-  await expect(page.getByLabel("Oracle 26ai DDL plan")).toHaveValue(/VECTOR\(1536, FLOAT32\)/);
+  await expect(page.getByLabel("Oracle 26ai DDL plan")).toHaveCount(0);
+  await expect(page.getByText("CREATE TABLE NL2SQL_FEEDBACK_VECTORS", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("CREATE VECTOR INDEX NL2SQL_FEEDBACK_VEC_IDX", { exact: false })).toHaveCount(0);
   const similarityConfigSave = page.getByRole("button", { name: "設定保存" });
   const similarityIndexActions = page.getByTestId("feedback-similarity-index-actions");
   const rebuildFeedbackIndexButton = similarityIndexActions.getByRole("button", {
     name: "Rebuild 実行",
   });
-  const clearFeedbackIndexButton = similarityIndexActions.getByRole("button", {
-    name: "Clear 実行",
-  });
+  const similarityIndexMoreButton = similarityIndexActions.getByRole("button", { name: "その他の操作" });
   await expect(similarityConfigSave).toHaveClass(/\bh-10\b/);
   await expect(similarityConfigSave).toHaveClass(/\bbg-primary\b/);
   await expect(similarityIndexActions).toHaveClass(/\bborder-t\b/);
   await expect(rebuildFeedbackIndexButton).toHaveClass(/\bh-10\b/);
   await expect(rebuildFeedbackIndexButton).toHaveClass(/\bbg-card\b/);
-  await expect(clearFeedbackIndexButton).toHaveClass(/\bh-10\b/);
-  await expect(clearFeedbackIndexButton).toHaveClass(/\bbg-danger\b/);
+  await expect(similarityIndexMoreButton).toHaveClass(/\bh-10\b/);
+  await expect(similarityIndexMoreButton).toHaveClass(/\bbg-card\b/);
+  await expect(similarityIndexActions.getByRole("button", { name: "Clear 実行" })).toHaveCount(0);
   await page.getByLabel("しきい値").fill("0.85");
   await page.getByLabel("件数").fill("4");
   await similarityConfigSave.click();
@@ -4690,16 +5934,101 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await rebuildDialog.getByRole("button", { name: "Rebuild 実行" }).click();
   await expect(page.getByText(/NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
   await expect(page.getByText("ready", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "削除" }).click();
+  await clickRowAction(page, "feedback-vector-entry-actions-hist-001", "削除");
+  const deleteEntryDialog = page.getByRole("alertdialog", { name: "Feedback entry を削除しますか" });
+  await expect(deleteEntryDialog).toBeVisible();
+  await deleteEntryDialog.getByRole("button", { name: "削除" }).click();
   await expect(page.getByText("Feedback entry を削除しました。")).toBeVisible();
   expect(api.feedbackEntriesDeletePayload).toEqual({ history_ids: ["hist-001"] });
-  await clearFeedbackIndexButton.click();
+  await similarityIndexMoreButton.click();
+  const clearFeedbackIndexMenuItem = page.getByRole("menuitem", { name: "Clear 実行" });
+  await expect(clearFeedbackIndexMenuItem).toHaveAttribute("data-form-action-tone", "danger");
+  await clearFeedbackIndexMenuItem.click();
   const clearDialog = page.getByRole("alertdialog", { name: "Feedback index 削除の確認" });
   await expect(clearDialog).toBeVisible();
   await clearDialog.getByRole("button", { name: "Clear 実行" }).click();
   await expect(page.getByText(/clear 実行には NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 900 });
+  await expectNoHorizontalScroll(page);
+});
+
+test("feedback management keeps long query text contained in app feedback and similarity entries", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop project covers split-pane resizing and mobile stacking");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mockNl2SqlApi(page);
+  await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return fulfillJson(route, {
+      items: [
+        {
+          ...longHistoryItem,
+          training_status: "pending",
+          training_example_id: "",
+        },
+      ],
+      total: 1,
+      next_cursor: "",
+    });
+  });
+  await page.route("**/api/nl2sql/feedback-entries", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          history_id: longHistoryItem.id,
+          question: longHistoryItem.question,
+          generated_sql: longHistoryItem.generated_sql,
+          profile_id: "default",
+          profile_name: "既定プロファイル",
+          profile_category: "既定プロファイル",
+          feedback_rating: "good",
+          feedback_comment: longHistoryItem.feedback_comment,
+          admin_feedback_rating: "good",
+          admin_feedback_content: longHistoryItem.admin_feedback_content,
+          admin_feedback_updated_at: longHistoryItem.admin_feedback_updated_at,
+          indexed: false,
+          created_at: longHistoryItem.created_at,
+        },
+      ],
+      total: 1,
+      indexed_count: 0,
+    })
+  );
+
+  await page.goto("/feedback-management?tab=appFeedback");
+  const historyPane = page.getByTestId("feedback-history-pane");
+  const editorPane = page.getByTestId("app-feedback-editor-pane");
+  const row = page.getByTestId("feedback-history-row").first();
+  const rowQuestion = row.getByTestId("feedback-history-question");
+  const selectedQuestion = page.getByTestId("app-feedback-selected-question");
+  await expect(rowQuestion).toContainText("対象テーブル");
+  await expect(selectedQuestion).toContainText("対象テーブル");
+  await expectQuestionClamp(rowQuestion, longHistoryItem.question, 1);
+  await expectQuestionClamp(selectedQuestion, longHistoryItem.question, 3);
+  await expectHorizontallyContained(row, historyPane);
+  await expectHorizontallyContained(rowQuestion, row);
+  await expectHorizontallyContained(selectedQuestion, editorPane);
+  const historySelect = page.getByRole("combobox", { name: "対象履歴" });
+  await historySelect.click();
+  const listbox = page.getByRole("listbox", { name: "対象履歴" });
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option")).toContainText("対象テーブル");
+  await expectHorizontallyContained(listbox, editorPane);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "全文表示" }).click();
+  await expect(page.getByRole("button", { name: "閉じる" })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  await page.getByRole("tab", { name: "類似検索インデックス" }).click();
+  const vectorEntry = page.getByTestId("feedback-vector-entry").first();
+  const vectorQuestion = vectorEntry.getByTestId("feedback-vector-question");
+  await expect(vectorQuestion).toContainText("対象テーブル");
+  await expectQuestionClamp(vectorQuestion, longHistoryItem.question, 1);
+  await expectHorizontallyContained(vectorQuestion, vectorEntry);
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expectHorizontallyContained(vectorQuestion, vectorEntry);
   await expectNoHorizontalScroll(page);
 });
 
@@ -4931,7 +6260,7 @@ test("app feedback keeps history left of the editor without crossing the divider
   const mobileActionControls = [
     mobileActionBar.getByRole("button", { name: "フィードバック保存" }),
     mobileActionBar.getByRole("link", { name: "学習候補で確認" }),
-    mobileActionBar.getByRole("button", { name: "フィードバックを解除" }),
+    mobileActionBar.getByRole("button", { name: "その他の操作" }),
   ];
   const mobileActionBarBox = await mobileActionBar.boundingBox();
   expect(mobileActionBarBox).not.toBeNull();
@@ -4943,6 +6272,8 @@ test("app feedback keeps history left of the editor without crossing the divider
     await expect(action).toBeFocused();
     await expectHorizontallyContained(action, editorPane);
   }
+  await mobileActionBar.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "フィードバックを解除" })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -4956,10 +6287,6 @@ test("shared split panes reserve their divider track across NL2SQL management pa
     { path: "/view-management", splitIds: ["view-management-list"] },
     { path: "/data-management", splitIds: ["data-management-preview"] },
     { path: "/sample-data", splitIds: ["sample-data-import"] },
-    {
-      path: "/sql-analysis",
-      splitIds: ["sql-analysis-workspace", "sql-analysis-repair"],
-    },
     { path: "/sql-to-question", splitIds: ["sql-to-question-input"] },
     { path: "/feedback-management", splitIds: ["feedback-management-entries-split"] },
     {
@@ -4973,7 +6300,9 @@ test("shared split panes reserve their divider track across NL2SQL management pa
     await page.goto(scenario.path);
     for (const splitId of scenario.splitIds) {
       const pane = page.getByTestId(`fixed-split-pane-${splitId}`);
-      await expect(pane).toHaveAttribute("data-split-layout", "split");
+      await expect(pane).toHaveAttribute("data-split-layout", "split", {
+        timeout: SPLIT_PANE_RENDER_TIMEOUT_MS,
+      });
       await expectSplitPaneReservedTrack(pane);
     }
     await expectNoHorizontalScroll(page);
@@ -5170,6 +6499,81 @@ test("question classifier model management page trains classifier and finds lear
   await page.goto("/question-classifier-models");
   await expect(page.getByRole("heading", { name: "訓練データ一覧" })).toBeVisible();
   expect(api.classifierModelListRequests).toBe(0);
+
+  const firstTrainingRow = page
+    .getByTestId("qcm-training-data-table")
+    .locator("tbody tr")
+    .filter({ hasText: "請求金額が大きい取引先を見たい" });
+  await expect(firstTrainingRow).toBeVisible();
+  await expect(firstTrainingRow.getByRole("button", { name: "編集", exact: true })).toHaveCount(0);
+  await expect(firstTrainingRow.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
+  await firstTrainingRow.getByTestId("qcm-training-row-actions-example-001-trigger").click();
+  const editTrainingMenuItem = page.getByRole("menuitem", { name: "編集", exact: true });
+  const deleteTrainingMenuItem = page.getByRole("menuitem", { name: "削除", exact: true });
+  await expect(editTrainingMenuItem).toBeVisible();
+  await expect(deleteTrainingMenuItem).toBeVisible();
+  await expect(deleteTrainingMenuItem).toHaveAttribute("data-entity-action-tone", "danger");
+  await editTrainingMenuItem.click();
+  await expect(firstTrainingRow.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await firstTrainingRow.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await clickRowAction(page, "qcm-training-row-actions-example-001", "削除");
+  const deleteTrainingDialog = page.getByRole("alertdialog", { name: "訓練データを削除しますか" });
+  await expect(deleteTrainingDialog).toBeVisible();
+  await deleteTrainingDialog.getByRole("button", { name: "削除", exact: true }).click();
+  await expect(page.getByText("訓練データを削除しました。モデルは再学習待ちです。")).toBeVisible();
+  expect(api.classifierTrainingDeleteId).toBe("example-001");
+  await expect(page.getByText("請求金額が大きい取引先を見たい")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("learning candidates keep long query text clear of selection controls", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop project covers desktop and 375px geometry");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/classifier/training-candidates*", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          history_id: longHistoryItem.id,
+          question: longHistoryItem.question,
+          profile_id: "default",
+          profile_name: "既定プロファイル",
+          profile_category: "既定プロファイル",
+          feedback_rating: "good",
+          feedback_comment: longHistoryItem.feedback_comment,
+          created_at: longHistoryItem.created_at,
+          status: "pending",
+          training_example_id: "",
+          conflict_profile_ids: [],
+        },
+      ],
+      total: 1,
+      next_cursor: "",
+      pending_count: 1,
+      added_count: 0,
+      attention_count: 0,
+    })
+  );
+
+  await page.goto("/question-classifier-models?tab=candidates");
+  const candidate = page.getByTestId("qcm-training-candidate").first();
+  const question = candidate.getByTestId("qcm-candidate-question");
+  const checkbox = candidate.getByRole("checkbox");
+  const profile = candidate.getByRole("combobox", { name: "追加する Profile" });
+  await expect(question).toContainText("対象テーブル");
+  await expectQuestionClamp(question, longHistoryItem.question, 1);
+  await expect(checkbox).toBeVisible();
+  await expect(profile).toBeVisible();
+  await expectHorizontallyContained(question, candidate);
+  await expectHorizontallyContained(profile, candidate);
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(question).toBeVisible();
+  await expect(checkbox).toBeVisible();
+  await expect(profile).toBeVisible();
+  await expectHorizontallyContained(question, candidate);
+  await expectHorizontallyContained(profile, candidate);
   await expectNoHorizontalScroll(page);
 });
 
@@ -5181,12 +6585,12 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await page.unroute("**/api/nl2sql/profiles");
   await page.route("**/api/nl2sql/profiles", (route) =>
     fulfillJson(route, [
-      ...profiles,
+      { ...profiles[0], category: "請求カテゴリ" },
       {
         ...profiles[0],
         id: "payment",
         name: "入金管理",
-        category: "入金管理",
+        category: "入金カテゴリ",
       },
     ])
   );
@@ -5196,6 +6600,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
     question: "履歴から再実行したい請求金額",
     profile_id: "default",
     profile_name: "既定プロファイル",
+    profile_category: "請求カテゴリ",
     feedback_rating: "good",
     feedback_comment: "SQL は期待通りです",
     created_at: historyItem.created_at,
@@ -5211,8 +6616,10 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   };
   const initialGate = createRequestGate();
   let holdInitialRequests = true;
+  let holdNoResultsRequest = false;
   let failRecoveryRequest = true;
   const candidateRequests: URL[] = [];
+  const noResultsGate = createRequestGate();
 
   await page.unroute("**/api/nl2sql/classifier/training-candidates*");
   await page.route("**/api/nl2sql/classifier/training-candidates*", async (route) => {
@@ -5233,6 +6640,9 @@ test("learning candidates use the shared responsive list, filters, paging, and r
       });
     }
     if (url.searchParams.get("q") === "一致なし") {
+      if (holdNoResultsRequest) {
+        await noResultsGate.promise;
+      }
       return fulfillJson(route, {
         items: [],
         total: 0,
@@ -5306,8 +6716,10 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await page.keyboard.press("ArrowDown");
   await expect(candidateProfile).toHaveAttribute("aria-expanded", "true");
   const profileListbox = firstCandidate.getByRole("listbox");
-  await expect(profileListbox.getByText("default", { exact: true })).toBeVisible();
-  await expect(profileListbox.getByText("payment", { exact: true })).toBeVisible();
+  await expect(profileListbox.getByText("default", { exact: true })).toHaveCount(0);
+  await expect(profileListbox.getByText("payment", { exact: true })).toHaveCount(0);
+  await expect(profileListbox.getByText("請求カテゴリ", { exact: true })).toBeVisible();
+  await expect(profileListbox.getByText("入金カテゴリ", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(candidateProfile).toHaveAttribute("aria-expanded", "false");
   await expect(candidateProfile).toBeFocused();
@@ -5347,9 +6759,17 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   const profileFilter = page.getByRole("combobox", { name: "業務プロファイル" });
   await profileFilter.click();
   await page.getByRole("option", { name: /入金管理/ }).click();
+  holdNoResultsRequest = true;
   await search.fill("一致なし");
   await search.press("Enter");
+  const applyFiltersButton = page.getByRole("button", { name: "絞り込み" });
+  const filteredSkeleton = page.getByTestId("qcm-candidates-list-skeleton");
+  await expect(filteredSkeleton).toBeVisible();
+  await expect(applyFiltersButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(filteredSkeleton.locator("svg.animate-spin")).toHaveCount(0);
+  noResultsGate.release();
   await expect(page.getByText("条件に一致する学習候補がありません", { exact: true })).toBeVisible();
+  holdNoResultsRequest = false;
   const lastFilteredRequest = candidateRequests.at(-1);
   expect(lastFilteredRequest?.searchParams.get("q")).toBe("一致なし");
   expect(lastFilteredRequest?.searchParams.get("status")).toBe("pending");
@@ -5620,7 +7040,7 @@ test("data preparation read results use the shared detail skeleton without stale
   let previewAttempts = 0;
   const previewResponse = {
     runtime: "deterministic",
-    sql: 'SELECT * FROM "INVOICES" FETCH FIRST 100 ROWS ONLY',
+    sql: 'SELECT * FROM "INVOICES" FETCH FIRST 10 ROWS ONLY',
     results: {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
       rows: [{ CUSTOMER_NAME: "スケルトン確認顧客", TOTAL_AMOUNT: 1200000 }],
@@ -5655,16 +7075,16 @@ test("data preparation read results use the shared detail skeleton without stale
   const resultsPanel = page.locator("#data-management-panel-preview").locator("section").filter({
     has: page.getByRole("heading", { name: "表示結果" }),
   });
-  const invoicesPreviewButton = page.getByRole("button", { name: "INVOICES のデータを表示" });
-  const viewPreviewButton = page.getByRole("button", { name: "V_EMP_DEPT のデータを表示" });
-  const invoicesTruncateAction = page.getByTestId("data-preview-object-list-row-actions-INVOICES-trigger");
+  const invoicesPreviewButton = page.getByRole("button", { name: "APP.INVOICES のデータを表示" });
+  const viewPreviewButton = page.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" });
+  const invoicesTruncateAction = page.getByTestId("data-preview-object-list-row-actions-APP.INVOICES-trigger");
   await invoicesPreviewButton.click();
   const dataSkeleton = page.getByTestId("data-preview-results-detail-skeleton");
   await expect(dataSkeleton).toBeVisible();
   await expect(invoicesPreviewButton).toBeDisabled();
   await expect(viewPreviewButton).toBeDisabled();
   await expect(invoicesTruncateAction).toBeDisabled();
-  await expect(page.getByTestId("data-preview-object-list-row-actions-V_EMP_DEPT-trigger")).toHaveCount(0);
+  await expect(page.getByTestId("data-preview-object-list-row-actions-APP.V_EMP_DEPT-trigger")).toHaveCount(0);
   await expect(resultsPanel.getByText("データ未表示")).toHaveCount(0);
   await expect(resultsPanel.getByText("スケルトン確認顧客")).toHaveCount(0);
 
@@ -5725,7 +7145,7 @@ test("data preparation read results use the shared detail skeleton without stale
   });
   await page.goto("/table-management");
   await expect(page.getByTestId("table-management-grid")).toBeVisible();
-  await page.getByRole("button", { name: "INVOICES を表示" }).click();
+  await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();
   const tableSkeleton = page.getByTestId("table-management-detail-skeleton");
   await expect(tableSkeleton).toBeVisible();
   const tableSkeletonShape = await tableSkeleton
@@ -5786,15 +7206,18 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await commentFetchButton.click();
   const commentInputSkeleton = page.getByTestId("comment-management-input-detail-skeleton");
   await expect(commentInputSkeleton).toBeVisible();
+  await expect(commentFetchButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(commentInputSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.locator("#comment-management-panel-input").getByText("対象情報が未取得です")).toHaveCount(0);
   commentDetailGate.release();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: INVOICES/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
 
   const commentGenerateGate = createRequestGate();
   await page.route("**/api/nl2sql/metadata-samples", async (route) => {
     await commentGenerateGate.promise;
     return fulfillJson(route, {
-      sample_text: "OBJECT: INVOICES\nCUSTOMER_NAME: 青山商事",
+      sample_text: "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 青山商事",
       sample_count: 1,
       runtime: "oracle",
       warnings: [],
@@ -5805,21 +7228,25 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await commentGenerateButton.click();
   const commentExecuteSkeleton = page.getByTestId("comment-management-execute-result-detail-skeleton");
   await expect(commentExecuteSkeleton).toBeVisible();
+  await expect(commentGenerateButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(commentExecuteSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.locator("#comment-management-panel-execute").getByText("生成済み SQL がありません")).toHaveCount(0);
   commentGenerateGate.release();
   await expect(page.locator("#comment-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON COLUMN/);
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("SQL 生成が完了しました。");
 
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   const annotationFetchButton = page.getByRole("button", { name: "情報を取得" });
   await expectButtonBelowInput(page.getByTestId("annotation-management-target-footer"), annotationFetchButton);
   await annotationFetchButton.click();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: INVOICES/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
   const annotationGenerateGate = createRequestGate();
   await page.route("**/api/nl2sql/annotations/generate-sql", async (route) => {
     await annotationGenerateGate.promise;
     return fulfillJson(route, {
-      sql: "ALTER TABLE \"INVOICES\" MODIFY (\"TOTAL_AMOUNT\" ANNOTATIONS (ADD IF NOT EXISTS UI_Display '税込請求金額'));",
+      sql: "ALTER TABLE \"APP\".\"INVOICES\" MODIFY (\"TOTAL_AMOUNT\" ANNOTATIONS (ADD IF NOT EXISTS UI_Display '税込請求金額'));",
       source: "deterministic",
       warnings: [],
       timing,
@@ -5828,41 +7255,61 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   const annotationGenerateButton = page.getByRole("button", { name: "SQL 生成" });
   await expectButtonBelowInput(page.getByLabel("追加入力"), annotationGenerateButton);
   await annotationGenerateButton.click();
-  await expect(page.getByTestId("annotation-management-execute-result-detail-skeleton")).toBeVisible();
+  const annotationExecuteSkeleton = page.getByTestId("annotation-management-execute-result-detail-skeleton");
+  await expect(annotationExecuteSkeleton).toBeVisible();
+  await expect(annotationGenerateButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(annotationExecuteSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   annotationGenerateGate.release();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("SQL 生成が完了しました。");
 
   await page.goto("/view-management");
   await expect(page.getByTestId("view-management-grid")).toBeVisible();
-  await page.getByRole("button", { name: "V_EMP_DEPT を表示" }).click();
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
   await expect(page.getByRole("button", { name: /XLSX ダウンロード/ })).toBeVisible();
   const viewColumnsDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: /XLSX ダウンロード/ }).click();
   const viewColumnsDownload = await viewColumnsDownloadPromise;
-  expect(viewColumnsDownload.suggestedFilename()).toBe("v_emp_dept_columns.xlsx");
+  expect(viewColumnsDownload.suggestedFilename()).toBe("app_v_emp_dept_columns.xlsx");
   const autoDdlResponse = page.waitForResponse((response) =>
     response.url().includes("/api/nl2sql/db-admin/views/V_EMP_DEPT?include_ddl=1") && response.ok()
   );
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await autoDdlResponse;
   await expect(page.getByTestId("view-join-where-actions")).toContainText("DDL 取得済み");
-  const joinWhereGate = createRequestGate();
+  let joinWhereGate = createRequestGate();
   await page.route("**/api/nl2sql/db-admin/extract-join-where", async (route) => {
     await joinWhereGate.promise;
     return fulfillJson(route, {
-      join_text: "[INNER] E(EMPLOYEE).DEPARTMENT_ID = D(DEPARTMENT).DEPARTMENT_ID",
-      where_text: "None",
+      join_text:
+        "JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\nON: EMPLOYEE(e).DEPARTMENT_ID = DEPARTMENT(d).DEPARTMENT_ID",
+      where_text: "EMPLOYEE(e).STATUS = 'A'",
       source: "deterministic",
       warnings: [],
-      prompt_profile: "join_where_strict",
-      structure_markdown: "",
+      prompt_profile: "sql_structure",
+      structure_markdown:
+        "## SQL構造分析\n\n### JOIN句\n- JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\n\n### WHERE句\n- EMPLOYEE(e).STATUS = 'A'",
     });
   });
   const joinWhereButton = page.getByRole("button", { name: "AI で抽出" });
-  await expectButtonBelowInput(page.getByText("提示詞プロファイル"), joinWhereButton);
+  await expectButtonBelowInput(page.getByTestId("view-join-where-advanced-settings"), joinWhereButton);
   await joinWhereButton.click();
-  await expect(page.getByTestId("view-join-where-result-detail-skeleton")).toBeVisible();
+  const joinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
+  await expect(joinWhereSkeleton).toBeVisible();
+  await expect(joinWhereButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(joinWhereSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
+  joinWhereGate.release();
+  await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
+  await page.setViewportSize({ width: 375, height: 900 });
+  joinWhereGate = createRequestGate();
+  await joinWhereButton.click();
+  const mobileJoinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
+  await expect(mobileJoinWhereSkeleton).toBeVisible();
+  await expect(joinWhereButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(mobileJoinWhereSkeleton.locator("svg.animate-spin")).toHaveCount(0);
+  await expectTopToBottomOrder(page.getByTestId("view-join-where-actions"), mobileJoinWhereSkeleton);
+  await expectNoHorizontalScroll(page);
   joinWhereGate.release();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
   await expectNoHorizontalScroll(page);
@@ -5969,12 +7416,13 @@ test("metadata management target lists load more tables and views before SQL gen
   await expect(commentFooter).toContainText("101 / 101 件を表示");
   await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: PAGE_101_TABLE/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#comment-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON COLUMN/);
   expect(api.metadataSamplesPayload?.targets).toEqual([
     {
       object_name: "PAGE_101_TABLE",
+      owner: "APP",
       object_type: "table",
       columns: ["ID"],
     },
@@ -5995,7 +7443,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await expect(annotationFooter).toContainText("1 / 1 件を表示");
   await page.getByRole("checkbox", { name: /V_PAGE_101_VIEW/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: V_PAGE_101_VIEW/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
 });
@@ -6174,11 +7622,16 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
       warnings: [],
     });
   });
-  await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await expect(page.getByTestId("data-synthetic-tables-list-skeleton")).toBeVisible();
+  const refreshTablesButton = syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" });
+  await refreshTablesButton.click();
+  const syntheticTablesSkeleton = page.getByTestId("data-synthetic-tables-list-skeleton");
+  await expect(syntheticTablesSkeleton).toBeVisible();
+  await expect(refreshTablesButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(syntheticTablesSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("対象テーブルが未取得です")).toHaveCount(0);
   tablesGate.release();
-  await expect(syntheticPanel.getByLabel("INVOICES を選択")).toBeVisible();
+  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("対象テーブル一覧を取得しました。1 件を確認できます。");
   const syntheticBulkActions = syntheticPanel.getByTestId("data-synthetic-table-selection-actions");
   await expect(syntheticBulkActions.getByRole("button", { name: "表示中をすべて選択" })).toBeEnabled();
   await expect(syntheticBulkActions.getByRole("button", { name: "表示中の選択を解除" })).toBeDisabled();
@@ -6188,18 +7641,39 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(syntheticBulkActions.getByRole("button", { name: "表示中の選択を解除" })).toBeEnabled();
   await syntheticBulkActions.getByRole("button", { name: "表示中の選択を解除" }).click();
   await expect(syntheticPanel.getByText("選択 0 件", { exact: true })).toBeVisible();
-  await syntheticPanel.getByLabel("INVOICES を選択").check();
-  await syntheticPanel.getByLabel("実行確認語").fill("INVOICES");
+  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
+  const generateGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/synthetic-data/generate");
+  await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
+    await generateGate.promise;
+    return fulfillJson(route, {
+      table_name: "APP.INVOICES",
+      object_list: ["APP.INVOICES"],
+      row_count: 1,
+      runtime: "oracle",
+      status: "executed",
+      message: "DBMS_CLOUD_AI synthetic data generation を実行しました。",
+      warnings: [],
+      engine_meta: {},
+      timing,
+    });
+  });
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成を開始しました。");
+  await expectToastStackBottomRight(page);
+  generateGate.release();
   await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
   await expect(syntheticPanel.getByRole("heading", { name: "結果確認" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成が完了しました。");
+  await expectToastStackBottomRight(page);
 
   const resultsGate = createRequestGate();
   await page.route("**/api/nl2sql/synthetic-data/results**", async (route) => {
     await resultsGate.promise;
     return fulfillJson(route, {
       runtime: "deterministic",
-      table_name: "INVOICES",
+      table_name: "APP.INVOICES",
       results: {
         columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
         rows: [{ CUSTOMER_NAME: "synthetic-loading-customer", TOTAL_AMOUNT: 12345 }],
@@ -6212,18 +7686,267 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(resultsActions.getByText("生成結果データの表示")).toBeVisible();
   await expect(resultsActions.getByText("選択中のテーブルから生成結果データを取得します。")).toBeVisible();
   await expectTopToBottomOrder(syntheticPanel.getByTestId("synthetic-result-table-select"), resultsActions);
-  await syntheticPanel.getByRole("button", { name: "データを表示" }).click();
-  await expect(page.getByTestId("data-synthetic-results-detail-skeleton")).toBeVisible();
+  const showDataButton = syntheticPanel.getByRole("button", { name: "データを表示" });
+  await showDataButton.click();
+  const syntheticResultsSkeleton = page.getByTestId("data-synthetic-results-detail-skeleton");
+  await expect(syntheticResultsSkeleton).toBeVisible();
+  await expect(showDataButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(syntheticResultsSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("表示するデータはまだありません")).toHaveCount(0);
   resultsGate.release();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-loading-customer" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(refreshTablesActions.getByRole("button", { name: "テーブル一覧を取得" })).toBeVisible();
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
   await expect(resultsActions.getByRole("button", { name: "データを表示" })).toBeVisible();
+  await resultsActions.getByRole("button", { name: "データを表示" }).click();
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
+  await expectToastStackBottomRight(page);
   await expectNoHorizontalScroll(page);
+});
+
+test("synthetic data reports non-executed 200 responses beside the generate action", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.unroute("**/api/nl2sql/synthetic-data/generate");
+  await page.route("**/api/nl2sql/synthetic-data/generate", (route) =>
+    fulfillJson(route, {
+      table_name: "APP.INVOICES",
+      object_list: ["APP.INVOICES"],
+      row_count: 1,
+      executed: false,
+      runtime: "deterministic",
+      status: "requires_oracle",
+      message: "INVOICES に 1 行/表の synthetic data を生成する plan です。",
+      warnings: [
+        "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
+      ],
+      engine_meta: {},
+      timing,
+    })
+  );
+
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const syntheticPanel = page.locator("#data-management-panel-synthetic");
+  await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
+  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
+
+  await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
+
+  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成を開始しました。");
+  await expect(page.getByRole("region", { name: "通知" })).not.toContainText("Synthetic data 生成が完了しました。");
+  await expect(
+    syntheticPanel.getByText(
+      "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+    )
+  ).toBeVisible();
+  await expectToastStackBottomRight(page);
+  await expectNoHorizontalScroll(page);
+});
+
+test("synthetic data guides DB Profile read model refresh from the target step", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let refreshed = false;
+  let refreshSubmits = 0;
+  let jobPolls = 0;
+
+  await page.unroute(
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true"
+  );
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true",
+    (route) =>
+      fulfillJson(
+        route,
+        refreshed
+          ? {
+              runtime: "deterministic",
+              profiles: [
+                {
+                  name: "NL2SQL_DEFAULT_PROFILE",
+                  status: "ready",
+                  owner: "APP",
+                  created_at: "2026-06-21T10:00:00.000Z",
+                  object_list: [],
+                  attributes: {
+                    profile_attributes: {
+                      object_list: [{ owner: "APP", name: "INVOICES" }],
+                    },
+                  },
+                },
+              ],
+              warnings: [],
+              profile_list_refresh_required: false,
+              profile_list_refresh_reason_code: "",
+            }
+          : {
+              runtime: "deterministic",
+              profiles: [],
+              warnings: [
+                "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。",
+              ],
+              profile_list_refresh_required: true,
+              profile_list_refresh_reason_code: "profile_list_read_model_uninitialized",
+            }
+      )
+  );
+  await page.unroute("**/api/nl2sql/select-ai/db-profiles/refresh-jobs");
+  await page.route("**/api/nl2sql/select-ai/db-profiles/refresh-jobs", (route) => {
+    refreshSubmits += 1;
+    return fulfillJson(route, {
+      job_id: "synthetic-db-profile-refresh",
+      status: "pending",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: false,
+      phase: "queued",
+      created_at: "2026-08-13T00:00:00.000Z",
+      total_profiles: 0,
+      processed_profiles: 0,
+      scanned_profiles: 0,
+      changed_profiles: 0,
+      deleted_profiles: 0,
+      error_code: "",
+      error_message: "",
+    });
+  });
+  await page.unroute("**/api/nl2sql/select-ai/db-profile-refresh-jobs/*");
+  await page.route("**/api/nl2sql/select-ai/db-profile-refresh-jobs/*", (route) => {
+    jobPolls += 1;
+    const done = jobPolls >= 2;
+    if (done) refreshed = true;
+    return fulfillJson(route, {
+      job_id: "synthetic-db-profile-refresh",
+      status: done ? "done" : "running",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: false,
+      phase: done ? "done" : "fetching",
+      created_at: "2026-08-13T00:00:00.000Z",
+      started_at: "2026-08-13T00:00:00.000Z",
+      finished_at: done ? "2026-08-13T00:00:01.000Z" : null,
+      total_profiles: 1,
+      processed_profiles: done ? 1 : 0,
+      scanned_profiles: done ? 1 : 0,
+      changed_profiles: done ? 1 : 0,
+      deleted_profiles: 0,
+      error_code: "",
+      error_message: "",
+    });
+  });
+
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const syntheticPanel = page.locator("#data-management-panel-synthetic");
+  const notice = syntheticPanel.getByTestId("data-synthetic-db-profile-refresh-notice");
+  await expect(notice).toBeVisible();
+  await expect(notice.getByText("DB Profile 一覧の再取得が必要です")).toBeVisible();
+  await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeVisible();
+  await expect(notice.getByRole("link", { name: "プロファイル管理を開く" })).toHaveAttribute(
+    "href",
+    "/profiles"
+  );
+  await expect(syntheticPanel.getByLabel("Profile")).toBeDisabled();
+  await expect(syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" })).toBeDisabled();
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeVisible();
+  await expect(notice.getByRole("link", { name: "プロファイル管理を開く" })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  await notice.getByRole("button", { name: "DB Profile 一覧を再取得" }).click();
+  await expect(page.getByTestId("data-synthetic-db-profile-refresh-processing")).toBeVisible();
+  await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeDisabled();
+  await expect(notice).toHaveCount(0);
+  await expect(syntheticPanel.getByLabel("Profile")).toHaveValue("NL2SQL_DEFAULT_PROFILE");
+  await expect(syntheticPanel.getByLabel("Profile")).toBeEnabled();
+  await expect(syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" })).toBeEnabled();
+  await expect.poll(() => refreshSubmits).toBe(1);
+});
+
+test("synthetic data keeps DB Profile refresh recovery visible when the job fails", async ({ page }) => {
+  await mockNl2SqlApi(page);
+
+  await page.unroute(
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true"
+  );
+  await page.route(
+    "**/api/nl2sql/select-ai/db-profiles?business_profiles_only=true&include_archived_business_profiles=true",
+    (route) =>
+      fulfillJson(route, {
+        runtime: "deterministic",
+        profiles: [],
+        warnings: [
+          "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。",
+        ],
+        profile_list_refresh_required: true,
+        profile_list_refresh_reason_code: "profile_list_read_model_uninitialized",
+      })
+  );
+  await page.unroute("**/api/nl2sql/select-ai/db-profiles/refresh-jobs");
+  await page.route("**/api/nl2sql/select-ai/db-profiles/refresh-jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "synthetic-db-profile-refresh-error",
+      status: "pending",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: false,
+      phase: "queued",
+      created_at: "2026-08-13T00:00:00.000Z",
+      total_profiles: 0,
+      processed_profiles: 0,
+      scanned_profiles: 0,
+      changed_profiles: 0,
+      deleted_profiles: 0,
+      error_code: "",
+      error_message: "",
+    })
+  );
+  await page.unroute("**/api/nl2sql/select-ai/db-profile-refresh-jobs/*");
+  await page.route("**/api/nl2sql/select-ai/db-profile-refresh-jobs/*", (route) =>
+    fulfillJson(route, {
+      job_id: "synthetic-db-profile-refresh-error",
+      status: "error",
+      mode: "full",
+      source: "manual",
+      target_profiles: [],
+      requires_full_refresh: true,
+      phase: "fetching",
+      created_at: "2026-08-13T00:00:00.000Z",
+      started_at: "2026-08-13T00:00:00.000Z",
+      finished_at: "2026-08-13T00:00:01.000Z",
+      total_profiles: 0,
+      processed_profiles: 0,
+      scanned_profiles: 0,
+      changed_profiles: 0,
+      deleted_profiles: 0,
+      error_code: "profile_list_refresh_full_required",
+      error_message: "DB Profile 一覧の差分同期で不整合を検出しました。",
+    })
+  );
+
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const notice = page
+    .locator("#data-management-panel-synthetic")
+    .getByTestId("data-synthetic-db-profile-refresh-notice");
+  await notice.getByRole("button", { name: "DB Profile 一覧を再取得" }).click();
+
+  await expect(
+    notice.getByText("DB Profile 一覧の差分同期で不整合を検出しました。DB Profile 一覧を再取得してください。")
+  ).toBeVisible();
+  await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeEnabled();
 });
 
 test("glossary and global rules use an initial list skeleton and preserve fetched rows on background reload", async ({ page }) => {
@@ -6321,6 +8044,7 @@ test("data management CSV upload layout keeps table, file, mode, and execution i
   const desktopCsvPanel = page.locator("#data-management-panel-csv");
   await expect(desktopCsvPanel).toBeVisible();
   await expectCsvUploadLayout(desktopCsvPanel);
+  await expect(desktopCsvPanel.getByText("CSV / XLSX / XLS ファイルを選択してください。")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -6329,11 +8053,64 @@ test("data management CSV upload layout keeps table, file, mode, and execution i
   const mobileCsvPanel = page.locator("#data-management-panel-csv");
   await expect(mobileCsvPanel).toBeVisible();
   await expectCsvUploadLayout(mobileCsvPanel);
+  await expect(mobileCsvPanel.getByText("CSV / XLSX / XLS ファイルを選択してください。")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
+});
+
+test("data management CSV upload hides unmatched columns when Oracle reports none", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/upload-csv");
+  await page.route("**/api/nl2sql/db-admin/upload-csv", (route) => {
+    return fulfillJson(route, {
+      table_name: "INVOICES",
+      filename: "book2.csv",
+      mode: "insert",
+      matched_columns: ["ID", "NAME"],
+      unmatched_csv_columns: [],
+      row_count: 2,
+      success_count: 2,
+      error_count: 0,
+      row_errors: [],
+      hint: "",
+      executed: true,
+      runtime: "oracle",
+      sample_rows: [
+        { ID: "123", NAME: "456" },
+        { ID: "666", NAME: "777" },
+      ],
+      warnings: [],
+      timing,
+    });
+  });
+
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvPanel = page.locator("#data-management-panel-csv");
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
+  await csvPanel.getByLabel("実行確認語").fill("APP.INVOICES");
+  await dropFiles(page, page.getByTestId("data-csv-file-field-dropzone"), [
+    {
+      name: "book2.csv",
+      type: "text/csv",
+      content: "ID,NAME\n123,456\n666,777\n",
+    },
+  ]);
+
+  await csvPanel.getByRole("button", { name: "アップロード実行" }).click();
+
+  await expect(csvPanel.getByText(/一致列:\s*ID, NAME/)).toBeVisible();
+  await expect(csvPanel.getByText("不一致列", { exact: false })).toHaveCount(0);
 });
 
 test("sample data and data management run imported workflows", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
+  const dbAdminObjectOwnerRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/nl2sql/db-admin/objects") {
+      dbAdminObjectOwnerRequests.push(url.searchParams.get("owner") ?? "");
+    }
+  });
 
   await page.goto("/sample-data");
   await expect(page.getByText("検証用サンプルデータ管理")).toBeVisible();
@@ -6413,22 +8190,30 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByText("全4件")).toBeVisible();
   await expect(dataPreviewPanel.getByText("テーブル3")).toBeVisible();
   await expect(dataPreviewPanel.getByText("ビュー1")).toBeVisible();
+  await expect(dataPreviewPanel.getByLabel("所有者フィルタ")).toBeVisible();
+  await expect(dataPreviewPanel.getByLabel("種別フィルタ")).toBeVisible();
+  await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByLabel("取得件数上限")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByLabel("WHERE 条件(任意)")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByText("表示件数 10 件固定")).toBeVisible();
+  await expect(dataPreviewPanel.getByText("統計未取得")).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(3);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true })).toHaveCount(0);
   const invoicesTruncateAction = dataPreviewPanel.getByTestId(
-    "data-preview-object-list-row-actions-INVOICES-trigger"
+    "data-preview-object-list-row-actions-APP.INVOICES-trigger"
   );
   await invoicesTruncateAction.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "INVOICES のデータを空にする" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("menuitem", { name: "INVOICES のデータを空にする" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toHaveCount(0);
   await expect(invoicesTruncateAction).toBeFocused();
   await clickRowAction(
     page,
-    "data-preview-object-list-row-actions-INVOICES",
-    "INVOICES のデータを空にする"
+    "data-preview-object-list-row-actions-APP.INVOICES",
+    "APP.INVOICES のデータを空にする"
   );
   const truncateDialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
   await expect(truncateDialog).toBeVisible();
@@ -6437,50 +8222,50 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(truncateButton).toBeDisabled();
   await truncateDialog.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await expect(truncateButton).toBeDisabled();
-  await truncateDialog.getByLabel("実行確認語").fill("INVOICES");
+  await truncateDialog.getByLabel("実行確認語").fill("APP.INVOICES");
   await truncateButton.click();
-  await expect.poll(() => api.truncateTablePayload?.confirmation).toBe("INVOICES");
+  await expect.poll(() => api.truncateTablePayload?.confirmation).toBe("APP.INVOICES");
   expect(api.truncateTablePayload?.table_name).toBe("INVOICES");
+  expect(api.truncateTablePayload?.owner).toBe("APP");
   expect(api.truncateTablePayload?.reason).toBe("ui-data-management-truncate");
   await expect(page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" })).toHaveCount(0);
 
   await dataPreviewPanel.getByLabel("対象検索").fill("EMP");
-  await expect(dataPreviewPanel.getByRole("button", { name: "V_EMP_DEPT のデータを表示" })).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: "INVOICES のデータを表示" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toHaveCount(0);
   await dataPreviewPanel.getByLabel("対象検索").fill("ZZZ");
   await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
   await dataPreviewPanel.getByLabel("対象検索").fill("");
+  await dataPreviewPanel.getByLabel("所有者フィルタ").selectOption("APP");
+  await expect.poll(() => dbAdminObjectOwnerRequests.includes("APP")).toBe(true);
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
   await dataPreviewPanel.getByLabel("種別フィルタ").selectOption("view");
-  await expect(dataPreviewPanel.getByRole("button", { name: "V_EMP_DEPT のデータを表示" })).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: "INVOICES のデータを表示" })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByTestId("data-preview-object-list-row-actions-V_EMP_DEPT-trigger")).toHaveCount(0);
-  await dataPreviewPanel.getByLabel("行数フィルタ").selectOption("unknown_rows");
-  const viewPreviewTarget = dataPreviewPanel.getByRole("button", { name: "V_EMP_DEPT のデータを表示" });
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByTestId("data-preview-object-list-row-actions-APP.V_EMP_DEPT-trigger")).toHaveCount(0);
+  const viewPreviewTarget = dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" });
   await expect(viewPreviewTarget).toBeEnabled();
   await viewPreviewTarget.focus();
   await page.keyboard.press("Enter");
   await expect(viewPreviewTarget).toHaveAttribute("aria-current", "true");
   await expect(viewPreviewTarget).toBeEnabled();
 
-  await dataPreviewPanel.getByLabel("取得件数上限").fill("75");
-  await dataPreviewPanel.getByLabel("WHERE 条件(任意)").fill("STATUS = 'A'");
   await viewPreviewTarget.click();
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 12 件");
+  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 10 件");
   await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-  await page.getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByRole("cell", { name: "顧客11" })).toBeVisible();
-  await expect(page.getByTestId("query-results-pagination")).toContainText("11-12 / 12 件");
   await expect.poll(() => api.previewDataPayload?.object_name).toBe("V_EMP_DEPT");
-  expect(api.previewDataPayload?.limit).toBe(75);
-  expect(api.previewDataPayload?.where_clause).toBe("STATUS = 'A'");
+  expect(api.previewDataPayload?.owner).toBe("APP");
+  expect(api.previewDataPayload?.limit).toBe(10);
+  expect(api.previewDataPayload?.where_clause).toBe("");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "XLSX ダウンロード" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("v_emp_dept_preview.xlsx");
+  expect(download.suggestedFilename()).toBe("app_v_emp_dept_preview.xlsx");
   await expect.poll(() => api.previewDataExportPayload?.object_name).toBe("V_EMP_DEPT");
-  expect(api.previewDataExportPayload?.limit).toBe(75);
-  expect(api.previewDataExportPayload?.where_clause).toBe("STATUS = 'A'");
+  expect(api.previewDataExportPayload?.owner).toBe("APP");
+  expect(api.previewDataExportPayload?.limit).toBe(10);
+  expect(api.previewDataExportPayload?.where_clause).toBe("");
   await expectNoHorizontalScroll(page);
 
   await dataCsvTab.click();
@@ -6489,20 +8274,20 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(csvPanel).toBeVisible();
   await expectCsvUploadLayout(csvPanel);
   const csvTableSearch = csvPanel.getByRole("searchbox", { name: "検索" });
-  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("INVOICES", { exact: true })).toBeVisible();
-  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("AUDIT_LOG", { exact: true })).toHaveCount(0);
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.AUDIT_LOG", { exact: true })).toHaveCount(0);
   await csvTableSearch.fill("PAY");
-  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("PAYMENTS", { exact: true })).toBeVisible();
-  await csvPanel.getByRole("button", { name: "PAYMENTS を選択" }).click();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.PAYMENTS", { exact: true })).toBeVisible();
+  await csvPanel.getByRole("button", { name: "APP.PAYMENTS を選択" }).click();
   await expect(csvPanel.getByText("選択中")).toBeVisible();
-  await expect(csvPanel.getByText("PAYMENTS", { exact: true }).first()).toBeVisible();
+  await expect(csvPanel.getByText("APP.PAYMENTS", { exact: true }).first()).toBeVisible();
   await csvTableSearch.clear();
-  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("INVOICES", { exact: true })).toBeVisible();
-  await csvPanel.getByLabel("実行確認語").fill("PAYMENTS");
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
+  await csvPanel.getByLabel("実行確認語").fill("APP.PAYMENTS");
   await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await csvPanel.getByTestId("data-csv-table-footer").getByRole("button", { name: "さらに読み込む" }).click();
-  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("AUDIT_LOG", { exact: true })).toBeVisible();
-  await expect(csvPanel.getByText("PAYMENTS", { exact: true }).first()).toBeVisible();
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.AUDIT_LOG", { exact: true })).toBeVisible();
+  await expect(csvPanel.getByText("APP.PAYMENTS", { exact: true }).first()).toBeVisible();
   await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const dataTabularInput = page.getByTestId("data-csv-file-field-input");
   await expect(dataTabularInput).toHaveAttribute("accept", ".csv,.xlsx,.xls");
@@ -6520,8 +8305,9 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await csvUploadButton.click();
   await expect(page.getByText("UNKNOWN_COLUMN", { exact: false }).first()).toBeVisible();
   await expect.poll(() => api.csvUploadPayload?.table_name).toBe("PAYMENTS");
+  expect(api.csvUploadPayload?.owner).toBe("APP");
   expect(api.csvUploadPayload?.mode).toBe("insert");
-  expect(api.csvUploadPayload?.confirmation).toBe("PAYMENTS");
+  expect(api.csvUploadPayload?.confirmation).toBe("APP.PAYMENTS");
   expect(api.csvUploadPayload?.filename).toBe("invoices.XLS");
 
   await dataSyntheticTab.click();
@@ -6542,29 +8328,130 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticProfileSelect.locator("option")).toHaveCount(1);
   await expect(syntheticProfileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
   await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await expect(syntheticPanel.getByLabel("INVOICES を選択")).toBeVisible();
+  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
   await expect(syntheticPanel.getByLabel("PAYMENTS を選択")).toHaveCount(0);
   await expect(syntheticPanel.getByLabel("AUDIT_LOG を選択")).toHaveCount(0);
-  await syntheticPanel.getByLabel("INVOICES を選択").check();
+  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
   await expect(syntheticPanel.getByText("選択 1 件", { exact: true })).toBeVisible();
   await expect(syntheticGenerateButton).toBeDisabled();
-  await syntheticPanel.getByLabel("実行確認語").fill("INVOICES");
+  await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(syntheticGenerateButton).toBeEnabled();
   await syntheticGenerateButton.click();
   await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
-  await expect(syntheticPanel.getByTestId("synthetic-result-table-select")).toHaveValue("INVOICES");
+  await expect(syntheticPanel.getByTestId("synthetic-result-table-select")).toHaveValue("APP.INVOICES");
   await expect(syntheticPanel.getByRole("option", { name: "AUDIT_LOG" })).toHaveCount(0);
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
   await syntheticPanel.getByRole("button", { name: "データを表示" }).click();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
-  await expect.poll(() => api.syntheticDataPayload?.table_name).toBe("INVOICES");
-  expect(api.syntheticDataPayload?.confirmation).toBe("INVOICES");
+  await expect.poll(() => api.syntheticDataPayload?.table_name).toBe("APP.INVOICES");
+  expect(api.syntheticDataPayload?.confirmation).toBe("APP.INVOICES");
   expect(api.syntheticDataPayload?.profile_name).toBe("NL2SQL_DEFAULT_PROFILE");
   expect(api.syntheticDataPayload?.object_list).toEqual([]);
   expect(api.syntheticDataPayload?.rows_per_table).toBe(1);
   expect(api.syntheticDataPayload?.sample_rows).toBe(5);
   expect(api.syntheticDataPayload?.use_comments).toBe(true);
+  await expectNoHorizontalScroll(page);
+});
+
+test("SampleData schema refresh recovery disables CTA while workspace processing is visible", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let manualRefreshStarted = 0;
+  let manualRefreshPolls = 0;
+  const manualRefreshGate = createRequestGate();
+
+  await page.unroute("**/api/nl2sql/sample-data/import");
+  await page.route("**/api/nl2sql/sample-data/import", (route) =>
+    fulfillJson(route, {
+      operation: "import",
+      step: "all",
+      runtime: "oracle",
+      executed: false,
+      objects: [],
+      statements: [],
+      warnings: [],
+      profile_id: "sql_assist_sample",
+      schema_refresh_required: true,
+      schema_refresh_reason_code: "schema_refresh_full_required",
+      timing,
+    })
+  );
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    manualRefreshStarted += 1;
+    await fulfillJson(route, {
+      job_id: "sample-data-manual-full-refresh",
+      status: "pending",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "queued",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 0,
+      changed_objects: 0,
+      deleted_objects: 0,
+      catalog_version: null,
+      error_code: "",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/sample-data-manual-full-refresh", async (route) => {
+    manualRefreshPolls += 1;
+    if (manualRefreshPolls === 1) {
+      await fulfillJson(route, {
+        job_id: "sample-data-manual-full-refresh",
+        status: "running",
+        mode: "full",
+        source: "manual",
+        target_objects: [],
+        requires_full_refresh: false,
+        phase: "fetching",
+        created_at: "2026-07-22T00:00:01.000Z",
+        scanned_objects: 1,
+        changed_objects: 0,
+        deleted_objects: 0,
+        catalog_version: null,
+        error_code: "",
+      });
+      return;
+    }
+    await manualRefreshGate.promise;
+    await fulfillJson(route, {
+      job_id: "sample-data-manual-full-refresh",
+      status: "done",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "done",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 2,
+      changed_objects: 1,
+      deleted_objects: 0,
+      catalog_version: 2,
+      error_code: "",
+    });
+  });
+
+  await page.goto("/sample-data");
+  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByRole("button", { name: "取り込み実行" }).last().click();
+
+  await expect(page.getByText("DB 構造の差分同期で不整合を検出しました。")).toBeVisible();
+  const refreshButton = page.getByRole("button", { name: "DB 構造を再取得" });
+  await expect(refreshButton).toBeVisible();
+  await refreshButton.click();
+  await expect.poll(() => manualRefreshStarted).toBe(1);
+  await expect(refreshButton).toBeDisabled();
+  await expect(refreshButton.locator("svg.animate-spin")).toBeVisible();
+  const processing = page.getByTestId("sample-data-workspace-processing");
+  await expect(processing).toContainText("DB 構造を再取得しています");
+  await expectNoHorizontalScroll(page);
+
+  manualRefreshGate.release();
+  await expect.poll(() => manualRefreshPolls).toBeGreaterThanOrEqual(2);
+  await expect(processing).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -6664,46 +8551,78 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
   await expectNoHorizontalScroll(page);
 });
 
-test("data management stops an 8 second object timeout and retries in place", async ({ page }) => {
+test("data management keeps loaded object rows when load more times out and retries in place", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: (delay: number) => nativeTimeout(delay === 60_000 ? 150 : delay),
+    });
+  });
   await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/db-admin/objects?*");
-  let attempts = 0;
+  const timeoutGate = createRequestGate();
+  let cursorAttempts = 0;
   let allowSuccess = false;
   await page.route("**/api/nl2sql/db-admin/objects?*", async (route) => {
-    attempts += 1;
-    if (!allowSuccess) {
-      await new Promise((resolve) => setTimeout(resolve, 8_500));
+    const url = new URL(route.request().url());
+    const cursor = url.searchParams.get("cursor");
+    if (cursor) {
+      expect(url.searchParams.get("include_counts")).toBe("false");
+      cursorAttempts += 1;
+      if (!allowSuccess) {
+        await timeoutGate.promise;
+      }
+      try {
+        await fulfillJson(route, {
+          runtime: "deterministic",
+          owner: "APP",
+          items: [
+            { name: "PAYMENTS", owner: "APP", object_type: "table", row_count: 3, comment: "入金情報" },
+          ],
+          total: 0,
+          table_count: 0,
+          view_count: 0,
+          counts_included: false,
+          next_cursor: null,
+          refreshed_at: schemaCatalog.refreshed_at,
+          catalog_version: 0,
+          warnings: [],
+        });
+      } catch {
+        // timeout で browser が最初の cursor request を破棄した場合は retry request を待つ。
+      }
+      return;
     }
-    try {
-      await fulfillJson(route, {
-        runtime: "deterministic",
-        owner: "APP",
-        items: [
-          { name: "INVOICES", owner: "APP", object_type: "table", row_count: 2, comment: "請求情報" },
-        ],
-        total: 1,
-        table_count: 1,
-        view_count: 0,
-        next_cursor: null,
-        refreshed_at: schemaCatalog.refreshed_at,
-        catalog_version: 1,
-        warnings: [],
-      });
-    } catch {
-      // timeout で browser が最初の route を破棄した場合は retry request を待つ。
-    }
+    await fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items: [
+        { name: "INVOICES", owner: "APP", object_type: "table", row_count: 2, comment: "請求情報" },
+      ],
+      total: 2,
+      table_count: 2,
+      view_count: 0,
+      counts_included: true,
+      next_cursor: "page-2",
+      refreshed_at: schemaCatalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    });
   });
 
   await page.goto("/data-management");
-  await expect(page.getByLabel("テーブル・ビュー一覧を読み込んでいます")).toBeVisible();
-  await expect(page.getByText(/一覧の更新が8秒以内に完了しませんでした/)).toBeVisible({
-    timeout: 12_000,
-  });
+  await expect(page.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await page.getByTestId("data-preview-object-footer").getByRole("button", { name: "さらに読み込む" }).click();
+  await expect(page.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await expect(page.getByText(/追加読み込みが60秒以内に完了しませんでした/)).toBeVisible();
   allowSuccess = true;
-  const retry = page.getByRole("button", { name: "再試行" });
+  timeoutGate.release();
+  const retry = page.getByTestId("data-preview-object-footer").getByRole("button", { name: "再試行" });
   await retry.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "INVOICES のデータを表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "APP.PAYMENTS のデータを表示" })).toBeVisible();
+  expect(cursorAttempts).toBe(2);
   await expectNoHorizontalScroll(page);
 });
 
@@ -6950,6 +8869,10 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
 test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表示する", async ({ page }) => {
   await mockNl2SqlApi(page);
   let schemaRefreshPolls = 0;
+  let dbAdminObjectRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/nl2sql/db-admin/objects?")) dbAdminObjectRequests += 1;
+  });
   await page.unroute("**/api/nl2sql/db-admin/import-tabular");
   await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
     const payload = route.request().postDataJSON() as { table_name?: string; filename?: string; mode?: string };
@@ -6975,9 +8898,10 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
   });
   await page.route("**/api/schema/refresh-jobs/table-import-refresh-pending", async (route) => {
     schemaRefreshPolls += 1;
+    const done = schemaRefreshPolls >= 2;
     await fulfillJson(route, {
       job_id: "table-import-refresh-pending",
-      status: "pending",
+      status: done ? "done" : "running",
       mode: "targeted",
       source: "db_admin_import_tabular",
       target_objects: [
@@ -6988,12 +8912,12 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
           expected_state: "present",
         },
       ],
-      phase: "queued",
+      phase: done ? "done" : "fetching",
       created_at: "2026-07-22T00:00:00.000Z",
-      scanned_objects: 0,
-      changed_objects: 0,
+      scanned_objects: done ? 1 : 0,
+      changed_objects: done ? 1 : 0,
       deleted_objects: 0,
-      catalog_version: 0,
+      catalog_version: done ? 2 : 0,
       error_code: "",
     });
   });
@@ -7019,6 +8943,12 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
   );
   await expect(executeButton).toBeEnabled();
   await expect.poll(() => schemaRefreshPolls).toBeGreaterThan(0);
+  await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
+  await expect(importPanel.getByTestId("table-import-schema-refresh-processing")).toHaveCount(0);
+  await page.waitForTimeout(200);
+  const dbAdminObjectRequestsAfterDone = dbAdminObjectRequests;
+  await page.waitForTimeout(1_500);
+  expect(dbAdminObjectRequests).toBe(dbAdminObjectRequestsAfterDone);
 
   const fieldsetBox = await executionFieldset.boundingBox();
   const buttonBox = await executeButton.boundingBox();
@@ -7176,6 +9106,16 @@ test("テーブル作成はDB構造再取得を待たずSQL結果と操作可能
     await fulfillJson(route, {
       job_id: "table-create-refresh-running",
       status: "running",
+      mode: "targeted",
+      source: "db_admin_statements",
+      target_objects: [
+        {
+          owner: "APP",
+          object_name: "T_PENDING",
+          object_type: "table",
+          expected_state: "present",
+        },
+      ],
       phase: "fetching",
       created_at: "2026-07-22T00:00:00.000Z",
       started_at: "2026-07-22T00:00:01.000Z",
@@ -7225,8 +9165,199 @@ test("テーブル作成はDB構造再取得を待たずSQL結果と操作可能
   await expectCompactExecutionActivity(completedExecutionActivity);
   await expect(executeButton).toBeEnabled();
   await expect.poll(() => schemaRefreshPolls).toBeGreaterThan(0);
-  await expect(page.getByText(/DB 構造再取得: 構造取得中/)).toBeVisible();
+  await expect(page.getByText(/DB 構造差分同期: 構造取得中/)).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+test("ビュー作成後はDB構造差分同期を作成パネル内に表示し完了後に消す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let schemaRefreshPolls = 0;
+  await page.unroute("**/api/nl2sql/db-admin/statements");
+  await page.route("**/api/nl2sql/db-admin/statements", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    const sql = String(
+      payload.sql ?? "CREATE OR REPLACE VIEW V_PENDING AS SELECT 1 AS ID FROM DUAL"
+    );
+    await fulfillJson(route, {
+      executed: true,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "CREATE",
+          status: "success",
+          sql,
+          row_count: null,
+          message: "OK",
+          elapsed_ms: 1,
+          error_message: "",
+        },
+      ],
+      committed: true,
+      rolled_back: false,
+      schema_refresh_job_id: "view-create-refresh-done",
+      warnings: [],
+      timing,
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/view-create-refresh-done", async (route) => {
+    schemaRefreshPolls += 1;
+    const done = schemaRefreshPolls >= 2;
+    await fulfillJson(route, {
+      job_id: "view-create-refresh-done",
+      status: done ? "done" : "running",
+      mode: "targeted",
+      source: "db_admin_statements",
+      target_objects: [
+        {
+          owner: "APP",
+          object_name: "V_PENDING",
+          object_type: "view",
+          expected_state: "present",
+        },
+      ],
+      requires_full_refresh: false,
+      phase: done ? "done" : "fetching",
+      created_at: "2026-07-22T00:00:00.000Z",
+      scanned_objects: done ? 1 : 0,
+      changed_objects: done ? 1 : 0,
+      deleted_objects: 0,
+      catalog_version: done ? 2 : 0,
+      error_code: "",
+    });
+  });
+
+  await page.goto("/view-management");
+  await clickPageHeaderAction(page, "view-management-actions", "ビュー作成");
+  const createPanel = page.locator("#view-management-panel-create");
+  await createPanel
+    .getByLabel("SQL(セミコロン区切りで複数文を入力可能)")
+    .fill("CREATE OR REPLACE VIEW V_PENDING AS SELECT 1 AS ID FROM DUAL");
+  await createPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await createPanel.getByRole("button", { name: "SQL 実行" }).click();
+
+  const resultRegion = createPanel.getByTestId("statement-runner-view_ddl-processing-region");
+  await expect(resultRegion.getByText("CREATE OR REPLACE VIEW V_PENDING")).toBeVisible();
+  await expect(createPanel.getByText("コミット済み", { exact: true })).toBeVisible();
+  const schemaSync = createPanel.getByTestId("view-create-schema-refresh-processing");
+  await expect(schemaSync).toContainText("DB 構造の差分を同期しています");
+  await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
+  await expect(schemaSync).toHaveCount(0);
+  await expect(resultRegion.getByText("CREATE OR REPLACE VIEW V_PENDING")).toBeVisible();
+  await expect(createPanel.getByText("コミット済み", { exact: true })).toBeVisible();
+});
+
+test("ビュー作成の差分同期不整合はDB構造再取得CTAを表示する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let manualRefreshStarted = 0;
+  await page.unroute("**/api/nl2sql/db-admin/statements");
+  await page.route("**/api/nl2sql/db-admin/statements", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    const sql = String(
+      payload.sql ?? "CREATE OR REPLACE VIEW V_NEEDS_REFRESH AS SELECT 1 AS ID FROM DUAL"
+    );
+    await fulfillJson(route, {
+      executed: true,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "CREATE",
+          status: "success",
+          sql,
+          row_count: null,
+          message: "OK",
+          elapsed_ms: 1,
+          error_message: "",
+        },
+      ],
+      committed: true,
+      rolled_back: false,
+      schema_refresh_job_id: "view-create-refresh-error",
+      warnings: [],
+      timing,
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/view-create-refresh-error", async (route) => {
+    await fulfillJson(route, {
+      job_id: "view-create-refresh-error",
+      status: "error",
+      mode: "targeted",
+      source: "db_admin_statements",
+      target_objects: [
+        {
+          owner: "APP",
+          object_name: "V_NEEDS_REFRESH",
+          object_type: "view",
+          expected_state: "present",
+        },
+      ],
+      requires_full_refresh: true,
+      phase: "fetching",
+      created_at: "2026-07-22T00:00:00.000Z",
+      scanned_objects: 1,
+      changed_objects: 0,
+      deleted_objects: 0,
+      catalog_version: 0,
+      error_code: "schema_refresh_full_required",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    manualRefreshStarted += 1;
+    await fulfillJson(route, {
+      job_id: "view-create-manual-full-refresh",
+      status: "done",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "done",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 2,
+      changed_objects: 1,
+      deleted_objects: 0,
+      catalog_version: 2,
+      error_code: "",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs/view-create-manual-full-refresh", async (route) => {
+    await fulfillJson(route, {
+      job_id: "view-create-manual-full-refresh",
+      status: "done",
+      mode: "full",
+      source: "manual",
+      target_objects: [],
+      requires_full_refresh: false,
+      phase: "done",
+      created_at: "2026-07-22T00:00:01.000Z",
+      scanned_objects: 2,
+      changed_objects: 1,
+      deleted_objects: 0,
+      catalog_version: 2,
+      error_code: "",
+    });
+  });
+
+  await page.goto("/view-management");
+  await clickPageHeaderAction(page, "view-management-actions", "ビュー作成");
+  const createPanel = page.locator("#view-management-panel-create");
+  await createPanel
+    .getByLabel("SQL(セミコロン区切りで複数文を入力可能)")
+    .fill("CREATE OR REPLACE VIEW V_NEEDS_REFRESH AS SELECT 1 AS ID FROM DUAL");
+  await createPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await createPanel.getByRole("button", { name: "SQL 実行" }).click();
+
+  const resultRegion = createPanel.getByTestId("statement-runner-view_ddl-processing-region");
+  await expect(resultRegion.getByText("CREATE OR REPLACE VIEW V_NEEDS_REFRESH")).toBeVisible();
+  await expect(createPanel.getByText("コミット済み", { exact: true })).toBeVisible();
+  await expect(page.locator("body")).toContainText("DB 構造の差分同期で不整合を検出しました。");
+  const refreshButton = page.getByRole("button", { name: "DB 構造を再取得" });
+  await expect(refreshButton).toBeVisible();
+  await refreshButton.click();
+  await expect.poll(() => manualRefreshStarted).toBe(1);
 });
 
 test("table and view management pages run guarded DDL and AI workflows", async ({ page }) => {
@@ -7254,8 +9385,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
     await expect(tablePageActions.getByRole("button", { name: "DB 構造を再取得" })).toBeVisible();
   }
   await page.getByLabel("検索").fill("請求");
-  await expect(page.getByTestId("table-management-grid").getByText("INVOICES")).toBeVisible();
-  await page.getByRole("button", { name: "INVOICES を表示" }).click();
+  await expect(page.getByTestId("table-management-grid").getByText("APP.INVOICES")).toBeVisible();
+  await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();
   const columnsPanel = page.getByTestId("db-admin-detail-columns");
   // 論理名(業務名)とコメント(生カラムコメント)は別列で表示される。
   await expect(columnsPanel.getByRole("columnheader", { name: "論理名" })).toBeVisible();
@@ -7268,7 +9399,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const columnsDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: /XLSX ダウンロード/ }).click();
   const columnsDownload = await columnsDownloadPromise;
-  expect(columnsDownload.suggestedFilename()).toBe("invoices_columns.xlsx");
+  expect(columnsDownload.suggestedFilename()).toBe("app_invoices_columns.xlsx");
   await expect
     .poll(() =>
       page.getByTestId("db-admin-detail-columns").evaluate((wrapper) => {
@@ -7293,17 +9424,18 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const ddlDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "SQL 出力" }).click();
   const ddlDownload = await ddlDownloadPromise;
-  expect(ddlDownload.suggestedFilename()).toBe("invoices_ddl.sql");
+  expect(ddlDownload.suggestedFilename()).toBe("app_invoices_ddl.sql");
 
-  await clickRowAction(page, "table-management-row-actions-INVOICES", "削除");
+  await clickRowAction(page, "table-management-row-actions-APP.INVOICES", "削除");
   const dropTableDialog = page.getByRole("dialog", { name: "DROP TABLE の確認" });
   await expect(dropTableDialog).toBeVisible();
   await expectOnlyConfirmationFieldHasNoLeftAccent(dropTableDialog);
-  await dropTableDialog.getByLabel("実行確認語").fill("INVOICES");
+  await dropTableDialog.getByLabel("実行確認語").fill("APP.INVOICES");
   await expect(dropTableDialog.getByText("確認済み", { exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Drop 実行" }).click();
-  await expect.poll(() => api.dropTablePayload?.confirmation).toBe("INVOICES");
-  expect(api.dropTablePayload?.confirmation).toBe("INVOICES");
+  await expect.poll(() => api.dropTablePayload?.confirmation).toBe("APP.INVOICES");
+  expect(api.dropTablePayload?.table_name).toBe("INVOICES");
+  expect(api.dropTablePayload?.owner).toBe("APP");
   await expect(page.getByRole("dialog", { name: "DROP TABLE の確認" })).toHaveCount(0);
 
   await clickPageHeaderAction(page, "table-management-actions", "テーブル作成");
@@ -7412,7 +9544,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("comment-management-steps")).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: INVOICES/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByLabel("サンプル件数").fill("10");
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(10);
@@ -7421,7 +9553,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   );
   const commentExecutePanel = page.locator("#comment-management-panel-execute");
   await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(
-    /COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS '税込請求金額';/
+    /COMMENT ON COLUMN "APP"\."INVOICES"\."TOTAL_AMOUNT" IS '税込請求金額';/
   );
   await expect(commentExecutePanel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(commentExecutePanel.getByLabel("Oracle に実行する")).toHaveCount(0);
@@ -7437,11 +9569,11 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("annotation-management-steps")).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: INVOICES/);
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   const annotationExecutePanel = page.locator("#annotation-management-panel-execute");
   await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(
-    /ALTER TABLE "INVOICES" MODIFY/
+    /ALTER TABLE "APP"\."INVOICES" MODIFY/
   );
   await expect(annotationExecutePanel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(annotationExecutePanel.getByLabel("Oracle に実行する")).toHaveCount(0);
@@ -7457,7 +9589,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByRole("heading", { name: "ビュー一覧と詳細" })).toBeVisible();
   await expect(page.getByText("ビュー数", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("view-management-grid")).toBeVisible();
-  await page.getByRole("button", { name: "V_EMP_DEPT を表示" }).click();
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
   const viewColumnsTab = page.getByRole("tab", { name: "列情報" });
   const viewDdlTab = page.getByRole("tab", { name: "DDL" });
   await expect(viewColumnsTab).toHaveAttribute("aria-selected", "true");
@@ -7470,28 +9602,25 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const stepIndicatorBox = await page.getByTestId("view-join-where-steps").boundingBox();
   const selectedViewBox = await page.getByTestId("view-join-where-selected-view").boundingBox();
-  const promptProfileBox = await page.getByText("提示詞プロファイル").boundingBox();
+  const advancedSettings = page.getByTestId("view-join-where-advanced-settings");
+  const advancedSettingsBox = await advancedSettings.boundingBox();
   const joinWhereActionsBox = await page.getByTestId("view-join-where-actions").boundingBox();
   expect(stepIndicatorBox).not.toBeNull();
   expect(selectedViewBox).not.toBeNull();
-  expect(promptProfileBox).not.toBeNull();
+  expect(advancedSettingsBox).not.toBeNull();
   expect(joinWhereActionsBox).not.toBeNull();
-  expect(stepIndicatorBox!.y).toBeLessThan(promptProfileBox!.y);
-  expect(selectedViewBox!.y).toBeLessThan(promptProfileBox!.y);
-  expect(promptProfileBox!.y).toBeLessThan(joinWhereActionsBox!.y);
+  expect(stepIndicatorBox!.y).toBeLessThan(advancedSettingsBox!.y);
+  expect(selectedViewBox!.y).toBeLessThan(advancedSettingsBox!.y);
+  expect(advancedSettingsBox!.y).toBeLessThan(joinWhereActionsBox!.y);
   await expect(page.getByTestId("view-join-where-actions")).toContainText("DDL 取得済み");
-  const strictPrompt = page.getByRole("radio", { name: /JOIN\/WHERE 抽出/ });
-  const structurePrompt = page.getByRole("radio", { name: /SQL構造解析/ });
-  await expect(strictPrompt).toBeChecked();
-  await strictPrompt.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(structurePrompt).toBeChecked();
-  await strictPrompt.check();
-  await page.getByRole("button", { name: "AI で抽出" }).click();
-  await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("join_where_strict");
-  await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
-  await expect(page.getByLabel("抽出条件 (WHERE)")).toHaveValue("None");
-  await structurePrompt.check();
+  await expect(page.getByText("提示詞プロファイル")).toHaveCount(0);
+  await expect(page.getByText("標準: JOIN/WHERE のみ抽出")).toHaveCount(0);
+  await expect(advancedSettings.getByText("解析設定")).toBeVisible();
+  await expect(advancedSettings.getByText("詳細解析: SQL構造も解析")).toBeVisible();
+  await expect(advancedSettings.getByRole("list", { name: "出力範囲" })).toContainText("JOIN");
+  await expect(advancedSettings.getByRole("list", { name: "出力範囲" })).toContainText("WHERE");
+  await expect(advancedSettings.getByRole("list", { name: "出力範囲" })).toContainText("SQL構造");
+  await expect(page.getByRole("combobox", { name: "抽出モード" })).toHaveCount(0);
   await page.getByRole("button", { name: "AI で抽出" }).click();
   await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("sql_structure");
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
@@ -7500,14 +9629,16 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
   await page.getByRole("button", { name: "一覧に戻る" }).click();
-  await clickRowAction(page, "view-management-row-actions-V_EMP_DEPT", "削除");
+  await clickRowAction(page, "view-management-row-actions-APP.V_EMP_DEPT", "削除");
   const dropViewDialog = page.getByRole("dialog", { name: "DROP VIEW の確認" });
   await expect(dropViewDialog).toBeVisible();
   await expectOnlyConfirmationFieldHasNoLeftAccent(dropViewDialog);
   await expect(page.getByRole("button", { name: "Drop 実行" })).toBeDisabled();
-  await page.getByLabel("実行確認語").fill("V_EMP_DEPT");
+  await page.getByLabel("実行確認語").fill("APP.V_EMP_DEPT");
   await page.getByRole("button", { name: "Drop 実行" }).click();
-  await expect.poll(() => api.dropViewPayload?.confirmation).toBe("V_EMP_DEPT");
+  await expect.poll(() => api.dropViewPayload?.confirmation).toBe("APP.V_EMP_DEPT");
+  expect(api.dropViewPayload?.view_name).toBe("V_EMP_DEPT");
+  expect(api.dropViewPayload?.owner).toBe("APP");
 
   await clickPageHeaderAction(page, "view-management-actions", "ビュー作成");
   await page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("CREATE OR REPLACE VIEW V1 AS SELECT 1 FROM DUAL");
@@ -7587,7 +9718,7 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await expect(page.getByRole("alert")).toBeVisible();
 });
 
-test("legacy model-learning URL opens profile learning and preserves asset refresh", async ({ page }) => {
+test("legacy model-learning URL opens Select AI settings and preserves asset refresh", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/profiles/default/oracle-sync-jobs", (route) =>
     fulfillJson(route, {
@@ -7636,27 +9767,64 @@ test("legacy model-learning URL opens profile learning and preserves asset refre
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/settings/nl2sql-model");
-  await expect(page).toHaveURL(/\/profiles\?profile=[^#]+#profile-learning$/);
-  await expect(page.locator("#profile-learning")).toBeVisible();
-  await expect(page.getByLabel("few-shot 例")).toBeVisible();
+  await expect(page).toHaveURL(/\/profiles\?profile=[^#]+#profile-select-ai$/);
+  await expect(page.locator("#profile-select-ai")).toBeVisible();
+  await expect(page.getByText("語彙・few-shot", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("few-shot 例")).toHaveCount(0);
   await expect(page.getByRole("link", { name: /モデル学習/ })).toHaveCount(0);
-  await page.getByLabel("few-shot 例").fill("粗利を見たい => SELECT PROFIT FROM INVOICES");
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await page
+    .locator("#profile-select-ai-additional-instructions")
+    .fill("粗利は INVOICES.PROFIT を使う。");
   // ADMIN_EXECUTE ゲート + Agent アセット再構築チェックを付けて保存 1 クリックに集約。
   await page.getByRole("checkbox", { name: /Select AI Agent アセット/ }).check();
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  const profileSaveButton = page.getByRole("button", { name: "保存", exact: true });
+  await profileSaveButton.click();
   await expect(page.getByText("プロファイルを保存しました。")).toBeVisible();
-  expect(api.profilePatchPayload?.few_shot_examples).toEqual([
-    { question: "粗利を見たい", sql: "SELECT PROFIT FROM INVOICES" },
-  ]);
+  expect(api.profilePatchPayload?.name).toBe("DEFAULT_PROFILE");
+  expect(api.profilePatchPayload).not.toHaveProperty("glossary");
+  expect(api.profilePatchPayload).not.toHaveProperty("few_shot_examples");
+  expect(api.profilePatchPayload?.select_ai_config).toMatchObject({
+    additional_instructions: "粗利は INVOICES.PROFIT を使う。",
+  });
   await expect(page.getByText("NL2SQL_DEFAULT_AGENT_PROFILE")).toBeVisible();
+  const saveResultRegion = page.getByTestId("profile-save-result-region");
+  const oracleStatus = page.getByTestId("profile-oracle-sync-status");
+  const agentAssetStatus = page.getByTestId("profile-asset-status-select_ai_agent");
+  const resultFollowsConfirmation = () =>
+    saveResultRegion.evaluate((region) => {
+      const previous = region.previousElementSibling;
+      if (!(region instanceof HTMLElement) || !(previous instanceof HTMLElement)) return false;
+      return (
+        previous.getAttribute("data-testid") === "execution-confirmation-field"
+        && region.offsetTop >= previous.offsetTop + previous.offsetHeight - 1
+      );
+    });
+  await expect(saveResultRegion).toBeVisible();
+  await expect.poll(resultFollowsConfirmation).toBe(true);
+  await expect(oracleStatus).toBeVisible();
+  await expect(agentAssetStatus).toBeVisible();
+  const saveResultOrder = await saveResultRegion.evaluate((region) =>
+    Array.from(
+      region.querySelectorAll(
+        '[data-testid="profile-oracle-sync-status"], [data-testid="profile-asset-status-select_ai_agent"]'
+      )
+    ).map((node) => node.getAttribute("data-testid"))
+  );
+  expect(saveResultOrder).toEqual([
+    "profile-oracle-sync-status",
+    "profile-asset-status-select_ai_agent",
+  ]);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
+  await expect.poll(resultFollowsConfirmation).toBe(true);
+  await expectNoHorizontalScroll(page);
   await page.goto("/settings/nl2sql-model");
-  await expect(page).toHaveURL(/\/profiles\?profile=[^#]+#profile-learning$/);
-  await expect(page.locator("#profile-learning")).toBeVisible();
-  await expect(page.getByLabel("few-shot 例")).toBeVisible();
+  await expect(page).toHaveURL(/\/profiles\?profile=[^#]+#profile-select-ai$/);
+  await expect(page.locator("#profile-select-ai")).toBeVisible();
+  await expect(page.getByLabel("few-shot 例")).toHaveCount(0);
   await expect(page.getByRole("link", { name: /モデル学習/ })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
@@ -7798,11 +9966,12 @@ test("profile sync keeps result visible while DB Profile targeted refresh asks f
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/profiles?profile=default");
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("checkbox", { name: /Select AI Agent アセット/ }).check();
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => api.profilePatchPayload?.name).toBe("既定プロファイル");
+  await expect.poll(() => api.profilePatchPayload?.name).toBe("DEFAULT_PROFILE");
   await expect(page.getByText("NL2SQL_DEFAULT_AGENT_PROFILE")).toBeVisible();
   await expect(page.getByTestId("profile-management-workspace-processing")).toContainText(
     "DB Profile 一覧の差分を同期しています"
@@ -7834,7 +10003,6 @@ test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方�
     "/ontology-build",
     "/glossary-rules",
     "/global-rules",
-    "/sql-analysis",
     "/sql-to-question",
     "/direct-sql",
     "/admin-sql",

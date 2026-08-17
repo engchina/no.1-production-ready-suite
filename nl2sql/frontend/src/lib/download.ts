@@ -7,7 +7,7 @@ export function downloadBlob(filename: string, blob: Blob) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 /** Content-Disposition から安全な basename を取り出す。 */

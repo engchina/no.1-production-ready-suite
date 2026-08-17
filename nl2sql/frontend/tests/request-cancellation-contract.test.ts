@@ -48,6 +48,7 @@ test("table and view base detail requests use the shared 30 second state machine
   );
 
   assert.match(hookSource, /DB_OBJECT_DETAIL_TIMEOUT_MS = API_TIMEOUT_MS\.interactiveDetail/u);
+  assert.match(policySource, /interactiveList:\s*60_000/u);
   assert.match(policySource, /interactiveDetail:\s*30_000/u);
   assert.match(policySource, /requestTimeoutSeconds/u);
   assert.match(hookSource, /controllerRef\.current\?\.abort\(\)/u);
@@ -65,10 +66,13 @@ test("interactive schema fallbacks are restricted to compatibility statuses", ()
     new URL("../src/features/nl2sql/incrementalQueries.ts", import.meta.url),
     "utf8",
   );
+  const i18nSource = readFileSync(new URL("../src/lib/i18n.ts", import.meta.url), "utf8");
   assert.match(source, /new Set\(\[404, 410, 501\]\)/u);
   assert.match(source, /if \(!isLegacyCompatibilityError\(error\)\) throw error/u);
   assert.match(source, /timeoutMs: API_TIMEOUT_MS\.interactiveList/u);
   assert.match(source, /timeoutMs: API_TIMEOUT_MS\.jobControl/u);
+  assert.match(source, /params\.set\("include_counts", "false"\)/u);
+  assert.doesNotMatch(i18nSource, /8秒以内/u);
 });
 
 test("data management refresh uses the paged read model and durable schema job", () => {

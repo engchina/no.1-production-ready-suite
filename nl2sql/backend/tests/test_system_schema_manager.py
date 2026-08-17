@@ -90,7 +90,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8]
+    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8, 9]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
     assert "NL2SQL_FEEDBACK_VECTORS" not in MANAGED_TABLES
@@ -374,7 +374,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8],
+            pending_versions=[7, 8, 9],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -392,7 +392,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8]
+    assert manager.applied_migrations == [7, 8, 9]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
@@ -669,8 +669,7 @@ def test_system_tables_api_contract_and_strict_permission(
 
     status = settings_router.get_system_tables_status()
     initialized = settings_router.initialize_system_tables(
-        SystemTablesInitializeRequest(recreate=False),
-        _system_tables_request(),
+        SystemTablesInitializeRequest(recreate=False)
     )
 
     assert status.data is not None
@@ -678,12 +677,12 @@ def test_system_tables_api_contract_and_strict_permission(
     assert not isinstance(initialized, JSONResponse)
     assert initialized.data is not None
     assert initialized.data.operation == "migrated"
-    assert permission_for_route("GET", "/settings/database/system-tables") == (
-        "settings.database.view"
+    assert permission_for_route("GET", "/settings/database/system-tables") == frozenset(
+        {"menu.settings_system_tables"}
     )
     assert permission_for_route(
         "POST", "/settings/database/system-tables/initialize"
-    ) == "settings.database.sql_execute"
+    ) == frozenset({"menu.settings_system_tables"})
 
 
 def test_system_tables_api_exposes_retryable_ora_00054_contract(
@@ -692,8 +691,7 @@ def test_system_tables_api_exposes_retryable_ora_00054_contract(
     monkeypatch.setattr(settings_router, "system_schema_manager", _LockedApiManager())
 
     response = settings_router.initialize_system_tables(
-        SystemTablesInitializeRequest(recreate=False),
-        _system_tables_request(),
+        SystemTablesInitializeRequest(recreate=False)
     )
 
     assert isinstance(response, JSONResponse)
@@ -806,7 +804,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
 
     monkeypatch.setattr(security_dependencies, "run_in_threadpool", inline_threadpool)
 
-    viewer_service = FakeSecurityService(principal({"settings.database.view"}))
+    viewer_service = FakeSecurityService(principal({"menu.settings_database"}))
     monkeypatch.setattr(
         security_dependencies,
         "get_security_service",
@@ -821,7 +819,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
     assert no_execute.value.status_code == 403
 
     executor_service = FakeSecurityService(
-        principal({"settings.database.view", "settings.database.sql_execute"})
+        principal({"menu.settings_system_tables"})
     )
     monkeypatch.setattr(
         security_dependencies,

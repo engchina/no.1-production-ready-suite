@@ -26,6 +26,13 @@ function job(status: SchemaRefreshJob["status"], errorCode = ""): SchemaRefreshJ
   };
 }
 
+function exportedFunctionSource(source: string, name: string) {
+  const start = source.indexOf(`export function ${name}`);
+  assert.notEqual(start, -1, `${name} should exist`);
+  const next = source.indexOf("\nexport function ", start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+}
+
 test("waitForSchemaRefreshJob resolves when the durable job reaches done", async () => {
   const originalFetch = globalThis.fetch;
   const responses = [job("running"), job("done")];
@@ -95,6 +102,22 @@ test("waitForSchemaRefreshJob preserves caller aborts", async () => {
   }
 });
 
+test("refresh job hooks only poll and never invalidate read-model queries from refetchInterval", () => {
+  const source = readFileSync(
+    new URL("../src/features/nl2sql/incrementalQueries.ts", import.meta.url),
+    "utf8",
+  );
+
+  for (const hookName of ["useSchemaRefreshJob", "useSelectAiDbProfileRefreshJob"]) {
+    const hook = exportedFunctionSource(source, hookName);
+    assert.doesNotMatch(hook, /invalidateQueries/u);
+    assert.match(
+      hook,
+      /return status === "pending" \|\| status === "running" \? 1_000 : false/u,
+    );
+  }
+});
+
 test("DDL mutation pages do not block SQL results on schema refresh completion", () => {
   const sources = [
     "../src/features/nl2sql/pages/TableManagementPage.tsx",
@@ -108,4 +131,78 @@ test("DDL mutation pages do not block SQL results on schema refresh completion",
     assert.match(source, /setSchemaRefreshJobId\(/u);
     assert.match(source, /void refreshObjects\(\)/u);
   }
+});
+
+test("schema refresh completion and targeted labels are owned by page effects", () => {
+  const pageSources = [
+    "../src/features/nl2sql/pages/TableManagementPage.tsx",
+    "../src/features/nl2sql/pages/ViewManagementPage.tsx",
+    "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
+    "../src/features/nl2sql/pages/DataManagementPage.tsx",
+    "../src/features/nl2sql/pages/SampleDataPage.tsx",
+    "../src/features/nl2sql/pages/AdminSqlPage.tsx",
+  ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
+
+  for (const source of pageSources) {
+    assert.match(source, /common\.processing\.schemaDeltaSyncing/u);
+    assert.match(source, /schema_refresh_required/u);
+    assert.match(source, /useSchemaRefreshJob/u);
+  }
+
+  for (const source of pageSources.slice(0, 3)) {
+    assert.match(source, /completedSchemaRefreshJob\.current === reportKey/u);
+  }
+  assert.ok(pageSources[3].includes("completedSchemaJob.current === `${job.job_id}:${job.status}`"));
+  assert.match(pageSources[4], /completedSchemaRefreshJob\.current === reportKey/u);
+  assert.match(pageSources[5], /completedSchemaRefreshJob\.current === reportKey/u);
+});
+
+test("remaining schema refresh recovery pages use workspace feedback and disabled CTAs", () => {
+  const ontologySource = readFileSync(
+    new URL("../src/features/nl2sql/pages/OntologyBuildPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const sampleSource = readFileSync(
+    new URL("../src/features/nl2sql/pages/SampleDataPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const adminSqlSource = readFileSync(
+    new URL("../src/features/nl2sql/pages/AdminSqlPage.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(ontologySource, /ProcessingIndicator/u);
+  assert.match(ontologySource, /ontology-build-schema-refresh-processing/u);
+  assert.match(ontologySource, /toast\.success\(t\("common\.action\.schemaRefreshed"\)\)/u);
+  assert.doesNotMatch(ontologySource, /profiles\.schemaRefresh\.status\.\$\{schemaRefreshStatus\}/u);
+  assert.doesNotMatch(
+    ontologySource,
+    /<p className="text-sm text-muted" aria-live="polite" aria-atomic="true">/u,
+  );
+
+  assert.match(sampleSource, /const pageNoticeActionLoading = schemaRefreshNeedsFull/u);
+  assert.match(sampleSource, /const pageNoticeActionDisabled = schemaRefreshNeedsFull/u);
+  assert.match(sampleSource, /loading=\{pageNoticeActionLoading\}/u);
+  assert.match(sampleSource, /disabled=\{pageNoticeActionDisabled\}/u);
+  assert.match(sampleSource, /: loading === "load" \|\| schemaRefreshing/u);
+
+  assert.match(
+    adminSqlSource,
+    /loading=\{schemaRefreshing \|\| startSchemaRefresh\.isPending\}/u,
+  );
+  assert.match(
+    adminSqlSource,
+    /disabled=\{schemaRefreshing \|\| startSchemaRefresh\.isPending\}/u,
+  );
+});
+
+test("view create renders schema sync processing inside the create task panel", () => {
+  const source = readFileSync(
+    new URL("../src/features/nl2sql/pages/ViewManagementPage.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /footerProcessing=/u);
+  assert.match(source, /view-create-schema-refresh-processing/u);
+  assert.match(source, /schemaRefreshProcessingLabel\(/u);
 });

@@ -123,7 +123,7 @@ function SettingsPreviewCard({
     <Card>
       <CardHeader>
         <ContentActionBar
-          ariaLabel={title}
+          ariaLabel={t("settings.preview.actions", { label: copyLabel })}
           leading={<SettingsCardHeader icon={icon} title={title} description={description} />}
           testId="settings-preview-actions"
         >
@@ -131,10 +131,11 @@ function SettingsPreviewCard({
             type="button"
             variant="secondary"
             size="sm"
+            aria-label={copyLabel}
             onClick={() => void handleCopy()}
           >
             <Clipboard size={14} aria-hidden />
-            {copyLabel}
+            <span>{t("settings.preview.copy")}</span>
           </Button>
         </ContentActionBar>
       </CardHeader>

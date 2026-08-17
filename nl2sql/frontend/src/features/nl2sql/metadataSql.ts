@@ -1,5 +1,13 @@
 import type { DbAdminObjectDetail } from "./types";
 
+function detailQualifiedName(detail: DbAdminObjectDetail) {
+  const qualified = (detail.qualified_name ?? "").trim();
+  if (qualified) return qualified.toUpperCase();
+  const owner = detail.owner.trim().toUpperCase();
+  const name = detail.name.trim().toUpperCase();
+  return owner ? `${owner}.${name}` : name;
+}
+
 export function buildMetadataInputTexts(
   details: DbAdminObjectDetail[],
   sampleLimit: number
@@ -10,9 +18,10 @@ export function buildMetadataInputTexts(
   const samples: string[] = [];
 
   for (const detail of details) {
+    const qualifiedName = detailQualifiedName(detail);
     structure.push(
       [
-        `OBJECT: ${detail.name}`,
+        `OBJECT: ${qualifiedName}`,
         `TYPE: ${detail.object_type}`,
         `COMMENT: ${detail.comment || "-"}`,
         "COLUMNS:",
@@ -27,9 +36,9 @@ export function buildMetadataInputTexts(
 
     const constraints = detail.constraints ?? [];
     const pk = constraints.filter((constraint) => /\sP(\(|$)/.test(constraint));
-    if (pk.length > 0) primaryKeys.push(`OBJECT: ${detail.name}\n${pk.join("\n")}`);
+    if (pk.length > 0) primaryKeys.push(`OBJECT: ${qualifiedName}\n${pk.join("\n")}`);
     const fk = constraints.filter((constraint) => /\sR(\(|$)/.test(constraint));
-    if (fk.length > 0) foreignKeys.push(`OBJECT: ${detail.name}\n${fk.join("\n")}`);
+    if (fk.length > 0) foreignKeys.push(`OBJECT: ${qualifiedName}\n${fk.join("\n")}`);
 
     if (sampleLimit > 0) {
       const sampleLines = detail.columns
@@ -38,7 +47,7 @@ export function buildMetadataInputTexts(
           return values ? `${column.column_name}: ${values}` : "";
         })
         .filter(Boolean);
-      if (sampleLines.length > 0) samples.push(`OBJECT: ${detail.name}\n${sampleLines.join("\n")}`);
+      if (sampleLines.length > 0) samples.push(`OBJECT: ${qualifiedName}\n${sampleLines.join("\n")}`);
     }
   }
 

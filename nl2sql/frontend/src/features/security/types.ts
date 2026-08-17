@@ -49,27 +49,6 @@ export interface PermissionDefinition {
   implies: string[];
 }
 
-export interface AuditRecord {
-  audit_id: number;
-  actor_user_id: string | null;
-  event_type: string;
-  target_type: string;
-  target_id: string;
-  outcome: string;
-  detail: Record<string, unknown>;
-  request_id: string;
-  client_ip: string;
-  created_at: string;
-}
-
-export interface AuditPage {
-  items: AuditRecord[];
-  page: number;
-  page_size: number;
-  total: number;
-  total_pages: number;
-}
-
 export interface DeepSecStep {
   step_no: number;
   key: string;

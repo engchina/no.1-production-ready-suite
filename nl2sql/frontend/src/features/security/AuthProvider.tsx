@@ -10,6 +10,7 @@ import {
 
 import { isAbortError } from "@/lib/api";
 import { securityApi } from "./api";
+import { normalizeMenuPermissions } from "./menu-permissions";
 import type { CurrentUser } from "./types";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated";
@@ -74,18 +75,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({
-      status,
-      user,
-      login,
-      logout,
-      refresh,
-      hasPermission: (permission) =>
-        Boolean(
-          user &&
-            (user.role_codes.includes("SYSTEM_ADMIN") || user.permissions.includes(permission))
-        ),
-    }),
+    () => {
+      const normalizedPermissions = user ? normalizeMenuPermissions(user.permissions) : new Set<string>();
+      return {
+        status,
+        user,
+        login,
+        logout,
+        refresh,
+        hasPermission: (permission) => {
+          const requestedPermissions = normalizeMenuPermissions([permission]);
+          return Boolean(
+            user &&
+              (user.role_codes.includes("SYSTEM_ADMIN") ||
+                normalizedPermissions.has(permission) ||
+                [...requestedPermissions].some((code) => normalizedPermissions.has(code)))
+          );
+        },
+      };
+    },
     [login, logout, refresh, status, user]
   );
 

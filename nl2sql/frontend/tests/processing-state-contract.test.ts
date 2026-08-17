@@ -10,6 +10,10 @@ const managementShellSource = readFileSync(
   new URL("../src/features/nl2sql/components/DbObjectManagementShared.tsx", import.meta.url),
   "utf8",
 );
+const stateViewsSource = readFileSync(
+  new URL("../src/components/StateViews.tsx", import.meta.url),
+  "utf8",
+);
 
 test("shared processing state exposes the common hook and loading components", () => {
   assert.match(processingSource, /export function useOperationTiming/u);
@@ -49,6 +53,8 @@ test("processing activity icon defaults protect result areas from duplicate spin
   assert.match(processingSource, /timing\.active && showActivityIcon/u);
   assert.match(processingSource, /!timing\.active && showActivityIcon/u);
   assert.match(processingSource, /activityIcon=\{effectiveActivityIcon\}/u);
+  assert.doesNotMatch(stateViewsSource, /activityIcon = "spinner"/u);
+  assert.match(stateViewsSource, /placement = "panel",\s*activityIcon,/u);
 });
 
 test("operation timer resets on operation changes and recovers from background throttling", () => {

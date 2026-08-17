@@ -473,6 +473,7 @@ def test_openapi_exposes_new_quality_flow_and_removes_legacy_evaluation_routes()
     }
     assert expected <= set(paths)
     assert "/api/nl2sql/analyze" in paths
+    assert "/api/nl2sql/repair" not in paths
     assert "/api/nl2sql/reverse" in paths
     assert "/api/nl2sql/synthetic-data/generate" in paths
     removed = {

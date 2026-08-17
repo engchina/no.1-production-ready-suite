@@ -3,7 +3,7 @@ export const APP_ROUTES = {
   login: "/login",
   passwordChange: "/password/change",
   forbidden: "/forbidden",
-  dashboard: "/",
+  home: "/",
   adminSql: "/admin-sql",
   tableManagement: "/table-management",
   viewManagement: "/view-management",
@@ -16,7 +16,6 @@ export const APP_ROUTES = {
   ontologyBuild: "/ontology-build",
   glossaryRules: "/glossary-rules",
   globalRules: "/global-rules",
-  sqlAnalysis: "/sql-analysis",
   sqlToQuestion: "/sql-to-question",
   directSql: "/direct-sql",
   feedbackManagement: "/feedback-management",
@@ -33,8 +32,7 @@ export const APP_ROUTES = {
   settingsAppearance: "/settings/appearance",
   securityUsers: "/settings/security/users",
   securityRoles: "/settings/security/roles",
-  securityAudit: "/settings/security/audit",
   securityDeepSec: "/settings/security/deepsec",
-  /** 旧「NL2SQL モデル学習」URL。業務プロファイルの few-shot 領域へ転送する。 */
+  /** 旧「NL2SQL モデル学習」URL。業務プロファイルの Select AI 設定へ転送する。 */
   legacyNl2sqlModelLearning: "/settings/nl2sql-model",
 } as const;

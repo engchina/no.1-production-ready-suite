@@ -8,12 +8,10 @@ import {
   useState,
 } from "react";
 import {
+  AlertCircle,
   BookOpenText,
   ChevronDown,
   Database,
-  Eye,
-  History,
-  Network,
   Play,
   RefreshCw,
   RotateCcw,
@@ -26,16 +24,22 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { PageHeader } from "@/components/PageHeader";
+import { ActionResultRegion } from "@/components/ActionResultRegion";
+import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
+import { FieldLabel } from "@/components/ui/required-field";
 import { useAuth } from "@/features/security/AuthProvider";
-import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
+import { apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
+import { Nl2SqlExecutionOptionsPanel } from "./components/Nl2SqlExecutionOptionsPanel";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
+import { QuestionText } from "./components/QuestionText";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
 import {
   getSchemaObjectDetail,
@@ -48,19 +52,16 @@ import {
 } from "./incrementalQueries";
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
-import { previewExecutePayload, previewToJob } from "./previewState";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
+import { profileDisplayLabel } from "./profileDisplay";
 import type {
   HistoryData,
   HistoryItem,
   JobCreateData,
-  JobData,
   Nl2SqlEngine,
   Nl2SqlResult,
-  PreviewData,
   ProfileRecommendationData,
-  QueryResults,
   RewriteData,
   SchemaCatalog,
   SchemaObjectDetail,
@@ -69,28 +70,6 @@ import type {
   SimilarHistoryItem,
 } from "./types";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
-import {
-  confirmQuerySessionSql,
-  confirmOntologyProfileRecommendation,
-  createOntologyImprovementProposal,
-  createQuerySession,
-  executeQuerySession,
-  generateQuerySessionSql,
-  getQuerySession,
-  patchQuerySessionIntent,
-  recommendOntologyProfiles,
-  QuerySessionVersionConflictError,
-} from "./ontology/api";
-import { QueryOntologyFlow } from "./ontology/QueryOntologyFlow";
-import {
-  currentIntentVersionForSession,
-  type GraphPatch,
-  type OntologyProfileRecommendation,
-  type QuerySession,
-  type QuerySessionExecuteRequest,
-  type QuerySessionGenerateSqlRequest,
-  type QuerySessionSqlConfirmationRequest,
-} from "./ontology/types";
 import {
   emptySelection,
   insertTextAtRange,
@@ -102,22 +81,52 @@ import {
 
 function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null) {
   if (!result) return null;
+  if (result.history_id) {
+    const byId = history.find((item) => item.id === result.history_id);
+    if (byId) return byId;
+  }
   return history.find((item) => item.generated_sql === result.generated_sql) ?? null;
 }
 
-function queryResultsFromOntologySession(session: QuerySession): QueryResults | null {
-  const value = session.result;
-  if (!value || !Array.isArray(value.columns) || !Array.isArray(value.rows)) return null;
-  return {
-    columns: value.columns.map(String),
-    rows: value.rows as Array<Record<string, unknown>>,
-    total: typeof value.total === "number" ? value.total : value.rows.length,
-  };
+function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistoryItem[] {
+  return items.filter((entry) => entry.item.admin_feedback_rating === "good");
+}
+
+type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh";
+type PageError = { source: PageErrorSource; message: string } | null;
+
+const SCHEMA_EMPTY_ERROR_FRAGMENT = "Schema catalog が空です";
+const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
+
+function messageFromError(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function messageWithRetryHint(message: string) {
+  const retryHint = t("nl2sql.error.retryHint");
+  return message.includes(retryHint) ? message : `${message} ${retryHint}`;
+}
+
+function actionErrorMessage(error: unknown, fallback: string) {
+  return messageWithRetryHint(messageFromError(error, fallback));
+}
+
+function isSchemaEmptyError(message: string) {
+  return message.includes(SCHEMA_EMPTY_ERROR_FRAGMENT);
+}
+
+function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
 }
 
 export function Nl2SqlWorkbench() {
   const { hasPermission } = useAuth();
-  const canExecute = hasPermission("search.execute");
+  const canExecute = hasPermission(MENU_PERMISSIONS.query);
   if (!canExecute) {
     return (
       <>
@@ -136,37 +145,21 @@ function ExecutableNl2SqlWorkbench() {
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
-  const [profileId, setProfileId] = useState("default");
+  const [profileId, setProfileId] = useState("");
   const [question, setQuestion] = useState("");
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
-  const [previewJob, setPreviewJob] = useState<JobData | null>(null);
-  const [previewExecutionResults, setPreviewExecutionResults] = useState<QueryResults | null>(null);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
-  const [ontologySession, setOntologySession] = useState<QuerySession | null>(null);
-  const [ontologyProfileRecommendation, setOntologyProfileRecommendation] =
-    useState<OntologyProfileRecommendation | null>(null);
-  const [ontologyProfileConfirmation, setOntologyProfileConfirmation] = useState<{
-    question: string;
-    profileId: string;
-    revisionId: string;
-    token: string;
-  } | null>(null);
-  const [ontologyLoading, setOntologyLoading] = useState(false);
-  const [ontologyPatch, setOntologyPatch] = useState<GraphPatch | null>(null);
-  const [ontologyVersionConflict, setOntologyVersionConflict] = useState<{
-    baseVersion: number;
-    currentVersion: number;
-    message?: string;
-  } | null>(null);
-  const [ontologyExecutionResults, setOntologyExecutionResults] = useState<QueryResults | null>(null);
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [rewriteUseSchema, setRewriteUseSchema] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
+  const [includeInterpretation, setIncludeInterpretation] = useState(true);
+  const [includeShowPrompt, setIncludeShowPrompt] = useState(true);
   const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
+  const [selectAiRoleAdvancedOpen, setSelectAiRoleAdvancedOpen] = useState(false);
   const [similarHistoryOpen, setSimilarHistoryOpen] = useState(false);
   const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
   const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useState("");
@@ -174,9 +167,11 @@ function ExecutableNl2SqlWorkbench() {
   const [schemaDetails, setSchemaDetails] = useState<Record<string, SchemaObjectDetail>>({});
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewExecuteLoading, setPreviewExecuteLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [pageError, setPageError] = useState<PageError>(null);
+  const [actionError, setActionError] = useState("");
+  const [schemaDetailError, setSchemaDetailError] = useState("");
+  const [autoDetectLowConfidence, setAutoDetectLowConfidence] = useState(false);
+  const [actionOperationKey, setActionOperationKey] = useState(0);
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -199,20 +194,43 @@ function ExecutableNl2SqlWorkbench() {
     () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [profilesQuery.data]
   );
+  const profileLoadMoreError =
+    profilesQuery.isFetchNextPageError && profilesQuery.error
+      ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
+      : "";
+  const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
   const selectedProfileQuery = useProfileDetail(profileId);
-  const schemaObjectsQuery = useSchemaObjects(schemaSearch, "", profileId);
+  const selectedProfile = selectedProfileQuery.data?.profile ?? null;
+  const profileSelectionReady =
+    !noProfiles &&
+    Boolean(profileId) &&
+    (profiles.some((profile) => profile.id === profileId) || selectedProfileQuery.isSuccess);
+  const schemaObjectsQuery = useSchemaObjects(
+    schemaSearch,
+    "",
+    profileId,
+    "",
+    profileSelectionReady
+  );
+  const schemaLoadMoreError =
+    schemaObjectsQuery.isFetchNextPageError && schemaObjectsQuery.error
+      ? listLoadMoreErrorMessage(schemaObjectsQuery.error, "dataMgmt.objectList.error")
+      : "";
   const schemaHeadQuery = useSchemaCatalogHead();
   const startSchemaRefresh = useStartSchemaRefresh();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshStatus = schemaRefreshJobQuery.isError
     ? "error"
     : (schemaRefreshJobQuery.data?.status ?? "");
+  const schemaObjects = useMemo(
+    () => schemaObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [schemaObjectsQuery.data]
+  );
   const catalog = useMemo<SchemaCatalog>(() => {
-    const objects = schemaObjectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
     return {
       refreshed_at: schemaHeadQuery.data?.refreshed_at ?? "",
       schema_fingerprint: schemaHeadQuery.data?.schema_fingerprint ?? "",
-      tables: objects.map((object) => {
+      tables: schemaObjects.map((object) => {
         const key = `${object.owner}.${object.object_name}`.toUpperCase();
         return (
           schemaDetails[key]?.table ?? {
@@ -229,11 +247,21 @@ function ExecutableNl2SqlWorkbench() {
         );
       }),
     };
-  }, [schemaDetails, schemaHeadQuery.data, schemaObjectsQuery.data]);
-  const loadingCatalog = schemaObjectsQuery.isPending || schemaObjectsQuery.isFetching;
+  }, [schemaDetails, schemaHeadQuery.data, schemaObjects]);
+  const loadingCatalog = schemaObjectsQuery.isPending && !schemaObjectsQuery.data;
+  const schemaCatalogHasObjects =
+    catalog.tables.length > 0 || (schemaHeadQuery.data?.object_count ?? 0) > 0;
+  const currentScopedSchemaEmpty =
+    schemaObjectsQuery.isSuccess &&
+    catalog.tables.length === 0 &&
+    (schemaHeadQuery.data?.object_count ?? 0) === 0;
+  const visiblePageError =
+    pageError && !(isSchemaEmptyError(pageError.message) && schemaCatalogHasObjects)
+      ? pageError
+      : null;
 
   // 画面 entry は summary/object page だけを独立取得する。refresh は persistent job を投入し、
-  // 前 catalog を表示したまま job 完了時の query invalidation を待つ。
+  // 前 catalog を表示したまま job 完了時にこの画面で必要な read model だけを取り直す。
   const loadCatalog = useCallback(
     async (refresh = false, announce = false) => {
       try {
@@ -248,6 +276,24 @@ function ExecutableNl2SqlWorkbench() {
           schemaHeadQuery.refetch(),
           profilesQuery.refetch(),
         ]);
+        const failedResult = results.find(
+          (result) => result.status === "rejected" || result.value.isError
+        );
+        if (failedResult) {
+          const failedIndex = results.indexOf(failedResult);
+          const fallback =
+            failedIndex === 2 ? t("profiles.error.load") : t("nl2sql.error.loadFailed");
+          const message =
+            failedResult.status === "rejected"
+              ? messageFromError(failedResult.reason, fallback)
+              : messageFromError(failedResult.value.error, fallback);
+          setPageError({
+            source: failedIndex === 2 ? "profile-load" : "schema-load",
+            message,
+          });
+          return;
+        }
+        setPageError(null);
         if (
           announce &&
           results.every(
@@ -257,11 +303,82 @@ function ExecutableNl2SqlWorkbench() {
           toast.success(t("common.action.refreshed"));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+        setPageError({
+          source: refresh ? "schema-refresh" : "schema-load",
+          message: messageFromError(err, t("nl2sql.error.loadFailed")),
+        });
       }
     },
     [profilesQuery, schemaHeadQuery, schemaObjectsQuery, startSchemaRefresh]
   );
+
+  useEffect(() => {
+    if (profilesQuery.isError && !profilesQuery.data) {
+      setPageError({
+        source: "profile-load",
+        message: messageFromError(profilesQuery.error, t("profiles.error.load")),
+      });
+      return;
+    }
+    if (selectedProfileQuery.isError && profileId) {
+      setPageError({
+        source: "profile-load",
+        message: messageFromError(selectedProfileQuery.error, t("profiles.error.load")),
+      });
+      return;
+    }
+    if (schemaObjectsQuery.isError && !schemaObjectsQuery.data) {
+      setPageError({
+        source: "schema-load",
+        message: messageFromError(schemaObjectsQuery.error, t("nl2sql.error.loadFailed")),
+      });
+      return;
+    }
+    if (schemaHeadQuery.isError && !schemaHeadQuery.data) {
+      setPageError({
+        source: "schema-load",
+        message: messageFromError(schemaHeadQuery.error, t("nl2sql.error.loadFailed")),
+      });
+    }
+  }, [
+    profileId,
+    profilesQuery.data,
+    profilesQuery.error,
+    profilesQuery.isError,
+    schemaHeadQuery.data,
+    schemaHeadQuery.error,
+    schemaHeadQuery.isError,
+    schemaObjectsQuery.data,
+    schemaObjectsQuery.error,
+    schemaObjectsQuery.isError,
+    selectedProfileQuery.error,
+    selectedProfileQuery.isError,
+  ]);
+
+  useEffect(() => {
+    if (!pageError) return;
+    if (
+      pageError.source === "profile-load" &&
+      profilesQuery.isSuccess &&
+      (noProfiles || !profileId || selectedProfileQuery.isSuccess)
+    ) {
+      setPageError(null);
+      return;
+    }
+    if (
+      (pageError.source === "schema-load" || pageError.source === "schema-refresh") &&
+      schemaCatalogHasObjects
+    ) {
+      setPageError(null);
+    }
+  }, [
+    pageError,
+    noProfiles,
+    profileId,
+    profilesQuery.isSuccess,
+    schemaCatalogHasObjects,
+    selectedProfileQuery.isSuccess,
+  ]);
 
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
@@ -271,10 +388,21 @@ function ExecutableNl2SqlWorkbench() {
     reportedSchemaRefreshJob.current = reportKey;
     if (job.status === "done") {
       toast.success(t("common.action.schemaRefreshed"));
+      setPageError(null);
+      void Promise.all([schemaObjectsQuery.refetch(), schemaHeadQuery.refetch()]);
     } else {
+      setPageError({ source: "schema-refresh", message: t("profiles.schemaRefresh.error") });
       toast.error(t("profiles.schemaRefresh.error"));
     }
-  }, [schemaRefreshJobQuery.data]);
+  }, [schemaHeadQuery, schemaObjectsQuery, schemaRefreshJobQuery.data]);
+
+  useEffect(() => {
+    if (!schemaRefreshJobQuery.isError) return;
+    setPageError({
+      source: "schema-refresh",
+      message: messageFromError(schemaRefreshJobQuery.error, t("profiles.schemaRefresh.error")),
+    });
+  }, [schemaRefreshJobQuery.error, schemaRefreshJobQuery.isError]);
 
   const refreshHistory = useCallback(async () => {
     const historyData = await apiGet<HistoryData>("/api/nl2sql/history");
@@ -282,13 +410,11 @@ function ExecutableNl2SqlWorkbench() {
   }, []);
 
   const handleJobResult = useCallback((data: Nl2SqlResult) => {
-    setPreviewJob(null);
-    setPreviewExecutionResults(null);
     setResult(data);
   }, []);
 
   // job エラーは OperationStatusStrip（job.error_message）へ一本化して表示する。
-  // ページ共通 Banner（catalog/preview/execute 用）には流さず、重複表示を避ける。
+  // ページ共通 Banner（catalog/execute 用）には流さず、重複表示を避ける。
   const handleJobError = useCallback(() => {}, []);
 
   const { job, jobStartedAt, pollJob, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
@@ -296,8 +422,23 @@ function ExecutableNl2SqlWorkbench() {
     onError: handleJobError,
     onHistoryRefresh: refreshHistory,
   });
+  const clearGeneratedOutput = useCallback(() => {
+    setResult(null);
+    clearTrackedJob();
+    setRewriteData(null);
+    setActionError("");
+  }, [clearTrackedJob]);
   const jobActive = isJobInFlight(job?.status) || submitting;
-  const active = jobActive || previewLoading || previewExecuteLoading || ontologyLoading;
+  const active = jobActive;
+  const actionBusy = submitting;
+  const beginActionFeedback = useCallback(() => {
+    setActionError("");
+    setActionOperationKey((current) => current + 1);
+  }, []);
+  const showActionError = useCallback((err: unknown, fallback: string) => {
+    setActionError(actionErrorMessage(err, fallback));
+    setActionOperationKey((current) => current + 1);
+  }, []);
   const latestHistory = useMemo(() => lastMatchingHistory(history, result), [history, result]);
   const selectAiOverrides = useMemo(() => {
     if (engine !== "select_ai") return null;
@@ -309,12 +450,12 @@ function ExecutableNl2SqlWorkbench() {
       additional_instructions: additionalInstructions,
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
-  const selectedProfile = selectedProfileQuery.data?.profile ?? null;
-  const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
-  const profileSelectionReady =
-    !noProfiles &&
-    Boolean(profileId) &&
-    (profiles.some((profile) => profile.id === profileId) || selectedProfileQuery.isSuccess);
+  const selectAiRoleHasOverride = Boolean(selectAiRoleOverride.trim());
+  const hasSelectAiOverrideInputs = useMemo(
+    () => Boolean(selectAiRoleHasOverride || selectAiInstructionsOverride.trim()),
+    [selectAiInstructionsOverride, selectAiRoleHasOverride]
+  );
+  const selectAiRolePanelOpen = selectAiRoleAdvancedOpen || selectAiRoleHasOverride;
   const profileAllowedTableNames = useMemo(() => {
     if (!selectedProfile) return null;
     const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
@@ -334,8 +475,6 @@ function ExecutableNl2SqlWorkbench() {
       if (profileId) setProfileId("");
       setSelection(emptySelection());
       setRecommendation(null);
-      setOntologyProfileRecommendation(null);
-      setOntologyProfileConfirmation(null);
       return;
     }
     if (!profileId) {
@@ -353,8 +492,6 @@ function ExecutableNl2SqlWorkbench() {
     setProfileId(profiles[0]?.id ?? "");
     setSelection(emptySelection());
     setRecommendation(null);
-    setOntologyProfileRecommendation(null);
-    setOntologyProfileConfirmation(null);
   }, [
     noProfiles,
     profileId,
@@ -366,6 +503,7 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     const trimmed = question.trim();
+    setAutoDetectLowConfidence(false);
     if (trimmed.length < 4 || active || profiles.length === 0) {
       setRecommendation(null);
       return undefined;
@@ -406,7 +544,7 @@ function ExecutableNl2SqlWorkbench() {
         limit: 3,
       }, { signal: controller.signal })
         .then((data) => {
-          if (!controller.signal.aborted) setSimilarHistory(data.items);
+          if (!controller.signal.aborted) setSimilarHistory(goodFeedbackSimilarHistory(data.items));
         })
         .catch((cause: unknown) => {
           if (!controller.signal.aborted && !isAbortError(cause)) {
@@ -457,9 +595,10 @@ function ExecutableNl2SqlWorkbench() {
       const detail = await getSchemaObjectDetail(table.owner, table.table_name, signal);
       if (signal?.aborted) return;
       setSchemaDetails((current) => ({ ...current, [key]: detail }));
+      setSchemaDetailError("");
     } catch (err) {
       if (!signal?.aborted && !isAbortError(err)) {
-        setError(err instanceof Error ? err.message : t("nl2sql.error.loadFailed"));
+        setSchemaDetailError(messageFromError(err, t("nl2sql.error.loadFailed")));
       }
     } finally {
       schemaDetailRequests.current.delete(key);
@@ -477,8 +616,11 @@ function ExecutableNl2SqlWorkbench() {
 
   const applyRecommendation = () => {
     if (!recommendation) return;
+    setAutoDetectLowConfidence(false);
     setProfileId(recommendation.recommended_profile_id);
     setSelection(toSchemaSelection(recommendation.recommended_allowed_objects));
+    setPageError(null);
+    setSchemaDetailError("");
   };
 
   // 質問から業務プロファイルを自動判定（学習済み分類器 → 決定論フォールバック）して選択する。
@@ -492,6 +634,23 @@ function ExecutableNl2SqlWorkbench() {
         current_profile_id: profileId || null,
       });
       setRecommendation(data);
+      setPageError(null);
+      setSchemaDetailError("");
+      const recommendedProfileLabel = profileDisplayLabel({
+        name: data.recommended_profile_name,
+        category: data.recommended_profile_category,
+      });
+      if (data.confidence < PROFILE_RECOMMENDATION_APPLY_THRESHOLD) {
+        setAutoDetectLowConfidence(true);
+        toast.warning(
+          t("nl2sql.recommend.autoDetectLowConfidence", {
+            name: recommendedProfileLabel,
+            confidence: Math.round(data.confidence * 100),
+          })
+        );
+        return;
+      }
+      setAutoDetectLowConfidence(false);
       setProfileId(data.recommended_profile_id);
       setSelection(toSchemaSelection(data.recommended_allowed_objects));
       const sourceLabel =
@@ -500,7 +659,7 @@ function ExecutableNl2SqlWorkbench() {
           : t("nl2sql.recommend.sourceDeterministic");
       toast.success(
         t("nl2sql.recommend.autoDetectApplied", {
-          name: data.recommended_profile_name,
+          name: recommendedProfileLabel,
           source: sourceLabel,
           confidence: Math.round(data.confidence * 100),
         })
@@ -518,7 +677,8 @@ function ExecutableNl2SqlWorkbench() {
     try {
       await apiPost("/api/nl2sql/sample-data/import", { step: "all", confirmation: "SQL_ASSIST_SAMPLE" });
       toast.success(t("nl2sql.sample.importSuccess"));
-      setError("");
+      setPageError(null);
+      setSchemaDetailError("");
       clearTrackedJob();
       await loadCatalog();
     } catch (err) {
@@ -528,217 +688,17 @@ function ExecutableNl2SqlWorkbench() {
     }
   }, [clearTrackedJob, loadCatalog]);
 
-  const previewSql = async () => {
-    const trimmed = question.trim();
-    if (!trimmed || active || !profileSelectionReady) return;
-    setPreviewLoading(true);
-    setError("");
-    clearTrackedJob();
-    setResult(null);
-    try {
-      const data = await apiPost<PreviewData>("/api/nl2sql/preview", {
-        question: trimmed,
-        engine,
-        profile_id: profileId || null,
-        allowed_objects: toAllowedObjects(selection),
-        select_ai_overrides: selectAiOverrides,
-      });
-      setPreviewJob(previewToJob(data, trimmed));
-      setPreviewExecutionResults(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.previewFailed"));
-      setPreviewJob(null);
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const executePreviewSql = async () => {
-    const previewResult = previewJob?.result;
-    const sql = previewResult?.executable_sql || previewResult?.generated_sql || "";
-    if (!sql.trim() || active) return;
-    setPreviewExecuteLoading(true);
-    setError("");
-    try {
-      const data = await apiPost<QueryResults>("/api/nl2sql/execute", {
-        ...previewExecutePayload(sql, profileId || null, toAllowedObjects(selection)),
-      });
-      setPreviewExecutionResults(data);
-      // タイムライン上でも実行済みを示す: execute/format を done に、結果を result へ反映。
-      setPreviewJob((prev) =>
-        prev
-          ? {
-              ...prev,
-              result: prev.result ? { ...prev.result, results: data } : prev.result,
-              steps: prev.steps.map((step) =>
-                step.stage === "execute_sql" || step.stage === "format_results"
-                  ? { ...step, status: "done" }
-                  : step
-              ),
-            }
-          : prev
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.executePreviewFailed"));
-      setPreviewExecutionResults(null);
-    } finally {
-      setPreviewExecuteLoading(false);
-    }
-  };
-
-  const updateOntologySession = (session: QuerySession) => {
-    setOntologySession(session);
-    setOntologyExecutionResults(queryResultsFromOntologySession(session));
-    setOntologyVersionConflict(null);
-  };
-
-  const confirmOntologyProfile = async (candidateProfileId: string, revisionId: string) => {
-    const trimmed = question.trim();
-    if (!trimmed || !ontologyProfileRecommendation || active) return;
-    setOntologyLoading(true);
-    setError("");
-    try {
-      const confirmation = await confirmOntologyProfileRecommendation(
-        ontologyProfileRecommendation.id,
-        candidateProfileId,
-        revisionId
-      );
-      setProfileId(candidateProfileId);
-      setOntologyProfileConfirmation({
-        question: trimmed,
-        profileId: candidateProfileId,
-        revisionId,
-        token: confirmation.confirmation_token,
-      });
-      toast.success(t("nl2sql.ontologyProfile.confirmed"));
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : t("nl2sql.ontologyProfile.confirmFailed")
-      );
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const startOntologySession = async () => {
-    const trimmed = question.trim();
-    if (!trimmed || active || !profileSelectionReady) return;
-    setOntologyLoading(true);
-    setError("");
-    setOntologyPatch(null);
-    setOntologyExecutionResults(null);
-    try {
-      const confirmationIsCurrent =
-        ontologyProfileConfirmation?.question === trimmed &&
-        ontologyProfileConfirmation.profileId === profileId;
-      if (!confirmationIsCurrent) {
-        setOntologyProfileConfirmation(null);
-        setOntologyProfileRecommendation(await recommendOntologyProfiles(trimmed));
-        return;
-      }
-      updateOntologySession(
-        await createQuerySession({
-          question: trimmed,
-          profile_id: profileId,
-          allowed_objects: toAllowedObjects(selection),
-          profile_confirmation_token: ontologyProfileConfirmation.token,
-        })
-      );
-      setOntologyProfileRecommendation(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.previewFailed"));
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const applyOntologyPatch = async (patch: GraphPatch) => {
-    if (!ontologySession) return;
-    setOntologyLoading(true);
-    try {
-      updateOntologySession(await patchQuerySessionIntent(ontologySession.id, patch));
-      setOntologyPatch(null);
-    } catch (err) {
-      if (err instanceof QuerySessionVersionConflictError) {
-        setOntologyVersionConflict({
-          baseVersion: patch.base_version,
-          currentVersion: err.currentVersion ?? currentIntentVersionForSession(ontologySession),
-          message: err.message,
-        });
-        if (err.session) setOntologySession(err.session);
-        return;
-      }
-      throw err;
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const confirmOntologyIntent = async (request: QuerySessionGenerateSqlRequest) => {
-    if (!ontologySession) return;
-    setOntologyLoading(true);
-    try {
-      updateOntologySession(await generateQuerySessionSql(ontologySession.id, request));
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const confirmOntologySql = async (request: QuerySessionSqlConfirmationRequest) => {
-    if (!ontologySession) return;
-    setOntologyLoading(true);
-    try {
-      updateOntologySession(await confirmQuerySessionSql(ontologySession.id, request));
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const executeOntologySql = async (request: QuerySessionExecuteRequest) => {
-    if (!ontologySession) return;
-    setOntologyLoading(true);
-    try {
-      updateOntologySession(await executeQuerySession(ontologySession.id, request));
-    } finally {
-      setOntologyLoading(false);
-    }
-  };
-
-  const reloadOntologySession = async () => {
-    if (!ontologySession) return;
-    updateOntologySession(await getQuerySession(ontologySession.id));
-  };
-
   const applyRewrittenQuestion = async () => {
     if (!rewriteData) return;
-    if (!ontologySession) {
-      setQuestion(rewriteData.rewritten_question);
-      return;
-    }
-    const patch: GraphPatch = ontologyPatch ?? {
-      base_version: currentIntentVersionForSession(ontologySession),
-      summary_ja: "提案された質問を現在のセッションへ適用",
-      operations: [
-        {
-          op: "replace",
-          path: "/question_effective",
-          value: rewriteData.rewritten_question,
-          reason_ja: "ユーザーが質問の最適化案を確認して適用",
-        },
-      ],
-    };
-    setOntologyPatch(patch);
-    await applyOntologyPatch(patch);
+    setQuestion(rewriteData.rewritten_question);
   };
 
   const submit = async () => {
     const trimmed = question.trim();
     if (!trimmed || active || !profileSelectionReady) return;
+    beginActionFeedback();
+    clearGeneratedOutput();
     setSubmitting(true);
-    setError("");
-    setResult(null);
-    setPreviewJob(null);
-    setPreviewExecutionResults(null);
     const startedAt = Date.now();
     try {
       // チェックが ON のときだけ質問を書き換えてから検索する（入力欄は変えず job にだけ反映）。
@@ -760,11 +720,13 @@ function ExecutableNl2SqlWorkbench() {
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
         select_ai_overrides: selectAiOverrides,
+        include_interpretation: includeInterpretation,
+        include_show_prompt: includeShowPrompt,
       });
       trackJob(data, startedAt);
       await pollJob(data.job_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("nl2sql.error.submitFailed"));
+      showActionError(err, t("nl2sql.error.submitFailed"));
       clearTrackedJob();
     } finally {
       setSubmitting(false);
@@ -777,19 +739,11 @@ function ExecutableNl2SqlWorkbench() {
         title={t("nav.query")}
         subtitle={t("page.query.subtitle")}
         status={
-          schemaRefreshStatus ? (
-            <span aria-live="polite" aria-atomic="true">
-              <StatusBadge
-                variant={
-                  schemaRefreshStatus === "done"
-                    ? "success"
-                    : schemaRefreshStatus === "error"
-                      ? "danger"
-                      : "info"
-                }
-                label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
-              />
-            </span>
+          schemaRefreshStatus && schemaRefreshStatus !== "done" ? (
+            <PageHeaderStatusBadge
+              variant={schemaRefreshStatus === "error" ? "danger" : "info"}
+              label={t(`profiles.schemaRefresh.status.${schemaRefreshStatus}`)}
+            />
           ) : undefined
         }
         meta={
@@ -825,27 +779,17 @@ function ExecutableNl2SqlWorkbench() {
 
       <div className="grid gap-4 p-4 lg:p-8">
         <PageNotice
-          notice={error ? { tone: "danger", message: `${error} ${t("nl2sql.error.retryHint")}` } : null}
+          notice={
+            visiblePageError
+              ? { tone: "danger", message: messageWithRetryHint(visiblePageError.message) }
+              : null
+          }
           action={
-            error ? (
-              catalog.tables.length === 0 ? (
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  loading={importingSample}
-                  disabled={active}
-                  onClick={() => void importSampleData()}
-                >
-                  <Database size={15} aria-hidden="true" />
-                  <span>{t("nl2sql.sample.import")}</span>
-                </Button>
-              ) : (
-                <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
-                  <RefreshCw size={15} aria-hidden="true" />
-                  <span>{t("nl2sql.action.refresh")}</span>
-                </Button>
-              )
+            visiblePageError ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("nl2sql.action.refresh")}</span>
+              </Button>
             ) : undefined
           }
         />
@@ -883,58 +827,14 @@ function ExecutableNl2SqlWorkbench() {
                   description={t("nl2sql.workbench.description")}
                 />
                 <div className="space-y-5">
-                  <EngineSelector value={engine} onChange={setEngine} disabled={active} />
-
-              {engine === "select_ai" && (
-                <section className="overflow-hidden rounded-md border border-border bg-background">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="md"
-                    className="min-h-11 w-full justify-between rounded-none px-4 text-left"
-                    aria-expanded={selectAiAdvancedOpen}
-                    aria-controls="select-ai-request-overrides"
-                    onClick={() => setSelectAiAdvancedOpen((current) => !current)}
+                  <EngineSelector
+                    value={engine}
+                    onChange={(nextEngine) => {
+                      setEngine(nextEngine);
+                      setActionError("");
+                    }}
                     disabled={active}
-                  >
-                    <span>{t("nl2sql.selectAiOverrides.title")}</span>
-                    <ChevronDown
-                      size={16}
-                      className={selectAiAdvancedOpen ? "rotate-180 transition-transform" : "transition-transform"}
-                      aria-hidden="true"
-                    />
-                  </Button>
-                  {selectAiAdvancedOpen && (
-                    <div id="select-ai-request-overrides" className="grid gap-4 border-t border-border p-4">
-                      <p className="text-sm leading-6 text-muted">
-                        {t("nl2sql.selectAiOverrides.hint")}
-                      </p>
-                      <label className="grid gap-1 text-sm font-medium text-foreground">
-                        <span>{t("nl2sql.selectAiOverrides.role")}</span>
-                        <textarea
-                          value={selectAiRoleOverride}
-                          onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
-                          disabled={active}
-                          rows={3}
-                          className="rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                          placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm font-medium text-foreground">
-                        <span>{t("nl2sql.selectAiOverrides.additionalInstructions")}</span>
-                        <textarea
-                          value={selectAiInstructionsOverride}
-                          onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
-                          disabled={active}
-                          rows={5}
-                          className="rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-                          placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
-                        />
-                      </label>
-                    </div>
-                  )}
-                </section>
-              )}
+                  />
 
               <div className="grid gap-4">
                 <div className="grid gap-1">
@@ -948,7 +848,13 @@ function ExecutableNl2SqlWorkbench() {
                     <select
                       id="nl2sql-profile-select"
                       value={profileId}
-                      onChange={(event) => setProfileId(event.currentTarget.value)}
+                      onChange={(event) => {
+                        setProfileId(event.currentTarget.value);
+                        setAutoDetectLowConfidence(false);
+                        setActionError("");
+                        setPageError(null);
+                        setSchemaDetailError("");
+                      }}
                       disabled={active || profilesQuery.isPending || noProfiles}
                       className="min-h-11 min-w-0 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
                     >
@@ -957,7 +863,7 @@ function ExecutableNl2SqlWorkbench() {
                       )}
                       {profiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {profile.name}
+                          {profileDisplayLabel(profile)}
                         </option>
                       ))}
                     </select>
@@ -986,9 +892,32 @@ function ExecutableNl2SqlWorkbench() {
                       </Button>
                     )}
                   </div>
+                  {profileLoadMoreError && (
+                    <div
+                      className="flex flex-col gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
+                      role="alert"
+                    >
+                      <span className="flex min-w-0 items-start gap-2">
+                        <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{profileLoadMoreError}</span>
+                      </span>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        loading={profilesQuery.isFetchingNextPage}
+                        disabled={active}
+                        onClick={() => void profilesQuery.fetchNextPage()}
+                      >
+                        <RefreshCw size={15} aria-hidden="true" />
+                        <span>{t("common.retry")}</span>
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {recommendation &&
-                  recommendation.confidence >= 0.3 &&
+                  recommendation.confidence >= PROFILE_RECOMMENDATION_APPLY_THRESHOLD &&
                   recommendation.recommended_profile_id !== profileId && (
                     <div
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm"
@@ -998,7 +927,10 @@ function ExecutableNl2SqlWorkbench() {
                         <Sparkles size={15} className="shrink-0 text-primary" aria-hidden="true" />
                         <span className="min-w-0 [overflow-wrap:anywhere]">
                           {t("nl2sql.recommend.switchHint", {
-                            name: recommendation.recommended_profile_name,
+                            name: profileDisplayLabel({
+                              name: recommendation.recommended_profile_name,
+                              category: recommendation.recommended_profile_category,
+                            }),
                             confidence: Math.round(recommendation.confidence * 100),
                           })}
                         </span>
@@ -1014,77 +946,21 @@ function ExecutableNl2SqlWorkbench() {
                       </Button>
                     </div>
                   )}
-                {ontologyProfileRecommendation ? (
-                  <section
-                    className="grid gap-3 rounded-md border border-primary/30 bg-primary/5 p-3"
-                    aria-labelledby="nl2sql-ontology-profile-recommendation-heading"
-                    data-testid="nl2sql-ontology-profile-recommendation"
-                  >
-                    <div>
-                      <h3
-                        id="nl2sql-ontology-profile-recommendation-heading"
-                        className="text-sm font-semibold text-foreground"
-                      >
-                        {t("nl2sql.ontologyProfile.title")}
-                      </h3>
-                      <p className="mt-1 text-sm leading-6 text-muted">
-                        {t("nl2sql.ontologyProfile.description")}
-                      </p>
+                {autoDetectLowConfidence &&
+                  recommendation &&
+                  recommendation.confidence < PROFILE_RECOMMENDATION_APPLY_THRESHOLD && (
+                    <div data-testid="nl2sql-recommend-low-confidence">
+                      <Banner severity="warning">
+                        {t("nl2sql.recommend.autoDetectLowConfidence", {
+                          name: profileDisplayLabel({
+                            name: recommendation.recommended_profile_name,
+                            category: recommendation.recommended_profile_category,
+                          }),
+                          confidence: Math.round(recommendation.confidence * 100),
+                        })}
+                      </Banner>
                     </div>
-                    <div className="grid gap-2">
-                      {ontologyProfileRecommendation.candidates.map((candidate) => (
-                        <div
-                          key={candidate.profile_id}
-                          className="grid gap-2 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                        >
-                          <div className="min-w-0 text-sm">
-                            <p className="font-medium text-foreground">
-                              {candidate.profile_name}（{Math.round(candidate.score * 100)}%）
-                            </p>
-                            <p className="mt-1 text-muted">
-                              {candidate.reasons_ja.join(" ")}
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={active}
-                            onClick={() =>
-                              void confirmOntologyProfile(
-                                candidate.profile_id,
-                                candidate.ontology_revision_id
-                              )
-                            }
-                          >
-                            {t("nl2sql.ontologyProfile.confirm")}
-                          </Button>
-                        </div>
-                      ))}
-                      {ontologyProfileRecommendation.candidates.length === 0 ? (
-                        <div className="grid gap-2 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                          <p className="text-sm leading-6 text-muted">
-                            {t("nl2sql.ontologyProfile.noMatch")}
-                          </p>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={active || !profileId}
-                            onClick={() =>
-                              void confirmOntologyProfile(
-                                profileId,
-                                ontologyProfileRecommendation.ontology_revision_id
-                              )
-                            }
-                          >
-                            {t("nl2sql.ontologyProfile.confirmCurrent")}
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </section>
-                ) : null}
+                  )}
               </div>
 
                   {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
@@ -1102,6 +978,7 @@ function ExecutableNl2SqlWorkbench() {
                             disabled={active}
                             onClick={() => {
                               setQuestion(template.body);
+                              setActionError("");
                               const el = questionTextareaRef.current;
                               if (el) {
                                 requestAnimationFrame(() => {
@@ -1118,18 +995,130 @@ function ExecutableNl2SqlWorkbench() {
                           </Button>
                         ))}
                       </div>
-                      <label className="grid gap-2 text-sm font-medium text-foreground">
-                        <span>{t("nl2sql.question.label")}</span>
+                      <div className="grid gap-2">
+                        <FieldLabel
+                          htmlFor="nl2sql-question-input"
+                          label={t("nl2sql.question.label")}
+                          required
+                        />
                         <textarea
+                          id="nl2sql-question-input"
                           ref={questionTextareaRef}
                           value={question}
-                          onChange={(event) => setQuestion(event.currentTarget.value)}
-                            disabled={active}
+                          onChange={(event) => {
+                            setQuestion(event.currentTarget.value);
+                            setActionError("");
+                          }}
+                          disabled={active}
                           rows={5}
+                          required
+                          aria-required="true"
                           className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
-                      </label>
+                        {engine === "select_ai" && (
+                          <section className="overflow-hidden rounded-md border border-dashed border-border bg-background">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="md"
+                              className="min-h-11 w-full justify-between rounded-none px-3 text-left"
+                              aria-expanded={selectAiAdvancedOpen}
+                              aria-controls="select-ai-request-overrides"
+                              onClick={() => setSelectAiAdvancedOpen((current) => !current)}
+                              disabled={active}
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <Sparkles size={15} className="shrink-0 text-foreground" aria-hidden="true" />
+                                <span className="min-w-0 [overflow-wrap:anywhere]">
+                                  {t("nl2sql.selectAiOverrides.title")}
+                                </span>
+                                {hasSelectAiOverrideInputs && (
+                                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                                    {t("nl2sql.selectAiOverrides.activeBadge")}
+                                  </span>
+                                )}
+                              </span>
+                              <ChevronDown
+                                size={16}
+                                className={
+                                  selectAiAdvancedOpen ? "shrink-0 rotate-180 transition-transform" : "shrink-0 transition-transform"
+                                }
+                                aria-hidden="true"
+                              />
+                            </Button>
+                            {selectAiAdvancedOpen && (
+                              <div id="select-ai-request-overrides" className="grid gap-3 border-t border-border p-3">
+                                <p className="text-xs leading-5 text-muted">
+                                  {t("nl2sql.selectAiOverrides.hint")}
+                                </p>
+                                <label className="grid gap-1 text-sm font-medium text-foreground">
+                                  <span>{t("nl2sql.selectAiOverrides.additionalInstructions")}</span>
+                                  <textarea
+                                    value={selectAiInstructionsOverride}
+                                    onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
+                                    disabled={active}
+                                    rows={3}
+                                    className="min-h-24 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                                    placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
+                                  />
+                                </label>
+                                <div className="overflow-hidden rounded-md border border-border bg-card">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="min-h-10 w-full justify-between rounded-none px-3 text-left"
+                                    aria-expanded={selectAiRolePanelOpen}
+                                    aria-controls="select-ai-role-override"
+                                    onClick={() =>
+                                      setSelectAiRoleAdvancedOpen((current) =>
+                                        selectAiRoleHasOverride ? true : !current
+                                      )
+                                    }
+                                    disabled={active}
+                                  >
+                                    <span className="flex min-w-0 items-center gap-2">
+                                      <UserCog size={14} className="shrink-0 text-muted" aria-hidden="true" />
+                                      <span>{t("nl2sql.selectAiOverrides.roleToggle")}</span>
+                                      {selectAiRoleHasOverride && (
+                                        <span className="rounded-full bg-muted/30 px-2 py-0.5 text-xs font-medium text-muted">
+                                          {t("nl2sql.selectAiOverrides.activeBadge")}
+                                        </span>
+                                      )}
+                                    </span>
+                                    <ChevronDown
+                                      size={15}
+                                      className={
+                                        selectAiRolePanelOpen
+                                          ? "shrink-0 rotate-180 transition-transform"
+                                          : "shrink-0 transition-transform"
+                                      }
+                                      aria-hidden="true"
+                                    />
+                                  </Button>
+                                  {selectAiRolePanelOpen && (
+                                    <label
+                                      id="select-ai-role-override"
+                                      className="grid gap-1 border-t border-border p-3 text-sm font-medium text-foreground"
+                                    >
+                                      <span>{t("nl2sql.selectAiOverrides.role")}</span>
+                                      <textarea
+                                        value={selectAiRoleOverride}
+                                        onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
+                                        disabled={active}
+                                        rows={2}
+                                        className="min-h-20 rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                                        placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
+                                      />
+                                    </label>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </section>
+                        )}
+                      </div>
                     </div>
                     <div className="rounded-md border border-border bg-background p-3">
                       <SchemaReferencePanel
@@ -1148,92 +1137,103 @@ function ExecutableNl2SqlWorkbench() {
                           schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
                         }
                         searchQuery={schemaSearch}
-                        onSearchQueryChange={setSchemaSearch}
+                        onSearchQueryChange={(value) => {
+                          setSchemaSearch(value);
+                          setSchemaDetailError("");
+                        }}
                         hasMore={Boolean(schemaObjectsQuery.hasNextPage)}
                         loadingMore={schemaObjectsQuery.isFetchingNextPage}
+                        loadMoreError={schemaLoadMoreError}
                         onLoadMore={() => void schemaObjectsQuery.fetchNextPage()}
+                        onRetryLoadMore={() => void schemaObjectsQuery.fetchNextPage()}
                         onExpandTable={(table) => void loadSchemaDetail(table)}
+                        detailLoadError={schemaDetailError}
+                        onDismissDetailLoadError={() => setSchemaDetailError("")}
                         onInsert={insertSchemaText}
                       />
                     </div>
                   </div>
 
-                  <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm">
-                    <div className="grid gap-1">
-                      <p className="font-semibold text-foreground">{t("nl2sql.rewrite.title")}</p>
-                      <p className="text-xs leading-5 text-muted">{t("nl2sql.rewrite.hint")}</p>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-foreground">
-                        <input
-                          type="checkbox"
-                          checked={rewriteUseGlossary}
-                          onChange={(event) => setRewriteUseGlossary(event.currentTarget.checked)}
-                          className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-                        />
-                        <span>{t("nl2sql.rewrite.useGlossary")}</span>
-                      </label>
-                      <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-foreground">
-                        <input
-                          type="checkbox"
-                          checked={rewriteUseSchema}
-                          onChange={(event) => setRewriteUseSchema(event.currentTarget.checked)}
-                          className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-                        />
-                        <span>{t("nl2sql.rewrite.useSchema")}</span>
-                      </label>
-                    </div>
-                    {rewriteData && (
-                      <div className="grid gap-3 rounded-md border border-primary/30 bg-card p-3">
-                        <dl className="grid gap-2 text-sm">
-                          <div>
-                            <dt className="font-medium text-muted">{t("nl2sql.session.originalQuestion")}</dt>
-                            <dd className="mt-1 text-foreground">{question}</dd>
-                          </div>
-                          <div>
-                            <dt className="font-medium text-muted">{t("nl2sql.session.suggestedQuestion")}</dt>
-                            <dd className="mt-1 text-foreground">{rewriteData.rewritten_question}</dd>
-                          </div>
-                        </dl>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
-                            {rewriteData.source}
-                          </span>
-                          {rewriteData.model && (
-                            <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
-                              {rewriteData.model}
-                            </span>
-                          )}
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={active}
-                            onClick={() => void applyRewrittenQuestion()}
-                          >
-                            {t("nl2sql.session.applyPatch")}
-                          </Button>
+                  <Nl2SqlExecutionOptionsPanel
+                    disabled={active}
+                    engine={engine}
+                    includeInterpretation={includeInterpretation}
+                    includeShowPrompt={includeShowPrompt}
+                    onIncludeInterpretationChange={setIncludeInterpretation}
+                    onIncludeShowPromptChange={setIncludeShowPrompt}
+                    onRewriteUseGlossaryChange={setRewriteUseGlossary}
+                    onRewriteUseSchemaChange={setRewriteUseSchema}
+                    rewriteUseGlossary={rewriteUseGlossary}
+                    rewriteUseSchema={rewriteUseSchema}
+                  />
+                  {rewriteData && (
+                    <div className="grid gap-3 rounded-md border border-primary/30 bg-card p-3">
+                      <dl className="grid gap-2 text-sm">
+                        <div>
+                          <dt className="font-medium text-muted">{t("nl2sql.session.originalQuestion")}</dt>
+                          <dd className="mt-1">
+                            <QuestionText value={question} variant="detail" maxLines={3} expandable />
+                          </dd>
                         </div>
+                        <div>
+                          <dt className="font-medium text-muted">{t("nl2sql.session.suggestedQuestion")}</dt>
+                          <dd className="mt-1">
+                            <QuestionText value={rewriteData.rewritten_question} variant="detail" maxLines={3} expandable />
+                          </dd>
+                        </div>
+                      </dl>
+                      {rewriteData.warnings.length > 0 && (
+                        <div className="grid gap-2">
+                          {rewriteData.warnings.map((warning) => (
+                            <Banner key={warning} severity="warning">
+                              {warning}
+                            </Banner>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
+                          {rewriteData.source}
+                        </span>
+                        {rewriteData.model && (
+                          <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
+                            {rewriteData.model}
+                          </span>
+                        )}
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={active}
+                          onClick={() => void applyRewrittenQuestion()}
+                        >
+                          {t("nl2sql.session.applyPatch")}
+                        </Button>
                       </div>
-                    )}
-                  </section>
+                    </div>
+                  )}
 
                   {(similarHistory.length > 0 || similarHistoryLoading) && (
-                    <section className="overflow-hidden rounded-md border border-border bg-card">
+                    <section className="w-full min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-card">
                       <Button
                         type="button"
                         variant="ghost"
                         size="md"
-                        className="min-h-11 w-full justify-between rounded-none px-4 text-left"
+                        className="min-h-11 w-full min-w-0 max-w-full justify-between rounded-none px-4 text-left"
                         aria-expanded={similarHistoryOpen}
                         aria-controls="nl2sql-similar-history"
                         onClick={() => setSimilarHistoryOpen((current) => !current)}
                       >
-                        <span className="flex items-center gap-2">
-                          <BookOpenText size={16} className="text-foreground" aria-hidden="true" />
-                          {similarHistoryLoading
-                            ? t("nl2sql.similar.loading")
-                            : t("nl2sql.similar.title")}
+                        <span className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <BookOpenText size={16} className="shrink-0 text-foreground" aria-hidden="true" />
+                            <span className="truncate">
+                              {similarHistoryLoading
+                                ? t("nl2sql.similar.loading")
+                                : t("nl2sql.similar.title")}
+                            </span>
+                          </span>
+                          <StatusBadge variant="success" label={t("nl2sql.similar.goodOnly")} />
                         </span>
                         <ChevronDown
                           size={16}
@@ -1242,15 +1242,28 @@ function ExecutableNl2SqlWorkbench() {
                         />
                       </Button>
                       {similarHistoryOpen && (
-                        <div id="nl2sql-similar-history" className="grid gap-3 border-t border-border p-3 text-sm text-foreground">
+                        <div
+                          id="nl2sql-similar-history"
+                          data-testid="nl2sql-similar-history"
+                          className="grid gap-3 border-t border-border p-3 text-sm text-foreground"
+                        >
                           {similarHistory.slice(0, 2).map((entry) => (
-                            <article key={entry.item.id} className="grid gap-2 rounded-md bg-background p-3">
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div>
-                                  <p className="font-medium text-foreground">{entry.item.question}</p>
+                            <article
+                              key={entry.item.id}
+                              data-testid="nl2sql-similar-history-item"
+                              className="grid w-full min-w-0 max-w-full gap-2 overflow-hidden rounded-md bg-background p-3"
+                            >
+                              <div className="grid w-full min-w-0 max-w-full gap-2 sm:flex sm:flex-wrap sm:items-start sm:justify-between">
+                                <div className="min-w-0 sm:flex-1 sm:basis-0">
+                                  <QuestionText
+                                    value={entry.item.question}
+                                    variant="select"
+                                    maxLines={1}
+                                    testId="nl2sql-similar-history-question"
+                                  />
                                   <p className="mt-1 text-xs text-muted">{entry.reason}</p>
                                 </div>
-                                <span className="rounded-md bg-card px-2 py-1 text-xs font-medium text-foreground">
+                                <span className="w-fit rounded-md bg-card px-2 py-1 text-xs font-medium text-foreground sm:shrink-0">
                                   {t("nl2sql.similar.score", {
                                     score: Math.round(entry.score * 100),
                                   })}
@@ -1266,134 +1279,78 @@ function ExecutableNl2SqlWorkbench() {
                     </section>
                   )}
 
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-sm text-muted">
-                      <History size={15} aria-hidden="true" />
-                      <span>{t("nl2sql.history.count", { count: history.length })}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        disabled={active}
-                        onClick={() => {
-                          setSelection(emptySelection());
-                          setQuestion("");
-                          setResult(null);
-                          setPreviewJob(null);
-                          setPreviewExecutionResults(null);
-                          setRewriteData(null);
-                          setRewriteUseGlossary(false);
-                          setRewriteUseSchema(false);
-                          setRewriteExtraPrompt("");
-                          clearTrackedJob();
-                          setSelectAiRoleOverride("");
-                          setSelectAiInstructionsOverride("");
-                          setSelectAiAdvancedOpen(false);
-                          setOntologySession(null);
-                          setOntologyPatch(null);
-                          setOntologyVersionConflict(null);
-                          setOntologyExecutionResults(null);
-                          setError("");
-                        }}
-                      >
-                        <RotateCcw size={16} aria-hidden="true" />
-                        <span>{t("nl2sql.action.reset")}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        loading={previewLoading}
-                        disabled={!question.trim() || active || !profileSelectionReady}
-                        onClick={() => void previewSql()}
-                      >
-                        <Eye size={16} aria-hidden="true" />
-                        <span>{t("nl2sql.action.preview")}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        size="md"
-                        loading={ontologyLoading}
-                        disabled={!question.trim() || active || !profileSelectionReady}
-                        onClick={() => void startOntologySession()}
-                      >
-                        <Network size={16} aria-hidden="true" />
-                        <span>{t("nl2sql.session.create")}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        loading={jobActive}
-                        disabled={!question.trim() || active || !profileSelectionReady}
-                        onClick={() => void submit()}
-                      >
-                        <Play size={16} aria-hidden="true" />
-                        <span>{t("nl2sql.action.run")}</span>
-                      </Button>
-                    </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      disabled={active}
+                      onClick={() => {
+                        setSelection(emptySelection());
+                        setQuestion("");
+                        setResult(null);
+                        setRewriteData(null);
+                        setRewriteUseGlossary(false);
+                        setRewriteUseSchema(false);
+                        setRewriteExtraPrompt("");
+                        setIncludeInterpretation(true);
+                        setIncludeShowPrompt(true);
+                        clearTrackedJob();
+                        setSelectAiRoleOverride("");
+                        setSelectAiInstructionsOverride("");
+                        setSelectAiAdvancedOpen(false);
+                        setSelectAiRoleAdvancedOpen(false);
+                        setPageError(null);
+                        setSchemaDetailError("");
+                        setActionError("");
+                      }}
+                    >
+                      <RotateCcw size={16} aria-hidden="true" />
+                      <span>{t("nl2sql.action.reset")}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="md"
+                      loading={jobActive}
+                      disabled={!question.trim() || active || !profileSelectionReady}
+                      onClick={() => void submit()}
+                    >
+                      <Play size={16} aria-hidden="true" />
+                      <span>{t("nl2sql.action.run")}</span>
+                    </Button>
                   </div>
+
+                  <ActionResultRegion
+                    loading={actionBusy}
+                    operationKey={actionOperationKey}
+                    errorMessage={actionError}
+                    errorAction={
+                      actionError && currentScopedSchemaEmpty ? (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          loading={importingSample}
+                          disabled={active}
+                          onClick={() => void importSampleData()}
+                        >
+                          <Database size={15} aria-hidden="true" />
+                          <span>{t("nl2sql.sample.import")}</span>
+                        </Button>
+                      ) : undefined
+                    }
+                    testId="nl2sql-action-feedback"
+                  />
 
                 </div>
               </section>
         </section>
 
-        {ontologySession && (
-          <QueryOntologyFlow
-            session={ontologySession}
-            pendingPatch={ontologyPatch}
-            versionConflict={ontologyVersionConflict}
-            onApplyIntentPatch={applyOntologyPatch}
-            onConfirmIntent={confirmOntologyIntent}
-            onConfirmSql={confirmOntologySql}
-            onExecute={executeOntologySql}
-            onCreateProposal={async (request) => {
-              await createOntologyImprovementProposal(ontologySession.id, request);
-              await reloadOntologySession();
-            }}
-            onReload={reloadOntologySession}
-            labels={{
-              businessTab: t("nl2sql.ontology.tab.business"),
-              intentTab: t("nl2sql.ontology.tab.intent"),
-              sqlTab: t("nl2sql.ontology.tab.sql"),
-              validationTab: t("nl2sql.ontology.tab.diff"),
-              applyPatch: t("nl2sql.session.applyPatch"),
-              confirmIntent: t("nl2sql.session.generateSql"),
-              confirmSql: t("nl2sql.session.confirmSql"),
-              execute: t("nl2sql.session.execute"),
-              proposal: t("nl2sql.session.propose"),
-              rawSql: t("nl2sql.session.sqlDetails"),
-            }}
-          />
-        )}
-
-        {submitting || previewLoading || ontologyLoading || previewExecuteLoading || detecting ? (
+        {submitting || detecting ? (
           <TimedLoadingState
-            label={
-              submitting
-                ? t("nl2sql.action.run")
-                : previewLoading
-                  ? t("nl2sql.action.preview")
-                  : ontologyLoading
-                    ? t("nl2sql.session.confirmIntent")
-                    : previewExecuteLoading
-                      ? t("nl2sql.action.executePreview")
-                      : t("nl2sql.recommend.autoDetect")
-            }
-            operationKey={
-              submitting
-                ? "submit"
-                : previewLoading
-                  ? "preview"
-                  : ontologyLoading
-                    ? "ontology"
-                    : previewExecuteLoading
-                      ? "preview-execute"
-                      : "profile-detect"
-            }
+            label={submitting ? t("nl2sql.action.run") : t("nl2sql.recommend.autoDetect")}
+            operationKey={submitting ? "submit" : "profile-detect"}
             placement="result"
             testId="nl2sql-foreground-processing"
             activityIcon="none"
@@ -1401,25 +1358,17 @@ function ExecutableNl2SqlWorkbench() {
         ) : null}
 
         <OperationStatusStrip
-          job={job ?? previewJob}
+          job={job}
           startedAtMs={jobStartedAt}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
           importingSample={importingSample}
           onImportSample={importSampleData}
-          onPreviewExecute={
-            !job && previewJob && !previewExecutionResults
-              ? () => void executePreviewSql()
-              : undefined
-          }
-          previewExecuteLoading={previewExecuteLoading}
         />
-        <Nl2SqlResultTable results={ontologyExecutionResults} />
 
-        <Nl2SqlResultTable results={result?.results ?? previewExecutionResults} />
+        <Nl2SqlResultTable results={result?.results ?? null} />
         <SelectAiFeedbackAddPanel
-          result={result ?? previewJob?.result ?? null}
+          result={result}
           history={latestHistory}
-          selectedProfileId={profileId}
           questionText={question}
           onSaved={refreshHistory}
         />

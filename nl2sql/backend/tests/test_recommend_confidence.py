@@ -103,6 +103,67 @@ def test_deterministic_recommend_confident_for_matching_question() -> None:
     assert recommendation.recommendation_source == "deterministic"
 
 
+def test_current_profile_bias_does_not_affect_deterministic_confidence() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="default",
+            name="既定プロファイル",
+            glossary={"社員": "EMPLOYEE.FULL_NAME"},
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="hr",
+            name="人事プロファイル",
+            glossary={"社員": "EMPLOYEE.FULL_NAME"},
+        )
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(
+            question="社員を確認したい",
+            current_profile_id="default",
+        )
+    )
+
+    assert recommendation.recommended_profile_id == "default"
+    assert recommendation.confidence == 0.2
+    scores = {candidate.profile_id: candidate.score for candidate in recommendation.candidates}
+    assert scores["default"] == 0.5
+    assert scores["hr"] == 0.5
+
+
+def test_few_shot_partial_overlap_contributes_to_deterministic_score() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="payment",
+            name="入金管理",
+            few_shot_examples=[
+                {
+                    "question": "未入金の請求を確認したい",
+                    "sql": "SELECT * FROM INVOICES WHERE PAID_AT IS NULL",
+                }
+            ],
+        )
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(question="未入金の請求一覧")
+    )
+
+    assert recommendation.recommended_profile_id == "payment"
+    assert recommendation.confidence > 0.0
+    payment = next(
+        candidate
+        for candidate in recommendation.candidates
+        if candidate.profile_id == "payment"
+    )
+    assert payment.score == 1.0
+    assert {"入金", "未入"} & set(payment.matched_terms)
+
+
 def test_classifier_confidence_uses_probability_not_divided_by_six() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     cast(Any, service)._embedding_client = _FakeEmbeddingClient()

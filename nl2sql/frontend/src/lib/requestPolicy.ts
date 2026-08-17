@@ -1,6 +1,6 @@
 /** 画面応答性を揃えるための API request class。 */
 export const API_TIMEOUT_MS = {
-  interactiveList: 8_000,
+  interactiveList: 60_000,
   interactiveDetail: 30_000,
   jobControl: 5_000,
 } as const;

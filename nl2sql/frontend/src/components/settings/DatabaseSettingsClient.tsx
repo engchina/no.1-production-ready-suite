@@ -30,6 +30,7 @@ import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels, formatSettingsEnvValue } from "@/components/settings/SettingsPreviewPanels";
+import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   ApiError,
   type AdbInfoData,
@@ -805,9 +806,7 @@ function PasswordField({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <RequiredLabel id={id} label={label} required={required} />
         {hasSavedSecret ? (
-          <span className="rounded-full border border-success/30 bg-success-bg px-2 py-0.5 text-xs font-medium text-success">
-            {t("settings.database.secrets.saved")}
-          </span>
+          <SavedSecretBadge label={t("settings.database.secrets.saved")} />
         ) : null}
       </div>
       <div className="relative">

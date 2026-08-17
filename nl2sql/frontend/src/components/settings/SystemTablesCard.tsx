@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 import { useAuth } from "@/features/security/AuthProvider";
+import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import {
   ApiError,
   type SystemTableSchemaStatus,
@@ -63,7 +64,7 @@ export function SystemTablesCard() {
   const recreateConfirmed = recreateConfirmation.trim() === RECREATE_CONFIRMATION;
 
   const data = statusQuery.data;
-  const mayExecute = hasPermission("settings.database.sql_execute");
+  const mayExecute = hasPermission(MENU_PERMISSIONS.settingsSystemTables);
   const schemaOperationRunning = data?.operation_state.status === "running";
   const busy = systemTableControlsBusy(
     operation.isPending,

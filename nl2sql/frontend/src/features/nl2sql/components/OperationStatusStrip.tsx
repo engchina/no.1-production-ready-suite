@@ -18,6 +18,7 @@ import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
+import { QuestionText } from "./QuestionText";
 
 const JOB_STAGES = [
   "prepare_context",
@@ -257,7 +258,12 @@ export function OperationStatusStrip({
                     <div className="grid gap-0.5">
                       <dt className="font-medium text-muted">{t("nl2sql.result.rewritten")}</dt>
                       <dd className="leading-5 text-foreground">
-                        {job.result.rewritten_question || "-"}
+                        <QuestionText
+                          value={job.result.rewritten_question || "-"}
+                          variant="compact"
+                          maxLines={2}
+                          className="text-foreground"
+                        />
                       </dd>
                     </div>
                     <div className="grid gap-0.5">

@@ -385,6 +385,8 @@ export function QueryResultsTable({
   rowLimit?: number | null;
 }) {
   const { page, setPage, totalPages, pageItems, range } = usePagination(results.rows, DEFAULT_PAGE_SIZE);
+  const paginationSummary = t("queryResults.pageSummary", { start: range.start, end: range.end, total: range.total });
+  const pageIndicator = t("queryResults.page", { page, total: totalPages });
 
   return (
     <div className="grid gap-2">
@@ -401,16 +403,22 @@ export function QueryResultsTable({
         getRowKey={(_, index) => (range.start === 0 ? 0 : range.start - 1) + index}
         empty={t("queryResults.emptyRows")}
       />
-      <Pagination
-        page={page}
-        totalPages={totalPages}
-        onPageChange={setPage}
-        summary={t("queryResults.pageSummary", { start: range.start, end: range.end, total: range.total })}
-        pageIndicator={t("queryResults.page", { page, total: totalPages })}
-        prevLabel={t("queryResults.prev")}
-        nextLabel={t("queryResults.next")}
-        testId="query-results-pagination"
-      />
+      {totalPages > 1 ? (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          summary={paginationSummary}
+          pageIndicator={pageIndicator}
+          prevLabel={t("queryResults.prev")}
+          nextLabel={t("queryResults.next")}
+          testId="query-results-pagination"
+        />
+      ) : (
+        <nav className="text-xs text-muted" aria-label={pageIndicator} data-testid="query-results-pagination">
+          <span className="tnum">{paginationSummary}</span>
+        </nav>
+      )}
     </div>
   );
 }
@@ -800,6 +808,7 @@ export function StatementRunnerCard({
   placeholder,
   progress,
   confirmationTitle,
+  footerProcessing,
   executeOnly = false,
   framed = true,
   onExecuted,
@@ -811,6 +820,7 @@ export function StatementRunnerCard({
   placeholder?: string;
   progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
   confirmationTitle?: string;
+  footerProcessing?: ReactNode;
   executeOnly?: boolean;
   framed?: boolean;
   onExecuted?: (result: DbAdminExecuteData) => void | Promise<void>;
@@ -989,6 +999,7 @@ export function StatementRunnerCard({
       >
         {result ? <DbAdminExecutionResult result={result} /> : null}
       </ActionResultRegion>
+      {footerProcessing}
     </>
   );
 

@@ -83,7 +83,7 @@
 
 ### 3.1 Toast
 
-- **配置**: 画面右下にスタック。`z-index` は `1000`(§6 参照)。
+- **配置**: NL2SQL では画面右下にスタック。`z-index` は `1000`(§6 参照)。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
 - **a11y**: コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない(`toast-accessibility`)。`danger` は `role="alert"`。
 - **自動消滅**: 既定 4 秒(`toast-dismiss`: 3–5s)。`danger` と action 付きは手動 + 8 秒に延長可。閉じる × ボタン必須。
 - **アニメーション**: enter 200ms ease-out / exit 130ms ease-in(`exit-faster-than-enter`)。`prefers-reduced-motion` で無効化。
@@ -112,6 +112,11 @@ toast.error(message, opts?)      // = danger トーン
 ### 3.3 FormStatus
 
 - アクションボタン(保存/接続テスト等)の**近傍**に、直近結果を 1 行で表示。
+- 検索実行、SQL プレビュー、SQL 実行、保存など、ユーザーが明示的に押したボタンの失敗は、
+  そのボタン群の**直下**に `FormStatus` または `ActionResultRegion` で表示する。ページ先頭の
+  `PageNotice` / Banner へ送らない。
+- ページ初期読込、接続未設定、権限不足、対象データなしなど、特定ボタンではなくページ/セクション全体の
+  状態を説明するものは従来どおり Banner / State views を使う。
 - TanStack Query の `mutation.isSuccess` / `isError` と連動させる。`isError` の文言は `error instanceof ApiError ? error.message : t("...loadError")` を基本形にする。
 - 成功表示は数秒後にフェードしてよいが、エラーは次操作まで残す。
 
@@ -200,7 +205,7 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
   `started_at` / `finished_at` / `elapsed_ms` を優先し、技術診断値のミリ秒精度は保持する。
 - timeout と取消は別状態にする。timeout は現在の選択を保持した `ErrorState` に置換して再試行を示し、
   取消は timeout error として通知しない。
-- request budget は `requestPolicy.ts` を正本とする。`interactive-list = 8 秒`、
+- request budget は `requestPolicy.ts` を正本とする。`interactive-list = 60 秒`、
   `interactive-detail = 30 秒`、`job-control = 5 秒`。それ以上の処理は durable job とし、
   秒数をページ文言へ直書きしない。
 
@@ -332,7 +337,7 @@ header           : StatusBadge（文書状態の正本 = P1）
 ```
 src/components/ui/feedback-tone.ts   FeedbackTone(4 トーン)+ アイコン/色/role マップ
 src/lib/toast.ts                     Toast ストア(Zustand) + toast.* API
-src/components/ui/toast.tsx          <Toaster/>（右下スタック・aria-live）
+src/components/ui/toast.tsx          <Toaster/>（placement 指定・aria-live）
 src/components/ui/banner.tsx         <Banner severity title? action? onDismiss? />
 src/components/ui/confirm-dialog.tsx <ConfirmProvider> / useConfirm()（focus trap・Esc）
 src/components/ui/field-error.tsx    <FieldError id message />

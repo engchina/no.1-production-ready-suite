@@ -15,6 +15,7 @@ export interface ActionResultRegionProps {
   operationKey: string | number;
   loadingLabel?: string;
   errorMessage?: string;
+  errorAction?: ReactNode;
   children?: ReactNode;
   testId?: string;
   preserveHeight?: boolean;
@@ -32,6 +33,7 @@ export function ActionResultRegion({
   loading,
   operationKey,
   errorMessage = "",
+  errorAction,
   children,
   testId,
   preserveHeight = true,
@@ -119,7 +121,9 @@ export function ActionResultRegion({
     >
       {loading ? null : hasError ? (
         <div data-testid={testId ? `${testId}-error` : undefined}>
-          <Banner severity="danger">{errorMessage}</Banner>
+          <Banner severity="danger" action={errorAction}>
+            {errorMessage}
+          </Banner>
         </div>
       ) : (
         children
