@@ -3,7 +3,9 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-exec > >(tee -a /var/log/nl2sql-init.log) 2>&1
+if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
+  exec > >(tee -a /var/log/nl2sql-init.log) 2>&1
+fi
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 APP_USER="${APP_USER:-ubuntu}"
@@ -16,6 +18,10 @@ WALLET_DIR="${APP_ROOT}/wallet"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8000"
 APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' < "${APP_ROOT}/props/application_port.txt" 2>/dev/null || printf '80')}"
+NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
+NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
+NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
 
@@ -95,16 +101,92 @@ install_system_packages() {
 }
 
 install_nodejs() {
-  if command -v node >/dev/null 2>&1 && node --version | grep -q '^v22\.'; then
-    log "Node.js $(node --version) is already installed."
-    return
+  local installed_version
+  local npm_version
+
+  if command -v node >/dev/null 2>&1; then
+    installed_version="$(node --version)" || return 1
+    if printf '%s\n' "${installed_version}" | grep -q '^v24\.' && command -v npm >/dev/null 2>&1; then
+      npm_version="$(npm --version)" || return 1
+      log "Node.js ${installed_version} with npm ${npm_version} is already installed."
+      return
+    fi
   fi
 
-  log "Installing Node.js 22."
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt_get install -y nodejs
-  node --version
-  npm --version
+  log "Installing Node.js 24 from NodeSource."
+  install_nodesource_apt_repository || return 1
+  apt_get update || return 1
+  ensure_nodejs_24_candidate || return 1
+  apt_get install -y nodejs || return 1
+  validate_nodejs_24 || return 1
+}
+
+install_nodesource_apt_repository() {
+  local architecture
+  local keyring_tmp
+
+  install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING_PATH}")" "$(dirname "${NODESOURCE_SOURCE_PATH}")" || return 1
+  keyring_tmp="$(mktemp)" || return 1
+  if ! curl -fsSL "${NODESOURCE_KEY_URL}" | gpg --dearmor --yes -o "${keyring_tmp}"; then
+    rm -f "${keyring_tmp}"
+    return 1
+  fi
+  install -m 0644 "${keyring_tmp}" "${NODESOURCE_KEYRING_PATH}" || {
+    rm -f "${keyring_tmp}"
+    return 1
+  }
+  rm -f "${keyring_tmp}"
+  architecture="$(dpkg --print-architecture)" || return 1
+
+  if ! cat > "${NODESOURCE_SOURCE_PATH}" <<EOF
+Types: deb
+URIs: ${NODESOURCE_REPO_URL}
+Suites: nodistro
+Components: main
+Architectures: ${architecture}
+Signed-By: ${NODESOURCE_KEYRING_PATH}
+EOF
+  then
+    return 1
+  fi
+  chmod 0644 "${NODESOURCE_SOURCE_PATH}" || return 1
+}
+
+ensure_nodejs_24_candidate() {
+  local candidate
+  if ! candidate="$(apt-cache policy nodejs | awk '/Candidate:/ {print $2; exit}')"; then
+    log "Unable to inspect nodejs apt candidate."
+    return 1
+  fi
+  if [ -z "${candidate}" ] || [ "${candidate}" = "(none)" ] || ! printf '%s\n' "${candidate}" | grep -q '^24\.'; then
+    log "NodeSource nodejs candidate is not Node.js 24: ${candidate:-<none>}"
+    apt-cache policy nodejs || true
+    return 1
+  fi
+}
+
+validate_nodejs_24() {
+  local installed_version
+  local npm_version
+
+  if ! command -v node >/dev/null 2>&1; then
+    log "node command was not installed."
+    return 1
+  fi
+
+  installed_version="$(node --version)" || return 1
+  if ! printf '%s\n' "${installed_version}" | grep -q '^v24\.'; then
+    log "Expected Node.js v24.x after installation, got ${installed_version}."
+    return 1
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    log "npm was not installed with Node.js ${installed_version}."
+    return 1
+  fi
+
+  npm_version="$(npm --version)" || return 1
+  log "Installed Node.js ${installed_version} with npm ${npm_version}."
 }
 
 install_uv() {
@@ -306,4 +388,6 @@ main() {
   log "Initialization complete. Open http://<compute-ip>/"
 }
 
-main "$@"
+if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
+  main "$@"
+fi

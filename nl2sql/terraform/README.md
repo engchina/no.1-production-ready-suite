@@ -156,7 +156,7 @@ curl -i http://127.0.0.1/health
 
 The cloud-init bootstrap:
 
-1. Installs Nginx, Node.js 22, uv, and build dependencies.
+1. Installs Nginx, Node.js 24, uv, and build dependencies.
 2. Clones the NL2SQL and shared platform repositories.
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
 4. Writes the runtime `backend/.env`.
