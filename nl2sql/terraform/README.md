@@ -120,6 +120,9 @@ sudo journalctl -u production-ready-nl2sql-quality-evaluation-worker -f
 sudo journalctl -u production-ready-nl2sql-ontology-worker -f
 sudo nginx -t
 sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log
+curl -i http://127.0.0.1:8000/api/health
+curl -i http://127.0.0.1/api/health
+curl -i http://127.0.0.1/health
 ```
 
 The cloud-init bootstrap:

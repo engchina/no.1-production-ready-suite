@@ -254,7 +254,7 @@ server {
     }
 
     location = /health {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/health;
+        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/health;
         proxy_set_header Host \$host;
         access_log off;
     }
@@ -282,7 +282,7 @@ dump_service_diagnostics() {
 
 wait_for_backend() {
   log "Waiting for backend health endpoint."
-  if retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/health"; then
+  if retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
     return 0
   fi
   local status="$?"
