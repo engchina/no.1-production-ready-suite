@@ -294,4 +294,4 @@ write_files:
       start_services
       log "Deployment finished. Frontend listens on TCP port $${APPLICATION_PORT}."
 runcmd:
-  - bash /u01/aipoc/bootstrap-nl2sql.sh
+  - "nohup bash /u01/aipoc/bootstrap-nl2sql.sh >> /var/log/cloud-init-custom.log 2>&1 &"

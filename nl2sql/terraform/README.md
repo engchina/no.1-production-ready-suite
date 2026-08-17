@@ -67,7 +67,10 @@ future releases can replace the asset without changing documentation.
 ## Runtime Notes
 
 The bootstrap script writes `/u01/aipoc/no.1-production-ready-nl2sql/backend/.env`
-on the instance and starts:
+on the instance and starts in the background from cloud-init, matching the
+proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
+`/var/log/cloud-init-custom.log` until the application containers are ready.
+The bootstrap starts:
 
 - `backend`
 - `frontend`
