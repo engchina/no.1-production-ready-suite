@@ -94,14 +94,17 @@ sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
 sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 ```
 
-The first application login is created from:
+The configured SYSTEM_ADMIN login is the database connection user from
+`backend/.env`:
 
 - username: `ADMIN`
 - password: the ADB password supplied to Resource Manager
 
-The application marks this bootstrap administrator for forced password change.
-If the auth/RBAC tables do not exist yet, the first login attempt applies the
-idempotent security migrations and then creates the bootstrap administrator.
+This configured administrator does not read from `NL2SQL_APP_USERS` and does not
+require the auth/RBAC tables to exist. Application-local users are checked from
+`NL2SQL_APP_USERS` only after the login name is different from the configured
+database connection user. The database connection password cannot be changed
+from the application password change screen.
 
 For direct HTTP access, the default is `app_environment=local`,
 `DEBUG=false`, and `app_auth_cookie_secure=false`. When serving through HTTPS,
@@ -146,7 +149,7 @@ CLI recovery after DB connectivity is available:
 ```bash
 cd /u01/aipoc/no.1-production-ready-nl2sql/backend
 sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
-sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply
+sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 sudo systemctl restart production-ready-nl2sql-backend
 ```
 

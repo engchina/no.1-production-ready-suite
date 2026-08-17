@@ -29,7 +29,7 @@ from app.security.domain import (
     RoleRecord,
     UserRecord,
 )
-from app.security.passwords import PasswordPolicyError, validate_password
+from app.security.passwords import PasswordPolicyError, hash_password, validate_password
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
     PERMISSION_CATALOG,
@@ -42,7 +42,12 @@ from app.security.router import (
     me,
 )
 from app.security.schemas import DataEntitlementInput, PasswordChangeRequest, RoleData, UserData
-from app.security.service import SecurityApiError, SecurityService, reset_security_service
+from app.security.service import (
+    LoginFailed,
+    SecurityApiError,
+    SecurityService,
+    reset_security_service,
+)
 from app.security.store import (
     InMemorySecurityStore,
     OracleSecurityStore,
@@ -54,8 +59,8 @@ from app.settings import Settings, get_settings
 
 def _settings() -> Settings:
     return Settings.model_construct(
-        oracle_user="ADMIN",
-        oracle_password="BootstrapPass!123",
+        oracle_user="DBADMIN",
+        oracle_password="DbAdminPass!123",
         oracle_dsn="test",
         nl2sql_persistence_mode="memory",
         app_auth_enabled=True,
@@ -69,9 +74,24 @@ def _settings() -> Settings:
 
 
 def _service() -> SecurityService:
-    service = SecurityService(InMemorySecurityStore(), _settings())
-    assert service.bootstrap() is True
-    assert service.bootstrap() is False
+    store = InMemorySecurityStore()
+    assert (
+        store.bootstrap(
+            login_name="admin",
+            display_name="ADMIN（システム管理者）",
+            password_hash=hash_password("BootstrapPass!123"),
+        )
+        is True
+    )
+    assert (
+        store.bootstrap(
+            login_name="admin",
+            display_name="ADMIN（システム管理者）",
+            password_hash=hash_password("BootstrapPass!123"),
+        )
+        is False
+    )
+    service = SecurityService(store, _settings())
     return service
 
 
@@ -93,24 +113,18 @@ def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.security.router.run_in_threadpool", _inline_threadpool)
 
 
-class _MissingSecuritySchemaOnceStore:
+class _NoAuthTableStore:
     def __init__(self) -> None:
-        self.bootstrap_calls = 0
+        self.calls: list[str] = []
 
-    def bootstrap(self, **_kwargs: object) -> bool:
-        self.bootstrap_calls += 1
-        if self.bootstrap_calls == 1:
-            raise RuntimeError(
-                'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
-            )
-        return True
+    def __getattr__(self, name: str) -> object:
+        self.calls.append(name)
+        raise AssertionError(f"auth table store must not be used for env admin: {name}")
 
 
 class _MissingSecuritySchemaStore:
-    def bootstrap(self, **_kwargs: object) -> bool:
-        raise RuntimeError(
-            'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
-        )
+    def get_user_by_login(self, _normalized_login: str) -> UserRecord | None:
+        raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
 
 
 class _RecordingCursor:
@@ -203,9 +217,7 @@ def test_debug_flag_cannot_bypass_auth_outside_local(
             assert token == ""
             raise SecurityApiError(401, "ログインしてください。")
 
-    async def inline_threadpool(
-        function: Callable[..., object], *args: object
-    ) -> object:
+    async def inline_threadpool(function: Callable[..., object], *args: object) -> object:
         return function(*args)
 
     monkeypatch.setattr(
@@ -251,43 +263,39 @@ def test_bootstrap_login_session_and_password_independence() -> None:
     assert changed.force_password_change is False
 
 
-def test_bootstrap_applies_security_migration_when_auth_table_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    applied: list[tuple[int, int, int]] = []
-
-    def apply_security_migrations() -> tuple[int, int, int]:
-        applied.append((1, 2, 3))
-        return applied[-1]
-
-    monkeypatch.setattr(
-        "app.cli.app_security_migrate.apply_security_migrations",
-        apply_security_migrations,
-    )
-    store = _MissingSecuritySchemaOnceStore()
+def test_configured_system_admin_login_uses_env_credentials_without_auth_tables() -> None:
+    store = _NoAuthTableStore()
     service = SecurityService(cast(SecurityStore, store), _settings())
 
-    assert service.bootstrap() is True
-    assert applied == [(1, 2, 3)]
-    assert store.bootstrap_calls == 2
+    principal, token, csrf = service.login("DBADMIN", "DbAdminPass!123")
+
+    assert principal.is_system_admin
+    assert principal.force_password_change is False
+    assert principal.login_name == "DBADMIN"
+    assert token.startswith("nl2sql-system-admin-v1.")
+    assert csrf
+    authenticated = service.authenticate_session(token)
+    assert authenticated.is_system_admin
+    assert authenticated.user_id == principal.user_id
+    service.verify_csrf(authenticated, csrf, csrf)
+    service.logout(authenticated)
+    assert store.calls == []
 
 
-def test_bootstrap_reports_503_when_on_demand_security_migration_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def apply_security_migrations() -> tuple[int, int, int]:
-        raise RuntimeError("migration failed")
+def test_configured_system_admin_wrong_password_does_not_touch_auth_tables() -> None:
+    store = _NoAuthTableStore()
+    service = SecurityService(cast(SecurityStore, store), _settings())
 
-    monkeypatch.setattr(
-        "app.cli.app_security_migrate.apply_security_migrations",
-        apply_security_migrations,
-    )
-    service = SecurityService(
-        cast(SecurityStore, _MissingSecuritySchemaStore()), _settings()
-    )
+    with pytest.raises(LoginFailed):
+        service.login("DBADMIN", "wrong-password")
+    assert store.calls == []
+
+
+def test_table_user_login_reports_503_when_auth_table_is_missing() -> None:
+    service = SecurityService(cast(SecurityStore, _MissingSecuritySchemaStore()), _settings())
 
     with pytest.raises(SecurityApiError) as error:
-        service.bootstrap()
+        service.login("app.user", "AppUserPass!123")
     assert error.value.status_code == 503
     assert "認証テーブル" in error.value.public_message
 
@@ -325,9 +333,8 @@ def test_dashboard_permission_is_retired_for_appearance_settings() -> None:
 
 
 def test_stale_permission_codes_are_hidden_from_role_api_and_principals() -> None:
-    store = InMemorySecurityStore()
-    service = SecurityService(store, _settings())
-    assert service.bootstrap() is True
+    service = _service()
+    store = service.store
     actor, _, _ = _login(service)
 
     store.create_role(
@@ -393,15 +400,11 @@ def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
     OracleSecurityStore._replace_role_access(cursor, role)
 
     permission_inserts = [
-        item
-        for item in cursor.executed
-        if "INSERT INTO NL2SQL_APP_ROLE_PERMISSIONS" in item[0]
+        item for item in cursor.executed if "INSERT INTO NL2SQL_APP_ROLE_PERMISSIONS" in item[0]
     ]
     assert len(permission_inserts) == 2
     data_inserts = [
-        item
-        for item in cursor.executed
-        if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
+        item for item in cursor.executed if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
     ]
     assert len(data_inserts) == 1
     sql, params = data_inserts[0]
@@ -421,9 +424,7 @@ def test_oracle_system_admin_probe_entitlement_uses_safe_bind_name() -> None:
     OracleSecurityStore._ensure_system_admin_probe_entitlement(cursor)
 
     data_inserts = [
-        item
-        for item in cursor.executed
-        if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
+        item for item in cursor.executed if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
     ]
     assert len(data_inserts) == 1
     sql, params = data_inserts[0]
@@ -468,9 +469,10 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         "menu.sql_to_question",
         "menu.history",
     }
-    assert {
-        (item.scope_code, item.capability) for item in principal.data_entitlements
-    } == {("SALES", "ROW_READ"), ("SALES", "SENSITIVE_READ")}
+    assert {(item.scope_code, item.capability) for item in principal.data_entitlements} == {
+        ("SALES", "ROW_READ"),
+        ("SALES", "SENSITIVE_READ"),
+    }
 
 
 def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
@@ -617,17 +619,14 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 "/auth/logout",
                 "/auth/password/change",
             }:
-                assert not (permission and UNCLASSIFIED_PERMISSION in permission), (
-                    f"unclassified route: {method.upper()} {path}"
-                )
+                assert not (
+                    permission and UNCLASSIFIED_PERMISSION in permission
+                ), f"unclassified route: {method.upper()} {path}"
 
     assert permission_for_route("POST", "/nl2sql/execute") == frozenset(
         {"menu.query", "menu.direct_sql"}
     )
-    assert (
-        permission_for_route("POST", "/nl2sql/db-admin/execute")
-        == frozenset({"menu.admin_sql"})
-    )
+    assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
 
 
 def test_security_audit_permission_and_api_are_removed() -> None:
@@ -666,9 +665,6 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
     monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
-    from app.security.service import get_security_service
-
-    get_security_service().bootstrap()
 
     async def exercise() -> None:
         transport = httpx.ASGITransport(app=app)
@@ -685,6 +681,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
             me = await client.get("/api/auth/me")
             assert me.status_code == 200
             assert me.json()["data"]["role_codes"] == ["SYSTEM_ADMIN"]
+            assert me.json()["data"]["force_password_change"] is False
 
             no_csrf = await client.post("/api/auth/logout")
             assert no_csrf.status_code == 403
@@ -709,10 +706,19 @@ def test_api_enforces_menu_permissions(
     settings = get_settings()
     monkeypatch.setattr(settings, "app_auth_enabled", True)
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
-    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
-    monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
+    monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
+    monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
+    from app.security.service import get_security_service
+
+    service = get_security_service()
+    assert isinstance(service.store, InMemorySecurityStore)
+    assert service.store.bootstrap(
+        login_name="ADMIN",
+        display_name="ADMIN（システム管理者）",
+        password_hash=hash_password("BootstrapPass!123"),
+    )
 
     async def exercise() -> None:
         transport = httpx.ASGITransport(app=app)
@@ -806,14 +812,20 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     settings = get_settings()
     monkeypatch.setattr(settings, "app_auth_enabled", True)
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
-    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
-    monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
+    monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
+    monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     _patch_security_threadpools(monkeypatch)
     reset_security_service()
     from app.security.service import get_security_service
 
-    get_security_service().bootstrap()
+    service = get_security_service()
+    assert isinstance(service.store, InMemorySecurityStore)
+    assert service.store.bootstrap(
+        login_name="ADMIN",
+        display_name="ADMIN（システム管理者）",
+        password_hash=hash_password("BootstrapPass!123"),
+    )
 
     history_service = Nl2SqlService(store=MemoryNl2SqlStore())
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", history_service)

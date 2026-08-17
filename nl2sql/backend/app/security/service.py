@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
-import logging
+import json
 import secrets
 import threading
 from datetime import UTC, datetime, timedelta
@@ -29,7 +31,7 @@ from .passwords import (
     validate_password,
     verify_password,
 )
-from .permissions import expand_permissions, unknown_permission_codes
+from .permissions import ALL_PERMISSION_CODES, expand_permissions, unknown_permission_codes
 from .store import (
     InMemorySecurityStore,
     OracleSecurityStore,
@@ -37,8 +39,6 @@ from .store import (
     SecurityNotFound,
     SecurityStore,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class SecurityApiError(RuntimeError):
@@ -81,12 +81,28 @@ _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
     }
 )
 
+_CONFIGURED_SYSTEM_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002"
+_CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
+_CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
+
 
 def _looks_like_missing_security_schema(exc: Exception) -> bool:
     message = str(exc).upper()
     return "ORA-00942" in message and any(
         object_name in message for object_name in _SECURITY_SCHEMA_OBJECT_NAMES
     )
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _constant_time_equal(left: str, right: str) -> bool:
+    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
 class SecurityService:
@@ -106,42 +122,11 @@ class SecurityService:
                 "ORACLE_USER と ORACLE_PASSWORD を設定してください。",
             )
         password_hash = hash_password(password)
-        try:
-            return self.store.bootstrap(
-                login_name=login_name,
-                display_name=f"{login_name}（システム管理者）",
-                password_hash=password_hash,
-            )
-        except Exception as exc:
-            if not _looks_like_missing_security_schema(exc):
-                raise
-            logger.warning("security_schema_missing_on_bootstrap", exc_info=True)
-        try:
-            self._initialize_security_schema_for_bootstrap()
-        except Exception as exc:
-            logger.exception("security_schema_on_demand_migration_failed")
-            raise SecurityApiError(
-                503,
-                "認証テーブルを初期化できません。DB 接続と Oracle 権限を確認してください。",
-            ) from exc
-        try:
-            return self.store.bootstrap(
-                login_name=login_name,
-                display_name=f"{login_name}（システム管理者）",
-                password_hash=password_hash,
-            )
-        except Exception as exc:
-            logger.exception("security_bootstrap_after_migration_failed")
-            raise SecurityApiError(
-                503,
-                "初期システム管理者を作成できません。認証テーブルの状態を確認してください。",
-            ) from exc
-
-    @staticmethod
-    def _initialize_security_schema_for_bootstrap() -> None:
-        from app.cli.app_security_migrate import apply_security_migrations
-
-        apply_security_migrations()
+        return self.store.bootstrap(
+            login_name=login_name,
+            display_name=f"{login_name}（システム管理者）",
+            password_hash=password_hash,
+        )
 
     def ensure_bootstrapped(self) -> None:
         """process ごとに一度だけ、DB lock 付きで初期管理者を確認する。"""
@@ -162,8 +147,21 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> tuple[Principal, str, str]:
-        self.ensure_bootstrapped()
-        user = self.store.get_user_by_login(login_name.strip().casefold())
+        normalized_login = login_name.strip()
+        if self._matches_configured_system_admin_login_name(normalized_login):
+            if _constant_time_equal(password, self.settings.oracle_password):
+                return self._create_configured_system_admin_session(normalized_login)
+            raise LoginFailed()
+        try:
+            user = self.store.get_user_by_login(normalized_login.casefold())
+        except Exception as exc:
+            if _looks_like_missing_security_schema(exc):
+                raise SecurityApiError(
+                    503,
+                    "認証テーブルが初期化されていません。"
+                    "データベース接続ユーザーでログインして初期設定を完了してください。",
+                ) from exc
+            raise
         now = _now()
         if user is None:
             raise LoginFailed()
@@ -204,6 +202,9 @@ class SecurityService:
     def authenticate_session(self, token: str) -> Principal:
         if not token:
             raise SecurityApiError(401, "ログインしてください。")
+        configured_admin = self._authenticate_configured_system_admin_session(token)
+        if configured_admin is not None:
+            return configured_admin
         session = self.store.get_session_by_token_hash(_hash_token(token))
         now = _now()
         if session is None or session.revoked_at is not None:
@@ -244,6 +245,8 @@ class SecurityService:
             )
 
     def logout(self, principal: Principal, *, request_id: str = "", client_ip: str = "") -> None:
+        if self._is_configured_system_admin_principal(principal):
+            return
         self.store.revoke_session(principal.session_id)
 
     def change_password(
@@ -255,6 +258,11 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> Principal:
+        if self._is_configured_system_admin_principal(principal):
+            raise SecurityApiError(
+                409,
+                "データベース接続ユーザーのパスワードはアプリケーションから変更できません。",
+            )
         user = self.store.get_user(principal.user_id)
         if user is None or not verify_password(current_password, user.password_hash)[0]:
             raise SecurityApiError(400, "現在のパスワードを確認してください。")
@@ -464,6 +472,124 @@ class SecurityService:
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
         return archived
+
+    def _matches_configured_system_admin_login_name(self, login_name: str) -> bool:
+        configured_login = self.settings.oracle_user.strip()
+        return bool(configured_login) and _constant_time_equal(
+            login_name.casefold(), configured_login.casefold()
+        )
+
+    def _create_configured_system_admin_session(
+        self, login_name: str
+    ) -> tuple[Principal, str, str]:
+        now = _now()
+        csrf_token = secrets.token_urlsafe(32)
+        session_id = f"configured-system-admin:{uuid4()}"
+        payload = {
+            "type": _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE,
+            "sid": session_id,
+            "login": login_name,
+            "csrf_hash": _hash_token(csrf_token),
+            "exp": int(
+                (now + timedelta(hours=self.settings.app_auth_absolute_timeout_hours)).timestamp()
+            ),
+        }
+        token = self._sign_configured_system_admin_payload(payload)
+        principal = self._configured_system_admin_principal(
+            login_name=login_name,
+            session_id=session_id,
+            csrf_token_hash=str(payload["csrf_hash"]),
+        )
+        return principal, token, csrf_token
+
+    def _authenticate_configured_system_admin_session(self, token: str) -> Principal | None:
+        prefix = _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX + "."
+        if not token.startswith(prefix):
+            return None
+        try:
+            payload_segment, signature = token.removeprefix(prefix).split(".", 1)
+        except ValueError as exc:
+            raise SecurityApiError(401, "ログインしてください。") from exc
+        expected_signature = self._configured_system_admin_signature(payload_segment)
+        if not hmac.compare_digest(signature, expected_signature):
+            raise SecurityApiError(401, "ログインしてください。")
+        try:
+            payload = json.loads(_b64url_decode(payload_segment).decode("utf-8"))
+        except (TypeError, ValueError, UnicodeDecodeError, binascii.Error) as exc:
+            raise SecurityApiError(401, "ログインしてください。") from exc
+        if payload.get("type") != _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE:
+            raise SecurityApiError(401, "ログインしてください。")
+        login_name = str(payload.get("login") or "")
+        if not self._matches_configured_system_admin_login_name(login_name):
+            raise SecurityApiError(401, "ログインしてください。")
+        try:
+            expires_at = int(payload.get("exp"))
+        except (TypeError, ValueError) as exc:
+            raise SecurityApiError(401, "ログインしてください。") from exc
+        if expires_at <= int(_now().timestamp()):
+            raise SecurityApiError(
+                401, "セッションの有効期限が切れました。再度ログインしてください。"
+            )
+        session_id = str(payload.get("sid") or "")
+        csrf_token_hash = str(payload.get("csrf_hash") or "")
+        if not session_id.startswith("configured-system-admin:") or not csrf_token_hash:
+            raise SecurityApiError(401, "ログインしてください。")
+        return self._configured_system_admin_principal(
+            login_name=login_name,
+            session_id=session_id,
+            csrf_token_hash=csrf_token_hash,
+        )
+
+    def _sign_configured_system_admin_payload(self, payload: dict[str, object]) -> str:
+        payload_segment = _b64url_encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        )
+        signature = self._configured_system_admin_signature(payload_segment)
+        return f"{_CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX}.{payload_segment}.{signature}"
+
+    def _configured_system_admin_signature(self, payload_segment: str) -> str:
+        return _b64url_encode(
+            hmac.new(
+                self._configured_system_admin_token_key(),
+                payload_segment.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+        )
+
+    def _configured_system_admin_token_key(self) -> bytes:
+        configured_secret = (
+            f"{self.settings.service_name}:"
+            f"{self.settings.oracle_user.strip()}:"
+            f"{self.settings.oracle_password}"
+        )
+        return hashlib.sha256(configured_secret.encode("utf-8")).digest()
+
+    def _configured_system_admin_principal(
+        self,
+        *,
+        login_name: str,
+        session_id: str,
+        csrf_token_hash: str,
+    ) -> Principal:
+        return Principal(
+            user_id=_CONFIGURED_SYSTEM_ADMIN_USER_ID,
+            login_name=login_name,
+            display_name=f"{login_name}（データベース接続管理者）",
+            status="ACTIVE",
+            force_password_change=False,
+            role_codes=[SYSTEM_ADMIN_ROLE_CODE],
+            permissions=set(ALL_PERMISSION_CODES),
+            data_entitlements=[],
+            session_id=session_id,
+            csrf_token_hash=csrf_token_hash,
+        )
+
+    @staticmethod
+    def _is_configured_system_admin_principal(principal: Principal) -> bool:
+        return (
+            principal.user_id == _CONFIGURED_SYSTEM_ADMIN_USER_ID
+            and principal.session_id.startswith("configured-system-admin:")
+        )
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
         roles = [self.store.get_role(role_id) for role_id in user.role_ids]
