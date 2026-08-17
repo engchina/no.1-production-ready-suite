@@ -48,14 +48,9 @@ import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
 import { historyRerunUrl } from "../queryPrefillState";
 import type { HistoryData, HistoryItem } from "../types";
+import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 
 type HistoryDetailTab = "overview" | "sql";
-
-function feedbackLabel(item: HistoryItem) {
-  if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
-  if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
-  return t("history.feedback.none");
-}
 
 function columnsLabel(item: HistoryItem) {
   if (item.result_columns.length === 0) return "—";
@@ -281,7 +276,7 @@ function HistoryGrid({
                           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
                           <StatusBadge
                             variant={item.feedback_rating ? "success" : "neutral"}
-                            label={feedbackLabel(item)}
+                            label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
                           />
                           <StatusBadge
                             variant={item.safety_is_safe ? "success" : "danger"}
@@ -407,7 +402,7 @@ function HistoryDetailPanel({
             <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
             <StatusBadge variant="info" label={engineLabel(item.engine)} />
             <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-            <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={feedbackLabel(item)} />
+            <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={userFeedbackRatingBadgeLabel(item.feedback_rating)} />
             <StatusBadge
               variant={item.safety_is_safe ? "success" : "danger"}
               label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}

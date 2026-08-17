@@ -219,6 +219,8 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByTestId("history-detail").getByRole("heading", { name: "履歴詳細" })).toBeVisible();
   await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
   await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
+  await expect(historyRows(page).first().getByText("利用者評価: 良い", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("history-detail").getByText("利用者評価: 良い", { exact: true })).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: "履歴検索" });
   await search.fill("集計条件が違います");
@@ -226,13 +228,13 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByRole("button", { name: "請求金額を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
 
   await search.clear();
-  await page.getByLabel("評価フィルタ").selectOption("unrated");
+  await page.getByLabel("利用者評価フィルター").selectOption("unrated");
   await page.getByLabel("安全状態フィルタ").selectOption("blocked");
   await expect(historyRows(page)).toHaveCount(1);
   await expect(page.getByText("監査ログを削除", { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId("history-detail").getByText("ブロック", { exact: true })).toBeVisible();
 
-  await page.getByLabel("評価フィルタ").selectOption("all");
+  await page.getByLabel("利用者評価フィルター").selectOption("all");
   await page.getByLabel("安全状態フィルタ").selectOption("all");
   await page.getByRole("button", { name: "実行情報" }).click();
   await expect(historyRows(page).first()).toContainText("監査ログを削除");
@@ -371,11 +373,11 @@ test("実行履歴は検索結果なしと条件クリアを案内する", async
   await expect(historyRows(page)).toHaveCount(3);
 });
 
-test("実行履歴の評価フィルタに要確認は表示しない", async ({ page }) => {
+test("実行履歴の利用者評価フィルターに要確認は表示しない", async ({ page }) => {
   await mockHistory(page);
   await page.goto("/history");
 
-  const options = page.getByLabel("評価フィルタ").locator("option");
+  const options = page.getByLabel("利用者評価フィルター").locator("option");
   await expect(options).toHaveText(["すべて", "未評価", "良い", "違う"]);
   await expect(options.filter({ hasText: "要確認" })).toHaveCount(0);
 });

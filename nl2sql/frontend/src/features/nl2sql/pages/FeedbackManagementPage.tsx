@@ -5,6 +5,8 @@ import {
   useState,
 } from "react";
 import {
+  BookOpenText,
+  CheckCircle2,
   Code2,
   Copy,
   DatabaseZap,
@@ -18,6 +20,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import {
+  Banner,
   EmptyState,
   Pagination,
   StatusBadge,
@@ -51,6 +54,11 @@ import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
+import {
+  adminFeedbackReviewBadgeLabel,
+  feedbackRatingLabel,
+  userFeedbackRatingBadgeLabel,
+} from "../feedbackLabels";
 import type {
   AdminFeedbackReviewData,
   FeedbackClearData,
@@ -71,8 +79,10 @@ import type {
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
+type StatusBadgeVariant = "neutral" | "info" | "success" | "warning" | "danger";
 
 const APP_FEEDBACK_PAGE_SIZE = 20;
+const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "appFeedback", label: t("feedbackManagement.tabs.appFeedback"), icon: MessageSquareText },
@@ -81,25 +91,8 @@ const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "similarityIndex", label: t("feedbackManagement.tabs.similarityIndex"), icon: DatabaseZap },
 ];
 
-function formatAttributes(entry: SelectAiFeedbackEntry) {
-  if (entry.raw_attributes) return entry.raw_attributes;
-  return JSON.stringify(entry.attributes ?? {});
-}
-
 function profileOptionLabel(profile: SelectAiDbProfile) {
   return profile.owner ? `${profile.name} (${profile.owner})` : profile.name;
-}
-
-function feedbackLabel(item: FeedbackRecord) {
-  if (item.feedback_rating === "good") return t("nl2sql.feedback.good");
-  if (item.feedback_rating === "bad") return t("nl2sql.feedback.bad");
-  return t("feedbackManagement.appFeedback.unrated");
-}
-
-function adminFeedbackLabel(item: { admin_feedback_rating?: FeedbackRating | null }) {
-  if (item.admin_feedback_rating === "good") return t("nl2sql.feedback.good");
-  if (item.admin_feedback_rating === "bad") return t("nl2sql.feedback.bad");
-  return t("feedbackManagement.appFeedback.unrated");
 }
 
 function defaultSelectAiResponse(item: FeedbackRecord) {
@@ -114,12 +107,66 @@ function roundThreshold(value: number) {
   return Number(clamp(value, 0.1, 0.95).toFixed(2));
 }
 
+function resolveFeedbackManagementView(tab: string | null): FeedbackManagementView {
+  if (tab === "appFeedback" || tab === "entries" || tab === "vectorIndex" || tab === "similarityIndex") {
+    return tab;
+  }
+  return DEFAULT_FEEDBACK_MANAGEMENT_VIEW;
+}
+
+function similarityIndexStatusLabel(status?: string) {
+  switch (status) {
+    case "ready":
+      return t("feedbackManagement.similarityIndex.status.ready");
+    case "stale":
+      return t("feedbackManagement.similarityIndex.status.stale");
+    case "needs_cleanup":
+      return t("feedbackManagement.similarityIndex.status.needsCleanup");
+    case "empty":
+      return t("feedbackManagement.similarityIndex.status.empty");
+    default:
+      return t("feedbackManagement.similarityIndex.status.unknown");
+  }
+}
+
+function similarityIndexStatusVariant(status?: string): StatusBadgeVariant {
+  switch (status) {
+    case "ready":
+      return "success";
+    case "stale":
+    case "needs_cleanup":
+      return "warning";
+    case "empty":
+      return "neutral";
+    default:
+      return "info";
+  }
+}
+
+function feedbackVectorEntryState(entry: FeedbackVectorEntry) {
+  if (entry.indexed) {
+    return {
+      label: t("feedbackManagement.similarityIndex.entryStatus.indexed"),
+      variant: "success" as const,
+    };
+  }
+  if (entry.admin_feedback_rating === "good") {
+    return {
+      label: t("feedbackManagement.similarityIndex.entryStatus.pending"),
+      variant: "warning" as const,
+    };
+  }
+  return {
+    label: t("feedbackManagement.similarityIndex.entryStatus.excluded"),
+    variant: "neutral" as const,
+  };
+}
+
 export function FeedbackManagementPage() {
   const confirm = useConfirm();
   const [searchParams] = useSearchParams();
-  const [activeView, setActiveView] = useState<FeedbackManagementView>(
-    searchParams.get("tab") === "appFeedback" ? "appFeedback" : "entries"
-  );
+  const requestedView = resolveFeedbackManagementView(searchParams.get("tab"));
+  const [activeView, setActiveView] = useState<FeedbackManagementView>(requestedView);
   const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
   const [profileName, setProfileName] = useState("");
   const [feedback, setFeedback] = useState<SelectAiFeedbackEntriesData | null>(null);
@@ -144,6 +191,7 @@ export function FeedbackManagementPage() {
   const [feedbackIndex, setFeedbackIndex] = useState<FeedbackIndexData | null>(null);
   const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntriesData | null>(null);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
+  const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
@@ -175,6 +223,25 @@ export function FeedbackManagementPage() {
       })
       .slice(0, APP_FEEDBACK_PAGE_SIZE);
   }, [feedbackFilter, feedbackSearch, history]);
+  const feedbackVectorEntries = feedbackEntries?.items ?? [];
+  const feedbackVectorCandidates = useMemo(
+    () => feedbackVectorEntries.filter((entry) => entry.admin_feedback_rating === "good"),
+    [feedbackVectorEntries]
+  );
+  const feedbackVectorOtherEntries = useMemo(
+    () => feedbackVectorEntries.filter((entry) => entry.admin_feedback_rating !== "good"),
+    [feedbackVectorEntries]
+  );
+  const feedbackVectorPendingCount = Math.max(
+    (feedbackIndex?.indexable_count ?? feedbackVectorCandidates.length) - (feedbackIndex?.indexed_count ?? 0),
+    0
+  );
+  const feedbackConfigDirty = Boolean(
+    feedbackConfig &&
+      savedFeedbackConfig &&
+      (feedbackConfig.similarity_threshold !== savedFeedbackConfig.similarity_threshold ||
+        feedbackConfig.match_limit !== savedFeedbackConfig.match_limit)
+  );
   const feedbackTotalPages = Math.max(
     1,
     Math.ceil(feedbackTotal / APP_FEEDBACK_PAGE_SIZE),
@@ -193,7 +260,7 @@ export function FeedbackManagementPage() {
       history.map((item) => ({
         value: item.id,
         label: item.question,
-        description: `${formatDateTime(item.feedback_updated_at || item.created_at)} / ${profileRecordDisplayLabel(item)} / ${feedbackLabel(item)}`,
+        description: `${formatDateTime(item.feedback_updated_at || item.created_at)} / ${profileRecordDisplayLabel(item)} / ${userFeedbackRatingBadgeLabel(item.feedback_rating)}`,
       })),
     [history]
   );
@@ -268,6 +335,7 @@ export function FeedbackManagementPage() {
         setFeedbackIndex(indexData);
         setFeedbackEntries(entriesData);
         setFeedbackConfig(configData);
+        setSavedFeedbackConfig(configData);
         setSelectedFeedbackId((current) =>
           appFeedbackData.items.some((item) => item.id === current)
             ? current
@@ -403,7 +471,7 @@ export function FeedbackManagementPage() {
     if (!selectedAppFeedback) return;
     const trimmedAdminFeedbackContent = adminFeedbackContent.trim();
     if (adminFeedbackRating === "bad" && !trimmedAdminFeedbackContent) {
-      setMessage(t("nl2sql.selectAiFeedbackAdd.requiresContent"));
+      setMessage(t("feedbackManagement.appFeedback.adminFeedbackRequired"));
       window.requestAnimationFrame(() => adminFeedbackContentRef.current?.focus());
       return;
     }
@@ -514,7 +582,9 @@ export function FeedbackManagementPage() {
     setLoading("feedback-config");
     setMessage("");
     try {
-      setFeedbackConfig(await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig));
+      const nextConfig = await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig);
+      setFeedbackConfig(nextConfig);
+      setSavedFeedbackConfig(nextConfig);
       toast.success(t("feedbackManagement.similarityIndex.configSaved"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackConfig"));
@@ -556,6 +626,10 @@ export function FeedbackManagementPage() {
       abortAll();
     };
   }, []);
+
+  useEffect(() => {
+    setActiveView(requestedView);
+  }, [requestedView]);
 
   useEffect(() => {
     if (!selectedAppFeedback) {
@@ -667,20 +741,14 @@ export function FeedbackManagementPage() {
                 className={`rounded-md border border-border ${INFORMATION_TABLE_SCROLL_CLASS}`}
                 data-testid="feedback-management-entries-scroll-region"
               >
-                <table className="min-w-[860px] w-full table-fixed divide-y divide-border text-left text-sm">
+                <table className="min-w-[640px] w-full table-fixed divide-y divide-border text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-background text-xs font-semibold uppercase tracking-normal text-muted">
                     <tr className="h-10">
-                      <th scope="col" className="w-[28%] px-3 py-2">
+                      <th scope="col" className="w-[42%] px-3 py-2">
                         {t("feedbackManagement.entries.content")}
                       </th>
-                      <th scope="col" className="w-[18%] px-3 py-2">
-                        {t("feedbackManagement.entries.sqlId")}
-                      </th>
-                      <th scope="col" className="w-[34%] px-3 py-2">
+                      <th scope="col" className="w-[58%] px-3 py-2">
                         {t("feedbackManagement.entries.sqlText")}
-                      </th>
-                      <th scope="col" className="w-[20%] px-3 py-2">
-                        {t("feedbackManagement.entries.attributes")}
                       </th>
                     </tr>
                   </thead>
@@ -695,7 +763,7 @@ export function FeedbackManagementPage() {
                     ))}
                     {selectAiFeedbackItems.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-3 py-8">
+                        <td colSpan={2} className="px-3 py-8">
                           <EmptyState
                             title={t("feedbackManagement.entries.emptyTitle")}
                             hint={t("feedbackManagement.entries.emptyHint")}
@@ -984,7 +1052,7 @@ export function FeedbackManagementPage() {
                       <div className="mt-2">
                         <StatusBadge
                           variant={selectedAppFeedback.feedback_rating ? "success" : "neutral"}
-                          label={feedbackLabel(selectedAppFeedback)}
+                          label={feedbackRatingLabel(selectedAppFeedback.feedback_rating)}
                         />
                       </div>
                     </div>
@@ -993,11 +1061,7 @@ export function FeedbackManagementPage() {
                       <div className="mt-2">
                         <StatusBadge
                           variant={selectedAppFeedback.admin_feedback_rating === "good" ? "success" : "neutral"}
-                          label={
-                            selectedAppFeedback.admin_feedback_rating
-                              ? adminFeedbackLabel(selectedAppFeedback)
-                              : t("feedbackManagement.appFeedback.unrated")
-                          }
+                          label={feedbackRatingLabel(selectedAppFeedback.admin_feedback_rating)}
                         />
                       </div>
                     </div>
@@ -1135,109 +1199,125 @@ export function FeedbackManagementPage() {
               description={t("feedbackManagement.similarityIndex.hint")}
               icon={DatabaseZap}
             />
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1fr)]">
               <section className="grid content-start gap-3">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <CompactFact
-                    label={t("feedbackManagement.similarityIndex.indexed")}
-                    value={String(feedbackIndex?.indexed_count ?? 0)}
+                <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                        <CheckCircle2 size={16} aria-hidden="true" />
+                        {t("feedbackManagement.similarityIndex.summaryTitle")}
+                      </p>
+                      <p className="mt-1 text-sm text-muted">
+                        {t("feedbackManagement.similarityIndex.summaryHint")}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      variant={similarityIndexStatusVariant(feedbackIndex?.status)}
+                      label={similarityIndexStatusLabel(feedbackIndex?.status)}
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.indexed")}
+                      value={t("feedbackManagement.similarityIndex.indexedRatio", {
+                        indexed: feedbackIndex?.indexed_count ?? 0,
+                        total: feedbackIndex?.indexable_count ?? 0,
+                      })}
+                      hint={t("feedbackManagement.similarityIndex.indexedHint")}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.pending")}
+                      value={String(feedbackVectorPendingCount)}
+                      hint={t("feedbackManagement.similarityIndex.pendingHint")}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.usedBy")}
+                      value={t("feedbackManagement.similarityIndex.usedByValue")}
+                      hint={t("feedbackManagement.similarityIndex.usedByHint")}
+                    />
+                  </div>
+                  <SimilarityIndexStateNotice
+                    feedbackIndex={feedbackIndex}
+                    candidateCount={feedbackVectorCandidates.length}
+                    pendingCount={feedbackVectorPendingCount}
                   />
-                  <CompactFact
-                    label={t("feedbackManagement.similarityIndex.indexable")}
-                    value={String(feedbackIndex?.indexable_count ?? 0)}
-                  />
-                  <CompactFact
-                    label={t("feedbackManagement.similarityIndex.dimension")}
-                    value={String(feedbackIndex?.vector_dimension ?? 1536)}
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <CompactFact
-                    label={t("feedbackManagement.similarityIndex.embeddingModel")}
-                    value={feedbackIndex?.embedding_model || "-"}
-                  />
-                  <CompactFact
-                    label={t("feedbackManagement.similarityIndex.embeddingConfigured")}
-                    value={
-                      feedbackIndex?.embedding_configured
-                        ? t("feedbackManagement.similarityIndex.configured")
-                        : t("feedbackManagement.similarityIndex.notConfigured")
-                    }
-                  />
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge variant="neutral" label={feedbackIndex?.status ?? "empty"} />
-                  <StatusBadge variant="neutral" label={feedbackIndex?.vector_backend ?? "oracle_26ai"} />
-                  <StatusBadge variant="neutral" label={feedbackIndex?.runtime ?? "deterministic"} />
-                  <StatusBadge
-                    variant="neutral"
-                    label={t("feedbackManagement.similarityIndex.entryTotal", { count: feedbackEntries?.total ?? 0 })}
-                  />
-                </div>
-                <section className="grid gap-3 rounded-md border border-border bg-background p-3">
-                  <p className="text-sm font-semibold text-foreground">
-                    {t("feedbackManagement.similarityIndex.configTitle")}
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
-                    <label className="grid gap-1 text-sm font-medium text-foreground">
-                      <span>{t("feedbackManagement.similarityIndex.threshold")}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={feedbackConfig?.similarity_threshold ?? 0}
-                        onChange={(event) => {
-                          const nextThreshold = Number(event.currentTarget.value) || 0;
-                          setFeedbackConfig((current) => ({
-                            similarity_threshold: nextThreshold,
-                            match_limit: current?.match_limit ?? 3,
-                          }));
-                        }}
-                        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                      />
-                    </label>
-                    <label className="grid gap-1 text-sm font-medium text-foreground">
-                      <span>{t("feedbackManagement.similarityIndex.matchLimit")}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={feedbackConfig?.match_limit ?? 3}
-                        onChange={(event) => {
-                          const nextMatchLimit = Number(event.currentTarget.value) || 1;
-                          setFeedbackConfig((current) => ({
-                            similarity_threshold: current?.similarity_threshold ?? 0,
-                            match_limit: nextMatchLimit,
-                          }));
-                        }}
-                        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                      />
-                    </label>
+                  <FeedbackWarnings warnings={feedbackIndex?.warnings ?? []} />
+                </section>
+
+                <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      {t("feedbackManagement.similarityIndex.configTitle")}
+                    </p>
+                    <p className="mt-1 text-sm text-muted">
+                      {t("feedbackManagement.similarityIndex.configHint")}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]">
+                    <SimilarityConfigField
+                      id="feedback-similarity-threshold"
+                      label={t("feedbackManagement.similarityIndex.threshold")}
+                      hint={t("feedbackManagement.similarityIndex.thresholdHint")}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={feedbackConfig?.similarity_threshold ?? 0}
+                      onChange={(value) => {
+                        setFeedbackConfig((current) => ({
+                          similarity_threshold: clamp(value, 0, 1),
+                          match_limit: current?.match_limit ?? 3,
+                        }));
+                      }}
+                    />
+                    <SimilarityConfigField
+                      id="feedback-similarity-match-limit"
+                      label={t("feedbackManagement.similarityIndex.matchLimit")}
+                      hint={t("feedbackManagement.similarityIndex.matchLimitHint")}
+                      min={1}
+                      max={20}
+                      step={1}
+                      value={feedbackConfig?.match_limit ?? 3}
+                      onChange={(value) => {
+                        setFeedbackConfig((current) => ({
+                          similarity_threshold: current?.similarity_threshold ?? 0,
+                          match_limit: Math.round(clamp(value, 1, 20)),
+                        }));
+                      }}
+                    />
                   </div>
                   <FormActionBar
                     ariaLabel={t("feedbackManagement.similarityIndex.configActions")}
-                    primaryActions={[
+                    status={
+                      feedbackConfigDirty ? (
+                        <p className="text-sm text-muted">
+                          {t("feedbackManagement.similarityIndex.configDirty")}
+                        </p>
+                      ) : null
+                    }
+                    secondaryActions={[
                       {
                         id: "save-config",
                         label: t("feedbackManagement.similarityIndex.saveConfig"),
                         icon: Save,
                         loading: loading === "feedback-config",
-                        disabled: !feedbackConfig,
+                        disabled: !feedbackConfig || !feedbackConfigDirty,
                         onClick: () => void saveFeedbackConfig(),
                       },
                     ]}
                   />
                 </section>
+
                 <FormActionBar
                   ariaLabel={t("feedbackManagement.similarityIndex.actions")}
                   testId="feedback-similarity-index-actions"
-                  secondaryActions={[
+                  primaryActions={[
                     {
                       id: "rebuild",
                       label: t("feedbackManagement.similarityIndex.rebuild"),
                       icon: RefreshCw,
                       loading: loading === "feedback-index",
+                      disabled: (feedbackIndex?.indexable_count ?? 0) === 0,
                       onClick: () => void rebuildFeedbackIndex(),
                     },
                   ]}
@@ -1251,23 +1331,68 @@ export function FeedbackManagementPage() {
                     },
                   ]}
                 />
+
+                <details className="rounded-md border border-border bg-background">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                    {t("feedbackManagement.similarityIndex.technicalDetails")}
+                    <StatusBadge
+                      variant="neutral"
+                      label={feedbackIndex?.vector_backend ?? "oracle_26ai"}
+                    />
+                  </summary>
+                  <div className="grid gap-3 border-t border-border p-4 sm:grid-cols-2">
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.vectorBackend")}
+                      value={feedbackIndex?.vector_backend ?? "-"}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.runtime")}
+                      value={feedbackIndex?.runtime ?? "-"}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.embeddingModel")}
+                      value={feedbackIndex?.embedding_model || "-"}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.embeddingConfigured")}
+                      value={
+                        feedbackIndex?.embedding_configured
+                          ? t("feedbackManagement.similarityIndex.configured")
+                          : t("feedbackManagement.similarityIndex.notConfigured")
+                      }
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.dimension")}
+                      value={String(feedbackIndex?.vector_dimension ?? 1536)}
+                    />
+                    <CompactFact
+                      label={t("feedbackManagement.similarityIndex.totalEntries")}
+                      value={String(feedbackEntries?.total ?? 0)}
+                    />
+                  </div>
+                </details>
               </section>
 
               <section className="grid content-start gap-3">
-                <FeedbackWarnings warnings={feedbackIndex?.warnings ?? []} />
-                <section className="grid gap-2 rounded-md border border-border p-3">
+                <section className="grid gap-3 rounded-md border border-border bg-background p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-foreground">
-                      {t("feedbackManagement.similarityIndex.entries")}
-                    </p>
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                        <BookOpenText size={16} aria-hidden="true" />
+                        {t("feedbackManagement.similarityIndex.entries")}
+                      </p>
+                      <p className="mt-1 text-sm text-muted">
+                        {t("feedbackManagement.similarityIndex.entriesHint")}
+                      </p>
+                    </div>
                     <StatusBadge
-                      variant="neutral"
+                      variant="info"
                       label={t("feedbackManagement.similarityIndex.indexedTotal", {
                         count: feedbackEntries?.indexed_count ?? 0,
                       })}
                     />
                   </div>
-                  {(feedbackEntries?.items ?? []).slice(0, 5).map((entry) => (
+                  {feedbackVectorCandidates.slice(0, 8).map((entry) => (
                     <FeedbackVectorEntryRow
                       key={entry.history_id}
                       entry={entry}
@@ -1275,13 +1400,43 @@ export function FeedbackManagementPage() {
                       onDelete={() => void deleteFeedbackEntry(entry.history_id)}
                     />
                   ))}
-                  {(!feedbackEntries || feedbackEntries.items.length === 0) && (
+                  {feedbackVectorEntries.length > 0 && feedbackVectorCandidates.length === 0 && (
+                    <EmptyState
+                      title={t("feedbackManagement.similarityIndex.noCandidatesTitle")}
+                      hint={t("feedbackManagement.similarityIndex.noCandidatesHint")}
+                    />
+                  )}
+                  {(!feedbackEntries || feedbackVectorEntries.length === 0) && (
                     <EmptyState
                       title={t("feedbackManagement.similarityIndex.entriesEmptyTitle")}
                       hint={t("feedbackManagement.similarityIndex.entriesEmptyHint")}
                     />
                   )}
                 </section>
+
+                {feedbackVectorOtherEntries.length > 0 && (
+                  <details className="rounded-md border border-border bg-background">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                      {t("feedbackManagement.similarityIndex.excludedEntries")}
+                      <StatusBadge
+                        variant="neutral"
+                        label={t("feedbackManagement.similarityIndex.excludedCount", {
+                          count: feedbackVectorOtherEntries.length,
+                        })}
+                      />
+                    </summary>
+                    <div className="grid gap-3 border-t border-border p-4">
+                      {feedbackVectorOtherEntries.slice(0, 6).map((entry) => (
+                        <FeedbackVectorEntryRow
+                          key={entry.history_id}
+                          entry={entry}
+                          deleting={loading === `feedback-entry-${entry.history_id}`}
+                          onDelete={() => void deleteFeedbackEntry(entry.history_id)}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
               </section>
             </div>
           </DbObjectManagementPanelShell>
@@ -1326,12 +1481,60 @@ function FeedbackWarnings({ warnings }: { warnings: string[] }) {
   return (
     <div className="grid gap-2">
       {warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+        <Banner key={warning} severity="warning">
           {warning}
-        </p>
+        </Banner>
       ))}
     </div>
   );
+}
+
+function SimilarityIndexStateNotice({
+  feedbackIndex,
+  candidateCount,
+  pendingCount,
+}: {
+  feedbackIndex: FeedbackIndexData | null;
+  candidateCount: number;
+  pendingCount: number;
+}) {
+  if (!feedbackIndex) return null;
+  if (candidateCount === 0) {
+    return (
+      <Banner severity="info" title={t("feedbackManagement.similarityIndex.notice.noCandidatesTitle")}>
+        {t("feedbackManagement.similarityIndex.notice.noCandidates")}
+      </Banner>
+    );
+  }
+  if (feedbackIndex.runtime !== "oracle" || !feedbackIndex.embedding_configured) {
+    return (
+      <Banner severity="warning" title={t("feedbackManagement.similarityIndex.notice.setupTitle")}>
+        {t("feedbackManagement.similarityIndex.notice.setup")}
+      </Banner>
+    );
+  }
+  if (pendingCount > 0 || feedbackIndex.status === "stale") {
+    return (
+      <Banner severity="warning" title={t("feedbackManagement.similarityIndex.notice.staleTitle")}>
+        {t("feedbackManagement.similarityIndex.notice.stale", { count: pendingCount })}
+      </Banner>
+    );
+  }
+  if (feedbackIndex.status === "needs_cleanup") {
+    return (
+      <Banner severity="warning" title={t("feedbackManagement.similarityIndex.notice.cleanupTitle")}>
+        {t("feedbackManagement.similarityIndex.notice.cleanup")}
+      </Banner>
+    );
+  }
+  if (feedbackIndex.status === "ready") {
+    return (
+      <Banner severity="success" title={t("feedbackManagement.similarityIndex.notice.readyTitle")}>
+        {t("feedbackManagement.similarityIndex.notice.ready")}
+      </Banner>
+    );
+  }
+  return null;
 }
 
 function FeedbackEntryRow({
@@ -1346,28 +1549,22 @@ function FeedbackEntryRow({
   return (
     <tr className={`${INFORMATION_TABLE_ROW_CLASS} ${selected ? "bg-primary/10" : "hover:bg-background"}`} onClick={onSelect}>
       <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words text-foreground">{entry.content || "-"}</p>
-      </td>
-      <td className="px-3 py-2 align-top">
         <button
           type="button"
-          className="text-left font-mono text-xs font-semibold text-primary underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-ring/40"
-          aria-label={t("feedbackManagement.entries.show", { id: entry.sql_id || "-" })}
+          className="block w-full rounded-sm text-left text-foreground underline-offset-2 hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+          aria-label={t("feedbackManagement.entries.select", {
+            content: entry.content || entry.sql_text || "-",
+          })}
           onClick={(event) => {
             event.stopPropagation();
             onSelect();
           }}
         >
-          {entry.sql_id || "-"}
+          <span className="line-clamp-3 break-words">{entry.content || "-"}</span>
         </button>
       </td>
       <td className="px-3 py-2 align-top">
         <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-foreground">{entry.sql_text || "-"}</p>
-      </td>
-      <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-muted">
-          {formatAttributes(entry)}
-        </p>
       </td>
     </tr>
   );
@@ -1404,11 +1601,11 @@ function FeedbackHistoryRow({
           <StatusBadge variant="neutral" label={engineLabel(item.engine)} />
           <StatusBadge
             variant={item.feedback_rating ? "success" : "neutral"}
-            label={`${t("feedbackManagement.appFeedback.userRatingShort")}: ${feedbackLabel(item)}`}
+            label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
           />
           <StatusBadge
             variant={item.admin_feedback_rating === "good" ? "success" : "neutral"}
-            label={`${t("feedbackManagement.appFeedback.adminRatingShort")}: ${adminFeedbackLabel(item)}`}
+            label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
           />
           {(item.profile_name || item.profile_category) && (
             <StatusBadge variant="info" label={profileRecordDisplayLabel(item)} />
@@ -1450,6 +1647,7 @@ function FeedbackVectorEntryRow({
       onSelect: onDelete,
     },
   ];
+  const state = feedbackVectorEntryState(entry);
 
   return (
     <section className="grid gap-2 rounded-md border border-border bg-card p-3 text-sm" data-testid="feedback-vector-entry">
@@ -1461,16 +1659,28 @@ function FeedbackVectorEntryRow({
             maxLines={1}
             testId="feedback-vector-question"
           />
-          <p className="mt-1 break-all font-mono text-xs text-muted">{entry.generated_sql}</p>
+          {entry.admin_feedback_content ? (
+            <p className="mt-2 line-clamp-2 break-words rounded-md border border-border bg-background px-3 py-2 text-xs leading-5 text-muted">
+              {entry.admin_feedback_content}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          <StatusBadge variant={entry.indexed ? "success" : "neutral"} label={entry.indexed ? "indexed" : "pending"} />
+          <StatusBadge variant={state.variant} label={state.label} />
           <StatusBadge
-            variant={entry.admin_feedback_rating === "good" ? "info" : "neutral"}
-            label={adminFeedbackLabel(entry)}
+            variant={entry.admin_feedback_rating === "good" ? "success" : "neutral"}
+            label={adminFeedbackReviewBadgeLabel(entry.admin_feedback_rating)}
           />
         </div>
       </div>
+      <details className="rounded-md border border-border bg-background">
+        <summary className="min-h-11 cursor-pointer px-3 py-2 text-xs font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+          {t("feedbackManagement.similarityIndex.generatedSql")}
+        </summary>
+        <pre className="max-h-36 overflow-auto border-t border-border p-3 text-xs leading-5 text-foreground">
+          <code>{entry.generated_sql || "-"}</code>
+        </pre>
+      </details>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted">{profileRecordDisplayLabel(entry)}</span>
         <RowActionMenu
@@ -1481,6 +1691,63 @@ function FeedbackVectorEntryRow({
         />
       </div>
     </section>
+  );
+}
+
+function SimilarityConfigField({
+  id,
+  label,
+  hint,
+  min,
+  max,
+  step,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const hintId = `${id}-hint`;
+  return (
+    <fieldset className="grid gap-2 text-sm font-medium text-foreground">
+      <legend className="mb-1">{label}</legend>
+      <input
+        type="range"
+        aria-label={`${label} slider`}
+        aria-describedby={hintId}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        className="w-full accent-primary"
+      />
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        inputMode="decimal"
+        aria-label={label}
+        aria-describedby={hintId}
+        value={value}
+        onChange={(event) => {
+          const nextValue = Number(event.currentTarget.value);
+          if (!Number.isNaN(nextValue)) onChange(nextValue);
+        }}
+        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+      />
+      <span id={hintId} className="text-xs font-normal leading-5 text-muted">
+        {hint}
+      </span>
+    </fieldset>
   );
 }
 
@@ -1526,11 +1793,12 @@ function SliderNumberField({
   );
 }
 
-function CompactFact({ label, value }: { label: string; value: string }) {
+function CompactFact({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="min-w-0 rounded-md border border-border bg-card p-3">
       <p className="text-xs font-medium text-muted">{label}</p>
       <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-muted">{hint}</p> : null}
     </div>
   );
 }

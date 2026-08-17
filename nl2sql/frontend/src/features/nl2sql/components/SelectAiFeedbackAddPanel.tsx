@@ -14,6 +14,7 @@ import {
 import { FormStatus } from "@/components/ui/form-status";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import type {
   GeneratedSqlPanelData,
   HistoryItem,
@@ -101,7 +102,7 @@ export function SelectAiFeedbackAddPanel({
           <div className="flex flex-wrap justify-end gap-2">
             <StatusBadge
               variant="neutral"
-              label={history.feedback_rating === "good" ? t("nl2sql.feedback.good") : t("nl2sql.feedback.bad")}
+              label={userFeedbackRatingBadgeLabel(history.feedback_rating)}
             />
           </div>
         )}

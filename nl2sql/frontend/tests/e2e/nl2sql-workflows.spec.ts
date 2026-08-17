@@ -1934,7 +1934,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         {
           item: { ...historyItem, admin_feedback_rating: "good", admin_feedback_content: "管理者確認済み" },
           score: 0.9,
-          reason: "請求金額の履歴と近い質問です。管理者の良い feedback が付いています。",
+          reason: "請求金額の履歴と近い質問です。管理者レビュー結果が良い履歴です。",
         },
       ],
     })
@@ -3311,13 +3311,18 @@ test("query workbench generates SQL through the job flow and shows results", asy
 
   const feedbackResponse = page.getByLabel("生成 SQL");
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "この SQL 生成結果に対する利用者からの評価をアプリ内 DB に保存します。参考履歴には管理者レビュー結果が良い履歴だけを使用します。"
+    )
+  ).toBeVisible();
   await expect(feedbackResponse).toHaveValue("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   // 結果フィードバックカードは廃止され、良い/違うボタンへ統合された。
   await expect(page.getByRole("heading", { name: "結果フィードバック" })).toHaveCount(0);
   await expect(feedbackResponse).toHaveJSProperty("readOnly", true);
 
-  // 「良い」はユーザー feedback としてアプリ DB にだけ保存する。
-  await page.getByLabel("feedback_content").fill("期待どおりの SQL です");
+  // 「良い」は利用者からの評価としてアプリ DB にだけ保存する。
+  await page.getByLabel("利用者コメント（feedback_content）").fill("期待どおりの SQL です");
   await page.getByRole("button", { name: "良い", exact: true }).click();
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
   expect(api.feedbackPayload).toEqual({
@@ -3328,12 +3333,12 @@ test("query workbench generates SQL through the job flow and shows results", asy
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
 
-  // 「違う」= negative。feedback_content 未入力なら送信をブロックする。
-  await page.getByLabel("feedback_content").fill("");
+  // 「違う」= negative。利用者コメント未入力なら送信をブロックする。
+  await page.getByLabel("利用者コメント（feedback_content）").fill("");
   await page.getByRole("button", { name: "違う", exact: true }).click();
-  await expect(page.getByText("「違う」の場合は feedback_content の入力が必須です。")).toBeVisible();
+  await expect(page.getByText("「違う」の場合は利用者コメントの入力が必須です。")).toBeVisible();
 
-  await page.getByLabel("feedback_content").fill("列を請求金額だけに修正");
+  await page.getByLabel("利用者コメント（feedback_content）").fill("列を請求金額だけに修正");
   await page.getByRole("button", { name: "違う", exact: true }).click();
   expect(api.feedbackPayload).toEqual({
     history_id: "hist-001",
@@ -3676,7 +3681,7 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
 
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
-  await expect(header).toContainText("管理者の良い評価のみ");
+  await expect(header).toContainText("管理者レビュー結果: 良いのみ");
   // 既定は折りたたみ: 中身（類似度・過去 SQL）は表示されない。
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByText("類似度 90%")).toHaveCount(0);
@@ -3705,7 +3710,7 @@ test("参考履歴は API が空の場合に表示しない", async ({ page }) =
   await expect(page.getByRole("button", { name: /参考履歴/ })).toHaveCount(0);
 });
 
-test("参考履歴は管理者の良い評価の履歴だけを表示する", async ({ page }) => {
+test("参考履歴は管理者レビュー結果が良い履歴だけを表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/similar-history");
@@ -3721,7 +3726,7 @@ test("参考履歴は管理者の良い評価の履歴だけを表示する", as
             admin_feedback_content: "管理者が確認しました。",
           },
           score: 0.92,
-          reason: "請求金額が一致し、管理者の良い feedback が付いています。",
+          reason: "請求金額が一致し、管理者レビュー結果が良い履歴です。",
         },
         {
           item: {
@@ -3730,10 +3735,10 @@ test("参考履歴は管理者の良い評価の履歴だけを表示する", as
             admin_feedback_rating: null,
             admin_feedback_content: "",
             id: "hist-user-good",
-            question: "ユーザーだけ良い評価の請求金額",
+            question: "利用者だけ良い評価の請求金額",
           },
           score: 0.98,
-          reason: "ユーザー評価のみのため表示しません。",
+          reason: "利用者評価のみのため表示しません。",
         },
         {
           item: {
@@ -3767,7 +3772,7 @@ test("参考履歴は管理者の良い評価の履歴だけを表示する", as
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
-  await expect(header).toContainText("管理者の良い評価のみ");
+  await expect(header).toContainText("管理者レビュー結果: 良いのみ");
   await header.click();
 
   const panel = page.getByTestId("nl2sql-similar-history");
@@ -3777,7 +3782,7 @@ test("参考履歴は管理者の良い評価の履歴だけを表示する", as
   await expect(similarQuestion).toContainText("対象テーブル");
   await expectQuestionClamp(similarQuestion, longHistoryItem.question, 1);
   await expect(panel).toContainText("類似度 92%");
-  await expect(panel).not.toContainText("ユーザーだけ良い評価の請求金額");
+  await expect(panel).not.toContainText("利用者だけ良い評価の請求金額");
   await expect(panel).not.toContainText("違う評価の請求金額");
   await expect(panel).not.toContainText("未評価の請求金額");
   await expectNoHorizontalScroll(page);
@@ -4019,9 +4024,9 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expect(page.getByRole("alert").filter({ hasText: "コピーできませんでした。" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
 
-  // 実行結果の「良い」はユーザー feedback としてアプリ DB に保存する。
+  // 実行結果の「良い」は利用者からの評価としてアプリ DB に保存する。
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
-  await page.getByLabel("feedback_content").fill("想定どおりの SQL です");
+  await page.getByLabel("利用者コメント（feedback_content）").fill("想定どおりの SQL です");
   await page.getByRole("button", { name: "良い", exact: true }).click();
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
   expect(api.feedbackPayload).toEqual({
@@ -5694,10 +5699,37 @@ test("sql to question page reports generation errors beside the action bar", asy
   await expect(sqlToQuestionInput(inputPanel)).toBeEnabled();
 });
 
+test("feedback management defaults to app feedback and keeps explicit tab deep links", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/feedback-management");
+  await expect(page.getByRole("heading", { name: "フィードバック管理" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveText([
+    "アプリ内フィードバック",
+    "Select AI feedback",
+    "Select AI ベクトルインデックス",
+    "類似検索インデックス",
+  ]);
+  await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Select AI feedback" })).toHaveAttribute("aria-selected", "false");
+  await expect(page.getByTestId("feedback-history-pane")).toBeVisible();
+
+  await page.evaluate(() => {
+    window.history.pushState(null, "", "/feedback-management?tab=entries");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page.getByRole("tab", { name: "Select AI feedback" })).toHaveAttribute("aria-selected", "true");
+
+  await page.evaluate(() => {
+    window.history.pushState(null, "", "/feedback-management?tab=unknown");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("feedback management page mirrors Select AI feedback operations", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
-  await page.goto("/feedback-management");
+  await page.goto("/feedback-management?tab=entries");
   await expect(page.getByRole("heading", { name: "フィードバック管理" })).toBeVisible();
   await expect(page.getByRole("tab")).toHaveText([
     "アプリ内フィードバック",
@@ -5715,11 +5747,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(profileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
   await expect(page.getByTestId("feedback-management-entry-count")).toContainText("30");
   await expect(page.getByText("NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX").first()).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "CONTENT" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "SQL_ID" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "SQL_TEXT" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "ATTRIBUTES" })).toBeVisible();
   const entriesScrollRegion = page.getByTestId("feedback-management-entries-scroll-region");
+  await expect(entriesScrollRegion.getByRole("columnheader")).toHaveText(["CONTENT", "SQL_TEXT"]);
+  await expect(page.getByRole("columnheader", { name: "SQL_ID" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "ATTRIBUTES" })).toHaveCount(0);
   await expect(entriesScrollRegion.locator("tbody tr")).toHaveCount(30);
   await expectInformationTableRowLimit(
     entriesScrollRegion,
@@ -5736,7 +5767,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(entryRefreshButtons).toHaveCount(1);
   await expect(entryRefreshButtons).toHaveCSS("height", "44px");
 
-  await page.getByRole("button", { name: "sql-001 の feedback を選択" }).click();
+  await page.getByRole("button", { name: "select ai showsql 請求金額を確認したい の feedback を選択" }).click();
   await expect(page.getByLabel("選択された SQL_TEXT")).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByTestId("feedback-selected-sql-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "選択したフィードバックを削除" }).click();
@@ -5801,17 +5832,21 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     "href",
     /question-classifier-models\?tab=candidates&history_id=hist-001/
   );
-  await expect(page.getByText("ユーザー評価", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("ユーザー feedback_content")).toHaveValue("SQL は期待通りです");
-  await page.getByRole("button", { name: "ユーザー内容を反映" }).click();
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("SQL は期待通りです");
+  const appFeedbackEditorPane = page.getByTestId("app-feedback-editor-pane");
+  await expect(appFeedbackEditorPane.getByText("利用者からの評価", { exact: true })).toBeVisible();
+  await expect(appFeedbackEditorPane.getByText("管理者レビュー結果", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("利用者評価: 良い", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("管理者レビュー: 良い", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("利用者コメント（feedback_content）")).toHaveValue("SQL は期待通りです");
+  await page.getByRole("button", { name: "利用者コメントを反映" }).click();
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("SQL は期待通りです");
   const registerSelectAiCheckbox = page.getByRole("checkbox", {
     name: "Select AI feedback に登録する",
   });
   await expect(registerSelectAiCheckbox).not.toBeChecked();
-  await page.getByRole("combobox", { name: "管理者評価", exact: true }).selectOption("good");
+  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("管理者フィードバックを保存しました。")).toBeVisible();
+  await expect(page.getByText("管理者レビューを保存しました。")).toBeVisible();
   expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
     rating: "good",
@@ -5822,15 +5857,15 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
   await expect(registerSelectAiCheckbox).not.toBeChecked();
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("SQL は期待通りです");
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("SQL は期待通りです");
 
-  await page.getByRole("combobox", { name: "管理者評価", exact: true }).selectOption("bad");
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveAttribute("required", "");
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveAttribute("aria-required", "true");
-  await page.getByLabel("管理者 feedback_content").fill("");
+  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("bad");
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAttribute("required", "");
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAttribute("aria-required", "true");
+  await page.getByLabel("管理者レビューコメント（feedback_content）").fill("");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("「違う」の場合は feedback_content の入力が必須です。")).toBeVisible();
-  await expect(page.getByLabel("管理者 feedback_content")).toBeFocused();
+  await expect(page.getByText("「違う」の場合は管理者レビューコメントの入力が必須です。")).toBeVisible();
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toBeFocused();
   expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
     rating: "good",
@@ -5842,9 +5877,9 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
 
   await registerSelectAiCheckbox.check();
   await expect(page.getByLabel("Select AI response SQL")).toHaveValue(historySql);
-  await page.getByLabel("管理者 feedback_content").fill("Select AI 登録用の管理者確認メモ");
+  await page.getByLabel("管理者レビューコメント（feedback_content）").fill("Select AI 登録用の管理者確認メモ");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("管理者フィードバックを保存し、Select AI feedback に登録しました。")).toBeVisible();
+  await expect(page.getByText("管理者レビューを保存し、Select AI feedback に登録しました。")).toBeVisible();
   expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
     rating: "bad",
@@ -5853,10 +5888,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     select_ai_response: historySql,
     select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
   });
-  await expect(page.getByRole("combobox", { name: "管理者評価", exact: true })).toHaveValue("bad");
+  await expect(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true })).toHaveValue("bad");
   await expect(registerSelectAiCheckbox).toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveValue(historySql);
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("Select AI 登録用の管理者確認メモ");
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("Select AI 登録用の管理者確認メモ");
   await appFeedbackMoreButton.click();
   const clearAppFeedbackMenuItem = page.getByRole("menuitem", { name: "フィードバックを解除" });
   await expect(clearAppFeedbackMenuItem).toHaveAttribute("data-form-action-tone", "danger");
@@ -5871,11 +5906,11 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByText("フィードバックを解除しました。")).toBeVisible();
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveCount(0);
-  await expect(page.getByLabel("管理者 feedback_content")).toHaveValue("");
-  const feedbackFilterOptions = page.getByLabel("評価フィルター").locator("option");
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("");
+  const feedbackFilterOptions = page.getByLabel("利用者評価フィルター").locator("option");
   await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
   await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
-  await page.getByLabel("評価フィルター").selectOption("good");
+  await page.getByLabel("利用者評価フィルター").selectOption("good");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
@@ -5902,26 +5937,29 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   await expect(page.getByRole("heading", { name: "類似検索インデックス" })).toBeVisible();
-  await expect(page.getByText("oracle_26ai")).toBeVisible();
+  await expect(page.locator("summary").filter({ hasText: "oracle_26ai" })).toBeVisible();
   await expect(page.getByLabel("Oracle 26ai DDL plan")).toHaveCount(0);
   await expect(page.getByText("CREATE TABLE NL2SQL_FEEDBACK_VECTORS", { exact: false })).toHaveCount(0);
   await expect(page.getByText("CREATE VECTOR INDEX NL2SQL_FEEDBACK_VEC_IDX", { exact: false })).toHaveCount(0);
   const similarityConfigSave = page.getByRole("button", { name: "設定保存" });
   const similarityIndexActions = page.getByTestId("feedback-similarity-index-actions");
   const rebuildFeedbackIndexButton = similarityIndexActions.getByRole("button", {
-    name: "Rebuild 実行",
+    name: "インデックスを更新",
   });
   const similarityIndexMoreButton = similarityIndexActions.getByRole("button", { name: "その他の操作" });
   await expect(similarityConfigSave).toHaveClass(/\bh-10\b/);
-  await expect(similarityConfigSave).toHaveClass(/\bbg-primary\b/);
+  await expect(similarityConfigSave).toHaveClass(/\bbg-card\b/);
   await expect(similarityIndexActions).toHaveClass(/\bborder-t\b/);
   await expect(rebuildFeedbackIndexButton).toHaveClass(/\bh-10\b/);
-  await expect(rebuildFeedbackIndexButton).toHaveClass(/\bbg-card\b/);
+  await expect(rebuildFeedbackIndexButton).toHaveClass(/\bbg-primary\b/);
   await expect(similarityIndexMoreButton).toHaveClass(/\bh-10\b/);
   await expect(similarityIndexMoreButton).toHaveClass(/\bbg-card\b/);
-  await expect(similarityIndexActions.getByRole("button", { name: "Clear 実行" })).toHaveCount(0);
-  await page.getByLabel("しきい値").fill("0.85");
-  await page.getByLabel("件数").fill("4");
+  await expect(similarityIndexActions.getByRole("button", { name: "インデックスを削除" })).toHaveCount(0);
+  await expect(page.getByText("更新が必要")).toBeVisible();
+  await expect(page.getByText("索引候補", { exact: true })).toBeVisible();
+  await expect(page.getByText("反映待ち", { exact: true })).toBeVisible();
+  await page.getByLabel("最低スコア", { exact: true }).fill("0.85");
+  await page.getByLabel("最大候補数", { exact: true }).fill("4");
   await similarityConfigSave.click();
   await expect(page.getByText("Feedback 類似検索設定を保存しました。")).toBeVisible();
   expect(api.feedbackConfigPayload).toEqual({
@@ -5929,24 +5967,24 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     match_limit: 4,
   });
   await rebuildFeedbackIndexButton.click();
-  const rebuildDialog = page.getByRole("alertdialog", { name: "Feedback index 再構築の確認" });
+  const rebuildDialog = page.getByRole("alertdialog", { name: "類似検索インデックス更新の確認" });
   await expect(rebuildDialog).toBeVisible();
-  await rebuildDialog.getByRole("button", { name: "Rebuild 実行" }).click();
+  await rebuildDialog.getByRole("button", { name: "インデックスを更新" }).click();
   await expect(page.getByText(/NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
-  await expect(page.getByText("ready", { exact: true })).toBeVisible();
+  await expect(page.getByText("利用可能", { exact: true })).toBeVisible();
   await clickRowAction(page, "feedback-vector-entry-actions-hist-001", "削除");
-  const deleteEntryDialog = page.getByRole("alertdialog", { name: "Feedback entry を削除しますか" });
+  const deleteEntryDialog = page.getByRole("alertdialog", { name: "類似検索候補の履歴を削除しますか" });
   await expect(deleteEntryDialog).toBeVisible();
   await deleteEntryDialog.getByRole("button", { name: "削除" }).click();
   await expect(page.getByText("Feedback entry を削除しました。")).toBeVisible();
   expect(api.feedbackEntriesDeletePayload).toEqual({ history_ids: ["hist-001"] });
   await similarityIndexMoreButton.click();
-  const clearFeedbackIndexMenuItem = page.getByRole("menuitem", { name: "Clear 実行" });
+  const clearFeedbackIndexMenuItem = page.getByRole("menuitem", { name: "インデックスを削除" });
   await expect(clearFeedbackIndexMenuItem).toHaveAttribute("data-form-action-tone", "danger");
   await clearFeedbackIndexMenuItem.click();
-  const clearDialog = page.getByRole("alertdialog", { name: "Feedback index 削除の確認" });
+  const clearDialog = page.getByRole("alertdialog", { name: "類似検索インデックス削除の確認" });
   await expect(clearDialog).toBeVisible();
-  await clearDialog.getByRole("button", { name: "Clear 実行" }).click();
+  await clearDialog.getByRole("button", { name: "インデックスを削除" }).click();
   await expect(page.getByText(/clear 実行には NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -6049,7 +6087,7 @@ test("feedback missing-table warning hides the Oracle physical table name", asyn
     })
   );
 
-  await page.goto("/feedback-management");
+  await page.goto("/feedback-management?tab=entries");
 
   const warning = page.getByText(missingTableWarning, { exact: true });
   await expect(warning).toBeVisible();
@@ -6153,7 +6191,7 @@ test("feedback management keeps utility actions usable in empty and load error s
     })
   );
 
-  await page.goto("/feedback-management");
+  await page.goto("/feedback-management?tab=entries");
 
   await expect(page.getByRole("alert")).toContainText("Feedback 類似検索設定を取得できません。");
   await expect(page.getByText("Select AI feedback はありません")).toBeVisible();
@@ -6288,7 +6326,7 @@ test("shared split panes reserve their divider track across NL2SQL management pa
     { path: "/data-management", splitIds: ["data-management-preview"] },
     { path: "/sample-data", splitIds: ["sample-data-import"] },
     { path: "/sql-to-question", splitIds: ["sql-to-question-input"] },
-    { path: "/feedback-management", splitIds: ["feedback-management-entries-split"] },
+    { path: "/feedback-management?tab=entries", splitIds: ["feedback-management-entries-split"] },
     {
       path: "/feedback-management?tab=appFeedback",
       splitIds: ["feedback-management-app-feedback-history-left-v2"],
