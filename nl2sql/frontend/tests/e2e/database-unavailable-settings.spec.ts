@@ -193,6 +193,9 @@ const databaseDependentScenarios: Scenario[] = [
           steps: [],
         })
       );
+      await page.route("**/api/security/deepsec/data-entitlements", (route) =>
+        fulfill(route, [])
+      );
     },
   },
 ];

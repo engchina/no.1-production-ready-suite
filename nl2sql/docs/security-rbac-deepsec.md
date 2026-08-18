@@ -55,11 +55,10 @@ APP_AUTH_LOCKOUT_MINUTES=15
 
 ## DeepSec V001 の前提
 
-V001 を適用する前に、driver mode を変更した場合は API process を再起動する。同一 process 内で
-Thick/Thin は混在させない。DATA USER password は Deep Data Security 画面から保存でき、保存後は
-API を再起動せずに次の適用・検証・data-plane query から使用される。現在の integration は共有
-DATA USER を password で直接 login し、classic application context に application user UUID を
-設定するため、**Thin/Thick の両方に対応する**。
+DeepSec は python-oracledb Thin mode のみ対応する。`ORACLE_DEEPSEC_ENABLED=true` の場合、
+`ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
+fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
+次の適用・検証・data-plane query から使用される。
 
 共通設定:
 
@@ -67,30 +66,20 @@ DATA USER を password で直接 login し、classic application context に app
 ORACLE_DEEPSEC_ENABLED=true
 ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER
 ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
-```
-
-Thick mode を使う場合:
-
-```dotenv
-ORACLE_DRIVER_MODE=thick
-ORACLE_CLIENT_LIB_DIR=/u01/aipoc/instantclient_23_26
-```
-
-Oracle Client と Wallet / Oracle Net 設定を用意する。現在の設定解決では
-`<ORACLE_CLIENT_LIB_DIR>/network/admin` を `tnsnames.ora` 等の配置先として使用する。
-
-Thin mode を使う場合:
-
-```dotenv
 ORACLE_DRIVER_MODE=thin
+ORACLE_CLIENT_LIB_DIR=
+ORACLE_CONNECTION_SECURITY=wallet_mtls
 ORACLE_WALLET_DIR=<thin-mode-wallet-or-config-directory>
 ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
 ```
 
+Thin mTLS の Wallet / config directory には `tnsnames.ora` と `ewallet.pem` を配置する。
+`sqlnet.ora` と `cwallet.sso` は Thick 互換の Oracle Net 構成向けであり、DeepSec 有効時の必須条件にはしない。
+DeepSec 無効の非標準運用で Thick 専用機能が必要な場合のみ、別 service/process として設計し直す。
+
 python-oracledb の `create_end_user_security_context()` / `set_end_user_security_context()` または
-`end_user_sec_provider` SPI による EndUserSecurityContext payload 伝播は Thin mode 限定である。
-本システムはこれらの API/SPI を使用しない。将来 payload integration を追加する場合は、direct logon
-との構成境界を分け、payload 側だけ `ORACLE_DRIVER_MODE=thin` を必須とする。
+`end_user_sec_provider` SPI による EndUserSecurityContext payload 伝播も Thin mode 限定である。
+本システムは現在 classic application context を使うが、DeepSec 全体の driver mode は Thin に統一する。
 
 管理画面の `システム設定 > Deep Data Security` で以下を行う。
 
@@ -127,6 +116,12 @@ context へ設定した data pool で実行する。
 `ADMIN_EXECUTE` 確認語、RBAC、監査を通した上で application DB user の control pool から実行する。
 この経路は業務データ参照用の DeepSec data plane ではないため、通常の SELECT 実行と混同しない。
 確認不要の判定には通常の SELECT-only guard を再利用し、WITH で始まる更新文も管理 SQL として扱う。
+
+NL2SQL job の生成済み SELECT 実行、Select AI `DBMS_CLOUD_AI.GENERATE`、Select AI Agent の
+`DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` / `CREATE_CONVERSATION` も非 `system_admin` では
+DeepSec context 付き data connection を使用する。`system_admin`、migration、DeepSec V001 適用、
+schema refresh、profile/credential/asset 管理は同じ Thin + mTLS の通常 Oracle user 接続で実行し、
+DeepSec context は付けない。
 
 ## 主要な安全境界
 

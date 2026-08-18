@@ -53,6 +53,27 @@ def test_audit_reports_unknown_duplicate_malformed_and_security_combinations(
     assert "NONLOCAL_AUTH_COOKIE_NOT_SECURE" in codes
 
 
+def test_audit_rejects_deepsec_with_thick_driver(tmp_path: Path) -> None:
+    backend_dir = Path(__file__).resolve().parents[1]
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ORACLE_DEEPSEC_ENABLED=true\n"
+        "ORACLE_DRIVER_MODE=thick\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = audit_configuration(
+        example_path=backend_dir / ".env.example",
+        env_path=env_file,
+        model_settings_path=tmp_path / "missing.json",
+    )
+    codes = {item.code for item in result.findings}
+
+    assert result.ok is False
+    assert "DEEPSEC_REQUIRES_THIN_DRIVER" in codes
+
+
 def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
     model_settings = tmp_path / "model-settings.json"
@@ -77,3 +98,16 @@ def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> 
     assert "MODEL_SETTINGS_LEGACY_SECRET" in output
     assert "MODEL_SETTINGS_VERSION_LEGACY" in output
     assert "do-not-disclose" not in output
+
+
+def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
+    dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
+
+    assert "ORACLE_DEEPSEC_ENABLED=true" in locals_tf
+    assert "ORACLE_DRIVER_MODE=thin" in locals_tf
+    assert "ORACLE_CLIENT_LIB_DIR=" in locals_tf
+    assert "instantclient" not in init_script
+    assert "instantclient" not in dockerfile

@@ -472,6 +472,53 @@ def test_data_entitlement_capability_is_structured() -> None:
         )
 
 
+def test_deepsec_entitlement_update_preserves_role_metadata_and_permissions() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="メニュー権限は DeepSec 画面から変更しない",
+        permissions={"menu.query"},
+        entitlements=[("NL2SQL_DEEPSEC_PROBE", "SALES", "ROW_READ")],
+        actor=actor,
+    )
+
+    updated = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[
+            ("NL2SQL_DEEPSEC_PROBE", "SALES", "SENSITIVE_READ"),
+            ("NL2SQL_DEEPSEC_PROBE", "HR", "ROW_READ"),
+        ],
+        actor=actor,
+    )
+
+    assert updated.version == role.version + 1
+    assert updated.role_code == role.role_code
+    assert updated.display_name == role.display_name
+    assert updated.description == role.description
+    assert updated.permissions == role.permissions
+    assert {(item.scope_code, item.capability) for item in updated.entitlements} == {
+        ("SALES", "SENSITIVE_READ"),
+        ("HR", "ROW_READ"),
+    }
+    with pytest.raises(SecurityApiError, match="更新"):
+        service.update_role_data_entitlements(
+            role.role_id,
+            expected_version=role.version,
+            entitlements=[],
+            actor=actor,
+        )
+    with pytest.raises(SecurityApiError, match="SYSTEM_ADMIN"):
+        service.update_role_data_entitlements(
+            SYSTEM_ADMIN_ROLE_ID,
+            expected_version=1,
+            entitlements=[],
+            actor=actor,
+        )
+
+
 def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
     cursor = _RecordingCursor()
     role = RoleRecord(
@@ -950,6 +997,18 @@ def test_api_enforces_menu_permissions(
             )
             assert role_response.status_code == 200
             role_id = role_response.json()["data"]["role_id"]
+            deepsec_role_response = await client.post(
+                "/api/security/roles",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "role_code": "DEEPSEC_MANAGER",
+                    "display_name": "DeepSec 管理",
+                    "permissions": ["menu.security_deepsec"],
+                    "data_entitlements": [],
+                },
+            )
+            assert deepsec_role_response.status_code == 200
+            deepsec_role_id = deepsec_role_response.json()["data"]["role_id"]
             user_response = await client.post(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
@@ -961,6 +1020,17 @@ def test_api_enforces_menu_permissions(
                 },
             )
             assert user_response.status_code == 200
+            deepsec_user_response = await client.post(
+                "/api/security/users",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "login_name": "deepsec.user",
+                    "display_name": "DeepSec 管理ユーザー",
+                    "temporary_password": "DeepSecStart!123",
+                    "role_ids": [deepsec_role_id],
+                },
+            )
+            assert deepsec_user_response.status_code == 200
             await client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
 
             await client.post(
@@ -991,6 +1061,58 @@ def test_api_enforces_menu_permissions(
             )
             assert denied_execute.status_code == 403
             assert (await client.get("/api/security/users")).status_code == 403
+            assert (
+                await client.get("/api/security/deepsec/data-entitlements")
+            ).status_code == 403
+
+            await client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+            await client.post(
+                "/api/auth/login",
+                json={"login_name": "deepsec.user", "password": "DeepSecStart!123"},
+            )
+            csrf = client.cookies.get("nl2sql_csrf")
+            assert csrf
+            await client.post(
+                "/api/auth/password/change",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "current_password": "DeepSecStart!123",
+                    "new_password": "DeepSecActive!456",
+                },
+            )
+            await client.post(
+                "/api/auth/login",
+                json={"login_name": "deepsec.user", "password": "DeepSecActive!456"},
+            )
+            csrf = client.cookies.get("nl2sql_csrf")
+            assert csrf
+            assert (await client.get("/api/security/roles")).status_code == 403
+            entitlement_response = await client.get("/api/security/deepsec/data-entitlements")
+            assert entitlement_response.status_code == 200
+            assert any(
+                item["role_code"] == "DEEPSEC_MANAGER"
+                for item in entitlement_response.json()["data"]
+            )
+            patch_response = await client.patch(
+                f"/api/security/deepsec/data-entitlements/{deepsec_role_id}",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "version": deepsec_role_response.json()["data"]["version"],
+                    "data_entitlements": [
+                        {
+                            "resource_code": "NL2SQL_DEEPSEC_PROBE",
+                            "scope_code": "SALES",
+                            "capability": "ROW_READ",
+                        }
+                    ],
+                },
+            )
+            assert patch_response.status_code == 200
+            assert patch_response.json()["data"]["data_entitlements"][0]["scope_code"] == "SALES"
+            stored_role = service.store.get_role(deepsec_role_id)
+            assert stored_role is not None
+            assert stored_role.display_name == "DeepSec 管理"
+            assert stored_role.permissions == {"menu.security_deepsec"}
 
     try:
         asyncio.run(exercise())

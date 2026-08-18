@@ -4,6 +4,7 @@ import type {
   CurrentUser,
   DataEntitlement,
   DeepSecPlan,
+  DeepSecRoleEntitlements,
   DeepSecStep,
   DeepSecStatus,
   DeepSecVerification,
@@ -84,6 +85,20 @@ export const securityApi = {
     apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
   deepSecPlan: (options: ApiRequestOptions = {}) =>
     apiGet<DeepSecPlan>("/api/security/deepsec/plan", options),
+  deepSecDataEntitlements: (options: ApiRequestOptions = {}) =>
+    apiGet<DeepSecRoleEntitlements[]>("/api/security/deepsec/data-entitlements", options),
+  updateDeepSecDataEntitlements: (role: DeepSecRoleEntitlements) =>
+    apiPatch<DeepSecRoleEntitlements>(
+      `/api/security/deepsec/data-entitlements/${role.role_id}`,
+      {
+        version: role.version,
+        data_entitlements: role.data_entitlements.map(({ resource_code, scope_code, capability }) => ({
+          resource_code,
+          scope_code,
+          capability,
+        })),
+      }
+    ),
   updateDeepSecConfig: (dataUserPassword: string) =>
     apiPatch<DeepSecStatus>("/api/security/deepsec/config", {
       data_user_password: dataUserPassword,

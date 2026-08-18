@@ -15,6 +15,8 @@ from .schemas import (
     CurrentUserData,
     DeepSecApplyRequest,
     DeepSecConfigUpdate,
+    DeepSecDataEntitlementUpdateRequest,
+    DeepSecRoleEntitlementsData,
     LoginRequest,
     PasswordChangeRequest,
     PasswordResetData,
@@ -359,6 +361,42 @@ def archive_role(
 @router.get("/security/permissions", response_model=ApiResponse[list[PermissionData]])
 def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
+
+
+@router.get(
+    "/security/deepsec/data-entitlements",
+    response_model=ApiResponse[list[DeepSecRoleEntitlementsData]],
+)
+def list_deepsec_data_entitlements() -> ApiResponse[list[DeepSecRoleEntitlementsData]]:
+    roles = get_security_service().list_roles(include_archived=True)
+    return ApiResponse(data=[DeepSecRoleEntitlementsData.from_record(role) for role in roles])
+
+
+@router.patch(
+    "/security/deepsec/data-entitlements/{role_id}",
+    response_model=ApiResponse[DeepSecRoleEntitlementsData],
+)
+def update_deepsec_data_entitlements(
+    role_id: str,
+    payload: DeepSecDataEntitlementUpdateRequest,
+    request: Request,
+    response: Response,
+) -> ApiResponse[DeepSecRoleEntitlementsData]:
+    actor = current_principal(request)
+    request_id, client_ip = request_context(request)
+    role = get_security_service().update_role_data_entitlements(
+        role_id,
+        expected_version=payload.version,
+        entitlements=[
+            (item.resource_code, item.scope_code, item.capability)
+            for item in payload.data_entitlements
+        ],
+        actor=actor,
+        request_id=request_id,
+        client_ip=client_ip,
+    )
+    response.headers["ETag"] = f'"{role.version}"'
+    return ApiResponse(data=DeepSecRoleEntitlementsData.from_record(role))
 
 
 @router.get("/security/deepsec/status", response_model=ApiResponse[dict[str, object]])

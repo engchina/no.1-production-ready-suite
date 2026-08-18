@@ -107,9 +107,9 @@ ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIRECTORY_MODE = 0o700
 ORACLE_WALLET_FILE_MODE = 0o600
-ORACLE_WALLET_REQUIRED_FILES = frozenset(
-    {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
-)
+ORACLE_WALLET_THIN_REQUIRED_FILES = frozenset({"tnsnames.ora", "ewallet.pem"})
+ORACLE_WALLET_THICK_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso"})
+ORACLE_WALLET_REQUIRED_FILES = ORACLE_WALLET_THIN_REQUIRED_FILES
 ORACLE_WALLET_SKIPPED_FILES = frozenset(
     {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
 )
@@ -1031,7 +1031,13 @@ def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
     wallet_path = _expand(wallet_dir) if wallet_dir else None
     if wallet_path is not None:
         _sanitize_database_wallet_dir(wallet_path)
-    wallet_configured = bool(wallet_path and _database_wallet_is_configured(wallet_path))
+    wallet_configured = bool(
+        wallet_path
+        and _database_wallet_is_configured(
+            wallet_path,
+            driver_mode=settings.oracle_driver_mode,
+        )
+    )
     has_password = bool(getattr(settings, "oracle_password", ""))
     return DatabaseSettingsData(
         user=getattr(settings, "oracle_user", ""),
@@ -1067,15 +1073,34 @@ def _sanitize_database_wallet_dir(wallet_path: Path) -> None:
             continue
 
 
-def _database_wallet_is_configured(wallet_path: Path) -> bool:
-    """接続に必須の四ファイルが通常ファイルとして揃っているか判定する。"""
+def _database_wallet_required_files(driver_mode: str) -> frozenset[str]:
+    """driver mode に応じた mTLS Wallet の必須ファイルを返す。"""
+    if driver_mode.strip().lower() == "thin":
+        return ORACLE_WALLET_THIN_REQUIRED_FILES
+    return ORACLE_WALLET_THICK_REQUIRED_FILES
+
+
+def _database_wallet_is_configured(
+    wallet_path: Path,
+    *,
+    driver_mode: str = "thin",
+) -> bool:
+    """接続に必須の mTLS Wallet ファイルが通常ファイルとして揃っているか判定する。"""
+    required_files = _database_wallet_required_files(driver_mode)
     return wallet_path.is_dir() and all(
-        (wallet_path / file_name).is_file() for file_name in ORACLE_WALLET_REQUIRED_FILES
+        (wallet_path / file_name).is_file() for file_name in required_files
     )
 
 
-def _database_wallet_password_is_usable(wallet_path: Path, wallet_password: str) -> bool:
-    """Thin mTLS 用の ewallet.pem が保存済み password で使えるか判定する。"""
+def _database_wallet_password_is_usable(
+    wallet_path: Path,
+    wallet_password: str,
+    *,
+    driver_mode: str = "thin",
+) -> bool:
+    """mTLS Wallet の認証ファイルが保存済み password で使えるか判定する。"""
+    if driver_mode.strip().lower() != "thin":
+        return (wallet_path / "cwallet.sso").is_file()
     pem_path = wallet_path / "ewallet.pem"
     if not pem_path.is_file():
         return False
@@ -1197,9 +1222,13 @@ def _install_uploaded_database_wallet(
 def _prepare_database_wallet_download(settings: Settings) -> DatabaseWalletDownloadData | None:
     with _database_wallet_install_lock(settings):
         target = _wallet_storage_root(settings)
-        if _database_wallet_is_configured(target) and _database_wallet_password_is_usable(
+        if _database_wallet_is_configured(
+            target,
+            driver_mode=settings.oracle_driver_mode,
+        ) and _database_wallet_password_is_usable(
             target,
             settings.oracle_wallet_password.strip() or settings.oracle_password.strip(),
+            driver_mode=settings.oracle_driver_mode,
         ):
             return DatabaseWalletDownloadData(
                 status="already_configured",
@@ -1277,11 +1306,19 @@ def _persist_database_settings(settings: Settings) -> None:
 
 
 def _database_readiness(settings: Settings) -> str:
+    if settings.oracle_deepsec_enabled and settings.oracle_driver_mode.strip().lower() != "thin":
+        return "invalid_configuration"
     if not settings.oracle_user.strip() or not settings.oracle_dsn.strip():
         return "missing"
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
-    wallet_configured = bool(wallet_path and _database_wallet_is_configured(wallet_path))
+    wallet_configured = bool(
+        wallet_path
+        and _database_wallet_is_configured(
+            wallet_path,
+            driver_mode=settings.oracle_driver_mode,
+        )
+    )
     connection_security = settings.oracle_connection_security.strip().lower()
     if connection_security == "walletless_tls":
         if _database_dsn_uses_wallet_alias(settings.oracle_dsn):
@@ -1292,6 +1329,7 @@ def _database_readiness(settings: Settings) -> str:
     if not _database_wallet_password_is_usable(
         wallet_path,
         settings.oracle_wallet_password.strip() or settings.oracle_password.strip(),
+        driver_mode=settings.oracle_driver_mode,
     ):
         return "wallet_password_invalid"
     if _database_dsn_uses_wallet_alias(settings.oracle_dsn):
@@ -1314,6 +1352,11 @@ def _database_wallet_service_exists(wallet_path: Path, dsn: str) -> bool:
 
 
 def _database_readiness_message(readiness: str) -> str:
+    if readiness == "invalid_configuration":
+        return (
+            "Oracle Deep Data Security は python-oracledb Thin mode のみ対応しています。"
+            "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin にしてください。"
+        )
     if readiness == "invalid":
         return (
             "Oracle 26ai 接続設定を確認してください。"
@@ -1667,7 +1710,7 @@ def _validate_private_key_pem(data: bytes) -> None:
 
 
 def _install_database_wallet(settings: Settings, data: bytes, file_name: str | None) -> Path:
-    """Wallet ZIP を ORACLE_CLIENT_LIB_DIR/network/admin へ展開する。"""
+    """Wallet ZIP を解決済み ORACLE_WALLET_DIR へ展開する。"""
     safe_name = _safe_wallet_filename(file_name)
     if not safe_name.lower().endswith(".zip"):
         raise HTTPException(
@@ -1683,7 +1726,11 @@ def _install_database_wallet(settings: Settings, data: bytes, file_name: str | N
     backup = target.parent / f".{target.name}.backup-{uuid4().hex}"
     previous_moved = False
     try:
-        wallet_dir = _extract_wallet_zip(data, tmp_dir)
+        wallet_dir = _extract_wallet_zip(
+            data,
+            tmp_dir,
+            driver_mode=settings.oracle_driver_mode,
+        )
         if target.exists():
             target.replace(backup)
             previous_moved = True
@@ -1727,7 +1774,7 @@ def _remove_wallet_path(path: Path) -> None:
         path.unlink()
 
 
-def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
+def _extract_wallet_zip(data: bytes, target_dir: Path, *, driver_mode: str = "thin") -> Path:
     """ZIP を検証しながら展開し、config_dir として使うディレクトリを返す。"""
     extracted_files: list[Path] = []
     total_uncompressed = 0
@@ -1772,9 +1819,10 @@ def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
             detail="Wallet ZIP の形式を確認してください。",
         ) from exc
 
-    wallet_dir = _find_wallet_config_dir(extracted_files)
+    required_files = _database_wallet_required_files(driver_mode)
+    wallet_dir = _find_wallet_config_dir(extracted_files, required_files=required_files)
     if wallet_dir is None:
-        required = ", ".join(sorted(ORACLE_WALLET_REQUIRED_FILES))
+        required = ", ".join(sorted(required_files))
         raise HTTPException(
             status_code=400,
             detail=f"Wallet ZIP に {required} が含まれているか確認してください。",
@@ -1800,12 +1848,16 @@ def _wallet_member_destination(root: Path, member_name: str) -> Path:
     return destination
 
 
-def _find_wallet_config_dir(extracted_files: list[Path]) -> Path | None:
-    """tnsnames.ora/sqlnet.ora と認証ファイルが揃うディレクトリを探す。"""
+def _find_wallet_config_dir(
+    extracted_files: list[Path],
+    *,
+    required_files: frozenset[str] = ORACLE_WALLET_REQUIRED_FILES,
+) -> Path | None:
+    """driver mode に必要な Oracle Net / 認証ファイルが揃うディレクトリを探す。"""
     candidates = {path.parent for path in extracted_files}
     for candidate in sorted(candidates, key=lambda path: len(path.parts)):
         names = {path.name.lower() for path in extracted_files if path.parent == candidate}
-        if ORACLE_WALLET_REQUIRED_FILES.issubset(names):
+        if required_files.issubset(names):
             return candidate
     return None
 
@@ -2359,6 +2411,8 @@ def _database_connection_error_message(exc: Exception, oracle_error_codes: list[
     if code_set & {"DPI-1047", "DPI-1072"}:
         return (
             f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "標準の Thin mode では Oracle Instant Client は不要です。"
+            "Thick 互換設定を DeepSec 無効で使う場合のみ、"
             "Oracle Instant Client の配置と ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if oracle_error_codes:
@@ -2393,8 +2447,13 @@ def _database_connection_troubleshooting(
             "Wallet パスワードが一致していません。OCI から Wallet を再取得するか、"
             "現在の Wallet ZIP 作成時に指定した Wallet パスワードを保存してください。"
         )
+    if readiness == "invalid_configuration":
+        tips.append(
+            "DeepSec を有効にする場合は ORACLE_DRIVER_MODE=thin とし、"
+            "Thin mTLS 用の tnsnames.ora と ewallet.pem を ORACLE_WALLET_DIR に配置してください。"
+        )
     if readiness == "invalid":
-        tips.append("Wallet の tnsnames.ora / sqlnet.ora とサービス名の形式を確認してください。")
+        tips.append("Wallet の tnsnames.ora とサービス名の形式を確認してください。")
     if readiness == "walletless_tls_dsn_required":
         tips.append(
             "Walletless TLS の DSN は Wallet alias ではなく、ADB の TCPS 接続文字列または "
@@ -2426,8 +2485,9 @@ def _database_connection_troubleshooting(
         tips.append("Wallet ZIP の内容、Wallet パスワード、ORACLE_WALLET_DIR を確認してください。")
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(
-            "Oracle Instant Client が ORACLE_CLIENT_LIB_DIR に存在し、"
-            "実行環境から読み込めるか確認してください。"
+            "ORACLE_DRIVER_MODE=thin の標準構成へ戻してください。"
+            "Thick 互換設定を DeepSec 無効で使う場合のみ、"
+            "Oracle Instant Client と ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if "operationalerror" in combined and not tips:
         tips.append(

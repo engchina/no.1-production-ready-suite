@@ -21,6 +21,7 @@ os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"
 os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
 os.environ["APP_AUTH_ENABLED"] = "false"
 os.environ["ORACLE_USER"] = "APP"
+os.environ["ORACLE_DEEPSEC_ENABLED"] = "false"
 
 
 async def _run_sync_in_test_thread[T](

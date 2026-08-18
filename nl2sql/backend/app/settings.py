@@ -78,8 +78,8 @@ class Settings(BaseServiceSettings):
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""
-    # Deep Data Security は共有 DATA USER の password direct logon を使うため
-    # Thin/Thick の両方に対応する。payload API/SPI を導入する場合は Thin が必要。
+    # Deep Data Security は python-oracledb Thin mode のみ対応する。
+    # Thick は DeepSec 無効時の互換用途に限る。
     oracle_driver_mode: str = "thin"
     oracle_connection_security: str = "wallet_mtls"
     oracle_client_lib_dir: str = ""
@@ -224,6 +224,10 @@ class Settings(BaseServiceSettings):
     @model_validator(mode="after")
     def validate_security_boundaries(self) -> Settings:
         """非 local 環境で debug bypass と非 Secure cookie を fail-closed にする。"""
+        if self.oracle_deepsec_enabled and self.oracle_driver_mode.strip().lower() != "thin":
+            raise ValueError(
+                "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin が必要です。"
+            )
         if self.environment.strip().lower() == "local":
             return self
         if self.debug:

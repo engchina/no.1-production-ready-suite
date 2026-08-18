@@ -46,6 +46,10 @@ Resource Manager and create a stack. Provide the required form values:
   `ORACLE_DEEPSEC_ENABLED=true`, keeps `ORACLE_DEEPSEC_DATA_USER` fixed as
   `NL2SQL_DEEPSEC_DATA_USER`, and writes this password to
   `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`.
+- Oracle driver mode is intentionally fixed to Thin + mTLS:
+  `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The cloud-init script
+  does not install Oracle Instant Client because Deep Data Security is supported
+  only by python-oracledb Thin mode in this stack.
 - Autonomous AI Database mode:
   - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
     license, and password fields. New ADBs default to Thin-compatible Wallet

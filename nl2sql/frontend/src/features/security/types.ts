@@ -42,6 +42,17 @@ export interface SecurityRole {
   data_entitlements: DataEntitlement[];
 }
 
+export interface DeepSecRoleEntitlements {
+  role_id: string;
+  role_code: string;
+  display_name: string;
+  description: string;
+  is_built_in: boolean;
+  archived: boolean;
+  version: number;
+  data_entitlements: DataEntitlement[];
+}
+
 export interface PermissionDefinition {
   code: string;
   group: string;

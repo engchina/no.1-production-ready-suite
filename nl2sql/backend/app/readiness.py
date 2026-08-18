@@ -8,6 +8,7 @@ READINESS_OK = "ok"
 READINESS_MISSING = "missing"
 READINESS_MISSING_CREDENTIALS = "missing_credentials"
 READINESS_WALLET_NOT_FOUND = "wallet_not_found"
+READINESS_INVALID_CONFIGURATION = "invalid_configuration"
 
 
 def readiness_checks(settings: Settings) -> dict[str, str]:
@@ -21,6 +22,8 @@ def readiness_checks(settings: Settings) -> dict[str, str]:
 
 def oracle_readiness_check(settings: Settings) -> str:
     """Oracle 接続に必要な非 secret 設定の状態を返す。"""
+    if settings.oracle_deepsec_enabled and settings.oracle_driver_mode.strip().lower() != "thin":
+        return READINESS_INVALID_CONFIGURATION
     if not settings.oracle_user.strip() or not settings.oracle_dsn.strip():
         return READINESS_MISSING
     if settings.oracle_password.strip():

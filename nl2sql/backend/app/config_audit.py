@@ -201,6 +201,8 @@ def _audit_security_combinations(
     debug = _as_bool(effective.get("DEBUG", "false"))
     auth_enabled = _as_bool(effective.get("APP_AUTH_ENABLED", "true"))
     cookie_secure = _as_bool(effective.get("APP_AUTH_COOKIE_SECURE", "false"))
+    deepsec_enabled = _as_bool(effective.get("ORACLE_DEEPSEC_ENABLED", "false"))
+    oracle_driver_mode = _unquote(effective.get("ORACLE_DRIVER_MODE", "thin")).lower()
     if environment != "local" and debug:
         result.findings.append(AuditFinding("error", "NONLOCAL_DEBUG_ENABLED", ("DEBUG",)))
     if environment != "local" and auth_enabled and not cookie_secure:
@@ -209,6 +211,14 @@ def _audit_security_combinations(
                 "error",
                 "NONLOCAL_AUTH_COOKIE_NOT_SECURE",
                 ("APP_AUTH_COOKIE_SECURE",),
+            )
+        )
+    if deepsec_enabled and oracle_driver_mode != "thin":
+        result.findings.append(
+            AuditFinding(
+                "error",
+                "DEEPSEC_REQUIRES_THIN_DRIVER",
+                ("ORACLE_DEEPSEC_ENABLED", "ORACLE_DRIVER_MODE"),
             )
         )
 

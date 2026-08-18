@@ -317,6 +317,7 @@ def test_upload_database_wallet_extracts_to_thick_resolved_wallet_dir(
     monkeypatch.setattr(settings, "oracle_connection_security", "wallet_mtls")
     monkeypatch.setattr(settings, "oracle_client_lib_dir", str(client_lib_dir))
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
 
     wallet_zip = _wallet_zip_bytes()
     resp = client.post(
@@ -335,11 +336,11 @@ def test_upload_database_wallet_extracts_to_thick_resolved_wallet_dir(
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert not (wallet_dir / "readme").exists()
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router.ORACLE_WALLET_REQUIRED_FILES:
+    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
-def test_database_wallet_state_requires_all_four_files(
+def test_database_wallet_state_uses_thin_mtls_required_files(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -355,6 +356,13 @@ def test_database_wallet_state_requires_all_four_files(
 
     assert data.wallet_uploaded is False
     assert data.available_services == []
+
+    (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
+
+    configured = settings_router._database_settings_data(settings)
+
+    assert configured.wallet_uploaded is True
+    assert configured.available_services == ["mydb_high"]
 
 
 def test_reveal_database_password_returns_saved_secret_only_on_explicit_route(
@@ -439,7 +447,7 @@ def test_download_database_wallet_creates_missing_wallet_dir(
     assert dotenv_values(tmp_path / ".env")["ORACLE_WALLET_PASSWORD"] == settings.oracle_password
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router.ORACLE_WALLET_REQUIRED_FILES:
+    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
@@ -501,7 +509,7 @@ def test_download_database_wallet_repairs_partial_serverless_wallet(
     assert password not in resp.text
     assert pool_closed == [True]
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router.ORACLE_WALLET_REQUIRED_FILES:
+    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
@@ -588,7 +596,11 @@ def test_download_database_wallet_refreshes_when_wallet_password_is_invalid(
             return _wallet_zip_bytes()
 
     monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
-    monkeypatch.setattr(settings_router, "_database_wallet_password_is_usable", lambda *_: False)
+    monkeypatch.setattr(
+        settings_router,
+        "_database_wallet_password_is_usable",
+        lambda *_, **__: False,
+    )
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -911,6 +923,7 @@ def test_update_database_settings_preserves_client_lib_dir_in_env(
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
     monkeypatch.setattr(settings, "oracle_password", "old-password")
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
 
     resp = client.patch(
         "/api/settings/database",
@@ -982,11 +995,6 @@ def test_database_connection_test_rejects_dsn_missing_from_wallet(
     wallet_dir = tmp_path / "wallet"
     wallet_dir.mkdir()
     (wallet_dir / "tnsnames.ora").write_text("mydb_high = (...)\n", encoding="utf-8")
-    (wallet_dir / "sqlnet.ora").write_text(
-        "WALLET_LOCATION=(SOURCE=(METHOD=file))\n",
-        encoding="utf-8",
-    )
-    (wallet_dir / "cwallet.sso").write_text("dummy", encoding="utf-8")
     (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
     monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
@@ -1015,6 +1023,45 @@ def test_database_connection_test_rejects_dsn_missing_from_wallet(
     assert data["readiness"] == "invalid"
     assert "tnsnames.ora" in data["message"]
     assert any("tnsnames.ora" in tip for tip in data["troubleshooting"])
+
+
+def test_database_connection_test_rejects_deepsec_thick_driver_mode(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("mydb_high = (...)\n", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text(
+        "WALLET_LOCATION=(SOURCE=(METHOD=file))\n",
+        encoding="utf-8",
+    )
+    (wallet_dir / "cwallet.sso").write_text("dummy", encoding="utf-8")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thick")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", str(tmp_path / "instantclient"))
+    monkeypatch.setattr(settings, "oracle_wallet_dir", str(wallet_dir))
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_password", "database-secret")
+    monkeypatch.setattr(settings, "oracle_dsn", "mydb_high")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", True)
+
+    async def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("DeepSec+thick must not reach python-oracledb")
+
+    monkeypatch.setattr(settings_router, "test_oracle_connection", fail_if_called)
+
+    resp = client.post(
+        "/api/settings/database/test",
+        json={"user": "ADMIN", "dsn": "mydb_high", "wallet_dir": str(wallet_dir)},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["readiness"] == "invalid_configuration"
+    assert "Thin mode" in data["message"]
+    assert any("ORACLE_DRIVER_MODE=thin" in tip for tip in data["troubleshooting"])
 
 
 def test_database_connection_test_rejects_walletless_tls_wallet_alias(
@@ -1554,11 +1601,6 @@ def test_oracle_adapter_wallet_only_connection_uses_wallet_kwargs(
         "(CONNECT_DATA=(SERVICE_NAME=mydb_high)))\n",
         encoding="utf-8",
     )
-    (wallet_dir / "sqlnet.ora").write_text(
-        "WALLET_LOCATION=(SOURCE=(METHOD=file))\n",
-        encoding="utf-8",
-    )
-    (wallet_dir / "cwallet.sso").write_text("dummy", encoding="utf-8")
     (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
     captured: dict[str, Any] = {}
 
@@ -1655,8 +1697,15 @@ def test_oracle_connect_kwargs_wallet_mtls_requires_wallet_readiness(tmp_path: P
         oracle_wallet_dir=str(wallet_dir),
     )
 
-    with pytest.raises(Exception, match="mTLS 接続ファイル"):
+    with pytest.raises(Exception, match="ewallet.pem"):
         oracle_connect_kwargs(settings)
+
+    (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
+
+    kwargs = oracle_connect_kwargs(settings)
+
+    assert kwargs["config_dir"] == str(wallet_dir)
+    assert kwargs["wallet_location"] == str(wallet_dir)
 
 
 def _configure_wallet_download(monkeypatch: MonkeyPatch, tmp_path: Path) -> Settings:

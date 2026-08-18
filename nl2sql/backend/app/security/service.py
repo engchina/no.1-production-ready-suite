@@ -494,6 +494,50 @@ class SecurityService:
             raise self._store_error(exc) from exc
         return updated
 
+    def update_role_data_entitlements(
+        self,
+        role_id: str,
+        *,
+        expected_version: int,
+        entitlements: list[tuple[str, str, str]],
+        actor: Principal,
+        request_id: str = "",
+        client_ip: str = "",
+    ) -> RoleRecord:
+        current = self.store.get_role(role_id)
+        if current is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if current.is_built_in:
+            raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。")
+        if current.archived:
+            raise SecurityApiError(409, "アーカイブ済みロールは変更できません。")
+        data_records = [
+            DataEntitlementRecord(
+                entitlement_id=str(uuid4()),
+                role_id=role_id,
+                resource_code=resource,
+                scope_code=scope,
+                capability=capability,
+            )
+            for resource, scope, capability in dict.fromkeys(entitlements)
+        ]
+        role = RoleRecord(
+            role_id=current.role_id,
+            role_code=current.role_code,
+            display_name=current.display_name,
+            description=current.description,
+            is_built_in=current.is_built_in,
+            archived=current.archived,
+            version=current.version,
+            permissions=set(current.permissions),
+            entitlements=data_records,
+        )
+        try:
+            updated = self.store.update_role(role, expected_version=expected_version)
+        except (SecurityConflict, SecurityNotFound) as exc:
+            raise self._store_error(exc) from exc
+        return updated
+
     def archive_role(
         self,
         role_id: str,

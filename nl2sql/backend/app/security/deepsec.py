@@ -394,6 +394,12 @@ class DeepSecService:
             "objects": {},
             "message": "Deep Data Security は未設定です。",
         }
+        if self.settings.oracle_deepsec_enabled:
+            try:
+                self.pools.validate_deepsec_configuration()
+            except Exception as exc:
+                result["message"] = f"DeepSec 状態を確認できませんでした: {self._safe_error(exc)}"
+                return result
         if not self.settings.oracle_user or not self.settings.oracle_dsn:
             return result
         owner = _strict_identifier(self.settings.oracle_user)
@@ -454,12 +460,13 @@ class DeepSecService:
         self.settings.oracle_deepsec_data_user = DEEPSEC_DATA_USER
         self.settings.oracle_deepsec_data_user_password = password
         try:
+            self.pools.validate_deepsec_configuration()
             _write_deepsec_config_env(self.settings)
-        except Exception:
+        except Exception as exc:
             self.settings.oracle_deepsec_enabled = previous_enabled
             self.settings.oracle_deepsec_data_user = previous_data_user
             self.settings.oracle_deepsec_data_user_password = previous_password
-            raise
+            raise SecurityApiError(409, self._safe_error(exc)) from exc
         close_oracle_pools()
         return self.status()
 

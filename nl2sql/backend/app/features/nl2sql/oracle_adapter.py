@@ -52,7 +52,29 @@ WALLET_PASSWORD_REQUIRED_ERROR = (
     "Oracle Wallet がパスワードを必要としています。"  # nosec B105
     "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
 )
-WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"})
+DEEPSEC_THIN_ONLY_ERROR = (
+    "Oracle Deep Data Security は python-oracledb Thin mode のみ対応です。"
+    "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin にしてください。"
+)
+THIN_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "ewallet.pem"})
+THICK_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso"})
+WALLET_MTLS_REQUIRED_FILES = THIN_WALLET_MTLS_REQUIRED_FILES
+
+
+def ensure_deepsec_thin_mode(settings: Settings) -> None:
+    """DeepSec 利用時は python-oracledb Thin mode だけを許可する。"""
+    if (
+        getattr(settings, "oracle_deepsec_enabled", False)
+        and getattr(settings, "oracle_driver_mode", "thin").strip().lower() != "thin"
+    ):
+        raise OracleAdapterError(DEEPSEC_THIN_ONLY_ERROR)
+
+
+def wallet_mtls_required_files(settings: Settings) -> frozenset[str]:
+    """driver mode に応じた mTLS Wallet の必須ファイルを返す。"""
+    if getattr(settings, "oracle_driver_mode", "thin").strip().lower() == "thin":
+        return THIN_WALLET_MTLS_REQUIRED_FILES
+    return THICK_WALLET_MTLS_REQUIRED_FILES
 
 
 def _coerce_text(value: Any) -> str:
@@ -268,6 +290,7 @@ def oracle_connect_kwargs(
     password: str | None = None,
 ) -> dict[str, object]:
     """python-oracledb connect に渡す共通 kwargs を作る。"""
+    ensure_deepsec_thin_mode(settings)
     kwargs: dict[str, object] = {
         "user": user if user is not None else settings.oracle_user,
         "dsn": _oracle_connection_test_dsn(settings),
@@ -354,8 +377,9 @@ def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
     wallet_path = Path(wallet_dir).expanduser()
     if not wallet_path.is_dir():
         raise OracleAdapterError(f"Oracle Wallet ディレクトリが見つかりません: {wallet_dir}")
-    if not _wallet_mtls_files_exist(wallet_path):
-        required = ", ".join(sorted(WALLET_MTLS_REQUIRED_FILES))
+    required_files = wallet_mtls_required_files(settings)
+    if not _wallet_mtls_files_exist(wallet_path, required_files=required_files):
+        required = ", ".join(sorted(required_files))
         raise OracleAdapterError(
             f"Oracle Wallet に mTLS 接続ファイルが揃っていません。必要ファイル: {required}"
         )
@@ -381,9 +405,13 @@ def _wallet_dir_exists(settings: Settings) -> bool:
     return bool(wallet_dir and Path(wallet_dir).expanduser().is_dir())
 
 
-def _wallet_mtls_files_exist(wallet_path: Path) -> bool:
+def _wallet_mtls_files_exist(
+    wallet_path: Path,
+    *,
+    required_files: frozenset[str] = WALLET_MTLS_REQUIRED_FILES,
+) -> bool:
     return wallet_path.is_dir() and all(
-        (wallet_path / file_name).is_file() for file_name in WALLET_MTLS_REQUIRED_FILES
+        (wallet_path / file_name).is_file() for file_name in required_files
     )
 
 
@@ -399,9 +427,7 @@ def _wallet_requires_password(wallet_path: Path) -> bool:
     encrypted_pem_exists = any(
         path.suffix.lower() == ".pem" and _pem_file_is_encrypted(path) for path in files
     )
-    if encrypted_pem_exists:
-        return True
-    return "cwallet.sso" not in names
+    return bool(encrypted_pem_exists)
 
 
 def _pem_file_is_encrypted(path: Path) -> bool:
@@ -433,7 +459,13 @@ class OracleNl2SqlAdapter:
             return bool(self.settings.oracle_password.strip())
         wallet_dir = self.settings.resolved_oracle_wallet_dir.strip()
         wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
-        return bool(wallet_path and _wallet_mtls_files_exist(wallet_path))
+        return bool(
+            wallet_path
+            and _wallet_mtls_files_exist(
+                wallet_path,
+                required_files=wallet_mtls_required_files(self.settings),
+            )
+        )
 
     def module_available(self) -> bool:
         try:
@@ -2626,7 +2658,7 @@ class OracleNl2SqlAdapter:
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         """
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.user_data_connection() as conn, conn.cursor() as cursor:
             binds: dict[str, str] = {
                 "prompt": question,
                 "profile_name": profile_name,
@@ -3015,7 +3047,7 @@ class OracleNl2SqlAdapter:
             ]
         )
         errors: list[str] = []
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.user_data_connection() as conn, conn.cursor() as cursor:
             for sql, bindings in candidates:
                 try:
                     cursor.execute(sql, bindings)
@@ -3042,7 +3074,7 @@ class OracleNl2SqlAdapter:
             {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
             ensure_ascii=False,
         )
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.user_data_connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute(
                     """
@@ -3061,7 +3093,7 @@ class OracleNl2SqlAdapter:
         return _extract_select_statement(text), f"run_tool:{tool_name}"
 
     def create_agent_conversation(self) -> str:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.user_data_connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute("SELECT DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION() FROM DUAL")
             except Exception as exc:
@@ -3346,6 +3378,7 @@ class OracleNl2SqlAdapter:
         return self._oracledb
 
     def _init_client(self, oracledb: Any) -> None:
+        ensure_deepsec_thin_mode(self.settings)
         if self._client_initialized or self.settings.oracle_driver_mode == "thin":
             return
         if not self.settings.oracle_client_lib_dir:

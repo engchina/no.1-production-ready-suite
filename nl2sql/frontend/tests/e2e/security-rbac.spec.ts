@@ -115,6 +115,10 @@ function deepSecPlan(
   };
 }
 
+async function mockDeepSecDataEntitlements(page: Page, rows: unknown[] = [systemRole]) {
+  await page.route("**/api/security/deepsec/data-entitlements", (route) => fulfill(route, rows));
+}
+
 test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、状態を明示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/auth/me");
@@ -591,6 +595,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "メニュー権限" })).toBeVisible();
+  await expect(page.getByText("構造化データ権限", { exact: true })).toHaveCount(0);
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const systemRoleAction = page.getByTestId("security-roles-row-actions-role-system-trigger");
   await expect(systemRoleAction).toBeVisible();
@@ -753,6 +758,7 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
     });
   });
   await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan()));
+  await mockDeepSecDataEntitlements(page);
 
   await page.goto("/settings/security/deepsec");
   await expect(page.getByText("構成状態を確認しています。", { exact: true }).nth(1)).toBeVisible();
@@ -782,6 +788,7 @@ test("DeepSec は Thick mode でも SQL step をキーボード操作できる",
   await page.route("**/api/security/deepsec/plan", (route) =>
     fulfill(route, deepSecPlan(false, "thick"))
   );
+  await mockDeepSecDataEntitlements(page);
 
   await page.goto("/settings/security/deepsec");
 
@@ -816,6 +823,7 @@ for (const driverMode of ["thin", "thick"] as const) {
     await page.route("**/api/security/deepsec/plan", (route) =>
       fulfill(route, deepSecPlan(false, driverMode, false, false))
     );
+    await mockDeepSecDataEntitlements(page);
 
     await page.goto("/settings/security/deepsec");
 
@@ -862,6 +870,7 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
       message: "未適用です。",
     });
   });
+  await mockDeepSecDataEntitlements(page);
 
   await page.goto("/settings/security/deepsec");
 
@@ -875,13 +884,101 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
 
   const password = page.getByLabel("DATA USER パスワード");
   await password.fill("DeepSecret!789");
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
 
   expect(savedPassword).toBe("DeepSecret!789");
   await expect(password).toHaveValue("");
   await expect(page.getByText("保存済み", { exact: true })).toBeVisible();
   await expect(page.getByText("API を再起動")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "このステップを適用" })).toBeEnabled();
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("DeepSec は構造化データ権限をロール別に編集する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const queryRole = {
+    role_id: "role-query",
+    role_code: "QUERY_VIEWER",
+    display_name: "検索閲覧",
+    description: "業務データ参照",
+    is_built_in: false,
+    archived: false,
+    version: 3,
+    data_entitlements: [],
+  };
+  const archivedRole = {
+    ...queryRole,
+    role_id: "role-archived",
+    role_code: "ARCHIVED_VIEWER",
+    display_name: "廃止ロール",
+    archived: true,
+    version: 1,
+  };
+  let entitlementRoles = [systemRole, queryRole, archivedRole];
+  let savedPayload: {
+    version: number;
+    data_entitlements: Array<{ resource_code: string; scope_code: string; capability: string }>;
+  } | null = null;
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 2 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await page.route("**/api/security/deepsec/data-entitlements", (route) =>
+    fulfill(route, entitlementRoles)
+  );
+  await page.route("**/api/security/deepsec/data-entitlements/role-query", async (route) => {
+    savedPayload = route.request().postDataJSON();
+    const updated = {
+      ...queryRole,
+      version: 4,
+      data_entitlements: savedPayload?.data_entitlements.map((item, index) => ({
+        entitlement_id: `saved-${index}`,
+        ...item,
+      })) ?? [],
+    };
+    entitlementRoles = [systemRole, updated, archivedRole];
+    await fulfill(route, updated);
+  });
+
+  await page.goto("/settings/security/deepsec");
+
+  await expect(page.getByRole("heading", { name: "構造化データ権限" })).toBeVisible();
+  const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+  await expect(entitlementForm.getByText("組み込みロールの構造化データ権限は変更できません。", { exact: true })).toBeVisible();
+  await expect(entitlementForm.getByRole("button", { name: "構造化データ権限を保存" })).toBeDisabled();
+
+  await page.getByTestId("security-deepsec-entitlement-role-role-query").click();
+  await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  await entitlementForm.getByLabel("範囲").fill("SALES");
+  await entitlementForm.getByLabel("データ操作能力").selectOption("SENSITIVE_READ");
+  await entitlementForm.getByRole("button", { name: "構造化データ権限を保存" }).click();
+
+  expect(savedPayload).toEqual({
+    version: 3,
+    data_entitlements: [
+      {
+        resource_code: "NL2SQL_DEEPSEC_PROBE",
+        scope_code: "SALES",
+        capability: "SENSITIVE_READ",
+      },
+    ],
+  });
+  await expect(page.getByText("構造化データ権限を保存しました。", { exact: true })).toBeVisible();
+
+  await page.getByTestId("security-deepsec-entitlement-role-role-archived").click();
+  await expect(entitlementForm.getByText("アーカイブ済みロールの構造化データ権限は変更できません。", { exact: true })).toBeVisible();
+  await expect(entitlementForm.getByRole("button", { name: "構造化データ権限を保存" })).toBeDisabled();
+
+  await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -918,6 +1015,7 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
       ],
     })
   );
+  await mockDeepSecDataEntitlements(page);
 
   await page.goto("/settings/security/deepsec");
   await expect(page.locator("pre")).toHaveCount(1);

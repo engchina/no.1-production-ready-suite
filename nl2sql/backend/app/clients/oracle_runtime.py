@@ -1,4 +1,4 @@
-"""Thin/Thick driver 初期化と DeepSec 用 control/data pool。"""
+"""Oracle driver 初期化と DeepSec 用 Thin-only control/data pool。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,11 @@ from contextlib import contextmanager, suppress
 from functools import lru_cache
 from typing import Any
 
-from app.features.nl2sql.oracle_adapter import OracleAdapterError, oracle_connect_kwargs
+from app.features.nl2sql.oracle_adapter import (
+    OracleAdapterError,
+    ensure_deepsec_thin_mode,
+    oracle_connect_kwargs,
+)
 from app.settings import Settings, get_settings
 
 
@@ -22,11 +26,8 @@ class OraclePoolManager:
         self._lock = threading.RLock()
 
     def validate_deepsec_configuration(self) -> None:
-        """共有 DATA USER の direct logon に必要な設定を検証する。
-
-        この integration は EndUserSecurityContext payload API/SPI を使用しないため、
-        python-oracledb の Thin/Thick のどちらでも実行できる。
-        """
+        """共有 DATA USER の direct logon に必要な DeepSec 設定を検証する。"""
+        ensure_deepsec_thin_mode(self.settings)
         if (
             self.settings.oracle_deepsec_enabled
             and not self.settings.oracle_deepsec_data_user_password
@@ -87,6 +88,7 @@ class OraclePoolManager:
             current = self._data_pool if data_plane else self._control_pool
             if current is not None:
                 return current
+            ensure_deepsec_thin_mode(self.settings)
             oracledb = self._load_oracledb()
             self._initialize_driver(oracledb)
             if data_plane:
@@ -111,6 +113,7 @@ class OraclePoolManager:
         return self._oracledb
 
     def _initialize_driver(self, oracledb: Any) -> None:
+        ensure_deepsec_thin_mode(self.settings)
         if self.settings.oracle_driver_mode == "thin":
             return
         if not self.settings.oracle_client_lib_dir:

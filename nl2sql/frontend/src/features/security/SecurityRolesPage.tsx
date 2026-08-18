@@ -14,7 +14,6 @@ import {
   RefreshCw,
   Shield,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
 
 import {
@@ -49,7 +48,7 @@ import {
   securityFilteredCount,
 } from "./SecurityManagementShared";
 import { securityApi } from "./api";
-import type { DataEntitlement, PermissionDefinition, SecurityRole } from "./types";
+import type { PermissionDefinition, SecurityRole } from "./types";
 
 type RolePanelView = "list" | "create" | "edit";
 
@@ -58,7 +57,6 @@ interface RoleDraftState {
   displayName: string;
   description: string;
   permissions: string[];
-  dataEntitlements: DataEntitlement[];
 }
 
 const EMPTY_DRAFT: RoleDraftState = {
@@ -66,7 +64,6 @@ const EMPTY_DRAFT: RoleDraftState = {
   displayName: "",
   description: "",
   permissions: [],
-  dataEntitlements: [],
 };
 
 const INPUT_CLASS =
@@ -138,7 +135,6 @@ export function SecurityRolesPage() {
       role.description,
       roleStatusText(role),
       rolePermissionText(role),
-      ...role.data_entitlements.flatMap((item) => [item.resource_code, item.scope_code, item.capability]),
     ]
       .join(" ")
       .toLowerCase();
@@ -150,7 +146,6 @@ export function SecurityRolesPage() {
       .sort((left, right) => {
         if (sort.key === "status") return compareText(roleStatusText(left), roleStatusText(right), sort.direction);
         if (sort.key === "permissions") return compareNumber(left.permissions.length, right.permissions.length, sort.direction);
-        if (sort.key === "dataEntitlements") return compareNumber(left.data_entitlements.length, right.data_entitlements.length, sort.direction);
         return compareText(left.display_name, right.display_name, sort.direction);
       });
   }, [permissionByCode, roles, search, sort]);
@@ -217,7 +212,6 @@ export function SecurityRolesPage() {
       displayName: role.display_name,
       description: role.description,
       permissions: role.permissions,
-      dataEntitlements: role.data_entitlements.map((item) => ({ ...item })),
     });
     setFormError("");
   };
@@ -233,11 +227,6 @@ export function SecurityRolesPage() {
     setBusy(true);
     setFormError("");
     try {
-      const entitlementPayload = draft.dataEntitlements.map(({ resource_code, scope_code, capability }) => ({
-        resource_code,
-        scope_code,
-        capability,
-      }));
       if (activeView === "edit") {
         if (!editingRole) return;
         const updated = await securityApi.updateRole({
@@ -245,7 +234,7 @@ export function SecurityRolesPage() {
           display_name: draft.displayName,
           description: draft.description,
           permissions: draft.permissions,
-          data_entitlements: entitlementPayload,
+          data_entitlements: editingRole.data_entitlements,
         });
         setRoles((rows) => rows.map((row) => (row.role_id === updated.role_id ? updated : row)));
         startEdit(updated);
@@ -255,7 +244,7 @@ export function SecurityRolesPage() {
           display_name: draft.displayName,
           description: draft.description,
           permissions: draft.permissions,
-          data_entitlements: entitlementPayload,
+          data_entitlements: [],
         });
         setRoles((rows) => [...rows, created]);
         startEdit(created);
@@ -335,25 +324,6 @@ export function SecurityRolesPage() {
     }));
   };
 
-  const addEntitlement = () => {
-    setDraft((current) => ({
-      ...current,
-      dataEntitlements: [
-        ...current.dataEntitlements,
-        { resource_code: "NL2SQL_DEEPSEC_PROBE", scope_code: "*", capability: "ROW_READ" },
-      ],
-    }));
-  };
-
-  const updateEntitlement = (index: number, field: keyof DataEntitlement, value: string) => {
-    setDraft((current) => ({
-      ...current,
-      dataEntitlements: current.dataEntitlements.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [field]: value } : item
-      ),
-    }));
-  };
-
   const readOnly = Boolean(!canManage || editingRole?.is_built_in || editingRole?.archived);
 
   const roleColumns: Array<DataTableColumn<SecurityRole>> = [
@@ -396,13 +366,6 @@ export function SecurityRolesPage() {
       sortable: true,
       className: "min-w-32",
       render: (role) => t("security.roles.permissionCount", { count: role.permissions.length }),
-    },
-    {
-      key: "dataEntitlements",
-      header: t("security.roles.dataEntitlements"),
-      sortable: true,
-      className: "min-w-36",
-      render: (role) => t("security.roles.entitlementCount", { count: role.data_entitlements.length }),
     },
     ...(canManage
       ? [
@@ -646,72 +609,6 @@ export function SecurityRolesPage() {
                   )}
                 </fieldset>
 
-                <fieldset className="grid gap-3" disabled={readOnly}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-base font-semibold">{t("security.roles.dataEntitlements")}</h3>
-                    <Button type="button" size="sm" variant="secondary" onClick={addEntitlement} disabled={readOnly}>
-                      <Plus size={14} aria-hidden />
-                      {t("security.roles.addEntitlement")}
-                    </Button>
-                  </div>
-                  {draft.dataEntitlements.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">{t("security.common.empty")}</p>
-                  ) : (
-                    <div className="grid gap-2">
-                      {draft.dataEntitlements.map((entitlement, index) => (
-                        <div
-                          key={`${index}-${entitlement.entitlement_id ?? "new"}`}
-                          className="grid gap-2 rounded-md border border-border p-3 sm:grid-cols-[1fr_1fr_1fr_auto]"
-                        >
-                          <label className="grid gap-1 text-xs font-medium">
-                            <span>{t("security.roles.resource")}</span>
-                            <input
-                              className={INPUT_CLASS}
-                              value={entitlement.resource_code}
-                              onChange={(event) => updateEntitlement(index, "resource_code", event.target.value.toUpperCase())}
-                            />
-                          </label>
-                          <label className="grid gap-1 text-xs font-medium">
-                            <span>{t("security.roles.scope")}</span>
-                            <input
-                              className={INPUT_CLASS}
-                              value={entitlement.scope_code}
-                              onChange={(event) => updateEntitlement(index, "scope_code", event.target.value)}
-                            />
-                          </label>
-                          <label className="grid gap-1 text-xs font-medium">
-                            <span>{t("security.roles.capability")}</span>
-                            <select
-                              className={INPUT_CLASS}
-                              value={entitlement.capability}
-                              onChange={(event) => updateEntitlement(index, "capability", event.target.value)}
-                            >
-                              <option value="ROW_READ">ROW_READ</option>
-                              <option value="SENSITIVE_READ">SENSITIVE_READ</option>
-                              <option value="FULL">FULL</option>
-                            </select>
-                          </label>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="self-end"
-                            aria-label={t("security.roles.removeEntitlement")}
-                            onClick={() =>
-                              setDraft((current) => ({
-                                ...current,
-                                dataEntitlements: current.dataEntitlements.filter((_, itemIndex) => itemIndex !== index),
-                              }))
-                            }
-                          >
-                            <Trash2 size={14} aria-hidden />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </fieldset>
-
                 <FormActionBar
                   ariaLabel={t("security.roles.editActions")}
                   primaryActions={
@@ -836,9 +733,6 @@ function RoleDetailPanel({
         <SecurityDetailField label={t("security.roles.permissions")}>
           {t("security.roles.permissionCount", { count: role.permissions.length })}
         </SecurityDetailField>
-        <SecurityDetailField label={t("security.roles.dataEntitlements")}>
-          {t("security.roles.entitlementCount", { count: role.data_entitlements.length })}
-        </SecurityDetailField>
         <SecurityDetailField label={t("security.common.version")}>
           {String(role.version)}
         </SecurityDetailField>
@@ -869,34 +763,6 @@ function RoleDetailPanel({
                 </div>
               </div>
             ))}
-          </div>
-        )}
-      </section>
-
-      <section className="grid gap-2" aria-label={t("security.roles.dataEntitlements")}>
-        <h3 className="text-sm font-semibold text-foreground">{t("security.roles.dataEntitlements")}</h3>
-        {role.data_entitlements.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">{t("security.common.none")}</p>
-        ) : (
-          <div className="overflow-x-auto rounded-md border border-border bg-card">
-            <table className="w-full min-w-[32rem] table-fixed divide-y divide-border text-left text-sm">
-              <thead className="bg-background text-xs text-muted">
-                <tr>
-                  <th className="px-3 py-2 font-semibold">{t("security.roles.resource")}</th>
-                  <th className="px-3 py-2 font-semibold">{t("security.roles.scope")}</th>
-                  <th className="px-3 py-2 font-semibold">{t("security.roles.capability")}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {role.data_entitlements.map((entitlement, index) => (
-                  <tr key={entitlement.entitlement_id ?? `${entitlement.resource_code}-${index}`}>
-                    <td className="break-all px-3 py-2 font-mono text-xs">{entitlement.resource_code}</td>
-                    <td className="break-all px-3 py-2 font-mono text-xs">{entitlement.scope_code}</td>
-                    <td className="break-all px-3 py-2 font-mono text-xs">{entitlement.capability}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         )}
       </section>

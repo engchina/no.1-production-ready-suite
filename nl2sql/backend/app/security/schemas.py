@@ -179,6 +179,35 @@ class RoleData(BaseModel):
         )
 
 
+class DeepSecDataEntitlementUpdateRequest(BaseModel):
+    version: int = Field(ge=1)
+    data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
+
+
+class DeepSecRoleEntitlementsData(BaseModel):
+    role_id: str
+    role_code: str
+    display_name: str
+    description: str
+    is_built_in: bool
+    archived: bool
+    version: int
+    data_entitlements: list[DataEntitlementData]
+
+    @classmethod
+    def from_record(cls, role: RoleRecord) -> DeepSecRoleEntitlementsData:
+        return cls(
+            role_id=role.role_id,
+            role_code=role.role_code,
+            display_name=role.display_name,
+            description=role.description,
+            is_built_in=role.is_built_in,
+            archived=role.archived,
+            version=role.version,
+            data_entitlements=[DataEntitlementData.from_record(item) for item in role.entitlements],
+        )
+
+
 class UserData(BaseModel):
     user_id: str
     login_name: str
