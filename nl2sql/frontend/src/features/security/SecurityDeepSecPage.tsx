@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Play,
   RefreshCw,
+  Save,
   ShieldCheck,
 } from "lucide-react";
 
@@ -28,7 +29,12 @@ import { useRequestScope } from "@/lib/useRequestScope";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import { securityApi } from "./api";
-import type { DeepSecPlan, DeepSecStatus, DeepSecStep, DeepSecVerification } from "./types";
+import type {
+  DeepSecPlan,
+  DeepSecStatus,
+  DeepSecStep,
+  DeepSecVerification,
+} from "./types";
 
 function loadErrorMessage(cause: unknown) {
   return cause instanceof Error && cause.message.trim()
@@ -55,6 +61,9 @@ export function SecurityDeepSecPage() {
   const [planLoading, setPlanLoading] = useState(true);
   const [busyStep, setBusyStep] = useState<number | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [dataUserPassword, setDataUserPassword] = useState("");
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState("");
   const [statusLoadError, setStatusLoadError] = useState("");
   const [planLoadError, setPlanLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -135,8 +144,42 @@ export function SecurityDeepSecPage() {
   }, []);
 
   const canApply = (step: DeepSecStep) => {
-    if (!plan?.deepsec_enabled || step.status === "APPLIED") return false;
+    if (!plan?.deepsec_enabled || !plan.has_data_user_password || step.status === "APPLIED") {
+      return false;
+    }
     return plan.steps.filter((item) => item.step_no < step.step_no).every((item) => item.status === "APPLIED");
+  };
+
+  const validateConfigForm = () => {
+    if (dataUserPassword.length < 12 || dataUserPassword.length > 256) {
+      return t("security.deepsec.config.passwordLength");
+    }
+    if (dataUserPassword.includes("\"") || /[\x00-\x1f\x7f-\x9f]/.test(dataUserPassword)) {
+      return t("security.deepsec.config.passwordChars");
+    }
+    return "";
+  };
+
+  const handleSaveConfig = async () => {
+    const validationError = validateConfigForm();
+    if (validationError) {
+      setConfigError(validationError);
+      return;
+    }
+    setConfigSaving(true);
+    setConfigError("");
+    setActionError("");
+    try {
+      const nextStatus = await securityApi.updateDeepSecConfig(dataUserPassword);
+      setStatus(nextStatus);
+      setDataUserPassword("");
+      toast.success(t("security.deepsec.config.saved"));
+      await loadPlan();
+    } catch (cause) {
+      setConfigError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setConfigSaving(false);
+    }
   };
 
   const handleApply = async (step: DeepSecStep) => {
@@ -211,6 +254,9 @@ export function SecurityDeepSecPage() {
         {plan && !plan.deepsec_enabled ? (
           <Banner severity="warning">{t("security.deepsec.banner.disabled")}</Banner>
         ) : null}
+        {plan?.deepsec_enabled && !plan.has_data_user_password ? (
+          <Banner severity="warning">{t("security.deepsec.banner.passwordMissing")}</Banner>
+        ) : null}
         <Card>
           <CardHeader>
             <CardTitle>{t("security.deepsec.status")}</CardTitle>
@@ -230,7 +276,7 @@ export function SecurityDeepSecPage() {
             ) : status ? (
               <>
                 <Banner severity={status.configured ? "success" : "info"}>{status.message}</Banner>
-                <dl className="grid gap-3 text-sm sm:grid-cols-3">
+                <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-md border border-border p-3">
                     <dt className="text-muted">{t("security.deepsec.enabled")}</dt>
                     <dd className="mt-1 font-medium">{String(status.deepsec_enabled)}</dd>
@@ -240,8 +286,14 @@ export function SecurityDeepSecPage() {
                     <dd className="mt-1 font-mono">{status.driver_mode}</dd>
                   </div>
                   <div className="rounded-md border border-border p-3">
-                    <dt className="text-muted">{t("security.deepsec.endUser")}</dt>
-                    <dd className="mt-1 break-all font-mono">{status.end_user}</dd>
+                    <dt className="text-muted">{t("security.deepsec.connectionSecurity")}</dt>
+                    <dd className="mt-1 break-all font-mono">
+                      {status.connection_security ?? "wallet_mtls"}
+                    </dd>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <dt className="text-muted">{t("security.deepsec.dataUser")}</dt>
+                    <dd className="mt-1 break-all font-mono">{status.data_user}</dd>
                   </div>
                 </dl>
               </>
@@ -252,6 +304,68 @@ export function SecurityDeepSecPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("security.deepsec.config.title")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleSaveConfig();
+              }}
+            >
+              <dl className="rounded-md border border-border p-3 text-sm">
+                <dt className="text-muted">{t("security.deepsec.dataUser")}</dt>
+                <dd className="mt-1 break-all font-mono">
+                  {status?.data_user ?? plan?.data_user ?? "NL2SQL_DEEPSEC_DATA_USER"}
+                </dd>
+              </dl>
+              <div className="space-y-2">
+                <label htmlFor="deepsec-data-user-password" className="block text-sm font-medium">
+                  {t("security.deepsec.config.password")}
+                </label>
+                <input
+                  id="deepsec-data-user-password"
+                  type="password"
+                  autoComplete="new-password"
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  value={dataUserPassword}
+                  onChange={(event) => {
+                    setDataUserPassword(event.target.value);
+                    setConfigError("");
+                  }}
+                  placeholder={
+                    status?.has_data_user_password
+                      ? t("security.deepsec.config.passwordPlaceholderSaved")
+                      : t("security.deepsec.config.passwordPlaceholderNew")
+                  }
+                  aria-describedby="deepsec-data-user-password-state"
+                  aria-invalid={Boolean(configError)}
+                />
+                <p id="deepsec-data-user-password-state" className="text-xs text-muted">
+                  {status?.has_data_user_password
+                    ? t("security.deepsec.config.secretSaved")
+                    : t("security.deepsec.config.secretMissing")}
+                </p>
+                {configError ? <FormStatus tone="danger" message={configError} /> : null}
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="submit"
+                  loading={configSaving}
+                  disabled={!dataUserPassword || configSaving}
+                  className="w-full lg:w-auto"
+                >
+                  <Save size={15} aria-hidden />
+                  {t("security.deepsec.config.save")}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
         <section className="space-y-4" aria-labelledby="deepsec-plan-title">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
@@ -259,7 +373,11 @@ export function SecurityDeepSecPage() {
               <p className="mt-1 text-sm text-muted">{t("security.deepsec.sqlReadonly")}</p>
             </div>
             {mayVerify ? (
-              <Button onClick={() => void handleVerify()} loading={verifying} disabled={!status?.configured}>
+              <Button
+                onClick={() => void handleVerify()}
+                loading={verifying}
+                disabled={!status?.configured || !status.has_data_user_password}
+              >
                 <ShieldCheck size={15} aria-hidden />
                 {t("security.deepsec.verify")}
               </Button>

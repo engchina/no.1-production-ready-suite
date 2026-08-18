@@ -10,7 +10,7 @@
 アプリケーション機能権限は FastAPI の route manifest で default deny とし、画面表示制御に加えて API 側でも
 毎回ユーザー状態、role、permission を再評価する。
 
-Deep Data Security は共有 local END USER と classic application context を使用する。これは本システムの
+Deep Data Security は共有 DATA USER と classic application context を使用する。これは本システムの
 非 IAM 構成向け custom integration であり、Oracle 公式の IAM/database access token を含む local END
 USER 認証フローとは区別する。
 
@@ -55,16 +55,18 @@ APP_AUTH_LOCKOUT_MINUTES=15
 
 ## DeepSec V001 の前提
 
-V001 を適用する前に、API process を選択した driver mode で再起動する。同一 process 内で
-Thick/Thin は混在させない。現在の integration は共有 local END USER を password で直接 login し、
-classic application context に application user UUID を設定するため、**Thin/Thick の両方に対応する**。
+V001 を適用する前に、driver mode を変更した場合は API process を再起動する。同一 process 内で
+Thick/Thin は混在させない。DATA USER password は Deep Data Security 画面から保存でき、保存後は
+API を再起動せずに次の適用・検証・data-plane query から使用される。現在の integration は共有
+DATA USER を password で直接 login し、classic application context に application user UUID を
+設定するため、**Thin/Thick の両方に対応する**。
 
 共通設定:
 
 ```dotenv
 ORACLE_DEEPSEC_ENABLED=true
-ORACLE_DEEPSEC_END_USER=NL2SQL_APP_END_USER
-ORACLE_DEEPSEC_END_USER_PASSWORD=<strong-random-secret>
+ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER
+ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
 ```
 
 Thick mode を使う場合:

@@ -21,8 +21,10 @@ class OracleConnectionTimeoutError(TimeoutError):
 
 
 def close_oracle_pool() -> None:
-    """共有 Oracle pool を閉じる。NL2SQL adapter は共有 pool を持たないため no-op。"""
-    return None
+    """共有 Oracle pool を閉じる。DeepSec control/data pool も同時に破棄する。"""
+    from app.clients.oracle_runtime import close_oracle_pools
+
+    close_oracle_pools()
 
 
 async def test_oracle_connection(

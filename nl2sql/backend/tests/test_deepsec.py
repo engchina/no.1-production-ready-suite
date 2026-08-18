@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
 
 import pytest
 
@@ -18,8 +18,10 @@ from app.settings import Settings
 def _settings(
     *,
     driver_mode: str = "thin",
+    connection_security: str = "walletless_tls",
     deepsec_enabled: bool = True,
-    end_user_password: str = "DeepSecret!123",
+    data_user_password: str = "DeepSecret!123",
+    wallet_dir: str = "",
 ) -> Settings:
     return Settings.model_construct(
         oracle_user="APP_OWNER",
@@ -28,10 +30,13 @@ def _settings(
         app_admin_password="AppAdminPass123",
         oracle_dsn="test",
         oracle_driver_mode=driver_mode,
+        oracle_connection_security=connection_security,
         oracle_client_lib_dir="/opt/oracle/instantclient",
+        oracle_wallet_dir=wallet_dir,
+        oracle_wallet_password="",
         oracle_deepsec_enabled=deepsec_enabled,
-        oracle_deepsec_end_user="NL2SQL_APP_END_USER",
-        oracle_deepsec_end_user_password=end_user_password,
+        oracle_deepsec_data_user="NL2SQL_DEEPSEC_DATA_USER",
+        oracle_deepsec_data_user_password=data_user_password,
         nl2sql_persistence_mode="memory",
         app_auth_password_min_length=12,
         app_auth_password_max_length=128,
@@ -60,7 +65,7 @@ def test_v001_registry_is_stable_and_preview_never_contains_secret() -> None:
     assert [step.checksum for step in first] == [step.checksum for step in second]
     preview = "\n".join(statement for step in first for statement in step.statements)
     assert PASSWORD_PLACEHOLDER in preview
-    assert settings.oracle_deepsec_end_user_password not in preview
+    assert settings.oracle_deepsec_data_user_password not in preview
 
 
 def test_apply_rejects_unknown_checksum_before_oracle_execution() -> None:
@@ -70,6 +75,89 @@ def test_apply_rejects_unknown_checksum_before_oracle_execution() -> None:
     service = DeepSecService(settings, security, OraclePoolManager(settings))
     with pytest.raises(SecurityApiError, match="チェックサム"):
         service.apply_step(1, "0" * 64, _principal())
+
+
+def test_plan_ignores_stale_checksum_state() -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    current_step = build_v001_plan(settings)[0]
+    store.set_deepsec_state(
+        version="V001",
+        step_no=current_step.step_no,
+        step_key=current_step.key,
+        checksum="0" * 64,
+        status="APPLIED",
+        error_message="",
+        executed_by="actor",
+    )
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    plan = service.plan()
+
+    assert plan["has_data_user_password"] is True
+    assert plan["steps"][0]["status"] == "PENDING"
+
+
+def test_update_config_persists_runtime_settings_and_closes_pools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "ORACLE_USER=APP_OWNER",
+                "ORACLE_DEEPSEC_END_USER=NL2SQL_APP_END_USER",
+                "ORACLE_DEEPSEC_END_USER_PASSWORD=OldSecret123",
+                "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..example",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+    settings = _settings(deepsec_enabled=False, data_user_password="")
+    settings.oracle_dsn = ""
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    status = service.update_config("DeepSecret!456")
+
+    assert status["deepsec_enabled"] is True
+    assert status["data_user"] == "NL2SQL_DEEPSEC_DATA_USER"
+    assert status["has_data_user_password"] is True
+    assert settings.oracle_deepsec_enabled is True
+    assert settings.oracle_deepsec_data_user == "NL2SQL_DEEPSEC_DATA_USER"
+    assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
+    assert closed == [True]
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_USER=APP_OWNER" in env_text
+    assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
+    assert "ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER" in env_text
+    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
+    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..example" in env_text
+    assert "ORACLE_DEEPSEC_END_USER" not in env_text
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["short", "Invalid\nPass123", "Invalid\x7fPass123", 'Invalid"Pass123'],
+)
+def test_update_config_rejects_invalid_data_user_password(password: str) -> None:
+    settings = _settings()
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    with pytest.raises(SecurityApiError, match="ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
+        service.update_config(password)
 
 
 class _FakeCursor:
@@ -105,7 +193,7 @@ class _FakeConnection:
 class _FakePool:
     def __init__(self, connection: _FakeConnection) -> None:
         self.connection = connection
-        self.dropped: list[Any] = []
+        self.dropped: list[_FakeConnection] = []
 
     def acquire(self) -> _FakeConnection:
         return self.connection
@@ -138,10 +226,10 @@ def test_deepsec_configuration_accepts_thin_and_thick(driver_mode: str) -> None:
 
 
 @pytest.mark.parametrize("driver_mode", ["thin", "thick"])
-def test_deepsec_configuration_requires_end_user_password(driver_mode: str) -> None:
-    manager = OraclePoolManager(_settings(driver_mode=driver_mode, end_user_password=""))
+def test_deepsec_configuration_requires_data_user_password(driver_mode: str) -> None:
+    manager = OraclePoolManager(_settings(driver_mode=driver_mode, data_user_password=""))
 
-    with pytest.raises(OracleAdapterError, match="ORACLE_DEEPSEC_END_USER_PASSWORD"):
+    with pytest.raises(OracleAdapterError, match="ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
         manager.validate_deepsec_configuration()
 
 
@@ -149,7 +237,7 @@ def test_deepsec_configuration_requires_end_user_password(driver_mode: str) -> N
     ("driver_mode", "expected_init_calls"),
     [("thin", []), ("thick", ["/opt/oracle/instantclient"])],
 )
-def test_data_pool_uses_selected_driver_and_end_user_credentials(
+def test_data_pool_uses_selected_driver_and_data_user_credentials(
     driver_mode: str,
     expected_init_calls: list[str],
 ) -> None:
@@ -162,7 +250,7 @@ def test_data_pool_uses_selected_driver_and_end_user_credentials(
     assert fake_oracledb.init_calls == expected_init_calls
     assert fake_oracledb.pool_kwargs == [
         {
-            "user": "NL2SQL_APP_END_USER",
+            "user": "NL2SQL_DEEPSEC_DATA_USER",
             "password": "DeepSecret!123",
             "dsn": "test",
             "tcp_connect_timeout": 5,
@@ -170,6 +258,48 @@ def test_data_pool_uses_selected_driver_and_end_user_credentials(
             "max": 4,
             "increment": 1,
         }
+    ]
+
+
+def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Path) -> None:
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    for file_name in ("tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"):
+        (wallet_dir / file_name).write_text("dummy", encoding="utf-8")
+    manager = OraclePoolManager(
+        _settings(connection_security="wallet_mtls", wallet_dir=str(wallet_dir))
+    )
+    fake_oracledb = _FakeOracleDb()
+    manager._oracledb = fake_oracledb
+
+    manager._get_pool(data_plane=False)
+    manager._get_pool(data_plane=True)
+
+    assert fake_oracledb.pool_kwargs == [
+        {
+            "user": "APP_OWNER",
+            "dsn": "test",
+            "tcp_connect_timeout": 5,
+            "password": "ControlPass!123",
+            "config_dir": str(wallet_dir),
+            "wallet_location": str(wallet_dir),
+            "wallet_password": "ControlPass!123",
+            "min": 1,
+            "max": 4,
+            "increment": 1,
+        },
+        {
+            "user": "NL2SQL_DEEPSEC_DATA_USER",
+            "dsn": "test",
+            "tcp_connect_timeout": 5,
+            "password": "DeepSecret!123",
+            "config_dir": str(wallet_dir),
+            "wallet_location": str(wallet_dir),
+            "wallet_password": "ControlPass!123",
+            "min": 1,
+            "max": 4,
+            "increment": 1,
+        },
     ]
 
 

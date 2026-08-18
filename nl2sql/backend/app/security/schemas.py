@@ -121,6 +121,22 @@ class DeepSecApplyRequest(BaseModel):
     checksum: str = Field(min_length=64, max_length=64)
 
 
+class DeepSecConfigUpdate(BaseModel):
+    data_user_password: str = Field(min_length=12, max_length=256)
+
+    @field_validator("data_user_password")
+    @classmethod
+    def validate_data_user_password(cls, value: str) -> str:
+        if '"' in value or any(
+            ord(char) < 32 or 127 <= ord(char) <= 159 for char in value
+        ):
+            raise ValueError(
+                "ORACLE_DEEPSEC_DATA_USER_PASSWORD は二重引用符と制御文字を"
+                "含めずに指定してください。"
+            )
+        return value
+
+
 class DataEntitlementData(BaseModel):
     entitlement_id: str
     resource_code: str

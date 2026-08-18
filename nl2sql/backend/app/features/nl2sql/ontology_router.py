@@ -24,6 +24,7 @@ from pr_backend_core import ApiResponse
 from pydantic import Field
 
 from app.api.concurrency import run_sync_io
+from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
 from .models import (
@@ -323,9 +324,7 @@ class OntologyApiRuntime:
         self._lock = RLock()
         # テーブル詳細の論理名 lookup は全量 ontology graph の lock と分離する。
         self._business_name_lock = RLock()
-        self._business_name_cache: OrderedDict[tuple[str, str], dict[str, str]] = (
-            OrderedDict()
-        )
+        self._business_name_cache: OrderedDict[tuple[str, str], dict[str, str]] = OrderedDict()
         self._business_name_cache_max_objects = 512
         self._business_name_cache_generation = 0
         self._store_ready = False
@@ -340,9 +339,9 @@ class OntologyApiRuntime:
         self._ontology_cache_max_revisions = max(
             1, settings.nl2sql_ontology_graph_cache_max_revisions
         )
-        self._ontology_cache_max_bytes = max(
-            1, settings.nl2sql_ontology_graph_cache_max_megabytes
-        ) * 1024 * 1024
+        self._ontology_cache_max_bytes = (
+            max(1, settings.nl2sql_ontology_graph_cache_max_megabytes) * 1024 * 1024
+        )
         self._session_views: dict[str, ProfileOntologyView] = {}
         self._profile_view_overrides: dict[tuple[str, str], ProfileOntologyView] = {}
         self._contexts: dict[str, QueryRuntimeContext] = {}
@@ -404,9 +403,7 @@ class OntologyApiRuntime:
         ``_lock`` を取得しないことで、ontology 初期化中も詳細表示を待たせない。
         """
 
-        normalized_type: Literal["table", "view"] = (
-            "view" if object_type == "view" else "table"
-        )
+        normalized_type: Literal["table", "view"] = "view" if object_type == "view" else "table"
         physical_id = stable_physical_id(
             normalized_type,
             owner,
@@ -420,9 +417,7 @@ class OntologyApiRuntime:
             {"status": OntologyRevisionStatus.PUBLISHED.value},
         )
         revisions = [
-            OntologyRevision.model_validate(
-                self._stored_payload(document, collection="revision")
-            )
+            OntologyRevision.model_validate(self._stored_payload(document, collection="revision"))
             for document in revision_documents
         ]
         if not revisions:
@@ -453,9 +448,7 @@ class OntologyApiRuntime:
         )
         names: dict[str, str] = {}
         for document in node_documents:
-            node = OntologyNode.model_validate(
-                self._stored_payload(document, collection="node")
-            )
+            node = OntologyNode.model_validate(self._stored_payload(document, collection="node"))
             column_name = str(node.metadata.get("column_name") or "").strip().upper()
             if not column_name:
                 parts = node.technical_name.upper().split(".")
@@ -1107,8 +1100,7 @@ class OntologyApiRuntime:
             )
             stale = (
                 stored.source_profile_etag != view.source_profile_etag
-                or stored.source_profile_scope_fingerprint
-                != view.source_profile_scope_fingerprint
+                or stored.source_profile_scope_fingerprint != view.source_profile_scope_fingerprint
             )
             return True, stale
 
@@ -1430,9 +1422,7 @@ class OntologyApiRuntime:
             self.sessions.evict_profile_views(profile_id)
             return deleted
 
-    def materialize_profile_views_for_revision(
-        self, revision_id: str
-    ) -> list[ProfileOntologyView]:
+    def materialize_profile_views_for_revision(self, revision_id: str) -> list[ProfileOntologyView]:
         """Publish 前に全 active profile view を対象 revision へ物化する。"""
 
         with self._lock:
@@ -1504,9 +1494,7 @@ class OntologyApiRuntime:
                 recommendation.candidates[0].profile_id if recommendation.candidates else ""
             )
             record_profile_recommendation(
-                "accepted"
-                if recommended_profile_id == profile.id
-                else "manually_changed"
+                "accepted" if recommended_profile_id == profile.id else "manually_changed"
             )
             return confirmed, token
 
@@ -1855,6 +1843,7 @@ class OntologyApiRuntime:
         *,
         idempotency_key: str,
         actor_user_id: str = "",
+        actor_is_system_admin: bool = False,
     ) -> QueryExecutionData:
         data = self._run_session_idempotent(
             "execute_query_session",
@@ -1863,8 +1852,14 @@ class OntologyApiRuntime:
                 "session_id": session_id,
                 "request": request.model_dump(mode="json"),
                 "actor_user_id": actor_user_id,
+                "actor_is_system_admin": actor_is_system_admin,
             },
-            lambda: self.execute(session_id, request, actor_user_id=actor_user_id),
+            lambda: self.execute(
+                session_id,
+                request,
+                actor_user_id=actor_user_id,
+                actor_is_system_admin=actor_is_system_admin,
+            ),
         )
         payload = data.model_dump()
         if payload.get("result") is None and self._results.get(session_id) is not None:
@@ -2052,7 +2047,7 @@ class OntologyApiRuntime:
                 time_summary = f"{time_range.label_ja}: {time_range.relative_expression}"
             else:
                 time_summary = (
-                    f"{time_range.label_ja}: {time_range.start or ''} - " f"{time_range.end or ''}"
+                    f"{time_range.label_ja}: {time_range.start or ''} - {time_range.end or ''}"
                 )
         sort_summaries = [f"{item.target_id} {item.direction}" for item in intent.sorts]
         payload: dict[str, Any] = {
@@ -2435,6 +2430,7 @@ class OntologyApiRuntime:
         request: SqlConfirmationRequest,
         *,
         actor_user_id: str = "",
+        actor_is_system_admin: bool = False,
     ) -> QueryExecutionData:
         with self._lock:
             self._ensure_store()
@@ -2457,11 +2453,15 @@ class OntologyApiRuntime:
                         executing.profile_id,
                         context.allowed_objects,
                     )
-                    safety, executable_sql, result = self.legacy_service.execute_sql(
-                        sql=artifact.sql,
-                        allowed=allowed,
-                        row_limit=context.row_limit,
-                    )
+                    with actor_scope(
+                        actor_user_id,
+                        is_system_admin=actor_is_system_admin,
+                    ):
+                        safety, executable_sql, result = self.legacy_service.execute_sql(
+                            sql=artifact.sql,
+                            allowed=allowed,
+                            row_limit=context.row_limit,
+                        )
                 if not safety.is_safe:
                     failed = self.sessions.fail_session(
                         session_id,
@@ -2622,9 +2622,7 @@ class OntologyApiRuntime:
         with self._lock:
             self._ensure_store()
             self._strict_profile(profile_id)
-            for document in self.store.list_documents(
-                "proposals", {"profile_id": profile_id}
-            ):
+            for document in self.store.list_documents("proposals", {"profile_id": profile_id}):
                 proposal = OntologyProposal.model_validate(
                     self._stored_payload(document, collection="proposal")
                 )
@@ -3118,9 +3116,7 @@ class OntologyApiRuntime:
             "revisions", {"status": OntologyRevisionStatus.PUBLISHED.value}
         )
         headers = [
-            OntologyRevision.model_validate(
-                self._stored_payload(document, collection="revision")
-            )
+            OntologyRevision.model_validate(self._stored_payload(document, collection="revision"))
             for document in documents
         ]
         if headers:
@@ -3143,16 +3139,12 @@ class OntologyApiRuntime:
             return
         documents = self.store.list_documents("revisions")
         headers = [
-            OntologyRevision.model_validate(
-                self._stored_payload(document, collection="revision")
-            )
+            OntologyRevision.model_validate(self._stored_payload(document, collection="revision"))
             for document in documents
         ]
         self._revision_headers.update({header.id: header for header in headers})
         active_candidates = [
-            header
-            for header in headers
-            if header.status == OntologyRevisionStatus.PUBLISHED
+            header for header in headers if header.status == OntologyRevisionStatus.PUBLISHED
         ] or headers
         if active_candidates and self._ontology is None:
             active = max(
@@ -3268,8 +3260,7 @@ class OntologyApiRuntime:
 
         def estimated_bytes() -> int:
             graph_bytes = sum(
-                len(item.model_dump_json().encode("utf-8"))
-                for item in self._ontologies.values()
+                len(item.model_dump_json().encode("utf-8")) for item in self._ontologies.values()
             )
             vector_bytes = sum(
                 len(vector) * 8
@@ -3431,15 +3422,11 @@ class OntologyApiRuntime:
                 "schema_fingerprint": ontology.revision.schema_fingerprint,
                 "payload": ontology.revision,
             }
-            current = self.store.get_document(
-                "revisions", {"revision_id": ontology.revision.id}
-            )
+            current = self.store.get_document("revisions", {"revision_id": ontology.revision.id})
             documents.append((document, str(current["etag"]) if current is not None else None))
         self.store.save_documents_atomic("revisions", documents)
         for ontology in ontologies:
-            self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(
-                deep=True
-            )
+            self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(deep=True)
 
     def _persist_node(self, ontology: SchemaOntology, node: OntologyNode) -> None:
         physical_id = node.physical_mappings[0].object_ref.node_id if node.physical_mappings else ""
@@ -3586,9 +3573,7 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
 )
 def list_ontology_revisions() -> ApiResponse[OntologyRevisionListData]:
     try:
-        revisions, active_revision_id = _run_runtime_sync(
-            ontology_runtime.list_ontology_revisions
-        )
+        revisions, active_revision_id = _run_runtime_sync(ontology_runtime.list_ontology_revisions)
         return ApiResponse(
             data=OntologyRevisionListData(
                 revisions=revisions,
@@ -3925,9 +3910,7 @@ def create_query_session(
 )
 def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
     try:
-        return ApiResponse(
-            data=_run_runtime_sync(ontology_runtime.get_session, session_id)
-        )
+        return ApiResponse(data=_run_runtime_sync(ontology_runtime.get_session, session_id))
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3941,14 +3924,10 @@ def patch_query_intent(
     patch: GraphPatch,
 ) -> ApiResponse[QuerySessionData]:
     try:
-        return ApiResponse(
-            data=_run_runtime_sync(ontology_runtime.patch_intent, session_id, patch)
-        )
+        return ApiResponse(data=_run_runtime_sync(ontology_runtime.patch_intent, session_id, patch))
     except OntologyVersionConflictError as exc:
         try:
-            current = (
-                _run_runtime_sync(ontology_runtime.get_session, session_id)
-            ).session
+            current = (_run_runtime_sync(ontology_runtime.get_session, session_id)).session
         except Exception:
             _raise_domain_error(exc)
         raise HTTPException(
@@ -4037,6 +4016,7 @@ def execute_query_session(
                 payload.binding(),
                 idempotency_key=idempotency_key,
                 actor_user_id=str(getattr(principal, "user_id", "")),
+                actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )
     except Exception as exc:
@@ -4068,9 +4048,7 @@ def create_ontology_improvement_proposal(
 )
 def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposal]:
     try:
-        return ApiResponse(
-            data=_run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
-        )
+        return ApiResponse(data=_run_runtime_sync(ontology_runtime.get_proposal, proposal_id))
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -4083,9 +4061,7 @@ def accept_ontology_proposal(
     proposal_id: str,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
-        return ApiResponse(
-            data=_run_runtime_sync(ontology_runtime.accept_proposal, proposal_id)
-        )
+        return ApiResponse(data=_run_runtime_sync(ontology_runtime.accept_proposal, proposal_id))
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -4098,9 +4074,7 @@ def reject_ontology_proposal(
     proposal_id: str,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
-        return ApiResponse(
-            data=_run_runtime_sync(ontology_runtime.reject_proposal, proposal_id)
-        )
+        return ApiResponse(data=_run_runtime_sync(ontology_runtime.reject_proposal, proposal_id))
     except Exception as exc:
         _raise_domain_error(exc)
 

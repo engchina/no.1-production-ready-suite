@@ -32,7 +32,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
-from app.security.request_actor import actor_scope
+from app.security.request_actor import actor_scope, current_actor_is_system_admin
 from app.settings import get_settings
 
 from .embedding_client import (
@@ -354,10 +354,7 @@ class SchemaRefreshFullRequired(RuntimeError):
 
 def _schema_refresh_required_warning(reason_code: str) -> str:
     if reason_code == "schema_refresh_target_unresolved":
-        return (
-            "DB 構造の差分同期対象を安全に特定できませんでした。"
-            "DB 構造を再取得してください。"
-        )
+        return "DB 構造の差分同期対象を安全に特定できませんでした。DB 構造を再取得してください。"
     return "DB 構造の差分同期で不整合を検出しました。DB 構造を再取得してください。"
 
 
@@ -386,8 +383,7 @@ def _profile_list_refresh_required_warning(reason_code: str) -> str:
         )
     if reason_code == "profile_list_refresh_submit_failed":
         return (
-            "DB Profile 一覧の差分同期を開始できませんでした。"
-            "DB Profile 一覧を再取得してください。"
+            "DB Profile 一覧の差分同期を開始できませんでした。DB Profile 一覧を再取得してください。"
         )
     return "DB Profile 一覧の差分同期で不整合を検出しました。DB Profile 一覧を再取得してください。"
 
@@ -713,15 +709,11 @@ def _parse_structured_question_slots(question: str) -> _StructuredQuestionSlots:
                 current_label = label
                 current_value = slots.get(label, "")
                 line_value = match.group(2)
-                slots[label] = (
-                    f"{current_value}\n{line_value}" if current_value else line_value
-                )
+                slots[label] = f"{current_value}\n{line_value}" if current_value else line_value
                 continue
         if current_label:
             current_value = slots.get(current_label, "")
-            slots[current_label] = (
-                f"{current_value}\n{raw_line}" if current_value else raw_line
-            )
+            slots[current_label] = f"{current_value}\n{raw_line}" if current_value else raw_line
     return _StructuredQuestionSlots(
         slots={label: value.strip() for label, value in slots.items()},
         has_template=has_template,
@@ -1188,9 +1180,7 @@ def _dedupe_schema_refresh_targets(
         key = (target.owner.upper(), target.object_name.upper())
         current = merged.get(key)
         if current is None:
-            merged[key] = target.model_copy(
-                update={"owner": key[0], "object_name": key[1]}
-            )
+            merged[key] = target.model_copy(update={"owner": key[0], "object_name": key[1]})
             continue
         expected_state = current.expected_state
         if target.expected_state != "unknown":
@@ -1554,6 +1544,14 @@ def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
+def _coerce_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def _normalize_identifier(value: str) -> str:
     parts = [part.strip().strip('"') for part in value.strip().split(".")]
     return (parts[-1] if parts else "").upper()
@@ -1637,8 +1635,7 @@ def _profile_recommendation_tokens(value: str) -> set[str]:
     return {
         token
         for token in _similarity_tokens(normalized)
-        if len(token.strip()) >= 2
-        and token.casefold() not in _PROFILE_RECOMMENDATION_STOPWORDS
+        if len(token.strip()) >= 2 and token.casefold() not in _PROFILE_RECOMMENDATION_STOPWORDS
     }
 
 
@@ -1912,6 +1909,7 @@ class StoredJob:
     job_id: str
     request: JobCreateRequest
     actor_user_id: str = ""
+    actor_is_system_admin: bool = False
     status: JobStatus = JobStatus.PENDING
     created_at: str = field(default_factory=_utc_now)
     started_at: str | None = None
@@ -2750,6 +2748,7 @@ class Nl2SqlService:
             "job_id": job.job_id,
             "request": job.request.model_dump(mode="json"),
             "actor_user_id": job.actor_user_id,
+            "actor_is_system_admin": job.actor_is_system_admin,
             "status": job.status.value,
             "created_at": job.created_at,
             "started_at": job.started_at,
@@ -2769,6 +2768,7 @@ class Nl2SqlService:
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
             actor_user_id=str(data.get("actor_user_id") or ""),
+            actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
             status=status,
             created_at=str(data.get("created_at") or _utc_now()),
             started_at=data.get("started_at"),
@@ -3183,9 +3183,7 @@ class Nl2SqlService:
             return False
         if job.status == SchemaRefreshJobStatus.PENDING:
             return self._dispatch_schema_refresh_job(job.job_id)
-        if job.status == SchemaRefreshJobStatus.RUNNING and self._schema_refresh_lease_expired(
-            job
-        ):
+        if job.status == SchemaRefreshJobStatus.RUNNING and self._schema_refresh_lease_expired(job):
             return self._dispatch_schema_refresh_job(job.job_id)
         return False
 
@@ -3296,9 +3294,7 @@ class Nl2SqlService:
                 }
                 if job.mode == SchemaRefreshMode.TARGETED:
                     incoming_manifest = {
-                        key: value
-                        for key, value in incoming_manifest.items()
-                        if key in target_keys
+                        key: value for key, value in incoming_manifest.items() if key in target_keys
                     }
             SCHEMA_REFRESH_PHASE_SECONDS.labels(phase="scanning").observe(
                 time.monotonic() - phase_started
@@ -3351,9 +3347,7 @@ class Nl2SqlService:
             publish_manifest = incoming_manifest
             if job.mode == SchemaRefreshMode.TARGETED:
                 publish_manifest = {
-                    key: value
-                    for key, value in stored_manifest.items()
-                    if key not in deleted_keys
+                    key: value for key, value in stored_manifest.items() if key not in deleted_keys
                 }
                 publish_manifest.update(incoming_manifest)
             SCHEMA_CHANGED_OBJECTS.observe(len(changed_keys))
@@ -4842,6 +4836,7 @@ class Nl2SqlService:
         request: JobCreateRequest,
         *,
         actor_user_id: str = "",
+        actor_is_system_admin: bool = False,
     ) -> JobCreateData:
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
@@ -4854,6 +4849,7 @@ class Nl2SqlService:
             job_id=job_id,
             request=request,
             actor_user_id=actor_user_id,
+            actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
         )
         with self._lock:
@@ -5172,9 +5168,7 @@ class Nl2SqlService:
                     profile_id=profile_id,
                     status=status,
                     query=query,
-                    payload_filters=(
-                        {"actor_user_id": actor_user_id} if actor_user_id else None
-                    ),
+                    payload_filters=({"actor_user_id": actor_user_id} if actor_user_id else None),
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -5399,9 +5393,7 @@ class Nl2SqlService:
                         profile_name=request.select_ai_profile_name.strip(),
                         question=current.question,
                         feedback_type=(
-                            "positive"
-                            if request.rating == FeedbackRating.GOOD
-                            else "negative"
+                            "positive" if request.rating == FeedbackRating.GOOD else "negative"
                         ),
                         response=response,
                         feedback_content=feedback_content,
@@ -6841,11 +6833,7 @@ class Nl2SqlService:
 
     def _feedback_indexable_history(self, include_bad: bool) -> list[HistoryItem]:
         del include_bad
-        return [
-            item
-            for item in self._history
-            if item.admin_feedback_rating == FeedbackRating.GOOD
-        ]
+        return [item for item in self._history if item.admin_feedback_rating == FeedbackRating.GOOD]
 
     def _feedback_index_status(self, indexed_count: int, indexable_count: int) -> str:
         if indexable_count == 0 and indexed_count == 0:
@@ -6876,9 +6864,7 @@ class Nl2SqlService:
         ]
 
     def _feedback_embedding_text(self, item: HistoryItem) -> str:
-        admin_feedback = (
-            item.admin_feedback_rating.value if item.admin_feedback_rating else ""
-        )
+        admin_feedback = item.admin_feedback_rating.value if item.admin_feedback_rating else ""
         user_feedback = item.feedback_rating.value if item.feedback_rating else ""
         return "\n".join(
             [
@@ -6964,9 +6950,7 @@ class Nl2SqlService:
         # (rank=順序用 bias 込み, evidence=実マッチ由来, profile, matched_terms)
         scored: list[tuple[float, float, Nl2SqlProfile, list[str]]] = []
         for profile in profiles:
-            evidence, matched_terms = self._score_profile_for_question(
-                profile, request.question
-            )
+            evidence, matched_terms = self._score_profile_for_question(profile, request.question)
             rank = evidence
             if profile.id == request.current_profile_id:
                 rank += _PROFILE_RECOMMEND_CURRENT_PROFILE_BIAS
@@ -7692,8 +7676,7 @@ class Nl2SqlService:
             sql = self._clean_generated_metadata_sql(raw, "comment_sql")
             if not self._metadata_sql_preserves_targets(sql, request):
                 warning = (
-                    "生成 SQL が owner 修飾を保持しなかったため "
-                    "deterministic SQL を使用しました。"
+                    "生成 SQL が owner 修飾を保持しなかったため deterministic SQL を使用しました。"
                 )
                 return deterministic.model_copy(
                     update={
@@ -7866,8 +7849,7 @@ class Nl2SqlService:
             )
             if not self._metadata_sql_preserves_targets(sql, request):
                 warning = (
-                    "生成 SQL が owner 修飾を保持しなかったため "
-                    "deterministic SQL を使用しました。"
+                    "生成 SQL が owner 修飾を保持しなかったため deterministic SQL を使用しました。"
                 )
                 return deterministic.model_copy(
                     update={
@@ -9429,9 +9411,7 @@ class Nl2SqlService:
         item: SchemaObjectSummary,
     ) -> DbAdminObjectSummary:
         object_type = (
-            "view"
-            if item.object_type.upper() in {"VIEW", "MATERIALIZED VIEW"}
-            else "table"
+            "view" if item.object_type.upper() in {"VIEW", "MATERIALIZED VIEW"} else "table"
         )
         return DbAdminObjectSummary(
             name=item.object_name,
@@ -9773,9 +9753,14 @@ class Nl2SqlService:
         created_at = _utc_now()
         warnings: list[str] = []
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        select_vpd_context_enforced = (
+            self._use_oracle_runtime()
+            and self._deepsec_enabled
+            and not current_actor_is_system_admin()
+        )
         select_execution_context = (
             "deepsec_data_plane"
-            if self._use_oracle_runtime() and self._deepsec_enabled
+            if select_vpd_context_enforced
             else "oracle_data_plane"
             if self._use_oracle_runtime()
             else "deterministic"
@@ -9807,8 +9792,7 @@ class Nl2SqlService:
                         statement_type=statement_types[index],
                         status="blocked",
                         sql=statements[index],
-                        error_message=system_object_errors[index]
-                        or _SYSTEM_OBJECT_BLOCKED_MESSAGE,
+                        error_message=system_object_errors[index] or _SYSTEM_OBJECT_BLOCKED_MESSAGE,
                     )
                     for index in range(len(statements))
                 ],
@@ -9849,7 +9833,7 @@ class Nl2SqlService:
                     executed=False,
                     runtime="oracle",
                     execution_context=select_execution_context,
-                    vpd_context_enforced=self._deepsec_enabled,
+                    vpd_context_enforced=select_vpd_context_enforced,
                     statements=[
                         DbAdminStatementResult(
                             index=1,
@@ -9865,8 +9849,8 @@ class Nl2SqlService:
             return DbAdminExecuteData(
                 executed=True,
                 runtime=runtime,
-                execution_context=select_execution_context,
-                vpd_context_enforced=self._deepsec_enabled and self._use_oracle_runtime(),
+                execution_context=results.execution_context,
+                vpd_context_enforced=results.vpd_context_enforced,
                 select_result=results,
                 statements=[
                     DbAdminStatementResult(
@@ -10249,8 +10233,7 @@ class Nl2SqlService:
                         statement_type=statement_types[index],
                         status="blocked",
                         sql=statements[index],
-                        error_message=system_object_errors[index]
-                        or _SYSTEM_OBJECT_BLOCKED_MESSAGE,
+                        error_message=system_object_errors[index] or _SYSTEM_OBJECT_BLOCKED_MESSAGE,
                     )
                     for index in range(len(statements))
                 ],
@@ -10821,9 +10804,7 @@ class Nl2SqlService:
         table = self._find_catalog_table(object_name)
         if table is None:
             missing_name = (
-                identity.object_name
-                if identity is not None
-                else _normalize_identifier(object_name)
+                identity.object_name if identity is not None else _normalize_identifier(object_name)
             )
             missing_owner = identity.owner if identity is not None else ""
             return DbAdminObjectDetail(
@@ -10860,10 +10841,7 @@ class Nl2SqlService:
         ddl_kind = "VIEW" if object_type == "view" else "TABLE"
         ddl = f"CREATE {ddl_kind} {quoted_object} ({column_defs});"
         if table.comment:
-            ddl += (
-                f"\nCOMMENT ON TABLE {quoted_object} "
-                f"IS {_quote_sql_string(table.comment)};"
-            )
+            ddl += f"\nCOMMENT ON TABLE {quoted_object} IS {_quote_sql_string(table.comment)};"
         for column in table.columns:
             if column.comment:
                 column_comment = _quote_sql_string(column.comment)
@@ -11378,8 +11356,7 @@ class Nl2SqlService:
             profile_list_refresh_reason_code = "profile_list_read_model_uninitialized"
             profiles = self._fallback_select_ai_db_profiles_from_asset_meta(business_profile_names)
             warnings.append(
-                "DB Profile 一覧 read model が未初期化です。"
-                "DB Profile 一覧を再取得してください。"
+                "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。"
             )
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if not self._use_oracle_runtime() and not profiles:
@@ -11578,9 +11555,7 @@ class Nl2SqlService:
         normalized_mode = SelectAiDbProfileRefreshMode(mode)
         targets = self._dedupe_select_ai_db_profile_refresh_targets(target_profiles or [])
         if normalized_mode == SelectAiDbProfileRefreshMode.TARGETED and not targets:
-            raise SelectAiDbProfileListRefreshFullRequired(
-                "profile_list_refresh_target_unresolved"
-            )
+            raise SelectAiDbProfileListRefreshFullRequired("profile_list_refresh_target_unresolved")
         job = SelectAiDbProfileRefreshJobData(
             job_id=str(uuid.uuid4()),
             mode=normalized_mode,
@@ -11776,9 +11751,7 @@ class Nl2SqlService:
             to_delete: set[str] = set()
             if self._use_oracle_runtime():
                 present_names = self._oracle_adapter.fetch_select_ai_profile_names(
-                    target_names
-                    if job.mode == SelectAiDbProfileRefreshMode.TARGETED
-                    else None
+                    target_names if job.mode == SelectAiDbProfileRefreshMode.TARGETED else None
                 )
                 if job.mode == SelectAiDbProfileRefreshMode.TARGETED:
                     missing_present = {
@@ -11831,11 +11804,7 @@ class Nl2SqlService:
                 if job.mode == SelectAiDbProfileRefreshMode.FULL:
                     to_delete.update(set(existing) - present_names)
 
-            changed = {
-                name
-                for name, profile in to_upsert.items()
-                if existing.get(name) != profile
-            }
+            changed = {name for name, profile in to_upsert.items() if existing.get(name) != profile}
             deleted = {name for name in to_delete if name in existing}
             total_profiles = (
                 len(target_names)
@@ -13081,9 +13050,7 @@ class Nl2SqlService:
             example_question = str(example.get("question", "")).strip()
             if add_match(example_question, 1.2):
                 continue
-            overlap = sorted(
-                question_tokens & _profile_recommendation_tokens(example_question)
-            )
+            overlap = sorted(question_tokens & _profile_recommendation_tokens(example_question))
             if overlap:
                 score += min(1.2, 0.4 * len(overlap))
                 for token in overlap[:3]:
@@ -13145,18 +13112,12 @@ class Nl2SqlService:
         if not cleaned:
             return []
         candidates = [cleaned]
-        parts = [
-            part.strip()
-            for part in re.split(r"[,、;；/／]+", cleaned)
-            if part.strip()
-        ]
+        parts = [part.strip() for part in re.split(r"[,、;；/／]+", cleaned) if part.strip()]
         if len(parts) > 1:
             candidates.extend(parts)
         seen: set[str] = set()
         return [
-            candidate
-            for candidate in candidates
-            if not (candidate in seen or seen.add(candidate))
+            candidate for candidate in candidates if not (candidate in seen or seen.add(candidate))
         ]
 
     def _resolve_similar_history_target_object(self, value: str) -> set[str]:
@@ -13318,8 +13279,7 @@ class Nl2SqlService:
             reason_terms = "、".join(visible_terms[:4] or overlap[:4])
             target_reason = "対象テーブルが一致し、" if target_objects else ""
             reason = (
-                f"{target_reason}{reason_terms} が一致し、"
-                "管理者の良い feedback が付いています。"
+                f"{target_reason}{reason_terms} が一致し、管理者の良い feedback が付いています。"
             )
             scored.append(SimilarHistoryItem(item=item, score=score, reason=reason))
         scored.sort(
@@ -13372,7 +13332,8 @@ class Nl2SqlService:
         try:
             with self._lock:
                 actor_user_id = self._jobs[job_id].actor_user_id
-            with actor_scope(actor_user_id):
+                actor_is_system_admin = self._jobs[job_id].actor_is_system_admin
+            with actor_scope(actor_user_id, is_system_admin=actor_is_system_admin):
                 self._run_job(job_id)
         except Exception as exc:  # pragma: no cover - defensive boundary
             with self._lock:
@@ -13742,8 +13703,7 @@ class Nl2SqlService:
         fallback_messages: list[str] = []
         for candidate in candidates:
             allow_deterministic_fallback = not (
-                engine == Nl2SqlEngine.SELECT_AI_AGENT
-                and candidate == Nl2SqlEngine.SELECT_AI_AGENT
+                engine == Nl2SqlEngine.SELECT_AI_AGENT and candidate == Nl2SqlEngine.SELECT_AI_AGENT
             )
             try:
                 return self._generate_sql(
@@ -14405,18 +14365,12 @@ class Nl2SqlService:
     def _select_ai_agent_asset_names(self, profile: Nl2SqlProfile) -> dict[str, str]:
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"
         return {
-            "tool": _oracle_agent_asset_name(
-                prefix=prefix, profile_key=profile.id, suffix="TOOL"
-            ),
+            "tool": _oracle_agent_asset_name(prefix=prefix, profile_key=profile.id, suffix="TOOL"),
             "agent": _oracle_agent_asset_name(
                 prefix=prefix, profile_key=profile.id, suffix="AGENT"
             ),
-            "task": _oracle_agent_asset_name(
-                prefix=prefix, profile_key=profile.id, suffix="TASK"
-            ),
-            "team": _oracle_agent_asset_name(
-                prefix=prefix, profile_key=profile.id, suffix="TEAM"
-            ),
+            "task": _oracle_agent_asset_name(prefix=prefix, profile_key=profile.id, suffix="TASK"),
+            "team": _oracle_agent_asset_name(prefix=prefix, profile_key=profile.id, suffix="TEAM"),
         }
 
     def _dedupe_object_names(self, names: Sequence[str]) -> list[str]:
@@ -14721,9 +14675,7 @@ class Nl2SqlService:
             return self._resolve_profile_object_name(allowed.table_names[0])
         active_catalog = catalog or self._catalog
         return (
-            self._catalog_qualified_name(active_catalog.tables[0])
-            if active_catalog.tables
-            else ""
+            self._catalog_qualified_name(active_catalog.tables[0]) if active_catalog.tables else ""
         )
 
     def _allowed_select_list(

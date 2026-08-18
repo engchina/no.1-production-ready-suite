@@ -4,18 +4,52 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
-from app.clients.oracle_runtime import OraclePoolManager, get_oracle_pool_manager
+from app.clients.oracle_runtime import (
+    OraclePoolManager,
+    close_oracle_pools,
+    get_oracle_pool_manager,
+)
 from app.clients.oracle_statement_executor import oracle_statement_executor
 from app.settings import Settings, get_settings
 
 from .domain import Principal
-from .service import SecurityApiError, SecurityService, get_security_service
+from .service import (
+    _BACKEND_ENV_FILE,
+    SecurityApiError,
+    SecurityService,
+    _env_assignment_key,
+    _format_env_value,
+    get_security_service,
+)
 
 PLAN_VERSION = "V001"
-PASSWORD_PLACEHOLDER = "<secret:ORACLE_DEEPSEC_END_USER_PASSWORD>"  # nosec B105
+PASSWORD_PLACEHOLDER = "<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
+DEEPSEC_DATA_USER = "NL2SQL_DEEPSEC_DATA_USER"
+_DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
+_DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
+_DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"
+_REMOVED_DEEPSEC_KEYS = frozenset(
+    {
+        "ORACLE_DEEPSEC_END_USER",
+        "ORACLE_DEEPSEC_END_USER_PASSWORD",
+        "ORACLE_DEEPSEC_APP_USER",
+        "ORACLE_DEEPSEC_APP_USER_PASSWORD",
+    }
+)
+_DEEPSEC_CONFIG_KEYS = frozenset(
+    {
+        _DEEPSEC_ENABLED_KEY,
+        _DEEPSEC_DATA_USER_KEY,
+        _DEEPSEC_DATA_USER_PASSWORD_KEY,
+        *_REMOVED_DEEPSEC_KEYS,
+    }
+)
 
 
 def _strict_identifier(value: str) -> str:
@@ -25,12 +59,84 @@ def _strict_identifier(value: str) -> str:
     return normalized
 
 
+def _has_forbidden_password_char(value: str) -> bool:
+    return '"' in value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
+
+
 def _quoted_password(value: str) -> str:
-    if not value or len(value) > 256 or any(ord(char) < 32 for char in value):
+    if not value or len(value) > 256 or _has_forbidden_password_char(value):
         raise SecurityApiError(
-            503, "ORACLE_DEEPSEC_END_USER_PASSWORD を安全な値で設定してください。"
+            503, "ORACLE_DEEPSEC_DATA_USER_PASSWORD を安全な値で設定してください。"
         )
     return '"' + value.replace('"', '""') + '"'
+
+
+def _validate_data_user_password(value: str) -> str:
+    if len(value) < 12 or len(value) > 256 or _has_forbidden_password_char(value):
+        raise SecurityApiError(
+            400,
+            "ORACLE_DEEPSEC_DATA_USER_PASSWORD は12〜256文字で、"
+            "二重引用符と制御文字を含めずに指定してください。",
+        )
+    return value
+
+
+def _replace_deepsec_env_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(content, encoding="utf-8")
+        temporary_path.chmod(mode)
+        temporary_path.replace(path)
+    except OSError:
+        with suppress(OSError):
+            temporary_path.unlink()
+        raise
+
+
+def _write_deepsec_config_env(settings: Settings) -> None:
+    try:
+        lines = (
+            _BACKEND_ENV_FILE.read_text(encoding="utf-8").splitlines()
+            if _BACKEND_ENV_FILE.exists()
+            else []
+        )
+        next_lines = [
+            line for line in lines if _env_assignment_key(line) not in _DEEPSEC_CONFIG_KEYS
+        ]
+        deepsec_lines = [
+            f"{_DEEPSEC_ENABLED_KEY}=true",
+            f"{_DEEPSEC_DATA_USER_KEY}={_format_env_value(settings.oracle_deepsec_data_user)}",
+            (
+                f"{_DEEPSEC_DATA_USER_PASSWORD_KEY}="
+                f"{_format_env_value(settings.oracle_deepsec_data_user_password)}"
+            ),
+        ]
+        insert_at = next(
+            (
+                index
+                for index, line in enumerate(next_lines)
+                if _env_assignment_key(line) == "ORACLE_ADB_OCID"
+            ),
+            None,
+        )
+        if insert_at is None:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.append("# Deep Data Security")
+            next_lines.extend(deepsec_lines)
+        else:
+            next_lines[insert_at:insert_at] = deepsec_lines
+        _replace_deepsec_env_file(
+            _BACKEND_ENV_FILE,
+            "\n".join(next_lines).rstrip() + "\n",
+        )
+    except OSError as exc:
+        raise SecurityApiError(
+            500,
+            "DeepSec DATA USER 認証情報を backend/.env へ保存できませんでした。",
+        ) from exc
 
 
 def _trusted_identifier_sql(template: str, **identifiers: str) -> str:
@@ -61,7 +167,7 @@ class DeepSecStep:
 
 def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     owner = _strict_identifier(settings.oracle_user)
-    end_user = _strict_identifier(settings.oracle_deepsec_end_user)
+    data_user = _strict_identifier(settings.oracle_deepsec_data_user)
     role = "NL2SQL_APP_DB_ROLE"
     data_role = "NL2SQL_APP_DATA_ROLE"
     probe = f"{owner}.NL2SQL_DEEPSEC_PROBE"
@@ -69,18 +175,18 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     role_step = DeepSecStep(
         step_no=1,
         key="principals_and_roles",
-        title="共有 END USER とロール",
-        description="共有 local END USER、最小 DB role、local DATA ROLE を作成して関連付けます。",
+        title="共有 DATA USER とロール",
+        description="共有 DATA USER、最小 DB role、local DATA ROLE を作成して関連付けます。",
         statements=(
             f"CREATE ROLE {role}",
             f"GRANT CREATE SESSION TO {role}",
             f"CREATE DATA ROLE IF NOT EXISTS {data_role}",
             (
-                f"CREATE END USER IF NOT EXISTS {end_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
+                f"CREATE END USER IF NOT EXISTS {data_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
                 f"SCHEMA {owner}"
             ),
             f"GRANT {role} TO {data_role}",
-            f"GRANT DATA ROLE {data_role} TO {end_user}",
+            f"GRANT DATA ROLE {data_role} TO {data_user}",
         ),
         ignored_error_codes=frozenset({"ORA-01921"}),
     )
@@ -253,7 +359,7 @@ class DeepSecService:
         states = self.security.store.get_deepsec_states()
         steps = []
         for step in build_v001_plan(self.settings):
-            state = states.get((PLAN_VERSION, step.step_no), {})
+            state = self._state_for_step(states, step)
             steps.append(
                 {
                     "step_no": step.step_no,
@@ -270,8 +376,10 @@ class DeepSecService:
         return {
             "version": PLAN_VERSION,
             "driver_mode": self.settings.oracle_driver_mode,
+            "connection_security": self.settings.oracle_connection_security,
             "deepsec_enabled": self.settings.oracle_deepsec_enabled,
-            "end_user": self.settings.oracle_deepsec_end_user,
+            "data_user": self.settings.oracle_deepsec_data_user,
+            "has_data_user_password": bool(self.settings.oracle_deepsec_data_user_password),
             "steps": steps,
         }
 
@@ -279,8 +387,10 @@ class DeepSecService:
         result: dict[str, object] = {
             "configured": False,
             "driver_mode": self.settings.oracle_driver_mode,
+            "connection_security": self.settings.oracle_connection_security,
             "deepsec_enabled": self.settings.oracle_deepsec_enabled,
-            "end_user": self.settings.oracle_deepsec_end_user,
+            "data_user": self.settings.oracle_deepsec_data_user,
+            "has_data_user_password": bool(self.settings.oracle_deepsec_data_user_password),
             "objects": {},
             "message": "Deep Data Security は未設定です。",
         }
@@ -290,9 +400,9 @@ class DeepSecService:
         try:
             with self.pools.control_connection() as conn, conn.cursor() as cursor:
                 checks = {
-                    "end_user": (
+                    "data_user": (
                         "SELECT COUNT(*) FROM DBA_END_USERS WHERE USERNAME = :name",
-                        _strict_identifier(self.settings.oracle_deepsec_end_user),
+                        _strict_identifier(self.settings.oracle_deepsec_data_user),
                     ),
                     "data_role": (
                         "SELECT COUNT(*) FROM DBA_DATA_ROLES WHERE DATA_ROLE = :name",
@@ -322,7 +432,7 @@ class DeepSecService:
                 result["configured"] = (
                     all(
                         objects[key] > 0
-                        for key in ("end_user", "data_role", "context", "probe_table")
+                        for key in ("data_user", "data_role", "context", "probe_table")
                     )
                     and objects["data_grants"] >= 2
                 )
@@ -334,6 +444,24 @@ class DeepSecService:
         except Exception as exc:
             result["message"] = f"DeepSec 状態を確認できませんでした: {self._safe_error(exc)}"
         return result
+
+    def update_config(self, data_user_password: str) -> dict[str, object]:
+        password = _validate_data_user_password(data_user_password)
+        previous_enabled = self.settings.oracle_deepsec_enabled
+        previous_data_user = self.settings.oracle_deepsec_data_user
+        previous_password = self.settings.oracle_deepsec_data_user_password
+        self.settings.oracle_deepsec_enabled = True
+        self.settings.oracle_deepsec_data_user = DEEPSEC_DATA_USER
+        self.settings.oracle_deepsec_data_user_password = password
+        try:
+            _write_deepsec_config_env(self.settings)
+        except Exception:
+            self.settings.oracle_deepsec_enabled = previous_enabled
+            self.settings.oracle_deepsec_data_user = previous_data_user
+            self.settings.oracle_deepsec_data_user_password = previous_password
+            raise
+        close_oracle_pools()
+        return self.status()
 
     def apply_step(self, step_no: int, checksum: str, actor: Principal) -> dict[str, object]:
         if not self.settings.oracle_deepsec_enabled:
@@ -349,7 +477,9 @@ class DeepSecService:
             )
         states = self.security.store.get_deepsec_states()
         for previous in range(1, step_no):
-            if states.get((PLAN_VERSION, previous), {}).get("status") != "APPLIED":
+            previous_step = plan[previous]
+            previous_state = self._state_for_step(states, previous_step)
+            if previous_state.get("status") != "APPLIED":
                 raise SecurityApiError(409, "前の DeepSec step を先に適用してください。")
         self.security.store.set_deepsec_state(
             version=PLAN_VERSION,
@@ -445,8 +575,7 @@ class DeepSecService:
                         "key": "limited_subject",
                         "passed": False,
                         "detail": (
-                            "ROW_READ の限定 role を持つ有効ユーザーを作成して"
-                            "再検証してください。"
+                            "ROW_READ の限定 role を持つ有効ユーザーを作成して再検証してください。"
                         ),
                     }
                 )
@@ -464,9 +593,7 @@ class DeepSecService:
                 actual_scopes = {str(row[1]) for row in limited_rows}
                 # Deep Sec の SELECT は未許可セルをエラーではなく NULL として返す。
                 # access-check function も併用し、実データ NULL と認可マスクを区別する。
-                sensitive_masked = all(
-                    row[3] is None and not bool(row[4]) for row in limited_rows
-                )
+                sensitive_masked = all(row[3] is None and not bool(row[4]) for row in limited_rows)
                 checks.append(
                     {
                         "key": "limited_subject",
@@ -479,9 +606,7 @@ class DeepSecService:
                 )
         except Exception as exc:
             safe_error = self._safe_error(exc)
-            raise SecurityApiError(
-                500, f"DeepSec 検証に失敗しました: {safe_error}"
-            ) from exc
+            raise SecurityApiError(500, f"DeepSec 検証に失敗しました: {safe_error}") from exc
         passed = all(bool(item["passed"]) for item in checks)
         return {
             "version": PLAN_VERSION,
@@ -511,12 +636,22 @@ class DeepSecService:
                 return user.user_id, scopes
         return None
 
+    @staticmethod
+    def _state_for_step(
+        states: dict[tuple[str, int], dict[str, object]],
+        step: DeepSecStep,
+    ) -> dict[str, object]:
+        state = states.get((PLAN_VERSION, step.step_no), {})
+        if state.get("checksum") != step.checksum:
+            return {}
+        return state
+
     def _execution_sql(self, statement: str) -> str:
         if PASSWORD_PLACEHOLDER not in statement:
             return statement.strip()
         return statement.replace(
             PASSWORD_PLACEHOLDER,
-            _quoted_password(self.settings.oracle_deepsec_end_user_password),
+            _quoted_password(self.settings.oracle_deepsec_data_user_password),
         ).strip()
 
     @staticmethod
@@ -525,10 +660,10 @@ class DeepSecService:
 
     def _safe_error(self, exc: Exception) -> str:
         text = str(exc).replace("\n", " ")
-        secret = self.settings.oracle_deepsec_end_user_password
+        secret = self.settings.oracle_deepsec_data_user_password
         if secret:
             text = text.replace(secret, "[REDACTED]")
-        # END USER password は exception に出ない前提だが、長い driver detail は切り捨てる。
+        # DATA USER password は exception に出ない前提だが、長い driver detail は切り捨てる。
         return text[:1000]
 
 

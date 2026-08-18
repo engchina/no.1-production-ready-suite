@@ -87,24 +87,29 @@ const systemRole = {
 function deepSecPlan(
   applied = false,
   driverMode: "thin" | "thick" = "thin",
-  deepsecEnabled = true
+  deepsecEnabled = true,
+  hasDataUserPassword = true
 ) {
   return {
     version: "V001",
     driver_mode: driverMode,
+    connection_security: "wallet_mtls",
     deepsec_enabled: deepsecEnabled,
-    end_user: "NL2SQL_APP_END_USER",
+    data_user: "NL2SQL_DEEPSEC_DATA_USER",
+    has_data_user_password: hasDataUserPassword,
     steps: [
       {
         step_no: 1,
         key: "principals_and_roles",
-        title: "共有 END USER とロール",
-        description: "共有 local END USER と最小権限ロールを構成します。",
+        title: "共有 DATA USER とロール",
+        description: "共有 DATA USER と最小権限ロールを構成します。",
         checksum: "a".repeat(64),
         status: applied ? "APPLIED" : "PENDING",
         error_message: "",
         executed_at: applied ? "2026-07-19T00:00:00Z" : null,
-        sql: ["CREATE END USER NL2SQL_APP_END_USER IDENTIFIED BY <secret:ORACLE_DEEPSEC_END_USER_PASSWORD>"],
+        sql: [
+          "CREATE END USER NL2SQL_DEEPSEC_DATA_USER IDENTIFIED BY <secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>",
+        ],
       },
     ],
   };
@@ -130,11 +135,11 @@ test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、�
   await expect(page.getByRole("heading", { name: "システムにログイン" })).toHaveCount(0);
   await expect(
     sidebar.getByRole("status", {
-      name: "ローカル DEBUG：ログイン省略・SYSTEM_ADMIN 権限",
+      name: "ログイン省略",
     })
   ).toBeVisible();
   const debugColors = await sidebar
-    .getByRole("status", { name: "ローカル DEBUG：ログイン省略・SYSTEM_ADMIN 権限" })
+    .getByRole("status", { name: "ログイン省略" })
     .evaluate((element) => {
       const style = getComputedStyle(element);
       return { backgroundColor: style.backgroundColor, color: style.color };
@@ -739,8 +744,10 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
     await fulfill(route, {
       configured: false,
       driver_mode: "thin",
+      connection_security: "wallet_mtls",
       deepsec_enabled: true,
-      end_user: "NL2SQL_APP_END_USER",
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: true,
       objects: {},
       message: "未適用です。",
     });
@@ -750,7 +757,7 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await page.goto("/settings/security/deepsec");
   await expect(page.getByText("構成状態を確認しています。", { exact: true }).nth(1)).toBeVisible();
   await expect(page.locator("pre")).toHaveCount(1);
-  await expect(page.getByText("CREATE END USER NL2SQL_APP_END_USER", { exact: false })).toBeVisible();
+  await expect(page.getByText("CREATE END USER NL2SQL_DEEPSEC_DATA_USER", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "Data Grant を検証" })).toBeDisabled();
 
   releaseStatus();
@@ -766,7 +773,8 @@ test("DeepSec は Thick mode でも SQL step をキーボード操作できる",
       configured: false,
       driver_mode: "thick",
       deepsec_enabled: true,
-      end_user: "NL2SQL_APP_END_USER",
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: true,
       objects: {},
       message: "未適用です。",
     })
@@ -797,14 +805,16 @@ for (const driverMode of ["thin", "thick"] as const) {
       fulfill(route, {
         configured: false,
         driver_mode: driverMode,
+        connection_security: "wallet_mtls",
         deepsec_enabled: false,
-        end_user: "NL2SQL_APP_END_USER",
+        data_user: "NL2SQL_DEEPSEC_DATA_USER",
+        has_data_user_password: false,
         objects: {},
         message: "未適用です。",
       })
     );
     await page.route("**/api/security/deepsec/plan", (route) =>
-      fulfill(route, deepSecPlan(false, driverMode, false))
+      fulfill(route, deepSecPlan(false, driverMode, false, false))
     );
 
     await page.goto("/settings/security/deepsec");
@@ -818,6 +828,63 @@ for (const driverMode of ["thin", "thick"] as const) {
   });
 }
 
+test("DeepSec は DATA USER password をページから保存し再起動なしで適用可能にする", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  let hasPassword = false;
+  let savedPassword = "";
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: false,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: hasPassword,
+      objects: {},
+      message: "未適用です。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) =>
+    fulfill(route, deepSecPlan(false, "thin", true, hasPassword))
+  );
+  await page.route("**/api/security/deepsec/config", async (route) => {
+    const payload = route.request().postDataJSON() as { data_user_password: string };
+    savedPassword = payload.data_user_password;
+    hasPassword = true;
+    await fulfill(route, {
+      configured: false,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: {},
+      message: "未適用です。",
+    });
+  });
+
+  await page.goto("/settings/security/deepsec");
+
+  await expect(
+    page.getByText("API を再起動せずに次の適用・検証から使用できます。", {
+      exact: false,
+    })
+  ).toBeVisible();
+  await expect(page.getByText("未設定", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "このステップを適用" })).toBeDisabled();
+
+  const password = page.getByLabel("DATA USER パスワード");
+  await password.fill("DeepSecret!789");
+  await page.getByRole("button", { name: "保存" }).click();
+
+  expect(savedPassword).toBe("DeepSecret!789");
+  await expect(password).toHaveValue("");
+  await expect(page.getByText("保存済み", { exact: true })).toBeVisible();
+  await expect(page.getByText("API を再起動")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "このステップを適用" })).toBeEnabled();
+  await expectNoPageHorizontalScroll(page);
+});
+
 test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証結果を表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   let applied = false;
@@ -825,8 +892,10 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
     fulfill(route, {
       configured: applied,
       driver_mode: "thin",
+      connection_security: "wallet_mtls",
       deepsec_enabled: true,
-      end_user: "NL2SQL_APP_END_USER",
+      data_user: "NL2SQL_DEEPSEC_DATA_USER",
+      has_data_user_password: true,
       objects: applied ? { data_grants: 2 } : {},
       message: applied ? "Deep Data Security の検証オブジェクトは構成済みです。" : "未適用です。",
     })
@@ -853,7 +922,7 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   await page.goto("/settings/security/deepsec");
   await expect(page.locator("pre")).toHaveCount(1);
   await expect(page.locator("textarea")).toHaveCount(0);
-  await expect(page.getByText("<secret:ORACLE_DEEPSEC_END_USER_PASSWORD>", { exact: false })).toBeVisible();
+  await expect(page.getByText("<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "このステップを適用" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "実行" }).click();
   await expect(page.getByText("適用済み", { exact: true }).first()).toBeVisible();

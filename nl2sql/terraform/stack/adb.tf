@@ -3,9 +3,9 @@ data "oci_core_subnet" "adb_acl_subnet" {
     local.create_new_adb
     && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
     && var.adb_acl_notation_type == "VCN"
-    && trimspace(var.adb_acl_subnet_id) != ""
+    && trimspace(local.effective_adb_acl_subnet_id) != ""
   ) ? 1 : 0
-  subnet_id = var.adb_acl_subnet_id
+  subnet_id = local.effective_adb_acl_subnet_id
 }
 
 data "oci_database_autonomous_database" "selected_existing_adb" {
@@ -34,14 +34,20 @@ locals {
     && (var.adb_network_access_type == "PRIVATE_ENDPOINT_ONLY" || var.adb_use_private_subnet)
   )
   adb_secure_acl_enabled = local.create_new_adb && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+  effective_adb_acl_vcn_id = (
+    trimspace(var.adb_acl_vcn_id) != "" ? trimspace(var.adb_acl_vcn_id) : trimspace(var.vcn_ai_vcn_id)
+  )
+  effective_adb_acl_subnet_id = (
+    trimspace(var.adb_acl_subnet_id) != "" ? trimspace(var.adb_acl_subnet_id) : trimspace(var.subnet_ai_subnet_id)
+  )
 
   adb_acl_cidr_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "CIDR_BLOCK" && trimspace(var.adb_acl_cidr_blocks) != "" ? [
     for cidr in split(",", var.adb_acl_cidr_blocks) : trimspace(cidr)
     if trimspace(cidr) != ""
   ] : []
 
-  adb_acl_vcn_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "VCN" && trimspace(var.adb_acl_vcn_id) != "" ? [
-    trimspace(var.adb_acl_subnet_id) != "" ? "${var.adb_acl_vcn_id};${data.oci_core_subnet.adb_acl_subnet[0].cidr_block}" : var.adb_acl_vcn_id
+  adb_acl_vcn_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "VCN" && trimspace(local.effective_adb_acl_vcn_id) != "" ? [
+    trimspace(local.effective_adb_acl_subnet_id) != "" ? "${local.effective_adb_acl_vcn_id};${data.oci_core_subnet.adb_acl_subnet[0].cidr_block}" : local.effective_adb_acl_vcn_id
   ] : []
 
   adb_whitelisted_ips = local.adb_secure_acl_enabled ? concat(local.adb_acl_vcn_entries, local.adb_acl_cidr_entries) : null

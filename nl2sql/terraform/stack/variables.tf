@@ -249,7 +249,7 @@ variable "adb_backup_retention_period_in_days" {
 variable "adb_network_access_type" {
   description = "Autonomous AI Database network access mode."
   type        = string
-  default     = "PRIVATE_ENDPOINT_ONLY"
+  default     = "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
 
   validation {
     condition = contains([
@@ -491,5 +491,22 @@ variable "app_admin_password" {
       )
     )
     error_message = "app_admin_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
+  }
+}
+
+variable "oracle_deepsec_data_user_password" {
+  description = "Password for the shared NL2SQL_DEEPSEC_DATA_USER Deep Data Security DATA USER."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition = (
+      trimspace(var.oracle_deepsec_data_user_password) != ""
+      && length(var.oracle_deepsec_data_user_password) >= 12
+      && length(var.oracle_deepsec_data_user_password) <= 256
+      && !can(regex("[\r\n]", var.oracle_deepsec_data_user_password))
+      && !can(regex("\"", var.oracle_deepsec_data_user_password))
+    )
+    error_message = "oracle_deepsec_data_user_password must be 12-256 characters, not include double quotes, and not contain line breaks."
   }
 }

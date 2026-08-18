@@ -244,6 +244,7 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
             data=nl2sql_service.start_job(
                 req,
                 actor_user_id=actor_user_id,
+                actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )
     except ValueError as exc:
@@ -315,9 +316,7 @@ def get_profile_detail(
 
 
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
-def create_profile(
-    req: ProfileUpsertRequest, response: Response
-) -> ApiResponse[Nl2SqlProfile]:
+def create_profile(req: ProfileUpsertRequest, response: Response) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を作成する。"""
     profile = Nl2SqlProfile(id=str(uuid.uuid4()), **req.model_dump())
     try:
@@ -1355,9 +1354,7 @@ def quality_evaluation_results(
     """品質評価結果の明細をページ取得する。"""
     try:
         return ApiResponse(
-            data=quality_evaluation_service.list_results(
-                job_id=job_id, cursor=cursor, limit=limit
-            )
+            data=quality_evaluation_service.list_results(job_id=job_id, cursor=cursor, limit=limit)
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

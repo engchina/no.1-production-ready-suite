@@ -237,9 +237,7 @@ def normalize_profile_identifier(value: str) -> str:
 
 def validate_profile_identifier(value: str) -> str:
     if not PROFILE_IDENTIFIER_PATTERN.fullmatch(value):
-        raise ValueError(
-            "名称は英字で開始し、英字・数字・アンダースコアのみ使用できます。"
-        )
+        raise ValueError("名称は英字で開始し、英字・数字・アンダースコアのみ使用できます。")
     return value
 
 
@@ -421,9 +419,7 @@ class ProfileUpsertRequest(BaseModel):
 
     @model_validator(mode="after")
     def align_select_ai_profile_name(self) -> ProfileUpsertRequest:
-        self.select_ai_config = self.select_ai_config.model_copy(
-            update={"profile_name": self.name}
-        )
+        self.select_ai_config = self.select_ai_config.model_copy(update={"profile_name": self.name})
         return self
 
 
@@ -530,6 +526,13 @@ class QueryResults(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     total: int
+    execution_context: Literal[
+        "deterministic",
+        "oracle_data_plane",
+        "deepsec_data_plane",
+        "admin_control_plane",
+    ] = "deterministic"
+    vpd_context_enforced: bool = False
 
 
 class ExplainPlanOperation(BaseModel):

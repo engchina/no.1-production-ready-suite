@@ -59,7 +59,7 @@ export function SettingsSupplementalPanels({
   json,
 }: {
   status?: ReactNode;
-  env: {
+  env?: {
     description: string;
     value: string;
   };
@@ -70,11 +70,13 @@ export function SettingsSupplementalPanels({
 }) {
   return (
     <aside className="space-y-5">
-      <EnvPreviewCard
-        description={env.description}
-        value={env.value}
-        previewHeightClassName="h-44"
-      />
+      {env ? (
+        <EnvPreviewCard
+          description={env.description}
+          value={env.value}
+          previewHeightClassName="h-44"
+        />
+      ) : null}
       {json ? (
         <JsonPreviewCard
           description={json.description}

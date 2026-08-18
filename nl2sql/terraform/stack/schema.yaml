@@ -36,6 +36,11 @@ variableGroups:
       - app_admin_username
       - app_admin_password
 
+  - title: Deep Data Security
+    visible: true
+    variables:
+      - oracle_deepsec_data_user_password
+
   - title: Autonomous AI Database
     visible: true
     variables:
@@ -202,6 +207,15 @@ variables:
     description: "Login password for the built-in SYSTEM_ADMIN configuration administrator. Uses the same rule as the database password."
     confirmation: true
     pattern: '^[^"\r\n]{12,30}$'
+
+  oracle_deepsec_data_user_password:
+    type: password
+    required: true
+    visible: true
+    title: "DeepSec DATA USER password"
+    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared NL2SQL_DEEPSEC_DATA_USER Deep Data Security data connection."
+    confirmation: true
+    pattern: '^[^"\r\n]{12,256}$'
 
   adb_deployment_mode:
     type: enum
@@ -390,11 +404,12 @@ variables:
     required: true
     visible: true
     title: "ADB network access"
+    description: "Default secure mode enables the ADB access-control list. With VCN notation and no override, the stack allows the selected Compute subnet."
     enum:
       - "PUBLIC_ENDPOINT"
       - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
       - "PRIVATE_ENDPOINT_ONLY"
-    default: "PRIVATE_ENDPOINT_ONLY"
+    default: "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
 
   adb_use_private_subnet:
     type: boolean
@@ -436,6 +451,7 @@ variables:
         - adb_network_access_type
         - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
     title: "Allowed VCN"
+    description: "Optional override. Leave blank to reuse the deployment VCN selected above."
     dependsOn:
       compartmentId: ${compartment_ocid}
 
@@ -447,7 +463,7 @@ variables:
         - adb_network_access_type
         - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
     title: "Allowed subnet"
-    description: "Optional. When selected, the subnet CIDR is added as VCN;CIDR in the ADB access list."
+    description: "Optional override. Leave blank to reuse the Compute subnet. The subnet CIDR is added as VCN;CIDR in the ADB access list."
     dependsOn:
       compartmentId: ${compartment_ocid}
       vcnId: ${adb_acl_vcn_id}
@@ -467,6 +483,7 @@ variables:
     required: true
     visible: true
     title: "Require mutual TLS (mTLS)"
+    description: "Enabled by default. Thin mode uses the generated Wallet for mTLS; set false only for walletless one-way TLS ADBs."
     default: true
 
   instance_display_name:

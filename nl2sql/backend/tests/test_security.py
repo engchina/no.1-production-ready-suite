@@ -823,6 +823,72 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
         reset_security_service()
 
 
+def test_deepsec_config_patch_updates_runtime_without_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_security_threadpools(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ORACLE_DEEPSEC_END_USER=NL2SQL_APP_END_USER\n"
+        "ORACLE_DEEPSEC_END_USER_PASSWORD=OldSecret123\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_dsn", "")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user", "")
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user_password", "")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            invalid = await client.patch(
+                "/api/security/deepsec/config",
+                json={"data_user_password": "short"},
+            )
+            assert invalid.status_code == 422
+            assert settings.oracle_deepsec_enabled is False
+            assert settings.oracle_deepsec_data_user_password == ""
+            assert closed == []
+
+            response = await client.patch(
+                "/api/security/deepsec/config",
+                json={"data_user_password": "DeepSecret!456"},
+            )
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["deepsec_enabled"] is True
+            assert data["data_user"] == "NL2SQL_DEEPSEC_DATA_USER"
+            assert data["has_data_user_password"] is True
+            assert "DeepSecret!456" not in response.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    assert settings.oracle_deepsec_enabled is True
+    assert settings.oracle_deepsec_data_user == "NL2SQL_DEEPSEC_DATA_USER"
+    assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
+    assert closed == [True]
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
+    assert "ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER" in env_text
+    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
+    assert "ORACLE_DEEPSEC_END_USER" not in env_text
+
+
 def test_api_enforces_menu_permissions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

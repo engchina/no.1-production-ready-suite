@@ -5,26 +5,54 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 
-_ACTOR_USER_ID: ContextVar[str] = ContextVar("nl2sql_actor_user_id", default="")
+
+@dataclass(frozen=True)
+class ActorContext:
+    """DB 実行時に必要な application actor 情報。"""
+
+    user_id: str = ""
+    is_system_admin: bool = False
+
+
+_ACTOR_CONTEXT: ContextVar[ActorContext | None] = ContextVar("nl2sql_actor_context", default=None)
+
+
+def current_actor_context() -> ActorContext:
+    return _ACTOR_CONTEXT.get() or ActorContext()
 
 
 def current_actor_user_id() -> str:
-    return _ACTOR_USER_ID.get()
+    return current_actor_context().user_id
 
 
-def set_actor_user_id(user_id: str) -> Token[str]:
-    return _ACTOR_USER_ID.set(user_id)
+def current_actor_is_system_admin() -> bool:
+    return current_actor_context().is_system_admin
 
 
-def reset_actor_user_id(token: Token[str]) -> None:
-    _ACTOR_USER_ID.reset(token)
+def set_actor_context(user_id: str, *, is_system_admin: bool = False) -> Token[ActorContext | None]:
+    return _ACTOR_CONTEXT.set(
+        ActorContext(user_id=user_id.strip(), is_system_admin=bool(is_system_admin))
+    )
+
+
+def reset_actor_context(token: Token[ActorContext | None]) -> None:
+    _ACTOR_CONTEXT.reset(token)
+
+
+def set_actor_user_id(user_id: str) -> Token[ActorContext | None]:
+    return set_actor_context(user_id)
+
+
+def reset_actor_user_id(token: Token[ActorContext | None]) -> None:
+    reset_actor_context(token)
 
 
 @contextmanager
-def actor_scope(user_id: str) -> Iterator[None]:
-    token = set_actor_user_id(user_id)
+def actor_scope(user_id: str, *, is_system_admin: bool = False) -> Iterator[None]:
+    token = set_actor_context(user_id, is_system_admin=is_system_admin)
     try:
         yield
     finally:
-        reset_actor_user_id(token)
+        reset_actor_context(token)

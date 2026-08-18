@@ -78,15 +78,16 @@ class Settings(BaseServiceSettings):
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""
-    # Deep Data Security は共有 local END USER の password direct logon を使うため
+    # Deep Data Security は共有 DATA USER の password direct logon を使うため
     # Thin/Thick の両方に対応する。payload API/SPI を導入する場合は Thin が必要。
-    oracle_driver_mode: str = "thick"
-    oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
-    oracle_wallet_dir: str = ""
+    oracle_driver_mode: str = "thin"
+    oracle_connection_security: str = "wallet_mtls"
+    oracle_client_lib_dir: str = ""
+    oracle_wallet_dir: str = "/u01/aipoc/wallet"
     oracle_wallet_password: str = ""
     oracle_deepsec_enabled: bool = False
-    oracle_deepsec_end_user: str = "NL2SQL_APP_END_USER"
-    oracle_deepsec_end_user_password: str = ""
+    oracle_deepsec_data_user: str = "NL2SQL_DEEPSEC_DATA_USER"
+    oracle_deepsec_data_user_password: str = ""
     oracle_adb_ocid: str = ""
     oracle_adb_region: str = ""
     oci_region: str = ""
@@ -311,6 +312,17 @@ class Settings(BaseServiceSettings):
         normalized = value.strip().lower()
         if normalized not in {"thin", "thick"}:
             raise ValueError("ORACLE_DRIVER_MODE は thin または thick を指定してください。")
+        return normalized
+
+    @field_validator("oracle_connection_security")
+    @classmethod
+    def validate_oracle_connection_security(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"wallet_mtls", "walletless_tls"}:
+            raise ValueError(
+                "ORACLE_CONNECTION_SECURITY は wallet_mtls または "
+                "walletless_tls を指定してください。"
+            )
         return normalized
 
 

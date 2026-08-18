@@ -55,8 +55,8 @@ resource "oci_core_instance" "generated_oci_core_instance" {
         local.create_new_adb
         && local.adb_secure_acl_enabled
         && var.adb_acl_notation_type == "VCN"
-      ) ? trimspace(var.adb_acl_vcn_id) != "" : true
-      error_message = "adb_acl_vcn_id must be configured when creating an Autonomous AI Database with VCN ACL access."
+      ) ? trimspace(local.effective_adb_acl_vcn_id) != "" : true
+      error_message = "adb_acl_vcn_id or vcn_ai_vcn_id must be configured when creating an Autonomous AI Database with VCN ACL access."
     }
     precondition {
       condition = (
@@ -77,6 +77,10 @@ resource "oci_core_instance" "generated_oci_core_instance" {
     precondition {
       condition     = var.app_environment == "local" || var.app_auth_cookie_secure
       error_message = "app_auth_cookie_secure must be true when app_environment is staging or production."
+    }
+    precondition {
+      condition     = trimspace(var.oracle_deepsec_data_user_password) != ""
+      error_message = "oracle_deepsec_data_user_password must be configured because ORACLE_DEEPSEC_ENABLED=true."
     }
   }
 }

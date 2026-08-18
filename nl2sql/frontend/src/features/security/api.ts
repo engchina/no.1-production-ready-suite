@@ -84,9 +84,16 @@ export const securityApi = {
     apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
   deepSecPlan: (options: ApiRequestOptions = {}) =>
     apiGet<DeepSecPlan>("/api/security/deepsec/plan", options),
-  applyDeepSecStep: (version: string, step: DeepSecStep) =>
-    apiPost<{ version: string; step_no: number; status: string }>(`/api/security/deepsec/plan/${version}/steps/${step.step_no}/apply`, {
-      checksum: step.checksum,
+  updateDeepSecConfig: (dataUserPassword: string) =>
+    apiPatch<DeepSecStatus>("/api/security/deepsec/config", {
+      data_user_password: dataUserPassword,
     }),
+  applyDeepSecStep: (version: string, step: DeepSecStep) =>
+    apiPost<{ version: string; step_no: number; status: string }>(
+      `/api/security/deepsec/plan/${version}/steps/${step.step_no}/apply`,
+      {
+        checksum: step.checksum,
+      }
+    ),
   verifyDeepSec: () => apiPost<DeepSecVerification>("/api/security/deepsec/verify"),
 };

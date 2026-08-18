@@ -11,10 +11,8 @@ import importlib
 import io
 import json
 import re
-import secrets
 import shutil
 import stat
-import string
 import time
 from base64 import b64decode
 from collections.abc import Iterator, Mapping
@@ -24,7 +22,8 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from pr_backend_core import ApiResponse
 from starlette.responses import JSONResponse
 
@@ -53,6 +52,7 @@ from app.schemas.settings import (
     AdbOperationStatus,
     AdbSettingsUpdate,
     DatabaseConnectionTestResult,
+    DatabasePasswordRevealData,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
     DatabaseWalletDownloadData,
@@ -107,8 +107,6 @@ ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIRECTORY_MODE = 0o700
 ORACLE_WALLET_FILE_MODE = 0o600
-ORACLE_WALLET_GENERATED_PASSWORD_LENGTH = 32
-ORACLE_WALLET_PASSWORD_SPECIALS = "!#$%&*+-=?@^_"
 ORACLE_WALLET_REQUIRED_FILES = frozenset(
     {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
 )
@@ -117,6 +115,7 @@ ORACLE_WALLET_SKIPPED_FILES = frozenset(
 )
 MODEL_SETTINGS_FILE_MODE = 0o600
 ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
+SECRET_REVEAL_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 OCI_CONFIG_KEYS: tuple[OciConfigField, ...] = (
     "user",
     "fingerprint",
@@ -308,6 +307,23 @@ def update_database_settings(
     return ApiResponse(data=_database_settings_data(settings))
 
 
+@router.post(
+    "/database/password/reveal",
+    response_model=ApiResponse[DatabasePasswordRevealData],
+)
+def reveal_database_password(response: Response) -> ApiResponse[DatabasePasswordRevealData]:
+    """保存済み DB password を明示操作時だけ返す。"""
+    response.headers.update(SECRET_REVEAL_HEADERS)
+    password = get_settings().oracle_password
+    if not password:
+        raise HTTPException(
+            status_code=404,
+            detail="保存済み DB パスワードがありません。パスワードを入力して保存してください。",
+            headers=SECRET_REVEAL_HEADERS,
+        )
+    return ApiResponse(data=DatabasePasswordRevealData(password=password))
+
+
 @router.post("/database/wallet", response_model=ApiResponse[DatabaseSettingsData])
 async def upload_database_wallet(
     file: Annotated[UploadFile, File(...)],
@@ -337,7 +353,7 @@ async def download_database_wallet() -> ApiResponse[DatabaseWalletDownloadData]:
 
     adb_ocid = settings.oracle_adb_ocid.strip()
     client = OciDatabaseClient(settings=settings)
-    password = _generate_wallet_password()
+    password = _wallet_download_password(settings)
     try:
         info = await client.get_autonomous_database(adb_ocid)
         generate_type = None if info.is_dedicated is True else "SINGLE"
@@ -369,6 +385,7 @@ async def download_database_wallet() -> ApiResponse[DatabaseWalletDownloadData]:
             _install_downloaded_database_wallet,
             settings,
             wallet_zip,
+            password,
         )
     except HTTPException as exc:
         if exc.status_code == 413:
@@ -920,8 +937,7 @@ def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_
         return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
     if target_type == "enterprise_vision":
         return (
-            f"Enterprise AI の Vision モデル「{model_id}」から"
-            "構造化抽出レスポンスを取得しました。"
+            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
         )
     if target_type == "embedding":
         return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
@@ -970,7 +986,7 @@ def _model_test_troubleshooting(
         )
     if any(token in lowered for token in ("401", "unauthorized", "authentication")):
         tips.append(
-            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
+            "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
         )
     if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
         tips.append(
@@ -1021,6 +1037,7 @@ def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
         user=getattr(settings, "oracle_user", ""),
         dsn=getattr(settings, "oracle_dsn", ""),
         driver_mode=settings.oracle_driver_mode,
+        connection_security=settings.oracle_connection_security,
         client_lib_dir=settings.oracle_client_lib_dir,
         wallet_dir=wallet_dir,
         wallet_uploaded=wallet_configured,
@@ -1057,6 +1074,22 @@ def _database_wallet_is_configured(wallet_path: Path) -> bool:
     )
 
 
+def _database_wallet_password_is_usable(wallet_path: Path, wallet_password: str) -> bool:
+    """Thin mTLS 用の ewallet.pem が保存済み password で使えるか判定する。"""
+    pem_path = wallet_path / "ewallet.pem"
+    if not pem_path.is_file():
+        return False
+    if not pem_file_is_encrypted(pem_path):
+        return True
+    if not wallet_password:
+        return False
+    try:
+        load_pem_private_key(pem_path.read_bytes(), password=wallet_password.encode("utf-8"))
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _require_wallet_download_configuration(settings: Settings) -> None:
     """Wallet 取得前に不足を 422 として説明可能な範囲で検出する。"""
     if not settings.oracle_adb_ocid.strip():
@@ -1083,8 +1116,10 @@ def _require_wallet_download_configuration(settings: Settings) -> None:
         if parsed is not None and parsed.key_file
         else None
     )
-    if not all(value.strip() for value in required_values) or not region.strip() or not (
-        key_path and key_path.is_file()
+    if (
+        not all(value.strip() for value in required_values)
+        or not region.strip()
+        or not (key_path and key_path.is_file())
     ):
         raise HTTPException(
             status_code=422,
@@ -1095,25 +1130,20 @@ def _require_wallet_download_configuration(settings: Settings) -> None:
         )
 
 
-def _generate_wallet_password(length: int = ORACLE_WALLET_GENERATED_PASSWORD_LENGTH) -> str:
-    """保存も返却もしない Wallet ZIP 用の一時 password を生成する。"""
-    if length < 24:
-        raise ValueError("Wallet password length must be at least 24")
-    required = [
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.digits),
-        secrets.choice(ORACLE_WALLET_PASSWORD_SPECIALS),
-    ]
-    alphabet = (
-        string.ascii_lowercase
-        + string.ascii_uppercase
-        + string.digits
-        + ORACLE_WALLET_PASSWORD_SPECIALS
-    )
-    password = required + [secrets.choice(alphabet) for _ in range(length - len(required))]
-    secrets.SystemRandom().shuffle(password)
-    return "".join(password)
+def _wallet_download_password(settings: Settings) -> str:
+    """OCI Wallet 生成 password は明示 Wallet password、未設定なら DB password を使う。"""
+    password = settings.oracle_wallet_password.strip() or settings.oracle_password.strip()
+    if not password:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Wallet を自動取得するには DB パスワードが必要です。"
+                "ORACLE_WALLET_PASSWORD が空の場合は ORACLE_PASSWORD を "
+                "Wallet password として使用し、"
+                "ORACLE_WALLET_PASSWORD にも保存します。"
+            ),
+        )
+    return password
 
 
 @contextmanager
@@ -1167,7 +1197,10 @@ def _install_uploaded_database_wallet(
 def _prepare_database_wallet_download(settings: Settings) -> DatabaseWalletDownloadData | None:
     with _database_wallet_install_lock(settings):
         target = _wallet_storage_root(settings)
-        if _database_wallet_is_configured(target):
+        if _database_wallet_is_configured(target) and _database_wallet_password_is_usable(
+            target,
+            settings.oracle_wallet_password.strip() or settings.oracle_password.strip(),
+        ):
             return DatabaseWalletDownloadData(
                 status="already_configured",
                 settings=_database_settings_data(settings),
@@ -1179,10 +1212,13 @@ def _prepare_database_wallet_download(settings: Settings) -> DatabaseWalletDownl
 def _install_downloaded_database_wallet(
     settings: Settings,
     wallet_zip: bytes,
+    wallet_password: str,
 ) -> DatabaseSettingsData:
     with _database_wallet_install_lock(settings):
         wallet_dir = _install_database_wallet(settings, wallet_zip, "wallet.zip")
     settings.oracle_wallet_dir = str(wallet_dir)
+    settings.oracle_wallet_password = wallet_password
+    _persist_database_settings(settings)
     close_oracle_pool()
     return _database_settings_data(settings)
 
@@ -1194,6 +1230,8 @@ def _database_settings_candidate(base: Settings, payload: DatabaseSettingsUpdate
     updates = {
         "oracle_user": payload.user.strip(),
         "oracle_dsn": payload.dsn.strip(),
+        "oracle_connection_security": payload.connection_security
+        or base.oracle_connection_security,
         "oracle_wallet_dir": wallet_dir,
         "oracle_password": _secret_value(
             current=base.oracle_password,
@@ -1213,6 +1251,7 @@ def _apply_database_settings(target: Settings, source: Settings) -> None:
     target.oracle_user = source.oracle_user
     target.oracle_password = source.oracle_password
     target.oracle_dsn = source.oracle_dsn
+    target.oracle_connection_security = source.oracle_connection_security
     target.oracle_client_lib_dir = source.oracle_client_lib_dir
     target.oracle_wallet_dir = source.oracle_wallet_dir
     target.oracle_wallet_password = source.oracle_wallet_password
@@ -1224,6 +1263,7 @@ def _persist_database_settings(settings: Settings) -> None:
         "ORACLE_PASSWORD": settings.oracle_password,
         "ORACLE_DSN": settings.oracle_dsn,
         "ORACLE_DRIVER_MODE": settings.oracle_driver_mode,
+        "ORACLE_CONNECTION_SECURITY": settings.oracle_connection_security,
         "ORACLE_CLIENT_LIB_DIR": settings.oracle_client_lib_dir,
         "ORACLE_WALLET_DIR": settings.oracle_wallet_dir,
         "ORACLE_WALLET_PASSWORD": settings.oracle_wallet_password,
@@ -1242,16 +1282,24 @@ def _database_readiness(settings: Settings) -> str:
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
     wallet_configured = bool(wallet_path and _database_wallet_is_configured(wallet_path))
+    connection_security = settings.oracle_connection_security.strip().lower()
+    if connection_security == "walletless_tls":
+        if _database_dsn_uses_wallet_alias(settings.oracle_dsn):
+            return "walletless_tls_dsn_required"
+        return "ok" if settings.oracle_password.strip() else "missing_credentials"
+    if not wallet_path or not wallet_configured:
+        return "wallet_not_found"
+    if not _database_wallet_password_is_usable(
+        wallet_path,
+        settings.oracle_wallet_password.strip() or settings.oracle_password.strip(),
+    ):
+        return "wallet_password_invalid"
     if _database_dsn_uses_wallet_alias(settings.oracle_dsn):
         if not wallet_path or not wallet_configured:
             return "wallet_not_found"
         if not _database_wallet_service_exists(wallet_path, settings.oracle_dsn):
             return "invalid"
-    if settings.oracle_password.strip() or wallet_configured:
-        return "ok"
-    if not wallet_dir:
-        return "missing_credentials"
-    return "wallet_not_found"
+    return "ok"
 
 
 def _database_dsn_uses_wallet_alias(dsn: str) -> bool:
@@ -1275,6 +1323,16 @@ def _database_readiness_message(readiness: str) -> str:
         return (
             "Oracle 26ai 接続に必要な Wallet を確認してください。"
             "現在の Wallet 保存先に接続用ファイルが揃っていません。"
+        )
+    if readiness == "wallet_password_invalid":
+        return (
+            "Oracle 26ai 接続に必要な Wallet パスワードを確認してください。"
+            "暗号化 Wallet の ewallet.pem を現在の ORACLE_WALLET_PASSWORD で復号できません。"
+        )
+    if readiness == "walletless_tls_dsn_required":
+        return (
+            "Walletless TLS では Wallet サービス名ではなく、"
+            "ADB の TCPS 接続文字列または Easy Connect DSN を指定してください。"
         )
     return "Oracle 26ai 接続に必要な設定が不足しています。"
 
@@ -2324,15 +2382,24 @@ def _database_connection_troubleshooting(
     tips: list[str] = []
     if readiness == "missing":
         tips.append(
-            "ユーザー名、Wallet サービス名、Wallet ZIP が"
-            "入力・アップロード済みか確認してください。"
+            "ユーザー名、Wallet サービス名、Wallet ZIP が入力・アップロード済みか確認してください。"
         )
     if readiness == "missing_credentials":
         tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
     if readiness == "wallet_not_found":
         tips.append("ADB からダウンロードした Wallet ZIP をアップロードし直してください。")
+    if readiness == "wallet_password_invalid":
+        tips.append(
+            "Wallet パスワードが一致していません。OCI から Wallet を再取得するか、"
+            "現在の Wallet ZIP 作成時に指定した Wallet パスワードを保存してください。"
+        )
     if readiness == "invalid":
         tips.append("Wallet の tnsnames.ora / sqlnet.ora とサービス名の形式を確認してください。")
+    if readiness == "walletless_tls_dsn_required":
+        tips.append(
+            "Walletless TLS の DSN は Wallet alias ではなく、ADB の TCPS 接続文字列または "
+            "host:port/service_name 形式で指定してください。"
+        )
 
     combined = f"{error_text} {error_type}".lower()
     if any(token in combined for token in ("timeout", "timed out", "oracleconnectiontimeouterror")):
@@ -2353,12 +2420,10 @@ def _database_connection_troubleshooting(
         tips.append("Wallet サービス名が ADB の接続文字列として有効か確認してください。")
     if "ora-12541" in combined or "dpy-6005" in combined or "dpy-6000" in combined:
         tips.append(
-            "データベースが停止していないか、ADB の listener に" "到達できるか確認してください。"
+            "データベースが停止していないか、ADB の listener に到達できるか確認してください。"
         )
     if "wallet" in combined or "dpy-4011" in combined:
-        tips.append(
-            "Wallet ZIP の内容、Wallet パスワード、ORACLE_WALLET_DIR を確認してください。"
-        )
+        tips.append("Wallet ZIP の内容、Wallet パスワード、ORACLE_WALLET_DIR を確認してください。")
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(
             "Oracle Instant Client が ORACLE_CLIENT_LIB_DIR に存在し、"

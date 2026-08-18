@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -25,7 +24,6 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   api,
@@ -42,11 +40,8 @@ import {
   FIXED_OCI_CONFIG_PROFILE,
   FIXED_OCI_KEY_FILE,
   OCI_SETTINGS_STORAGE_KEY,
-  REQUIRED_OCI_SETTINGS_FIELDS,
-  buildOciEnvFile,
   normalizeOciSettingsDraft,
   readStoredOciSettingsDraft,
-  validateOciSettingsDraft,
   type OciSettingsDraft,
   type OciSettingsField,
   type OciValidationCode,
@@ -67,18 +62,6 @@ const OCI_REGION_OPTIONS = [
   { value: "ap-osaka-1", label: "ap-osaka-1" },
   { value: "us-chicago-1", label: "us-chicago-1" },
 ] as const satisfies readonly SelectFieldOption<string>[];
-
-const FIELD_LABEL_KEYS: Record<OciSettingsField, I18nKey> = {
-  configFile: "settings.oci.field.configFile",
-  configProfile: "settings.oci.field.configProfile",
-  userOcid: "settings.oci.field.userOcid",
-  fingerprint: "settings.oci.field.fingerprint",
-  tenancyOcid: "settings.oci.field.tenancyOcid",
-  keyFile: "settings.oci.field.keyFile",
-  region: "settings.oci.field.region",
-  objectStorageRegion: "settings.oci.field.objectStorageRegion",
-  objectStorageNamespace: "settings.oci.field.objectStorageNamespace",
-};
 
 const AUTH_PROFILE_FIELDS = [
   "configFile",
@@ -149,12 +132,6 @@ export function OciSettingsClient() {
       abortAll();
     };
   }, []);
-
-  const liveErrors = useMemo(() => validateOciSettingsDraft(draft), [draft]);
-  const envPreview = useMemo(() => buildOciEnvFile(draft), [draft]);
-  const completedCount = REQUIRED_OCI_SETTINGS_FIELDS.filter((field) =>
-    draft[field].trim()
-  ).length;
 
   function updateDraft<K extends OciSettingsField>(field: K, value: OciSettingsDraft[K]) {
     if (field === "objectStorageNamespace") return;
@@ -354,199 +331,162 @@ export function OciSettingsClient() {
 
   return (
     <div className="p-8">
-      <div className={SETTINGS_DETAIL_GRID_CLASS}>
-        <div className="space-y-6">
-          <Card className="rounded-md">
-            <CardHeader className="p-6 pb-0">
-              <div className="flex items-center gap-2 border-b border-border pb-5">
-                <KeyRound size={18} aria-hidden />
-                <CardTitle className="text-lg">{t("settings.oci.auth.cardTitle")}</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5 p-6">
-              <RequiredFieldsNote />
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <ConfigFileField
-                  id="oci-config-file"
-                  label={t("settings.oci.field.configFile")}
-                  value={draft.configFile}
-                  error={errorText(errors.configFile)}
-                  helper={t("settings.oci.helper.configFile")}
-                  placeholder="~/.oci/config"
-                  importState={configImportState}
-                  importError={configImportMessage}
-                  onApply={() => void importConfigFromPath()}
-                  readOnly
-                  required
-                />
-                <TextField
-                  id="oci-config-profile"
-                  label={t("settings.oci.field.configProfile")}
-                  value={draft.configProfile}
-                  error={errorText(errors.configProfile)}
-                  helper={t("settings.oci.helper.configProfile")}
-                  placeholder="DEFAULT"
-                  readOnly
-                  required
-                />
-                <TextField
-                  id="oci-user-ocid"
-                  label={t("settings.oci.field.userOcid")}
-                  value={draft.userOcid}
-                  onChange={(value) => updateDraft("userOcid", value)}
-                  error={errorText(errors.userOcid)}
-                  helper={t("settings.oci.helper.userOcid")}
-                  placeholder="ocid1.user.oc1.."
-                  required
-                />
-                <TextField
-                  id="oci-tenancy-ocid"
-                  label={t("settings.oci.field.tenancyOcid")}
-                  value={draft.tenancyOcid}
-                  onChange={(value) => updateDraft("tenancyOcid", value)}
-                  error={errorText(errors.tenancyOcid)}
-                  helper={t("settings.oci.helper.tenancyOcid")}
-                  placeholder="ocid1.tenancy.oc1.."
-                  required
-                />
-                <TextField
-                  id="oci-fingerprint"
-                  label={t("settings.oci.field.fingerprint")}
-                  value={draft.fingerprint}
-                  onChange={(value) => updateDraft("fingerprint", value)}
-                  error={errorText(errors.fingerprint)}
-                  helper={t("settings.oci.helper.fingerprint")}
-                  placeholder="12:34:56:78:90:ab:cd:ef"
-                  required
-                />
-                <SelectField
-                  id="oci-region"
-                  label={t("settings.oci.field.region")}
-                  value={draft.region}
-                  options={OCI_REGION_OPTIONS}
-                  onValueChange={(value) => updateDraft("region", value)}
-                  error={errorText(errors.region)}
-                  helper={t("settings.oci.helper.region")}
-                  placeholder={t("settings.oci.placeholder.region")}
-                  required
-                  requiredLabel={t("settings.oci.required")}
-                  buttonClassName="h-11"
-                />
-              </div>
-
-              <PrivateKeyDropzoneField
-                id="oci-key-file"
-                label={t("settings.oci.field.keyFile")}
-                value={draft.keyFile}
-                error={errorText(errors.keyFile)}
-                fileState={keyFileState}
-                fileMessage={keyFileMessage}
-                keyFileExists={keyFileExists}
-                onFileChange={selectKeyFile}
+      <div className="space-y-6">
+        <Card className="rounded-md">
+          <CardHeader className="p-6 pb-0">
+            <div className="flex items-center gap-2 border-b border-border pb-5">
+              <KeyRound size={18} aria-hidden />
+              <CardTitle className="text-lg">{t("settings.oci.auth.cardTitle")}</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5 p-6">
+            <RequiredFieldsNote />
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ConfigFileField
+                id="oci-config-file"
+                label={t("settings.oci.field.configFile")}
+                value={draft.configFile}
+                error={errorText(errors.configFile)}
+                helper={t("settings.oci.helper.configFile")}
+                placeholder="~/.oci/config"
+                importState={configImportState}
+                importError={configImportMessage}
+                onApply={() => void importConfigFromPath()}
+                readOnly
                 required
               />
-
-              <SectionActions
-                ariaContext={t("nav.settingsOci")}
-                saveState={authSaveState}
-                saveLabel={t("settings.oci.actions.saveAuth")}
-                savingLabel={t("settings.oci.actions.saving")}
-                onSave={() => void saveAuthDraft()}
-                testState={configTestState.phase}
-                testLabel={t("settings.oci.actions.test")}
-                testingLabel={t("settings.oci.actions.testing")}
-                onTest={() => void testAuthConfig()}
+              <TextField
+                id="oci-config-profile"
+                label={t("settings.oci.field.configProfile")}
+                value={draft.configProfile}
+                error={errorText(errors.configProfile)}
+                helper={t("settings.oci.helper.configProfile")}
+                placeholder="DEFAULT"
+                readOnly
+                required
               />
-              <ConfigTestContent state={configTestState} />
-              <p className="text-xs leading-relaxed text-muted">{t("settings.oci.hint")}</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-                  <Cloud size={20} aria-hidden />
-                </div>
-                <div>
-                  <CardTitle>{t("settings.oci.storage.title")}</CardTitle>
-                  <CardDescription>{t("settings.oci.storage.description")}</CardDescription>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <NamespaceField
-                  id="oci-object-storage-namespace"
-                  label={t("settings.oci.field.objectStorageNamespace")}
-                  value={draft.objectStorageNamespace}
-                  error={errorText(errors.objectStorageNamespace)}
-                  helper={t("settings.oci.helper.objectStorageNamespace")}
-                  placeholder="mytenancynamespace"
-                  fetchState={namespaceFetchState}
-                  fetchError={namespaceFetchMessage}
-                  onFetch={() => void fetchObjectStorageNamespace()}
-                  required
-                />
-                <SelectField
-                  id="oci-object-storage-region"
-                  label={t("settings.oci.field.objectStorageRegion")}
-                  value={draft.objectStorageRegion}
-                  options={OCI_REGION_OPTIONS}
-                  onValueChange={(value) => updateDraft("objectStorageRegion", value)}
-                  error={errorText(errors.objectStorageRegion)}
-                  helper={t("settings.oci.helper.objectStorageRegion")}
-                  placeholder={t("settings.oci.placeholder.region")}
-                  required
-                  requiredLabel={t("settings.oci.required")}
-                />
-              </div>
-
-              <SectionActions
-                ariaContext={t("settings.oci.storage.title")}
-                saveState={storageSaveState}
-                saveLabel={t("settings.oci.actions.save")}
-                savingLabel={t("settings.oci.actions.saving")}
-                onSave={saveStorageDraft}
+              <TextField
+                id="oci-user-ocid"
+                label={t("settings.oci.field.userOcid")}
+                value={draft.userOcid}
+                onChange={(value) => updateDraft("userOcid", value)}
+                error={errorText(errors.userOcid)}
+                helper={t("settings.oci.helper.userOcid")}
+                placeholder="ocid1.user.oc1.."
+                required
               />
-            </CardContent>
-          </Card>
-        </div>
+              <TextField
+                id="oci-tenancy-ocid"
+                label={t("settings.oci.field.tenancyOcid")}
+                value={draft.tenancyOcid}
+                onChange={(value) => updateDraft("tenancyOcid", value)}
+                error={errorText(errors.tenancyOcid)}
+                helper={t("settings.oci.helper.tenancyOcid")}
+                placeholder="ocid1.tenancy.oc1.."
+                required
+              />
+              <TextField
+                id="oci-fingerprint"
+                label={t("settings.oci.field.fingerprint")}
+                value={draft.fingerprint}
+                onChange={(value) => updateDraft("fingerprint", value)}
+                error={errorText(errors.fingerprint)}
+                helper={t("settings.oci.helper.fingerprint")}
+                placeholder="12:34:56:78:90:ab:cd:ef"
+                required
+              />
+              <SelectField
+                id="oci-region"
+                label={t("settings.oci.field.region")}
+                value={draft.region}
+                options={OCI_REGION_OPTIONS}
+                onValueChange={(value) => updateDraft("region", value)}
+                error={errorText(errors.region)}
+                helper={t("settings.oci.helper.region")}
+                placeholder={t("settings.oci.placeholder.region")}
+                required
+                requiredLabel={t("settings.oci.required")}
+                buttonClassName="h-11"
+              />
+            </div>
 
-        <SettingsSupplementalPanels
-          status={(
-            <Card>
-              <CardHeader>
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-                    <ShieldCheck size={18} aria-hidden />
-                  </div>
-                  <div>
-                    <CardTitle>{t("settings.oci.status.title")}</CardTitle>
-                    <CardDescription>{t("settings.oci.status.description")}</CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
-                  {t("settings.oci.status.complete", {
-                    done: completedCount,
-                    total: REQUIRED_OCI_SETTINGS_FIELDS.length,
-                  })}
-                </div>
-                <ul className="space-y-2">
-                  {REQUIRED_OCI_SETTINGS_FIELDS.map((field) => (
-                    <FieldStatusRow key={field} field={field} error={liveErrors[field]} />
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-          env={{
-            description: t("settings.oci.env.description"),
-            value: envPreview,
-          }}
-        />
+            <PrivateKeyDropzoneField
+              id="oci-key-file"
+              label={t("settings.oci.field.keyFile")}
+              value={draft.keyFile}
+              error={errorText(errors.keyFile)}
+              fileState={keyFileState}
+              fileMessage={keyFileMessage}
+              keyFileExists={keyFileExists}
+              onFileChange={selectKeyFile}
+              required
+            />
+
+            <SectionActions
+              ariaContext={t("nav.settingsOci")}
+              saveState={authSaveState}
+              saveLabel={t("settings.oci.actions.saveAuth")}
+              savingLabel={t("settings.oci.actions.saving")}
+              onSave={() => void saveAuthDraft()}
+              testState={configTestState.phase}
+              testLabel={t("settings.oci.actions.test")}
+              testingLabel={t("settings.oci.actions.testing")}
+              onTest={() => void testAuthConfig()}
+            />
+            <ConfigTestContent state={configTestState} />
+            <p className="text-xs leading-relaxed text-muted">{t("settings.oci.hint")}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+                <Cloud size={20} aria-hidden />
+              </div>
+              <div>
+                <CardTitle>{t("settings.oci.storage.title")}</CardTitle>
+                <CardDescription>{t("settings.oci.storage.description")}</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <NamespaceField
+                id="oci-object-storage-namespace"
+                label={t("settings.oci.field.objectStorageNamespace")}
+                value={draft.objectStorageNamespace}
+                error={errorText(errors.objectStorageNamespace)}
+                helper={t("settings.oci.helper.objectStorageNamespace")}
+                placeholder="mytenancynamespace"
+                fetchState={namespaceFetchState}
+                fetchError={namespaceFetchMessage}
+                onFetch={() => void fetchObjectStorageNamespace()}
+                required
+              />
+              <SelectField
+                id="oci-object-storage-region"
+                label={t("settings.oci.field.objectStorageRegion")}
+                value={draft.objectStorageRegion}
+                options={OCI_REGION_OPTIONS}
+                onValueChange={(value) => updateDraft("objectStorageRegion", value)}
+                error={errorText(errors.objectStorageRegion)}
+                helper={t("settings.oci.helper.objectStorageRegion")}
+                placeholder={t("settings.oci.placeholder.region")}
+                required
+                requiredLabel={t("settings.oci.required")}
+              />
+            </div>
+
+            <SectionActions
+              ariaContext={t("settings.oci.storage.title")}
+              saveState={storageSaveState}
+              saveLabel={t("settings.oci.actions.save")}
+              savingLabel={t("settings.oci.actions.saving")}
+              onSave={saveStorageDraft}
+            />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -1087,28 +1027,6 @@ function TextField({
 
 function RequiredBadge() {
   return <RequiredIndicator label={t("settings.oci.required")} />;
-}
-
-function FieldStatusRow({
-  field,
-  error,
-}: {
-  field: (typeof REQUIRED_OCI_SETTINGS_FIELDS)[number];
-  error?: OciValidationCode;
-}) {
-  const kind = error === "required" ? "warning" : error ? "danger" : "success";
-  const label = error
-    ? error === "required"
-      ? t("settings.oci.status.missing")
-      : t("settings.oci.status.invalid")
-    : t("settings.oci.status.ok");
-
-  return (
-    <li className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-foreground">{t(FIELD_LABEL_KEYS[field])}</span>
-      <StatusPill kind={kind}>{label}</StatusPill>
-    </li>
-  );
 }
 
 function StatusPill({

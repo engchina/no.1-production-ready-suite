@@ -52,6 +52,7 @@ WALLET_PASSWORD_REQUIRED_ERROR = (
     "Oracle Wallet がパスワードを必要としています。"  # nosec B105
     "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
 )
+WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"})
 
 
 def _coerce_text(value: Any) -> str:
@@ -286,6 +287,8 @@ def _oracle_connect_kwargs(settings: Settings) -> dict[str, object]:
 
 def _oracle_connection_test_dsn(settings: Settings) -> str:
     """Wallet alias の descriptor が取れれば、長い retry 設定を外して接続テストする。"""
+    if _oracle_connection_security(settings) == "walletless_tls":
+        return settings.oracle_dsn
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     if not wallet_dir:
         return settings.oracle_dsn
@@ -339,13 +342,23 @@ def _strip_tns_retry_settings(descriptor: str) -> str:
 
 def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
     """Wallet 設定を kwargs に追加する。"""
+    if _oracle_connection_security(settings) == "walletless_tls":
+        return
+
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     if not wallet_dir:
-        return
+        raise OracleAdapterError(
+            "ORACLE_CONNECTION_SECURITY=wallet_mtls では ORACLE_WALLET_DIR が必要です。"
+        )
 
     wallet_path = Path(wallet_dir).expanduser()
     if not wallet_path.is_dir():
-        return
+        raise OracleAdapterError(f"Oracle Wallet ディレクトリが見つかりません: {wallet_dir}")
+    if not _wallet_mtls_files_exist(wallet_path):
+        required = ", ".join(sorted(WALLET_MTLS_REQUIRED_FILES))
+        raise OracleAdapterError(
+            f"Oracle Wallet に mTLS 接続ファイルが揃っていません。必要ファイル: {required}"
+        )
 
     wallet_password = settings.oracle_wallet_password.strip() or settings.oracle_password.strip()
     if not wallet_password and _wallet_requires_password(wallet_path):
@@ -358,9 +371,20 @@ def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
         kwargs["wallet_password"] = wallet_password
 
 
+def _oracle_connection_security(settings: Settings) -> str:
+    mode = getattr(settings, "oracle_connection_security", "wallet_mtls").strip().lower()
+    return mode if mode in {"wallet_mtls", "walletless_tls"} else "wallet_mtls"
+
+
 def _wallet_dir_exists(settings: Settings) -> bool:
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     return bool(wallet_dir and Path(wallet_dir).expanduser().is_dir())
+
+
+def _wallet_mtls_files_exist(wallet_path: Path) -> bool:
+    return wallet_path.is_dir() and all(
+        (wallet_path / file_name).is_file() for file_name in WALLET_MTLS_REQUIRED_FILES
+    )
 
 
 def _wallet_requires_password(wallet_path: Path) -> bool:
@@ -405,7 +429,11 @@ class OracleNl2SqlAdapter:
     def is_configured(self) -> bool:
         if not self.settings.oracle_user.strip() or not self.settings.oracle_dsn.strip():
             return False
-        return bool(self.settings.oracle_password.strip() or _wallet_dir_exists(self.settings))
+        if _oracle_connection_security(self.settings) == "walletless_tls":
+            return bool(self.settings.oracle_password.strip())
+        wallet_dir = self.settings.resolved_oracle_wallet_dir.strip()
+        wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
+        return bool(wallet_path and _wallet_mtls_files_exist(wallet_path))
 
     def module_available(self) -> bool:
         try:
@@ -455,20 +483,22 @@ class OracleNl2SqlAdapter:
 
     @contextmanager
     def user_data_connection(self) -> Iterator[Any]:
-        """認証済み actor のデータ処理にだけ共有 DeepSec END USER を使う。"""
+        """認証済み actor のデータ処理にだけ共有 DeepSec DATA USER を使う。"""
         if not self.settings.oracle_deepsec_enabled:
             with self.connection() as connection:
                 yield connection
             return
         from app.clients.oracle_runtime import get_oracle_pool_manager
-        from app.security.request_actor import current_actor_user_id
+        from app.security.request_actor import current_actor_context
 
-        actor_user_id = current_actor_user_id()
-        if not actor_user_id:
-            raise OracleAdapterError(
-                "DeepSec データ接続には認証済み application user が必要です。"
-            )
-        with get_oracle_pool_manager().data_connection(actor_user_id) as connection:
+        actor = current_actor_context()
+        if actor.is_system_admin:
+            with self.connection() as connection:
+                yield connection
+            return
+        if not actor.user_id:
+            raise OracleAdapterError("DeepSec データ接続には認証済み application user が必要です。")
+        with get_oracle_pool_manager().data_connection(actor.user_id) as connection:
             yield connection
 
     def fetch_catalog(
@@ -560,11 +590,13 @@ class OracleNl2SqlAdapter:
             # object detail 展開時に fetch_metadata_sample_values から遅延取得する。
             if include_samples:
                 self._load_sample_values(cursor, tables)
-        catalog = filter_user_visible_catalog(SchemaCatalog(
-            refreshed_at=datetime.now(UTC).isoformat(),
-            tables=list(tables.values()),
-            view_dependencies=view_dependencies,
-        ))
+        catalog = filter_user_visible_catalog(
+            SchemaCatalog(
+                refreshed_at=datetime.now(UTC).isoformat(),
+                tables=list(tables.values()),
+                view_dependencies=view_dependencies,
+            )
+        )
         catalog.schema_fingerprint = self._schema_fingerprint(catalog)
         return catalog
 
@@ -883,9 +915,7 @@ class OracleNl2SqlAdapter:
             name_key = f"{prefix}_name_{index}"
             binds[owner_key] = owner.upper()
             binds[name_key] = object_name.upper()
-            clauses.append(
-                f"({owner_column} = :{owner_key} AND {name_column} = :{name_key})"
-            )
+            clauses.append(f"({owner_column} = :{owner_key} AND {name_column} = :{name_key})")
         return "AND (" + " OR ".join(clauses) + ")", binds
 
     def _schema_fingerprint(self, catalog: SchemaCatalog) -> str:
@@ -953,7 +983,7 @@ class OracleNl2SqlAdapter:
         samples: dict[str, dict[str, list[str]]] = {}
         warnings: list[str] = []
         try:
-            with self.user_data_connection() as conn, conn.cursor() as cursor:
+            with self.connection() as conn, conn.cursor() as cursor:
                 for target in targets:
                     raw_object_name = str(target.get("object_name") or "")
                     raw_owner = str(target.get("owner") or "")
@@ -1033,7 +1063,23 @@ class OracleNl2SqlAdapter:
                             for index, value in enumerate(row)
                         }
                     )
-            return QueryResults(columns=columns, rows=rows, total=len(rows))
+            from app.security.request_actor import current_actor_context
+
+            actor = current_actor_context()
+            vpd_context_enforced = (
+                self.settings.oracle_deepsec_enabled
+                and bool(actor.user_id)
+                and not actor.is_system_admin
+            )
+            return QueryResults(
+                columns=columns,
+                rows=rows,
+                total=len(rows),
+                execution_context=(
+                    "deepsec_data_plane" if vpd_context_enforced else "oracle_data_plane"
+                ),
+                vpd_context_enforced=vpd_context_enforced,
+            )
         except OracleAdapterError:
             raise
         except Exception as exc:
@@ -1045,7 +1091,7 @@ class OracleNl2SqlAdapter:
         statement_id = f"NL2SQL_{hashlib.sha256(sql.encode()).hexdigest()[:20].upper()}"
         normalized = sql.strip().rstrip(";")
         try:
-            with self.user_data_connection() as conn, conn.cursor() as cursor:
+            with self.connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM PLAN_TABLE WHERE statement_id = :statement_id",
                     {"statement_id": statement_id},
@@ -1292,10 +1338,7 @@ class OracleNl2SqlAdapter:
                 ddl += ";"
             if comment:
                 escaped_comment = comment.replace("'", "''")
-                ddl += (
-                    f"\nCOMMENT ON {normalized_type} {quoted_object} "
-                    f"IS '{escaped_comment}';"
-                )
+                ddl += f"\nCOMMENT ON {normalized_type} {quoted_object} IS '{escaped_comment}';"
             for column in columns:
                 if column.comment:
                     escaped_column_comment = column.comment.replace("'", "''")
@@ -1500,9 +1543,7 @@ class OracleNl2SqlAdapter:
         """JSON_TABLE で入力を小分けし、DB charset における LENGTH/LENGTHB を測定する。"""
         if not text_columns or not rows:
             return
-        json_column_defs: list[str] = [
-            "file_row NUMBER PATH '$.__file_row' ERROR ON ERROR"
-        ]
+        json_column_defs: list[str] = ["file_row NUMBER PATH '$.__file_row' ERROR ON ERROR"]
         violation_queries: list[str] = []
         for index, (column, metadata) in enumerate(text_columns):
             alias = f"c{index}"
@@ -1521,9 +1562,7 @@ class OracleNl2SqlAdapter:
             )
             length_function = "LENGTH" if char_semantics else "LENGTHB"
             maximum = (
-                int(metadata["char_length"])
-                if char_semantics
-                else int(metadata["data_length"])
+                int(metadata["char_length"]) if char_semantics else int(metadata["data_length"])
             )
             unit = "文字" if char_semantics else "バイト"
             violation_queries.append(
@@ -1539,9 +1578,7 @@ class OracleNl2SqlAdapter:
         sql = (
             "WITH input_rows AS ("
             "SELECT * FROM JSON_TABLE("
-            ":payload, '$[*]' COLUMNS ("
-            + ", ".join(json_column_defs)
-            + "))) "
+            ":payload, '$[*]' COLUMNS (" + ", ".join(json_column_defs) + "))) "
             "SELECT file_row, column_name, actual_length, maximum_length, length_unit "
             "FROM ("
             + " UNION ALL ".join(violation_queries)
@@ -2303,9 +2340,7 @@ class OracleNl2SqlAdapter:
         use_comments: bool = True,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
-        table_identity = (
-            self._db_admin_identity(table_name) if table_name.strip() else None
-        )
+        table_identity = self._db_admin_identity(table_name) if table_name.strip() else None
         object_identities = [
             self._db_admin_identity(item) for item in object_list or [] if item.strip()
         ]

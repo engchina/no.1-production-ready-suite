@@ -65,16 +65,20 @@ export interface DeepSecStep {
 export interface DeepSecPlan {
   version: string;
   driver_mode: string;
+  connection_security?: string;
   deepsec_enabled: boolean;
-  end_user: string;
+  data_user: string;
+  has_data_user_password: boolean;
   steps: DeepSecStep[];
 }
 
 export interface DeepSecStatus {
   configured: boolean;
   driver_mode: string;
+  connection_security?: string;
   deepsec_enabled: boolean;
-  end_user: string;
+  data_user: string;
+  has_data_user_password: boolean;
   objects: Record<string, number>;
   message: string;
 }

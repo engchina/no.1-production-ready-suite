@@ -8,6 +8,9 @@ locals {
   app_repo_dir      = "no.1-production-ready-nl2sql"
   platform_repo_dir = "no.1-production-ready-platform"
   wallet_dir_host   = "/u01/aipoc/wallet"
+  oracle_connection_security = (
+    var.adb_is_mtls_connection_required ? "wallet_mtls" : "walletless_tls"
+  )
 
   backend_env = <<-EOT
 APP_VERSION=0.1.0
@@ -29,9 +32,13 @@ ORACLE_USER=${local.effective_oracle_user}
 ORACLE_PASSWORD=${local.effective_oracle_password}
 ORACLE_DSN=${local.effective_oracle_dsn}
 ORACLE_DRIVER_MODE=thin
+ORACLE_CONNECTION_SECURITY=${local.oracle_connection_security}
 ORACLE_CLIENT_LIB_DIR=
 ORACLE_WALLET_DIR=${local.wallet_dir_host}
 ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
+ORACLE_DEEPSEC_ENABLED=true
+ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER
+ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_data_user_password}
 ORACLE_ADB_OCID=${local.effective_adb_ocid}
 ORACLE_ADB_REGION=${var.region}
 

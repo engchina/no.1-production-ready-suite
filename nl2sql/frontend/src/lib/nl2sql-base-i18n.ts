@@ -960,10 +960,6 @@ export const ja = {
     "原因: v1 の model-settings.json が secret を保存していました。復旧方法: この画面で保存すると API Key を backend/.env へ移し、JSON を secret のない v2 へ更新します。移行後は接続テストを実行してください。",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.fixed": "固定",
-  "settings.model.env.description":
-    "backend/.env に保存する JSON ファイル名と Enterprise AI API Key の状態です。secret の値は表示しません。",
-  "settings.model.json.description":
-    "MODEL_SETTINGS_FILE に保存される v2 JSON のプレビューです。API Key は JSON に保存されません。",
 
   "settings.model.enterprise.title": "OCI Enterprise AI",
   "settings.model.enterprise.description":
@@ -1080,7 +1076,9 @@ export const ja = {
   "settings.database.field.user": "ユーザー名",
   "settings.database.field.dbUser": "データベースユーザー",
   "settings.database.field.dbPassword": "データベースパスワード",
+  "settings.database.field.connectionSecurity": "接続セキュリティ",
   "settings.database.field.serviceDsn": "サービス名 / DSN",
+  "settings.database.field.directDsn": "接続 DSN",
   "settings.database.field.walletDir": "Wallet ディレクトリ",
   "settings.database.field.walletZip": "Wallet ZIP",
   "settings.database.field.dsnService": "Wallet サービス名",
@@ -1092,6 +1090,8 @@ export const ja = {
     "Wallet の tnsnames.ora から検出したサービス名を選択します。",
   "settings.database.helper.dsnServiceManual":
     "Wallet のサービス名を入力します。Wallet ZIP をアップロードすると候補から選べます。",
+  "settings.database.helper.directDsn":
+    "Walletless TLS では ADB の TCPS 接続文字列または host:port/service_name 形式を入力します。",
   "settings.database.helper.walletDir":
     "ORACLE_CLIENT_LIB_DIR/network/admin に固定されます。この画面からは変更できません。",
   "settings.database.walletDir.missing":
@@ -1113,14 +1113,18 @@ export const ja = {
   "settings.database.placeholder.passwordSaved": "********",
   "settings.database.placeholder.serviceDsn": "DSN を選択してください",
   "settings.database.placeholder.serviceDsnManual": "ragdb_high",
+  "settings.database.placeholder.directDsn": "adb.example.oraclecloud.com:1522/service_name",
   "settings.database.placeholder.dsnService": "サービス名を選択",
   "settings.database.placeholder.dsnServiceManual": "ragdb_high",
-  "settings.database.placeholder.walletDir": "/u01/aipoc/instantclient_23_26/network/admin",
+  "settings.database.placeholder.walletDir": "/u01/aipoc/wallet",
   "settings.database.placeholder.secret": "更新する場合のみ入力",
   "settings.database.secrets.saved": "保存済み",
   "settings.database.secrets.notSet": "未設定",
-  "settings.database.secrets.show": "secret を表示",
-  "settings.database.secrets.hide": "secret を隠す",
+  "settings.database.secrets.show": "DB パスワードを表示",
+  "settings.database.secrets.hide": "DB パスワードを隠す",
+  "settings.database.secrets.revealingPassword": "DB パスワードを取得中",
+  "settings.database.secrets.revealError":
+    "保存済み DB パスワードの取得に失敗しました。入力値または保存状態を確認してください。",
   "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",
   "settings.database.secrets.clearWalletPassword": "保存済み Wallet パスワードを削除する",
   "settings.database.actions.save": "保存",
@@ -1141,6 +1145,16 @@ export const ja = {
     "Oracle Wallet を OCI から取得し、サーバーへ設定しました。",
   "settings.database.wallet.autoDownload.missingOcid":
     "ADB OCID が未設定のため自動取得は行いません。ADB OCID を設定するか、下の領域から Wallet ZIP を手動アップロードしてください。",
+  "settings.database.connectionSecurity.walletMtlS": "Wallet mTLS",
+  "settings.database.connectionSecurity.walletMtlS.description": "mTLS 必須 ADB / private endpoint",
+  "settings.database.connectionSecurity.walletlessTls": "Walletless TLS",
+  "settings.database.connectionSecurity.walletlessTls.description": "mTLS 不要 ADB の一方向 TLS",
+  "settings.database.connectionSecurity.wallet_mtls.helper":
+    "Thin mode でも mTLS 必須 ADB へ接続できます。Wallet ZIP と Wallet サービス名を使用します。",
+  "settings.database.connectionSecurity.walletless_tls.helper":
+    "mTLS が不要な ADB だけで使用します。Wallet は渡さず、ACL で許可された接続元から直接 DSN へ接続します。",
+  "settings.database.walletlessTls.walletSkipped":
+    "Walletless TLS では Wallet を接続 kwargs に渡しません。mTLS 必須 ADB では Wallet mTLS を選択してください。",
   "settings.database.walletInput.aria": "Wallet ZIP ファイルを選択",
   "settings.database.wallet.title": "Wallet（ZIP）",
   "settings.database.wallet.uploadCta": "`.zip` Wallet ファイルをアップロード",

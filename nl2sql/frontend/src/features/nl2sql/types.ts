@@ -410,6 +410,8 @@ export interface QueryResults {
   columns: string[];
   rows: Array<Record<string, unknown>>;
   total: number;
+  execution_context?: "deterministic" | "oracle_data_plane" | "deepsec_data_plane" | "admin_control_plane";
+  vpd_context_enforced?: boolean;
 }
 
 export interface Nl2SqlQuestionInterpretation {

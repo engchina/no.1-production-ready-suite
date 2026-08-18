@@ -60,6 +60,7 @@ from app.features.nl2sql.service import (
     _db_admin_error,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
 
@@ -118,6 +119,8 @@ class _FakeAdminSqlAdapter(_FakeStatementsAdapter):
             columns=["ID"],
             rows=[{"ID": 1}],
             total=1,
+            execution_context="oracle_data_plane",
+            vpd_context_enforced=False,
         )
         self.select_error = select_error
         self.select_calls: list[tuple[str, int | None]] = []
@@ -772,9 +775,7 @@ def test_select_ai_db_profile_drop_removes_only_target_profile(
 def test_select_ai_db_profile_rename_deletes_old_and_upserts_new(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = _MutableSelectAiProfileAdapter(
-        {"OLD_SELECT_AI": {"attributes": {"object_list": []}}}
-    )
+    adapter = _MutableSelectAiProfileAdapter({"OLD_SELECT_AI": {"attributes": {"object_list": []}}})
     service = _OracleRuntimeService(adapter)
     _run_db_profile_refresh(service)
     monkeypatch.setattr(
@@ -928,11 +929,14 @@ def test_db_admin_statements_block_nl2sql_system_objects_before_oracle() -> None
     assert create_table.statements[0].status == "blocked"
     assert create_view_ref.statements[0].status == "blocked"
     assert dml.statements[0].status == "blocked"
-    assert all("システムテーブル管理" in item.error_message for item in [
-        create_table.statements[0],
-        create_view_ref.statements[0],
-        dml.statements[0],
-    ])
+    assert all(
+        "システムテーブル管理" in item.error_message
+        for item in [
+            create_table.statements[0],
+            create_view_ref.statements[0],
+            dml.statements[0],
+        ]
+    )
     assert adapter.calls == []
 
 
@@ -1081,6 +1085,42 @@ def test_admin_sql_single_select_uses_data_plane_without_statement_executor() ->
     assert result.statements[0].status == "executed"
 
 
+def test_admin_sql_system_admin_select_uses_oracle_plane_when_deepsec_enabled() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+    service._deepsec_enabled = True
+
+    with actor_scope("system-admin-id", is_system_admin=True):
+        result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql="SELECT ID FROM T1"))
+
+    assert len(adapter.select_calls) == 1
+    assert result.executed is True
+    assert result.execution_context == "oracle_data_plane"
+    assert result.vpd_context_enforced is False
+
+
+def test_admin_sql_non_admin_select_surfaces_deepsec_data_plane() -> None:
+    adapter = _FakeAdminSqlAdapter(
+        select_result=QueryResults(
+            columns=["ID"],
+            rows=[{"ID": 1}],
+            total=1,
+            execution_context="deepsec_data_plane",
+            vpd_context_enforced=True,
+        )
+    )
+    service = _OracleRuntimeService(adapter)
+    service._deepsec_enabled = True
+
+    with actor_scope("business-user-id", is_system_admin=False):
+        result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql="SELECT ID FROM T1"))
+
+    assert len(adapter.select_calls) == 1
+    assert result.executed is True
+    assert result.execution_context == "deepsec_data_plane"
+    assert result.vpd_context_enforced is True
+
+
 def test_admin_sql_deepsec_select_error_fails_closed_without_control_fallback() -> None:
     adapter = _FakeAdminSqlAdapter(
         select_error=OracleAdapterError(
@@ -1090,9 +1130,7 @@ def test_admin_sql_deepsec_select_error_fails_closed_without_control_fallback() 
     service = _OracleRuntimeService(adapter)
     service._deepsec_enabled = True
 
-    result = service.execute_db_admin_sql(
-        DbAdminExecuteRequest(sql="SELECT ID FROM T1")
-    )
+    result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql="SELECT ID FROM T1"))
 
     assert len(adapter.select_calls) == 1
     assert adapter.calls == []
@@ -1206,9 +1244,7 @@ def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
     assert result.execution_context == "admin_control_plane"
     assert result.vpd_context_enforced is False
     assert any("部分的に成功しました(1/2 件)" in warning for warning in result.warnings)
-    assert any(
-        item["operation"] == "db_admin_statements_data_dml" for item in service._admin_audit
-    )
+    assert any(item["operation"] == "db_admin_statements_data_dml" for item in service._admin_audit)
 
 
 def test_admin_sql_commits_when_all_data_dml_statements_succeed() -> None:
@@ -1472,9 +1508,7 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
     result = service.generate_annotation_sql(
         MetadataSqlGenerateRequest(
             targets=[{"object_name": "DEPARTMENT", "object_type": "table"}],
-            structure_text=(
-                "OBJECT: DEPARTMENT\nTYPE: table\n" "COMMENT: 部署情報を管理するテーブル"
-            ),
+            structure_text=("OBJECT: DEPARTMENT\nTYPE: table\nCOMMENT: 部署情報を管理するテーブル"),
         )
     )
 
@@ -1844,9 +1878,7 @@ def test_preview_data_builds_guarded_select() -> None:
         )
 
     with pytest.raises(ValueError, match="Oracle 識別子"):
-        service.preview_db_admin_data(
-            DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET')
-        )
+        service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET'))
 
 
 def test_oracle_adapter_execute_select_normalizes_driver_error(
@@ -1877,6 +1909,200 @@ def test_oracle_adapter_execute_select_normalizes_driver_error(
         adapter.execute_select('SELECT * FROM "MISSING_TABLE"', 100)
 
 
+def test_oracle_adapter_system_admin_select_uses_normal_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        description = [("ID",)]
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchmany(self, _max_rows: int) -> list[tuple[int]]:
+            return [(1,)]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection()
+
+    settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
+    adapter = OracleNl2SqlAdapter(settings)
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+
+    with actor_scope("system-admin", is_system_admin=True):
+        result = adapter.execute_select("SELECT ID FROM T1", 100)
+
+    assert result.rows == [{"ID": 1}]
+    assert result.execution_context == "oracle_data_plane"
+    assert result.vpd_context_enforced is False
+
+
+def test_oracle_adapter_non_admin_select_uses_deepsec_data_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        description = [("ID",)]
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchmany(self, _max_rows: int) -> list[tuple[int]]:
+            return [(2,)]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    class _PoolManager:
+        def __init__(self) -> None:
+            self.actor_ids: list[str] = []
+
+        @contextmanager
+        def data_connection(self, actor_user_id: str) -> Iterator[_Connection]:
+            self.actor_ids.append(actor_user_id)
+            yield _Connection()
+
+    manager = _PoolManager()
+    settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
+    adapter = OracleNl2SqlAdapter(settings)
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.get_oracle_pool_manager",
+        lambda: manager,
+    )
+
+    with actor_scope("business-user", is_system_admin=False):
+        result = adapter.execute_select("SELECT ID FROM T1", 100)
+
+    assert manager.actor_ids == ["business-user"]
+    assert result.rows == [{"ID": 2}]
+    assert result.execution_context == "deepsec_data_plane"
+    assert result.vpd_context_enforced is True
+
+
+def test_oracle_adapter_deepsec_select_without_actor_fails_closed() -> None:
+    settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
+    adapter = OracleNl2SqlAdapter(settings)
+
+    with pytest.raises(OracleAdapterError, match="認証済み application user"):
+        adapter.execute_select("SELECT ID FROM T1", 100)
+
+
+def test_oracle_adapter_explain_uses_normal_connection_when_deepsec_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, *_args: object) -> None:
+            calls.append(sql)
+
+        def __iter__(self) -> Iterator[tuple[object, ...]]:
+            return iter(())
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+        def commit(self) -> None:
+            calls.append("COMMIT")
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection()
+
+    def forbidden_data_connection() -> Iterator[_Connection]:
+        raise AssertionError("EXPLAIN must not use DeepSec data connection")
+
+    settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
+    adapter = OracleNl2SqlAdapter(settings)
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "user_data_connection", forbidden_data_connection)
+
+    with actor_scope("business-user", is_system_admin=False):
+        plan = adapter.explain_select("SELECT ID FROM T1")
+
+    assert plan.available is False
+    assert any("EXPLAIN PLAN" in sql for sql in calls)
+    assert calls[-1] == "COMMIT"
+
+
+def test_oracle_adapter_generation_samples_use_normal_connection_when_deepsec_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.rows: list[tuple[str]] = []
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, *_args: object) -> None:
+            calls.append(sql)
+            if "SELECT column_name FROM all_tab_columns" in sql:
+                self.rows = [("ID",)]
+            else:
+                self.rows = [("sample-value",)]
+
+        def __iter__(self) -> Iterator[tuple[str]]:
+            return iter(self.rows)
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = _Cursor()
+
+        def cursor(self) -> _Cursor:
+            return self.cursor_instance
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection()
+
+    def forbidden_data_connection() -> Iterator[_Connection]:
+        raise AssertionError("generation samples must not use DeepSec data connection")
+
+    settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
+    adapter = OracleNl2SqlAdapter(settings)
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "user_data_connection", forbidden_data_connection)
+
+    with actor_scope("business-user", is_system_admin=False):
+        samples, warnings = adapter.fetch_metadata_sample_values(
+            [{"owner": "APP", "object_name": "T1", "columns": ["ID"]}],
+            1,
+        )
+
+    assert samples == {"APP.T1": {"ID": ["sample-value"]}}
+    assert warnings == []
+    assert any("all_tab_columns" in sql for sql in calls)
+
+
 def test_preview_data_exports_xlsx() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
@@ -1891,7 +2117,7 @@ def test_preview_data_exports_xlsx() -> None:
     assert workbook["data"].max_row >= 1
     assert (
         workbook["query"]["A2"].value
-        == "SELECT * FROM \"ADMIN\".\"INVOICES\" WHERE STATUS = 'A' FETCH FIRST 10 ROWS ONLY"
+        == 'SELECT * FROM "ADMIN"."INVOICES" WHERE STATUS = \'A\' FETCH FIRST 10 ROWS ONLY'
     )
 
 
@@ -2211,9 +2437,7 @@ def test_get_db_admin_object_uses_ontology_business_name_for_logical(
     column = detail.columns[0]
     assert column.logical_name == "得意先名称"  # オントロジー業務名で上書き
     assert column.comment == "取引先名"  # 生カラムコメントは保持
-    assert calls == [
-        {"owner": "APP", "object_name": "INVOICES", "object_type": "table"}
-    ]
+    assert calls == [{"owner": "APP", "object_name": "INVOICES", "object_type": "table"}]
 
 
 def test_get_db_admin_object_blanks_logical_when_ontology_unavailable(
@@ -2269,9 +2493,7 @@ def test_get_db_admin_object_skips_ddl_when_include_ddl_false() -> None:
     without_ddl = service.get_db_admin_object("INVOICES", "table", include_ddl=False)
     assert without_ddl.ddl == ""  # DDL 省略
     # 列・行数など DDL 以外は従来どおり
-    assert [c.column_name for c in without_ddl.columns] == [
-        c.column_name for c in with_ddl.columns
-    ]
+    assert [c.column_name for c in without_ddl.columns] == [c.column_name for c in with_ddl.columns]
     assert without_ddl.row_count == with_ddl.row_count
 
 
@@ -2422,11 +2644,7 @@ def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     import base64
 
-    csv_text = (
-        'ORDER_ID,ORDER_NAME,NOTE\r'
-        '1,青山商事,"第1行\r第2行"\r'
-        "2,北海物産,通常行\r"
-    )
+    csv_text = 'ORDER_ID,ORDER_NAME,NOTE\r1,青山商事,"第1行\r第2行"\r2,北海物産,通常行\r'
     result = service.upload_db_admin_csv(
         DbAdminCsvUploadRequest(
             table_name="ORDERS",
@@ -2652,8 +2870,7 @@ def test_import_tabular_rejects_oversized_existing_byte_column_before_mutation(
     assert cursor.executemany_called is False
     assert connection.committed is False
     assert not any(
-        "DELETE FROM" in sql or "TRUNCATE TABLE" in sql
-        for sql, _binds in cursor.executed
+        "DELETE FROM" in sql or "TRUNCATE TABLE" in sql for sql, _binds in cursor.executed
     )
 
 
@@ -2757,9 +2974,7 @@ def test_import_tabular_validation_error_returns_http_422(
     from app.features.nl2sql import router as nl2sql_router
 
     class _FailingService:
-        def import_db_admin_tabular(
-            self, _request: DbAdminImportTabularRequest
-        ) -> None:
+        def import_db_admin_tabular(self, _request: DbAdminImportTabularRequest) -> None:
             raise TabularImportValidationError(
                 "TEST_TABLE.NAME: ファイル2行目は16バイトで、"
                 "取込先列の上限6バイトを超えています。"
@@ -2901,8 +3116,7 @@ def test_fetch_cloud_ai_profile_attributes_degrades_on_missing_view() -> None:
             raise RuntimeError("ORA-00942: table or view does not exist")
 
     assert (
-        OracleNl2SqlAdapter._fetch_cloud_ai_profile_attributes(_RaisingCursor(), "HR_PROFILE")
-        == {}
+        OracleNl2SqlAdapter._fetch_cloud_ai_profile_attributes(_RaisingCursor(), "HR_PROFILE") == {}
     )
 
 

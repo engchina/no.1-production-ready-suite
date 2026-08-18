@@ -272,9 +272,7 @@ def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() 
             }
         },
     )
-    feedback_config = {
-        "value": {"similarity_threshold": 0.75, "match_limit": 7}
-    }
+    feedback_config = {"value": {"similarity_threshold": 0.75, "match_limit": 7}}
     repository.put_document(
         "singletons",
         "feedback_search_config",
@@ -291,9 +289,7 @@ def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() 
     )
     assert terms.glossary == {"粗利": "INVOICES.PROFIT"}
     assert terms.rules == ["SELECT のみ"]
-    assert repository.get_document(
-        "singletons", "feedback_search_config"
-    ) == feedback_config
+    assert repository.get_document("singletons", "feedback_search_config") == feedback_config
 
     rules_service = _incremental_service(repository)
     rules = rules_service.import_legacy_rules(
@@ -305,9 +301,7 @@ def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() 
     )
     assert rules.glossary == {"粗利": "INVOICES.PROFIT"}
     assert rules.rules == ["集計時は NULL を除外する"]
-    assert repository.get_document(
-        "singletons", "feedback_search_config"
-    ) == feedback_config
+    assert repository.get_document("singletons", "feedback_search_config") == feedback_config
 
 
 def test_incremental_generation_context_loads_global_material_without_page_read() -> None:
@@ -448,6 +442,7 @@ def test_job_history_records_actor_user_id_in_incremental_store() -> None:
             profile_id="orders-profile",
         ),
         actor_user_id="user-1",
+        actor_is_system_admin=True,
     )
     job = None
     for _ in range(50):
@@ -462,6 +457,10 @@ def test_job_history_records_actor_user_id_in_incremental_store() -> None:
     assert len(own_history) == 1
     assert own_history[0].actor_user_id == "user-1"
     assert service.list_history(actor_user_id="other-user").items == []
+    job_snapshot = repository.get_document("jobs", created.job_id)
+    assert job_snapshot is not None
+    assert job_snapshot["actor_user_id"] == "user-1"
+    assert job_snapshot["actor_is_system_admin"] is True
 
 
 def test_enterprise_ai_direct_reports_profile_scope_when_incremental_object_is_missing() -> None:
@@ -543,9 +542,7 @@ def test_incremental_legacy_material_missing_document_returns_empty() -> None:
 
     assert material.glossary == {}
     assert material.rules == []
-    assert repository.get_document(
-        "singletons", "legacy_learning_material"
-    ) is None
+    assert repository.get_document("singletons", "legacy_learning_material") is None
 
 
 def test_incremental_legacy_material_invalid_document_is_operation_failure() -> None:
@@ -617,12 +614,8 @@ def test_incremental_legacy_import_rolls_back_memory_when_save_fails() -> None:
 
 def test_incremental_migrations_backfill_before_not_null_constraints() -> None:
     migration_root = Path(__file__).resolve().parents[1] / "migrations"
-    state_ddl = (migration_root / "003_incremental_nl2sql_state.sql").read_text(
-        encoding="utf-8"
-    )
-    lease_ddl = (migration_root / "006_incremental_job_leases.sql").read_text(
-        encoding="utf-8"
-    )
+    state_ddl = (migration_root / "003_incremental_nl2sql_state.sql").read_text(encoding="utf-8")
+    lease_ddl = (migration_root / "006_incremental_job_leases.sql").read_text(encoding="utf-8")
     lifecycle_ddl = (migration_root / "007_profile_ontology_lifecycle.sql").read_text(
         encoding="utf-8"
     )
@@ -711,9 +704,7 @@ def test_oracle_profile_delete_removes_all_view_revisions_in_same_transaction() 
 
 
 def test_oracle_profile_delete_rolls_back_before_parent_delete_on_view_failure() -> None:
-    repository, connection = _profile_delete_repository(
-        fail_on="NL2SQL_ONTOLOGY_PROFILE_VIEWS"
-    )
+    repository, connection = _profile_delete_repository(fail_on="NL2SQL_ONTOLOGY_PROFILE_VIEWS")
 
     with pytest.raises(RuntimeError, match="scripted delete failure"):
         repository.delete_profile("profile-1", expected_etag="etag-1")
@@ -831,12 +822,8 @@ def test_oracle_profile_lobs_are_materialized_before_connection_closes() -> None
 
 def test_oracle_state_document_lobs_are_materialized_before_connection_closes() -> None:
     payload = '{"id":"history-1","question":"部署名"}'
-    detail_repository, detail_connections = _oracle_repository(
-        [[(_LobPayload(payload),)]]
-    )
-    list_repository, list_connections = _oracle_repository(
-        [[(_LobPayload(payload),)]]
-    )
+    detail_repository, detail_connections = _oracle_repository([[(_LobPayload(payload),)]])
+    list_repository, list_connections = _oracle_repository([[(_LobPayload(payload),)]])
     page_repository, page_connections = _oracle_repository(
         [
             [(1,)],
@@ -852,9 +839,7 @@ def test_oracle_state_document_lobs_are_materialized_before_connection_closes() 
 
     detail = detail_repository.get_document("history", "history-1")
     documents = list_repository.list_documents("history", limit=10)
-    page, next_cursor, total = page_repository.list_documents_page(
-        "history", cursor=None, limit=10
-    )
+    page, next_cursor, total = page_repository.list_documents_page("history", cursor=None, limit=10)
 
     assert detail == {"id": "history-1", "question": "部署名"}
     assert documents == [detail]
@@ -862,8 +847,7 @@ def test_oracle_state_document_lobs_are_materialized_before_connection_closes() 
     assert next_cursor is None
     assert total == 1
     assert all(
-        connection.closed
-        for connection in detail_connections + list_connections + page_connections
+        connection.closed for connection in detail_connections + list_connections + page_connections
     )
 
 
@@ -892,9 +876,7 @@ def test_oracle_state_document_page_filters_payload_before_paging() -> None:
     assert [item["id"] for item in page] == ["history-own"]
     assert next_cursor is None
     assert total == 1
-    executed = "\n".join(
-        sql for connection in connections for sql, _binds in connection.executed
-    )
+    executed = "\n".join(sql for connection in connections for sql, _binds in connection.executed)
     assert "JSON_VALUE(PAYLOAD_JSON, '$.actor_user_id'" in executed
     assert all(
         binds.get("payload_filter_0") == "user-1"
@@ -1031,9 +1013,7 @@ def test_oracle_refresh_job_lob_is_materialized_before_connection_closes() -> No
         job_id="refresh-1",
         created_at="2026-07-20T00:00:00+00:00",
     )
-    repository, connections = _oracle_repository(
-        [[(_LobPayload(job.model_dump_json()),)]]
-    )
+    repository, connections = _oracle_repository([[(_LobPayload(job.model_dump_json()),)]])
 
     restored = repository.get_refresh_job(job.job_id)
 
@@ -1050,9 +1030,7 @@ def test_oracle_refresh_job_submission_coalesces_active_job_atomically() -> None
         job_id="candidate-refresh",
         created_at="2026-07-21T00:00:00+00:00",
     )
-    repository, connections = _oracle_repository(
-        [[], [(_LobPayload(active.model_dump_json()),)]]
-    )
+    repository, connections = _oracle_repository([[], [(_LobPayload(active.model_dump_json()),)]])
 
     submitted = repository.submit_refresh_job(candidate)
 
@@ -1098,9 +1076,7 @@ def test_state_document_page_uses_stable_keyset_cursor() -> None:
     for index in range(5):
         repository.put_document("history", f"history-{index}", {"id": f"history-{index}"})
 
-    first, cursor, first_total = repository.list_documents_page(
-        "history", cursor=None, limit=2
-    )
+    first, cursor, first_total = repository.list_documents_page("history", cursor=None, limit=2)
     assert [item["id"] for item in first] == ["history-4", "history-3"]
     assert cursor is not None
     assert first_total == 5
@@ -1298,14 +1274,10 @@ def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
             _table("ORDERS").model_copy(update={"row_count": 10}),
             _table("EMPTY_ORDERS").model_copy(update={"row_count": 0}),
             _table("PAYMENTS").model_copy(update={"row_count": 5}),
-            _table("V_ORDERS").model_copy(
-                update={"table_type": "VIEW", "row_count": None}
-            ),
+            _table("V_ORDERS").model_copy(update={"table_type": "VIEW", "row_count": None}),
         ],
     )
-    manifest = {
-        (table.owner, table.table_name): "v1" for table in catalog.tables
-    }
+    manifest = {(table.owner, table.table_name): "v1" for table in catalog.tables}
     repository.apply_schema_refresh(
         catalog=catalog,
         manifest=manifest,
@@ -1608,9 +1580,7 @@ def test_schema_refresh_poll_wakes_expired_running_job_only(
     assert dispatched == [expired.job_id]
 
     monkeypatch.setattr(settings, "nl2sql_schema_refresh_worker_mode", "external")
-    repository.save_refresh_job(
-        expired.model_copy(update={"job_id": "external-refresh"})
-    )
+    repository.save_refresh_job(expired.model_copy(update={"job_id": "external-refresh"}))
     assert service.get_schema_refresh_job("external-refresh") is not None
     assert dispatched == [expired.job_id]
 
@@ -1641,10 +1611,7 @@ def test_twenty_object_reads_do_not_wait_for_schema_refresh_lock(
                     row_state="all",
                 )
                 for _ in range(10)
-            ] + [
-                executor.submit(service.get_schema_object, "APP", "ORDERS")
-                for _ in range(10)
-            ]
+            ] + [executor.submit(service.get_schema_object, "APP", "ORDERS") for _ in range(10)]
             results = [future.result(timeout=1) for future in futures]
     finally:
         service._schema_refresh_lock.release()  # noqa: SLF001
@@ -1907,17 +1874,13 @@ def test_schema_refresh_job_reclaims_only_expired_lease() -> None:
     assert claimed.status == SchemaRefreshJobStatus.RUNNING
     assert claimed.attempt == 1
     assert (
-        repository.claim_refresh_job(
-            worker_id="worker-b", lease_seconds=300, job_id=pending.job_id
-        )
+        repository.claim_refresh_job(worker_id="worker-b", lease_seconds=300, job_id=pending.job_id)
         is None
     )
 
     repository.save_refresh_job(
         claimed.model_copy(
-            update={
-                "lease_expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-            }
+            update={"lease_expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()}
         )
     )
     reclaimed = repository.claim_refresh_job(
@@ -2148,7 +2111,5 @@ def test_migration_dry_run_accepts_empty_snapshot_and_ddl_is_versioned() -> None
     summary = _migration_summary({})
     assert summary["profiles"] == 0
     assert summary["schema_objects"] == 0
-    statements = _split_ddl(
-        "CREATE TABLE A (ID NUMBER);\nCREATE INDEX IX_A ON A (ID);"
-    )
+    statements = _split_ddl("CREATE TABLE A (ID NUMBER);\nCREATE INDEX IX_A ON A (ID);")
     assert len(statements) == 2

@@ -7,13 +7,13 @@ import {
   Database,
   Eye,
   EyeOff,
+  Loader2,
   PlugZap,
   Power,
   PowerOff,
   RefreshCw,
   Save,
   Server,
-  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -22,21 +22,20 @@ import { toast } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels, formatSettingsEnvValue } from "@/components/settings/SettingsPreviewPanels";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   ApiError,
   type AdbInfoData,
+  type DatabaseConnectionSecurity,
   type DatabaseConnectionTestResult,
   type DatabaseSettingsData,
-  type SchemaOwnersData,
   type DatabaseSettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -45,7 +44,7 @@ import {
   useAdbInfo,
   useDatabaseSettings,
   useDownloadDatabaseWallet,
-  useSchemaOwners,
+  useRevealDatabasePassword,
   useStartAdb,
   useStopAdb,
   useTestDatabaseSettings,
@@ -58,6 +57,7 @@ import { cn } from "@/lib/utils";
 interface DatabaseSettingsForm {
   user: string;
   dsn: string;
+  connectionSecurity: DatabaseConnectionSecurity;
   password: string;
   clearPassword: boolean;
 }
@@ -69,20 +69,38 @@ interface DatabaseSettingsFormErrors {
   wallet?: string;
 }
 
+type WalletDownloadSource = "auto" | "wallet-field" | "adb-refresh";
+
 const EMPTY_FORM: DatabaseSettingsForm = {
   user: "",
   dsn: "",
+  connectionSecurity: "wallet_mtls",
   password: "",
   clearPassword: false,
 };
 
+function databaseConnectionSecurityOptions() {
+  return [
+    {
+      value: "wallet_mtls",
+      label: t("settings.database.connectionSecurity.walletMtlS"),
+      description: t("settings.database.connectionSecurity.walletMtlS.description"),
+    },
+    {
+      value: "walletless_tls",
+      label: t("settings.database.connectionSecurity.walletlessTls"),
+      description: t("settings.database.connectionSecurity.walletlessTls.description"),
+    },
+  ] satisfies SelectFieldOption<DatabaseConnectionSecurity>[];
+}
+
 /** Oracle 26ai の runtime 接続設定フォーム。 */
 export function DatabaseSettingsClient() {
   const query = useDatabaseSettings();
-  const schemaOwners = useSchemaOwners();
   const save = useUpdateDatabaseSettings();
   const walletUpload = useUploadDatabaseWallet();
   const walletDownload = useDownloadDatabaseWallet();
+  const passwordReveal = useRevealDatabasePassword();
   const test = useTestDatabaseSettings();
   const resetTest = test.reset;
 
@@ -90,29 +108,38 @@ export function DatabaseSettingsClient() {
   const [errors, setErrors] = useState<DatabaseSettingsFormErrors>({});
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [optimisticSettings, setOptimisticSettings] = useState<DatabaseSettingsData | null>(null);
+  const [walletDownloadSource, setWalletDownloadSource] =
+    useState<WalletDownloadSource | null>(null);
 
   const userRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const autoWalletAttemptedRef = useRef<Set<string>>(new Set());
+  const resetPasswordReveal = passwordReveal.reset;
 
   useEffect(() => {
     if (query.data) {
       setForm(formFromSettings(query.data));
       setErrors({});
+      setPasswordVisible(false);
       setOptimisticSettings(null);
+      resetPasswordReveal();
     }
-  }, [query.data]);
+  }, [query.data, resetPasswordReveal]);
 
   const downloadWallet = walletDownload.mutate;
+  const downloadWalletAsync = walletDownload.mutateAsync;
   const resetWalletDownload = walletDownload.reset;
 
   useEffect(() => {
     const settings = query.data;
     const adbOcid = settings?.adb_ocid.trim() ?? "";
+    const usesWalletMtlS = settings?.connection_security !== "walletless_tls";
     if (!settings || settings.wallet_uploaded || !adbOcid) return;
+    if (!usesWalletMtlS) return;
     if (autoWalletAttemptedRef.current.has(adbOcid)) return;
 
     autoWalletAttemptedRef.current.add(adbOcid);
+    setWalletDownloadSource("auto");
     resetWalletDownload();
     downloadWallet();
   }, [downloadWallet, query.data, resetWalletDownload]);
@@ -126,16 +153,37 @@ export function DatabaseSettingsClient() {
     if (result.status === "downloaded") {
       toast.success(t("settings.database.wallet.autoDownload.success"));
     }
+    setWalletDownloadSource(null);
   }, [resetTest, walletDownload.data]);
 
   function updateForm(update: Partial<DatabaseSettingsForm>) {
+    if ("password" in update || "clearPassword" in update) resetPasswordReveal();
     setForm((current) => ({ ...current, ...update }));
     setErrors((current) => clearChangedErrors(current, update));
     resetTest();
   }
 
   function updatePasswordClear(clear: boolean) {
+    if (clear) setPasswordVisible(false);
     updateForm({ clearPassword: clear, password: clear ? "" : form.password });
+  }
+
+  async function togglePasswordVisible(settings: DatabaseSettingsData) {
+    if (passwordVisible) {
+      setPasswordVisible(false);
+      return;
+    }
+    if (settings.has_password && !form.password) {
+      try {
+        const data = await passwordReveal.mutateAsync();
+        updateForm({ password: data.password });
+        setPasswordVisible(true);
+      } catch {
+        setPasswordVisible(false);
+      }
+      return;
+    }
+    setPasswordVisible(true);
   }
 
   function submit(settings: DatabaseSettingsData) {
@@ -186,15 +234,24 @@ export function DatabaseSettingsClient() {
     }
 
     setErrors((current) => ({ ...current, wallet: undefined }));
+    setWalletDownloadSource(null);
     resetWalletDownload();
     resetTest();
     walletUpload.mutate(file, {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
         setOptimisticSettings(data);
+        setPasswordVisible(false);
         toast.success(t("settings.database.actions.walletUploaded", { fileName: file.name }));
       },
     });
+  }
+
+  async function ensureWalletFromOci() {
+    setWalletDownloadSource("adb-refresh");
+    resetWalletDownload();
+    resetTest();
+    return await downloadWalletAsync();
   }
 
   const saveError =
@@ -207,7 +264,14 @@ export function DatabaseSettingsClient() {
     walletDownload.error instanceof ApiError
       ? walletDownload.error.message
       : t("settings.database.wallet.autoDownload.error");
+  const passwordRevealError =
+    passwordReveal.error instanceof ApiError
+      ? passwordReveal.error.message
+      : t("settings.database.secrets.revealError");
   const testResult = test.data;
+  const adbWalletDownloadActive = walletDownloadSource === "adb-refresh";
+  const walletFieldDownloadActive =
+    walletDownloadSource === "auto" || walletDownloadSource === "wallet-field";
 
   if (query.isPending) {
     return (
@@ -242,12 +306,19 @@ export function DatabaseSettingsClient() {
 
   const settings = optimisticSettings ?? query.data;
   if (!settings) return null;
-  const envPreview = buildDatabaseEnvFile(form, settings);
 
   return (
     <div className="p-8">
-      <div className={SETTINGS_DETAIL_GRID_CLASS}>
-        <div className="space-y-6">
+      <div className="space-y-6">
+        <AdbManagementCard
+          settings={settings}
+          ensureWalletFromOci={ensureWalletFromOci}
+          walletEnsureError={
+            walletDownload.isError && adbWalletDownloadActive ? walletDownloadError : null
+          }
+          walletEnsurePending={walletDownload.isPending && adbWalletDownloadActive}
+        />
+
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -285,7 +356,9 @@ export function DatabaseSettingsClient() {
                   inputRef={passwordRef}
                   hasSavedSecret={settings.has_password}
                   error={errors.password}
-                  onToggleVisible={() => setPasswordVisible((current) => !current)}
+                  revealError={passwordReveal.isError ? passwordRevealError : null}
+                  revealPending={passwordReveal.isPending}
+                  onToggleVisible={() => void togglePasswordVisible(settings)}
                   onChange={(value) => updateForm({ password: value })}
                 />
               </div>
@@ -298,26 +371,48 @@ export function DatabaseSettingsClient() {
                 />
               ) : null}
 
+              <SelectField<DatabaseConnectionSecurity>
+                id="oracle-connection-security"
+                label={t("settings.database.field.connectionSecurity")}
+                value={form.connectionSecurity}
+                options={databaseConnectionSecurityOptions()}
+                onValueChange={(value) => updateForm({ connectionSecurity: value })}
+                helper={t(`settings.database.connectionSecurity.${form.connectionSecurity}.helper`)}
+                buttonClassName="h-11"
+              />
+
+              {form.connectionSecurity === "wallet_mtls" ? (
+                <WalletUploadField
+                  settings={settings}
+                  uploadPending={walletUpload.isPending}
+                  autoDownloadPending={walletDownload.isPending && walletFieldDownloadActive}
+                  autoDownloadError={
+                    walletDownload.isError && walletFieldDownloadActive ? walletDownloadError : null
+                  }
+                  canAutoDownload={Boolean(settings.adb_ocid.trim())}
+                  uploadError={walletUpload.isError ? walletUploadError : null}
+                  validationError={errors.wallet}
+                  onUpload={uploadWallet}
+                  onRetryDownload={() => {
+                    setWalletDownloadSource("wallet-field");
+                    resetWalletDownload();
+                    downloadWallet();
+                  }}
+                />
+              ) : (
+                <FormStatus
+                  tone="info"
+                  className="text-xs"
+                  message={t("settings.database.walletlessTls.walletSkipped")}
+                />
+              )}
+
               <WalletServiceField
                 value={form.dsn}
                 onChange={(value) => updateForm({ dsn: value })}
                 services={settings.available_services}
+                connectionSecurity={form.connectionSecurity}
                 error={errors.dsn}
-              />
-
-              <WalletUploadField
-                settings={settings}
-                uploadPending={walletUpload.isPending}
-                autoDownloadPending={walletDownload.isPending}
-                autoDownloadError={walletDownload.isError ? walletDownloadError : null}
-                canAutoDownload={Boolean(settings.adb_ocid.trim())}
-                uploadError={walletUpload.isError ? walletUploadError : null}
-                validationError={errors.wallet}
-                onUpload={uploadWallet}
-                onRetryDownload={() => {
-                  resetWalletDownload();
-                  downloadWallet();
-                }}
               />
 
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -348,24 +443,6 @@ export function DatabaseSettingsClient() {
             </CardContent>
           </Card>
         </form>
-
-          <AdbManagementCard settings={settings} />
-        </div>
-
-        <SettingsSupplementalPanels
-          status={
-            <StatusPanel
-              settings={settings}
-              schemaOwners={schemaOwners.data ?? null}
-              schemaOwnersLoading={schemaOwners.isLoading}
-              schemaOwnersError={schemaOwners.isError}
-            />
-          }
-          env={{
-            description: t("settings.database.env.description"),
-            value: envPreview,
-          }}
-        />
       </div>
     </div>
   );
@@ -407,7 +484,17 @@ const ADB_LIFECYCLE_LABEL_KEYS: Record<string, I18nKey> = {
 };
 
 /** Autonomous Database の情報取得・起動・停止を行う運用パネル。 */
-function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
+function AdbManagementCard({
+  settings,
+  ensureWalletFromOci,
+  walletEnsureError,
+  walletEnsurePending,
+}: {
+  settings: DatabaseSettingsData;
+  ensureWalletFromOci: () => Promise<unknown>;
+  walletEnsureError: string | null;
+  walletEnsurePending: boolean;
+}) {
   const infoQuery = useAdbInfo();
   const saveSettings = useUpdateAdbSettings();
   const start = useStartAdb();
@@ -417,18 +504,21 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
   const ocid = settings.adb_ocid;
   const [region, setRegion] = useState(settings.region || ADB_DEFAULT_REGION);
   const [log, setLog] = useState<AdbOperationLogEntry[]>([]);
+  const [refreshAttemptedWallet, setRefreshAttemptedWallet] = useState(false);
 
   useEffect(() => {
     setRegion(settings.region || ADB_DEFAULT_REGION);
+    setRefreshAttemptedWallet(false);
   }, [settings.region]);
 
   const info = infoQuery.data;
   const lifecycle = info?.lifecycle_state ?? null;
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
   const canStop = lifecycle === "AVAILABLE";
+  const refreshWalletPending = refreshAttemptedWallet && walletEnsurePending;
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
-  const busy = saveSettings.isPending || start.isPending || stop.isPending;
+  const busy = saveSettings.isPending || start.isPending || stop.isPending || walletEnsurePending;
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -454,7 +544,14 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
 
   async function handleRefresh() {
     const result = await persist();
-    if (result) appendLog(result);
+    if (!result) return;
+    appendLog(result);
+    setRefreshAttemptedWallet(true);
+    try {
+      await ensureWalletFromOci();
+    } catch {
+      /* Wallet 取得エラーは ADB 操作フィードバックの FormStatus が担う */
+    }
   }
 
   async function handleStart() {
@@ -484,9 +581,11 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
         ? start.error.message
         : stop.error instanceof ApiError
           ? stop.error.message
-          : start.isError || stop.isError || saveSettings.isError
-            ? t("settings.adb.notify.actionFailed")
-            : null;
+          : refreshAttemptedWallet && walletEnsureError
+            ? walletEnsureError
+            : start.isError || stop.isError || saveSettings.isError
+              ? t("settings.adb.notify.actionFailed")
+              : null;
 
   return (
     <Card id="adb-management" className="scroll-mt-4 rounded-md">
@@ -500,7 +599,7 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             type="button"
             variant="secondary"
             size="sm"
-            loading={saveSettings.isPending}
+            loading={saveSettings.isPending || refreshWalletPending}
             disabled={busy}
             onClick={() => void handleRefresh()}
           >
@@ -543,44 +642,55 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          <Button
-            type="button"
-            size="lg"
-            loading={saveSettings.isPending}
-            disabled={busy || !ocid.trim()}
-            onClick={() => void handleRefresh()}
-          >
-            <Save size={16} aria-hidden />
-            {saveSettings.isPending
-              ? t("settings.database.actions.saving")
-              : t("settings.database.actions.save")}
-          </Button>
-          <Button
-            type="button"
-            size="lg"
-            variant="secondary"
-            loading={start.isPending || lifecycle === "STARTING"}
-            disabled={busy || !ocid.trim() || !canStart}
-            onClick={() => void handleStart()}
-          >
-            <Power size={16} aria-hidden />
-            {start.isPending
-              ? t("settings.adb.action.starting")
-              : t("settings.adb.action.start")}
-          </Button>
-          <Button
-            type="button"
-            size="lg"
-            variant="secondary"
-            loading={stop.isPending}
-            disabled={busy || !ocid.trim() || !canStop}
-            onClick={() => void handleStop()}
-          >
-            <PowerOff size={16} aria-hidden />
-            {stop.isPending ? t("settings.adb.action.stopping") : t("settings.adb.action.stop")}
-          </Button>
-          {actionError ? <FormStatus tone="danger" message={actionError} /> : null}
+        <div className="space-y-2 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="lg"
+              loading={saveSettings.isPending || refreshWalletPending}
+              disabled={busy || !ocid.trim()}
+              onClick={() => void handleRefresh()}
+            >
+              <Save size={16} aria-hidden />
+              {saveSettings.isPending
+                ? t("settings.database.actions.saving")
+                : t("settings.database.actions.save")}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="secondary"
+              loading={start.isPending || lifecycle === "STARTING"}
+              disabled={busy || !ocid.trim() || !canStart}
+              onClick={() => void handleStart()}
+            >
+              <Power size={16} aria-hidden />
+              {start.isPending
+                ? t("settings.adb.action.starting")
+                : t("settings.adb.action.start")}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="secondary"
+              loading={stop.isPending}
+              disabled={busy || !ocid.trim() || !canStop}
+              onClick={() => void handleStop()}
+            >
+              <PowerOff size={16} aria-hidden />
+              {stop.isPending ? t("settings.adb.action.stopping") : t("settings.adb.action.stop")}
+            </Button>
+          </div>
+          {refreshWalletPending ? (
+            <FormStatus
+              tone="info"
+              className="text-xs"
+              message={t("settings.database.wallet.autoDownload.pending")}
+            />
+          ) : null}
+          {actionError ? (
+            <FormStatus tone="danger" className="text-xs" message={actionError} />
+          ) : null}
         </div>
 
         {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
@@ -684,18 +794,25 @@ function adbStatusBadgeClass(status: AdbInfoData["status"]): string {
 function WalletServiceField({
   value,
   services,
+  connectionSecurity,
   error,
   onChange,
 }: {
   value: string;
   services: string[];
+  connectionSecurity: DatabaseConnectionSecurity;
   error?: string;
   onChange: (value: string) => void;
 }) {
-  const serviceOptions = services.map((service) => ({
-    value: service,
-    label: service,
-  })) satisfies SelectFieldOption<string>[];
+  const usesWalletMtlS = connectionSecurity === "wallet_mtls";
+  const serviceOptions = (
+    usesWalletMtlS
+      ? services.map((service) => ({
+          value: service,
+          label: service,
+        }))
+      : []
+  ) satisfies SelectFieldOption<string>[];
 
   if (serviceOptions.length > 0) {
     return (
@@ -709,6 +826,7 @@ function WalletServiceField({
         requiredLabel={t("settings.database.requiredMark")}
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
+        helper={t("settings.database.helper.dsnService")}
         buttonClassName="h-11"
       />
     );
@@ -717,11 +835,24 @@ function WalletServiceField({
   return (
     <TextField
       id="oracle-wallet-service"
-      label={t("settings.database.field.serviceDsn")}
+      label={
+        usesWalletMtlS
+          ? t("settings.database.field.serviceDsn")
+          : t("settings.database.field.directDsn")
+      }
       required
       value={value}
       onChange={onChange}
-      placeholder={t("settings.database.placeholder.serviceDsnManual")}
+      placeholder={
+        usesWalletMtlS
+          ? t("settings.database.placeholder.serviceDsnManual")
+          : t("settings.database.placeholder.directDsn")
+      }
+      helper={
+        usesWalletMtlS
+          ? t("settings.database.helper.dsnServiceManual")
+          : t("settings.database.helper.directDsn")
+      }
       error={error}
     />
   );
@@ -733,6 +864,7 @@ function TextField({
   value,
   onChange,
   placeholder,
+  helper,
   error,
   required = false,
   inputRef,
@@ -742,11 +874,14 @@ function TextField({
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  helper?: string;
   error?: string;
   required?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
   const errorId = `${id}-error`;
+  const helperId = `${id}-helper`;
+  const describedBy = [helper ? helperId : "", error ? errorId : ""].filter(Boolean).join(" ");
 
   return (
     <div className="space-y-1.5">
@@ -761,12 +896,17 @@ function TextField({
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy || undefined}
         className={cn(
           "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
           error ? "border-danger" : "border-border"
         )}
       />
+      {helper ? (
+        <p id={helperId} className="text-xs leading-relaxed text-muted">
+          {helper}
+        </p>
+      ) : null}
       <FieldError id={errorId} message={error} />
     </div>
   );
@@ -781,6 +921,8 @@ function PasswordField({
   hasSavedSecret,
   required,
   error,
+  revealError,
+  revealPending,
   inputRef,
   onChange,
   onToggleVisible,
@@ -793,13 +935,23 @@ function PasswordField({
   hasSavedSecret: boolean;
   required: boolean;
   error?: string;
+  revealError: string | null;
+  revealPending: boolean;
   inputRef: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
   onToggleVisible: () => void;
 }) {
   const errorId = `${id}-error`;
+  const revealErrorId = `${id}-reveal-error`;
   const hintId = `${id}-hint`;
-  const describedBy = [hintId, error ? errorId : ""].filter(Boolean).join(" ");
+  const describedBy = [hintId, error ? errorId : "", revealError ? revealErrorId : ""]
+    .filter(Boolean)
+    .join(" ");
+  const revealButtonLabel = revealPending
+    ? t("settings.database.secrets.revealingPassword")
+    : visible
+      ? t("settings.database.secrets.hide")
+      : t("settings.database.secrets.show");
 
   return (
     <div className="space-y-1.5">
@@ -833,15 +985,18 @@ function PasswordField({
         <button
           type="button"
           onClick={onToggleVisible}
-          disabled={disabled}
-          aria-label={
-            visible
-              ? t("settings.database.secrets.hide")
-              : t("settings.database.secrets.show")
-          }
+          disabled={disabled || revealPending}
+          aria-busy={revealPending}
+          aria-label={revealButtonLabel}
           className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {visible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+          {revealPending ? (
+            <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : visible ? (
+            <EyeOff size={16} aria-hidden />
+          ) : (
+            <Eye size={16} aria-hidden />
+          )}
         </button>
       </div>
       <p id={hintId} className="text-xs leading-relaxed text-muted">
@@ -850,6 +1005,11 @@ function PasswordField({
           : t("settings.database.helper.passwordRequired")}
       </p>
       <FieldError id={errorId} message={error} />
+      {revealError ? (
+        <div id={revealErrorId}>
+          <FormStatus tone="danger" className="text-xs" message={revealError} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -999,69 +1159,6 @@ function SecretClearCheckbox({
   );
 }
 
-function StatusPanel({
-  settings,
-  schemaOwners,
-  schemaOwnersLoading,
-  schemaOwnersError,
-}: {
-  settings: DatabaseSettingsData;
-  schemaOwners: SchemaOwnersData | null;
-  schemaOwnersLoading: boolean;
-  schemaOwnersError: boolean;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-            <ShieldCheck size={18} aria-hidden />
-          </div>
-          <div>
-            <CardTitle>{t("settings.database.status.title")}</CardTitle>
-            <CardDescription>{t("settings.database.status.description")}</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <MetadataRow
-          label={t("settings.database.status.authMethod")}
-          value={authMethodLabel(settings)}
-        />
-        <MetadataRow
-          label={t("settings.database.status.wallet")}
-          value={
-            settings.wallet_uploaded
-              ? t("settings.database.wallet.detected")
-              : t("settings.database.wallet.notDetected")
-          }
-        />
-        <MetadataRow
-          label={t("settings.database.status.currentOwner")}
-          value={
-            schemaOwnersLoading
-              ? t("common.loading")
-              : schemaOwners?.current_owner || settings.user || "-"
-          }
-        />
-        <MetadataRow
-          label={t("settings.database.status.accessibleSchemas")}
-          value={
-            schemaOwnersError
-              ? t("settings.database.status.schemaUnavailable")
-              : t("settings.database.status.schemaCount", {
-                  count: schemaOwners?.owners.length ?? 0,
-                })
-          }
-        />
-        <p className="rounded-md border border-info/25 bg-info-bg/40 px-3 py-2 text-xs leading-5 text-foreground">
-          {t("settings.database.status.scopeBoundary")}
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestResult }) {
   const success = result.status === "success";
   const skipped = result.status === "skipped";
@@ -1113,19 +1210,11 @@ function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestR
   );
 }
 
-function MetadataRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-      <span className="text-muted">{label}</span>
-      <span className="break-all text-right font-medium text-foreground">{value || "—"}</span>
-    </div>
-  );
-}
-
 function formFromSettings(settings: DatabaseSettingsData): DatabaseSettingsForm {
   return {
     user: settings.user,
     dsn: settings.dsn,
+    connectionSecurity: settings.connection_security ?? "wallet_mtls",
     password: "",
     clearPassword: false,
   };
@@ -1138,6 +1227,7 @@ function payloadFromForm(
   const payload: DatabaseSettingsUpdate = {
     user: form.user,
     dsn: form.dsn,
+    connection_security: form.connectionSecurity,
     wallet_dir: settings.wallet_dir,
   };
   if (form.clearPassword) payload.clear_password = true;
@@ -1145,49 +1235,6 @@ function payloadFromForm(
   return payload;
 }
 
-function buildDatabaseEnvFile(
-  form: DatabaseSettingsForm,
-  settings: DatabaseSettingsData
-): string {
-  const entries: [string, string][] = [
-    ["ORACLE_USER", form.user],
-    [
-      "ORACLE_PASSWORD",
-      secretPreview(form.password, settings.has_password, form.clearPassword),
-    ],
-    ["ORACLE_DSN", form.dsn],
-    ["ORACLE_DRIVER_MODE", settings.driver_mode],
-    ["ORACLE_CLIENT_LIB_DIR", settings.client_lib_dir],
-    ["ORACLE_WALLET_DIR", settings.wallet_dir],
-    [
-      "ORACLE_WALLET_PASSWORD",
-      settings.has_wallet_password ? t("settings.preview.secret.saved") : "",
-    ],
-  ];
-  return [
-    "# Oracle 26ai",
-    ...entries.map(([key, value]) => `${key}=${formatSettingsEnvValue(value)}`),
-  ].join("\n");
-}
-
-function secretPreview(value: string, hasSavedSecret: boolean, clearSecret = false): string {
-  if (clearSecret) return "";
-  if (value.trim()) return t("settings.preview.secret.entered");
-  return hasSavedSecret ? t("settings.preview.secret.saved") : "";
-}
-
-function authMethodLabel(settings: DatabaseSettingsData): string {
-  if (settings.has_password && settings.wallet_uploaded) {
-    return t("settings.database.authMethod.passwordAndWallet");
-  }
-  if (settings.has_password) {
-    return t("settings.database.authMethod.password");
-  }
-  if (settings.wallet_uploaded) {
-    return t("settings.database.authMethod.wallet");
-  }
-  return t("settings.database.secrets.notSet");
-}
 
 function clearChangedErrors(
   errors: DatabaseSettingsFormErrors,

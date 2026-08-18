@@ -22,16 +22,16 @@ class OraclePoolManager:
         self._lock = threading.RLock()
 
     def validate_deepsec_configuration(self) -> None:
-        """共有 local END USER の direct logon に必要な設定を検証する。
+        """共有 DATA USER の direct logon に必要な設定を検証する。
 
         この integration は EndUserSecurityContext payload API/SPI を使用しないため、
         python-oracledb の Thin/Thick のどちらでも実行できる。
         """
         if (
             self.settings.oracle_deepsec_enabled
-            and not self.settings.oracle_deepsec_end_user_password
+            and not self.settings.oracle_deepsec_data_user_password
         ):
-            raise OracleAdapterError("ORACLE_DEEPSEC_END_USER_PASSWORD を設定してください。")
+            raise OracleAdapterError("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
 
     @contextmanager
     def control_connection(self) -> Iterator[Any]:
@@ -92,8 +92,8 @@ class OraclePoolManager:
             if data_plane:
                 kwargs = oracle_connect_kwargs(
                     self.settings,
-                    user=self.settings.oracle_deepsec_end_user,
-                    password=self.settings.oracle_deepsec_end_user_password,
+                    user=self.settings.oracle_deepsec_data_user,
+                    password=self.settings.oracle_deepsec_data_user_password,
                 )
             else:
                 kwargs = oracle_connect_kwargs(self.settings)

@@ -26,12 +26,6 @@ import { RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import {
-  SETTINGS_DETAIL_GRID_CLASS,
-  SettingsSupplementalPanels,
-  formatSettingsEnvValue,
-  formatSettingsJson,
-} from "@/components/settings/SettingsPreviewPanels";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   ApiError,
@@ -51,7 +45,6 @@ import { cn } from "@/lib/utils";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 
-const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
 const VLM_INPUT_MODE_OPTIONS = [
   {
     value: "auto",
@@ -94,18 +87,11 @@ export function ModelSettingsClient() {
   }, [draft, query.data]);
 
   const canSubmit = Boolean(draft);
-  const modelSettingsFile =
-    checkData?.model_settings_file ??
-    baselineData?.model_settings_file ??
-    query.data?.model_settings_file ??
-    DEFAULT_MODEL_SETTINGS_FILE;
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
     query.data?.legacy_secret_detected ??
     false;
-  const envPreview = buildModelEnvFile(modelSettingsFile, draft?.enterprise_ai ?? null);
-  const jsonPreview = draft ? buildModelSettingsJsonPreview(draft) : "";
 
   const updateEnterprise = <K extends keyof EnterpriseAiModelSettings>(
     key: K,
@@ -331,186 +317,173 @@ export function ModelSettingsClient() {
         ) : null}
         {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
 
-        <div className={SETTINGS_DETAIL_GRID_CLASS}>
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Cpu size={16} className="text-primary" aria-hidden />
-                  {t("settings.model.enterprise.title")}
-                </CardTitle>
-                <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-5 md:grid-cols-2">
-                <TextField
-                  id="enterprise-endpoint"
-                  label={t("settings.model.enterprise.endpoint")}
-                  badge={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.endpoint}
-                  placeholder={t("settings.model.placeholder.endpoint")}
-                  helper={t("settings.model.enterprise.endpointHelp")}
-                  onChange={(value) => updateEnterprise("endpoint", value)}
-                  className="md:col-span-2"
-                />
-                <TextField
-                  id="enterprise-project-ocid"
-                  label={t("settings.model.enterprise.project")}
-                  badge={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.project_ocid}
-                  placeholder={t("settings.model.placeholder.project")}
-                  helper={t("settings.model.enterprise.projectHelp")}
-                  onChange={(value) => updateEnterprise("project_ocid", value)}
-                  className="md:col-span-2"
-                />
-                <SecretField
-                  id="enterprise-api-key"
-                  label={t("settings.model.enterprise.apiKey")}
-                  value={draft.enterprise_ai.api_key}
-                  visible={apiKeyVisible}
-                  disabled={draft.enterprise_ai.clear_api_key}
-                  hasSavedSecret={draft.enterprise_ai.has_api_key}
-                  placeholder={t("settings.model.placeholder.apiKey")}
-                  helper={t("settings.model.enterprise.apiKeyHelp")}
-                  onToggleVisible={() => setApiKeyVisible((current) => !current)}
-                  onChange={(value) => updateEnterprise("api_key", value)}
-                  className="md:col-span-2"
-                />
-                {draft.enterprise_ai.has_api_key ? (
-                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30 md:col-span-2">
-                    <input
-                      type="checkbox"
-                      checked={draft.enterprise_ai.clear_api_key}
-                      onChange={(event) => updateApiKeyClear(event.target.checked)}
-                      className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
-                    />
-                    <span className="text-foreground">
-                      {t("settings.model.enterprise.clearApiKey")}
-                    </span>
-                  </label>
-                ) : null}
-                <ModelCatalogEditor
-                  models={draft.enterprise_ai.models}
-                  defaultModelId={draft.enterprise_ai.default_model_id}
-                  testingKey={testingKey}
-                  testResults={testResults}
-                  onDefaultChange={(modelId) => updateEnterprise("default_model_id", modelId)}
-                  onModelChange={updateEnterpriseModel}
-                  onAdd={addEnterpriseModel}
-                  onRemove={removeEnterpriseModel}
-                  onTest={(key, target) => void handleTestModel(key, target)}
-                />
-                <TextField
-                  id="enterprise-api-path"
-                  label={t("settings.model.enterprise.apiPath")}
-                  value={draft.enterprise_ai.api_path}
-                  placeholder={t("settings.model.placeholder.apiPath")}
-                  onChange={(value) => updateEnterprise("api_path", value)}
-                  className="md:col-span-2"
-                />
-                <SelectField
-                  id="enterprise-vlm-input-mode"
-                  label={t("settings.model.enterprise.vlmInputMode")}
-                  value={draft.enterprise_ai.vlm_input_mode}
-                  options={VLM_INPUT_MODE_OPTIONS}
-                  helper={t("settings.model.enterprise.vlmInputModeHelp")}
-                  onValueChange={(value) => updateEnterprise("vlm_input_mode", value)}
-                  className="md:col-span-2"
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Cpu size={16} className="text-primary" aria-hidden />
+                {t("settings.model.enterprise.title")}
+              </CardTitle>
+              <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-5 md:grid-cols-2">
+              <TextField
+                id="enterprise-endpoint"
+                label={t("settings.model.enterprise.endpoint")}
+                badge={t("settings.model.requiredInOci")}
+                value={draft.enterprise_ai.endpoint}
+                placeholder={t("settings.model.placeholder.endpoint")}
+                helper={t("settings.model.enterprise.endpointHelp")}
+                onChange={(value) => updateEnterprise("endpoint", value)}
+                className="md:col-span-2"
+              />
+              <TextField
+                id="enterprise-project-ocid"
+                label={t("settings.model.enterprise.project")}
+                badge={t("settings.model.requiredInOci")}
+                value={draft.enterprise_ai.project_ocid}
+                placeholder={t("settings.model.placeholder.project")}
+                helper={t("settings.model.enterprise.projectHelp")}
+                onChange={(value) => updateEnterprise("project_ocid", value)}
+                className="md:col-span-2"
+              />
+              <SecretField
+                id="enterprise-api-key"
+                label={t("settings.model.enterprise.apiKey")}
+                value={draft.enterprise_ai.api_key}
+                visible={apiKeyVisible}
+                disabled={draft.enterprise_ai.clear_api_key}
+                hasSavedSecret={draft.enterprise_ai.has_api_key}
+                placeholder={t("settings.model.placeholder.apiKey")}
+                helper={t("settings.model.enterprise.apiKeyHelp")}
+                onToggleVisible={() => setApiKeyVisible((current) => !current)}
+                onChange={(value) => updateEnterprise("api_key", value)}
+                className="md:col-span-2"
+              />
+              {draft.enterprise_ai.has_api_key ? (
+                <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30 md:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={draft.enterprise_ai.clear_api_key}
+                    onChange={(event) => updateApiKeyClear(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+                  />
+                  <span className="text-foreground">
+                    {t("settings.model.enterprise.clearApiKey")}
+                  </span>
+                </label>
+              ) : null}
+              <ModelCatalogEditor
+                models={draft.enterprise_ai.models}
+                defaultModelId={draft.enterprise_ai.default_model_id}
+                testingKey={testingKey}
+                testResults={testResults}
+                onDefaultChange={(modelId) => updateEnterprise("default_model_id", modelId)}
+                onModelChange={updateEnterpriseModel}
+                onAdd={addEnterpriseModel}
+                onRemove={removeEnterpriseModel}
+                onTest={(key, target) => void handleTestModel(key, target)}
+              />
+              <TextField
+                id="enterprise-api-path"
+                label={t("settings.model.enterprise.apiPath")}
+                value={draft.enterprise_ai.api_path}
+                placeholder={t("settings.model.placeholder.apiPath")}
+                onChange={(value) => updateEnterprise("api_path", value)}
+                className="md:col-span-2"
+              />
+              <SelectField
+                id="enterprise-vlm-input-mode"
+                label={t("settings.model.enterprise.vlmInputMode")}
+                value={draft.enterprise_ai.vlm_input_mode}
+                options={VLM_INPUT_MODE_OPTIONS}
+                helper={t("settings.model.enterprise.vlmInputModeHelp")}
+                onValueChange={(value) => updateEnterprise("vlm_input_mode", value)}
+                className="md:col-span-2"
+              />
+              <NumberField
+                id="enterprise-timeout"
+                label={t("settings.model.enterprise.timeout")}
+                min={0.1}
+                max={600}
+                step={0.1}
+                value={draft.enterprise_ai.timeout_seconds}
+                onChange={(value) => updateEnterprise("timeout_seconds", value)}
+              />
+              <NumberField
+                id="enterprise-retries"
+                label={t("settings.model.enterprise.retries")}
+                min={0}
+                max={5}
+                step={1}
+                value={draft.enterprise_ai.max_retries}
+                onChange={(value) => updateEnterprise("max_retries", value)}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database size={16} className="text-primary" aria-hidden />
+                {t("settings.model.genai.title")}
+              </CardTitle>
+              <CardDescription>{t("settings.model.genai.description")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-5 md:grid-cols-2">
+                <TestableTextField
+                  id="genai-embedding-model"
+                  label={t("settings.model.genai.embeddingModel")}
+                  value={draft.generative_ai.embedding_model}
+                  placeholder={t("settings.model.placeholder.embeddingModel")}
+                  onChange={(value) => updateGenerative("embedding_model", value)}
+                  testResult={testResults.embedding}
+                  testing={testingKey === "embedding"}
+                  onTest={() =>
+                    void handleTestModel("embedding", {
+                      target_type: "embedding",
+                      model_id: draft.generative_ai.embedding_model,
+                      vision_enabled: false,
+                    })
+                  }
                 />
                 <NumberField
-                  id="enterprise-timeout"
-                  label={t("settings.model.enterprise.timeout")}
-                  min={0.1}
-                  max={600}
-                  step={0.1}
-                  value={draft.enterprise_ai.timeout_seconds}
-                  onChange={(value) => updateEnterprise("timeout_seconds", value)}
-                />
-                <NumberField
-                  id="enterprise-retries"
-                  label={t("settings.model.enterprise.retries")}
-                  min={0}
-                  max={5}
+                  id="genai-embedding-dim"
+                  label={t("settings.model.genai.embeddingDim")}
+                  badge={t("settings.model.fixed")}
+                  value={draft.generative_ai.embedding_dim}
+                  min={1536}
+                  max={1536}
                   step={1}
-                  value={draft.enterprise_ai.max_retries}
-                  onChange={(value) => updateEnterprise("max_retries", value)}
+                  readOnly
+                  helper={t("settings.model.genai.embeddingDimHelp")}
+                  onChange={(value) => updateGenerative("embedding_dim", value)}
                 />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Database size={16} className="text-primary" aria-hidden />
-                  {t("settings.model.genai.title")}
-                </CardTitle>
-                <CardDescription>{t("settings.model.genai.description")}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-5 md:grid-cols-2">
-                  <TestableTextField
-                    id="genai-embedding-model"
-                    label={t("settings.model.genai.embeddingModel")}
-                    value={draft.generative_ai.embedding_model}
-                    placeholder={t("settings.model.placeholder.embeddingModel")}
-                    onChange={(value) => updateGenerative("embedding_model", value)}
-                    testResult={testResults.embedding}
-                    testing={testingKey === "embedding"}
-                    onTest={() =>
-                      void handleTestModel("embedding", {
-                        target_type: "embedding",
-                        model_id: draft.generative_ai.embedding_model,
-                        vision_enabled: false,
-                      })
-                    }
-                  />
-                  <NumberField
-                    id="genai-embedding-dim"
-                    label={t("settings.model.genai.embeddingDim")}
-                    badge={t("settings.model.fixed")}
-                    value={draft.generative_ai.embedding_dim}
-                    min={1536}
-                    max={1536}
-                    step={1}
-                    readOnly
-                    helper={t("settings.model.genai.embeddingDimHelp")}
-                    onChange={(value) => updateGenerative("embedding_dim", value)}
-                  />
-                  <TestableTextField
-                    id="genai-rerank-model"
-                    label={t("settings.model.genai.rerankModel")}
-                    value={draft.generative_ai.rerank_model}
-                    placeholder={t("settings.model.placeholder.rerankModel")}
-                    onChange={(value) => updateGenerative("rerank_model", value)}
-                    className="md:col-span-2"
-                    testResult={testResults.rerank}
-                    testing={testingKey === "rerank"}
-                    onTest={() =>
-                      void handleTestModel("rerank", {
-                        target_type: "rerank",
-                        model_id: draft.generative_ai.rerank_model,
-                        vision_enabled: false,
-                      })
-                    }
-                  />
-                </div>
-                <ModelFormActions
-                  canSubmit={canSubmit}
-                  saving={updateMutation.isPending}
+                <TestableTextField
+                  id="genai-rerank-model"
+                  label={t("settings.model.genai.rerankModel")}
+                  value={draft.generative_ai.rerank_model}
+                  placeholder={t("settings.model.placeholder.rerankModel")}
+                  onChange={(value) => updateGenerative("rerank_model", value)}
+                  className="md:col-span-2"
+                  testResult={testResults.rerank}
+                  testing={testingKey === "rerank"}
+                  onTest={() =>
+                    void handleTestModel("rerank", {
+                      target_type: "rerank",
+                      model_id: draft.generative_ai.rerank_model,
+                      vision_enabled: false,
+                    })
+                  }
                 />
-              </CardContent>
-            </Card>
-          </div>
-
-          <SettingsSupplementalPanels
-            env={{
-              description: t("settings.model.env.description"),
-              value: envPreview,
-            }}
-            json={{
-              description: t("settings.model.json.description"),
-              value: jsonPreview,
-            }}
-          />
+              </div>
+              <ModelFormActions
+                canSubmit={canSubmit}
+                saving={updateMutation.isPending}
+              />
+            </CardContent>
+          </Card>
         </div>
       </form>
     </div>
@@ -1037,54 +1010,6 @@ function FieldLabel({
       {badge ? <RequiredIndicator label={badge} /> : null}
     </div>
   );
-}
-
-function buildModelEnvFile(
-  modelSettingsFile: string,
-  enterpriseAi: EnterpriseAiModelSettings | null
-): string {
-  return [
-    "# モデル設定",
-    `MODEL_SETTINGS_FILE=${formatSettingsEnvValue(modelSettingsFile)}`,
-    `OCI_ENTERPRISE_AI_API_KEY=${formatSettingsEnvValue(modelApiKeyEnvPreview(enterpriseAi))}`,
-  ].join("\n");
-}
-
-function buildModelSettingsJsonPreview(draft: ModelSettingsPayload): string {
-  return formatSettingsJson({
-    version: 2,
-    enterprise_ai: {
-      endpoint: draft.enterprise_ai.endpoint,
-      project_ocid: draft.enterprise_ai.project_ocid,
-      models: draft.enterprise_ai.models
-        .filter((model) => model.model_id.trim())
-        .map((model) => ({
-          model_id: model.model_id,
-          display_name: model.display_name,
-          vision_enabled: model.vision_enabled,
-        })),
-      default_model_id: draft.enterprise_ai.default_model_id,
-      api_path: draft.enterprise_ai.api_path,
-      vlm_input_mode: draft.enterprise_ai.vlm_input_mode,
-      text_payload_template: draft.enterprise_ai.text_payload_template,
-      vision_payload_template: draft.enterprise_ai.vision_payload_template,
-      text_response_path: draft.enterprise_ai.text_response_path,
-      vision_response_path: draft.enterprise_ai.vision_response_path,
-      timeout_seconds: draft.enterprise_ai.timeout_seconds,
-      max_retries: draft.enterprise_ai.max_retries,
-    },
-    generative_ai: {
-      embedding_model: draft.generative_ai.embedding_model,
-      embedding_dim: draft.generative_ai.embedding_dim,
-      rerank_model: draft.generative_ai.rerank_model,
-    },
-  });
-}
-
-function modelApiKeyEnvPreview(settings: EnterpriseAiModelSettings | null): string {
-  if (!settings || settings.clear_api_key) return "";
-  if (settings.api_key.trim()) return t("settings.preview.secret.entered");
-  return settings.has_api_key ? t("settings.preview.secret.saved") : "";
 }
 
 function buildClientSideTestFailure(

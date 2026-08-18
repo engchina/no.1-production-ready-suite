@@ -17,7 +17,7 @@ from .permissions import (
     UNCLASSIFIED_PERMISSION,
     permission_for_route,
 )
-from .request_actor import reset_actor_user_id, set_actor_user_id
+from .request_actor import reset_actor_context, set_actor_context
 from .service import SecurityApiError, get_security_service
 
 LOCAL_DEBUG_USER_ID = "00000000-0000-0000-0000-000000000000"
@@ -45,11 +45,14 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
     if settings.local_debug_enabled:
         principal = local_debug_principal()
         request.state.principal = principal
-        actor_token = set_actor_user_id(principal.user_id)
+        actor_token = set_actor_context(
+            principal.user_id,
+            is_system_admin=principal.is_system_admin,
+        )
         try:
             yield
         finally:
-            reset_actor_user_id(actor_token)
+            reset_actor_context(actor_token)
         return
     if not settings.app_auth_enabled:
         yield
@@ -81,11 +84,14 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
             raise SecurityApiError(403, "この機能を利用する権限がありません。")
     except SecurityApiError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
-    actor_token = set_actor_user_id(principal.user_id)
+    actor_token = set_actor_context(
+        principal.user_id,
+        is_system_admin=principal.is_system_admin,
+    )
     try:
         yield
     finally:
-        reset_actor_user_id(actor_token)
+        reset_actor_context(actor_token)
 
 
 def current_principal(request: Request) -> Principal:

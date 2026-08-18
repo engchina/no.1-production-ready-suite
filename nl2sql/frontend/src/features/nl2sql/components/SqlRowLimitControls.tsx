@@ -67,10 +67,19 @@ export function QueryResultSummary({
 }) {
   const hasRowLimit = typeof rowLimit === "number";
   const reachedRowLimit = hasRowLimit && rowLimit > 0 && results.total === rowLimit;
+  const executionContext = results.execution_context ?? "deterministic";
+  const showExecutionContext =
+    executionContext !== "deterministic" || Boolean(results.vpd_context_enforced);
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="query-result-summary">
       <StatusBadge variant="neutral" label={t("queryResults.fetchedCount", { count: results.total })} />
+      {showExecutionContext ? (
+        <StatusBadge
+          variant={results.vpd_context_enforced ? "info" : "neutral"}
+          label={t(`queryResults.executionContext.${executionContext}`)}
+        />
+      ) : null}
       {hasRowLimit && (
         <StatusBadge
           variant="neutral"

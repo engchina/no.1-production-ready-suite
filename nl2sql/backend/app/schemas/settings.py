@@ -13,6 +13,7 @@ ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 DatabaseConnectionTestStatus = Literal["success", "failed"]
+DatabaseConnectionSecurity = Literal["wallet_mtls", "walletless_tls"]
 DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
@@ -196,6 +197,7 @@ class DatabaseSettingsData(BaseModel):
     user: str
     dsn: str
     driver_mode: Literal["thin", "thick"]
+    connection_security: DatabaseConnectionSecurity
     client_lib_dir: str
     wallet_dir: str
     wallet_uploaded: bool
@@ -208,6 +210,12 @@ class DatabaseSettingsData(BaseModel):
     adb_ocid: str
     region: str
     config_source: Literal["runtime"]
+
+
+class DatabasePasswordRevealData(BaseModel):
+    """明示操作でのみ返す Oracle DB password。通常の設定取得には含めない。"""
+
+    password: str = Field(default="", max_length=4096)
 
 
 class DatabaseWalletDownloadData(BaseModel):
@@ -253,6 +261,7 @@ class DatabaseSettingsUpdate(BaseModel):
 
     user: str = Field(default="", max_length=256)
     dsn: str = Field(default="", max_length=1024)
+    connection_security: DatabaseConnectionSecurity | None = None
     wallet_dir: str = Field(default="", max_length=1024)
     password: str | None = Field(default=None, max_length=4096)
     wallet_password: str | None = Field(default=None, max_length=4096)

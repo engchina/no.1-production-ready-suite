@@ -14,9 +14,10 @@ function databaseSettingsFixture(overrides: Record<string, unknown> = {}) {
   return {
     user: "NL2SQL_APP",
     dsn: "nl2sqldb_high",
-    driver_mode: "thick",
-    client_lib_dir: "/u01/aipoc/instantclient_23_26",
-    wallet_dir: "/u01/aipoc/instantclient_23_26/network/admin",
+    driver_mode: "thin",
+    connection_security: "wallet_mtls",
+    client_lib_dir: "",
+    wallet_dir: "/u01/aipoc/wallet",
     wallet_uploaded: true,
     available_services: ["nl2sqldb_high", "nl2sqldb_low"],
     has_password: true,
@@ -27,6 +28,21 @@ function databaseSettingsFixture(overrides: Record<string, unknown> = {}) {
     adb_ocid: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
     region: "ap-osaka-1",
     config_source: "runtime",
+    ...overrides,
+  };
+}
+
+function adbInfoFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "success",
+    message: "ADB OCID が設定されています。",
+    id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
+    display_name: "nl2sqldb",
+    lifecycle_state: "AVAILABLE",
+    db_name: "NL2SQLDB",
+    cpu_core_count: 2,
+    data_storage_size_in_tbs: 1,
+    region: "ap-osaka-1",
     ...overrides,
   };
 }
@@ -121,17 +137,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
 
   const databaseSettings = databaseSettingsFixture();
 
-  const adbInfo = {
-    status: "success",
-    message: "ADB OCID が設定されています。",
-    id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
-    display_name: "nl2sqldb",
-    lifecycle_state: "AVAILABLE",
-    db_name: "NL2SQLDB",
-    cpu_core_count: 2,
-    data_storage_size_in_tbs: 1,
-    region: "ap-osaka-1",
-  };
+  const adbInfo = adbInfoFixture();
 
   await page.route("**/api/settings/oci", (route) => fulfillJson(route, ociSettings));
   await page.route("**/api/settings/oci/config/test", (route) =>
@@ -194,6 +200,9 @@ async function mockNl2sqlSettingsApi(page: Page) {
 
   await page.route("**/api/settings/database", (route) =>
     fulfillJson(route, databaseSettings)
+  );
+  await page.route("**/api/settings/database/password/reveal", (route) =>
+    fulfillJson(route, { password: "database-secret-fixture" })
   );
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfillJson(route, {
@@ -273,49 +282,18 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeTruthy();
 }
 
-async function expectSettingsPreviewCopyButtonFits(page: Page, accessibleName: string) {
-  const button = page.getByRole("button", { name: accessibleName }).first();
-  await expect(button).toBeVisible();
-  await expect(button).toHaveText("コピー");
-
-  const metrics = await button.evaluate((element) => {
-    const label = element.querySelector("span");
-    if (!(label instanceof HTMLElement)) {
-      throw new Error("preview copy button label が見つかりません。");
-    }
-
-    const buttonRect = element.getBoundingClientRect();
-    const labelRect = label.getBoundingClientRect();
-    const buttonStyle = getComputedStyle(element);
-    const labelStyle = getComputedStyle(label);
-
-    return {
-      buttonBottom: buttonRect.bottom,
-      buttonLeft: buttonRect.left,
-      buttonOverflowX: buttonStyle.overflowX,
-      buttonRight: buttonRect.right,
-      buttonTop: buttonRect.top,
-      buttonWhiteSpace: buttonStyle.whiteSpace,
-      labelBottom: labelRect.bottom,
-      labelLeft: labelRect.left,
-      labelRight: labelRect.right,
-      labelTop: labelRect.top,
-      labelWhiteSpace: labelStyle.whiteSpace,
-    };
-  });
-
-  expect(metrics.buttonOverflowX).toBe("hidden");
-  expect(metrics.buttonWhiteSpace).toBe("nowrap");
-  expect(metrics.labelWhiteSpace).toBe("nowrap");
-  expect(metrics.labelLeft).toBeGreaterThanOrEqual(metrics.buttonLeft - 1);
-  expect(metrics.labelRight).toBeLessThanOrEqual(metrics.buttonRight + 1);
-  expect(metrics.labelTop).toBeGreaterThanOrEqual(metrics.buttonTop - 1);
-  expect(metrics.labelBottom).toBeLessThanOrEqual(metrics.buttonBottom + 1);
+async function expectModelPreviewPanelsAbsent(page: Page) {
+  await expect(page.getByText(".env プレビュー", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("JSON プレビュー", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "JSON をコピー" })).toHaveCount(0);
 }
 
-async function expectSettingsPreviewCopyButtonsFit(page: Page) {
-  await expectSettingsPreviewCopyButtonFits(page, ".env をコピー");
-  await expectSettingsPreviewCopyButtonFits(page, "JSON をコピー");
+async function expectDatabaseSupplementalPanelsAbsent(page: Page) {
+  await expect(page.getByText(".env プレビュー", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "接続状態" })).toHaveCount(0);
 }
 
 async function getSavedSecretBadgeStyle(page: Page, fieldId: string) {
@@ -437,6 +415,48 @@ async function expectOciConfigFieldsAboveOcidFields(page: Page) {
   expect(configFieldsBottomRow).toBeLessThan(ocidFieldsTopRow);
 }
 
+async function expectWalletAboveServiceDsn(page: Page) {
+  const wallet = page.getByTestId("oracle-wallet-upload");
+  const service = page.getByRole("combobox", { name: /サービス名 \/ DSN/ });
+
+  await expect(wallet).toBeVisible();
+  await expect(service).toBeVisible();
+
+  const [walletBox, serviceBox] = await Promise.all([
+    wallet.boundingBox(),
+    service.boundingBox(),
+  ]);
+
+  if (!walletBox || !serviceBox) {
+    throw new Error("データベース設定フォームの Wallet / DSN 位置を取得できません。");
+  }
+
+  expect(walletBox.y).toBeLessThan(serviceBox.y);
+}
+
+async function expectAdbManagementAboveDatabaseSettings(page: Page) {
+  const adbHeading = page
+    .locator("#adb-management")
+    .getByRole("heading", { name: "Autonomous Database 管理" });
+  const databaseHeading = page
+    .locator("form")
+    .getByRole("heading", { name: "データベース設定" });
+
+  await expect(adbHeading).toBeVisible();
+  await expect(databaseHeading).toBeVisible();
+
+  const [adbBox, databaseBox] = await Promise.all([
+    adbHeading.boundingBox(),
+    databaseHeading.boundingBox(),
+  ]);
+
+  if (!adbBox || !databaseBox) {
+    throw new Error("ADB 管理カード / データベース設定カードの位置を取得できません。");
+  }
+
+  expect(adbBox.y).toBeLessThan(databaseBox.y);
+}
+
 test.beforeEach(async ({ page }) => {
   await mockNl2sqlSettingsApi(page);
   await mockDatabaseGateReady(page);
@@ -494,14 +514,19 @@ test("OCI 認証設定はブラウザ草稿のダミー値を runtime 空値で�
   await expect(
     page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
   ).toHaveValue("");
-  await expect(page.getByLabel(".env プレビュー")).not.toContainText("aaaaaaaa");
-  await expect(page.getByLabel(".env プレビュー")).not.toContainText("fake-namespace");
+  await expect(page.getByRole("heading", { name: "設定チェック" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
 });
 
 test("NL2SQL のシステム設定画面を表示できる", async ({ page }) => {
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
   await expect(page.getByLabel("ユーザー OCID")).toBeVisible();
+  await expect(page.getByRole("button", { name: "OCI 設定を保存" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "接続テスト" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "設定チェック" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
   await expectNoOperationsMemoOrReadiness(page);
   await expectOciConfigFieldsAboveOcidFields(page);
   await expectNl2sqlShellFillsViewport(page);
@@ -511,6 +536,9 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.goto("/settings/upload-storage");
   await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
   await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
     "/u01/data/production-ready-nl2sql"
   );
@@ -518,13 +546,19 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
   await expect(page.getByLabel("Object Storage バケット")).toHaveValue("nl2sql-originals");
   await expectNoHorizontalOverflow(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.goto("/settings/model");
   await expect(page.getByRole("heading", { name: "モデル設定" }).first()).toBeVisible();
   await expect(page.getByText("OCI Enterprise AI", { exact: true })).toBeVisible();
   await expect(page.getByText("OCI Generative AI", { exact: true })).toBeVisible();
   await expectNoOperationsMemoOrReadiness(page);
-  await expectSettingsPreviewCopyButtonsFit(page);
+  await expectModelPreviewPanelsAbsent(page);
   const modelSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(
     page,
     "enterprise-api-key"
@@ -537,22 +571,11 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.goto("/settings/database");
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toBeVisible();
-  const databaseEnvPreview = page.getByLabel(".env プレビュー");
-  await expect(databaseEnvPreview).toHaveValue(/ORACLE_DRIVER_MODE=thick/);
-  await expect(databaseEnvPreview).toHaveValue(
-    /ORACLE_CLIENT_LIB_DIR=\/u01\/aipoc\/instantclient_23_26/
-  );
-  await expect(databaseEnvPreview).toHaveValue(
-    /ORACLE_WALLET_DIR=\/u01\/aipoc\/instantclient_23_26\/network\/admin/
-  );
+  await expectAdbManagementAboveDatabaseSettings(page);
+  await expectWalletAboveServiceDsn(page);
+  await expectDatabaseSupplementalPanelsAbsent(page);
   const databaseSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(page, "oracle-password");
   expect(databaseSavedSecretBadgeStyle).toEqual(modelSavedSecretBadgeStyle);
-  await expect(page.getByText("現在の接続ユーザー")).toBeVisible();
-  await expect(page.getByText("APP", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 schema", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(/データベース接続ユーザーの権限がシステム上限/)
-  ).toBeVisible();
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "DB接続テスト" }).click();
   await expect(page.getByText("入力値の形式のみ確認します。")).toBeVisible();
@@ -563,7 +586,99 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expectNoHorizontalOverflow(page);
 });
 
-test("独立 Wallet ディレクトリを client lib として .env プレビューに表示しない", async ({
+test("データベース設定は Wallet ZIP の下にサービス名を置き、保存済みパスワードを明示表示する", async ({
+  page,
+}) => {
+  let revealCount = 0;
+  await page.unroute("**/api/settings/database/password/reveal");
+  await page.route("**/api/settings/database/password/reveal", async (route) => {
+    revealCount += 1;
+    await fulfillJson(route, { password: "database-secret-fixture" });
+  });
+
+  await page.goto("/settings/database");
+  await expect.poll(() => revealCount).toBe(0);
+
+  await expectWalletAboveServiceDsn(page);
+  await expectAdbManagementAboveDatabaseSettings(page);
+
+  const password = page.getByLabel("データベースパスワード");
+  await expect(password).toHaveValue("");
+  await expect(password).toHaveAttribute("type", "password");
+  await expectDatabaseSupplementalPanelsAbsent(page);
+
+  await page.getByRole("button", { name: "DB パスワードを表示" }).click();
+  await expect.poll(() => revealCount).toBe(1);
+  await expect(password).toHaveValue("database-secret-fixture");
+  await expect(password).toHaveAttribute("type", "text");
+  await expectDatabaseSupplementalPanelsAbsent(page);
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.body.innerText.includes("database-secret-fixture"))
+    )
+    .toBeFalsy();
+
+  await page.getByRole("button", { name: "DB パスワードを隠す" }).click();
+  await expect(password).toHaveAttribute("type", "password");
+  await expect(password).toHaveValue("database-secret-fixture");
+
+  const revealAgain = page.getByRole("button", { name: "DB パスワードを表示" });
+  await revealAgain.focus();
+  await expect(revealAgain).toBeFocused();
+  await revealAgain.press("Enter");
+  await expect.poll(() => revealCount).toBe(1);
+  await expect(password).toHaveAttribute("type", "text");
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectAdbManagementAboveDatabaseSettings(page);
+  await expectWalletAboveServiceDsn(page);
+  await expectDatabaseSupplementalPanelsAbsent(page);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("データベース設定は接続セキュリティで Wallet mTLS と Walletless TLS を切り替える", async ({
+  page,
+}) => {
+  await page.goto("/settings/database");
+
+  const securityMode = page.getByRole("combobox", { name: "接続セキュリティ" });
+  await expect(securityMode).toBeVisible();
+  await expect(securityMode).toContainText("Wallet mTLS");
+  await expect(page.getByTestId("oracle-wallet-upload")).toBeVisible();
+
+  await securityMode.click();
+  await page.getByRole("option", { name: /Walletless TLS/ }).click();
+
+  await expect(page.getByText("Walletless TLS では Wallet", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("oracle-wallet-upload")).toHaveCount(0);
+  await expect(page.getByLabel("接続 DSN")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("アップロード保存先は右側情報カラムを表示しない", async ({
+  page,
+}) => {
+  await page.goto("/settings/upload-storage");
+
+  await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
+    "/u01/data/production-ready-nl2sql"
+  );
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("データベース設定は右側情報カラムを表示しない", async ({
   page,
 }) => {
   await page.unroute("**/api/settings/database");
@@ -580,12 +695,14 @@ test("独立 Wallet ディレクトリを client lib として .env プレビュ
 
   await page.goto("/settings/database");
 
-  const envPreview = page.getByLabel(".env プレビュー");
-  await expect(envPreview).toHaveValue(/ORACLE_DRIVER_MODE=thin/);
-  await expect(envPreview).toHaveValue(
-    /ORACLE_CLIENT_LIB_DIR=\nORACLE_WALLET_DIR=\/u01\/aipoc\/wallet/
-  );
-  await expect(envPreview).not.toHaveValue(/ORACLE_CLIENT_LIB_DIR=\/u01\/aipoc\/wallet/);
+  await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
+  await expectAdbManagementAboveDatabaseSettings(page);
+  await expectWalletAboveServiceDsn(page);
+  await expectDatabaseSupplementalPanelsAbsent(page);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectDatabaseSupplementalPanelsAbsent(page);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -689,10 +806,12 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   );
 
   await page.goto("/settings/upload-storage");
-  await expect(page.getByRole("heading", { name: "保存先状態" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
+  await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
   await expect(
     page.getByText("backend/.env + 現在のプロセス設定", { exact: true })
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expectNoOperationsMemoOrReadiness(page);
 
   await page.unroute("**/api/settings/database");
@@ -714,8 +833,7 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   );
 
   await page.goto("/settings/database");
-  await expect(page.getByRole("heading", { name: "接続状態" })).toBeVisible();
-  await expect(page.getByText("現在の接続ユーザー")).toBeVisible();
+  await expectDatabaseSupplementalPanelsAbsent(page);
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "DB接続テスト" }).click();
   await expect(page.getByText("接続設定を確認してください。")).toBeVisible();
@@ -724,7 +842,7 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   await expectNoHorizontalOverflow(page);
 });
 
-test("モデル API Key を .env に新規保存して削除でき、JSON preview に含めない", async ({
+test("モデル API Key を .env に新規保存して削除でき、プレビュー欄を表示しない", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
@@ -768,13 +886,8 @@ test("モデル API Key を .env に新規保存して削除でき、JSON previe
 
   await page.goto("/settings/model");
   await page.getByLabel("API key", { exact: true }).fill("new-key-fixture");
-  await expect(page.getByLabel(".env プレビュー")).toContainText(
-    "OCI_ENTERPRISE_AI_API_KEY=\"<入力済み secret>\""
-  );
-  await expect(page.getByLabel("JSON プレビュー")).toContainText('"version": 2');
-  await expect(page.getByLabel("JSON プレビュー")).not.toContainText("api_key");
-  await expect(page.getByLabel("JSON プレビュー")).not.toContainText("new-key-fixture");
-  await expectSettingsPreviewCopyButtonsFit(page);
+  await expectModelPreviewPanelsAbsent(page);
+  await expect(page.locator("body")).not.toContainText("new-key-fixture");
   await page.getByRole("button", { name: "モデル設定: 保存" }).click();
   const notificationRegion = page.getByRole("region", { name: "通知" });
   await expect(notificationRegion).toContainText("モデル設定を保存しました。");
@@ -948,6 +1061,118 @@ test("有効な Wallet がある場合は OCI 自動取得を呼ばない", asyn
   await expect(
     page.getByText("OCI から Wallet を取得し、サーバーへ安全に設定しています…")
   ).toHaveCount(0);
+});
+
+test("情報を再取得は ADB 情報更新後に Wallet 取得も実行する", async ({ page }) => {
+  const walletGate = createRequestGate();
+  let adbRefreshCount = 0;
+  let walletDownloadCount = 0;
+
+  await page.unroute("**/api/settings/database/adb/settings");
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    adbRefreshCount += 1;
+    await fulfillJson(route, adbInfoFixture());
+  });
+  await page.unroute("**/api/settings/database/wallet/download");
+  await page.route("**/api/settings/database/wallet/download", async (route) => {
+    walletDownloadCount += 1;
+    await walletGate.promise;
+    await fulfillJson(route, {
+      status: "downloaded",
+      settings: databaseSettingsFixture(),
+    });
+  });
+
+  await page.goto("/settings/database");
+  await expect.poll(() => walletDownloadCount).toBe(0);
+
+  await page.getByRole("button", { name: "情報を再取得" }).click();
+  await expect.poll(() => adbRefreshCount).toBe(1);
+  await expect.poll(() => walletDownloadCount).toBe(1);
+  const pendingStatus = page
+    .getByRole("status")
+    .filter({ hasText: "OCI から Wallet を取得し、サーバーへ安全に設定しています…" });
+  await expect(pendingStatus).toHaveCount(1);
+  const adbCard = page.locator("#adb-management");
+  const [pendingBox, saveBox, startBox, stopBox] = await Promise.all([
+    pendingStatus.boundingBox(),
+    adbCard.getByRole("button", { name: "保存", exact: true }).boundingBox(),
+    adbCard.getByRole("button", { name: "起動" }).boundingBox(),
+    adbCard.getByRole("button", { name: "停止" }).boundingBox(),
+  ]);
+  if (!pendingBox || !saveBox || !startBox || !stopBox) {
+    throw new Error("ADB 操作ボタンまたは Wallet 取得メッセージの位置を取得できません。");
+  }
+  const actionButtonsBottom = Math.max(
+    saveBox.y + saveBox.height,
+    startBox.y + startBox.height,
+    stopBox.y + stopBox.height
+  );
+  expect(pendingBox.y).toBeGreaterThan(
+    actionButtonsBottom
+  );
+
+  walletGate.release();
+
+  await expect(pendingStatus).toHaveCount(0);
+  await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expect(page.getByText("設定済み", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Oracle Wallet を OCI から取得し、サーバーへ設定しました。")
+  ).toBeVisible();
+  await expect(
+    page.getByText("Oracle Wallet を OCI から取得し、サーバーへ設定しました。")
+  ).toHaveCount(1);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバックとして表示する", async ({
+  page,
+}) => {
+  let adbRefreshCount = 0;
+  let walletDownloadCount = 0;
+  const walletError =
+    "OCI から Wallet を取得できませんでした。IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。";
+
+  await page.unroute("**/api/settings/database/adb/settings");
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    adbRefreshCount += 1;
+    await fulfillJson(route, adbInfoFixture());
+  });
+  await page.unroute("**/api/settings/database/wallet/download");
+  await page.route("**/api/settings/database/wallet/download", async (route) => {
+    walletDownloadCount += 1;
+    await route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: walletError }),
+    });
+  });
+
+  await page.goto("/settings/database");
+  await page.getByRole("button", { name: "情報を再取得" }).click();
+
+  await expect.poll(() => adbRefreshCount).toBe(1);
+  await expect.poll(() => walletDownloadCount).toBe(1);
+  const adbAlert = page
+    .locator("#adb-management")
+    .getByRole("alert")
+    .filter({ hasText: /IAM 権限を確認して再試行/ });
+  await expect(adbAlert).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: /IAM 権限を確認して再試行/ })
+  ).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "OCI から Wallet を再取得" })).toHaveCount(
+    0
+  );
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(adbAlert).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("ADB OCID がない場合は自動取得せず手動アップロードを案内する", async ({ page }) => {

@@ -4,7 +4,6 @@ import {
   Cloud,
   HardDrive,
   Save,
-  ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "@engchina/production-ready-ui";
@@ -17,14 +16,12 @@ import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SETTINGS_DETAIL_GRID_CLASS, SettingsSupplementalPanels, formatSettingsEnvValue } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   type UploadStorageBackend,
   type UploadStorageSettingsData,
   type UploadStorageSettingsUpdate,
 } from "@/lib/api";
-import { formatBytes } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/queries";
 import { readStoredOciSettingsDraft } from "@/lib/oci-settings";
@@ -124,116 +121,105 @@ export function UploadStorageSettingsClient() {
 
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.uploadStorage.saveError");
-  const envPreview = buildUploadStorageEnvFile(form, objectStorageNamespace, settings);
 
   return (
     <div className="space-y-5 p-8">
-      <div className={SETTINGS_DETAIL_GRID_CLASS}>
-        <form
-          className="space-y-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
-        >
-          <Card>
-            <CardHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-                  {form.backend === "oci" ? (
-                    <Cloud size={20} aria-hidden />
-                  ) : (
-                    <HardDrive size={20} aria-hidden />
-                  )}
-                </div>
-                <div>
-                  <CardTitle>{t("settings.uploadStorage.destination.title")}</CardTitle>
-                  <CardDescription>
-                    {t("settings.uploadStorage.destination.description")}
-                  </CardDescription>
-                </div>
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <Card>
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+                {form.backend === "oci" ? (
+                  <Cloud size={20} aria-hidden />
+                ) : (
+                  <HardDrive size={20} aria-hidden />
+                )}
               </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <RequiredFieldsNote />
-              <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-foreground">
-                  {t("settings.uploadStorage.field.backend")}
-                </legend>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <BackendOption
-                    id="upload-storage-local"
-                    value="local"
-                    checked={form.backend === "local"}
-                    icon={<HardDrive size={20} aria-hidden />}
-                    title={t("settings.uploadStorage.backend.local")}
-                    description={t("settings.uploadStorage.backend.localDescription")}
-                    onChange={(backend) => updateForm({ backend })}
-                  />
-                  <BackendOption
-                    id="upload-storage-oci"
-                    value="oci"
-                    checked={form.backend === "oci"}
-                    icon={<Cloud size={20} aria-hidden />}
-                    title={t("settings.uploadStorage.backend.oci")}
-                    description={t("settings.uploadStorage.backend.ociDescription")}
-                    onChange={(backend) => updateForm({ backend })}
-                  />
-                </div>
-              </fieldset>
+              <div>
+                <CardTitle>{t("settings.uploadStorage.destination.title")}</CardTitle>
+                <CardDescription>
+                  {t("settings.uploadStorage.destination.description")}
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <RequiredFieldsNote />
+            <fieldset className="space-y-3">
+              <legend className="text-sm font-medium text-foreground">
+                {t("settings.uploadStorage.field.backend")}
+              </legend>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <BackendOption
+                  id="upload-storage-local"
+                  value="local"
+                  checked={form.backend === "local"}
+                  icon={<HardDrive size={20} aria-hidden />}
+                  title={t("settings.uploadStorage.backend.local")}
+                  description={t("settings.uploadStorage.backend.localDescription")}
+                  onChange={(backend) => updateForm({ backend })}
+                />
+                <BackendOption
+                  id="upload-storage-oci"
+                  value="oci"
+                  checked={form.backend === "oci"}
+                  icon={<Cloud size={20} aria-hidden />}
+                  title={t("settings.uploadStorage.backend.oci")}
+                  description={t("settings.uploadStorage.backend.ociDescription")}
+                  onChange={(backend) => updateForm({ backend })}
+                />
+              </div>
+            </fieldset>
 
-              {form.backend === "local" ? (
+            {form.backend === "local" ? (
+              <TextField
+                id="upload-storage-local-dir"
+                label={t("settings.uploadStorage.field.localStorageDir")}
+                value={form.localStorageDir}
+                onChange={(value) => updateForm({ localStorageDir: value })}
+                helper={t("settings.uploadStorage.helper.localStorageDir")}
+                placeholder={DEFAULT_LOCAL_STORAGE_DIR}
+                error={errors.localStorageDir}
+                required
+              />
+            ) : (
+              <div className="max-w-xl">
                 <TextField
-                  id="upload-storage-local-dir"
-                  label={t("settings.uploadStorage.field.localStorageDir")}
-                  value={form.localStorageDir}
-                  onChange={(value) => updateForm({ localStorageDir: value })}
-                  helper={t("settings.uploadStorage.helper.localStorageDir")}
-                  placeholder={DEFAULT_LOCAL_STORAGE_DIR}
-                  error={errors.localStorageDir}
+                  id="upload-storage-bucket"
+                  label={t("settings.uploadStorage.field.objectStorageBucket")}
+                  value={form.objectStorageBucket}
+                  onChange={(value) => updateForm({ objectStorageBucket: value })}
+                  helper={t("settings.uploadStorage.helper.objectStorageBucket")}
+                  placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
+                  error={errors.objectStorageBucket}
                   required
                 />
-              ) : (
-                <div className="max-w-xl">
-                  <TextField
-                    id="upload-storage-bucket"
-                    label={t("settings.uploadStorage.field.objectStorageBucket")}
-                    value={form.objectStorageBucket}
-                    onChange={(value) => updateForm({ objectStorageBucket: value })}
-                    helper={t("settings.uploadStorage.helper.objectStorageBucket")}
-                    placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
-                    error={errors.objectStorageBucket}
-                    required
-                  />
-                  <FieldError
-                    id="uploadStorage-objectStorageNamespace-error"
-                    className="mt-2"
-                    message={errors.objectStorageNamespace}
-                  />
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                <FieldError
+                  id="uploadStorage-objectStorageNamespace-error"
+                  className="mt-2"
+                  message={errors.objectStorageNamespace}
+                />
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" loading={save.isPending}>
-              <Save size={15} aria-hidden />
-              {save.isPending
-                ? t("settings.uploadStorage.actions.saving")
-                : t("settings.uploadStorage.actions.save")}
-            </Button>
-            {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-          </div>
-        </form>
-
-        <SettingsSupplementalPanels
-          status={<StatusPanel settings={settings} />}
-          env={{
-            description: t("settings.uploadStorage.env.description"),
-            value: envPreview,
-          }}
-        />
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" loading={save.isPending}>
+            <Save size={15} aria-hidden />
+            {save.isPending
+              ? t("settings.uploadStorage.actions.saving")
+              : t("settings.uploadStorage.actions.save")}
+          </Button>
+          {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
+        </div>
+      </form>
     </div>
   );
 }
@@ -333,59 +319,6 @@ function TextField({
   );
 }
 
-function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-            <ShieldCheck size={18} aria-hidden />
-          </div>
-          <div>
-            <CardTitle>{t("settings.uploadStorage.status.title")}</CardTitle>
-            <CardDescription>{t("settings.uploadStorage.status.description")}</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <MetadataRow
-          label={t("settings.uploadStorage.status.backend")}
-          value={backendLabel(settings.backend)}
-        />
-        <MetadataRow
-          label={t("settings.uploadStorage.status.source")}
-          value={t("settings.uploadStorage.source.runtime")}
-        />
-        <MetadataRow
-          label={t("settings.uploadStorage.status.maxUploadSize")}
-          value={formatBytes(settings.max_upload_bytes)}
-        />
-        <MetadataRow
-          label={t("settings.uploadStorage.status.localStorageDir")}
-          value={settings.local_storage_dir}
-        />
-        <MetadataRow
-          label={t("settings.uploadStorage.status.objectStorage")}
-          value={
-            settings.object_storage_namespace && settings.object_storage_bucket
-              ? `${settings.object_storage_namespace}/${settings.object_storage_bucket}`
-              : "—"
-          }
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
-function MetadataRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-      <span className="text-muted">{label}</span>
-      <span className="break-all text-right font-medium text-foreground">{value || "—"}</span>
-    </div>
-  );
-}
-
 function formFromSettings(settings: UploadStorageSettingsData): UploadStorageForm {
   return {
     backend: settings.backend,
@@ -409,33 +342,8 @@ function payloadFromForm(
   return payload;
 }
 
-function buildUploadStorageEnvFile(
-  form: UploadStorageForm,
-  objectStorageNamespace: string,
-  settings: UploadStorageSettingsData
-): string {
-  const entries: [string, string][] = [["UPLOAD_STORAGE_BACKEND", form.backend]];
-  if (form.backend === "local") {
-    entries.push(["LOCAL_STORAGE_DIR", form.localStorageDir]);
-  } else {
-    entries.push(["OBJECT_STORAGE_REGION", settings.object_storage_region]);
-    entries.push(["OBJECT_STORAGE_NAMESPACE", objectStorageNamespace]);
-    entries.push(["OBJECT_STORAGE_BUCKET", form.objectStorageBucket]);
-  }
-  return [
-    "# アップロード保存先",
-    ...entries.map(([key, value]) => `${key}=${formatSettingsEnvValue(value)}`),
-  ].join("\n");
-}
-
 function resolveObjectStorageNamespace(settings: UploadStorageSettingsData): string {
   const runtimeNamespace = settings.object_storage_namespace.trim();
   if (runtimeNamespace) return runtimeNamespace;
   return readStoredOciSettingsDraft().objectStorageNamespace;
-}
-
-function backendLabel(backend: UploadStorageBackend): string {
-  return backend === "oci"
-    ? t("settings.uploadStorage.backend.oci")
-    : t("settings.uploadStorage.backend.local");
 }

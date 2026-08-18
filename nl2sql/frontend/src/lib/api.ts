@@ -370,10 +370,13 @@ export interface ModelSettingsTestResult {
   details: Record<string, string | number | boolean | null>;
 }
 
+export type DatabaseConnectionSecurity = "wallet_mtls" | "walletless_tls";
+
 export interface DatabaseSettingsData {
   user: string;
   dsn: string;
   driver_mode: "thin" | "thick";
+  connection_security: DatabaseConnectionSecurity;
   client_lib_dir: string;
   wallet_dir: string;
   wallet_uploaded: boolean;
@@ -450,6 +453,10 @@ export interface DatabaseWalletDownloadData {
   settings: DatabaseSettingsData;
 }
 
+export interface DatabasePasswordRevealData {
+  password: string;
+}
+
 export interface SchemaOwnersData {
   current_owner: string;
   owners: Array<{
@@ -491,6 +498,7 @@ export interface AdbSettingsUpdate {
 export interface DatabaseSettingsUpdate {
   user: string;
   dsn: string;
+  connection_security?: DatabaseConnectionSecurity;
   wallet_dir: string;
   password?: string;
   wallet_password?: string;
@@ -730,6 +738,11 @@ export const api = {
   downloadDatabaseWallet: () =>
     settingsRequest<DatabaseWalletDownloadData>(
       "/api/settings/database/wallet/download",
+      { method: "POST" }
+    ),
+  revealDatabasePassword: () =>
+    settingsRequest<DatabasePasswordRevealData>(
+      "/api/settings/database/password/reveal",
       { method: "POST" }
     ),
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>

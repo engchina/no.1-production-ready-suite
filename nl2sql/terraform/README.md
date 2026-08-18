@@ -42,14 +42,33 @@ Resource Manager and create a stack. Provide the required form values:
 - OCI compartment, region, availability domain, VCN, and subnets
 - Application administrator password. The username is fixed to `system_admin`
   and is case-sensitive.
+- Deep Data Security DATA USER password. The stack enables
+  `ORACLE_DEEPSEC_ENABLED=true`, keeps `ORACLE_DEEPSEC_DATA_USER` fixed as
+  `NL2SQL_DEEPSEC_DATA_USER`, and writes this password to
+  `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`.
 - Autonomous AI Database mode:
   - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
-    license, and password fields.
+    license, and password fields. New ADBs default to Thin-compatible Wallet
+    mTLS (`Require mutual TLS (mTLS)=true`) with the ADB access-control list
+    enabled. In VCN ACL mode, leaving the override fields blank allows the
+    selected Compute subnet by writing `VCN_OCID;SUBNET_CIDR` to
+    `whitelisted_ips`.
+    If `Require mutual TLS (mTLS)` is set to `false`, the bootstrap writes
+    `ORACLE_CONNECTION_SECURITY=walletless_tls`; use that only with an ADB
+    connection string that supports one-way TLS and an ACL that permits the
+    application host.
+    For public endpoint ACL deployments that leave the VCN ACL overrides blank,
+    ensure the Compute subnet has a valid OCI private path to ADB; otherwise use
+    CIDR ACL mode and enter the Compute/NAT public egress IP or CIDR. For
+    private endpoint deployments, select an ADB subnet reachable from the
+    application Compute subnet in the same VCN routing/security path.
   - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
     values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
     left blank; the stack uses the selected ADB `db_name` with `_high`, for
     example `NL2SQLADB` becomes `nl2sqladb_high`. The wallet password can be
-    supplied separately, or left blank to reuse `ORACLE_PASSWORD`.
+    supplied separately, or left blank to reuse `ORACLE_PASSWORD`. This stack
+    reads the selected ADB and generates a wallet, but does not modify its
+    network access, mTLS, or access-control list settings.
 - Compute image, shape, subnet, and SSH public key
 
 After apply completes, use the `application_url` output. The default application
@@ -109,6 +128,15 @@ values supplied in Resource Manager:
 - `APP_ADMIN_USERNAME=system_admin`
 - `APP_ADMIN_PASSWORD`
 
+Deep Data Security is enabled by default in Terraform deployments:
+
+- `ORACLE_DEEPSEC_ENABLED=true`
+- `ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER`
+- `ORACLE_DEEPSEC_DATA_USER_PASSWORD`
+
+After deployment, open `システム設定 > Deep Data Security`, apply the V001 steps in
+order, then run the Data Grant verification.
+
 This configured administrator is independent from the database connection user,
 does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables
 to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
@@ -124,6 +152,8 @@ database values into `backend/.env`:
 - `ORACLE_PASSWORD`
 - `ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
   when left blank)
+- `ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
+  otherwise `walletless_tls`)
 - `ORACLE_WALLET_PASSWORD`
 - `ORACLE_ADB_OCID`
 - `ORACLE_ADB_REGION`

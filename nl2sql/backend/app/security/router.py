@@ -14,6 +14,7 @@ from .permissions import PERMISSION_CATALOG
 from .schemas import (
     CurrentUserData,
     DeepSecApplyRequest,
+    DeepSecConfigUpdate,
     LoginRequest,
     PasswordChangeRequest,
     PasswordResetData,
@@ -368,6 +369,15 @@ def deepsec_status() -> ApiResponse[dict[str, object]]:
 @router.get("/security/deepsec/plan", response_model=ApiResponse[dict[str, object]])
 def deepsec_plan() -> ApiResponse[dict[str, object]]:
     return ApiResponse(data=get_deepsec_service().plan())
+
+
+@router.patch("/security/deepsec/config", response_model=ApiResponse[dict[str, object]])
+def update_deepsec_config(
+    payload: DeepSecConfigUpdate,
+    request: Request,
+) -> ApiResponse[dict[str, object]]:
+    current_principal(request)
+    return ApiResponse(data=get_deepsec_service().update_config(payload.data_user_password))
 
 
 @router.post(

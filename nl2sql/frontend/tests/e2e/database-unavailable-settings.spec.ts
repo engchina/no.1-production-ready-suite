@@ -174,8 +174,10 @@ const databaseDependentScenarios: Scenario[] = [
         return fulfill(route, {
           configured: false,
           driver_mode: "thin",
+          connection_security: "wallet_mtls",
           deepsec_enabled: false,
-          end_user: "NL2SQL_APP_END_USER",
+          data_user: "NL2SQL_DEEPSEC_DATA_USER",
+          has_data_user_password: false,
           objects: {},
           message: "未適用です。",
         });
@@ -184,8 +186,10 @@ const databaseDependentScenarios: Scenario[] = [
         fulfill(route, {
           version: "V001",
           driver_mode: "thin",
+          connection_security: "wallet_mtls",
           deepsec_enabled: false,
-          end_user: "NL2SQL_APP_END_USER",
+          data_user: "NL2SQL_DEEPSEC_DATA_USER",
+          has_data_user_password: false,
           steps: [],
         })
       );

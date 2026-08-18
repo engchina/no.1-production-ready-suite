@@ -168,6 +168,12 @@ export function useDownloadDatabaseWallet() {
   });
 }
 
+export function useRevealDatabasePassword() {
+  return useMutation({
+    mutationFn: api.revealDatabasePassword,
+  });
+}
+
 export function useTestDatabaseSettings() {
   return useMutation({
     mutationFn: (payload: DatabaseSettingsUpdate) => api.testDatabaseSettings(payload),

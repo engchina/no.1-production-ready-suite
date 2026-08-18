@@ -2,9 +2,10 @@
   "data": {
     "user": "NL2SQL_APP",
     "dsn": "nl2sqldb_high",
-    "driver_mode": "thick",
-    "client_lib_dir": "/u01/aipoc/instantclient_23_26",
-    "wallet_dir": "/u01/aipoc/instantclient_23_26/network/admin",
+    "driver_mode": "thin",
+    "connection_security": "wallet_mtls",
+    "client_lib_dir": "",
+    "wallet_dir": "/u01/aipoc/wallet",
     "wallet_uploaded": true,
     "available_services": [
       "nl2sqldb_high",
