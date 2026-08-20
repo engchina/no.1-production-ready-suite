@@ -51,6 +51,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           import stat
           import zipfile
 
@@ -90,6 +91,7 @@ jobs:
               mode = archive.getinfo("extract_wallet.sh").external_attr >> 16
               locals_tf = archive.read("locals.tf").decode()
               schema_yaml = archive.read("schema.yaml").decode()
+              variables_tf = archive.read("variables.tf").decode()
           if missing:
               raise SystemExit(f"missing package entries: {sorted(missing)}")
           if forbidden:
@@ -98,6 +100,57 @@ jobs:
               raise SystemExit("extract_wallet.sh is not executable in package")
           if "APP_ADMIN_USERNAME=" not in locals_tf or "APP_ADMIN_PASSWORD=" not in locals_tf:
               raise SystemExit("APP_ADMIN credentials are missing from backend.env")
+          deepsec_schema_group = re.search(
+              r"- title: Deep Data Security\s+visible: true\s+variables:\s+"
+              r"- oracle_deepsec_data_user_password",
+              schema_yaml,
+          )
+          if not deepsec_schema_group:
+              raise SystemExit("DeepSec password is missing from the visible Resource Manager group")
+          deepsec_schema_block = re.search(
+              r"(?ms)^  oracle_deepsec_data_user_password:\n(?:(?:    .*)\n)+",
+              schema_yaml,
+          )
+          deepsec_schema_checks = [
+              "type: password",
+              "required: true",
+              "visible: true",
+              "ORACLE_DEEPSEC_DATA_USER_PASSWORD",
+              "confirmation: true",
+              "pattern: '^[^\"\\r\\n]{12,256}$'",
+          ]
+          if not deepsec_schema_block or any(
+              check not in deepsec_schema_block.group(0)
+              for check in deepsec_schema_checks
+          ):
+              raise SystemExit("DeepSec password Resource Manager form field is incomplete")
+          deepsec_variable_block = re.search(
+              r'(?ms)^variable "oracle_deepsec_data_user_password" \{.*?^}',
+              variables_tf,
+          )
+          deepsec_variable_checks = [
+              "type        = string",
+              "sensitive   = true",
+              "trimspace(var.oracle_deepsec_data_user_password) != \"\"",
+              "length(var.oracle_deepsec_data_user_password) >= 12",
+              "length(var.oracle_deepsec_data_user_password) <= 256",
+              "!can(regex(\"[\\r\\n]\", var.oracle_deepsec_data_user_password))",
+              "!can(regex(\"\\\"\", var.oracle_deepsec_data_user_password))",
+          ]
+          if (
+              not deepsec_variable_block
+              or "default" in deepsec_variable_block.group(0)
+              or any(
+                  check not in deepsec_variable_block.group(0)
+                  for check in deepsec_variable_checks
+              )
+          ):
+              raise SystemExit("DeepSec password Terraform variable validation is incomplete")
+          if (
+              "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_data_user_password}"
+              not in locals_tf
+          ):
+              raise SystemExit("DeepSec password is missing from backend.env")
           if "first SYSTEM_ADMIN web login" in schema_yaml:
               raise SystemExit("ADB password is still described as a web login password")
           print("Terraform package contents verified.")
