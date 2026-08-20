@@ -90,6 +90,7 @@ export function OperationStatusStrip({
   catalogEmpty = false,
   importingSample = false,
   onImportSample,
+  sampleImportUnavailableHint = "",
   onPreviewExecute,
   previewExecuteLoading = false,
 }: {
@@ -99,6 +100,7 @@ export function OperationStatusStrip({
   catalogEmpty?: boolean;
   importingSample?: boolean;
   onImportSample?: () => void;
+  sampleImportUnavailableHint?: string;
   /** プレビュー(擬似 job)経路で `generate_sql` ステップ内に実行ボタンを出すためのハンドラ。 */
   onPreviewExecute?: () => void;
   previewExecuteLoading?: boolean;
@@ -312,6 +314,9 @@ export function OperationStatusStrip({
               </Button>
               <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
             </div>
+          )}
+          {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
+            <p className="text-xs text-muted">{sampleImportUnavailableHint}</p>
           )}
         </div>
       )}

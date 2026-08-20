@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   Pencil,
   Plus,
@@ -80,9 +81,43 @@ function compareNumber(left: number, right: number, direction: DataTableSort["di
 }
 
 function roleStatusText(role: SecurityRole) {
-  if (role.archived) return t("security.roles.archived");
+  if (role.archived) return t("security.roles.archivedDisabled");
   if (role.is_built_in) return t("security.roles.builtIn");
   return t("security.roles.custom");
+}
+
+function permissionInheritanceSources(
+  directCodes: readonly string[],
+  permissionByCode: Map<string, PermissionDefinition>
+) {
+  const sources = new Map<string, string[]>();
+  for (const directCode of directCodes) {
+    const source = permissionByCode.get(directCode);
+    if (!source) continue;
+    const pending = [...source.implies];
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const impliedCode = pending.pop();
+      if (!impliedCode || seen.has(impliedCode)) continue;
+      seen.add(impliedCode);
+      const labels = sources.get(impliedCode) ?? [];
+      if (!labels.includes(source.label)) labels.push(source.label);
+      sources.set(impliedCode, labels);
+      pending.push(...(permissionByCode.get(impliedCode)?.implies ?? []));
+    }
+  }
+  return sources;
+}
+
+function effectivePermissionCodes(
+  directCodes: readonly string[],
+  permissionByCode: Map<string, PermissionDefinition>
+) {
+  const codes = new Set(directCodes);
+  for (const code of permissionInheritanceSources(directCodes, permissionByCode).keys()) {
+    codes.add(code);
+  }
+  return codes;
 }
 
 export function SecurityRolesPage() {
@@ -123,8 +158,13 @@ export function SecurityRolesPage() {
     return [...groups.entries()];
   }, [permissions]);
 
+  const draftInheritedPermissionSources = useMemo(
+    () => permissionInheritanceSources(draft.permissions, permissionByCode),
+    [draft.permissions, permissionByCode]
+  );
+
   const rolePermissionText = (role: SecurityRole) =>
-    role.permissions
+    [...effectivePermissionCodes(role.permissions, permissionByCode)]
       .map((code) => permissionByCode.get(code)?.label ?? code)
       .join(" ");
 
@@ -145,7 +185,13 @@ export function SecurityRolesPage() {
       .filter((role) => (q ? roleSearchText(role).includes(q) : true))
       .sort((left, right) => {
         if (sort.key === "status") return compareText(roleStatusText(left), roleStatusText(right), sort.direction);
-        if (sort.key === "permissions") return compareNumber(left.permissions.length, right.permissions.length, sort.direction);
+        if (sort.key === "permissions") {
+          return compareNumber(
+            effectivePermissionCodes(left.permissions, permissionByCode).size,
+            effectivePermissionCodes(right.permissions, permissionByCode).size,
+            sort.direction
+          );
+        }
         return compareText(left.display_name, right.display_name, sort.direction);
       });
   }, [permissionByCode, roles, search, sort]);
@@ -278,6 +324,27 @@ export function SecurityRolesPage() {
     }
   };
 
+  const handleRestore = async (role: SecurityRole) => {
+    if (
+      !(await confirm({
+        title: t("security.roles.restore"),
+        description: t("security.roles.restoreConfirm"),
+        tone: "warning",
+      }))
+    ) {
+      return;
+    }
+    try {
+      const restored = await securityApi.restoreRole(role);
+      setRoles((rows) => rows.map((row) => (row.role_id === restored.role_id ? restored : row)));
+      setSelectedId(restored.role_id);
+      returnToList();
+      toast.success(t("security.common.saved"));
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    }
+  };
+
   const roleActions = (role: SecurityRole): EntityAction[] =>
     canManage
       ? [
@@ -294,6 +361,13 @@ export function SecurityRolesPage() {
             tone: "danger",
             visible: !role.is_built_in && !role.archived,
             onSelect: () => handleArchive(role),
+          },
+          {
+            id: "restore",
+            label: t("security.roles.restore"),
+            icon: ArchiveRestore,
+            visible: !role.is_built_in && role.archived,
+            onSelect: () => handleRestore(role),
           },
         ]
       : [];
@@ -365,7 +439,10 @@ export function SecurityRolesPage() {
       header: t("security.roles.permissions"),
       sortable: true,
       className: "min-w-32",
-      render: (role) => t("security.roles.permissionCount", { count: role.permissions.length }),
+      render: (role) =>
+        t("security.roles.permissionCount", {
+          count: effectivePermissionCodes(role.permissions, permissionByCode).size,
+        }),
     },
     ...(canManage
       ? [
@@ -478,7 +555,6 @@ export function SecurityRolesPage() {
               <RoleDetailPanel
                 role={selectedRole}
                 canManage={canManage}
-                permissions={permissions}
                 permissionByCode={permissionByCode}
                 actions={selectedRole ? roleActions(selectedRole) : []}
               />
@@ -586,21 +662,47 @@ export function SecurityRolesPage() {
                               />
                             </div>
                             <div className="grid gap-2">
-                              {groupPermissions.map((permission) => (
-                                <label key={permission.code} className="flex min-h-11 cursor-pointer items-start gap-2 text-sm">
-                                  <input
-                                    className="mt-0.5 h-4 w-4 accent-primary"
-                                    type="checkbox"
-                                    checked={draft.permissions.includes(permission.code)}
-                                    onChange={() => togglePermission(permission.code)}
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="block font-medium">{permission.label}</span>
-                                    <span className="block text-xs leading-5 text-muted">{permission.description}</span>
-                                    <code className="block break-all text-[10px] text-muted">{permission.code}</code>
-                                  </span>
-                                </label>
-                              ))}
+                              {groupPermissions.map((permission) => {
+                                const checkedDirect = draft.permissions.includes(permission.code);
+                                const inheritedSources =
+                                  draftInheritedPermissionSources.get(permission.code) ?? [];
+                                const inherited = !checkedDirect && inheritedSources.length > 0;
+                                return (
+                                  <label
+                                    key={permission.code}
+                                    className={`flex min-h-11 items-start gap-2 text-sm ${
+                                      readOnly || inherited
+                                        ? "cursor-not-allowed opacity-80"
+                                        : "cursor-pointer"
+                                    }`}
+                                  >
+                                    <input
+                                      className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                                      type="checkbox"
+                                      checked={checkedDirect || inherited}
+                                      disabled={inherited}
+                                      onChange={() => {
+                                        if (!inherited) togglePermission(permission.code);
+                                      }}
+                                    />
+                                    <span className="min-w-0">
+                                      <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                                        <span>{permission.label}</span>
+                                        {inherited ? (
+                                          <StatusBadge
+                                            variant="neutral"
+                                            label={t("security.roles.permissionInherited", {
+                                              source: inheritedSources[0],
+                                            })}
+                                          />
+                                        ) : null}
+                                      </span>
+                                      <span className="block text-xs leading-5 text-muted">{permission.description}</span>
+                                      <code className="block break-all text-[10px] text-muted">{permission.code}</code>
+                                    </span>
+                                  </label>
+                                );
+                              })}
                             </div>
                           </div>
                         );
@@ -626,6 +728,16 @@ export function SecurityRolesPage() {
                       : []
                   }
                   secondaryActions={[
+                    ...(editingRole && !editingRole.is_built_in && editingRole.archived
+                      ? [
+                          {
+                            id: "restore",
+                            label: t("security.roles.restore"),
+                            icon: ArchiveRestore,
+                            onClick: () => void handleRestore(editingRole),
+                          },
+                        ]
+                      : []),
                     {
                       id: "cancel",
                       label: t("security.common.cancel"),
@@ -659,7 +771,7 @@ function RoleStatusBadges({ role }: { role: SecurityRole }) {
   return (
     <div className="flex flex-wrap gap-1">
       <StatusBadge variant={role.is_built_in ? "info" : "neutral"} label={role.is_built_in ? t("security.roles.builtIn") : t("security.roles.custom")} />
-      {role.archived ? <StatusBadge variant="neutral" label={t("security.roles.archived")} /> : null}
+      {role.archived ? <StatusBadge variant="neutral" label={t("security.roles.archivedDisabled")} /> : null}
     </div>
   );
 }
@@ -667,13 +779,11 @@ function RoleStatusBadges({ role }: { role: SecurityRole }) {
 function RoleDetailPanel({
   role,
   canManage,
-  permissions,
   permissionByCode,
   actions,
 }: {
   role: SecurityRole | null;
   canManage: boolean;
-  permissions: PermissionDefinition[];
   permissionByCode: Map<string, PermissionDefinition>;
   actions: EntityAction[];
 }) {
@@ -686,16 +796,10 @@ function RoleDetailPanel({
     );
   }
 
-  const groupedPermissions = role.permissions.reduce<Array<{ group: string; items: string[] }>>((groups, code) => {
-    const group = permissionByCode.get(code)?.group ?? t("security.roles.unknownGroup");
-    const existing = groups.find((item) => item.group === group);
-    if (existing) {
-      existing.items.push(code);
-    } else {
-      groups.push({ group, items: [code] });
-    }
-    return groups;
-  }, []);
+  const inheritedSources = permissionInheritanceSources(role.permissions, permissionByCode);
+  const effectivePermissionCount = role.permissions.length + [...inheritedSources.keys()].filter(
+    (code) => !role.permissions.includes(code)
+  ).length;
 
   return (
     <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4" aria-labelledby="security-roles-detail-heading">
@@ -722,6 +826,9 @@ function RoleDetailPanel({
       {role.role_code === "SYSTEM_ADMIN" ? (
         <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
       ) : null}
+      {role.archived ? (
+        <Banner severity="warning">{t("security.roles.archivedPermissionNotice")}</Banner>
+      ) : null}
 
       <dl className="grid gap-3 md:grid-cols-2">
         <SecurityDetailField label={t("security.roles.code")}>
@@ -731,7 +838,7 @@ function RoleDetailPanel({
           <RoleStatusBadges role={role} />
         </SecurityDetailField>
         <SecurityDetailField label={t("security.roles.permissions")}>
-          {t("security.roles.permissionCount", { count: role.permissions.length })}
+          {t("security.roles.permissionCount", { count: effectivePermissionCount })}
         </SecurityDetailField>
         <SecurityDetailField label={t("security.common.version")}>
           {String(role.version)}
@@ -740,38 +847,6 @@ function RoleDetailPanel({
           {role.description || t("security.common.none")}
         </SecurityDetailField>
       </dl>
-
-      <section className="grid gap-2" aria-label={t("security.roles.permissions")}>
-        <h3 className="text-sm font-semibold text-foreground">{t("security.roles.permissions")}</h3>
-        {groupedPermissions.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-            {role.role_code === "SYSTEM_ADMIN" ? t("security.roles.systemAdminNotice") : t("security.common.none")}
-          </p>
-        ) : (
-          <div className="grid gap-2">
-            {groupedPermissions.map((group) => (
-              <div key={group.group} className="rounded-md border border-border bg-card p-3">
-                <h4 className="text-xs font-semibold text-muted">{group.group}</h4>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {group.items.map((code) => (
-                    <StatusBadge
-                      key={code}
-                      variant="info"
-                      label={permissionByCode.get(code)?.label ?? code}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {permissions.length === 0 ? (
-        <p className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
-          {t("security.roles.permissionCatalogEmpty")}
-        </p>
-      ) : null}
     </section>
   );
 }

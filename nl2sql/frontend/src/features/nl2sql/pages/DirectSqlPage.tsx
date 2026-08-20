@@ -83,7 +83,7 @@ function ExecutableDirectSqlPage() {
     setExecutionRun({ operationKey: startedAt, status: "running", startedAt });
     try {
       const data = await apiPost<QueryResults>("/api/nl2sql/execute", {
-        ...sqlExecutePayload(trimmedSql, null, toAllowedObjects(emptySelection()), rowLimit),
+        ...sqlExecutePayload(trimmedSql, toAllowedObjects(emptySelection()), rowLimit),
       });
       const finishedAt = Date.now();
       setResults(data);

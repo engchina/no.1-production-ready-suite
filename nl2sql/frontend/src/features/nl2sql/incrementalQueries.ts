@@ -6,6 +6,7 @@ import type {
   DbAdminObjectPage,
   Nl2SqlProfile,
   ProfileSummaryPage,
+  ProfileUsageContext,
   SchemaCatalogHead,
   SchemaCatalog,
   SchemaObjectPage,
@@ -47,6 +48,8 @@ async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
 export const nl2sqlIncrementalKeys = {
   profiles: (query: string) => ["nl2sql", "profiles", "search", query] as const,
   profile: (profileId: string) => ["nl2sql", "profiles", "detail", profileId] as const,
+  profileUsageContext: (profileId: string) =>
+    ["nl2sql", "profiles", "usage-context", profileId] as const,
   profileOntologyView: (profileId: string) =>
     ["nl2sql", "profiles", "ontology-view", profileId] as const,
   schemaHead: ["schema", "catalog", "head"] as const,
@@ -101,6 +104,46 @@ export function useProfileDetail(profileId: string) {
         const profile = profiles.find((item) => item.id === profileId);
         if (!profile) throw new Error("指定された profile が見つかりません。");
         return { data: profile, etag: profile.etag ?? "" };
+      });
+      return { profile: response.data, etag: response.etag || response.data.etag };
+    },
+    enabled: Boolean(profileId),
+    staleTime: 5_000,
+    retry: false,
+  });
+}
+
+export function useProfileUsageContext(profileId: string) {
+  return useQuery({
+    queryKey: nl2sqlIncrementalKeys.profileUsageContext(profileId),
+    queryFn: async ({ signal }) => {
+      const response = await apiGetWithMetadata<ProfileUsageContext>(
+        `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/usage-context`,
+        { signal, timeoutMs: API_TIMEOUT_MS.interactiveList }
+      ).catch(async (error: unknown) => {
+        if (!isLegacyCompatibilityError(error)) throw error;
+        const profiles = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.interactiveList,
+        });
+        const profile = profiles.find((item) => item.id === profileId && !item.archived);
+        if (!profile) throw new Error("指定された profile が見つかりません。");
+        return {
+          data: {
+            id: profile.id,
+            name: profile.name,
+            category: profile.category ?? "",
+            description: profile.description,
+            allowed_tables: profile.allowed_tables,
+            allowed_views: profile.allowed_views,
+            archived: profile.archived,
+            object_scope_version: profile.object_scope_version ?? 1,
+            version: profile.version ?? 1,
+            etag: profile.etag ?? "",
+            updated_at: profile.updated_at ?? "",
+          },
+          etag: profile.etag ?? "",
+        };
       });
       return { profile: response.data, etag: response.etag || response.data.etag };
     },

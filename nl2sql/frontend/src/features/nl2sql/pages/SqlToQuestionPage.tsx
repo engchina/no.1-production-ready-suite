@@ -19,9 +19,9 @@ import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { profileDisplayLabel } from "../profileDisplay";
 import type {
-  Nl2SqlProfile,
   ProfileSummary,
   ProfileSummaryPage,
+  ProfileUsageContext,
   ReverseSqlData,
   SchemaObjectDetail,
   SchemaObjectPage,
@@ -33,7 +33,7 @@ const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shad
 
 export function SqlToQuestionPage() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<Nl2SqlProfile | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<ProfileUsageContext | null>(null);
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [sql, setSql] = useState("");
@@ -93,10 +93,13 @@ export function SqlToQuestionPage() {
       try {
         const params = new URLSearchParams({ limit: "100", profile_id: selectedProfileId });
         const [profile, page] = await Promise.all([
-          apiGet<Nl2SqlProfile>(`/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}`, {
-            signal,
-            timeoutMs: API_TIMEOUT_MS.interactiveList,
-          }),
+          apiGet<ProfileUsageContext>(
+            `/api/nl2sql/profiles/${encodeURIComponent(selectedProfileId)}/usage-context`,
+            {
+              signal,
+              timeoutMs: API_TIMEOUT_MS.interactiveList,
+            }
+          ),
           apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
             signal,
             timeoutMs: API_TIMEOUT_MS.interactiveList,
@@ -394,7 +397,7 @@ function SchemaPreview({
   tables,
 }: {
   loading: boolean;
-  profile: Nl2SqlProfile | null;
+  profile: ProfileUsageContext | null;
   tables: SchemaTable[];
 }) {
   if (loading) {

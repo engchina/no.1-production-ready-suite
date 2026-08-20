@@ -49,7 +49,7 @@ import {
   securityFilteredCount,
 } from "./SecurityManagementShared";
 import { securityApi } from "./api";
-import type { SecurityRole, SecurityUser } from "./types";
+import type { AssignedRole, SecurityRole, SecurityUser } from "./types";
 
 type UserPanelView = "list" | "create" | "edit";
 
@@ -101,8 +101,8 @@ export function SecurityUsersPage() {
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const roleNameById = useMemo(
-    () => new Map(roles.map((role) => [role.role_id, role.display_name])),
+  const roleById = useMemo(
+    () => new Map(roles.map((role) => [role.role_id, role])),
     [roles]
   );
   const systemAdminRoleId = useMemo(
@@ -112,11 +112,34 @@ export function SecurityUsersPage() {
 
   const selectedUser = users.find((user) => user.user_id === selectedId) ?? null;
   const editingUser = users.find((user) => user.user_id === editingId) ?? null;
-  const roleNames = (user: SecurityUser) =>
-    user.role_ids.map((id) => roleNameById.get(id) ?? id).filter(Boolean);
+  const assignedRoles = (user: SecurityUser): AssignedRole[] => {
+    if (user.assigned_roles?.length) return user.assigned_roles;
+    return user.role_ids.map((id) => {
+      const role = roleById.get(id);
+      return role
+        ? {
+            role_id: role.role_id,
+            role_code: role.role_code,
+            display_name: role.display_name,
+            is_built_in: role.is_built_in,
+            archived: role.archived,
+          }
+        : {
+            role_id: id,
+            role_code: id,
+            display_name: id,
+            is_built_in: false,
+            archived: true,
+          };
+    });
+  };
+  const assignedRoleLabel = (role: AssignedRole) =>
+    role.archived
+      ? t("security.users.archivedRoleLabel", { role: role.display_name })
+      : role.display_name;
 
   const roleSummary = (user: SecurityUser) => {
-    const names = roleNames(user);
+    const names = assignedRoles(user).map(assignedRoleLabel);
     return names.length > 0 ? names.join(", ") : t("security.common.none");
   };
   const canAssignSystemAdmin = activeView === "edit" && Boolean(editingUser?.is_bootstrap_admin);
@@ -153,7 +176,7 @@ export function SecurityUsersPage() {
         if (sort.key === "status") return compareText(userStatusLabel(left), userStatusLabel(right), sort.direction);
         return compareText(left.display_name, right.display_name, sort.direction);
       });
-  }, [roleNameById, search, sort, users]);
+  }, [roleById, search, sort, users]);
 
   const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
@@ -526,7 +549,7 @@ export function SecurityUsersPage() {
               <UserDetailPanel
                 user={selectedUser}
                 canManage={canManage}
-                roleNames={selectedUser ? roleNames(selectedUser) : []}
+                assignedRoles={selectedUser ? assignedRoles(selectedUser) : []}
                 actions={selectedUser ? userActions(selectedUser) : []}
               />
             </SecurityManagementPanelShell>
@@ -673,12 +696,12 @@ function UserStatusBadges({ user }: { user: SecurityUser }) {
 
 function UserDetailPanel({
   user,
-  roleNames,
+  assignedRoles,
   canManage,
   actions,
 }: {
   user: SecurityUser | null;
-  roleNames: string[];
+  assignedRoles: AssignedRole[];
   canManage: boolean;
   actions: EntityAction[];
 }) {
@@ -690,6 +713,8 @@ function UserDetailPanel({
       />
     );
   }
+
+  const hasArchivedRole = assignedRoles.some((role) => role.archived);
 
   return (
     <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4" aria-labelledby="security-users-detail-heading">
@@ -730,10 +755,21 @@ function UserDetailPanel({
 
       <section className="grid gap-2" aria-label={t("security.users.roles")}>
         <h3 className="text-sm font-semibold text-foreground">{t("security.users.roles")}</h3>
-        {roleNames.length > 0 ? (
+        {hasArchivedRole ? (
+          <Banner severity="warning">{t("security.users.archivedRoleNotice")}</Banner>
+        ) : null}
+        {assignedRoles.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
-            {roleNames.map((roleName) => (
-              <StatusBadge key={roleName} variant="info" label={roleName} />
+            {assignedRoles.map((role) => (
+              <StatusBadge
+                key={role.role_id}
+                variant={role.archived ? "neutral" : "info"}
+                label={
+                  role.archived
+                    ? t("security.users.archivedRoleLabel", { role: role.display_name })
+                    : role.display_name
+                }
+              />
             ))}
           </div>
         ) : (

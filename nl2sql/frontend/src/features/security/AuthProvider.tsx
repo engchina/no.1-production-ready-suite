@@ -10,7 +10,7 @@ import {
 
 import { isAbortError } from "@/lib/api";
 import { securityApi } from "./api";
-import { normalizeMenuPermissions } from "./menu-permissions";
+import { normalizeMenuPermissions, normalizePermissionCodes } from "./menu-permissions";
 import type { CurrentUser } from "./types";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated";
@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         refresh,
         hasPermission: (permission) => {
-          const requestedPermissions = normalizeMenuPermissions([permission]);
+          const requestedPermissions = normalizePermissionCodes([permission]);
           return Boolean(
             user &&
               (user.role_codes.includes("SYSTEM_ADMIN") ||

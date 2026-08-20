@@ -54,26 +54,22 @@ export function previewToJob(preview: PreviewData, question: string): JobData {
 
 export function previewExecutePayload(
   sql: string,
-  profileId: string | null,
   allowedObjects: AllowedObjects
 ) {
-  return sqlExecutePayload(sql, profileId, allowedObjects);
+  return sqlExecutePayload(sql, allowedObjects);
 }
 
 export function sqlExecutePayload(
   sql: string,
-  profileId: string | null,
   allowedObjects: AllowedObjects,
   rowLimit?: number | null
 ) {
   const payload: {
     sql: string;
-    profile_id: string | null;
     allowed_objects: AllowedObjects;
     row_limit?: number;
   } = {
     sql: sql.trim(),
-    profile_id: profileId,
     allowed_objects: allowedObjects,
   };
   if (typeof rowLimit === "number") {

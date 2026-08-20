@@ -20,6 +20,8 @@ from fastapi import (
 from pr_backend_core import ApiResponse
 
 from app.api.concurrency import run_sync_io
+from app.security.domain import Principal
+from app.security.permissions import FEEDBACK_MANAGE_PERMISSION
 from app.settings import get_settings
 
 from .incremental_store import IncrementalVersionConflict
@@ -114,6 +116,7 @@ from .models import (
     ProfileSyncJobData,
     ProfileSyncJobRequest,
     ProfileUpsertRequest,
+    ProfileUsageContext,
     QueryResults,
     ReverseSqlData,
     ReverseSqlRequest,
@@ -171,6 +174,22 @@ def _require_persistence() -> None:
     nl2sql_service.ensure_persistence_available()
 
 
+def _principal_from_request(request: Request) -> Principal | None:
+    principal = getattr(request.state, "principal", None)
+    return principal if isinstance(principal, Principal) else None
+
+
+def _actor_access_args(request: Request, *, manage_permission: str) -> dict[str, str | bool]:
+    principal = _principal_from_request(request)
+    if principal is None:
+        return {"actor_user_id": "", "actor_can_manage": True}
+    return {
+        "actor_user_id": principal.user_id,
+        "actor_can_manage": principal.is_system_admin
+        or principal.has_permission(manage_permission),
+    }
+
+
 persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
 router = APIRouter(
     prefix="/nl2sql",
@@ -221,7 +240,7 @@ def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
     実運用では Oracle 実行 adapter へ差し替える。
     """
     try:
-        allowed = nl2sql_service.resolve_allowed_objects(req.profile_id, req.allowed_objects)
+        allowed = nl2sql_service.resolve_direct_sql_allowed_objects(req.allowed_objects)
         safety, _executable, results = nl2sql_service.execute_sql(
             sql=req.sql,
             allowed=allowed,
@@ -229,6 +248,8 @@ def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OracleAdapterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not safety.is_safe:
         raise HTTPException(status_code=400, detail=safety.blocked_reason)
     return ApiResponse(data=results)
@@ -252,9 +273,18 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
-def get_job(job_id: str) -> ApiResponse[JobData]:
+def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
     """NL2SQL 検索 job の状態・結果を返す。"""
-    job = nl2sql_service.get_job(job_id)
+    try:
+        job = nl2sql_service.get_job(
+            job_id,
+            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="他のユーザーのジョブを参照する権限がありません。",
+        ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
     return ApiResponse(data=job)
@@ -294,6 +324,46 @@ def search_profiles(
         return Response(status_code=304, headers={"ETag": quoted_etag})
     response.headers["ETag"] = quoted_etag
     return ApiResponse(data=page)
+
+
+@router.get(
+    "/profiles/{profile_id}/usage-context",
+    response_model=ApiResponse[ProfileUsageContext],
+)
+def get_profile_usage_context(
+    profile_id: str,
+    response: Response,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> ApiResponse[ProfileUsageContext] | Response:
+    """AI 活用画面向けに profile の最小利用コンテキストを返す。"""
+    try:
+        profile = nl2sql_service.get_profile(profile_id, include_archived=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    quoted_etag = f'"{profile.etag}"'
+    if profile.etag and if_none_match == quoted_etag:
+        return Response(status_code=304, headers={"ETag": quoted_etag})
+    if profile.etag:
+        response.headers["ETag"] = quoted_etag
+    return ApiResponse(
+        data=ProfileUsageContext.model_validate(
+            profile.model_dump(
+                include={
+                    "id",
+                    "name",
+                    "category",
+                    "description",
+                    "allowed_tables",
+                    "allowed_views",
+                    "archived",
+                    "object_scope_version",
+                    "version",
+                    "etag",
+                    "updated_at",
+                }
+            )
+        )
+    )
 
 
 @router.get("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
@@ -942,12 +1012,22 @@ def history(request: Request) -> ApiResponse[HistoryData]:
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
-def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
+def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
     """検索結果 feedback を保存する。"""
     try:
-        data = nl2sql_service.save_feedback(req.history_id, req.rating, req.comment)
+        data = nl2sql_service.save_feedback(
+            req.history_id,
+            req.rating,
+            req.comment,
+            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="他のユーザーの履歴へフィードバックを登録する権限がありません。",
+        ) from exc
     return ApiResponse(data=data)
 
 
@@ -988,12 +1068,20 @@ def list_feedback(
 
 
 @router.delete("/feedback/{history_id}", response_model=ApiResponse[FeedbackClearData])
-def clear_feedback(history_id: str) -> ApiResponse[FeedbackClearData]:
+def clear_feedback(history_id: str, request: Request) -> ApiResponse[FeedbackClearData]:
     """SQL 履歴を残したままアプリ内 feedback だけを解除する。"""
     try:
-        data = nl2sql_service.clear_feedback(history_id)
+        data = nl2sql_service.clear_feedback(
+            history_id,
+            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="他のユーザーのフィードバックを解除する権限がありません。",
+        ) from exc
     return ApiResponse(data=data)
 
 

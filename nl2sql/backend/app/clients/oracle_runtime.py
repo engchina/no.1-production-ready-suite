@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -15,6 +16,8 @@ from app.features.nl2sql.oracle_adapter import (
     oracle_connect_kwargs,
 )
 from app.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class OraclePoolManager:
@@ -72,7 +75,11 @@ class OraclePoolManager:
         try:
             yield connection
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except Exception:
+                logger.warning("oracle_data_connection_close_failed", exc_info=True)
+                self._drop_connection_once(pool, connection)
 
     def close(self) -> None:
         with self._lock:
@@ -126,13 +133,22 @@ class OraclePoolManager:
             with connection.cursor() as cursor:
                 cursor.callproc("NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER")
         except Exception as exc:
+            logger.warning("oracle_deepsec_context_clear_failed", exc_info=True)
             pool = self._data_pool
             if pool is not None:
-                with suppress(Exception):
-                    pool.drop(connection)
+                self._drop_connection_once(pool, connection)
             raise OracleAdapterError(
                 "DeepSec context を消去できないため接続を破棄しました。"
             ) from exc
+
+    def _drop_connection_once(self, pool: Any, connection: Any) -> None:
+        marker = "_nl2sql_oracle_pool_dropped"
+        if getattr(connection, marker, False):
+            return
+        with suppress(Exception):
+            setattr(connection, marker, True)
+        with suppress(Exception):
+            pool.drop(connection)
 
 
 @lru_cache

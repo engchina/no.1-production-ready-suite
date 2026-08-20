@@ -28,9 +28,138 @@ export const MENU_PERMISSIONS = {
   settingsAppearance: "menu.settings_appearance",
 } as const;
 
-export type MenuPermission = (typeof MENU_PERMISSIONS)[keyof typeof MENU_PERMISSIONS];
+export const CAPABILITY_PERMISSIONS = {
+  profilesRead: "nl2sql.profiles.read",
+  profilesManage: "nl2sql.profiles.manage",
+  schemaRead: "nl2sql.schema.read",
+  schemaRefresh: "nl2sql.schema.refresh",
+  queryGenerate: "nl2sql.query.generate",
+  sqlExecute: "nl2sql.sql.execute",
+  feedbackWrite: "nl2sql.feedback.write",
+  feedbackManage: "nl2sql.feedback.manage",
+  selectAiAssetsRead: "nl2sql.select_ai_assets.read",
+  selectAiAssetsRefresh: "nl2sql.select_ai_assets.refresh",
+  selectAiAssetsManage: "nl2sql.select_ai_assets.manage",
+  sampleDataManage: "nl2sql.sample_data.manage",
+  learningMaterialManage: "nl2sql.learning_material.manage",
+  systemStatusRead: "nl2sql.system_status.read",
+  persistenceRecover: "nl2sql.persistence.recover",
+} as const;
 
-const LEGACY_PERMISSION_ALIASES: Record<string, MenuPermission[]> = {
+export type MenuPermission = (typeof MENU_PERMISSIONS)[keyof typeof MENU_PERMISSIONS];
+export type CapabilityPermission =
+  (typeof CAPABILITY_PERMISSIONS)[keyof typeof CAPABILITY_PERMISSIONS];
+
+const PERMISSION_IMPLIES: Record<string, string[]> = {
+  [MENU_PERMISSIONS.query]: [
+    CAPABILITY_PERMISSIONS.queryGenerate,
+    CAPABILITY_PERMISSIONS.sqlExecute,
+    CAPABILITY_PERMISSIONS.feedbackWrite,
+    CAPABILITY_PERMISSIONS.profilesRead,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.directSql]: [
+    CAPABILITY_PERMISSIONS.sqlExecute,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.sqlToQuestion]: [
+    CAPABILITY_PERMISSIONS.profilesRead,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.adminSql]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.systemStatusRead,
+    CAPABILITY_PERMISSIONS.persistenceRecover,
+  ],
+  [MENU_PERMISSIONS.tableManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+  ],
+  [MENU_PERMISSIONS.viewManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+  ],
+  [MENU_PERMISSIONS.dataManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRead,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRefresh,
+  ],
+  [MENU_PERMISSIONS.glossaryRules]: [
+    CAPABILITY_PERMISSIONS.profilesManage,
+    CAPABILITY_PERMISSIONS.learningMaterialManage,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.globalRules]: [
+    CAPABILITY_PERMISSIONS.profilesManage,
+    CAPABILITY_PERMISSIONS.learningMaterialManage,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.sampleData]: [
+    CAPABILITY_PERMISSIONS.sampleDataManage,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.profiles]: [
+    CAPABILITY_PERMISSIONS.profilesManage,
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRead,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRefresh,
+    CAPABILITY_PERMISSIONS.selectAiAssetsManage,
+    CAPABILITY_PERMISSIONS.learningMaterialManage,
+  ],
+  [MENU_PERMISSIONS.ontologyBuild]: [
+    CAPABILITY_PERMISSIONS.profilesManage,
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.learningMaterialManage,
+  ],
+  [MENU_PERMISSIONS.feedbackManagement]: [
+    CAPABILITY_PERMISSIONS.profilesRead,
+    CAPABILITY_PERMISSIONS.feedbackWrite,
+    CAPABILITY_PERMISSIONS.feedbackManage,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRead,
+    CAPABILITY_PERMISSIONS.selectAiAssetsManage,
+  ],
+  [MENU_PERMISSIONS.questionClassifierModels]: [
+    CAPABILITY_PERMISSIONS.profilesRead,
+  ],
+  [MENU_PERMISSIONS.evaluation]: [
+    CAPABILITY_PERMISSIONS.profilesRead,
+    CAPABILITY_PERMISSIONS.queryGenerate,
+  ],
+  [MENU_PERMISSIONS.settingsDatabase]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.systemStatusRead,
+    CAPABILITY_PERMISSIONS.persistenceRecover,
+  ],
+  [MENU_PERMISSIONS.settingsSystemTables]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+    CAPABILITY_PERMISSIONS.systemStatusRead,
+    CAPABILITY_PERMISSIONS.persistenceRecover,
+  ],
+  [CAPABILITY_PERMISSIONS.profilesManage]: [CAPABILITY_PERMISSIONS.profilesRead],
+  [CAPABILITY_PERMISSIONS.schemaRefresh]: [CAPABILITY_PERMISSIONS.schemaRead],
+  [CAPABILITY_PERMISSIONS.feedbackManage]: [
+    CAPABILITY_PERMISSIONS.feedbackWrite,
+    CAPABILITY_PERMISSIONS.profilesRead,
+  ],
+  [CAPABILITY_PERMISSIONS.selectAiAssetsRefresh]: [
+    CAPABILITY_PERMISSIONS.selectAiAssetsRead,
+  ],
+  [CAPABILITY_PERMISSIONS.selectAiAssetsManage]: [
+    CAPABILITY_PERMISSIONS.selectAiAssetsRead,
+    CAPABILITY_PERMISSIONS.selectAiAssetsRefresh,
+  ],
+  [CAPABILITY_PERMISSIONS.persistenceRecover]: [
+    CAPABILITY_PERMISSIONS.systemStatusRead,
+  ],
+};
+
+const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
   "dashboard.view": [MENU_PERMISSIONS.settingsAppearance],
   "documents.view": [
     MENU_PERMISSIONS.tableManagement,
@@ -116,17 +245,37 @@ const LEGACY_PERMISSION_ALIASES: Record<string, MenuPermission[]> = {
   "security.deepsec.verify": [MENU_PERMISSIONS.securityDeepSec],
 };
 
-export function normalizeMenuPermissions(permissions: string[]): Set<string> {
+export function normalizePermissionCodes(permissions: string[]): Set<string> {
   const normalized = new Set<string>();
   const pending = permissions.map((permission) => permission.trim()).filter(Boolean);
   while (pending.length > 0) {
     const permission = pending.pop();
     if (!permission) continue;
-    if (permission.startsWith("menu.")) {
+    const aliases = LEGACY_PERMISSION_ALIASES[permission];
+    if (aliases) {
+      pending.push(...aliases);
+      continue;
+    }
+    if (permission.startsWith("menu.") || permission.startsWith("nl2sql.")) {
       normalized.add(permission);
       continue;
     }
-    pending.push(...(LEGACY_PERMISSION_ALIASES[permission] ?? []));
+    normalized.add(permission);
+  }
+  return normalized;
+}
+
+export function normalizeMenuPermissions(permissions: string[]): Set<string> {
+  const normalized = normalizePermissionCodes(permissions);
+  const pending = [...normalized];
+  while (pending.length > 0) {
+    const permission = pending.pop();
+    if (!permission) continue;
+    for (const implied of PERMISSION_IMPLIES[permission] ?? []) {
+      if (normalized.has(implied)) continue;
+      normalized.add(implied);
+      pending.push(implied);
+    }
   }
   return normalized;
 }

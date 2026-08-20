@@ -4865,7 +4865,13 @@ class Nl2SqlService:
         thread.start()
         return response
 
-    def get_job(self, job_id: str) -> JobData | None:
+    def get_job(
+        self,
+        job_id: str,
+        *,
+        actor_user_id: str = "",
+        actor_can_manage: bool = False,
+    ) -> JobData | None:
         with self._lock:
             job = self._jobs.get(job_id)
         if job is None and self._incremental_repository is not None:
@@ -4883,6 +4889,13 @@ class Nl2SqlService:
                     self._jobs[job_id] = job
         if job is None:
             return None
+        if (
+            not actor_can_manage
+            and actor_user_id
+            and job.actor_user_id
+            and job.actor_user_id != actor_user_id
+        ):
+            raise PermissionError(job_id)
         with self._lock:
             return JobData(
                 job_id=job.job_id,
@@ -5327,11 +5340,24 @@ class Nl2SqlService:
         return item.model_copy(deep=True)
 
     def save_feedback(
-        self, history_id: str, rating: FeedbackRating, comment: str = ""
+        self,
+        history_id: str,
+        rating: FeedbackRating,
+        comment: str = "",
+        *,
+        actor_user_id: str = "",
+        actor_can_manage: bool = False,
     ) -> FeedbackData:
         current = self._history_by_id(history_id)
         if current is None:
             raise KeyError(history_id)
+        if (
+            not actor_can_manage
+            and actor_user_id
+            and current.actor_user_id
+            and current.actor_user_id != actor_user_id
+        ):
+            raise PermissionError(history_id)
         updated = current.model_copy(
             update={
                 "feedback_rating": rating,
@@ -5409,10 +5435,23 @@ class Nl2SqlService:
             select_ai_feedback=select_ai_feedback,
         )
 
-    def clear_feedback(self, history_id: str) -> FeedbackClearData:
+    def clear_feedback(
+        self,
+        history_id: str,
+        *,
+        actor_user_id: str = "",
+        actor_can_manage: bool = False,
+    ) -> FeedbackClearData:
         current = self._history_by_id(history_id)
         if current is None:
             raise KeyError(history_id)
+        if (
+            not actor_can_manage
+            and actor_user_id
+            and current.actor_user_id
+            and current.actor_user_id != actor_user_id
+        ):
+            raise PermissionError(history_id)
         updated = current.model_copy(
             update={
                 "feedback_rating": None,
@@ -14431,6 +14470,45 @@ class Nl2SqlService:
         """Profile view を越えない request scope を公開 API 用に解決する。"""
 
         return self._resolve_allowed_objects(profile_id, requested)
+
+    def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
+        """手書き SELECT SQL 実行用に request scope だけを解決する。"""
+
+        current_owner = self._current_schema_owner()
+        requested_names: list[str] = []
+        seen: set[str] = set()
+        for name in requested.table_names:
+            if not str(name or "").strip():
+                continue
+            normalized = parse_object_identity(
+                str(name),
+                default_owner=current_owner,
+            ).qualified_name
+            if not is_user_visible_object_name(normalized) or normalized in seen:
+                continue
+            seen.add(normalized)
+            requested_names.append(normalized)
+        requested_scope = set(requested_names)
+        resolved_columns: dict[str, list[str]] = {}
+        for table_name, columns in requested.columns.items():
+            canonical = parse_object_identity(
+                table_name,
+                default_owner=current_owner,
+            ).qualified_name
+            if not is_user_visible_object_name(canonical):
+                continue
+            if requested_names and canonical not in requested_scope:
+                continue
+            normalized_columns = [
+                _normalize_identifier(column) for column in columns if column.strip()
+            ]
+            if normalized_columns:
+                resolved_columns[canonical] = normalized_columns
+        return AllowedObjects(
+            table_names=requested_names,
+            columns=resolved_columns,
+            enforce_table_scope=requested.enforce_table_scope,
+        )
 
     def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int | None:
         del profile_id

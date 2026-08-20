@@ -10,6 +10,7 @@ from app.settings import get_settings
 
 from .deepsec import get_deepsec_service
 from .dependencies import current_principal, local_debug_principal, request_context
+from .domain import Principal, RoleRecord, UserRecord
 from .permissions import PERMISSION_CATALOG
 from .schemas import (
     CurrentUserData,
@@ -25,6 +26,7 @@ from .schemas import (
     RoleArchiveRequest,
     RoleCreateRequest,
     RoleData,
+    RoleRestoreRequest,
     RoleUpdateRequest,
     UserCreateData,
     UserCreateRequest,
@@ -55,6 +57,15 @@ def _set_auth_cookie(
         path="/",
         max_age=settings.app_auth_absolute_timeout_hours * 3600,
     )
+
+
+def _roles_by_id() -> dict[str, RoleRecord]:
+    service = get_security_service()
+    return {role.role_id: role for role in service.list_roles(include_archived=True)}
+
+
+def _user_data(user: UserRecord) -> UserData:
+    return UserData.from_record(user, roles_by_id=_roles_by_id())
 
 
 @router.post("/auth/login", response_model=ApiResponse[CurrentUserData])
@@ -145,7 +156,8 @@ def change_password(
 @router.get("/security/users", response_model=ApiResponse[list[UserData]])
 def list_users() -> ApiResponse[list[UserData]]:
     users = get_security_service().list_users()
-    return ApiResponse(data=[UserData.from_record(user) for user in users])
+    roles_by_id = _roles_by_id()
+    return ApiResponse(data=[UserData.from_record(user, roles_by_id=roles_by_id) for user in users])
 
 
 @router.post("/security/users", response_model=ApiResponse[UserCreateData])
@@ -162,7 +174,7 @@ def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[Use
         client_ip=client_ip,
     )
     return ApiResponse(
-        data=UserCreateData(user=UserData.from_record(user), temporary_password=password)
+        data=UserCreateData(user=_user_data(user), temporary_password=password)
     )
 
 
@@ -173,7 +185,7 @@ def get_user(user_id: str) -> ApiResponse[UserData]:
         from .service import SecurityApiError
 
         raise SecurityApiError(404, "ユーザーが見つかりません。")
-    return ApiResponse(data=UserData.from_record(user))
+    return ApiResponse(data=_user_data(user))
 
 
 @router.patch("/security/users/{user_id}", response_model=ApiResponse[UserData])
@@ -196,7 +208,7 @@ def update_user(
         client_ip=client_ip,
     )
     response.headers["ETag"] = f'"{user.version}"'
-    return ApiResponse(data=UserData.from_record(user))
+    return ApiResponse(data=_user_data(user))
 
 
 @router.post(
@@ -217,7 +229,7 @@ def reset_password(
         client_ip=client_ip,
     )
     return ApiResponse(
-        data=PasswordResetData(user=UserData.from_record(user), temporary_password=password)
+        data=PasswordResetData(user=_user_data(user), temporary_password=password)
     )
 
 
@@ -231,7 +243,7 @@ def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
         request_id=request_id,
         client_ip=client_ip,
     )
-    return ApiResponse(data=UserData.from_record(user))
+    return ApiResponse(data=_user_data(user))
 
 
 def _change_user_status(
@@ -258,7 +270,7 @@ def _change_user_status(
         request_id=request_id,
         client_ip=client_ip,
     )
-    return ApiResponse(data=UserData.from_record(updated))
+    return ApiResponse(data=_user_data(updated))
 
 
 @router.post("/security/users/{user_id}/enable", response_model=ApiResponse[UserData])
@@ -276,10 +288,18 @@ def disable_user(
 
 
 @router.get("/security/roles", response_model=ApiResponse[list[RoleData]])
-def list_roles(include_archived: bool = Query(default=False)) -> ApiResponse[list[RoleData]]:
-    roles = get_security_service().list_roles(
-        include_archived=include_archived,
-    )
+def list_roles(
+    request: Request, include_archived: bool = Query(default=False)
+) -> ApiResponse[list[RoleData]]:
+    service = get_security_service()
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, Principal):
+        roles = service.list_roles_for_actor(
+            principal,
+            include_archived=include_archived,
+        )
+    else:
+        roles = service.list_roles(include_archived=include_archived)
     return ApiResponse(data=[RoleData.from_record(role) for role in roles])
 
 
@@ -304,8 +324,13 @@ def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[Rol
 
 
 @router.get("/security/roles/{role_id}", response_model=ApiResponse[RoleData])
-def get_role(role_id: str) -> ApiResponse[RoleData]:
-    role = get_security_service().store.get_role(role_id)
+def get_role(role_id: str, request: Request) -> ApiResponse[RoleData]:
+    service = get_security_service()
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, Principal):
+        role = service.get_role_for_actor(role_id, principal)
+    else:
+        role = service.store.get_role(role_id)
     if role is None:
         from .service import SecurityApiError
 
@@ -349,6 +374,24 @@ def archive_role(
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     role = get_security_service().archive_role(
+        role_id,
+        expected_version=payload.version,
+        actor=actor,
+        request_id=request_id,
+        client_ip=client_ip,
+    )
+    return ApiResponse(data=RoleData.from_record(role))
+
+
+@router.post("/security/roles/{role_id}/restore", response_model=ApiResponse[RoleData])
+def restore_role(
+    role_id: str,
+    payload: RoleRestoreRequest,
+    request: Request,
+) -> ApiResponse[RoleData]:
+    actor = current_principal(request)
+    request_id, client_ip = request_context(request)
+    role = get_security_service().restore_role(
         role_id,
         expected_version=payload.version,
         actor=actor,
@@ -435,6 +478,7 @@ def apply_deepsec_step(
     result = get_deepsec_service().apply_step(
         step_no,
         payload.checksum,
+        payload.confirmation,
         current_principal(request),
     )
     return ApiResponse(data=result)

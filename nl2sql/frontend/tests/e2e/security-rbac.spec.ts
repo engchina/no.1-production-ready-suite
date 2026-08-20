@@ -41,6 +41,25 @@ async function expectNoPageHorizontalScroll(page: Page) {
     .toBeTruthy();
 }
 
+async function expectFloatingMenuInsideViewport(page: Page, menu: Locator) {
+  await expect(menu).toBeVisible();
+  const [box, viewport] = await Promise.all([menu.boundingBox(), page.viewportSize()]);
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  await expect
+    .poll(() =>
+      menu.evaluate((node) => ({
+        constrained: node.getAttribute("data-floating-menu-constrained"),
+        fitsWithoutScrollbar: node.scrollHeight <= node.clientHeight + 1,
+      }))
+    )
+    .toEqual({ constrained: null, fitsWithoutScrollbar: true });
+}
+
 async function sidebarComparableStyle(locator: Locator) {
   await expect(locator).toBeVisible();
   return locator.evaluate((element) => {
@@ -265,6 +284,68 @@ test("通常ユーザーはパスワード変更ページから元の画面へ�
       password_change_allowed: true,
     })
   );
+  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfill(route, {
+      catalog_version: 1,
+      schema_fingerprint: "schema-v1",
+      refreshed_at: "2026-08-20T00:00:00Z",
+      object_count: 1,
+      column_count: 2,
+      change_token: 1,
+      etag: "schema-v1",
+    })
+  );
+  await page.route("**/api/schema/objects**", (route) =>
+    fulfill(route, {
+      items: [],
+      next_cursor: null,
+      total: 0,
+      table_count: 0,
+      view_count: 0,
+      counts_included: true,
+      refreshed_at: "2026-08-20T00:00:00Z",
+      catalog_version: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search*", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          id: "default",
+          name: "標準プロファイル",
+          category: "",
+          description: "",
+          archived: false,
+          allowed_table_count: 0,
+          allowed_view_count: 0,
+          glossary_count: 0,
+          few_shot_count: 0,
+          version: 1,
+          etag: "profile-default-v1",
+          updated_at: "2026-08-20T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfill(route, {
+      id: "default",
+      name: "標準プロファイル",
+      category: "",
+      description: "",
+      allowed_tables: [],
+      allowed_views: [],
+      archived: false,
+      object_scope_version: 1,
+      version: 1,
+      etag: "profile-default-v1",
+      updated_at: "2026-08-20T00:00:00Z",
+    })
+  );
 
   await page.goto("/query");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
@@ -308,7 +389,8 @@ test("強制パスワード変更中の戻る操作はログインへ戻す", as
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("メニュー権限だけのユーザーはメニューと直達 URL/API の双方で制限される", async ({ page }) => {
+test("SQL 生成だけのユーザーは profile を利用できるが管理メニューには入れない", async ({ page }) => {
+  test.slow();
   await mockDatabaseGateReady(page);
   const limited = {
     ...systemAdminMe,
@@ -319,7 +401,100 @@ test("メニュー権限だけのユーザーはメニューと直達 URL/API �
     permissions: ["menu.query"],
     password_change_allowed: true,
   };
+  let usageContextRequested = false;
+  let fullProfileRequested = false;
+  let persistenceRequested = false;
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
+  await page.route("**/api/nl2sql/persistence", (route) => {
+    persistenceRequested = true;
+    return fulfill(route, {
+      mode: "oracle",
+      ready: true,
+      durable: true,
+      writable: true,
+      snapshot_loaded: true,
+      reason_code: null,
+      checked_at: "2026-08-20T00:00:00Z",
+    });
+  });
+  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfill(route, {
+      catalog_version: 1,
+      schema_fingerprint: "schema-v1",
+      refreshed_at: "2026-08-20T00:00:00Z",
+      object_count: 1,
+      column_count: 2,
+      change_token: 1,
+      etag: "schema-v1",
+    })
+  );
+  await page.route("**/api/schema/objects**", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          owner: "APP",
+          object_name: "DEPARTMENT",
+          object_type: "TABLE",
+          logical_name: "部署",
+          comment: "部署情報",
+          row_count: 3,
+          column_count: 2,
+          last_ddl_at: "",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      table_count: 1,
+      view_count: 0,
+      counts_included: true,
+      refreshed_at: "2026-08-20T00:00:00Z",
+      catalog_version: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search*", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          id: "default",
+          name: "標準プロファイル",
+          category: "",
+          description: "",
+          archived: false,
+          allowed_table_count: 1,
+          allowed_view_count: 0,
+          glossary_count: 0,
+          few_shot_count: 0,
+          version: 1,
+          etag: "profile-default-v1",
+          updated_at: "2026-08-20T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) => {
+    usageContextRequested = true;
+    return fulfill(route, {
+      id: "default",
+      name: "標準プロファイル",
+      category: "",
+      description: "",
+      allowed_tables: ["APP.DEPARTMENT"],
+      allowed_views: [],
+      archived: false,
+      object_scope_version: 1,
+      version: 1,
+      etag: "profile-default-v1",
+      updated_at: "2026-08-20T00:00:00Z",
+    });
+  });
+  await page.route("**/api/nl2sql/profiles/default", (route) => {
+    fullProfileRequested = true;
+    return fulfill(route, "この機能を利用する権限がありません。", 403);
+  });
   await page.route("**/api/security/users", (route) =>
     fulfill(route, "この機能を利用する権限がありません。", 403)
   );
@@ -327,10 +502,17 @@ test("メニュー権限だけのユーザーはメニューと直達 URL/API �
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
   await expect(page.getByRole("button", { name: "実行" })).toBeVisible();
+  await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(sidebar.getByText("業務プロファイル", { exact: true })).toHaveCount(0);
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toHaveCount(0);
   await expect(sidebar.getByText("セキュリティ管理", { exact: true })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "SELECT SQL を実行" })).toHaveCount(0);
   await expect(sidebar.getByText("管理 SQL を実行", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "スキーマを更新" })).toHaveCount(0);
+  await expect.poll(() => persistenceRequested).toBeTruthy();
+  await expect.poll(() => usageContextRequested).toBeTruthy();
+  expect(fullProfileRequested).toBe(false);
 
   await page.goto("/direct-sql");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
@@ -338,11 +520,198 @@ test("メニュー権限だけのユーザーはメニューと直達 URL/API �
   await page.goto("/admin-sql");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/profiles");
+    window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+  });
+  await expect(page).toHaveURL(/\/forbidden$/);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+
   const apiStatus = await page.evaluate(async () => (await fetch("/api/security/users")).status);
   expect(apiStatus).toBe(403);
+  const profileSearchStatus = await page.evaluate(
+    async () => (await fetch("/api/nl2sql/profiles/search")).status
+  );
+  expect(profileSearchStatus).toBe(200);
+  const fullProfileStatus = await page.evaluate(
+    async () => (await fetch("/api/nl2sql/profiles/default")).status
+  );
+  expect(fullProfileStatus).toBe(403);
 
   await page.goto("/settings/security/users");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+});
+
+test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボタンを表示しない", async ({ page }) => {
+  test.slow();
+  await mockDatabaseGateReady(page);
+  const limited = {
+    ...systemAdminMe,
+    user_id: "limited-empty-profile",
+    login_name: "limited.empty",
+    display_name: "SQL 生成ユーザー",
+    role_codes: ["QUERY_MENU"],
+    permissions: ["menu.query"],
+    password_change_allowed: true,
+  };
+  await page.route("**/api/auth/me", (route) => fulfill(route, limited));
+  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfill(route, {
+      catalog_version: 1,
+      schema_fingerprint: "schema-v1",
+      refreshed_at: "2026-08-20T00:00:00Z",
+      object_count: 0,
+      column_count: 0,
+      change_token: 1,
+      etag: "schema-v1",
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search*", (route) =>
+    fulfill(route, { items: [], next_cursor: null, total: 0, change_token: 1 })
+  );
+
+  await page.goto("/query");
+
+  await expect(
+    page.getByText("利用できる業務プロファイルがありません。管理者に作成を依頼してください。")
+  ).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByRole("button", { name: "業務プロファイルを作成" })).toHaveCount(0);
+});
+
+test("SQL 生成だけのユーザーは空 schema 失敗時にサンプルデータ投入ボタンを表示しない", async ({ page }) => {
+  test.slow();
+  await mockDatabaseGateReady(page);
+  const limited = {
+    ...systemAdminMe,
+    user_id: "query-only-sample-readonly",
+    login_name: "query.only.sample",
+    display_name: "SQL 生成ユーザー",
+    role_codes: ["QUERY_MENU"],
+    permissions: ["menu.query"],
+    password_change_allowed: true,
+  };
+  let sampleImportRequested = false;
+  await page.route("**/api/auth/me", (route) => fulfill(route, limited));
+  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfill(route, { refreshed_at: "2026-08-20T00:00:00Z", tables: [] })
+  );
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfill(route, {
+      catalog_version: 1,
+      schema_fingerprint: "schema-empty",
+      refreshed_at: "2026-08-20T00:00:00Z",
+      object_count: 0,
+      column_count: 0,
+      change_token: 1,
+      etag: "schema-empty",
+    })
+  );
+  await page.route("**/api/schema/objects**", (route) =>
+    fulfill(route, {
+      items: [],
+      next_cursor: null,
+      total: 0,
+      table_count: 0,
+      view_count: 0,
+      counts_included: true,
+      refreshed_at: "2026-08-20T00:00:00Z",
+      catalog_version: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search*", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          id: "default",
+          name: "標準プロファイル",
+          category: "",
+          description: "",
+          archived: false,
+          allowed_table_count: 0,
+          allowed_view_count: 0,
+          glossary_count: 0,
+          few_shot_count: 0,
+          version: 1,
+          etag: "profile-default-v1",
+          updated_at: "2026-08-20T00:00:00Z",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfill(route, {
+      id: "default",
+      name: "標準プロファイル",
+      category: "",
+      description: "",
+      allowed_tables: [],
+      allowed_views: [],
+      archived: false,
+      object_scope_version: 1,
+      version: 1,
+      etag: "profile-default-v1",
+      updated_at: "2026-08-20T00:00:00Z",
+    })
+  );
+  await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    sampleImportRequested = true;
+    return fulfill(route, { executed: true });
+  });
+
+  const createdAt = "2026-08-20T00:00:00Z";
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfill(route, {
+      job_id: "job-empty-readonly-001",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-empty-readonly-001", (route) =>
+    fulfill(route, {
+      job_id: "job-empty-readonly-001",
+      status: "error",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 30,
+      result: null,
+      error_message:
+        "NL2SQL ジョブに失敗しました: Schema catalog が空です。Oracle schema を refresh するか、Data Tools から sample data を明示的に import してください。",
+      timing: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "error", elapsed_ms: 5 },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+
+  await page.goto("/query");
+  await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
+  await page.locator("#nl2sql-question-input").fill("すべてプロジェクトを教えてください。");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const progress = page.getByTestId("nl2sql-job-progress");
+  await expect(progress).toHaveAttribute("data-job-status", "error");
+  await expect(progress.getByRole("button", { name: "サンプルデータを投入" })).toHaveCount(0);
+  await expect(
+    progress.getByText("スキーマが空です。管理者にサンプルデータの投入またはスキーマ更新を依頼してください。")
+  ).toBeVisible();
+  expect(sampleImportRequested).toBe(false);
 });
 
 test("管理者がユーザーを作成して単一ロールを割り当て、一時パスワードを一度だけ確認する", async ({ page, context }) => {
@@ -544,6 +913,117 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(page.getByTestId("security-users-row-actions-admin-user-trigger")).toBeVisible();
 });
 
+test("ユーザー管理はアーカイブ済み割り当てロールを無効として表示し、新規選択肢には出さない", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-viewer",
+    role_code: "QUERY_VIEWER",
+    display_name: "検索閲覧",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  const archivedAssignedRole = {
+    role_id: "role-archived-user",
+    role_code: "DATA_ADMIN",
+    display_name: "データ管理者",
+    is_built_in: false,
+    archived: true,
+  };
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole, viewerRole])
+  );
+  await page.route("**/api/security/users", (route) =>
+    fulfill(route, [
+      {
+        user_id: "archived-role-user",
+        login_name: "archive.user",
+        display_name: "アーカイブロール利用者",
+        status: "ACTIVE",
+        force_password_change: false,
+        locked_until: null,
+        version: 1,
+        role_ids: [archivedAssignedRole.role_id],
+        assigned_roles: [archivedAssignedRole],
+        is_bootstrap_admin: false,
+      },
+    ])
+  );
+
+  await page.goto("/settings/security/users");
+
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByText("データ管理者（アーカイブ済み・無効）", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("アーカイブ済みロールの権限は、このユーザーの実アクセス権には反映されません。", {
+      exact: true,
+    })
+  ).toBeVisible();
+
+  const inactiveRoleBadge = page.getByText("データ管理者（アーカイブ済み・無効）", { exact: true }).last();
+  await expect(inactiveRoleBadge).toHaveClass(/bg-slate-100/);
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByRole("radio", { name: /検索閲覧/ })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /データ管理者/ })).toHaveCount(0);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("ユーザー管理は復元済みロールを通常表示し、割り当て選択肢に戻す", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const restoredRole = {
+    ...systemRole,
+    role_id: "role-restored-user",
+    role_code: "DATA_ADMIN",
+    display_name: "データ管理者",
+    is_built_in: false,
+    archived: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  const restoredAssignedRole = {
+    role_id: restoredRole.role_id,
+    role_code: restoredRole.role_code,
+    display_name: restoredRole.display_name,
+    is_built_in: false,
+    archived: false,
+  };
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole, restoredRole])
+  );
+  await page.route("**/api/security/users", (route) =>
+    fulfill(route, [
+      {
+        user_id: "restored-role-user",
+        login_name: "restore.user",
+        display_name: "復元ロール利用者",
+        status: "ACTIVE",
+        force_password_change: false,
+        locked_until: null,
+        version: 1,
+        role_ids: [restoredRole.role_id],
+        assigned_roles: [restoredAssignedRole],
+        is_bootstrap_admin: false,
+      },
+    ])
+  );
+
+  await page.goto("/settings/security/users");
+
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByText("データ管理者", { exact: true })).toBeVisible();
+  await expect(page.getByText("データ管理者（アーカイブ済み・無効）", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText("アーカイブ済みロールの権限は、このユーザーの実アクセス権には反映されません。", {
+      exact: true,
+    })
+  ).toHaveCount(0);
+  await expect(page.getByText("データ管理者", { exact: true }).last()).toHaveClass(/bg-sky-100/);
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByRole("radio", { name: /データ管理者/ })).toBeVisible();
+});
+
 test("ロール・権限管理はカード型リストではなくテーブル一覧と詳細で表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const permissionRows = [
@@ -594,7 +1074,8 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   const grid = page.getByTestId("security-roles-grid");
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
-  await expect(grid.getByRole("columnheader", { name: "メニュー権限" })).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "機能権限" })).toHaveCount(0);
   await expect(page.getByText("構造化データ権限", { exact: true })).toHaveCount(0);
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const systemRoleAction = page.getByTestId("security-roles-row-actions-role-system-trigger");
@@ -654,8 +1135,259 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(page.getByTestId("security-roles-row-actions-role-system-trigger")).toBeVisible();
 });
 
-test("ロール・権限管理はオントロジー提案取得が遅延しても読み込み完了する", async ({ page }) => {
+test("ロール・権限管理は詳細で権限名を伏せ、編集では SQL 生成由来の参照権限を継承表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
+  const permissionRows = [
+    {
+      code: "menu.query",
+      group: "メニュー権限",
+      label: "SQL 生成",
+      description: "SQL 生成を表示し、関連操作を利用できます。",
+      implies: ["nl2sql.profiles.read", "nl2sql.schema.read"],
+    },
+    {
+      code: "nl2sql.profiles.read",
+      group: "参照権限",
+      label: "業務プロファイル参照",
+      description: "SQL 生成で業務プロファイルの利用コンテキストを参照できます。",
+      implies: [],
+    },
+    {
+      code: "nl2sql.schema.read",
+      group: "参照権限",
+      label: "スキーマ参照",
+      description: "SQL 生成でスキーマ情報を参照できます。",
+      implies: [],
+    },
+  ];
+  const queryRole = {
+    ...systemRole,
+    role_id: "role-query-only",
+    role_code: "QUERY_ONLY",
+    display_name: "SQL 利用者",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole, queryRole])
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
+
+  await page.goto("/settings/security/roles");
+  await page.getByTestId("security-roles-grid").locator("tbody tr").filter({ hasText: "SQL 利用者" }).locator("td").first().click();
+
+  await expect(page.getByText("業務プロファイル参照 (SQL 生成により付与)")).toHaveCount(0);
+  await expect(page.getByText("スキーマ参照 (SQL 生成により付与)")).toHaveCount(0);
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByText("SQL 生成により付与", { exact: true }).first()).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("ロール編集の下端メニューは viewport 下端では上方向に開く", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.setViewportSize({ width: 1365, height: 720 });
+  const permissionRows = [
+    {
+      code: "menu.query",
+      group: "RAG",
+      label: "SQL 生成",
+      description: "SQL 生成を表示し、関連操作を利用できます。",
+      implies: [],
+    },
+    ...Array.from({ length: 28 }, (_, index) => ({
+      code: `menu.bottom_menu_check_${index + 1}`,
+      group: index % 2 === 0 ? "システム設定" : "管理権限",
+      label: `下端検証 ${String(index + 1).padStart(2, "0")}`,
+      description: "下端メニューの表示位置を検証するための権限です。",
+      implies: [],
+    })),
+  ];
+  const activeRole = {
+    ...systemRole,
+    role_id: "role-bottom-menu",
+    role_code: "BOTTOM_MENU",
+    display_name: "下端メニュー検証ロール",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole, activeRole])
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
+
+  await page.goto("/settings/security/roles");
+  await page.getByTestId("security-roles-grid").locator("tbody tr").filter({ hasText: "下端メニュー検証ロール" }).locator("td").first().click();
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+
+  const editActions = page.getByRole("group", { name: "ロール編集操作" });
+  await expect(editActions.getByRole("button", { name: "保存" })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2
+      )
+    )
+    .toBeTruthy();
+
+  const trigger = editActions.getByRole("button", { name: "その他の操作" });
+  const triggerBox = await trigger.boundingBox();
+  expect(triggerBox).not.toBeNull();
+  await trigger.click();
+
+  const menu = page.getByRole("menu");
+  await expect(menu).toHaveAttribute("data-floating-menu-placement", "top");
+  await expectFloatingMenuInsideViewport(page, menu);
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(triggerBox!.y + 1);
+});
+
+test("ロール管理の compact header menu は短い viewport 内に収まる", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.setViewportSize({ width: 375, height: 360 });
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole])
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+
+  await page.goto("/settings/security/roles");
+  const actions = page.getByTestId("security-roles-actions");
+  const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
+  await expect(actions.getByRole("button")).toHaveText(["新規作成", "その他の操作"]);
+  await moreButton.click();
+
+  const menu = page.getByRole("menu");
+  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
+  await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
+  await expectFloatingMenuInsideViewport(page, menu);
+});
+
+test("ロール・権限管理はアーカイブ済みロールの権限が無効であることを明示する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const permissionRows = [
+    {
+      code: "menu.query",
+      group: "AI 活用",
+      label: "SQL 生成",
+      description: "SQL 生成を表示し、関連操作を利用できます。",
+      implies: [],
+    },
+    {
+      code: "menu.direct_sql",
+      group: "AI 活用",
+      label: "SELECT SQL を実行",
+      description: "SELECT SQL 実行を表示し、関連操作を利用できます。",
+      implies: [],
+    },
+  ];
+  const activeRole = {
+    ...systemRole,
+    role_id: "role-active-data",
+    role_code: "DATA_USER",
+    display_name: "データユーザー",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  const archivedRole = {
+    ...systemRole,
+    role_id: "role-archived-data",
+    role_code: "DATA_ADMIN",
+    display_name: "データ管理者",
+    is_built_in: false,
+    archived: true,
+    permissions: ["menu.query", "menu.direct_sql"],
+    data_entitlements: [],
+  };
+  let roles: unknown[] = [systemRole, activeRole, archivedRole];
+  await page.route("**/api/security/roles?include_archived=true", (route) => fulfill(route, roles));
+  await page.route("**/api/security/roles/role-active-data/archive", async (route) => {
+    const updated = { ...activeRole, archived: true, version: activeRole.version + 1 };
+    roles = [systemRole, updated, archivedRole];
+    await fulfill(route, updated);
+  });
+  await page.route("**/api/security/roles/role-archived-data/restore", async (route) => {
+    const restored = { ...archivedRole, archived: false, version: archivedRole.version + 1 };
+    roles = [systemRole, activeRole, restored];
+    await fulfill(route, restored);
+  });
+  await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
+
+  await page.goto("/settings/security/roles");
+
+  const grid = page.getByTestId("security-roles-grid");
+  const archivedRow = grid.locator("tbody tr").filter({ hasText: "データ管理者" });
+  await archivedRow.locator("td").first().click();
+  await expect(archivedRow.getByText("アーカイブ済み・権限無効", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
+      { exact: true }
+    )
+  ).toBeVisible();
+
+  const archivedDetail = page.locator("section", { has: page.getByRole("heading", { name: "データ管理者" }) });
+  await expect(archivedDetail.getByText("SQL 生成", { exact: true })).toHaveCount(0);
+
+  await page.getByTestId("security-roles-row-actions-role-archived-data-trigger").click();
+  await expect(page.getByRole("menuitem", { name: "復元" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toBeVisible();
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  const archivedEditActions = page.getByRole("group", { name: "ロール編集操作" });
+  await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeVisible();
+  await archivedEditActions.getByRole("button", { name: "復元" }).click();
+  const restoreDialog = page.getByRole("alertdialog");
+  await expect(restoreDialog).toBeVisible();
+  await expect(
+    restoreDialog.getByText(
+      "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  await restoreDialog.getByRole("button", { name: "実行" }).click();
+  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  const restoredRow = grid.locator("tbody tr").filter({ hasText: "データ管理者" });
+  await expect(restoredRow.getByText("カスタム", { exact: true })).toBeVisible();
+  await expect(restoredRow.getByText("アーカイブ済み・権限無効", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
+      { exact: true }
+    )
+  ).toHaveCount(0);
+  await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toHaveCount(0);
+
+  const activeRow = grid.locator("tbody tr").filter({ hasText: "データユーザー" });
+  await activeRow.locator("td").first().click();
+  await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toHaveCount(0);
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "アーカイブ" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "復元" })).toHaveCount(0);
+  await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+  const confirmDialog = page.getByRole("alertdialog");
+  await expect(confirmDialog).toBeVisible();
+  await expect(
+    confirmDialog.getByText(
+      "このロールをアーカイブすると、このロール由来の権限は利用者に反映されなくなります。ユーザー自体は無効化されません。",
+      { exact: true }
+    )
+  ).toBeVisible();
+});
+
+test("ロール・権限管理はオントロジー提案取得が遅延しても読み込み完了する", async ({ page }) => {
+  test.slow();
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/auth/me");
+  await page.route("**/api/auth/me", (route) => fulfill(route, systemAdminMe));
   const profile = {
     id: "default",
     name: "標準プロファイル",
@@ -715,6 +1447,12 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
       // 画面遷移で abort 済みの request は fulfill できない場合がある。
     }
   });
+  await page.route("**/api/nl2sql/profiles/default/ontology-build-jobs**", (route) =>
+    fulfill(route, { jobs: [] })
+  );
+  await page.route("**/api/nl2sql/ontology-templates", (route) =>
+    fulfill(route, { templates: [] })
+  );
   await page.route("**/api/security/roles?include_archived=true", (route) =>
     fulfill(route, [systemRole])
   );
@@ -722,7 +1460,9 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
 
   try {
     await page.goto("/ontology-build?profile=default");
-    await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
+    await expect(page.getByTestId("profile-ontology-build")).toBeVisible({
+      timeout: 30_000,
+    });
     await expect.poll(() => proposalRequests).toBeGreaterThan(0);
 
     await page.goto("/settings/security/roles");
@@ -793,14 +1533,17 @@ test("DeepSec は Thick mode でも SQL step をキーボード操作できる",
   await page.goto("/settings/security/deepsec");
 
   await expect(page.getByText("Deep Data Security が無効です。", { exact: false })).toHaveCount(0);
-  const applyButton = page.getByRole("button", { name: "このステップを適用" });
+  const confirmationField = page.getByTestId("execution-confirmation-field");
+  const confirmationInput = confirmationField.getByRole("textbox", { name: "実行確認語" });
+  const applyButton = confirmationField.getByRole("button", { name: "このステップを適用" });
+  await expect(applyButton).toBeDisabled();
+  await confirmationInput.focus();
+  await expect(confirmationInput).toBeFocused();
+  await page.keyboard.type("ADMIN_EXECUTE");
+  await expect(confirmationField.getByText("確認済み")).toBeVisible();
   await expect(applyButton).toBeEnabled();
   await applyButton.focus();
   await expect(applyButton).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("alertdialog")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -890,7 +1633,13 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   await expect(password).toHaveValue("");
   await expect(page.getByText("保存済み", { exact: true })).toBeVisible();
   await expect(page.getByText("API を再起動")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "このステップを適用" })).toBeEnabled();
+  const confirmationField = page.getByTestId("execution-confirmation-field");
+  const confirmationInput = confirmationField.getByRole("textbox", { name: "実行確認語" });
+  const applyButton = confirmationField.getByRole("button", { name: "このステップを適用" });
+  await expect(confirmationInput).toBeEnabled();
+  await expect(applyButton).toBeDisabled();
+  await confirmationInput.fill("ADMIN_EXECUTE");
+  await expect(applyButton).toBeEnabled();
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -914,7 +1663,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     archived: true,
     version: 1,
   };
-  let entitlementRoles = [systemRole, queryRole, archivedRole];
+  let entitlementRoles: unknown[] = [systemRole, queryRole, archivedRole];
   let savedPayload: {
     version: number;
     data_entitlements: Array<{ resource_code: string; scope_code: string; capability: string }>;
@@ -985,6 +1734,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
 test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証結果を表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   let applied = false;
+  let applyRequests = 0;
+  let applyPayload: unknown = null;
   await page.route("**/api/security/deepsec/status", (route) =>
     fulfill(route, {
       configured: applied,
@@ -1001,6 +1752,8 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
     fulfill(route, deepSecPlan(applied))
   );
   await page.route("**/api/security/deepsec/plan/V001/steps/1/apply", async (route) => {
+    applyRequests += 1;
+    applyPayload = route.request().postDataJSON();
     applied = true;
     await fulfill(route, { version: "V001", step_no: 1, status: "APPLIED" });
   });
@@ -1021,9 +1774,24 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   await expect(page.locator("pre")).toHaveCount(1);
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByText("<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "このステップを適用" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "実行" }).click();
+  const confirmationField = page.getByTestId("execution-confirmation-field");
+  const confirmationInput = confirmationField.getByRole("textbox", { name: "実行確認語" });
+  const applyButton = confirmationField.getByRole("button", { name: "このステップを適用" });
+  await expect(applyButton).toBeDisabled();
+  await confirmationInput.fill("ADMIN");
+  await expect(confirmationField.getByText("不一致")).toBeVisible();
+  await expect(applyButton).toBeDisabled();
+  expect(applyRequests).toBe(0);
+  await confirmationInput.fill("ADMIN_EXECUTE");
+  await expect(confirmationField.getByText("確認済み")).toBeVisible();
+  await expect(applyButton).toBeEnabled();
+  await applyButton.click();
   await expect(page.getByText("適用済み", { exact: true }).first()).toBeVisible();
+  expect(applyRequests).toBe(1);
+  expect(applyPayload).toEqual({
+    checksum: "a".repeat(64),
+    confirmation: "ADMIN_EXECUTE",
+  });
 
   await page.getByRole("button", { name: "Data Grant を検証" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "実行" }).click();

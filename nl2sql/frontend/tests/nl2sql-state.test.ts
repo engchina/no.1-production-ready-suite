@@ -320,12 +320,10 @@ test("SQL execution payload trims SQL and preserves execution scope", () => {
   assert.deepEqual(
     sqlExecutePayload(
       " SELECT TOTAL_AMOUNT FROM INVOICES ",
-      "finance",
       { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } }
     ),
     {
       sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-      profile_id: "finance",
       allowed_objects: { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
     }
   );
@@ -411,12 +409,10 @@ test("preview execute payload preserves selected allowed objects", () => {
   assert.deepEqual(
     previewExecutePayload(
       " SELECT TOTAL_AMOUNT FROM INVOICES ",
-      "default",
       { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } }
     ),
     {
       sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-      profile_id: "default",
       allowed_objects: {
         table_names: ["INVOICES"],
         columns: { INVOICES: ["TOTAL_AMOUNT"] },

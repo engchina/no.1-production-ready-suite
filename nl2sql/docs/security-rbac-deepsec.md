@@ -10,9 +10,43 @@
 アプリケーション機能権限は FastAPI の route manifest で default deny とし、画面表示制御に加えて API 側でも
 毎回ユーザー状態、role、permission を再評価する。
 
+RBAC は画面表示用の `menu.*` と、API/データ利用用の capability permission を分ける。たとえば
+`menu.profiles` は「業務プロファイル」管理画面へ入る権限であり、SQL 生成画面で profile を選択・利用する
+権限ではない。`menu.query` と `menu.sql_to_question` は認証時に `nl2sql.profiles.read` と
+`nl2sql.schema.read` を継承し、業務 profile の summary / usage context と schema picker を読める。
+一方で full profile detail、作成、更新、削除、import/export、Oracle sync は
+`nl2sql.profiles.manage` を要求する。`nl2sql.profiles.manage` は `nl2sql.profiles.read` を継承する。
+schema refresh は `nl2sql.schema.refresh`、schema 参照は `nl2sql.schema.read` とし、refresh は read を継承する。
+
+同じ方針で、SQL 生成と SELECT SQL 実行も capability を分ける。`menu.query` は
+`nl2sql.query.generate` / `nl2sql.sql.execute` / `nl2sql.feedback.write` を継承し、SQL 生成 API、
+直接実行、本人履歴への feedback 登録を利用できる。`menu.direct_sql` は `nl2sql.sql.execute` だけを
+継承し、`/api/nl2sql/jobs`、`recommend-profile`、`rewrite`、`similar-history` などの生成補助 API は
+利用できない。feedback 管理一覧、admin review、feedback index/config は `nl2sql.feedback.manage` を
+要求し、普通ユーザーは自分の履歴にだけ feedback を登録できる。Select AI / Agent の低レベル資産 API は
+`nl2sql.select_ai_assets.read` / `refresh` / `manage`、sample data は
+`nl2sql.sample_data.manage`、legacy learning material は `nl2sql.learning_material.manage`、
+diagnostics は `nl2sql.system_status.read`、persistence recover は `nl2sql.persistence.recover` で制御する。
+ただし `GET /api/nl2sql/persistence` は業務画面起動時の readiness gate が利用する粗粒度状態であり、
+ログイン済みユーザーなら capability なしで参照できる。
+
 Deep Data Security は共有 DATA USER と classic application context を使用する。これは本システムの
 非 IAM 構成向け custom integration であり、Oracle 公式の IAM/database access token を含む local END
 USER 認証フローとは区別する。
+通常ユーザーの SELECT SQL 実行は DeepSec data plane を通り、Oracle / DeepSec runtime failure は
+HTTP 502 の実行エラーとして画面に表示する。これはアプリケーションのメニュー権限不足ではない。
+`NL2SQL_DEEPSEC_CTX_PKG` の context クリアロジックを更新した後は、Deep Data Security 画面で
+V001.2「アプリケーションコンテキスト」を再適用する。古い package を DB に残したままでは通常ユーザーの
+SELECT 実行で `DeepSec context を消去できないため接続を破棄しました。` が継続する。
+`CLEAR_APP_USER` は `DBMS_SESSION.CLEAR_CONTEXT` ではなく、trusted package 内で
+`DBMS_SESSION.SET_CONTEXT(..., NULL)` により `APP_USER_ID` を空に戻す。
+`PLS-00905: object ... NL2SQL_DEEPSEC_CTX_PKG is invalid` が出る場合も V001.2 を再適用し、適用結果が
+失敗になったときは画面の compile error を修正してから再実行する。
+V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、DeepSec plan には `FAILED` と
+安全化した error message を保存する。これは再適用・DB 権限修正で解消する運用エラーであり、API の
+未処理 500 ではない。
+`oracle_data_connection_close_failed` の `DPY-1001` は破棄済み接続を close した副作用であり、
+実際の context クリア失敗は backend の `oracle_deepsec_context_clear_failed` warning を確認する。
 
 ## 初期 migration と構成管理者
 
@@ -47,11 +81,20 @@ versioned legacy reference であり、runtime object 名としては使用し�
 ```dotenv
 APP_AUTH_ENABLED=true
 APP_AUTH_COOKIE_SECURE=true
-APP_AUTH_IDLE_TIMEOUT_MINUTES=30
+APP_AUTH_IDLE_TIMEOUT_MINUTES=60
 APP_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
 APP_AUTH_FAILED_LOGIN_LIMIT=5
 APP_AUTH_LOCKOUT_MINUTES=15
 ```
+
+既定では、通常ユーザーの無操作 timeout は 60 分、session の絶対有効期限は 12 時間とする。
+業務端末が管理下にあり、無人端末リスクを組織として受容できる低リスク環境でだけ、
+deployment 固有の `.env` で `APP_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示して 12 時間の無操作
+timeout に拡張できる。これは production 既定値ではない。
+
+`system_admin` 構成管理者は認証 table 未作成時の bootstrap / 運用復旧用 identity であり、
+`NL2SQL_AUTH_SESSIONS` を使わない署名 token として絶対有効期限のみを持つ。通常運用は DB に
+永続化した application user を使い、`system_admin` は初期設定と復旧用途に限定する。
 
 ## DeepSec V001 の前提
 
@@ -85,7 +128,7 @@ python-oracledb の `create_end_user_security_context()` / `set_end_user_securit
 
 1. status の driver mode、前提権限、既存 object 名を確認する。
 2. V001 の SQL preview と SHA-256 checksum を確認する。password は placeholder のみ表示される。
-3. 各 step を確認 dialog から順番に適用する。API は version、step、checksum だけを受け付け、SQL 本文は受け付けない。
+3. 各 step は `ADMIN_EXECUTE` 実行確認語を入力して順番に適用する。API は version、step、checksum、confirmation だけを受け付け、SQL 本文は受け付けない。
 4. 失敗した場合は ledger の完了 step を保持し、原因を解消して失敗 step から再開する。
 5. Limited user/role に `NL2SQL_DEEPSEC_PROBE` の `ROW_READ` entitlement を設定し、verify を実行する。
 

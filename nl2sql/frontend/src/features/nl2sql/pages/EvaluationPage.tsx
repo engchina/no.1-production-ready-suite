@@ -38,7 +38,7 @@ import {
   type QualityEvaluationValidationCode,
 } from "../qualityEvaluationLogic";
 import type {
-  Nl2SqlProfile,
+  ProfileSummaryPage,
   QualityEvaluationCapabilities,
   QualityEvaluationEngine,
   QualityEvaluationEngineSummary,
@@ -87,7 +87,8 @@ export function EvaluationPage() {
   });
   const profilesQuery = useQuery({
     queryKey: ["nl2sql", "profiles", "quality-evaluation"],
-    queryFn: () => apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+    queryFn: () =>
+      apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100"),
   });
   const recentJobsQuery = useQuery({
     queryKey: ["quality-evaluations", "jobs", jobCursor],
@@ -122,7 +123,7 @@ export function EvaluationPage() {
   });
 
   useEffect(() => {
-    const profiles = profilesQuery.data ?? [];
+    const profiles = profilesQuery.data?.items ?? [];
     if (!profileId && profiles.length > 0) setProfileId(profiles[0].id);
   }, [profileId, profilesQuery.data]);
 
@@ -319,7 +320,7 @@ export function EvaluationPage() {
                     disabled={running}
                   >
                     <option value="">{t("qualityEvaluation.profile.placeholder")}</option>
-                    {(profilesQuery.data ?? [])
+                    {(profilesQuery.data?.items ?? [])
                       .filter((profile) => !profile.archived)
                       .map((profile) => (
                         <option key={profile.id} value={profile.id}>

@@ -60,6 +60,7 @@ class SecurityStore(Protocol):
     def create_role(self, role: RoleRecord) -> RoleRecord: ...
     def update_role(self, role: RoleRecord, *, expected_version: int) -> RoleRecord: ...
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
+    def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
     def count_active_system_admins(self) -> int: ...
     def create_session(self, session: SessionRecord) -> None: ...
     def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None: ...
@@ -193,7 +194,10 @@ class InMemorySecurityStore:
                 raise SecurityNotFound("ユーザーが見つかりません。")
             if user.version != expected_version:
                 raise SecurityConflict("ユーザーが別の操作で更新されています。")
-            self._validate_role_ids(role_ids)
+            self._validate_role_ids(
+                role_ids,
+                allow_inactive_role_ids=set(user.role_ids),
+            )
             removes_last_admin = (
                 user.status == "ACTIVE"
                 and SYSTEM_ADMIN_ROLE_ID in user.role_ids
@@ -269,6 +273,15 @@ class InMemorySecurityStore:
         role.archived = True
         return self.update_role(role, expected_version=expected_version)
 
+    def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
+        role = self.get_role(role_id)
+        if role is None:
+            raise SecurityNotFound("ロールが見つかりません。")
+        if not role.archived:
+            raise SecurityConflict("ロールはアーカイブされていません。")
+        role.archived = False
+        return self.update_role(role, expected_version=expected_version)
+
     def count_active_system_admins(self) -> int:
         with self._lock:
             return sum(
@@ -340,8 +353,19 @@ class InMemorySecurityStore:
             raise SecurityNotFound("ユーザーが見つかりません。")
         return user
 
-    def _validate_role_ids(self, role_ids: list[str]) -> None:
-        if any(role_id not in self.roles or self.roles[role_id].archived for role_id in role_ids):
+    def _validate_role_ids(
+        self,
+        role_ids: list[str],
+        *,
+        allow_inactive_role_ids: set[str] | None = None,
+    ) -> None:
+        allowed = allow_inactive_role_ids or set()
+        for role_id in dict.fromkeys(role_ids):
+            role = self.roles.get(role_id)
+            if role is not None and not role.archived:
+                continue
+            if role_id in allowed:
+                continue
             raise SecurityNotFound("指定された有効なロールが見つかりません。")
 
 class OracleSecurityStore:
@@ -527,7 +551,6 @@ class OracleSecurityStore:
             # 複数 API worker が同時に別の管理者を無効化しても 0 人にはならない。
             cursor.execute("LOCK TABLE NL2SQL_APP_USERS IN SHARE ROW EXCLUSIVE MODE")
             cursor.execute("LOCK TABLE NL2SQL_APP_USER_ROLES IN SHARE ROW EXCLUSIVE MODE")
-            self._assert_role_ids(cursor, role_ids)
             cursor.execute(
                 "SELECT STATUS FROM NL2SQL_APP_USERS WHERE USER_ID = :user_id",
                 {"user_id": user_id},
@@ -536,11 +559,16 @@ class OracleSecurityStore:
             if current_row is None:
                 raise SecurityNotFound("ユーザーが見つかりません。")
             cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_APP_USER_ROLES "
-                "WHERE USER_ID = :user_id AND ROLE_ID = :role_id",
-                {"user_id": user_id, "role_id": SYSTEM_ADMIN_ROLE_ID},
+                "SELECT ROLE_ID FROM NL2SQL_APP_USER_ROLES WHERE USER_ID = :user_id",
+                {"user_id": user_id},
             )
-            is_admin = int(cursor.fetchone()[0]) > 0
+            current_role_ids = {str(item[0]) for item in cursor.fetchall()}
+            self._assert_role_ids(
+                cursor,
+                role_ids,
+                allow_inactive_role_ids=current_role_ids,
+            )
+            is_admin = SYSTEM_ADMIN_ROLE_ID in current_role_ids
             removes_admin = is_admin and (
                 status != "ACTIVE" or SYSTEM_ADMIN_ROLE_ID not in role_ids
             )
@@ -770,6 +798,29 @@ class OracleSecurityStore:
             raise SecurityNotFound("ロールが見つかりません。")
         return role
 
+    def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
+        current = self.get_role(role_id)
+        if current is None:
+            raise SecurityNotFound("ロールが見つかりません。")
+        if not current.archived:
+            raise SecurityConflict("ロールはアーカイブされていません。")
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE NL2SQL_APP_ROLES SET ARCHIVED = 0, VERSION_NO = VERSION_NO + 1,
+                    UPDATED_AT = SYSTIMESTAMP
+                WHERE ROLE_ID = :role_id AND VERSION_NO = :expected_version AND IS_BUILT_IN = 0
+                """,
+                {"role_id": role_id, "expected_version": expected_version},
+            )
+            if cursor.rowcount == 0:
+                self._raise_not_found_or_conflict(cursor, "NL2SQL_APP_ROLES", "ROLE_ID", role_id)
+            conn.commit()
+        role = self.get_role(role_id)
+        if role is None:
+            raise SecurityNotFound("ロールが見つかりません。")
+        return role
+
     def count_active_system_admins(self) -> int:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
@@ -974,14 +1025,23 @@ class OracleSecurityStore:
             )
 
     @staticmethod
-    def _assert_role_ids(cursor: Any, role_ids: list[str]) -> None:
+    def _assert_role_ids(
+        cursor: Any,
+        role_ids: list[str],
+        *,
+        allow_inactive_role_ids: set[str] | None = None,
+    ) -> None:
+        allowed = allow_inactive_role_ids or set()
         for role_id in dict.fromkeys(role_ids):
             cursor.execute(
                 "SELECT COUNT(*) FROM NL2SQL_APP_ROLES WHERE ROLE_ID = :role_id AND ARCHIVED = 0",
                 {"role_id": role_id},
             )
-            if int(cursor.fetchone()[0]) != 1:
-                raise SecurityNotFound("指定された有効なロールが見つかりません。")
+            if int(cursor.fetchone()[0]) == 1:
+                continue
+            if role_id in allowed:
+                continue
+            raise SecurityNotFound("指定された有効なロールが見つかりません。")
 
     @staticmethod
     def _raise_not_found_or_conflict(cursor: Any, table: str, column: str, value: str) -> None:

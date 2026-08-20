@@ -11,10 +11,12 @@ import httpx
 import pytest
 from fastapi import HTTPException, Response
 
+from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import (
     AdminFeedbackReviewRequest,
     AgentTeamRunRequest,
     AllowedObjects,
+    ExecuteRequest,
     FeedbackIndexRequest,
     FeedbackRating,
     HistoryItem,
@@ -24,6 +26,8 @@ from app.features.nl2sql.models import (
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
+    QueryResults,
+    SafetyReport,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
@@ -1298,6 +1302,93 @@ async def test_execute_rejects_unsafe_sql() -> None:
     assert resp.status_code == 400
 
 
+async def test_execute_oracle_adapter_error_returns_http_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingDirectSqlService:
+        def ensure_persistence_available(self) -> None:
+            return None
+
+        def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
+            return requested
+
+        def execute_sql(
+            self,
+            sql: str,
+            allowed: AllowedObjects,
+            row_limit: int | None,
+        ) -> tuple[SafetyReport, str, QueryResults]:
+            del sql, allowed, row_limit
+            raise OracleAdapterError(
+                "SELECT の実行に失敗しました: ORA-01031: insufficient privileges"
+            )
+
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _FailingDirectSqlService())
+
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        resp = await client.post("/api/nl2sql/execute", json={"sql": "SELECT * FROM EMPLOYEE"})
+
+    assert resp.status_code == 502
+    assert "SELECT の実行に失敗しました" in resp.text
+    assert "ORA-01031" in resp.text
+
+
+def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _DirectSqlService:
+        resolved_allowed: AllowedObjects | None = None
+
+        def resolve_allowed_objects(
+            self,
+            _profile_id: str | None,
+            _requested: AllowedObjects,
+        ) -> AllowedObjects:
+            raise AssertionError("Direct SQL must not resolve profile-scoped objects")
+
+        def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
+            self.resolved_allowed = requested
+            return requested
+
+        def execute_sql(
+            self,
+            sql: str,
+            allowed: AllowedObjects,
+            row_limit: int | None,
+        ) -> tuple[SafetyReport, str, QueryResults]:
+            assert sql == "SELECT EMPLOYEE_ID FROM EMPLOYEE"
+            assert allowed.table_names == ["EMPLOYEE"]
+            assert row_limit == 100
+            return (
+                SafetyReport(
+                    is_safe=True,
+                    is_select_only=True,
+                    row_limit_applied=100,
+                    referenced_tables=["APP.EMPLOYEE"],
+                ),
+                sql,
+                QueryResults(
+                    columns=["EMPLOYEE_ID"],
+                    rows=[{"EMPLOYEE_ID": 1}],
+                    total=1,
+                ),
+            )
+
+    fake_service = _DirectSqlService()
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", fake_service)
+    request = ExecuteRequest.model_validate(
+        {
+            "sql": "SELECT EMPLOYEE_ID FROM EMPLOYEE",
+            "profile_id": "missing-default",
+            "allowed_objects": {"table_names": ["EMPLOYEE"], "columns": {}},
+        }
+    )
+
+    response = nl2sql_router.execute(request)
+
+    assert "profile_id" not in request.model_dump()
+    assert fake_service.resolved_allowed == AllowedObjects(table_names=["EMPLOYEE"])
+    assert response.data.rows == [{"EMPLOYEE_ID": 1}]
+
+
 async def test_allowed_objects_rejects_unselected_columns() -> None:
     payload = {
         "sql": "SELECT TOTAL_AMOUNT FROM INVOICES",
@@ -1317,6 +1408,32 @@ async def test_allowed_objects_rejects_unselected_columns() -> None:
     assert safety["referenced_columns"] == ["APP.INVOICES.TOTAL_AMOUNT"]
     assert "INVOICES.INVOICE_ID" in " ".join(analyze_resp.json()["data"]["recommendations"])
     assert execute_resp.status_code == 400
+
+
+def test_direct_sql_allowed_objects_restrict_columns_without_profile() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    service.delete_profile("default")
+
+    allowed = service.resolve_direct_sql_allowed_objects(
+        AllowedObjects(
+            table_names=["EMPLOYEE"],
+            columns={"EMPLOYEE": ["EMPLOYEE_ID"]},
+        )
+    )
+    safety, _sql, _results = service.execute_sql(
+        "SELECT EMPLOYEE_NAME FROM EMPLOYEE",
+        allowed,
+        100,
+    )
+
+    assert allowed == AllowedObjects(
+        table_names=["APP.EMPLOYEE"],
+        columns={"APP.EMPLOYEE": ["EMPLOYEE_ID"]},
+    )
+    assert safety.is_safe is False
+    assert safety.blocked_reason == "許可されていない列を参照しています。"
+    assert safety.referenced_columns == ["APP.EMPLOYEE.EMPLOYEE_NAME"]
 
 
 async def test_analyze_reports_limit_clause_without_default_fetch_first() -> None:

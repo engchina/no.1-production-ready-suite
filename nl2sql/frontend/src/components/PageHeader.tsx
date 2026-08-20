@@ -12,6 +12,7 @@ import { ChevronDown, type LucideIcon } from "lucide-react";
 
 import { StatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
 
+import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -127,7 +128,9 @@ export function PageActionBar({
     if (!menuOpen) return;
 
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      const target = event.target as Node;
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setMenuOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
@@ -232,11 +235,12 @@ export function PageActionBar({
       </div>
 
       {collapseInCompactHeader && menuOpen ? (
-        <div
-          ref={menuRef}
+        <FloatingActionMenu
           id={menuId}
-          role="menu"
-          className="absolute right-0 top-full z-50 mt-2 grid min-w-56 gap-1 rounded-md border border-border bg-card p-1 shadow-lg lg:hidden"
+          open={menuOpen}
+          triggerRef={triggerRef}
+          menuRef={menuRef}
+          className="min-w-56 lg:hidden"
           onKeyDown={handleMenuKeyDown}
         >
           {compactOverflowActions.map((action, index) => {
@@ -259,7 +263,7 @@ export function PageActionBar({
               </div>
             );
           })}
-        </div>
+        </FloatingActionMenu>
       ) : null}
     </div>
   );

@@ -39,6 +39,17 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+async function expectFloatingMenuWithoutVerticalScrollbar(menu: Locator) {
+  await expect
+    .poll(() =>
+      menu.evaluate((node) => ({
+        constrained: node.getAttribute("data-floating-menu-constrained"),
+        fitsWithoutScrollbar: node.scrollHeight <= node.clientHeight + 1,
+      }))
+    )
+    .toEqual({ constrained: null, fitsWithoutScrollbar: true });
+}
+
 async function pickerRowNames(list: Locator) {
   return list.getByRole("listitem").evaluateAll((rows) =>
     rows.map((row) => row.querySelector("button span")?.textContent?.trim() ?? "")
@@ -1326,6 +1337,7 @@ test("テーブル管理の行メニューは下端では上方向に開く", as
   expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(bottomTriggerBox!.y + 1);
   expect(bottomMenuBox!.y).toBeGreaterThanOrEqual(0);
   expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  await expectFloatingMenuWithoutVerticalScrollbar(bottomMenu);
 });
 
 test("テーブル管理の行メニューは少件数の一覧でも裁切されない", async ({ page }) => {

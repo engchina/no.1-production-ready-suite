@@ -8,7 +8,12 @@ import pytest
 
 from app.clients.oracle_runtime import OraclePoolManager
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
-from app.security.deepsec import PASSWORD_PLACEHOLDER, DeepSecService, build_v001_plan
+from app.security.deepsec import (
+    DEEPSEC_APPLY_CONFIRMATION,
+    PASSWORD_PLACEHOLDER,
+    DeepSecService,
+    build_v001_plan,
+)
 from app.security.domain import Principal
 from app.security.service import SecurityApiError, SecurityService
 from app.security.store import InMemorySecurityStore
@@ -68,13 +73,64 @@ def test_v001_registry_is_stable_and_preview_never_contains_secret() -> None:
     assert settings.oracle_deepsec_data_user_password not in preview
 
 
+def test_v001_verification_object_plsql_block_has_terminator() -> None:
+    verification_step = build_v001_plan(_settings())[2]
+
+    assert verification_step.key == "verification_object"
+    assert verification_step.statements[0].strip().endswith("END;")
+
+
+def test_v001_application_context_clears_only_app_user_attribute() -> None:
+    context_step = build_v001_plan(_settings())[1]
+    package_spec = context_step.statements[0]
+    package_body = context_step.statements[1]
+    compile_check = context_step.statements[2]
+
+    assert context_step.key == "application_context"
+    assert package_spec.strip().endswith("END NL2SQL_DEEPSEC_CTX_PKG;")
+    assert package_body.strip().endswith("END NL2SQL_DEEPSEC_CTX_PKG;")
+    assert "DBMS_SESSION.CLEAR_CONTEXT" not in package_body
+    assert "DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL)" in package_body
+    assert "ALL_ERRORS" in compile_check
+    assert "NL2SQL_DEEPSEC_CTX_PKG compile error" in compile_check
+
+
 def test_apply_rejects_unknown_checksum_before_oracle_execution() -> None:
     settings = _settings()
     security = SecurityService(InMemorySecurityStore(), settings)
     security.bootstrap()
     service = DeepSecService(settings, security, OraclePoolManager(settings))
     with pytest.raises(SecurityApiError, match="チェックサム"):
-        service.apply_step(1, "0" * 64, _principal())
+        service.apply_step(1, "0" * 64, DEEPSEC_APPLY_CONFIRMATION, _principal())
+
+
+@pytest.mark.parametrize("confirmation", ["", "ADMIN", "admin_execute"])
+def test_apply_requires_confirmation_before_oracle_or_state(
+    monkeypatch: pytest.MonkeyPatch,
+    confirmation: str,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+    step = build_v001_plan(settings)[0]
+    executed: list[bool] = []
+
+    def fail_if_executed(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        executed.append(True)
+        raise AssertionError("Oracle executor must not run without ADMIN_EXECUTE confirmation")
+
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        fail_if_executed,
+    )
+
+    with pytest.raises(SecurityApiError, match="confirmation=ADMIN_EXECUTE"):
+        service.apply_step(step.step_no, step.checksum, confirmation, _principal())
+
+    assert executed == []
+    assert store.get_deepsec_states() == {}
 
 
 def test_plan_ignores_stale_checksum_state() -> None:
@@ -98,6 +154,141 @@ def test_plan_ignores_stale_checksum_state() -> None:
 
     assert plan["has_data_user_password"] is True
     assert plan["steps"][0]["status"] == "PENDING"
+
+
+def test_plan_marks_stale_application_context_for_reapply() -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    context_step = build_v001_plan(settings)[1]
+    store.set_deepsec_state(
+        version="V001",
+        step_no=context_step.step_no,
+        step_key=context_step.key,
+        checksum="legacy-clear-context-checksum",
+        status="APPLIED",
+        error_message="",
+        executed_by="actor",
+    )
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    plan = service.plan()
+
+    assert plan["steps"][1]["key"] == "application_context"
+    assert plan["steps"][1]["status"] == "PENDING"
+
+
+def test_apply_application_context_after_stale_checksum_closes_pools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role_step, context_step = build_v001_plan(settings)[:2]
+    store.set_deepsec_state(
+        version="V001",
+        step_no=role_step.step_no,
+        step_key=role_step.key,
+        checksum=role_step.checksum,
+        status="APPLIED",
+        error_message="",
+        executed_by="actor",
+    )
+    store.set_deepsec_state(
+        version="V001",
+        step_no=context_step.step_no,
+        step_key=context_step.key,
+        checksum="legacy-clear-context-checksum",
+        status="APPLIED",
+        error_message="",
+        executed_by="actor",
+    )
+    closed: list[bool] = []
+    executed: list[list[str]] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda _conn, statements, **_kwargs: (
+            executed.append(list(statements))
+            or [
+                {"status": "success", "index": index}
+                for index, _statement in enumerate(statements, start=1)
+            ]
+        ),
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    result = service.apply_step(
+        context_step.step_no,
+        context_step.checksum,
+        DEEPSEC_APPLY_CONFIRMATION,
+        _principal(),
+    )
+
+    assert result["status"] == "APPLIED"
+    assert closed == [True]
+    assert len(executed) == 1
+    assert any(
+        "DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL)" in statement
+        for statement in executed[0]
+    )
+    assert any("NL2SQL_DEEPSEC_CTX_PKG compile error" in statement for statement in executed[0])
+    plan = service.plan()
+    assert plan["steps"][1]["status"] == "APPLIED"
+
+
+def test_apply_application_context_compile_error_marks_step_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role_step, context_step = build_v001_plan(settings)[:2]
+    store.set_deepsec_state(
+        version="V001",
+        step_no=role_step.step_no,
+        step_key=role_step.key,
+        checksum=role_step.checksum,
+        status="APPLIED",
+        error_message="",
+        executed_by="actor",
+    )
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda _conn, _statements, **_kwargs: [
+            {"status": "success", "index": 1},
+            {"status": "success", "index": 2},
+            {
+                "status": "error",
+                "index": 3,
+                "error_message": "ORA-20002: NL2SQL_DEEPSEC_CTX_PKG compile error",
+            },
+        ],
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError, match="compile error") as exc_info:
+        service.apply_step(
+            context_step.step_no,
+            context_step.checksum,
+            DEEPSEC_APPLY_CONFIRMATION,
+            _principal(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert closed == []
+    plan = service.plan()
+    assert plan["steps"][1]["status"] == "FAILED"
+    assert "compile error" in plan["steps"][1]["error_message"]
 
 
 def test_update_config_persists_runtime_settings_and_closes_pools(
@@ -199,9 +390,16 @@ class _FakeCursor:
 
 
 class _FakeConnection:
-    def __init__(self, calls: list[tuple[str, list[str]]], *, fail_clear: bool = False) -> None:
+    def __init__(
+        self,
+        calls: list[tuple[str, list[str]]],
+        *,
+        fail_clear: bool = False,
+        fail_close: bool = False,
+    ) -> None:
         self.calls = calls
         self.fail_clear = fail_clear
+        self.fail_close = fail_close
         self.closed = 0
 
     def cursor(self) -> _FakeCursor:
@@ -209,6 +407,8 @@ class _FakeConnection:
 
     def close(self) -> None:
         self.closed += 1
+        if self.fail_close:
+            raise RuntimeError("DPY-1001: not connected to database")
 
 
 class _FakePool:
@@ -395,3 +595,43 @@ def test_context_clear_failure_drops_connection_and_fails_closed(
     with pytest.raises(Exception, match="context"), manager.data_connection("user-a"):
         pass
     assert pool.dropped == [connection]
+
+
+def test_context_clear_failure_is_not_masked_by_close_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    connection = _FakeConnection(calls, fail_clear=True, fail_close=True)
+    pool = _FakePool(connection)
+    manager = OraclePoolManager(_settings())
+    manager._data_pool = pool
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: pool)
+
+    with pytest.raises(OracleAdapterError, match="DeepSec context"), manager.data_connection(
+        "user-a"
+    ):
+        pass
+
+    assert pool.dropped == [connection]
+    assert connection.closed == 1
+
+
+def test_data_connection_close_failure_after_success_drops_without_failing_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    connection = _FakeConnection(calls, fail_close=True)
+    pool = _FakePool(connection)
+    manager = OraclePoolManager(_settings())
+    manager._data_pool = pool
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: pool)
+
+    with manager.data_connection("user-a"):
+        pass
+
+    assert calls == [
+        ("NL2SQL_DEEPSEC_CTX_PKG.SET_APP_USER", ["user-a"]),
+        ("NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER", []),
+    ]
+    assert pool.dropped == [connection]
+    assert connection.closed == 1

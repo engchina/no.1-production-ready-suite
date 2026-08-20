@@ -206,7 +206,7 @@ class Settings(BaseServiceSettings):
     app_auth_cookie_secure: bool = False
     app_auth_session_cookie_name: str = "nl2sql_session"
     app_auth_csrf_cookie_name: str = "nl2sql_csrf"
-    app_auth_idle_timeout_minutes: int = 30
+    app_auth_idle_timeout_minutes: int = 60
     app_auth_absolute_timeout_hours: int = 12
     app_auth_failed_login_limit: int = 5
     app_auth_lockout_minutes: int = 15

@@ -27,7 +27,16 @@ export interface SecurityUser {
   locked_until: string | null;
   version: number;
   role_ids: string[];
+  assigned_roles: AssignedRole[];
   is_bootstrap_admin: boolean;
+}
+
+export interface AssignedRole {
+  role_id: string;
+  role_code: string;
+  display_name: string;
+  is_built_in: boolean;
+  archived: boolean;
 }
 
 export interface SecurityRole {

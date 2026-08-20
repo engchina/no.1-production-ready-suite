@@ -73,7 +73,8 @@ import type {
   ClassifierTrainingCandidate,
   ClassifierTrainingCandidatesData,
   ClassifierTrainingExample,
-  Nl2SqlProfile,
+  ProfileSummary,
+  ProfileSummaryPage,
 } from "../types";
 
 type ActiveView = "trainingData" | "train" | "test" | "candidates";
@@ -108,7 +109,7 @@ export function QuestionClassifierModelsPage() {
     searchParams.get("tab") === "candidates" ? "candidates" : "trainingData"
   );
   const focusedCandidateHistoryId = searchParams.get("history_id")?.trim() ?? "";
-  const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [question, setQuestion] = useState("登録済みの表から主要な列を一覧したい");
   const [classifierStatus, setClassifierStatus] = useState<ClassifierStatusData | null>(null);
   const [classifierTrainingData, setClassifierTrainingData] = useState<ClassifierTrainingDataData | null>(null);
@@ -159,7 +160,9 @@ export function QuestionClassifierModelsPage() {
     try {
       await runScopedRequest(async (signal) => {
         const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
-          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
+          apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
+            signal,
+          }),
           apiGet<ClassifierStatusData>("/api/nl2sql/classifier", { signal }),
           apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data", {
             signal,
@@ -170,7 +173,7 @@ export function QuestionClassifierModelsPage() {
           ),
         ]);
         if (signal.aborted || sequence !== loadSequence.current) return;
-        setProfiles(profileData);
+        setProfiles(profileData.items);
         setClassifierStatus(classifierData);
         setClassifierTrainingData(trainingData);
         setCandidates(candidateData);
@@ -648,7 +651,7 @@ function TrainingDataPanel({
   onRefresh: () => void;
   onImport: (file: File) => void;
   onClearFile: () => void;
-  profiles: Nl2SqlProfile[];
+  profiles: ProfileSummary[];
   editingExampleId: string;
   editingText: string;
   editingProfileId: string;
@@ -771,7 +774,7 @@ function TrainingDataTable({
 }: {
   examples: ClassifierTrainingExample[];
   hasFilter: boolean;
-  profiles: Nl2SqlProfile[];
+  profiles: ProfileSummary[];
   loading: string;
   editingExampleId: string;
   editingText: string;
@@ -1118,7 +1121,7 @@ function TrainingCandidatesPanel({
   onPrevious,
   onNext,
 }: {
-  profiles: Nl2SqlProfile[];
+  profiles: ProfileSummary[];
   data: ClassifierTrainingCandidatesData | null;
   search: string;
   status: string;

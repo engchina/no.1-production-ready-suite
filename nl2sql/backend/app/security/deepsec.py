@@ -31,6 +31,7 @@ from .service import (
 PLAN_VERSION = "V001"
 PASSWORD_PLACEHOLDER = "<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
 DEEPSEC_DATA_USER = "NL2SQL_DEEPSEC_DATA_USER"
+DEEPSEC_APPLY_CONFIRMATION = "ADMIN_EXECUTE"
 _DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
 _DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
 _DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"
@@ -195,7 +196,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
         CREATE OR REPLACE PACKAGE {owner}.NL2SQL_DEEPSEC_CTX_PKG AUTHID DEFINER AS
           PROCEDURE SET_APP_USER(p_user_id IN VARCHAR2);
           PROCEDURE CLEAR_APP_USER;
-        END NL2SQL_DEEPSEC_CTX_PKG
+        END NL2SQL_DEEPSEC_CTX_PKG;
         """,
         owner=owner,
     )
@@ -216,9 +217,33 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
 
           PROCEDURE CLEAR_APP_USER IS
           BEGIN
-            DBMS_SESSION.CLEAR_CONTEXT('NL2SQL_APP_USER_CTX');
+            DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL);
           END CLEAR_APP_USER;
-        END NL2SQL_DEEPSEC_CTX_PKG
+        END NL2SQL_DEEPSEC_CTX_PKG;
+        """,
+        owner=owner,
+    )
+    context_package_compile_check = _trusted_identifier_sql(
+        """
+        DECLARE
+          v_error_count NUMBER;
+          v_first_error VARCHAR2(1000);
+        BEGIN
+          SELECT COUNT(*),
+                 MIN('line ' || LINE || ':' || POSITION || ' ' || TEXT)
+                   KEEP (DENSE_RANK FIRST ORDER BY SEQUENCE)
+            INTO v_error_count, v_first_error
+            FROM ALL_ERRORS
+           WHERE OWNER = '{owner}'
+             AND NAME = 'NL2SQL_DEEPSEC_CTX_PKG'
+             AND TYPE IN ('PACKAGE', 'PACKAGE BODY');
+          IF v_error_count > 0 THEN
+            RAISE_APPLICATION_ERROR(
+              -20002,
+              'NL2SQL_DEEPSEC_CTX_PKG compile error: ' || SUBSTR(v_first_error, 1, 900)
+            );
+          END IF;
+        END;
         """,
         owner=owner,
     )
@@ -230,6 +255,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
         statements=(
             context_package_spec,
             context_package_body,
+            context_package_compile_check,
             f"CREATE OR REPLACE CONTEXT NL2SQL_APP_USER_CTX USING {owner}.NL2SQL_DEEPSEC_CTX_PKG",
             f"GRANT EXECUTE ON {owner}.NL2SQL_DEEPSEC_CTX_PKG TO {role}",
         ),
@@ -250,7 +276,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
                 SENSITIVE_TEXT VARCHAR2(256) NOT NULL
               )';
           END IF;
-        END
+        END;
         """,
         owner=owner,
         probe=probe,
@@ -470,7 +496,18 @@ class DeepSecService:
         close_oracle_pools()
         return self.status()
 
-    def apply_step(self, step_no: int, checksum: str, actor: Principal) -> dict[str, object]:
+    def apply_step(
+        self,
+        step_no: int,
+        checksum: str,
+        confirmation: str,
+        actor: Principal,
+    ) -> dict[str, object]:
+        if confirmation.strip() != DEEPSEC_APPLY_CONFIRMATION:
+            raise SecurityApiError(
+                409,
+                f"DeepSec step の適用には confirmation={DEEPSEC_APPLY_CONFIRMATION} が必要です。",
+            )
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         self.pools.validate_deepsec_configuration()
@@ -510,7 +547,7 @@ class DeepSecService:
             errors = [item for item in results if item["status"] == "error"]
             if errors:
                 raise SecurityApiError(
-                    500, str(errors[0].get("error_message") or "SQL execution failed")
+                    409, str(errors[0].get("error_message") or "SQL execution failed")
                 )
             self.security.store.set_deepsec_state(
                 version=PLAN_VERSION,
@@ -521,6 +558,7 @@ class DeepSecService:
                 error_message="",
                 executed_by=actor.user_id,
             )
+            close_oracle_pools()
             return {
                 "version": PLAN_VERSION,
                 "step_no": step.step_no,

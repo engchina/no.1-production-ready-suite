@@ -24,6 +24,7 @@ from pr_backend_core import ApiResponse
 from pydantic import Field
 
 from app.api.concurrency import run_sync_io
+from app.security.domain import Principal
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
@@ -1743,7 +1744,13 @@ class OntologyApiRuntime:
             frontier = next_frontier
         return visited - seed_node_ids
 
-    def create_session(self, request: QuerySessionApiCreate) -> QuerySessionData:
+    def create_session(
+        self,
+        request: QuerySessionApiCreate,
+        *,
+        actor_user_id: str = "",
+        actor_is_system_admin: bool = False,
+    ) -> QuerySessionData:
         with self._lock, observe_stage("interpret"):
             profile = self._strict_profile(request.profile_id)
             ontology = self._query_ontology()
@@ -1771,6 +1778,8 @@ class OntologyApiRuntime:
                     profile_view_id=view.id,
                     ontology_revision_id=ontology.revision.id,
                     intent=intent,
+                    actor_user_id=actor_user_id,
+                    actor_is_system_admin=actor_is_system_admin,
                 )
             )
             context = QueryRuntimeContext(
@@ -1800,12 +1809,22 @@ class OntologyApiRuntime:
         request: QuerySessionApiCreate,
         *,
         idempotency_key: str,
+        actor_user_id: str = "",
+        actor_is_system_admin: bool = False,
     ) -> QuerySessionData:
         return self._run_session_idempotent(
             "create_query_session",
             idempotency_key,
-            request.model_dump(mode="json"),
-            lambda: self.create_session(request),
+            {
+                "request": request.model_dump(mode="json"),
+                "actor_user_id": actor_user_id,
+                "actor_is_system_admin": actor_is_system_admin,
+            },
+            lambda: self.create_session(
+                request,
+                actor_user_id=actor_user_id,
+                actor_is_system_admin=actor_is_system_admin,
+            ),
         )
 
     def generate_sql_idempotent(
@@ -3539,7 +3558,41 @@ def _run_runtime_sync[T](
     return function(*args, **kwargs)
 
 
+def _principal_from_request(request: Request) -> Principal | None:
+    principal = getattr(request.state, "principal", None)
+    return principal if isinstance(principal, Principal) else None
+
+
+def _query_session_actor(request: Request) -> tuple[str, bool]:
+    principal = _principal_from_request(request)
+    if principal is None:
+        return "", True
+    return principal.user_id, principal.is_system_admin
+
+
+def _ensure_query_session_access(data: QuerySessionData, request: Request) -> QuerySessionData:
+    principal = _principal_from_request(request)
+    if principal is None or principal.is_system_admin:
+        return data
+    owner = data.session.actor_user_id.strip()
+    if not owner or owner == principal.user_id:
+        return data
+    raise HTTPException(
+        status_code=403,
+        detail="他のユーザーの query session を操作する権限がありません。",
+    )
+
+
+def _load_authorized_query_session(session_id: str, request: Request) -> QuerySessionData:
+    return _ensure_query_session_access(
+        _run_runtime_sync(ontology_runtime.get_session, session_id),
+        request,
+    )
+
+
 def _raise_domain_error(exc: Exception) -> NoReturn:
+    if isinstance(exc, HTTPException):
+        raise exc
     if isinstance(exc, OntologyNotFoundError):
         status_code = 404
     elif isinstance(
@@ -3890,14 +3943,18 @@ def patch_profile_ontology_view(
 )
 def create_query_session(
     request: QuerySessionApiCreate,
+    http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
+        actor_user_id, actor_is_system_admin = _query_session_actor(http_request)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.create_session_idempotent,
                 request,
                 idempotency_key=idempotency_key,
+                actor_user_id=actor_user_id,
+                actor_is_system_admin=actor_is_system_admin,
             )
         )
     except Exception as exc:
@@ -3908,9 +3965,9 @@ def create_query_session(
     "/query-sessions/{session_id}",
     response_model=ApiResponse[QuerySessionData],
 )
-def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
+def get_query_session(session_id: str, http_request: Request) -> ApiResponse[QuerySessionData]:
     try:
-        return ApiResponse(data=_run_runtime_sync(ontology_runtime.get_session, session_id))
+        return ApiResponse(data=_load_authorized_query_session(session_id, http_request))
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -3922,8 +3979,10 @@ def get_query_session(session_id: str) -> ApiResponse[QuerySessionData]:
 def patch_query_intent(
     session_id: str,
     patch: GraphPatch,
+    http_request: Request,
 ) -> ApiResponse[QuerySessionData]:
     try:
+        _load_authorized_query_session(session_id, http_request)
         return ApiResponse(data=_run_runtime_sync(ontology_runtime.patch_intent, session_id, patch))
     except OntologyVersionConflictError as exc:
         try:
@@ -3950,9 +4009,11 @@ def patch_query_intent(
 def generate_query_sql(
     session_id: str,
     request: GenerateSqlRequest,
+    http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
+        _load_authorized_query_session(session_id, http_request)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.generate_sql_idempotent,
@@ -3972,9 +4033,11 @@ def generate_query_sql(
 def confirm_query_sql(
     session_id: str,
     request: SqlBindingRequest,
+    http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
+        _load_authorized_query_session(session_id, http_request)
         if request.session_id != session_id:
             raise OntologyIntegrityError(
                 "SESSION_BINDING_MISMATCH",
@@ -4003,6 +4066,7 @@ def execute_query_session(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QueryExecutionData]:
     try:
+        _load_authorized_query_session(session_id, http_request)
         if payload.session_id != session_id:
             raise OntologyIntegrityError(
                 "SESSION_BINDING_MISMATCH",
@@ -4030,8 +4094,10 @@ def execute_query_session(
 def create_ontology_improvement_proposal(
     session_id: str,
     request: ImprovementProposalRequest,
+    http_request: Request,
 ) -> ApiResponse[OntologyProposal]:
     try:
+        _load_authorized_query_session(session_id, http_request)
         proposal, _session = _run_runtime_sync(
             ontology_runtime.create_proposal,
             session_id,

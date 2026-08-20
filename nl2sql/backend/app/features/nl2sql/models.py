@@ -320,6 +320,22 @@ class ProfileSummary(BaseModel):
     updated_at: str = ""
 
 
+class ProfileUsageContext(BaseModel):
+    """AI 活用画面が参照する profile の最小利用コンテキスト。"""
+
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
+    archived: bool = False
+    object_scope_version: int = 1
+    version: int = 1
+    etag: str = ""
+    updated_at: str = ""
+
+
 class ProfileSummaryPage(BaseModel):
     """業務 profile の keyset cursor page。"""
 
@@ -974,10 +990,11 @@ class PreviewData(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    """SQL execution request."""
+    """Profile と独立した SQL execution request."""
+
+    model_config = ConfigDict(extra="ignore")
 
     sql: str = Field(min_length=1)
-    profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=100, ge=0)
 

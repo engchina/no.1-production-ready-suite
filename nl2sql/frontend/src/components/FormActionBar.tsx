@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 
+import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -170,7 +171,9 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
     if (!open) return;
 
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
@@ -241,11 +244,12 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
         />
       </Button>
       {open ? (
-        <div
-          ref={menuRef}
+        <FloatingActionMenu
           id={menuId}
-          role="menu"
-          className="absolute right-0 top-full z-50 mt-2 grid min-w-56 max-w-[calc(100vw-2rem)] gap-1 rounded-md border border-border bg-card p-1 shadow-lg"
+          open={open}
+          triggerRef={triggerRef}
+          menuRef={menuRef}
+          className="min-w-56 max-w-[calc(100vw-1rem)]"
           onKeyDown={handleMenuKeyDown}
         >
           {actions.map((action, index) => (
@@ -258,7 +262,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
               <DangerMenuItem action={action} onInvoked={() => closeMenu(false)} />
             </div>
           ))}
-        </div>
+        </FloatingActionMenu>
       ) : null}
     </div>
   );

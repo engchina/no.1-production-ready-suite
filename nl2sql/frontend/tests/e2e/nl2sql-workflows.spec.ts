@@ -4492,6 +4492,15 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
         }),
       });
     }
+    if (/\bEMPLOYEE\b/i.test(sql)) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: "SELECT の実行に失敗しました: ORA-01031: insufficient privileges",
+        }),
+      });
+    }
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
       rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
@@ -4520,7 +4529,6 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   expect(api.executePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-    profile_id: null,
     allowed_objects: { table_names: [], columns: {} },
     row_limit: 100,
   });
@@ -4540,7 +4548,6 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限なし");
   expect(api.executePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-    profile_id: null,
     allowed_objects: { table_names: [], columns: {} },
     row_limit: 0,
   });
@@ -4559,6 +4566,16 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
     "SELECT/WITH のみ実行できます。"
   );
   expect(api.adminExecutePayload).toBeNull();
+
+  await page.getByRole("button", { name: "クリア" }).click();
+  await sqlInput.fill("select * from employee");
+  await page.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(page).toHaveURL(/\/direct-sql$/);
+  await expect(directSql.getByTestId("direct-sql-execution-activity")).toContainText("失敗");
+  await expect(directSql.getByTestId("direct-sql-processing-error")).toContainText(
+    "SELECT の実行に失敗しました: ORA-01031"
+  );
+  await expect(page).not.toHaveURL(/\/forbidden$/);
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 900 });

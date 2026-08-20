@@ -79,6 +79,10 @@ export const securityApi = {
     apiPost<SecurityRole>(`/api/security/roles/${role.role_id}/archive`, {
       version: role.version,
     }),
+  restoreRole: (role: SecurityRole) =>
+    apiPost<SecurityRole>(`/api/security/roles/${role.role_id}/restore`, {
+      version: role.version,
+    }),
   permissions: (options: ApiRequestOptions = {}) =>
     apiGet<PermissionDefinition[]>("/api/security/permissions", options),
   deepSecStatus: (options: ApiRequestOptions = {}) =>
@@ -103,11 +107,12 @@ export const securityApi = {
     apiPatch<DeepSecStatus>("/api/security/deepsec/config", {
       data_user_password: dataUserPassword,
     }),
-  applyDeepSecStep: (version: string, step: DeepSecStep) =>
+  applyDeepSecStep: (version: string, step: DeepSecStep, confirmation: string) =>
     apiPost<{ version: string; step_no: number; status: string }>(
       `/api/security/deepsec/plan/${version}/steps/${step.step_no}/apply`,
       {
         checksum: step.checksum,
+        confirmation,
       }
     ),
   verifyDeepSec: () => apiPost<DeepSecVerification>("/api/security/deepsec/verify"),

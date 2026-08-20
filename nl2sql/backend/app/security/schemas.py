@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
@@ -79,6 +80,10 @@ class RoleArchiveRequest(BaseModel):
     version: int = Field(ge=1)
 
 
+class RoleRestoreRequest(BaseModel):
+    version: int = Field(ge=1)
+
+
 class UserCreateRequest(BaseModel):
     login_name: str = Field(min_length=3, max_length=64)
     display_name: str = Field(min_length=1, max_length=256)
@@ -119,6 +124,7 @@ class VersionRequest(BaseModel):
 
 class DeepSecApplyRequest(BaseModel):
     checksum: str = Field(min_length=64, max_length=64)
+    confirmation: str = Field(default="", max_length=128)
 
 
 class DeepSecConfigUpdate(BaseModel):
@@ -208,6 +214,34 @@ class DeepSecRoleEntitlementsData(BaseModel):
         )
 
 
+class AssignedRoleData(BaseModel):
+    role_id: str
+    role_code: str
+    display_name: str
+    is_built_in: bool
+    archived: bool
+
+    @classmethod
+    def from_record(cls, role: RoleRecord) -> AssignedRoleData:
+        return cls(
+            role_id=role.role_id,
+            role_code=role.role_code,
+            display_name=role.display_name,
+            is_built_in=role.is_built_in,
+            archived=role.archived,
+        )
+
+    @classmethod
+    def unresolved(cls, role_id: str) -> AssignedRoleData:
+        return cls(
+            role_id=role_id,
+            role_code=role_id,
+            display_name=role_id,
+            is_built_in=False,
+            archived=True,
+        )
+
+
 class UserData(BaseModel):
     user_id: str
     login_name: str
@@ -217,10 +251,17 @@ class UserData(BaseModel):
     locked_until: datetime | None
     version: int
     role_ids: list[str]
+    assigned_roles: list[AssignedRoleData]
     is_bootstrap_admin: bool
 
     @classmethod
-    def from_record(cls, user: UserRecord) -> UserData:
+    def from_record(
+        cls,
+        user: UserRecord,
+        *,
+        roles_by_id: Mapping[str, RoleRecord] | None = None,
+    ) -> UserData:
+        role_lookup = roles_by_id or {}
         return cls(
             user_id=user.user_id,
             login_name=user.login_name,
@@ -230,6 +271,12 @@ class UserData(BaseModel):
             locked_until=user.locked_until,
             version=user.version,
             role_ids=user.role_ids,
+            assigned_roles=[
+                AssignedRoleData.from_record(role_lookup[role_id])
+                if role_id in role_lookup
+                else AssignedRoleData.unresolved(role_id)
+                for role_id in user.role_ids
+            ],
             is_bootstrap_admin=user.is_bootstrap_admin,
         )
 

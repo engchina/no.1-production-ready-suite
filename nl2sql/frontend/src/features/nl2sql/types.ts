@@ -150,6 +150,20 @@ export interface ProfileSummaryPage {
   change_token: number;
 }
 
+export interface ProfileUsageContext {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  allowed_tables: string[];
+  allowed_views: string[];
+  archived: boolean;
+  object_scope_version: number;
+  version: number;
+  etag: string;
+  updated_at: string;
+}
+
 export interface SchemaCatalogHead {
   catalog_version: number;
   schema_fingerprint: string;

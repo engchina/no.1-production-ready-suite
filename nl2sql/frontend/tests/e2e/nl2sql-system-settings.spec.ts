@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 
@@ -280,6 +280,59 @@ async function expectNoHorizontalOverflow(page: Page) {
       )
     )
     .toBeTruthy();
+}
+
+async function expectNoElementOverlap(items: Array<{ label: string; locator: Locator }>) {
+  const boxes = await Promise.all(
+    items.map(async (item) => ({ ...item, box: await item.locator.boundingBox() }))
+  );
+
+  for (const item of boxes) {
+    if (!item.box) {
+      throw new Error(`${item.label} の位置を取得できません。`);
+    }
+  }
+
+  for (let index = 0; index < boxes.length; index += 1) {
+    for (let compareIndex = index + 1; compareIndex < boxes.length; compareIndex += 1) {
+      const current = boxes[index];
+      const next = boxes[compareIndex];
+      const currentBox = current.box;
+      const nextBox = next.box;
+      if (!currentBox || !nextBox) continue;
+
+      const horizontalOverlap =
+        Math.min(currentBox.x + currentBox.width, nextBox.x + nextBox.width) -
+        Math.max(currentBox.x, nextBox.x);
+      const verticalOverlap =
+        Math.min(currentBox.y + currentBox.height, nextBox.y + nextBox.height) -
+        Math.max(currentBox.y, nextBox.y);
+
+      expect(
+        horizontalOverlap > 1 && verticalOverlap > 1,
+        `${current.label} と ${next.label} が重なっています。`
+      ).toBeFalsy();
+    }
+  }
+}
+
+async function expectAdbActionButtonsStableDuringOperation(
+  page: Page,
+  labels: { start: string; stop: string }
+) {
+  const adbCard = page.locator("#adb-management");
+  const saveButton = adbCard.getByRole("button", { name: "保存", exact: true });
+  const startButton = adbCard.getByRole("button", { name: labels.start, exact: true });
+  const stopButton = adbCard.getByRole("button", { name: labels.stop, exact: true });
+
+  await expect(saveButton).toBeDisabled();
+  await expect(adbCard.getByRole("button", { name: "保存中…", exact: true })).toHaveCount(0);
+  await expectNoElementOverlap([
+    { label: "保存ボタン", locator: saveButton },
+    { label: "起動ボタン", locator: startButton },
+    { label: "停止ボタン", locator: stopButton },
+  ]);
+  await expectNoHorizontalOverflow(page);
 }
 
 async function expectModelPreviewPanelsAbsent(page: Page) {
@@ -1061,6 +1114,116 @@ test("有効な Wallet がある場合は OCI 自動取得を呼ばない", asyn
   await expect(
     page.getByText("OCI から Wallet を取得し、サーバーへ安全に設定しています…")
   ).toHaveCount(0);
+});
+
+test("ADB 起動中は保存ボタンを無効化して保存表示のままにする", async ({ page }) => {
+  const settingsGate = createRequestGate();
+  const startGate = createRequestGate();
+  let settingsCount = 0;
+  let startCount = 0;
+
+  await page.unroute("**/api/settings/database/adb");
+  await page.route("**/api/settings/database/adb", (route) =>
+    fulfillJson(route, adbInfoFixture({ lifecycle_state: "STOPPED" }))
+  );
+  await page.unroute("**/api/settings/database/adb/settings");
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    settingsCount += 1;
+    await settingsGate.promise;
+    await fulfillJson(route, adbInfoFixture({ lifecycle_state: "STOPPED" }));
+  });
+  await page.unroute("**/api/settings/database/adb/start");
+  await page.route("**/api/settings/database/adb/start", async (route) => {
+    startCount += 1;
+    await startGate.promise;
+    await fulfillJson(
+      route,
+      adbInfoFixture({
+        lifecycle_state: "STARTING",
+        message: "データベース 'NL2SQLDB' の起動を開始しました。",
+      })
+    );
+  });
+
+  await page.goto("/settings/database");
+  const adbCard = page.locator("#adb-management");
+  await adbCard.getByRole("button", { name: "起動", exact: true }).click();
+
+  await expect.poll(() => settingsCount).toBe(1);
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動中…",
+    stop: "停止",
+  });
+
+  settingsGate.release();
+  await expect.poll(() => startCount).toBe(1);
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動中…",
+    stop: "停止",
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動中…",
+    stop: "停止",
+  });
+
+  startGate.release();
+  await expect(page.getByText("データベース 'NL2SQLDB' の起動を開始しました。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("ADB 停止中は保存ボタンを無効化して保存表示のままにする", async ({ page }) => {
+  const settingsGate = createRequestGate();
+  const stopGate = createRequestGate();
+  let settingsCount = 0;
+  let stopCount = 0;
+
+  await page.unroute("**/api/settings/database/adb/settings");
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    settingsCount += 1;
+    await settingsGate.promise;
+    await fulfillJson(route, adbInfoFixture({ lifecycle_state: "AVAILABLE" }));
+  });
+  await page.unroute("**/api/settings/database/adb/stop");
+  await page.route("**/api/settings/database/adb/stop", async (route) => {
+    stopCount += 1;
+    await stopGate.promise;
+    await fulfillJson(
+      route,
+      adbInfoFixture({
+        lifecycle_state: "STOPPING",
+        message: "データベース 'NL2SQLDB' の停止を開始しました。",
+      })
+    );
+  });
+
+  await page.goto("/settings/database");
+  const adbCard = page.locator("#adb-management");
+  await adbCard.getByRole("button", { name: "停止", exact: true }).click();
+
+  await expect.poll(() => settingsCount).toBe(1);
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動",
+    stop: "停止中…",
+  });
+
+  settingsGate.release();
+  await expect.poll(() => stopCount).toBe(1);
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動",
+    stop: "停止中…",
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectAdbActionButtonsStableDuringOperation(page, {
+    start: "起動",
+    stop: "停止中…",
+  });
+
+  stopGate.release();
+  await expect(page.getByText("データベース 'NL2SQLDB' の停止を開始しました。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("情報を再取得は ADB 情報更新後に Wallet 取得も実行する", async ({ page }) => {

@@ -69,7 +69,8 @@ import type {
   FeedbackRecord,
   FeedbackSearchConfigData,
   FeedbackVectorEntry,
-  Nl2SqlProfile,
+  ProfileSummary,
+  ProfileSummaryPage,
   SelectAiDbProfile,
   SelectAiDbProfilesData,
   SelectAiFeedbackEntriesData,
@@ -174,7 +175,7 @@ export function FeedbackManagementPage() {
   const [similarityThreshold, setSimilarityThreshold] = useState(0.9);
   const [matchLimit, setMatchLimit] = useState(3);
   const [history, setHistory] = useState<FeedbackRecord[]>([]);
-  const [appProfiles, setAppProfiles] = useState<Nl2SqlProfile[]>([]);
+  const [appProfiles, setAppProfiles] = useState<ProfileSummary[]>([]);
   const [selectedFeedbackId, setSelectedFeedbackId] = useState(searchParams.get("history_id") || "");
   const [adminFeedbackRating, setAdminFeedbackRating] = useState<FeedbackRating>("good");
   const [adminFeedbackContent, setAdminFeedbackContent] = useState("");
@@ -303,7 +304,9 @@ export function FeedbackManagementPage() {
           apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL, {
             signal,
           }),
-          apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles", { signal }),
+          apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
+            signal,
+          }),
           fetchAppFeedback("", signal),
           apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index", { signal }),
           apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries", { signal }),
@@ -325,7 +328,7 @@ export function FeedbackManagementPage() {
         setProfileName(nextProfile);
         setFeedback(feedbackData);
         setSelectedIndex(0);
-        setAppProfiles(appProfileData);
+        setAppProfiles(appProfileData.items);
         setHistory(appFeedbackData.items);
         setFeedbackTotal(appFeedbackData.total);
         setFeedbackNextCursor(appFeedbackData.next_cursor);

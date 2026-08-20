@@ -25,6 +25,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 import { isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -47,6 +48,11 @@ const ENTITLEMENT_CAPABILITIES = ["ROW_READ", "SENSITIVE_READ", "FULL"] as const
 
 const INPUT_CLASS =
   "h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
+const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
+
+function stepConfirmationKey(version: string, stepNo: number) {
+  return `${version}:${stepNo}`;
+}
 
 function loadErrorMessage(cause: unknown) {
   return cause instanceof Error && cause.message.trim()
@@ -109,6 +115,7 @@ export function SecurityDeepSecPage() {
   const [entitlementLoadError, setEntitlementLoadError] = useState("");
   const [entitlementFormError, setEntitlementFormError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [stepConfirmations, setStepConfirmations] = useState<Record<string, string>>({});
   const statusLoadSequence = useRef(0);
   const planLoadSequence = useRef(0);
   const entitlementLoadSequence = useRef(0);
@@ -240,7 +247,13 @@ export function SecurityDeepSecPage() {
   }, [selectedEntitlementRole?.role_id, selectedEntitlementRole?.version]);
 
   const canApply = (step: DeepSecStep) => {
-    if (!plan?.deepsec_enabled || !plan.has_data_user_password || step.status === "APPLIED") {
+    if (
+      !plan?.deepsec_enabled ||
+      !plan.has_data_user_password ||
+      step.status === "APPLIED" ||
+      step.status === "RUNNING" ||
+      busyStep !== null
+    ) {
       return false;
     }
     return plan.steps.filter((item) => item.step_no < step.step_no).every((item) => item.status === "APPLIED");
@@ -278,22 +291,22 @@ export function SecurityDeepSecPage() {
     }
   };
 
-  const handleApply = async (step: DeepSecStep) => {
+  const handleApply = async (step: DeepSecStep, confirmation: string) => {
     if (!plan) return;
-    if (
-      !(await confirm({
-        title: `${plan.version} / ${step.title}`,
-        description: t("security.deepsec.applyConfirm"),
-        tone: "warning",
-        dismissOnOverlay: false,
-      }))
-    ) {
+    if (confirmation.trim() !== ADMIN_EXECUTE_CONFIRMATION) {
+      setActionError(t("security.deepsec.applyConfirmationRequired"));
       return;
     }
     setBusyStep(step.step_no);
     setActionError("");
     try {
-      await securityApi.applyDeepSecStep(plan.version, step);
+      await securityApi.applyDeepSecStep(plan.version, step, confirmation.trim());
+      const key = stepConfirmationKey(plan.version, step.step_no);
+      setStepConfirmations((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
       toast.success(t("security.deepsec.applied"));
       void loadStatus();
       await loadPlan();
@@ -777,6 +790,10 @@ export function SecurityDeepSecPage() {
           ) : null}
           {plan?.steps.map((step) => {
             const statusBadge = stepStatus(step);
+            const confirmationKey = stepConfirmationKey(plan.version, step.step_no);
+            const confirmation = stepConfirmations[confirmationKey] ?? "";
+            const confirmationMatched = confirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
+            const applyAvailable = canApply(step);
             return (
               <Card key={step.step_no}>
                 <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -799,9 +816,41 @@ export function SecurityDeepSecPage() {
                       </pre>
                     ))}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                    {mayApply ? (
-                      <Button loading={busyStep === step.step_no} disabled={!canApply(step)} onClick={() => void handleApply(step)}>
+                  <div className="space-y-3 border-t border-border pt-4">
+                    {mayApply && step.status !== "APPLIED" ? (
+                      <ExecutionConfirmationField
+                        value={confirmation}
+                        onChange={(value) => {
+                          setStepConfirmations((current) => ({
+                            ...current,
+                            [confirmationKey]: value,
+                          }));
+                          setActionError("");
+                        }}
+                        confirmed={confirmationMatched}
+                        placeholder={ADMIN_EXECUTE_CONFIRMATION}
+                        expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
+                        helper={t("dbAdmin.confirmation.helper.danger", {
+                          phrase: ADMIN_EXECUTE_CONFIRMATION,
+                        })}
+                        tone="danger"
+                        disabled={!applyAvailable}
+                        actions={
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            className="w-full sm:w-auto"
+                            loading={busyStep === step.step_no}
+                            disabled={!applyAvailable || !confirmationMatched}
+                            onClick={() => void handleApply(step, confirmation)}
+                          >
+                            <Play size={15} aria-hidden />
+                            {t("security.deepsec.apply")}
+                          </Button>
+                        }
+                      />
+                    ) : mayApply ? (
+                      <Button disabled>
                         <Play size={15} aria-hidden />
                         {t("security.deepsec.apply")}
                       </Button>

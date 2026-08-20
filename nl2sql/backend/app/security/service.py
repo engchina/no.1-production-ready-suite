@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import threading
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -35,7 +36,12 @@ from .passwords import (
     validate_password,
     verify_password,
 )
-from .permissions import ALL_PERMISSION_CODES, expand_permissions, unknown_permission_codes
+from .permissions import (
+    ALL_PERMISSION_CODES,
+    expand_permissions,
+    normalize_permission_codes,
+    unknown_permission_codes,
+)
 from .store import (
     InMemorySecurityStore,
     OracleSecurityStore,
@@ -328,6 +334,7 @@ class SecurityService:
         normalized_role_ids = list(dict.fromkeys(role_ids))
         if SYSTEM_ADMIN_ROLE_ID in normalized_role_ids:
             raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
+        self._assert_actor_can_assign_roles(actor, normalized_role_ids)
         if login_name.strip().casefold() == _FIXED_APP_ADMIN_USERNAME:
             raise SecurityApiError(409, "system_admin は構成管理者専用のログイン名です。")
         password = temporary_password or generate_temporary_password()
@@ -365,6 +372,7 @@ class SecurityService:
         current = self.store.get_user(user_id)
         if current is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
+        self._assert_actor_can_manage_user(actor, current)
         normalized_role_ids = list(dict.fromkeys(role_ids))
         current_roles = [self.store.get_role(role_id) for role_id in current.role_ids]
         is_admin = any(role and role.role_code == SYSTEM_ADMIN_ROLE_CODE for role in current_roles)
@@ -378,6 +386,11 @@ class SecurityService:
         )
         if grants_system_admin and not current.is_bootstrap_admin:
             raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
+        self._assert_actor_can_assign_roles(
+            actor,
+            normalized_role_ids,
+            existing_role_ids=current.role_ids,
+        )
         if (
             is_admin
             and (status != "ACTIVE" or not remains_admin)
@@ -410,6 +423,7 @@ class SecurityService:
         user = self.store.get_user(user_id)
         if user is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
+        self._assert_actor_can_manage_user(actor, user)
         password = temporary_password or generate_temporary_password()
         self._validate_new_password(password, user.login_name)
         self.store.set_password(user_id, hash_password(password), force_change=True)
@@ -425,6 +439,7 @@ class SecurityService:
         user = self.store.get_user(user_id)
         if user is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
+        self._assert_actor_can_manage_user(actor, user)
         self.store.record_login_success(user_id)
         updated = self.store.get_user(user_id)
         if updated is None:
@@ -433,6 +448,27 @@ class SecurityService:
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return self.store.list_roles(include_archived=include_archived)
+
+    def list_roles_for_actor(
+        self, actor: Principal, *, include_archived: bool = False
+    ) -> list[RoleRecord]:
+        if actor.has_permission("menu.security_roles"):
+            return self.list_roles(include_archived=include_archived)
+        return [
+            role
+            for role in self.store.list_roles(include_archived=False)
+            if self._actor_can_assign_role(actor, role)
+        ]
+
+    def get_role_for_actor(self, role_id: str, actor: Principal) -> RoleRecord | None:
+        role = self.store.get_role(role_id)
+        if role is None:
+            return None
+        if actor.has_permission("menu.security_roles"):
+            return role
+        if self._actor_can_assign_role(actor, role):
+            return role
+        return None
 
     def create_role(
         self,
@@ -557,6 +593,28 @@ class SecurityService:
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
         return archived
+
+    def restore_role(
+        self,
+        role_id: str,
+        *,
+        expected_version: int,
+        actor: Principal,
+        request_id: str = "",
+        client_ip: str = "",
+    ) -> RoleRecord:
+        role = self.store.get_role(role_id)
+        if role is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if role.is_built_in:
+            raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは復元できません。")
+        if not role.archived:
+            raise SecurityApiError(409, "ロールはアーカイブされていません。")
+        try:
+            restored = self.store.restore_role(role_id, expected_version=expected_version)
+        except (SecurityConflict, SecurityNotFound) as exc:
+            raise self._store_error(exc) from exc
+        return restored
 
     def _matches_configured_system_admin_login_name(self, login_name: str) -> bool:
         configured_login, _ = self._ensure_configured_system_admin_ready()
@@ -791,7 +849,7 @@ class SecurityService:
         unknown = unknown_permission_codes(permissions)
         if unknown:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
-        expanded = expand_permissions(permissions)
+        normalized = normalize_permission_codes(permissions)
         data_records = [
             DataEntitlementRecord(
                 entitlement_id=str(uuid4()),
@@ -810,9 +868,46 @@ class SecurityService:
             is_built_in=False,
             archived=False,
             version=version,
-            permissions=expanded,
+            permissions=normalized,
             entitlements=data_records,
         )
+
+    def _assert_actor_can_assign_roles(
+        self,
+        actor: Principal,
+        role_ids: list[str],
+        *,
+        existing_role_ids: Iterable[str] = (),
+    ) -> None:
+        existing_role_id_set = set(existing_role_ids)
+        for role_id in role_ids:
+            role = self.store.get_role(role_id)
+            if role is None or role.archived:
+                if role_id in existing_role_id_set:
+                    continue
+                raise SecurityApiError(404, "指定された有効なロールが見つかりません。")
+            if not self._actor_can_assign_role(actor, role):
+                raise SecurityApiError(403, "このロールを割り当てる権限がありません。")
+
+    def _assert_actor_can_manage_user(self, actor: Principal, user: UserRecord) -> None:
+        if actor.is_system_admin:
+            return
+        for role_id in user.role_ids:
+            role = self.store.get_role(role_id)
+            if role is not None and not role.archived and not self._actor_can_assign_role(
+                actor, role
+            ):
+                raise SecurityApiError(403, "このユーザーを管理する権限がありません。")
+
+    @staticmethod
+    def _actor_can_assign_role(actor: Principal, role: RoleRecord) -> bool:
+        if actor.is_system_admin:
+            return True
+        if role.role_code == SYSTEM_ADMIN_ROLE_CODE:
+            return False
+        if role.archived:
+            return False
+        return expand_permissions(role.permissions).issubset(actor.permissions)
 
     def _validate_new_password(self, password: str, login_name: str) -> None:
         try:

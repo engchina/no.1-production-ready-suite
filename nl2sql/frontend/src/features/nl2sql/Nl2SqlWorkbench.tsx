@@ -29,7 +29,10 @@ import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { useAuth } from "@/features/security/AuthProvider";
-import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
+import {
+  CAPABILITY_PERMISSIONS,
+  MENU_PERMISSIONS,
+} from "@/features/security/menu-permissions";
 import { apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
@@ -43,7 +46,7 @@ import { QuestionText } from "./components/QuestionText";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
 import {
   getSchemaObjectDetail,
-  useProfileDetail,
+  useProfileUsageContext,
   useProfileSummaries,
   useSchemaCatalogHead,
   useSchemaObjects,
@@ -141,6 +144,7 @@ export function Nl2SqlWorkbench() {
 }
 
 function ExecutableNl2SqlWorkbench() {
+  const { hasPermission } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -199,8 +203,11 @@ function ExecutableNl2SqlWorkbench() {
       ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
       : "";
   const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
-  const selectedProfileQuery = useProfileDetail(profileId);
+  const selectedProfileQuery = useProfileUsageContext(profileId);
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
+  const canManageProfiles = hasPermission(CAPABILITY_PERMISSIONS.profilesManage);
+  const canRefreshSchema = hasPermission(CAPABILITY_PERMISSIONS.schemaRefresh);
+  const canImportSampleData = hasPermission(CAPABILITY_PERMISSIONS.sampleDataManage);
   const profileSelectionReady =
     !noProfiles &&
     Boolean(profileId) &&
@@ -763,17 +770,21 @@ function ExecutableNl2SqlWorkbench() {
             loading: loadingCatalog,
             disabled: active,
           },
-          {
-            id: "schema-refresh",
-            kind: "utility",
-            label: t("common.action.schemaRefresh"),
-            icon: RefreshCw,
-            onClick: () => loadCatalog(true),
-            loading:
-              schemaRefreshStatus === "pending" ||
-              schemaRefreshStatus === "running",
-            disabled: active,
-          },
+          ...(canRefreshSchema
+            ? [
+                {
+                  id: "schema-refresh",
+                  kind: "utility" as const,
+                  label: t("common.action.schemaRefresh"),
+                  icon: RefreshCw,
+                  onClick: () => loadCatalog(true),
+                  loading:
+                    schemaRefreshStatus === "pending" ||
+                    schemaRefreshStatus === "running",
+                  disabled: active,
+                },
+              ]
+            : []),
         ]}
       />
 
@@ -799,18 +810,22 @@ function ExecutableNl2SqlWorkbench() {
             severity="info"
             title={t("nl2sql.profile.empty.title")}
             action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => navigate("/profiles?profile=new")}
-              >
-                <UserCog size={15} aria-hidden="true" />
-                <span>{t("nl2sql.profile.empty.action")}</span>
-              </Button>
+              canManageProfiles ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => navigate("/profiles?profile=new")}
+                >
+                  <UserCog size={15} aria-hidden="true" />
+                  <span>{t("nl2sql.profile.empty.action")}</span>
+                </Button>
+              ) : undefined
             }
           >
-            {t("nl2sql.profile.empty.description")}
+            {canManageProfiles
+              ? t("nl2sql.profile.empty.description")
+              : t("nl2sql.profile.empty.readOnlyDescription")}
           </Banner>
         ) : null}
 
@@ -1132,7 +1147,9 @@ function ExecutableNl2SqlWorkbench() {
                         insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"
-                        onRefreshSchema={() => void loadCatalog(true)}
+                        onRefreshSchema={
+                          canRefreshSchema ? () => void loadCatalog(true) : undefined
+                        }
                         refreshing={
                           schemaRefreshStatus === "pending" || schemaRefreshStatus === "running"
                         }
@@ -1326,7 +1343,7 @@ function ExecutableNl2SqlWorkbench() {
                     operationKey={actionOperationKey}
                     errorMessage={actionError}
                     errorAction={
-                      actionError && currentScopedSchemaEmpty ? (
+                      actionError && currentScopedSchemaEmpty && canImportSampleData ? (
                         <Button
                           type="button"
                           variant="primary"
@@ -1362,7 +1379,10 @@ function ExecutableNl2SqlWorkbench() {
           startedAtMs={jobStartedAt}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
           importingSample={importingSample}
-          onImportSample={importSampleData}
+          onImportSample={canImportSampleData ? importSampleData : undefined}
+          sampleImportUnavailableHint={
+            canImportSampleData ? "" : t("nl2sql.sample.importReadOnlyHint")
+          }
         />
 
         <Nl2SqlResultTable results={result?.results ?? null} />

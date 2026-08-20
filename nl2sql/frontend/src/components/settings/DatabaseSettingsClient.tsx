@@ -70,6 +70,7 @@ interface DatabaseSettingsFormErrors {
 }
 
 type WalletDownloadSource = "auto" | "wallet-field" | "adb-refresh";
+type AdbManagementOperation = "save" | "refresh" | "start" | "stop";
 
 const EMPTY_FORM: DatabaseSettingsForm = {
   user: "",
@@ -505,6 +506,7 @@ function AdbManagementCard({
   const [region, setRegion] = useState(settings.region || ADB_DEFAULT_REGION);
   const [log, setLog] = useState<AdbOperationLogEntry[]>([]);
   const [refreshAttemptedWallet, setRefreshAttemptedWallet] = useState(false);
+  const [activeOperation, setActiveOperation] = useState<AdbManagementOperation | null>(null);
 
   useEffect(() => {
     setRegion(settings.region || ADB_DEFAULT_REGION);
@@ -516,9 +518,29 @@ function AdbManagementCard({
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
   const canStop = lifecycle === "AVAILABLE";
   const refreshWalletPending = refreshAttemptedWallet && walletEnsurePending;
+  const saveSettingsFeedbackPending =
+    (activeOperation === "save" || activeOperation === "refresh") && saveSettings.isPending;
+  const refreshSettingsFeedbackPending =
+    activeOperation === "refresh" && saveSettings.isPending;
+  const saveButtonLoading =
+    saveSettingsFeedbackPending ||
+    ((activeOperation === "save" || activeOperation === "refresh") && refreshWalletPending);
+  const refreshButtonLoading =
+    activeOperation === "refresh" && (saveSettings.isPending || refreshWalletPending);
+  const startButtonLoading =
+    (activeOperation === "start" && (saveSettings.isPending || start.isPending)) ||
+    lifecycle === "STARTING";
+  const stopButtonLoading =
+    (activeOperation === "stop" && (saveSettings.isPending || stop.isPending)) ||
+    lifecycle === "STOPPING";
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
-  const busy = saveSettings.isPending || start.isPending || stop.isPending || walletEnsurePending;
+  const busy =
+    activeOperation !== null ||
+    saveSettings.isPending ||
+    start.isPending ||
+    stop.isPending ||
+    walletEnsurePending;
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -542,35 +564,46 @@ function AdbManagementCard({
     }
   }
 
-  async function handleRefresh() {
-    const result = await persist();
-    if (!result) return;
-    appendLog(result);
-    setRefreshAttemptedWallet(true);
+  async function handleRefresh(operation: Extract<AdbManagementOperation, "save" | "refresh">) {
+    setActiveOperation(operation);
     try {
-      await ensureWalletFromOci();
-    } catch {
-      /* Wallet 取得エラーは ADB 操作フィードバックの FormStatus が担う */
+      const result = await persist();
+      if (!result) return;
+      appendLog(result);
+      setRefreshAttemptedWallet(true);
+      try {
+        await ensureWalletFromOci();
+      } catch {
+        /* Wallet 取得エラーは ADB 操作フィードバックの FormStatus が担う */
+      }
+    } finally {
+      setActiveOperation(null);
     }
   }
 
   async function handleStart() {
-    if (!(await persist())) return;
+    setActiveOperation("start");
     try {
+      if (!(await persist())) return;
       const result = await start.mutateAsync();
       appendLog(result);
     } catch {
       /* mutation error surface は下部の FormStatus が担う */
+    } finally {
+      setActiveOperation(null);
     }
   }
 
   async function handleStop() {
-    if (!(await persist())) return;
+    setActiveOperation("stop");
     try {
+      if (!(await persist())) return;
       const result = await stop.mutateAsync();
       appendLog(result);
     } catch {
       /* mutation error surface は下部の FormStatus が担う */
+    } finally {
+      setActiveOperation(null);
     }
   }
 
@@ -599,12 +632,12 @@ function AdbManagementCard({
             type="button"
             variant="secondary"
             size="sm"
-            loading={saveSettings.isPending || refreshWalletPending}
+            loading={refreshButtonLoading}
             disabled={busy}
-            onClick={() => void handleRefresh()}
+            onClick={() => void handleRefresh("refresh")}
           >
             <RefreshCw size={15} aria-hidden />
-            {saveSettings.isPending
+            {refreshSettingsFeedbackPending
               ? t("settings.adb.action.refreshing")
               : t("settings.adb.action.refresh")}
           </Button>
@@ -647,12 +680,12 @@ function AdbManagementCard({
             <Button
               type="button"
               size="lg"
-              loading={saveSettings.isPending || refreshWalletPending}
+              loading={saveButtonLoading}
               disabled={busy || !ocid.trim()}
-              onClick={() => void handleRefresh()}
+              onClick={() => void handleRefresh("save")}
             >
               <Save size={16} aria-hidden />
-              {saveSettings.isPending
+              {saveSettingsFeedbackPending
                 ? t("settings.database.actions.saving")
                 : t("settings.database.actions.save")}
             </Button>
@@ -660,12 +693,12 @@ function AdbManagementCard({
               type="button"
               size="lg"
               variant="secondary"
-              loading={start.isPending || lifecycle === "STARTING"}
+              loading={startButtonLoading}
               disabled={busy || !ocid.trim() || !canStart}
               onClick={() => void handleStart()}
             >
               <Power size={16} aria-hidden />
-              {start.isPending
+              {startButtonLoading
                 ? t("settings.adb.action.starting")
                 : t("settings.adb.action.start")}
             </Button>
@@ -673,12 +706,14 @@ function AdbManagementCard({
               type="button"
               size="lg"
               variant="secondary"
-              loading={stop.isPending}
+              loading={stopButtonLoading}
               disabled={busy || !ocid.trim() || !canStop}
               onClick={() => void handleStop()}
             >
               <PowerOff size={16} aria-hidden />
-              {stop.isPending ? t("settings.adb.action.stopping") : t("settings.adb.action.stop")}
+              {stopButtonLoading
+                ? t("settings.adb.action.stopping")
+                : t("settings.adb.action.stop")}
             </Button>
           </div>
           {refreshWalletPending ? (
