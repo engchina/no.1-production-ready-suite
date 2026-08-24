@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -55,6 +56,8 @@ from app.features.nl2sql.service import (
     Nl2SqlPersistenceUnavailable,
     Nl2SqlRepositoryOperationFailed,
     Nl2SqlService,
+    StoredJob,
+    _new_job_steps,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.settings import Settings, get_settings
@@ -142,6 +145,9 @@ class _ScriptedOracleCursor:
             raise AssertionError("scripted result set is missing")
         self._current = list(self._result_sets.pop(0))
 
+    def setinputsizes(self, **kwargs: Any) -> None:
+        self._connection.input_sizes.append(kwargs)
+
     def fetchone(self) -> tuple[Any, ...] | None:
         if not self._current:
             return None
@@ -165,6 +171,7 @@ class _ScriptedOracleConnection:
     def __init__(self, result_sets: list[list[tuple[Any, ...]]]) -> None:
         self.closed = False
         self.executed: list[tuple[str, Any]] = []
+        self.input_sizes: list[dict[str, Any]] = []
         self._cursor = _ScriptedOracleCursor(self, result_sets)
 
     def cursor(self) -> _ScriptedOracleCursor:
@@ -461,6 +468,100 @@ def test_job_history_records_actor_user_uuid_in_incremental_store() -> None:
     assert job_snapshot is not None
     assert job_snapshot["actor_user_uuid"] == "user-1"
     assert job_snapshot["actor_is_system_admin"] is True
+
+
+def test_completed_job_stays_done_when_final_result_persistence_fails() -> None:
+    class FinalResultWriteFailRepository(MemoryIncrementalNl2SqlRepository):
+        def put_document(
+            self,
+            collection: str,
+            entity_id: str,
+            payload: Any,
+            **kwargs: Any,
+        ) -> None:
+            if collection == "jobs" and payload.get("result") is not None:
+                raise RuntimeError("ORA-03146: invalid buffer length for TTC field")
+            super().put_document(collection, entity_id, payload, **kwargs)
+
+    repository = FinalResultWriteFailRepository(seed_default=False)
+    _apply_incremental_catalog(
+        repository,
+        SchemaCatalog(
+            refreshed_at="2026-08-14T00:00:00+00:00",
+            schema_fingerprint="incremental-schema-v1",
+            current_owner="APP",
+            tables=[
+                _table("ORDERS", comment="注文").model_copy(
+                    update={
+                        "columns": [
+                            SchemaColumn(
+                                column_name="ID",
+                                logical_name="ID",
+                                data_type="NUMBER",
+                                nullable=False,
+                            ),
+                            SchemaColumn(
+                                column_name="ORDER_NAME",
+                                logical_name="注文名",
+                                data_type="VARCHAR2",
+                                nullable=True,
+                                sample_values=["注文A"],
+                            ),
+                            SchemaColumn(
+                                column_name="AMOUNT",
+                                logical_name="金額",
+                                data_type="NUMBER",
+                                nullable=True,
+                            ),
+                            SchemaColumn(
+                                column_name="CREATED_AT",
+                                logical_name="作成日",
+                                data_type="DATE",
+                                nullable=True,
+                            ),
+                        ]
+                    }
+                )
+            ],
+        ),
+    )
+    repository.save_profile(
+        Nl2SqlProfile(
+            id="orders-profile",
+            name="注文管理",
+            allowed_tables=["APP.ORDERS"],
+        ),
+        expected_etag=None,
+    )
+    service = _incremental_service(repository)
+    service._catalog = repository.load_catalog()  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient(  # noqa: SLF001
+        '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
+    )
+    request = JobCreateRequest(
+        question="注文一覧を確認したい",
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+        profile_id="orders-profile",
+    )
+    job_id = "job-final-result-persist-fails"
+    service._jobs[job_id] = StoredJob(  # noqa: SLF001
+        job_id=job_id,
+        request=request,
+        actor_user_uuid="user-1",
+        actor_is_system_admin=True,
+        steps=_new_job_steps(),
+    )
+
+    service._run_job(job_id)  # noqa: SLF001
+
+    job = service.get_job(job_id)
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.error_message is None
+    assert job.warning_message is not None
+    assert "履歴/ジョブ保存に失敗しました" in job.warning_message
+    assert job.result is not None
+    assert job.result.generated_sql == "SELECT ID FROM APP.ORDERS"
 
 
 def test_enterprise_ai_direct_reports_profile_scope_when_incremental_object_is_missing() -> None:
@@ -799,6 +900,19 @@ def test_oracle_profile_timestamp_bind_is_nls_independent() -> None:
 def test_incremental_repository_accepts_oracle_native_json_values() -> None:
     assert json.loads(_read_lob({"items": ["値"]})) == {"items": ["値"]}
     assert json.loads(_read_lob([{"id": "one"}])) == [{"id": "one"}]
+
+
+def test_oracle_state_document_payload_uses_clob_bind(
+    monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+    clob_type = object()
+    monkeypatch.setitem(sys.modules, "oracledb", SimpleNamespace(DB_TYPE_CLOB=clob_type))
+    repository, connections = _oracle_repository([[], []])
+
+    repository.put_document("jobs", "job-1", {"id": "job-1", "payload": "値"})
+
+    assert connections[0].input_sizes == [{"payload": clob_type}]
+    assert connections[0].executed[0][1]["payload"] == '{"id":"job-1","payload":"値"}'
 
 
 def test_oracle_profile_lobs_are_materialized_before_connection_closes() -> None:

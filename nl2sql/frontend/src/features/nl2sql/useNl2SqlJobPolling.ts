@@ -53,7 +53,7 @@ export function useNl2SqlJobPolling({
     const storage = getBrowserStorage();
     if (storage) persistActiveJobSnapshot(storage, data.job_id, startedAtMs);
     setJobStartedAt(startedAtMs);
-    setJob({ ...data, result: null, error_message: null, timing: null });
+    setJob({ ...data, result: null, error_message: null, warning_message: null, timing: null });
   }, []);
 
   const clearTrackedJob = useCallback(() => {

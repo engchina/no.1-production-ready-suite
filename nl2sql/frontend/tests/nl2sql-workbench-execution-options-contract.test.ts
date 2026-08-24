@@ -31,12 +31,21 @@ test("NL2SQL workbench keeps one execution action and removes preview/session bu
 test("execution options default to showing interpretation and show prompt artifacts", () => {
   assert.match(
     workbenchSource,
+    /const \[useOntologyContext, setUseOntologyContext\] = useState\(true\);/
+  );
+  assert.match(
+    workbenchSource,
     /const \[includeInterpretation, setIncludeInterpretation\] = useState\(true\);/
   );
   assert.match(
     workbenchSource,
     /const \[includeShowPrompt, setIncludeShowPrompt\] = useState\(true\);/
   );
+  assert.match(
+    workbenchSource,
+    /const \[executionOptionsOpen, setExecutionOptionsOpen\] = useState\(false\);/
+  );
+  assert.match(workbenchSource, /use_ontology_context: useOntologyContext/);
   assert.match(workbenchSource, /include_interpretation: includeInterpretation/);
   assert.match(workbenchSource, /include_show_prompt: includeShowPrompt/);
 });
@@ -44,8 +53,11 @@ test("execution options default to showing interpretation and show prompt artifa
 test("execution options panel keeps Query Rewrite checkboxes and Select AI showprompt scope", () => {
   assert.match(optionsPanelSource, /nl2sql\.rewrite\.useGlossary/);
   assert.match(optionsPanelSource, /nl2sql\.rewrite\.useSchema/);
+  assert.match(optionsPanelSource, /nl2sql\.executionOptions\.useOntology/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeInterpretation/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeShowPrompt/);
+  assert.match(optionsPanelSource, /aria-expanded=\{open\}/);
+  assert.match(optionsPanelSource, /aria-controls="nl2sql-execution-options-body"/);
   assert.match(optionsPanelSource, /engine !== "select_ai"/);
 });
 

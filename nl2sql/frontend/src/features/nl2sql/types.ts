@@ -548,6 +548,7 @@ export interface JobData {
   elapsed_ms?: number | null;
   result?: Nl2SqlResult | null;
   error_message?: string | null;
+  warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];
 }

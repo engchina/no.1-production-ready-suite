@@ -1008,6 +1008,7 @@ class JobCreateRequest(BaseModel):
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
+    use_ontology_context: bool = True
     include_interpretation: bool = False
     include_show_prompt: bool = False
 
@@ -1037,6 +1038,7 @@ class JobData(BaseModel):
     elapsed_ms: int | None = None
     result: Nl2SqlResult | None = None
     error_message: str | None = None
+    warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
 

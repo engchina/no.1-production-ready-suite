@@ -112,6 +112,21 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
     })
   );
   await page.route("**/api/nl2sql/profiles/default", (route) => fulfillJson(route, profile));
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfillJson(route, {
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      allowed_tables: profile.allowed_tables,
+      allowed_views: profile.allowed_views,
+      archived: profile.archived,
+      object_scope_version: 1,
+      version: profile.version,
+      etag: profile.etag,
+      updated_at: profile.updated_at,
+    })
+  );
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfillJson(route, {
       catalog_version: 1,
@@ -286,6 +301,13 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
   await expect(page.getByText("履歴 0 件")).toHaveCount(0);
+  const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByLabel("Ontology を使う")).toBeHidden();
+  await executionOptionsDisclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByLabel("Ontology を使う")).toBeChecked();
   await expect(page.getByLabel("解釈を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
   await expect(page.getByTestId("nl2sql-execution-options")).toBeVisible();
@@ -298,10 +320,13 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect.poll(() => api.jobPayload).not.toBeNull();
   expect(api.jobPayload).toMatchObject({
     question: "書き換え後の請求金額",
+    use_ontology_context: true,
     include_interpretation: true,
     include_show_prompt: true,
   });
-  await expect(page.getByText("SELECT TOTAL_AMOUNT FROM INVOICES")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "生成 SQL" })).toHaveValue(
+    /SELECT TOTAL_AMOUNT FROM INVOICES/
+  );
   await expect(page.getByTestId("nl2sql-interpretation-panel")).toBeVisible();
   await expect(page.getByText("APP.INVOICES を参照し、SELECT 操作を行います。")).toBeVisible();
   await expect(page.getByText("1200000")).toBeVisible();
@@ -336,5 +361,51 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(showPromptBody).toBeHidden();
   await expect(showPromptChevron).toHaveAttribute("data-state", "collapsed");
   await expect(showPromptChevron).not.toHaveClass(/rotate-180/);
+
+  const ontologyOption = page.getByLabel("Ontology を使う");
+  await ontologyOption.focus();
+  await expect(ontologyOption).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(ontologyOption).not.toBeChecked();
+  api.jobPayload = null;
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({
+    use_ontology_context: false,
+  });
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  const resetButton = page.getByRole("button", { name: "リセット" });
+  await expect(resetButton).toBeEnabled();
+  await resetButton.click();
+  await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByLabel("Ontology を使う")).toBeHidden();
+  await executionOptionsDisclosure.click();
+  await expect(page.getByLabel("Ontology を使う")).toBeChecked();
+  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
+  await expect(page.getByLabel("Schema を使う")).not.toBeChecked();
+  await expect(page.getByLabel("解釈を表示")).toBeChecked();
+  await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("execution options keep ontology toggle usable at mobile width", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 });
+  await mockNl2SqlWorkbenchApi(page);
+  await page.goto("/query");
+
+  const options = page.getByTestId("nl2sql-execution-options");
+  const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  const ontologyOption = page.getByLabel("Ontology を使う");
+  await expect(options).toBeVisible();
+  await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(ontologyOption).toBeHidden();
+  await executionOptionsDisclosure.focus();
+  await page.keyboard.press("Space");
+  await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(ontologyOption).toBeVisible();
+  await expect(ontologyOption).toBeChecked();
+  await ontologyOption.focus();
+  await page.keyboard.press("Space");
+  await expect(ontologyOption).not.toBeChecked();
   await expectNoHorizontalOverflow(page);
 });

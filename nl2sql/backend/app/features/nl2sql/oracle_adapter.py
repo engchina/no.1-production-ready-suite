@@ -2658,7 +2658,7 @@ class OracleNl2SqlAdapter:
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         """
-        with self.user_data_connection() as conn, conn.cursor() as cursor:
+        with self.connection() as conn, conn.cursor() as cursor:
             binds: dict[str, str] = {
                 "prompt": question,
                 "profile_name": profile_name,
@@ -3047,7 +3047,7 @@ class OracleNl2SqlAdapter:
             ]
         )
         errors: list[str] = []
-        with self.user_data_connection() as conn, conn.cursor() as cursor:
+        with self.connection() as conn, conn.cursor() as cursor:
             for sql, bindings in candidates:
                 try:
                     cursor.execute(sql, bindings)
@@ -3074,7 +3074,7 @@ class OracleNl2SqlAdapter:
             {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
             ensure_ascii=False,
         )
-        with self.user_data_connection() as conn, conn.cursor() as cursor:
+        with self.connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute(
                     """
@@ -3093,7 +3093,7 @@ class OracleNl2SqlAdapter:
         return _extract_select_statement(text), f"run_tool:{tool_name}"
 
     def create_agent_conversation(self) -> str:
-        with self.user_data_connection() as conn, conn.cursor() as cursor:
+        with self.connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute("SELECT DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION() FROM DUAL")
             except Exception as exc:

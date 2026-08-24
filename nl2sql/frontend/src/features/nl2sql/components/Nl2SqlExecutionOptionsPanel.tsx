@@ -1,4 +1,5 @@
-import { Eye, FileText, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ChevronDown, Eye, FileText, Network, Sparkles } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import type { Nl2SqlEngine } from "../types";
@@ -38,10 +39,14 @@ export function Nl2SqlExecutionOptionsPanel({
   engine,
   includeInterpretation,
   includeShowPrompt,
+  open,
+  useOntologyContext,
   onIncludeInterpretationChange,
   onIncludeShowPromptChange,
+  onOpenChange,
   onRewriteUseGlossaryChange,
   onRewriteUseSchemaChange,
+  onUseOntologyContextChange,
   rewriteUseGlossary,
   rewriteUseSchema,
 }: {
@@ -49,62 +54,114 @@ export function Nl2SqlExecutionOptionsPanel({
   engine: Nl2SqlEngine;
   includeInterpretation: boolean;
   includeShowPrompt: boolean;
+  open: boolean;
+  useOntologyContext: boolean;
   onIncludeInterpretationChange: (checked: boolean) => void;
   onIncludeShowPromptChange: (checked: boolean) => void;
+  onOpenChange: (open: boolean) => void;
   onRewriteUseGlossaryChange: (checked: boolean) => void;
   onRewriteUseSchemaChange: (checked: boolean) => void;
+  onUseOntologyContextChange: (checked: boolean) => void;
   rewriteUseGlossary: boolean;
   rewriteUseSchema: boolean;
 }) {
   const showPromptUnavailable = includeShowPrompt && engine !== "select_ai";
+  const hasChangedOptions =
+    rewriteUseGlossary ||
+    rewriteUseSchema ||
+    !useOntologyContext ||
+    !includeInterpretation ||
+    !includeShowPrompt;
 
   return (
     <section
-      className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm"
+      className="overflow-hidden rounded-md border border-border bg-background text-sm"
       aria-labelledby="nl2sql-execution-options-heading"
       data-testid="nl2sql-execution-options"
     >
-      <div className="grid gap-1">
-        <p id="nl2sql-execution-options-heading" className="font-semibold text-foreground">
-          {t("nl2sql.executionOptions.title")}
-        </p>
+      <Button
+        type="button"
+        variant="ghost"
+        size="md"
+        className="min-h-11 w-full justify-between rounded-none px-3 text-left"
+        aria-expanded={open}
+        aria-controls="nl2sql-execution-options-body"
+        onClick={() => onOpenChange(!open)}
+        disabled={disabled}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <Sparkles size={15} className="shrink-0 text-foreground" aria-hidden="true" />
+          <span
+            id="nl2sql-execution-options-heading"
+            className="min-w-0 [overflow-wrap:anywhere]"
+          >
+            {t("nl2sql.executionOptions.title")}
+          </span>
+          {hasChangedOptions ? (
+            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+              {t("nl2sql.selectAiOverrides.activeBadge")}
+            </span>
+          ) : null}
+        </span>
+        <ChevronDown
+          size={16}
+          className={
+            open
+              ? "shrink-0 rotate-180 transition-transform"
+              : "shrink-0 transition-transform"
+          }
+          aria-hidden="true"
+        />
+      </Button>
+      <div
+        id="nl2sql-execution-options-body"
+        hidden={!open}
+        className={open ? "grid gap-3 border-t border-border p-3" : "hidden"}
+      >
         <p className="text-xs leading-5 text-muted">{t("nl2sql.executionOptions.hint")}</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <OptionCheckbox
+            checked={rewriteUseGlossary}
+            disabled={disabled}
+            icon={Sparkles}
+            label={t("nl2sql.rewrite.useGlossary")}
+            onChange={onRewriteUseGlossaryChange}
+          />
+          <OptionCheckbox
+            checked={rewriteUseSchema}
+            disabled={disabled}
+            icon={Sparkles}
+            label={t("nl2sql.rewrite.useSchema")}
+            onChange={onRewriteUseSchemaChange}
+          />
+          <OptionCheckbox
+            checked={useOntologyContext}
+            disabled={disabled}
+            icon={Network}
+            label={t("nl2sql.executionOptions.useOntology")}
+            onChange={onUseOntologyContextChange}
+          />
+          <OptionCheckbox
+            checked={includeInterpretation}
+            disabled={disabled}
+            icon={Eye}
+            label={t("nl2sql.executionOptions.includeInterpretation")}
+            onChange={onIncludeInterpretationChange}
+          />
+          <OptionCheckbox
+            checked={includeShowPrompt}
+            disabled={disabled}
+            icon={FileText}
+            label={t("nl2sql.executionOptions.includeShowPrompt")}
+            onChange={onIncludeShowPromptChange}
+          />
+        </div>
+        {showPromptUnavailable ? (
+          <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
+            {t("nl2sql.executionOptions.showPromptUnsupported")}
+          </p>
+        ) : null}
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <OptionCheckbox
-          checked={rewriteUseGlossary}
-          disabled={disabled}
-          icon={Sparkles}
-          label={t("nl2sql.rewrite.useGlossary")}
-          onChange={onRewriteUseGlossaryChange}
-        />
-        <OptionCheckbox
-          checked={rewriteUseSchema}
-          disabled={disabled}
-          icon={Sparkles}
-          label={t("nl2sql.rewrite.useSchema")}
-          onChange={onRewriteUseSchemaChange}
-        />
-        <OptionCheckbox
-          checked={includeInterpretation}
-          disabled={disabled}
-          icon={Eye}
-          label={t("nl2sql.executionOptions.includeInterpretation")}
-          onChange={onIncludeInterpretationChange}
-        />
-        <OptionCheckbox
-          checked={includeShowPrompt}
-          disabled={disabled}
-          icon={FileText}
-          label={t("nl2sql.executionOptions.includeShowPrompt")}
-          onChange={onIncludeShowPromptChange}
-        />
-      </div>
-      {showPromptUnavailable ? (
-        <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
-          {t("nl2sql.executionOptions.showPromptUnsupported")}
-        </p>
-      ) : null}
     </section>
   );
 }

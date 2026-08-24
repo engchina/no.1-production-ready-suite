@@ -1883,6 +1883,12 @@ def enforce_row_limit(sql: str, row_limit: int | None) -> str:
     return f"{normalized} FETCH FIRST {row_limit} ROWS ONLY"
 
 
+_JOB_RESULT_PERSISTENCE_WARNING = (
+    "結果は生成されましたが、履歴/ジョブ保存に失敗しました。"
+    "結果を確認後、必要に応じて管理者にお問い合わせください。"
+)
+
+
 @dataclass
 class GeneratedSql:
     engine: Nl2SqlEngine
@@ -1917,6 +1923,7 @@ class StoredJob:
     elapsed_ms: int | None = None
     result: Nl2SqlResult | None = None
     error_message: str | None = None
+    warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = field(default_factory=list)
 
@@ -2756,6 +2763,7 @@ class Nl2SqlService:
             "elapsed_ms": job.elapsed_ms,
             "result": job.result.model_dump(mode="json") if job.result else None,
             "error_message": job.error_message,
+            "warning_message": job.warning_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
             "steps": [step.model_dump(mode="json") for step in job.steps],
         }
@@ -2776,6 +2784,7 @@ class Nl2SqlService:
             elapsed_ms=data.get("elapsed_ms"),
             result=result,
             error_message=data.get("error_message"),
+            warning_message=data.get("warning_message"),
             timing=timing,
             steps=_restore_job_steps(
                 data.get("steps", []),
@@ -4267,6 +4276,28 @@ class Nl2SqlService:
             attributes["additional_instructions"] = instructions
         return attributes or None
 
+    def _select_ai_overrides_with_ontology_context(
+        self,
+        overrides: SelectAiRequestOverrides | None,
+        ontology_context: Any | None,
+    ) -> SelectAiRequestOverrides | None:
+        ontology_instructions = self._ontology_generation_context_prompt(ontology_context)
+        if not ontology_instructions:
+            return overrides
+        merged_instructions = "\n\n".join(
+            part
+            for part in [
+                overrides.additional_instructions if overrides is not None else "",
+                "## 確認済み Ontology コンテキスト",
+                ontology_instructions,
+            ]
+            if part.strip()
+        )
+        return SelectAiRequestOverrides(
+            role=overrides.role if overrides is not None else "",
+            additional_instructions=merged_instructions,
+        )
+
     def _redact_select_ai_context_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """監査・engine meta から業務 prompt 本文を除外する。"""
         redacted = {
@@ -4906,6 +4937,7 @@ class Nl2SqlService:
                 elapsed_ms=job.elapsed_ms,
                 result=job.result,
                 error_message=job.error_message,
+                warning_message=job.warning_message,
                 timing=job.timing,
                 steps=job.steps,
             )
@@ -13383,11 +13415,37 @@ class Nl2SqlService:
                 job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
                 job.finished_at = _utc_now()
                 failure_index = _job_failure_step_index(job.steps)
+                failure_stage = (
+                    job.steps[failure_index].stage if failure_index is not None else ""
+                )
                 if failure_index is not None:
                     job.steps[failure_index] = job.steps[failure_index].model_copy(
                         update={"status": JobStepStatus.ERROR}
                     )
-            self._persist_job(job_id)
+                request = job.request
+            logger.exception(
+                "nl2sql_job_failed",
+                extra={
+                    "job_id": job_id,
+                    "failure_stage": failure_stage,
+                    "engine": request.engine.value,
+                    "profile_id": request.profile_id or "",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            try:
+                self._persist_job(job_id)
+            except Exception as persist_exc:  # pragma: no cover - defensive log boundary
+                logger.exception(
+                    "nl2sql_job_error_state_persist_failed",
+                    extra={
+                        "job_id": job_id,
+                        "failure_stage": failure_stage,
+                        "engine": request.engine.value,
+                        "profile_id": request.profile_id or "",
+                        "exception_type": type(persist_exc).__name__,
+                    },
+                )
 
     def _build_interpretation_artifact(
         self,
@@ -13467,6 +13525,7 @@ class Nl2SqlService:
         profile: Nl2SqlProfile,
         generated: GeneratedSql,
         rewritten_question: str,
+        ontology_context: Any | None = None,
     ) -> Nl2SqlShowPromptArtifact:
         if generated.engine != Nl2SqlEngine.SELECT_AI:
             return Nl2SqlShowPromptArtifact(
@@ -13483,7 +13542,11 @@ class Nl2SqlService:
                 ),
             )
         try:
-            attributes = self._select_ai_generate_attributes(profile, request.select_ai_overrides)
+            effective_overrides = self._select_ai_overrides_with_ontology_context(
+                request.select_ai_overrides,
+                ontology_context,
+            )
+            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             prompt = self._oracle_adapter.generate_select_ai_prompt(
                 profile_name=str(
                     generated.engine_meta.get("select_ai_profile")
@@ -13512,6 +13575,39 @@ class Nl2SqlService:
                 warnings=[str(exc)],
             )
 
+    def _job_ontology_context(
+        self,
+        *,
+        request: JobCreateRequest,
+        question: str,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+    ) -> Any | None:
+        if not request.use_ontology_context:
+            return None
+        try:
+            # ontology_router imports nl2sql_service at module load time, so keep this lazy.
+            from app.features.nl2sql.ontology_router import ontology_runtime
+
+            return ontology_runtime.compile_generation_context_for_job(
+                question=question,
+                profile=profile,
+                allowed=allowed,
+                row_limit=row_limit,
+                engine=request.engine,
+            )
+        except Exception:
+            logger.info(
+                "nl2sql_job_ontology_context_unavailable",
+                exc_info=True,
+                extra={
+                    "profile_id": profile.id,
+                    "engine": request.engine.value,
+                },
+            )
+            return None
+
     def _run_job(self, job_id: str) -> None:
         total_started = time.monotonic()
         with self._lock:
@@ -13530,6 +13626,13 @@ class Nl2SqlService:
         rewritten = self._rewrite_question_preserving_empty_filter(request.question, profile)
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
+        ontology_context = self._job_ontology_context(
+            request=request,
+            question=rewritten,
+            profile=profile,
+            allowed=allowed,
+            row_limit=row_limit,
+        )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
         self._transition_job_steps(
@@ -13547,6 +13650,7 @@ class Nl2SqlService:
             allowed=allowed,
             row_limit=row_limit,
             select_ai_overrides=request.select_ai_overrides,
+            ontology_context=ontology_context,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
@@ -13633,6 +13737,7 @@ class Nl2SqlService:
                     profile=profile,
                     generated=generated,
                     rewritten_question=rewritten,
+                    ontology_context=ontology_context,
                 )
             except Exception as exc:  # pragma: no cover - defensive artifact boundary
                 logger.warning("nl2sql_showprompt_artifact_boundary_failed", exc_info=True)
@@ -13687,6 +13792,7 @@ class Nl2SqlService:
             ]
             job.status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
             job.error_message = None if safety.is_safe else safety.blocked_reason
+            job.warning_message = None
             job.result = result
             job.finished_at = finished
             job.elapsed_ms = timing.elapsed_ms
@@ -13709,12 +13815,33 @@ class Nl2SqlService:
                 actor_user_uuid=job.actor_user_uuid,
             )
             self._history.append(history_item)
-        self._persist_entities(
-            [
-                ("jobs", job_id, self._job_to_snapshot(job)),
-                ("history", history_item.id, history_item.model_dump(mode="json")),
-            ]
-        )
+        try:
+            self._persist_entities(
+                [
+                    ("jobs", job_id, self._job_to_snapshot(job)),
+                    ("history", history_item.id, history_item.model_dump(mode="json")),
+                ]
+            )
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+            with self._lock:
+                current_job = self._jobs[job_id]
+                has_result = current_job.result is not None
+                if has_result:
+                    current_job.warning_message = _JOB_RESULT_PERSISTENCE_WARNING
+                    if current_job.status == JobStatus.DONE:
+                        current_job.error_message = None
+            if has_result:
+                logger.exception(
+                    "nl2sql_job_result_persist_failed",
+                    extra={
+                        "job_id": job_id,
+                        "engine": request.engine.value,
+                        "profile_id": request.profile_id or "",
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                return
+            raise
 
     def _generate_with_fallback(
         self,
@@ -14179,23 +14306,10 @@ class Nl2SqlService:
         )
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
-            effective_overrides = select_ai_overrides
-            if ontology_instructions:
-                merged_instructions = "\n\n".join(
-                    part
-                    for part in [
-                        select_ai_overrides.additional_instructions
-                        if select_ai_overrides is not None
-                        else "",
-                        "## 確認済み Ontology コンテキスト",
-                        ontology_instructions,
-                    ]
-                    if part.strip()
-                )
-                effective_overrides = SelectAiRequestOverrides(
-                    role=select_ai_overrides.role if select_ai_overrides is not None else "",
-                    additional_instructions=merged_instructions,
-                )
+            effective_overrides = self._select_ai_overrides_with_ontology_context(
+                select_ai_overrides,
+                ontology_context,
+            )
             attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             if attributes:
                 sql = self._oracle_adapter.generate_select_ai_sql(

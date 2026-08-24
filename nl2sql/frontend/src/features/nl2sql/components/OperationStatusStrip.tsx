@@ -120,6 +120,8 @@ export function OperationStatusStrip({
   const steps = normalizeSteps(job);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const isPreview = Boolean(onPreviewExecute);
+  const warningMessage = job.warning_message?.trim();
+  const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
 
   return (
     <section
@@ -297,9 +299,18 @@ export function OperationStatusStrip({
         })}
       </ol>
 
-      {job.error_message && (
+      {warningMessage && (
+        <div
+          className="mx-4 mb-4 rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm leading-6 text-warning"
+          role="status"
+        >
+          <p>{warningMessage}</p>
+        </div>
+      )}
+
+      {errorMessage && (
         <div className="mx-4 mb-4 grid gap-3 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
-          <p>{job.error_message}</p>
+          <p>{errorMessage}</p>
           {job.status === "error" && catalogEmpty && onImportSample && (
             <div className="flex flex-wrap items-center gap-2">
               <Button

@@ -160,8 +160,10 @@ function ExecutableNl2SqlWorkbench() {
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [rewriteUseSchema, setRewriteUseSchema] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
+  const [useOntologyContext, setUseOntologyContext] = useState(true);
   const [includeInterpretation, setIncludeInterpretation] = useState(true);
   const [includeShowPrompt, setIncludeShowPrompt] = useState(true);
+  const [executionOptionsOpen, setExecutionOptionsOpen] = useState(false);
   const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
   const [selectAiRoleAdvancedOpen, setSelectAiRoleAdvancedOpen] = useState(false);
   const [similarHistoryOpen, setSimilarHistoryOpen] = useState(false);
@@ -727,6 +729,7 @@ function ExecutableNl2SqlWorkbench() {
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
         select_ai_overrides: selectAiOverrides,
+        use_ontology_context: useOntologyContext,
         include_interpretation: includeInterpretation,
         include_show_prompt: includeShowPrompt,
       });
@@ -1176,10 +1179,14 @@ function ExecutableNl2SqlWorkbench() {
                     engine={engine}
                     includeInterpretation={includeInterpretation}
                     includeShowPrompt={includeShowPrompt}
+                    open={executionOptionsOpen}
+                    useOntologyContext={useOntologyContext}
                     onIncludeInterpretationChange={setIncludeInterpretation}
                     onIncludeShowPromptChange={setIncludeShowPrompt}
+                    onOpenChange={setExecutionOptionsOpen}
                     onRewriteUseGlossaryChange={setRewriteUseGlossary}
                     onRewriteUseSchemaChange={setRewriteUseSchema}
+                    onUseOntologyContextChange={setUseOntologyContext}
                     rewriteUseGlossary={rewriteUseGlossary}
                     rewriteUseSchema={rewriteUseSchema}
                   />
@@ -1310,8 +1317,10 @@ function ExecutableNl2SqlWorkbench() {
                         setRewriteUseGlossary(false);
                         setRewriteUseSchema(false);
                         setRewriteExtraPrompt("");
+                        setUseOntologyContext(true);
                         setIncludeInterpretation(true);
                         setIncludeShowPrompt(true);
+                        setExecutionOptionsOpen(false);
                         clearTrackedJob();
                         setSelectAiRoleOverride("");
                         setSelectAiInstructionsOverride("");

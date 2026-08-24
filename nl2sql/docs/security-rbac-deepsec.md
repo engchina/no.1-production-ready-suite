@@ -200,11 +200,12 @@ context へ設定した data pool で実行する。
 この経路は業務データ参照用の DeepSec data plane ではないため、通常の SELECT 実行と混同しない。
 確認不要の判定には通常の SELECT-only guard を再利用し、WITH で始まる更新文も管理 SQL として扱う。
 
-NL2SQL job の生成済み SELECT 実行、Select AI `DBMS_CLOUD_AI.GENERATE`、Select AI Agent の
-`DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` / `CREATE_CONVERSATION` も非 `system_admin` では
-DeepSec context 付き data connection を使用する。`system_admin`、migration、DeepSec V001 適用、
-schema refresh、profile/credential/asset 管理は同じ Thin + mTLS の通常 Oracle user 接続で実行し、
-DeepSec context は付けない。
+Select AI `DBMS_CLOUD_AI.GENERATE` と Select AI Agent の
+`DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` / `CREATE_CONVERSATION` は、非
+`system_admin` の SQL 生成でも `system_admin` と同じ Thin + mTLS の通常 Oracle user 接続で実行し、
+DeepSec context は付けない。NL2SQL job の生成済み SELECT 実行は、非 `system_admin` では DeepSec
+context 付き data connection を使用する。`system_admin`、migration、DeepSec V001 適用、schema
+refresh、profile/credential/asset 管理は通常 Oracle user 接続で実行し、DeepSec context は付けない。
 
 ## 主要な安全境界
 

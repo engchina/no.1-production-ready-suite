@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
-import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
   expectSplitPaneReservedTrack,
   expectSplitPaneStacked,
@@ -1209,6 +1209,23 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       });
     }
     return fulfillJson(route, profiles[0]);
+  });
+  await page.route("**/api/nl2sql/profiles/*/usage-context", (route) => {
+    const profileId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
+    const profile = profiles.find((item) => item.id === profileId) ?? profiles[0];
+    return fulfillJson(route, {
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      allowed_tables: profile.allowed_tables,
+      allowed_views: profile.allowed_views,
+      archived: profile.archived,
+      object_scope_version: 1,
+      version: 1,
+      etag: `etag-${profile.id}`,
+      updated_at: "2026-06-21T10:00:00.000Z",
+    });
   });
   // 保存時に一体化された Oracle 反映(業務 profile → DBMS_CLOUD_AI profile)。
   await page.route("**/api/nl2sql/profiles/*/select-ai-profile", (route) =>
@@ -4051,6 +4068,91 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
 
+  await expectNoHorizontalScroll(page);
+});
+
+test("保存警告がある完了 job は結果を表示し、赤エラーではなく黄色 warning を出す", async ({ page }) => {
+  await page.unroute("**/api/auth/me").catch(() => undefined);
+  await page.route("**/api/auth/me**", (route) => fulfillJson(route, systemAdminMe));
+  await page.route("**/api/auth/login**", (route) => fulfillJson(route, systemAdminMe));
+  await mockNl2SqlApi(page);
+  const questionText = "請求金額を確認したい";
+  const createdAt = "2026-06-21T10:00:00.000Z";
+  const warningMessage = "結果は生成されましたが、履歴/ジョブ保存に失敗しました。";
+  const doneSteps = [
+    { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+    { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+    { stage: "safety_check", status: "done", elapsed_ms: 4 },
+    { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+    { stage: "format_results", status: "done", elapsed_ms: 6 },
+  ];
+
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "job-warning-001",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-warning-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-warning-001",
+      status: "done",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 50,
+      error_message: null,
+      warning_message: warningMessage,
+      steps: doneSteps,
+      timing,
+      result: {
+        history_id: "hist-warning-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        executable_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+        explanation: "請求情報を取得します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
+          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          total: 1,
+        },
+        timing,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  const loginHeading = page.getByRole("heading", { name: "システムにログイン" });
+  if (await loginHeading.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await page.getByLabel("ログインユーザーID").fill("SYSTEM");
+    await page.getByLabel("パスワード").fill("password");
+    await page.getByRole("button", { name: "ログイン" }).click();
+  }
+  await expect(nl2sqlQuestionInput(page)).toBeVisible();
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const progress = page.getByTestId("nl2sql-job-progress");
+  await expect(progress).toHaveAttribute("data-job-status", "done");
+  await expect(progress.getByRole("status").filter({ hasText: warningMessage })).toBeVisible();
+  await expect(progress).not.toContainText("処理を完了できませんでした");
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 

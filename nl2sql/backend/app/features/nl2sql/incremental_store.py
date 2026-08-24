@@ -1674,6 +1674,7 @@ class OracleIncrementalNl2SqlRepository:
         payload_json = _canonical_json(dict(payload))
         etag = hashlib.sha256(payload_json.encode()).hexdigest()
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            _set_clob_bind(cursor, "payload")
             cursor.execute(
                 "MERGE INTO NL2SQL_STATE_DOCUMENTS t USING (SELECT :collection COLLECTION, "
                 ":entity_id ENTITY_ID FROM DUAL) s ON (t.COLLECTION = s.COLLECTION AND "
