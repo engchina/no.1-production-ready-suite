@@ -1908,7 +1908,7 @@ class LearningExample:
 class StoredJob:
     job_id: str
     request: JobCreateRequest
-    actor_user_id: str = ""
+    actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
     status: JobStatus = JobStatus.PENDING
     created_at: str = field(default_factory=_utc_now)
@@ -2747,7 +2747,7 @@ class Nl2SqlService:
         return {
             "job_id": job.job_id,
             "request": job.request.model_dump(mode="json"),
-            "actor_user_id": job.actor_user_id,
+            "actor_user_uuid": job.actor_user_uuid,
             "actor_is_system_admin": job.actor_is_system_admin,
             "status": job.status.value,
             "created_at": job.created_at,
@@ -2767,7 +2767,7 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
-            actor_user_id=str(data.get("actor_user_id") or ""),
+            actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
             status=status,
             created_at=str(data.get("created_at") or _utc_now()),
@@ -4835,7 +4835,7 @@ class Nl2SqlService:
         self,
         request: JobCreateRequest,
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> JobCreateData:
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
@@ -4843,12 +4843,12 @@ class Nl2SqlService:
         self.get_profile(request.profile_id)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         job_id = str(uuid.uuid4())
-        if self._deepsec_enabled and not actor_user_id:
+        if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
         job = StoredJob(
             job_id=job_id,
             request=request,
-            actor_user_id=actor_user_id,
+            actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
         )
@@ -4869,7 +4869,7 @@ class Nl2SqlService:
         self,
         job_id: str,
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_can_manage: bool = False,
     ) -> JobData | None:
         with self._lock:
@@ -4891,9 +4891,9 @@ class Nl2SqlService:
             return None
         if (
             not actor_can_manage
-            and actor_user_id
-            and job.actor_user_id
-            and job.actor_user_id != actor_user_id
+            and actor_user_uuid
+            and job.actor_user_uuid
+            and job.actor_user_uuid != actor_user_uuid
         ):
             raise PermissionError(job_id)
         with self._lock:
@@ -5169,7 +5169,7 @@ class Nl2SqlService:
         profile_id: str = "",
         status: str = "",
         query: str = "",
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
     ) -> tuple[list[HistoryItem], str, int]:
         repository = self._incremental_repository
         if repository is not None:
@@ -5181,7 +5181,9 @@ class Nl2SqlService:
                     profile_id=profile_id,
                     status=status,
                     query=query,
-                    payload_filters=({"actor_user_id": actor_user_id} if actor_user_id else None),
+                    payload_filters=(
+                        {"actor_user_uuid": actor_user_uuid} if actor_user_uuid else None
+                    ),
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -5210,7 +5212,7 @@ class Nl2SqlService:
                     or query_key
                     in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
                 )
-                and (not actor_user_id or item.actor_user_id == actor_user_id)
+                and (not actor_user_uuid or item.actor_user_uuid == actor_user_uuid)
             ]
         total = len(items)
         selected = items[offset : offset + limit]
@@ -5275,19 +5277,19 @@ class Nl2SqlService:
             self._classifier_examples = examples
             self._classifier_artifact = artifact
 
-    def list_history(self, *, actor_user_id: str = "") -> HistoryData:
+    def list_history(self, *, actor_user_uuid: str = "") -> HistoryData:
         if self._incremental_repository is not None:
             items, _cursor, _total = self._history_page(
                 cursor=None,
                 limit=50,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
             )
             return HistoryData(items=items)
         with self._lock:
             items = [
                 item
                 for item in reversed(self._history)
-                if not actor_user_id or item.actor_user_id == actor_user_id
+                if not actor_user_uuid or item.actor_user_uuid == actor_user_uuid
             ]
             return HistoryData(items=items[:50])
 
@@ -5304,7 +5306,7 @@ class Nl2SqlService:
         result: QueryResults,
         ontology_trace_summary: dict[str, Any],
         elapsed_ms: int | None = None,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
     ) -> HistoryItem:
         """Query Session 実行を legacy history へ一度だけ投影する。"""
 
@@ -5332,7 +5334,7 @@ class Nl2SqlService:
                 result_row_count=result.total,
                 result_columns=result.columns,
                 session_id=session_id,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
                 ontology_trace_summary=dict(ontology_trace_summary),
             )
             self._history.append(item)
@@ -5345,7 +5347,7 @@ class Nl2SqlService:
         rating: FeedbackRating,
         comment: str = "",
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_can_manage: bool = False,
     ) -> FeedbackData:
         current = self._history_by_id(history_id)
@@ -5353,9 +5355,9 @@ class Nl2SqlService:
             raise KeyError(history_id)
         if (
             not actor_can_manage
-            and actor_user_id
-            and current.actor_user_id
-            and current.actor_user_id != actor_user_id
+            and actor_user_uuid
+            and current.actor_user_uuid
+            and current.actor_user_uuid != actor_user_uuid
         ):
             raise PermissionError(history_id)
         updated = current.model_copy(
@@ -5439,7 +5441,7 @@ class Nl2SqlService:
         self,
         history_id: str,
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_can_manage: bool = False,
     ) -> FeedbackClearData:
         current = self._history_by_id(history_id)
@@ -5447,9 +5449,9 @@ class Nl2SqlService:
             raise KeyError(history_id)
         if (
             not actor_can_manage
-            and actor_user_id
-            and current.actor_user_id
-            and current.actor_user_id != actor_user_id
+            and actor_user_uuid
+            and current.actor_user_uuid
+            and current.actor_user_uuid != actor_user_uuid
         ):
             raise PermissionError(history_id)
         updated = current.model_copy(
@@ -13370,9 +13372,9 @@ class Nl2SqlService:
     def _run_job_safely(self, job_id: str) -> None:
         try:
             with self._lock:
-                actor_user_id = self._jobs[job_id].actor_user_id
+                actor_user_uuid = self._jobs[job_id].actor_user_uuid
                 actor_is_system_admin = self._jobs[job_id].actor_is_system_admin
-            with actor_scope(actor_user_id, is_system_admin=actor_is_system_admin):
+            with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
                 self._run_job(job_id)
         except Exception as exc:  # pragma: no cover - defensive boundary
             with self._lock:
@@ -13704,7 +13706,7 @@ class Nl2SqlService:
                 safety_is_safe=result.safety.is_safe,
                 result_row_count=result.results.total,
                 result_columns=result.results.columns,
-                actor_user_id=job.actor_user_id,
+                actor_user_uuid=job.actor_user_uuid,
             )
             self._history.append(history_item)
         self._persist_entities(

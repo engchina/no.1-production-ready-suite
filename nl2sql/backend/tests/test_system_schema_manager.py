@@ -775,8 +775,8 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
 
     def principal(permissions: set[str]) -> Principal:
         return Principal(
-            user_id="user-1",
-            login_name="viewer",
+            user_uuid="user-1",
+            login_user_id="viewer",
             display_name="閲覧者",
             status="ACTIVE",
             force_password_change=False,

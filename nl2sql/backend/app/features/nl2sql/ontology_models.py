@@ -1057,7 +1057,7 @@ class QuerySession(OntologyContract):
     sql_confirmation: SqlConfirmationBinding | None = None
     execution: QueryExecutionRecord | None = None
     proposal_ids: list[str] = Field(default_factory=list)
-    actor_user_id: str = ""
+    actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -1071,7 +1071,7 @@ class QuerySessionCreate(OntologyContract):
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
     intent: QuestionIntentGraph | None = None
-    actor_user_id: str = ""
+    actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
 
 

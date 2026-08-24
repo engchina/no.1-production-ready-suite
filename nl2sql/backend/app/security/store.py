@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -20,6 +21,8 @@ from .domain import (
     RoleRecord,
     SessionRecord,
     UserRecord,
+    scope_filters_canonical_json,
+    scope_filters_from_json,
 )
 
 
@@ -36,25 +39,25 @@ class SecurityConflict(SecurityStoreError):
 
 
 class SecurityStore(Protocol):
-    def bootstrap(self, *, login_name: str, display_name: str, password_hash: str) -> bool: ...
-    def get_user_by_login(self, normalized_login: str) -> UserRecord | None: ...
-    def get_user(self, user_id: str) -> UserRecord | None: ...
+    def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool: ...
+    def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None: ...
+    def get_user(self, user_uuid: str) -> UserRecord | None: ...
     def list_users(self) -> list[UserRecord]: ...
     def create_user(self, user: UserRecord) -> UserRecord: ...
     def update_user(
         self,
-        user_id: str,
+        user_uuid: str,
         *,
         expected_version: int,
         display_name: str,
         status: str,
         role_ids: list[str],
     ) -> UserRecord: ...
-    def set_password(self, user_id: str, password_hash: str, *, force_change: bool) -> None: ...
+    def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None: ...
     def record_login_failure(
-        self, user_id: str, *, failed_count: int, locked_until: datetime | None
+        self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
     ) -> None: ...
-    def record_login_success(self, user_id: str, *, password_hash: str | None = None) -> None: ...
+    def record_login_success(self, user_uuid: str, *, password_hash: str | None = None) -> None: ...
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]: ...
     def get_role(self, role_id: str) -> RoleRecord | None: ...
     def create_role(self, role: RoleRecord) -> RoleRecord: ...
@@ -68,7 +71,7 @@ class SecurityStore(Protocol):
         self, session_id: str, *, last_seen_at: datetime, idle_expires_at: datetime
     ) -> None: ...
     def revoke_session(self, session_id: str) -> None: ...
-    def revoke_user_sessions(self, user_id: str) -> None: ...
+    def revoke_user_sessions(self, user_uuid: str) -> None: ...
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]: ...
     def set_deepsec_state(
         self,
@@ -79,8 +82,19 @@ class SecurityStore(Protocol):
         checksum: str,
         status: str,
         error_message: str,
-        executed_by: str | None,
+        executed_by_user_uuid: str | None,
     ) -> None: ...
+    def clear_deepsec_states(self, *, version: str, step_numbers: list[int]) -> None: ...
+    def set_deepsec_entitlement_apply_state(
+        self,
+        entitlement_id: str,
+        *,
+        status: str,
+        data_grant_name: str = "",
+        sql_checksum: str = "",
+        error_message: str = "",
+    ) -> None: ...
+    def clear_deepsec_entitlement_apply_states(self) -> None: ...
 
 
 def _now() -> datetime:
@@ -101,14 +115,14 @@ class InMemorySecurityStore:
         self.deepsec_states: dict[tuple[str, int], dict[str, object]] = {}
         self._lock = threading.RLock()
 
-    def bootstrap(self, *, login_name: str, display_name: str, password_hash: str) -> bool:
+    def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool:
         with self._lock:
             self._ensure_system_admin_role()
             if self.users:
                 return False
             user = UserRecord(
-                user_id=str(uuid4()),
-                login_name=login_name,
+                user_uuid=str(uuid4()),
+                login_user_id=login_user_id,
                 display_name=display_name,
                 password_hash=password_hash,
                 status="ACTIVE",
@@ -119,7 +133,7 @@ class InMemorySecurityStore:
                 role_ids=[SYSTEM_ADMIN_ROLE_ID],
                 is_bootstrap_admin=True,
             )
-            self.users[user.user_id] = user
+            self.users[user.user_uuid] = user
             return True
 
     def _ensure_system_admin_role(self) -> None:
@@ -133,55 +147,47 @@ class InMemorySecurityStore:
             is_built_in=True,
             archived=False,
             version=1,
-            entitlements=[
-                DataEntitlementRecord(
-                    entitlement_id=str(uuid4()),
-                    role_id=SYSTEM_ADMIN_ROLE_ID,
-                    resource_code="NL2SQL_DEEPSEC_PROBE",
-                    scope_code="*",
-                    capability="FULL",
-                )
-            ],
+            entitlements=[],
         )
 
-    def get_user_by_login(self, normalized_login: str) -> UserRecord | None:
+    def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None:
         with self._lock:
             return _copy_optional(
                 next(
                     (
                         user
                         for user in self.users.values()
-                        if user.login_name.casefold() == normalized_login.casefold()
+                        if user.login_user_id.casefold() == normalized_login_user_id.casefold()
                     ),
                     None,
                 )
             )
 
-    def get_user(self, user_id: str) -> UserRecord | None:
+    def get_user(self, user_uuid: str) -> UserRecord | None:
         with self._lock:
-            return _copy_optional(self.users.get(user_id))
+            return _copy_optional(self.users.get(user_uuid))
 
     def list_users(self) -> list[UserRecord]:
         with self._lock:
             return [
                 copy.deepcopy(item)
-                for item in sorted(self.users.values(), key=lambda u: u.login_name)
+                for item in sorted(self.users.values(), key=lambda u: u.login_user_id)
             ]
 
     def create_user(self, user: UserRecord) -> UserRecord:
         with self._lock:
             if any(
-                item.login_name.casefold() == user.login_name.casefold()
+                item.login_user_id.casefold() == user.login_user_id.casefold()
                 for item in self.users.values()
             ):
-                raise SecurityConflict("同じログイン名のユーザーが既に存在します。")
+                raise SecurityConflict("同じログインユーザーIDのユーザーが既に存在します。")
             self._validate_role_ids(user.role_ids)
-            self.users[user.user_id] = copy.deepcopy(user)
+            self.users[user.user_uuid] = copy.deepcopy(user)
             return copy.deepcopy(user)
 
     def update_user(
         self,
-        user_id: str,
+        user_uuid: str,
         *,
         expected_version: int,
         display_name: str,
@@ -189,7 +195,7 @@ class InMemorySecurityStore:
         role_ids: list[str],
     ) -> UserRecord:
         with self._lock:
-            user = self.users.get(user_id)
+            user = self.users.get(user_uuid)
             if user is None:
                 raise SecurityNotFound("ユーザーが見つかりません。")
             if user.version != expected_version:
@@ -205,18 +211,16 @@ class InMemorySecurityStore:
                 and self.count_active_system_admins() <= 1
             )
             if removes_last_admin:
-                raise SecurityConflict(
-                    "最後のシステム管理者は無効化または権限解除できません。"
-                )
+                raise SecurityConflict("最後のシステム管理者は無効化または権限解除できません。")
             user.display_name = display_name
             user.status = status
             user.role_ids = list(dict.fromkeys(role_ids))
             user.version += 1
             return copy.deepcopy(user)
 
-    def set_password(self, user_id: str, password_hash: str, *, force_change: bool) -> None:
+    def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None:
         with self._lock:
-            user = self._required_user(user_id)
+            user = self._required_user(user_uuid)
             user.password_hash = password_hash
             user.force_password_change = force_change
             user.failed_login_count = 0
@@ -224,16 +228,16 @@ class InMemorySecurityStore:
             user.version += 1
 
     def record_login_failure(
-        self, user_id: str, *, failed_count: int, locked_until: datetime | None
+        self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
     ) -> None:
         with self._lock:
-            user = self._required_user(user_id)
+            user = self._required_user(user_uuid)
             user.failed_login_count = failed_count
             user.locked_until = locked_until
 
-    def record_login_success(self, user_id: str, *, password_hash: str | None = None) -> None:
+    def record_login_success(self, user_uuid: str, *, password_hash: str | None = None) -> None:
         with self._lock:
-            user = self._required_user(user_id)
+            user = self._required_user(user_uuid)
             user.failed_login_count = 0
             user.locked_until = None
             if password_hash:
@@ -316,10 +320,10 @@ class InMemorySecurityStore:
             if session_id in self.sessions:
                 self.sessions[session_id].revoked_at = _now()
 
-    def revoke_user_sessions(self, user_id: str) -> None:
+    def revoke_user_sessions(self, user_uuid: str) -> None:
         with self._lock:
             for session in self.sessions.values():
-                if session.user_id == user_id and session.revoked_at is None:
+                if session.user_uuid == user_uuid and session.revoked_at is None:
                     session.revoked_at = _now()
 
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
@@ -335,7 +339,7 @@ class InMemorySecurityStore:
         checksum: str,
         status: str,
         error_message: str,
-        executed_by: str | None,
+        executed_by_user_uuid: str | None,
     ) -> None:
         with self._lock:
             self.deepsec_states[(version, step_no)] = {
@@ -343,12 +347,52 @@ class InMemorySecurityStore:
                 "checksum": checksum,
                 "status": status,
                 "error_message": error_message,
-                "executed_by": executed_by,
+                "executed_by_user_uuid": executed_by_user_uuid,
                 "executed_at": _now() if status in {"APPLIED", "FAILED"} else None,
             }
 
-    def _required_user(self, user_id: str) -> UserRecord:
-        user = self.users.get(user_id)
+    def clear_deepsec_states(self, *, version: str, step_numbers: list[int]) -> None:
+        with self._lock:
+            for step_no in step_numbers:
+                self.deepsec_states.pop((version, step_no), None)
+
+    def set_deepsec_entitlement_apply_state(
+        self,
+        entitlement_id: str,
+        *,
+        status: str,
+        data_grant_name: str = "",
+        sql_checksum: str = "",
+        error_message: str = "",
+    ) -> None:
+        with self._lock:
+            for role in self.roles.values():
+                for entitlement in role.entitlements:
+                    if entitlement.entitlement_id != entitlement_id:
+                        continue
+                    entitlement.apply_status = status
+                    if data_grant_name:
+                        entitlement.data_grant_name = data_grant_name
+                    if sql_checksum:
+                        entitlement.sql_checksum = sql_checksum
+                    entitlement.apply_error_message = error_message
+                    entitlement.applied_at = (
+                        _now() if status == "APPLIED" else entitlement.applied_at
+                    )
+                    return
+            raise SecurityNotFound("データ権限が見つかりません。")
+
+    def clear_deepsec_entitlement_apply_states(self) -> None:
+        with self._lock:
+            for role in self.roles.values():
+                for entitlement in role.entitlements:
+                    entitlement.apply_status = "PENDING"
+                    entitlement.apply_error_message = ""
+                    entitlement.sql_checksum = ""
+                    entitlement.applied_at = None
+
+    def _required_user(self, user_uuid: str) -> UserRecord:
+        user = self.users.get(user_uuid)
         if user is None:
             raise SecurityNotFound("ユーザーが見つかりません。")
         return user
@@ -368,6 +412,7 @@ class InMemorySecurityStore:
                 continue
             raise SecurityNotFound("指定された有効なロールが見つかりません。")
 
+
 class OracleSecurityStore:
     """Oracle 26ai backed security store。"""
 
@@ -379,7 +424,7 @@ class OracleSecurityStore:
         with self._adapter.connection() as connection:
             yield connection
 
-    def bootstrap(self, *, login_name: str, display_name: str, password_hash: str) -> bool:
+    def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool:
         with self.connection() as conn, conn.cursor() as cursor:
             # 初回 user 判定から INSERT までを DB lock で直列化し、複数 worker の
             # 同時 startup でも管理者を一度だけ作成する。
@@ -403,98 +448,82 @@ class OracleSecurityStore:
                     "description": "すべてのアプリケーション機能を管理する組み込みロールです。",
                 },
             )
-            self._ensure_system_admin_probe_entitlement(cursor)
             if user_count:
                 conn.commit()
                 return False
-            user_id = str(uuid4())
+            user_uuid = str(uuid4())
             cursor.execute(
                 """
                 INSERT INTO NL2SQL_APP_USERS
-                  (USER_ID, LOGIN_NAME, LOGIN_NAME_NORMALIZED, DISPLAY_NAME, PASSWORD_HASH,
+                  (USER_UUID, LOGIN_USER_ID, LOGIN_USER_ID_NORMALIZED, DISPLAY_NAME, PASSWORD_HASH,
                    STATUS, FORCE_PASSWORD_CHANGE, FAILED_LOGIN_COUNT, VERSION_NO)
                 VALUES
-                  (:user_id, :login_name, :normalized, :display_name, :password_hash,
+                  (:user_uuid, :login_user_id, :normalized, :display_name, :password_hash,
                    'ACTIVE', 1, 0, 1)
                 """,
                 {
-                    "user_id": user_id,
-                    "login_name": login_name,
-                    "normalized": login_name.casefold(),
+                    "user_uuid": user_uuid,
+                    "login_user_id": login_user_id,
+                    "normalized": login_user_id.casefold(),
                     "display_name": display_name,
                     "password_hash": password_hash,
                 },
             )
             cursor.execute(
-                "INSERT INTO NL2SQL_APP_USER_ROLES (USER_ID, ROLE_ID) VALUES (:user_id, :role_id)",
-                {"user_id": user_id, "role_id": SYSTEM_ADMIN_ROLE_ID},
+                "INSERT INTO NL2SQL_APP_USER_ROLES "
+                "(USER_UUID, ROLE_ID) VALUES (:user_uuid, :role_id)",
+                {"user_uuid": user_uuid, "role_id": SYSTEM_ADMIN_ROLE_ID},
             )
             conn.commit()
             return True
 
-    @staticmethod
-    def _ensure_system_admin_probe_entitlement(cursor: Any) -> None:
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM NL2SQL_APP_DATA_ENTITLEMENTS
-            WHERE ROLE_ID = :role_id AND RESOURCE_CODE = 'NL2SQL_DEEPSEC_PROBE'
-              AND SCOPE_CODE = '*' AND CAPABILITY = 'FULL'
-            """,
-            {"role_id": SYSTEM_ADMIN_ROLE_ID},
-        )
-        if int(cursor.fetchone()[0]) == 0:
-            cursor.execute(
-                """
-                INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS
-                  (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY)
-                VALUES (:entitlement_id, :role_id, 'NL2SQL_DEEPSEC_PROBE', '*', 'FULL')
-                """,
-                {"entitlement_id": str(uuid4()), "role_id": SYSTEM_ADMIN_ROLE_ID},
-            )
-
-    def get_user_by_login(self, normalized_login: str) -> UserRecord | None:
+    def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
-                self._user_select() + " WHERE LOGIN_NAME_NORMALIZED = :login",
-                {"login": normalized_login.casefold()},
+                self._user_select() + " WHERE LOGIN_USER_ID_NORMALIZED = :login",
+                {"login": normalized_login_user_id.casefold()},
             )
             row = cursor.fetchone()
             return self._user_from_row(cursor, row) if row else None
 
-    def get_user(self, user_id: str) -> UserRecord | None:
+    def get_user(self, user_uuid: str) -> UserRecord | None:
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(self._user_select() + " WHERE USER_ID = :user_id", {"user_id": user_id})
+            cursor.execute(
+                self._user_select() + " WHERE USER_UUID = :user_uuid",
+                {"user_uuid": user_uuid},
+            )
             row = cursor.fetchone()
             return self._user_from_row(cursor, row) if row else None
 
     def list_users(self) -> list[UserRecord]:
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(self._user_select() + " ORDER BY LOGIN_NAME_NORMALIZED")
+            cursor.execute(self._user_select() + " ORDER BY LOGIN_USER_ID_NORMALIZED")
             rows = cursor.fetchall()
             return [self._user_from_row(cursor, row) for row in rows]
 
     @staticmethod
     def _user_select() -> str:
         return (
-            "SELECT USER_ID, LOGIN_NAME, DISPLAY_NAME, PASSWORD_HASH, STATUS, "
+            "SELECT USER_UUID, LOGIN_USER_ID, DISPLAY_NAME, PASSWORD_HASH, STATUS, "
             "FORCE_PASSWORD_CHANGE, FAILED_LOGIN_COUNT, LOCKED_UNTIL, VERSION_NO, "
-            "CASE WHEN USER_ID = ("
-            "  SELECT MIN(USER_ID) KEEP (DENSE_RANK FIRST ORDER BY CREATED_AT, USER_ID) "
+            "CASE WHEN USER_UUID = ("
+            "  SELECT MIN(USER_UUID) KEEP (DENSE_RANK FIRST ORDER BY CREATED_AT, USER_UUID) "
             "  FROM NL2SQL_APP_USERS"
             ") THEN 1 ELSE 0 END AS IS_BOOTSTRAP_ADMIN "
             "FROM NL2SQL_APP_USERS"
         )
 
     def _user_from_row(self, cursor: Any, row: Any) -> UserRecord:
-        user_id = str(row[0])
+        user_uuid = str(row[0])
         cursor.execute(
-            "SELECT ROLE_ID FROM NL2SQL_APP_USER_ROLES WHERE USER_ID = :user_id ORDER BY ROLE_ID",
-            {"user_id": user_id},
+            "SELECT ROLE_ID FROM NL2SQL_APP_USER_ROLES "
+            "WHERE USER_UUID = :user_uuid ORDER BY ROLE_ID",
+            {"user_uuid": user_uuid},
         )
         role_ids = [str(item[0]) for item in cursor.fetchall()]
         return UserRecord(
-            user_id=user_id,
-            login_name=str(row[1]),
+            user_uuid=user_uuid,
+            login_user_id=str(row[1]),
             display_name=str(row[2]),
             password_hash=str(row[3]),
             status=str(row[4]),
@@ -513,33 +542,36 @@ class OracleSecurityStore:
                 cursor.execute(
                     """
                     INSERT INTO NL2SQL_APP_USERS
-                      (USER_ID, LOGIN_NAME, LOGIN_NAME_NORMALIZED, DISPLAY_NAME, PASSWORD_HASH,
+                      (USER_UUID, LOGIN_USER_ID, LOGIN_USER_ID_NORMALIZED,
+                       DISPLAY_NAME, PASSWORD_HASH,
                        STATUS, FORCE_PASSWORD_CHANGE, FAILED_LOGIN_COUNT, LOCKED_UNTIL, VERSION_NO)
                     VALUES
-                      (:user_id, :login_name, :normalized, :display_name, :password_hash,
+                      (:user_uuid, :login_user_id, :normalized, :display_name, :password_hash,
                        :status, :force_change, 0, NULL, 1)
                     """,
                     {
-                        "user_id": user.user_id,
-                        "login_name": user.login_name,
-                        "normalized": user.login_name.casefold(),
+                        "user_uuid": user.user_uuid,
+                        "login_user_id": user.login_user_id,
+                        "normalized": user.login_user_id.casefold(),
                         "display_name": user.display_name,
                         "password_hash": user.password_hash,
                         "status": user.status,
                         "force_change": int(user.force_password_change),
                     },
                 )
-                self._replace_user_roles(cursor, user.user_id, user.role_ids)
+                self._replace_user_roles(cursor, user.user_uuid, user.role_ids)
                 conn.commit()
         except Exception as exc:
             if "ORA-00001" in str(exc):
-                raise SecurityConflict("同じログイン名のユーザーが既に存在します。") from exc
+                raise SecurityConflict(
+                    "同じログインユーザーIDのユーザーが既に存在します。"
+                ) from exc
             raise
-        return self.get_user(user.user_id) or user
+        return self.get_user(user.user_uuid) or user
 
     def update_user(
         self,
-        user_id: str,
+        user_uuid: str,
         *,
         expected_version: int,
         display_name: str,
@@ -552,15 +584,15 @@ class OracleSecurityStore:
             cursor.execute("LOCK TABLE NL2SQL_APP_USERS IN SHARE ROW EXCLUSIVE MODE")
             cursor.execute("LOCK TABLE NL2SQL_APP_USER_ROLES IN SHARE ROW EXCLUSIVE MODE")
             cursor.execute(
-                "SELECT STATUS FROM NL2SQL_APP_USERS WHERE USER_ID = :user_id",
-                {"user_id": user_id},
+                "SELECT STATUS FROM NL2SQL_APP_USERS WHERE USER_UUID = :user_uuid",
+                {"user_uuid": user_uuid},
             )
             current_row = cursor.fetchone()
             if current_row is None:
                 raise SecurityNotFound("ユーザーが見つかりません。")
             cursor.execute(
-                "SELECT ROLE_ID FROM NL2SQL_APP_USER_ROLES WHERE USER_ID = :user_id",
-                {"user_id": user_id},
+                "SELECT ROLE_ID FROM NL2SQL_APP_USER_ROLES WHERE USER_UUID = :user_uuid",
+                {"user_uuid": user_uuid},
             )
             current_role_ids = {str(item[0]) for item in cursor.fetchall()}
             self._assert_role_ids(
@@ -577,39 +609,42 @@ class OracleSecurityStore:
                     """
                     SELECT COUNT(*)
                       FROM NL2SQL_APP_USERS u
-                      JOIN NL2SQL_APP_USER_ROLES ur ON ur.USER_ID = u.USER_ID
+                      JOIN NL2SQL_APP_USER_ROLES ur ON ur.USER_UUID = u.USER_UUID
                      WHERE u.STATUS = 'ACTIVE' AND ur.ROLE_ID = :role_id
                     """,
                     {"role_id": SYSTEM_ADMIN_ROLE_ID},
                 )
                 if int(cursor.fetchone()[0]) <= 1:
-                    raise SecurityConflict(
-                        "最後のシステム管理者は無効化または権限解除できません。"
-                    )
+                    raise SecurityConflict("最後のシステム管理者は無効化または権限解除できません。")
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_USERS
                    SET DISPLAY_NAME = :display_name, STATUS = :status,
                        VERSION_NO = VERSION_NO + 1, UPDATED_AT = SYSTIMESTAMP
-                 WHERE USER_ID = :user_id AND VERSION_NO = :expected_version
+                 WHERE USER_UUID = :user_uuid AND VERSION_NO = :expected_version
                 """,
                 {
                     "display_name": display_name,
                     "status": status,
-                    "user_id": user_id,
+                    "user_uuid": user_uuid,
                     "expected_version": expected_version,
                 },
             )
             if cursor.rowcount == 0:
-                self._raise_not_found_or_conflict(cursor, "NL2SQL_APP_USERS", "USER_ID", user_id)
-            self._replace_user_roles(cursor, user_id, role_ids)
+                self._raise_not_found_or_conflict(
+                    cursor,
+                    "NL2SQL_APP_USERS",
+                    "USER_UUID",
+                    user_uuid,
+                )
+            self._replace_user_roles(cursor, user_uuid, role_ids)
             conn.commit()
-        updated = self.get_user(user_id)
+        updated = self.get_user(user_uuid)
         if updated is None:
             raise SecurityNotFound("ユーザーが見つかりません。")
         return updated
 
-    def set_password(self, user_id: str, password_hash: str, *, force_change: bool) -> None:
+    def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -617,12 +652,12 @@ class OracleSecurityStore:
                    SET PASSWORD_HASH = :password_hash, FORCE_PASSWORD_CHANGE = :force_change,
                        FAILED_LOGIN_COUNT = 0, LOCKED_UNTIL = NULL,
                        VERSION_NO = VERSION_NO + 1, UPDATED_AT = SYSTIMESTAMP
-                 WHERE USER_ID = :user_id
+                 WHERE USER_UUID = :user_uuid
                 """,
                 {
                     "password_hash": password_hash,
                     "force_change": int(force_change),
-                    "user_id": user_id,
+                    "user_uuid": user_uuid,
                 },
             )
             if cursor.rowcount == 0:
@@ -630,37 +665,41 @@ class OracleSecurityStore:
             conn.commit()
 
     def record_login_failure(
-        self, user_id: str, *, failed_count: int, locked_until: datetime | None
+        self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
     ) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_USERS SET FAILED_LOGIN_COUNT = :failed_count,
                     LOCKED_UNTIL = :locked_until, UPDATED_AT = SYSTIMESTAMP
-                WHERE USER_ID = :user_id
+                WHERE USER_UUID = :user_uuid
                 """,
-                {"failed_count": failed_count, "locked_until": locked_until, "user_id": user_id},
+                {
+                    "failed_count": failed_count,
+                    "locked_until": locked_until,
+                    "user_uuid": user_uuid,
+                },
             )
             conn.commit()
 
-    def record_login_success(self, user_id: str, *, password_hash: str | None = None) -> None:
+    def record_login_success(self, user_uuid: str, *, password_hash: str | None = None) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
             if password_hash:
                 cursor.execute(
                     """
                     UPDATE NL2SQL_APP_USERS SET FAILED_LOGIN_COUNT = 0, LOCKED_UNTIL = NULL,
                         PASSWORD_HASH = :password_hash, UPDATED_AT = SYSTIMESTAMP
-                    WHERE USER_ID = :user_id
+                    WHERE USER_UUID = :user_uuid
                     """,
-                    {"password_hash": password_hash, "user_id": user_id},
+                    {"password_hash": password_hash, "user_uuid": user_uuid},
                 )
             else:
                 cursor.execute(
                     """
                     UPDATE NL2SQL_APP_USERS SET FAILED_LOGIN_COUNT = 0, LOCKED_UNTIL = NULL,
-                        UPDATED_AT = SYSTIMESTAMP WHERE USER_ID = :user_id
+                        UPDATED_AT = SYSTIMESTAMP WHERE USER_UUID = :user_uuid
                     """,
-                    {"user_id": user_id},
+                    {"user_uuid": user_uuid},
                 )
             conn.commit()
 
@@ -695,10 +734,13 @@ class OracleSecurityStore:
         permissions = {str(item[0]) for item in cursor.fetchall()}
         cursor.execute(
             """
-            SELECT ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY
+            SELECT ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
+                   TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
+                   SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
+                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT
               FROM NL2SQL_APP_DATA_ENTITLEMENTS
              WHERE ROLE_ID = :role_id
-             ORDER BY RESOURCE_CODE, SCOPE_CODE, CAPABILITY
+             ORDER BY TARGET_OWNER, TARGET_OBJECT, SCOPE_CODE, CAPABILITY, ENTITLEMENT_ID
             """,
             {"role_id": role_id},
         )
@@ -709,6 +751,18 @@ class OracleSecurityStore:
                 resource_code=str(item[1]),
                 scope_code=str(item[2]),
                 capability=str(item[3]),
+                target_owner="" if item[4] is None else str(item[4]),
+                target_object="" if item[5] is None else str(item[5]),
+                target_type="TABLE" if item[6] is None else str(item[6]),
+                column_names=self._json_string_list(item[7]),
+                scope_mode="ALL" if item[8] is None else str(item[8]),
+                scope_column="" if item[9] is None else str(item[9]),
+                scope_filters=scope_filters_from_json(item[10]),
+                data_grant_name="" if item[11] is None else str(item[11]),
+                sql_checksum="" if item[12] is None else str(item[12]),
+                apply_status="PENDING" if item[13] is None else str(item[13]),
+                apply_error_message="" if item[14] in (None, "-") else str(item[14]),
+                applied_at=item[15],
             )
             for item in cursor.fetchall()
         ]
@@ -723,6 +777,20 @@ class OracleSecurityStore:
             permissions=permissions,
             entitlements=entitlements,
         )
+
+    @staticmethod
+    def _json_string_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if hasattr(value, "read"):
+            value = value.read()
+        try:
+            payload = json.loads(str(value or "[]"))
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [str(item) for item in payload if str(item).strip()]
 
     def create_role(self, role: RoleRecord) -> RoleRecord:
         try:
@@ -823,15 +891,13 @@ class OracleSecurityStore:
 
     def count_active_system_admins(self) -> int:
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT COUNT(*)
                   FROM NL2SQL_APP_USERS u
-                  JOIN NL2SQL_APP_USER_ROLES ur ON ur.USER_ID = u.USER_ID
+                  JOIN NL2SQL_APP_USER_ROLES ur ON ur.USER_UUID = u.USER_UUID
                   JOIN NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID
                  WHERE u.STATUS = 'ACTIVE' AND r.ROLE_CODE = 'SYSTEM_ADMIN' AND r.ARCHIVED = 0
-                """
-            )
+                """)
             return int(cursor.fetchone()[0])
 
     def create_session(self, session: SessionRecord) -> None:
@@ -839,15 +905,15 @@ class OracleSecurityStore:
             cursor.execute(
                 """
                 INSERT INTO NL2SQL_AUTH_SESSIONS
-                  (SESSION_ID, USER_ID, TOKEN_HASH, CSRF_TOKEN_HASH, IDLE_EXPIRES_AT,
+                  (SESSION_ID, USER_UUID, TOKEN_HASH, CSRF_TOKEN_HASH, IDLE_EXPIRES_AT,
                    ABSOLUTE_EXPIRES_AT, LAST_SEEN_AT)
                 VALUES
-                  (:session_id, :user_id, :token_hash, :csrf_hash, :idle_expires,
+                  (:session_id, :user_uuid, :token_hash, :csrf_hash, :idle_expires,
                    :absolute_expires, :last_seen)
                 """,
                 {
                     "session_id": session.session_id,
-                    "user_id": session.user_id,
+                    "user_uuid": session.user_uuid,
                     "token_hash": session.token_hash,
                     "csrf_hash": session.csrf_token_hash,
                     "idle_expires": session.idle_expires_at,
@@ -861,7 +927,7 @@ class OracleSecurityStore:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT SESSION_ID, USER_ID, TOKEN_HASH, CSRF_TOKEN_HASH, IDLE_EXPIRES_AT,
+                SELECT SESSION_ID, USER_UUID, TOKEN_HASH, CSRF_TOKEN_HASH, IDLE_EXPIRES_AT,
                        ABSOLUTE_EXPIRES_AT, LAST_SEEN_AT, REVOKED_AT
                   FROM NL2SQL_AUTH_SESSIONS WHERE TOKEN_HASH = :token_hash
                 """,
@@ -872,7 +938,7 @@ class OracleSecurityStore:
                 return None
             return SessionRecord(
                 session_id=str(row[0]),
-                user_id=str(row[1]),
+                user_uuid=str(row[1]),
                 token_hash=str(row[2]),
                 csrf_token_hash=str(row[3]),
                 idle_expires_at=row[4],
@@ -908,31 +974,29 @@ class OracleSecurityStore:
             )
             conn.commit()
 
-    def revoke_user_sessions(self, user_id: str) -> None:
+    def revoke_user_sessions(self, user_uuid: str) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE NL2SQL_AUTH_SESSIONS SET REVOKED_AT = SYSTIMESTAMP "
-                "WHERE USER_ID = :user_id AND REVOKED_AT IS NULL",
-                {"user_id": user_id},
+                "WHERE USER_UUID = :user_uuid AND REVOKED_AT IS NULL",
+                {"user_uuid": user_uuid},
             )
             conn.commit()
 
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT PLAN_VERSION, STEP_NO, STEP_KEY, CHECKSUM, STATUS,
-                       ERROR_MESSAGE, EXECUTED_BY, EXECUTED_AT
+                       ERROR_MESSAGE, EXECUTED_BY_USER_UUID, EXECUTED_AT
                   FROM NL2SQL_DEEPSEC_MIGRATIONS
-                """
-            )
+                """)
             return {
                 (str(row[0]), int(row[1])): {
                     "step_key": str(row[2]),
                     "checksum": str(row[3]),
                     "status": str(row[4]),
                     "error_message": "" if row[5] in (None, "-") else str(row[5]),
-                    "executed_by": str(row[6]) if row[6] else None,
+                    "executed_by_user_uuid": str(row[6]) if row[6] else None,
                     "executed_at": row[7],
                 }
                 for row in cursor.fetchall()
@@ -947,7 +1011,7 @@ class OracleSecurityStore:
         checksum: str,
         status: str,
         error_message: str,
-        executed_by: str | None,
+        executed_by_user_uuid: str | None,
     ) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(
@@ -957,16 +1021,16 @@ class OracleSecurityStore:
                 ON (m.PLAN_VERSION = s.plan_version AND m.STEP_NO = s.step_no)
                 WHEN MATCHED THEN UPDATE SET
                     STEP_KEY = :step_key, CHECKSUM = :checksum, STATUS = :status,
-                    ERROR_MESSAGE = :error_message, EXECUTED_BY = :executed_by,
+                    ERROR_MESSAGE = :error_message, EXECUTED_BY_USER_UUID = :executed_by_user_uuid,
                     EXECUTED_AT = CASE WHEN :status IN ('APPLIED', 'FAILED')
                                        THEN SYSTIMESTAMP ELSE NULL END,
                     UPDATED_AT = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (PLAN_VERSION, STEP_NO, STEP_KEY, CHECKSUM, STATUS, ERROR_MESSAGE,
-                     EXECUTED_BY, EXECUTED_AT)
+                     EXECUTED_BY_USER_UUID, EXECUTED_AT)
                 VALUES
                     (:version, :step_no, :step_key, :checksum, :status, :error_message,
-                     :executed_by, CASE WHEN :status IN ('APPLIED', 'FAILED')
+                     :executed_by_user_uuid, CASE WHEN :status IN ('APPLIED', 'FAILED')
                                         THEN SYSTIMESTAMP ELSE NULL END)
                 """,
                 {
@@ -976,20 +1040,35 @@ class OracleSecurityStore:
                     "checksum": checksum,
                     "status": status,
                     "error_message": error_message[:2000] or "-",
-                    "executed_by": executed_by,
+                    "executed_by_user_uuid": executed_by_user_uuid,
                 },
             )
             conn.commit()
 
+    def clear_deepsec_states(self, *, version: str, step_numbers: list[int]) -> None:
+        if not step_numbers:
+            return
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                DELETE FROM NL2SQL_DEEPSEC_MIGRATIONS
+                 WHERE PLAN_VERSION = :version AND STEP_NO = :step_no
+                """,
+                [{"version": version, "step_no": step_no} for step_no in step_numbers],
+            )
+            conn.commit()
+
     @staticmethod
-    def _replace_user_roles(cursor: Any, user_id: str, role_ids: list[str]) -> None:
+    def _replace_user_roles(cursor: Any, user_uuid: str, role_ids: list[str]) -> None:
         cursor.execute(
-            "DELETE FROM NL2SQL_APP_USER_ROLES WHERE USER_ID = :user_id", {"user_id": user_id}
+            "DELETE FROM NL2SQL_APP_USER_ROLES WHERE USER_UUID = :user_uuid",
+            {"user_uuid": user_uuid},
         )
         for role_id in dict.fromkeys(role_ids):
             cursor.execute(
-                "INSERT INTO NL2SQL_APP_USER_ROLES (USER_ID, ROLE_ID) VALUES (:user_id, :role_id)",
-                {"user_id": user_id, "role_id": role_id},
+                "INSERT INTO NL2SQL_APP_USER_ROLES "
+                "(USER_UUID, ROLE_ID) VALUES (:user_uuid, :role_id)",
+                {"user_uuid": user_uuid, "role_id": role_id},
             )
 
     @staticmethod
@@ -1012,8 +1091,15 @@ class OracleSecurityStore:
             cursor.execute(
                 """
                 INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS
-                  (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY)
-                VALUES (:entitlement_id, :role_id, :resource_code, :scope_code, :capability_code)
+                  (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
+                   TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
+                   SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
+                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT)
+                VALUES
+                  (:entitlement_id, :role_id, :resource_code, :scope_code, :capability_code,
+                   :target_owner, :target_object, :target_type, :column_names,
+                   :scope_mode, :scope_column, :scope_filters, :data_grant_name, :sql_checksum,
+                   :apply_status, :apply_error_message, :applied_at)
                 """,
                 {
                     "entitlement_id": entitlement.entitlement_id,
@@ -1021,8 +1107,72 @@ class OracleSecurityStore:
                     "resource_code": entitlement.resource_code,
                     "scope_code": entitlement.scope_code,
                     "capability_code": entitlement.capability,
+                    "target_owner": entitlement.target_owner or None,
+                    "target_object": entitlement.target_object or None,
+                    "target_type": entitlement.target_type or "TABLE",
+                    "column_names": json.dumps(
+                        list(entitlement.column_names),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "scope_mode": entitlement.scope_mode or "ALL",
+                    "scope_column": entitlement.scope_column or None,
+                    "scope_filters": scope_filters_canonical_json(entitlement.scope_filters),
+                    "data_grant_name": entitlement.data_grant_name or None,
+                    "sql_checksum": entitlement.sql_checksum or None,
+                    "apply_status": entitlement.apply_status or "PENDING",
+                    "apply_error_message": entitlement.apply_error_message[:2000] or "-",
+                    "applied_at": entitlement.applied_at,
                 },
             )
+
+    def set_deepsec_entitlement_apply_state(
+        self,
+        entitlement_id: str,
+        *,
+        status: str,
+        data_grant_name: str = "",
+        sql_checksum: str = "",
+        error_message: str = "",
+    ) -> None:
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE NL2SQL_APP_DATA_ENTITLEMENTS
+                   SET APPLY_STATUS = :status,
+                       DATA_GRANT_NAME = COALESCE(:data_grant_name, DATA_GRANT_NAME),
+                       SQL_CHECKSUM = COALESCE(:sql_checksum, SQL_CHECKSUM),
+                       APPLY_ERROR_MESSAGE = :error_message,
+                       APPLIED_AT = CASE
+                         WHEN :status = 'APPLIED' THEN SYSTIMESTAMP
+                         WHEN :status = 'PENDING' THEN NULL
+                         ELSE APPLIED_AT
+                       END
+                 WHERE ENTITLEMENT_ID = :entitlement_id
+                """,
+                {
+                    "entitlement_id": entitlement_id,
+                    "status": status,
+                    "data_grant_name": data_grant_name or None,
+                    "sql_checksum": sql_checksum or None,
+                    "error_message": error_message[:2000] or "-",
+                },
+            )
+            if cursor.rowcount == 0:
+                raise SecurityNotFound("データ権限が見つかりません。")
+            conn.commit()
+
+    def clear_deepsec_entitlement_apply_states(self) -> None:
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE NL2SQL_APP_DATA_ENTITLEMENTS
+                   SET APPLY_STATUS = 'PENDING',
+                       SQL_CHECKSUM = NULL,
+                       APPLY_ERROR_MESSAGE = '-',
+                       APPLIED_AT = NULL,
+                       UPDATED_AT = SYSTIMESTAMP
+                """)
+            conn.commit()
 
     @staticmethod
     def _assert_role_ids(
@@ -1046,8 +1196,8 @@ class OracleSecurityStore:
     @staticmethod
     def _raise_not_found_or_conflict(cursor: Any, table: str, column: str, value: str) -> None:
         queries = {
-            ("NL2SQL_APP_USERS", "USER_ID"): (
-                "SELECT COUNT(*) FROM NL2SQL_APP_USERS WHERE USER_ID = :value"
+            ("NL2SQL_APP_USERS", "USER_UUID"): (
+                "SELECT COUNT(*) FROM NL2SQL_APP_USERS WHERE USER_UUID = :value"
             ),
             ("NL2SQL_APP_ROLES", "ROLE_ID"): (
                 "SELECT COUNT(*) FROM NL2SQL_APP_ROLES WHERE ROLE_ID = :value"

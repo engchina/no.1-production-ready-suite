@@ -14,12 +14,28 @@ const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
   minute: "2-digit",
 });
 
+const dateTimeWithYearFormat = new Intl.DateTimeFormat("ja-JP", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 /** ISO 文字列を「MM/DD HH:mm」へ。未設定・無効値はダッシュ。 */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   return dateTimeFormat.format(date);
+}
+
+/** ISO 文字列を「YYYY/MM/DD HH:mm」へ。未設定・無効値はダッシュ。 */
+export function formatDateTimeWithYear(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return dateTimeWithYearFormat.format(date);
 }
 
 /** バイト数を人間可読サイズへ。 */

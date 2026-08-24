@@ -488,6 +488,7 @@ test("SQL 実行権限がない利用者は状態のみ閲覧できる", async (
     fulfill(route, {
       ...systemAdminMe,
       role_codes: ["DB_VIEWER"],
+      is_system_admin: false,
       permissions: ["settings.database.view"],
     })
   );

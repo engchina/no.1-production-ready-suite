@@ -320,7 +320,7 @@ class QualityEvaluationService:
         repeat_count: int,
         content: bytes,
         filename: str,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
     ) -> QualityEvaluationJobSummary:
         capabilities = self.capabilities()
         if not capabilities.judge.available:
@@ -363,7 +363,7 @@ class QualityEvaluationService:
             repeat_count=repeat_count,
             cases=cases,
             total_attempts=total_attempts,
-            actor_user_id=actor_user_id,
+            actor_user_uuid=actor_user_uuid,
             input_filename=Path(filename).name[:255],
             created_at=now,
             updated_at=now,

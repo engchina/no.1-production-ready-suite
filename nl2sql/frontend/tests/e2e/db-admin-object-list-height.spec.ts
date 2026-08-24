@@ -793,9 +793,18 @@ for (const scenario of scenarios) {
       await page.goto(scenario.path);
 
       const list = page.getByTestId("db-admin-object-list");
-      await expect(page.getByTestId(`${scenario.objectType}-management-grid`).locator("tbody tr")).toHaveCount(30);
+      const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
+      const detailHeader = page.getByTestId(`${scenario.objectType}-management-detail-header`);
+      await expect(grid.locator("tbody tr")).toHaveCount(30);
+      await expect(grid.locator("tbody tr").first()).toHaveAttribute("data-selected", "true");
+      await expect(detailHeader).toContainText(`${scenario.prefix}_01`);
 
       await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
+
+      await page.getByRole("searchbox", { name: "検索" }).fill(`${scenario.prefix}_02`);
+      await expect(grid.locator("tbody tr")).toHaveCount(1);
+      await expect(grid.locator("tbody tr").first()).toHaveAttribute("data-selected", "true");
+      await expect(detailHeader).toContainText(`${scenario.prefix}_02`);
     }
   );
 
@@ -1039,6 +1048,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "BILLING.Z_PAYMENTS",
   ]);
+  await expect(previewList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
 
   await previewList.getByRole("button", { name: /対象名/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1047,6 +1057,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.B_AUDIT",
     "APP.A_VIEW",
   ]);
+  await expect(previewList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
 
   await previewList.getByRole("button", { name: /種類/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1080,6 +1091,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "BILLING.Z_PAYMENTS",
   ]);
+  await expect(csvList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
 
   await csvList.getByRole("button", { name: /対象名/ }).click();
   await expect.poll(() => pickerRowNames(csvList)).toEqual([
@@ -1087,6 +1099,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "APP.B_AUDIT",
   ]);
+  await expect(csvList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
 
   await csvList.getByRole("button", { name: /行数/ }).click();
   await expect.poll(() => pickerRowNames(csvList)).toEqual([

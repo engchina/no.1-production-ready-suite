@@ -182,9 +182,9 @@ def _principal_from_request(request: Request) -> Principal | None:
 def _actor_access_args(request: Request, *, manage_permission: str) -> dict[str, str | bool]:
     principal = _principal_from_request(request)
     if principal is None:
-        return {"actor_user_id": "", "actor_can_manage": True}
+        return {"actor_user_uuid": "", "actor_can_manage": True}
     return {
-        "actor_user_id": principal.user_id,
+        "actor_user_uuid": principal.user_uuid,
         "actor_can_manage": principal.is_system_admin
         or principal.has_permission(manage_permission),
     }
@@ -260,11 +260,11 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
     """NL2SQL 検索 job を開始する。"""
     try:
         principal = getattr(request.state, "principal", None)
-        actor_user_id = str(getattr(principal, "user_id", ""))
+        actor_user_uuid = str(getattr(principal, "user_uuid", ""))
         return ApiResponse(
             data=nl2sql_service.start_job(
                 req,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )
@@ -1005,10 +1005,10 @@ def history(request: Request) -> ApiResponse[HistoryData]:
     principal = getattr(request.state, "principal", None)
     if principal is None or bool(getattr(principal, "is_system_admin", False)):
         return ApiResponse(data=nl2sql_service.list_history())
-    actor_user_id = str(getattr(principal, "user_id", ""))
-    if not actor_user_id:
+    actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+    if not actor_user_uuid:
         return ApiResponse(data=HistoryData(items=[]))
-    return ApiResponse(data=nl2sql_service.list_history(actor_user_id=actor_user_id))
+    return ApiResponse(data=nl2sql_service.list_history(actor_user_uuid=actor_user_uuid))
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
@@ -1399,7 +1399,7 @@ async def create_quality_evaluation(
     maximum = get_settings().nl2sql_quality_evaluation_max_file_bytes
     content = await file.read(maximum + 1)
     principal = getattr(request.state, "principal", None)
-    actor_user_id = str(getattr(principal, "user_id", ""))
+    actor_user_uuid = str(getattr(principal, "user_uuid", ""))
     try:
         data = await run_sync_io(
             quality_evaluation_service.submit,
@@ -1408,7 +1408,7 @@ async def create_quality_evaluation(
             repeat_count=repeat_count,
             content=content,
             filename=file.filename or "evaluation.xlsx",
-            actor_user_id=actor_user_id,
+            actor_user_uuid=actor_user_uuid,
         )
         return ApiResponse(data=data)
     except QualityEvaluationValidationError as exc:

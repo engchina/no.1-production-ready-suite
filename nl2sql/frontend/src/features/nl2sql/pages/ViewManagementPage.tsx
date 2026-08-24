@@ -14,6 +14,7 @@ import { t } from "@/lib/i18n";
 import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   DbManagementLoadingSkeleton,
   DbObjectDetailPanel,
@@ -384,8 +385,10 @@ export function ViewManagementPage() {
     selectedName: selectedViewName,
     detail,
   } = detailRequest;
+  const selectedViewManualSelection = useRef(false);
 
-  const fetchDetail = async (name: string) => {
+  const fetchDetail = async (name: string, options: { manualSelection?: boolean } = {}) => {
+    if (options.manualSelection) selectedViewManualSelection.current = true;
     autoJoinWhereDdlName.current = "";
     setDetailTab("columns");
     setJoinWhere(null);
@@ -507,26 +510,6 @@ export function ViewManagementPage() {
   }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
   useEffect(() => {
-    if (activeView !== "list") return;
-    if (viewObjectsQuery.isPending || detailRequest.loading) return;
-    if (viewObjectsQuery.error && !viewObjectsQuery.data) return;
-    if (viewItems.length === 0) {
-      if (selectedViewName) detailRequest.clear();
-      return;
-    }
-    if (selectedViewName && viewItems.some((item) => dbAdminObjectQualifiedName(item) === selectedViewName)) return;
-    void fetchDetail(dbAdminObjectQualifiedName(viewItems[0]));
-  }, [
-    activeView,
-    viewItems,
-    viewObjectsQuery.isPending,
-    viewObjectsQuery.error,
-    viewObjectsQuery.data,
-    selectedViewName,
-    detailRequest.loading,
-  ]);
-
-  useEffect(() => {
     if (
       activeView !== "joinWhere" ||
       !detail ||
@@ -586,6 +569,35 @@ export function ViewManagementPage() {
         return viewSort.direction === "asc" ? result : -result;
       });
   }, [viewItems, viewOwnerFilter, viewSearch, viewSort]);
+
+  useEffect(() => {
+    if (activeView !== "list") return;
+    if (viewObjectsQuery.isPending || detailRequest.loading) return;
+    if (viewObjectsQuery.error && !viewObjectsQuery.data) return;
+    const nextViewName = selectedVisibleStringKey(
+      filteredViews,
+      selectedViewName,
+      dbAdminObjectQualifiedName,
+      { preserveSelected: selectedViewManualSelection.current }
+    );
+    if (!nextViewName) {
+      selectedViewManualSelection.current = false;
+      if (selectedViewName) detailRequest.clear();
+      return;
+    }
+    if (nextViewName === selectedViewName) return;
+    selectedViewManualSelection.current = false;
+    void fetchDetail(nextViewName);
+  }, [
+    activeView,
+    filteredViews,
+    viewObjectsQuery.isPending,
+    viewObjectsQuery.error,
+    viewObjectsQuery.data,
+    selectedViewName,
+    detailRequest.loading,
+    detailRequest.clear,
+  ]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setViewSort((current) => ({
@@ -886,7 +898,7 @@ export function ViewManagementPage() {
               onSearchChange={setViewSearch}
               onOwnerFilterChange={setViewOwnerFilter}
               onSortChange={toggleSort}
-              onSelect={(name) => void fetchDetail(name)}
+              onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
               onDrop={openDropDialog}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}

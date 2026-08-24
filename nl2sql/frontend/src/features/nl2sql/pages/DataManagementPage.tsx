@@ -21,6 +21,7 @@ import { INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-densi
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   ExecutionConfirmationField,
   QueryResultsTable,
@@ -63,7 +64,6 @@ import type {
   DbAdminDataPreviewData,
   DbAdminExecuteData,
   DbAdminObjectSummary,
-  DbAdminObjectsData,
   SchemaRefreshJob,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
@@ -158,6 +158,8 @@ export function DataManagementPage() {
   const completedSchemaJob = useRef("");
   const completedDbProfileRefreshJob = useRef("");
   const previewRequestSequence = useRef(0);
+  const previewObjectManualSelection = useRef(false);
+  const csvTableManualSelection = useRef(false);
   const debouncedObjectSearch = useDebouncedValue(previewObjectSearch, 250);
   const debouncedCsvTableSearch = useDebouncedValue(csvTableSearch, 250);
   const baseObjectsQuery = useDbAdminObjects("", "all", "all");
@@ -241,6 +243,42 @@ export function DataManagementPage() {
       ),
     [previewObjects, previewObjectKindFilter, previewObjectOwnerFilter, previewObjectSearch]
   );
+  const previewObjectPickerItems = useMemo(
+    () =>
+      sortDbObjectPickerItems(
+        filteredPreviewObjects.map<DbObjectPickerItem>((item) => ({
+          key: item.qualifiedName,
+          name: item.qualifiedName,
+          kind: item.kind,
+          owner: item.owner,
+          comment: item.comment,
+          kindLabel: previewObjectKindLabel(item.kind),
+          kindVariant: item.kind === "view" ? "info" : "neutral",
+          rowCount: item.rowCount,
+          rowCountLabel: previewObjectRowCountLabel(item.rowCount),
+        })),
+        previewObjectSort
+      ),
+    [filteredPreviewObjects, previewObjectSort]
+  );
+  const csvTablePickerItems = useMemo(
+    () =>
+      sortDbObjectPickerItems(
+        csvTableItems.map<DbObjectPickerItem>((item) => ({
+          key: dbAdminObjectQualifiedName(item),
+          name: dbAdminObjectQualifiedName(item),
+          kind: "table",
+          owner: item.owner,
+          comment: item.comment,
+          kindLabel: t("dataMgmt.preview.kindFilterTable"),
+          kindVariant: "neutral",
+          rowCount: item.row_count,
+          rowCountLabel: rowCountLabel(item.row_count),
+        })),
+        csvTableSort
+      ),
+    [csvTableItems, csvTableSort]
+  );
 
   const selectedSyntheticProfile = useMemo(
     () => selectAiDbProfiles?.profiles.find((profile) => profile.name === syntheticProfileName) ?? null,
@@ -282,17 +320,29 @@ export function DataManagementPage() {
   }, [selectAiProfilesQuery.data]);
 
   useEffect(() => {
-    const firstObject = previewObjects[0]?.qualifiedName ?? "";
-    setPreviewObject((current) =>
-      current && previewObjects.some((item) => item.qualifiedName === current) ? current : firstObject
-    );
-  }, [previewObjects]);
+    const nextObject = selectedVisibleStringKey(previewObjectPickerItems, previewObject, (item) => item.key, {
+      preserveSelected: previewObjectManualSelection.current,
+    });
+    if (nextObject === previewObject) return;
+    previewObjectManualSelection.current = false;
+    previewRequestSequence.current += 1;
+    setPreviewObject(nextObject);
+    setPreview(null);
+    setPreviewLoadingObject("");
+    setPreviewError("");
+    setExportError("");
+  }, [previewObject, previewObjectPickerItems]);
 
   useEffect(() => {
-    if (csvTable) return;
-    const firstTable = csvTableItems[0] ? dbAdminObjectQualifiedName(csvTableItems[0]) : "";
-    if (firstTable) setCsvTable(firstTable);
-  }, [csvTable, csvTableItems]);
+    const nextTable = selectedVisibleStringKey(csvTablePickerItems, csvTable, (item) => item.key, {
+      preserveSelected: csvTableManualSelection.current,
+    });
+    if (nextTable === csvTable) return;
+    csvTableManualSelection.current = false;
+    setCsvTable(nextTable);
+    setCsvUploadResult(null);
+    setCsvStep("file");
+  }, [csvTable, csvTablePickerItems]);
 
   useEffect(() => {
     const job = schemaJobQuery.data;
@@ -402,11 +452,12 @@ export function DataManagementPage() {
     }
   };
 
-  const showPreview = async (objectName: string) => {
+  const showPreview = async (objectName: string, options: { manualSelection?: boolean } = {}) => {
     if (!objectName || previewLoadingObject) return;
     const target = parseDbAdminObjectTarget(objectName);
     const sequence = previewRequestSequence.current + 1;
     previewRequestSequence.current = sequence;
+    if (options.manualSelection) previewObjectManualSelection.current = true;
     setPreviewObject(target.qualifiedName);
     setPreview(null);
     setPreviewLoadingObject(target.qualifiedName);
@@ -800,7 +851,7 @@ export function DataManagementPage() {
           >
             <PreviewControlsPanel
               previewObjectCounts={previewObjectCounts}
-              filteredPreviewObjects={filteredPreviewObjects}
+              previewObjectPickerItems={previewObjectPickerItems}
               previewObject={previewObject}
               previewObjectSearch={previewObjectSearch}
               previewObjectOwnerFilter={previewObjectOwnerFilter}
@@ -819,7 +870,7 @@ export function DataManagementPage() {
               onPreviewObjectSortChange={(key) =>
                 setPreviewObjectSort((current) => nextObjectPickerSort(current, key))
               }
-              onShowPreview={(objectName) => void showPreview(objectName)}
+              onShowPreview={(objectName) => void showPreview(objectName, { manualSelection: true })}
               onTruncateTable={openTruncateDialog}
               onRetry={() => void refreshObjects()}
               onLoadMore={() => void previewObjectsQuery.fetchNextPage()}
@@ -844,7 +895,7 @@ export function DataManagementPage() {
             ariaLabel={t("dataMgmt.workspace.csv")}
           >
             <CsvUploadWorkspace
-              tables={csvTableItems}
+              tablePickerItems={csvTablePickerItems}
               tableTotalCount={csvTableCount}
               table={csvTable}
               tableSearch={csvTableSearch}
@@ -870,6 +921,7 @@ export function DataManagementPage() {
                 setCsvTableSort((current) => nextObjectPickerSort(current, key))
               }
               onTableChange={(value) => {
+                csvTableManualSelection.current = true;
                 setCsvTable(value);
                 setCsvUploadResult(null);
                 setCsvStep("file");
@@ -1014,7 +1066,7 @@ export function DataManagementPage() {
 
 function PreviewControlsPanel({
   previewObjectCounts,
-  filteredPreviewObjects,
+  previewObjectPickerItems,
   previewObject,
   previewObjectSearch,
   previewObjectOwnerFilter,
@@ -1037,7 +1089,7 @@ function PreviewControlsPanel({
   onLoadMore,
 }: {
   previewObjectCounts: DbAdminObjectCounts;
-  filteredPreviewObjects: PreviewObject[];
+  previewObjectPickerItems: DbObjectPickerItem[];
   previewObject: string;
   previewObjectSearch: string;
   previewObjectOwnerFilter: string;
@@ -1063,20 +1115,6 @@ function PreviewControlsPanel({
     Boolean(previewObjectSearch.trim()) ||
     previewObjectOwnerFilter !== "all" ||
     previewObjectKindFilter !== "all";
-  const pickerItems = sortDbObjectPickerItems(
-    filteredPreviewObjects.map<DbObjectPickerItem>((item) => ({
-      key: item.qualifiedName,
-      name: item.qualifiedName,
-      kind: item.kind,
-      owner: item.owner,
-      comment: item.comment,
-      kindLabel: previewObjectKindLabel(item.kind),
-      kindVariant: item.kind === "view" ? "info" : "neutral",
-      rowCount: item.rowCount,
-      rowCountLabel: previewObjectRowCountLabel(item.rowCount),
-    })),
-    previewObjectSort
-  );
 
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="data-preview-controls-heading">
@@ -1143,7 +1181,7 @@ function PreviewControlsPanel({
           ) : (
             <>
               <DbSingleObjectPickerList
-                items={pickerItems}
+                items={previewObjectPickerItems}
                 selectedKey={previewObject}
                 hasActiveFilter={hasActiveFilter}
                 listLabel={t("dataMgmt.preview.object")}
@@ -1169,7 +1207,7 @@ function PreviewControlsPanel({
                 }}
               />
               <DbObjectSelectorFooter
-                visibleCount={filteredPreviewObjects.length}
+                visibleCount={previewObjectPickerItems.length}
                 totalCount={previewObjectCounts.totalCount}
                 hasNextPage={hasNextPage}
                 loadingNextPage={loadingNextPage}
@@ -1397,7 +1435,7 @@ function PreviewResultsPanel({
 }
 
 function CsvUploadWorkspace({
-  tables,
+  tablePickerItems,
   tableTotalCount,
   table,
   tableSearch,
@@ -1428,7 +1466,7 @@ function CsvUploadWorkspace({
   onTablesRetry,
   onLoadMore,
 }: {
-  tables: DbAdminObjectsData["items"];
+  tablePickerItems: DbObjectPickerItem[];
   tableTotalCount: number;
   table: string;
   tableSearch: string;
@@ -1461,20 +1499,6 @@ function CsvUploadWorkspace({
 }) {
   const activeIndex = step === "execute" ? 1 : 0;
   const hasTableFilter = Boolean(tableSearch.trim());
-  const tablePickerItems = sortDbObjectPickerItems(
-    tables.map<DbObjectPickerItem>((item) => ({
-      key: dbAdminObjectQualifiedName(item),
-      name: dbAdminObjectQualifiedName(item),
-      kind: "table",
-      owner: item.owner,
-      comment: item.comment,
-      kindLabel: t("dataMgmt.preview.kindFilterTable"),
-      kindVariant: "neutral",
-      rowCount: item.row_count,
-      rowCountLabel: rowCountLabel(item.row_count),
-    })),
-    tableSort
-  );
   return (
     <div className="grid gap-4">
       <DbObjectPanelHeader

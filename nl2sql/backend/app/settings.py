@@ -86,7 +86,7 @@ class Settings(BaseServiceSettings):
     oracle_wallet_dir: str = "/u01/aipoc/wallet"
     oracle_wallet_password: str = ""
     oracle_deepsec_enabled: bool = False
-    oracle_deepsec_data_user: str = "NL2SQL_DEEPSEC_DATA_USER"
+    oracle_deepsec_data_user: str = "DEEPSEC_DATA_USER"
     oracle_deepsec_data_user_password: str = ""
     oracle_adb_ocid: str = ""
     oracle_adb_region: str = ""
@@ -201,7 +201,7 @@ class Settings(BaseServiceSettings):
 
     # アプリケーション認証/RBAC。local/CI は APP_AUTH_ENABLED=false を明示する。
     app_auth_enabled: bool = True
-    app_admin_username: str = ""
+    app_admin_login_user_id: str = ""
     app_admin_password: str = ""
     app_auth_cookie_secure: bool = False
     app_auth_session_cookie_name: str = "nl2sql_session"

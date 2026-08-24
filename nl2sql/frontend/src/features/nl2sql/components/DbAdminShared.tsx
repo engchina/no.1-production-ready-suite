@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ChevronDown,
   Code2,
   CircleAlert,
   Download,
@@ -106,23 +107,46 @@ export function WorkSection({
   title,
   description,
   tone = "neutral",
+  open,
+  dataTestId,
+  onOpenChange,
   children,
 }: {
   title: string;
   description: string;
   tone?: "neutral" | "danger";
+  open?: boolean;
+  dataTestId?: string;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const toneClass =
     tone === "danger"
       ? "border-danger/30 bg-danger-bg/70 text-danger marker:text-danger"
       : "border-border bg-card text-foreground marker:text-muted";
+  const summaryFocusClass =
+    tone === "danger" ? "focus-visible:ring-danger/40" : "focus-visible:ring-ring/40";
+  const summaryIconClass = tone === "danger" ? "text-danger" : "text-muted";
 
   return (
-    <details className={`rounded-md border ${toneClass}`}>
-      <summary className="cursor-pointer px-4 py-3 focus:outline-none focus:ring-2 focus:ring-ring/40">
-        <span className="font-semibold">{title}</span>
-        <span className="mt-1 block text-sm font-normal text-muted">{description}</span>
+    <details
+      className={`group rounded-md border ${toneClass}`}
+      data-testid={dataTestId}
+      open={open}
+      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+    >
+      <summary
+        className={`flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus-visible:ring-2 ${summaryFocusClass} [&::-webkit-details-marker]:hidden`}
+      >
+        <span className="min-w-0">
+          <span className="block font-semibold">{title}</span>
+          <span className="mt-1 block text-sm font-normal text-muted">{description}</span>
+        </span>
+        <ChevronDown
+          size={16}
+          className={`shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none ${summaryIconClass}`}
+          aria-hidden="true"
+        />
       </summary>
       <div className="border-t border-current/10 bg-card p-3">{children}</div>
     </details>
@@ -580,7 +604,7 @@ export function DbAdminErrorNotice({
       </div>
       {hasDetail && (
         <details className="rounded-md border border-danger/30 bg-card/70">
-          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-danger/40">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-danger/40">
             {t("dbAdmin.result.error.detail")}
           </summary>
           <div className="grid gap-2 border-t border-danger/20 p-3">
@@ -1187,7 +1211,7 @@ export function ObjectDetailPanel({
         </div>
       </div>
       <details className="rounded-md border border-border bg-background">
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-foreground marker:text-muted focus:outline-none focus:ring-2 focus:ring-ring/40">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-foreground marker:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
           {t("dbAdmin.detail.ddl")}
           <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
         </summary>

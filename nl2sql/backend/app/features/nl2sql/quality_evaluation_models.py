@@ -113,7 +113,7 @@ class QualityEvaluationJobRecord(BaseModel):
     current_engine: Nl2SqlEngine | None = None
     current_repetition: int = 0
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
-    actor_user_id: str = ""
+    actor_user_uuid: str = ""
     input_filename: str = ""
     worker_id: str = ""
     heartbeat_at: str | None = None

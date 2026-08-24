@@ -1065,7 +1065,7 @@ class HistoryItem(BaseModel):
     admin_feedback_content: str = ""
     admin_feedback_updated_at: str = ""
     session_id: str = ""
-    actor_user_id: str = ""
+    actor_user_uuid: str = ""
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")

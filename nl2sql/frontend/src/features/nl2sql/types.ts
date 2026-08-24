@@ -573,7 +573,7 @@ export interface HistoryItem {
   admin_feedback_rating?: FeedbackRating | null;
   admin_feedback_content?: string;
   admin_feedback_updated_at?: string;
-  actor_user_id?: string;
+  actor_user_uuid?: string;
 }
 
 export interface HistoryData {

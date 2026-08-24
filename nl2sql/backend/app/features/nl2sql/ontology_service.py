@@ -833,7 +833,7 @@ class OntologyQuerySessionService:
                 original_question=request.question,
                 current_intent_version=1,
                 intents=[intent],
-                actor_user_id=request.actor_user_id,
+                actor_user_uuid=request.actor_user_uuid,
                 actor_is_system_admin=request.actor_is_system_admin,
             )
             self._sessions[session.id] = session

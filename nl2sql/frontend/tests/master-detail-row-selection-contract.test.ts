@@ -51,12 +51,16 @@ test("行クリックはボタンや menu item などのアクション領域を
 
 test("一覧/詳細ページは同じ行選択プリミティブを使う", () => {
   assert.match(securityUsersSource, /MasterDetailDataTable/u);
-  assert.match(securityUsersSource, /selectedRowKey=\{selectedId\}/u);
-  assert.match(securityUsersSource, /onRowSelect=\{\(user\) => setSelectedId\(user\.user_id\)\}/u);
+  assert.match(securityUsersSource, /selectedVisibleKey/u);
+  assert.match(securityUsersSource, /selectedRowKey=\{visibleSelectedId\}/u);
+  assert.match(securityUsersSource, /selectedUserManualSelection\.current = true/u);
+  assert.match(securityUsersSource, /setSelectedId\(user\.user_uuid\)/u);
 
   assert.match(securityRolesSource, /MasterDetailDataTable/u);
-  assert.match(securityRolesSource, /selectedRowKey=\{selectedId\}/u);
-  assert.match(securityRolesSource, /onRowSelect=\{\(role\) => setSelectedId\(role\.role_id\)\}/u);
+  assert.match(securityRolesSource, /selectedVisibleKey/u);
+  assert.match(securityRolesSource, /selectedRowKey=\{visibleSelectedId\}/u);
+  assert.match(securityRolesSource, /selectedRoleManualSelection\.current = true/u);
+  assert.match(securityRolesSource, /setSelectedId\(role\.role_id\)/u);
 
   assert.match(dbObjectSharedSource, /isInteractiveRowTarget\(event\.target\)/u);
   assert.match(profileManagementSource, /isInteractiveRowTarget\(event\.target\)/u);

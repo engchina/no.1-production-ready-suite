@@ -745,12 +745,12 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
 
     confirmed = api.confirm_sql(created.session.id, confirmation)
     assert confirmed.session.sql_confirmation is not None
-    executed = api.execute(created.session.id, confirmation, actor_user_id="user-1")
+    executed = api.execute(created.session.id, confirmation, actor_user_uuid="user-1")
     assert executed.session.status.value == "done"
     assert executed.result.rows == [{"ORDER_COUNT": 3}]
     assert legacy.executed_sql == [generated.session.sql_artifacts[-1].sql]
     assert legacy.recorded_history[0]["session_id"] == created.session.id
-    assert legacy.recorded_history[0]["actor_user_id"] == "user-1"
+    assert legacy.recorded_history[0]["actor_user_uuid"] == "user-1"
     assert legacy.recorded_history[0]["ontology_trace_summary"]["validation_hash"]
 
     assert len(store.list_revisions()) == 1

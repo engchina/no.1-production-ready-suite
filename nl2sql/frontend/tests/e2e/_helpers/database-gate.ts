@@ -13,12 +13,13 @@ async function fulfill(route: Route, data: unknown) {
 }
 
 export const systemAdminMe = {
-  user_id: "00000000-0000-0000-0000-000000000001",
-  login_name: "SYSTEM",
+  user_uuid: "00000000-0000-0000-0000-000000000001",
+  login_user_id: "SYSTEM",
   display_name: "システム管理者",
   status: "ACTIVE",
   force_password_change: false,
   role_codes: ["SYSTEM_ADMIN"],
+  is_system_admin: true,
   permissions: [],
   data_entitlements: [],
   debug_mode: false,

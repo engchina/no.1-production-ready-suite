@@ -16,6 +16,7 @@ import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   ExecutionConfirmationField,
   QueryResultsTable,
@@ -428,8 +429,10 @@ export function TableManagementPage() {
     detail,
     setDetail,
   } = detailRequest;
+  const selectedTableManualSelection = useRef(false);
 
-  const fetchDetail = async (name: string) => {
+  const fetchDetail = async (name: string, options: { manualSelection?: boolean } = {}) => {
+    if (options.manualSelection) selectedTableManualSelection.current = true;
     setDetailTab("columns");
     await detailRequest.load(name);
   };
@@ -604,26 +607,6 @@ export function TableManagementPage() {
     toast.error(t("dataMgmt.schemaJob.error"));
   }, [importSchemaRefreshJobId, importSchemaRefreshJobQuery.error]);
 
-  useEffect(() => {
-    if (activeView !== "list") return;
-    if (tableObjectsQuery.isPending || detailRequest.loading) return;
-    if (tableObjectsQuery.error && !tableObjectsQuery.data) return;
-    if (tableItems.length === 0) {
-      if (selectedTableName) detailRequest.clear();
-      return;
-    }
-    if (selectedTableName && tableItems.some((item) => dbAdminObjectQualifiedName(item) === selectedTableName)) return;
-    void fetchDetail(dbAdminObjectQualifiedName(tableItems[0]));
-  }, [
-    activeView,
-    tableItems,
-    tableObjectsQuery.isPending,
-    tableObjectsQuery.error,
-    tableObjectsQuery.data,
-    selectedTableName,
-    detailRequest.loading,
-  ]);
-
   const trackSchemaRefreshJob = (jobId: string) => {
     if (activeView === "import") {
       completedImportSchemaRefreshJob.current = "";
@@ -679,6 +662,35 @@ export function TableManagementPage() {
         return tableSort.direction === "asc" ? result : -result;
       });
   }, [tableItems, tableOwnerFilter, tableSearch, tableSort]);
+
+  useEffect(() => {
+    if (activeView !== "list") return;
+    if (tableObjectsQuery.isPending || detailRequest.loading) return;
+    if (tableObjectsQuery.error && !tableObjectsQuery.data) return;
+    const nextTableName = selectedVisibleStringKey(
+      filteredTables,
+      selectedTableName,
+      dbAdminObjectQualifiedName,
+      { preserveSelected: selectedTableManualSelection.current }
+    );
+    if (!nextTableName) {
+      selectedTableManualSelection.current = false;
+      if (selectedTableName) detailRequest.clear();
+      return;
+    }
+    if (nextTableName === selectedTableName) return;
+    selectedTableManualSelection.current = false;
+    void fetchDetail(nextTableName);
+  }, [
+    activeView,
+    filteredTables,
+    tableObjectsQuery.isPending,
+    tableObjectsQuery.error,
+    tableObjectsQuery.data,
+    selectedTableName,
+    detailRequest.loading,
+    detailRequest.clear,
+  ]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setTableSort((current) => ({
@@ -1045,7 +1057,7 @@ export function TableManagementPage() {
               onSearchChange={setTableSearch}
               onOwnerFilterChange={setTableOwnerFilter}
               onSortChange={toggleSort}
-              onSelect={(name) => void fetchDetail(name)}
+              onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
               onDrop={openDropDialog}
               onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void tableObjectsQuery.fetchNextPage()}

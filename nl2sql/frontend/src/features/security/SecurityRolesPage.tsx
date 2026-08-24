@@ -38,6 +38,7 @@ import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { selectedVisibleKey } from "@/lib/visible-selection";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
@@ -139,9 +140,9 @@ export function SecurityRolesPage() {
   const [formError, setFormError] = useState("");
   const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
+  const selectedRoleManualSelection = useRef(false);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const selectedRole = roles.find((role) => role.role_id === selectedId) ?? null;
   const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
   const permissionByCode = useMemo(
     () => new Map(permissions.map((permission) => [permission.code, permission])),
@@ -196,6 +197,14 @@ export function SecurityRolesPage() {
       });
   }, [permissionByCode, roles, search, sort]);
 
+  const visibleSelectedId =
+    activeView === "list"
+      ? selectedVisibleKey(filteredRoles, selectedId, (role) => role.role_id, {
+          preserveSelected: selectedRoleManualSelection.current,
+        })
+      : selectedId;
+  const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
+
   const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
@@ -214,7 +223,7 @@ export function SecurityRolesPage() {
         setSelectedId((current) =>
           current && roleRows.some((role) => role.role_id === current)
             ? current
-            : roleRows[0]?.role_id ?? null
+            : null
         );
       });
       if (announce && sequence === loadSequence.current) {
@@ -242,6 +251,17 @@ export function SecurityRolesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeView !== "list" || loading) return;
+    setSelectedId((current) => {
+      const nextId = selectedVisibleKey(filteredRoles, current, (role) => role.role_id, {
+        preserveSelected: selectedRoleManualSelection.current,
+      });
+      if (nextId !== current) selectedRoleManualSelection.current = false;
+      return nextId;
+    });
+  }, [activeView, filteredRoles, loading]);
+
   const startCreate = () => {
     setActiveView("create");
     setEditingId(null);
@@ -250,6 +270,7 @@ export function SecurityRolesPage() {
   };
 
   const startEdit = (role: SecurityRole) => {
+    selectedRoleManualSelection.current = true;
     setSelectedId(role.role_id);
     setEditingId(role.role_id);
     setActiveView("edit");
@@ -316,6 +337,7 @@ export function SecurityRolesPage() {
     try {
       const archived = await securityApi.archiveRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === archived.role_id ? archived : row)));
+      selectedRoleManualSelection.current = true;
       setSelectedId(archived.role_id);
       returnToList();
       toast.success(t("security.common.saved"));
@@ -337,6 +359,7 @@ export function SecurityRolesPage() {
     try {
       const restored = await securityApi.restoreRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === restored.role_id ? restored : row)));
+      selectedRoleManualSelection.current = true;
       setSelectedId(restored.role_id);
       returnToList();
       toast.success(t("security.common.saved"));
@@ -407,7 +430,7 @@ export function SecurityRolesPage() {
       sortable: true,
       className: "min-w-52",
       render: (role) => {
-        const selected = selectedId === role.role_id;
+        const selected = visibleSelectedId === role.role_id;
         return (
           <button
             type="button"
@@ -418,6 +441,7 @@ export function SecurityRolesPage() {
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
+              selectedRoleManualSelection.current = true;
               setSelectedId(role.role_id);
             }}
           >
@@ -541,8 +565,11 @@ export function SecurityRolesPage() {
                   rows={filteredRoles}
                   sort={sort}
                   onSortChange={setSort}
-                  selectedRowKey={selectedId}
-                  onRowSelect={(role) => setSelectedId(role.role_id)}
+                  selectedRowKey={visibleSelectedId}
+                  onRowSelect={(role) => {
+                    selectedRoleManualSelection.current = true;
+                    setSelectedId(role.role_id);
+                  }}
                   getRowKey={(role) => role.role_id}
                   getRowAriaLabel={(role) => t("security.roles.showRole", { name: role.display_name })}
                   ariaLabel={t("security.roles.list")}

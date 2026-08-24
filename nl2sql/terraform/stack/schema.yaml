@@ -33,7 +33,7 @@ variableGroups:
   - title: Application Administrator
     visible: true
     variables:
-      - app_admin_username
+      - app_admin_login_user_id
       - app_admin_password
 
   - title: Deep Data Security
@@ -189,12 +189,12 @@ variables:
     description: "Set true when the app is served through HTTPS."
     default: false
 
-  app_admin_username:
+  app_admin_login_user_id:
     type: enum
     required: true
     visible: true
-    title: "Application administrator username"
-    description: "Fixed login name for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
+    title: "Application administrator login user ID"
+    description: "Fixed login user ID for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
     enum:
       - "system_admin"
     default: "system_admin"
@@ -213,7 +213,7 @@ variables:
     required: true
     visible: true
     title: "DeepSec DATA USER password"
-    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared NL2SQL_DEEPSEC_DATA_USER Deep Data Security data connection."
+    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
 

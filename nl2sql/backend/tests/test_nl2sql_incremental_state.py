@@ -378,7 +378,7 @@ def test_enterprise_ai_direct_uses_incremental_schema_when_legacy_catalog_is_emp
     assert "APP.PAYMENTS" not in context
 
 
-def test_job_history_records_actor_user_id_in_incremental_store() -> None:
+def test_job_history_records_actor_user_uuid_in_incremental_store() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     _apply_incremental_catalog(
         repository,
@@ -441,7 +441,7 @@ def test_job_history_records_actor_user_id_in_incremental_store() -> None:
             engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
             profile_id="orders-profile",
         ),
-        actor_user_id="user-1",
+        actor_user_uuid="user-1",
         actor_is_system_admin=True,
     )
     job = None
@@ -453,13 +453,13 @@ def test_job_history_records_actor_user_id_in_incremental_store() -> None:
 
     assert job is not None
     assert job.status == JobStatus.DONE, job.error_message
-    own_history = service.list_history(actor_user_id="user-1").items
+    own_history = service.list_history(actor_user_uuid="user-1").items
     assert len(own_history) == 1
-    assert own_history[0].actor_user_id == "user-1"
-    assert service.list_history(actor_user_id="other-user").items == []
+    assert own_history[0].actor_user_uuid == "user-1"
+    assert service.list_history(actor_user_uuid="other-user").items == []
     job_snapshot = repository.get_document("jobs", created.job_id)
     assert job_snapshot is not None
-    assert job_snapshot["actor_user_id"] == "user-1"
+    assert job_snapshot["actor_user_uuid"] == "user-1"
     assert job_snapshot["actor_is_system_admin"] is True
 
 
@@ -852,7 +852,7 @@ def test_oracle_state_document_lobs_are_materialized_before_connection_closes() 
 
 
 def test_oracle_state_document_page_filters_payload_before_paging() -> None:
-    payload = '{"id":"history-own","question":"自分の履歴","actor_user_id":"user-1"}'
+    payload = '{"id":"history-own","question":"自分の履歴","actor_user_uuid":"user-1"}'
     repository, connections = _oracle_repository(
         [
             [(1,)],
@@ -870,14 +870,14 @@ def test_oracle_state_document_page_filters_payload_before_paging() -> None:
         "history",
         cursor=None,
         limit=1,
-        payload_filters={"actor_user_id": "user-1"},
+        payload_filters={"actor_user_uuid": "user-1"},
     )
 
     assert [item["id"] for item in page] == ["history-own"]
     assert next_cursor is None
     assert total == 1
     executed = "\n".join(sql for connection in connections for sql, _binds in connection.executed)
-    assert "JSON_VALUE(PAYLOAD_JSON, '$.actor_user_id'" in executed
+    assert "JSON_VALUE(PAYLOAD_JSON, '$.actor_user_uuid'" in executed
     assert all(
         binds.get("payload_filter_0") == "user-1"
         for connection in connections
@@ -1094,20 +1094,20 @@ def test_memory_state_document_page_filters_payload_before_paging() -> None:
     repository.put_document(
         "history",
         "history-own",
-        {"id": "history-own", "actor_user_id": "user-1"},
+        {"id": "history-own", "actor_user_uuid": "user-1"},
     )
     for index in range(3):
         repository.put_document(
             "history",
             f"history-other-{index}",
-            {"id": f"history-other-{index}", "actor_user_id": "other-user"},
+            {"id": f"history-other-{index}", "actor_user_uuid": "other-user"},
         )
 
     page, next_cursor, total = repository.list_documents_page(
         "history",
         cursor=None,
         limit=1,
-        payload_filters={"actor_user_id": "user-1"},
+        payload_filters={"actor_user_uuid": "user-1"},
     )
 
     assert [item["id"] for item in page] == ["history-own"]

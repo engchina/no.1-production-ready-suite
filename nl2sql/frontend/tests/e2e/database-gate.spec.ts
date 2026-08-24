@@ -15,14 +15,16 @@ async function fulfill(route: Route, data: unknown, status = 200) {
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/auth/me", (route) =>
     fulfill(route, {
-      user_id: "admin",
-      login_name: "SYSTEM",
+      user_uuid: "admin",
+      login_user_id: "SYSTEM",
       display_name: "システム管理者",
       status: "ACTIVE",
       force_password_change: false,
       role_codes: ["SYSTEM_ADMIN"],
+      is_system_admin: true,
       permissions: [],
       data_entitlements: [],
+      debug_mode: false,
       password_change_allowed: true,
     })
   );

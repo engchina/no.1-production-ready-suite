@@ -1748,7 +1748,7 @@ class OntologyApiRuntime:
         self,
         request: QuerySessionApiCreate,
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> QuerySessionData:
         with self._lock, observe_stage("interpret"):
@@ -1778,7 +1778,7 @@ class OntologyApiRuntime:
                     profile_view_id=view.id,
                     ontology_revision_id=ontology.revision.id,
                     intent=intent,
-                    actor_user_id=actor_user_id,
+                    actor_user_uuid=actor_user_uuid,
                     actor_is_system_admin=actor_is_system_admin,
                 )
             )
@@ -1809,7 +1809,7 @@ class OntologyApiRuntime:
         request: QuerySessionApiCreate,
         *,
         idempotency_key: str,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> QuerySessionData:
         return self._run_session_idempotent(
@@ -1817,12 +1817,12 @@ class OntologyApiRuntime:
             idempotency_key,
             {
                 "request": request.model_dump(mode="json"),
-                "actor_user_id": actor_user_id,
+                "actor_user_uuid": actor_user_uuid,
                 "actor_is_system_admin": actor_is_system_admin,
             },
             lambda: self.create_session(
                 request,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
             ),
         )
@@ -1861,7 +1861,7 @@ class OntologyApiRuntime:
         request: SqlConfirmationRequest,
         *,
         idempotency_key: str,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> QueryExecutionData:
         data = self._run_session_idempotent(
@@ -1870,13 +1870,13 @@ class OntologyApiRuntime:
             {
                 "session_id": session_id,
                 "request": request.model_dump(mode="json"),
-                "actor_user_id": actor_user_id,
+                "actor_user_uuid": actor_user_uuid,
                 "actor_is_system_admin": actor_is_system_admin,
             },
             lambda: self.execute(
                 session_id,
                 request,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
             ),
         )
@@ -2448,7 +2448,7 @@ class OntologyApiRuntime:
         session_id: str,
         request: SqlConfirmationRequest,
         *,
-        actor_user_id: str = "",
+        actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> QueryExecutionData:
         with self._lock:
@@ -2473,7 +2473,7 @@ class OntologyApiRuntime:
                         context.allowed_objects,
                     )
                     with actor_scope(
-                        actor_user_id,
+                        actor_user_uuid,
                         is_system_admin=actor_is_system_admin,
                     ):
                         safety, executable_sql, result = self.legacy_service.execute_sql(
@@ -2546,7 +2546,7 @@ class OntologyApiRuntime:
                         result=result,
                         ontology_trace_summary=data.ontology_trace_summary,
                         elapsed_ms=elapsed_ms,
-                        actor_user_id=actor_user_id,
+                        actor_user_uuid=actor_user_uuid,
                     )
                 except Exception:
                     # SQL は既に実行済みなので history 投影障害で結果を失わせない。
@@ -3567,15 +3567,15 @@ def _query_session_actor(request: Request) -> tuple[str, bool]:
     principal = _principal_from_request(request)
     if principal is None:
         return "", True
-    return principal.user_id, principal.is_system_admin
+    return principal.user_uuid, principal.is_system_admin
 
 
 def _ensure_query_session_access(data: QuerySessionData, request: Request) -> QuerySessionData:
     principal = _principal_from_request(request)
     if principal is None or principal.is_system_admin:
         return data
-    owner = data.session.actor_user_id.strip()
-    if not owner or owner == principal.user_id:
+    owner = data.session.actor_user_uuid.strip()
+    if not owner or owner == principal.user_uuid:
         return data
     raise HTTPException(
         status_code=403,
@@ -3947,13 +3947,13 @@ def create_query_session(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
-        actor_user_id, actor_is_system_admin = _query_session_actor(http_request)
+        actor_user_uuid, actor_is_system_admin = _query_session_actor(http_request)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.create_session_idempotent,
                 request,
                 idempotency_key=idempotency_key,
-                actor_user_id=actor_user_id,
+                actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
             )
         )
@@ -4079,7 +4079,7 @@ def execute_query_session(
                 session_id,
                 payload.binding(),
                 idempotency_key=idempotency_key,
-                actor_user_id=str(getattr(principal, "user_id", "")),
+                actor_user_uuid=str(getattr(principal, "user_uuid", "")),
                 actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )

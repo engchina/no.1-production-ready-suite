@@ -1,3 +1,5 @@
+import type { CurrentUser } from "./types";
+
 export const MENU_PERMISSIONS = {
   query: "menu.query",
   directSql: "menu.direct_sql",
@@ -278,4 +280,18 @@ export function normalizeMenuPermissions(permissions: string[]): Set<string> {
     }
   }
   return normalized;
+}
+
+export function currentUserHasPermission(
+  user: Pick<CurrentUser, "is_system_admin" | "permissions"> | null | undefined,
+  permission: string,
+  normalizedPermissions = user ? normalizeMenuPermissions(user.permissions) : new Set<string>()
+): boolean {
+  if (!user) return false;
+  if (user.is_system_admin) return true;
+  const requestedPermissions = normalizePermissionCodes([permission]);
+  return (
+    normalizedPermissions.has(permission) ||
+    [...requestedPermissions].some((code) => normalizedPermissions.has(code))
+  );
 }

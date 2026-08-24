@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,9 +27,11 @@ from app.security.dependencies import authorize_api_request, local_debug_princip
 from app.security.domain import (
     SYSTEM_ADMIN_ROLE_ID,
     DataEntitlementRecord,
+    DataEntitlementScopeFilter,
     Principal,
     RoleRecord,
     UserRecord,
+    scope_filters_scope_code,
 )
 from app.security.passwords import PasswordPolicyError, hash_password, validate_password
 from app.security.permissions import (
@@ -57,7 +60,14 @@ from app.security.router import (
     logout,
     me,
 )
-from app.security.schemas import DataEntitlementInput, PasswordChangeRequest, RoleData, UserData
+from app.security.schemas import (
+    CurrentUserData,
+    DataEntitlementInput,
+    PasswordChangeRequest,
+    RoleData,
+    UserCreateRequest,
+    UserData,
+)
 from app.security.service import (
     LoginFailed,
     SecurityApiError,
@@ -77,7 +87,7 @@ def _settings() -> Settings:
     return Settings.model_construct(
         oracle_user="DBADMIN",
         oracle_password="DbAdminPass!123",
-        app_admin_username="system_admin",
+        app_admin_login_user_id="system_admin",
         app_admin_password="AppAdminPass123",
         oracle_dsn="test",
         nl2sql_persistence_mode="memory",
@@ -95,12 +105,12 @@ def _patch_app_admin_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     *,
-    username: str = "system_admin",
+    login_user_id: str = "system_admin",
     password: str = "AppAdminPass123",
 ) -> Path:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        f"APP_ADMIN_USERNAME={username}\n"
+        f"APP_ADMIN_LOGIN_USER_ID={login_user_id}\n"
         f"APP_ADMIN_PASSWORD={password}\n"
         "APP_AUTH_ENABLED=true\n",
         encoding="utf-8",
@@ -113,7 +123,7 @@ def _service() -> SecurityService:
     store = InMemorySecurityStore()
     assert (
         store.bootstrap(
-            login_name="admin",
+            login_user_id="admin",
             display_name="ADMIN（システム管理者）",
             password_hash=hash_password("BootstrapPass!123"),
         )
@@ -121,7 +131,7 @@ def _service() -> SecurityService:
     )
     assert (
         store.bootstrap(
-            login_name="admin",
+            login_user_id="admin",
             display_name="ADMIN（システム管理者）",
             password_hash=hash_password("BootstrapPass!123"),
         )
@@ -156,7 +166,7 @@ def _configure_memory_api_auth(monkeypatch: pytest.MonkeyPatch) -> SecurityServi
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
+    monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -165,7 +175,7 @@ def _configure_memory_api_auth(monkeypatch: pytest.MonkeyPatch) -> SecurityServi
     service = get_security_service()
     assert isinstance(service.store, InMemorySecurityStore)
     assert service.store.bootstrap(
-        login_name="ADMIN",
+        login_user_id="ADMIN",
         display_name="ADMIN（システム管理者）",
         password_hash=hash_password("BootstrapPass!123"),
     )
@@ -174,12 +184,12 @@ def _configure_memory_api_auth(monkeypatch: pytest.MonkeyPatch) -> SecurityServi
 
 async def _login_api(
     client: httpx.AsyncClient,
-    login_name: str,
+    login_user_id: str,
     password: str,
 ) -> tuple[dict[str, object], str]:
     response = await client.post(
         "/api/auth/login",
-        json={"login_name": login_name, "password": password},
+        json={"login_user_id": login_user_id, "password": password},
     )
     assert response.status_code == 200
     csrf = client.cookies.get("nl2sql_csrf")
@@ -191,20 +201,20 @@ def _create_active_user(
     service: SecurityService,
     actor: Principal,
     *,
-    login_name: str,
+    login_user_id: str,
     display_name: str,
     role_ids: list[str],
     password: str,
 ) -> UserRecord:
     user, _ = service.create_user(
-        login_name=login_name,
+        login_user_id=login_user_id,
         display_name=display_name,
         role_ids=role_ids,
         temporary_password=password,
         actor=actor,
     )
-    service.store.set_password(user.user_id, hash_password(password), force_change=False)
-    active = service.store.get_user(user.user_id)
+    service.store.set_password(user.user_uuid, hash_password(password), force_change=False)
+    active = service.store.get_user(user.user_uuid)
     assert active is not None
     return active
 
@@ -219,7 +229,7 @@ class _NoAuthTableStore:
 
 
 class _MissingSecuritySchemaStore:
-    def get_user_by_login(self, _normalized_login: str) -> UserRecord | None:
+    def get_user_by_login_user_id(self, _normalized_login_user_id: str) -> UserRecord | None:
         raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
 
 
@@ -274,12 +284,13 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
         current = me(request)
         assert current.data is not None
         assert current.data.model_dump() == {
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "login_name": "local-debug",
+            "user_uuid": "00000000-0000-0000-0000-000000000000",
+            "login_user_id": "local-debug",
             "display_name": "ローカル DEBUG 管理者",
             "status": "ACTIVE",
             "force_password_change": False,
             "role_codes": ["SYSTEM_ADMIN"],
+            "is_system_admin": True,
             "permissions": sorted(ALL_PERMISSION_CODES),
             "data_entitlements": [],
             "debug_mode": True,
@@ -349,7 +360,7 @@ def test_bootstrap_login_session_and_password_independence() -> None:
     principal, token, csrf = _login(service)
     assert principal.is_system_admin
     assert principal.force_password_change
-    assert service.authenticate_session(token).user_id == principal.user_id
+    assert service.authenticate_session(token).user_uuid == principal.user_uuid
     service.verify_csrf(principal, csrf, csrf)
     with pytest.raises(SecurityApiError, match="安全性"):
         service.verify_csrf(principal, csrf, "different")
@@ -359,6 +370,18 @@ def test_bootstrap_login_session_and_password_independence() -> None:
         service.authenticate_session(token)
     changed, _, _ = service.login("ADMIN", "IndependentPass!456")
     assert changed.force_password_change is False
+
+
+def test_current_user_data_marks_non_reserved_login_with_system_admin_role() -> None:
+    service = _service()
+    principal, _, _ = _login(service)
+
+    current = CurrentUserData.from_principal(principal)
+
+    assert current.login_user_id == "admin"
+    assert current.is_system_admin is True
+    assert current.permissions == sorted(principal.permissions)
+    assert principal.has_permission("menu.security_users") is True
 
 
 def test_login_session_uses_sixty_minute_default_idle_timeout(
@@ -375,7 +398,7 @@ def test_login_session_uses_sixty_minute_default_idle_timeout(
     assert principal.session_id == session.session_id
     assert session.idle_expires_at == now + timedelta(minutes=60)
     assert session.absolute_expires_at == now + timedelta(hours=12)
-    assert service.authenticate_session(token).user_id == principal.user_id
+    assert service.authenticate_session(token).user_uuid == principal.user_uuid
 
 
 def test_session_activity_refreshes_idle_timeout_without_exceeding_absolute(
@@ -432,12 +455,12 @@ def test_configured_system_admin_login_uses_app_admin_credentials_without_auth_t
     assert principal.is_system_admin
     assert principal.force_password_change is False
     assert principal.password_change_allowed is True
-    assert principal.login_name == "system_admin"
+    assert principal.login_user_id == "system_admin"
     assert token.startswith("nl2sql-system-admin-v1.")
     assert csrf
     authenticated = service.authenticate_session(token)
     assert authenticated.is_system_admin
-    assert authenticated.user_id == principal.user_id
+    assert authenticated.user_uuid == principal.user_uuid
     assert authenticated.password_change_allowed is True
     service.verify_csrf(authenticated, csrf, csrf)
     service.logout(authenticated)
@@ -457,9 +480,9 @@ def test_configured_system_admin_wrong_password_does_not_touch_auth_tables(
     assert store.calls == []
 
 
-@pytest.mark.parametrize("login_name", ["System_Admin", "SYSTEM_ADMIN"])
+@pytest.mark.parametrize("login_user_id", ["System_Admin", "SYSTEM_ADMIN"])
 def test_system_admin_case_variants_do_not_fall_back_to_db_users(
-    login_name: str,
+    login_user_id: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -468,15 +491,15 @@ def test_system_admin_case_variants_do_not_fall_back_to_db_users(
     service = SecurityService(cast(SecurityStore, store), _settings())
 
     with pytest.raises(LoginFailed):
-        service.login(login_name, "AppAdminPass123")
+        service.login(login_user_id, "AppAdminPass123")
     assert store.calls == []
 
 
-def test_configured_system_admin_requires_fixed_username(
+def test_configured_system_admin_requires_fixed_login_user_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    _patch_app_admin_env(monkeypatch, tmp_path, username="app-admin")
+    _patch_app_admin_env(monkeypatch, tmp_path, login_user_id="app-admin")
     service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
 
     with pytest.raises(SecurityApiError) as error:
@@ -496,11 +519,11 @@ def test_configured_system_admin_password_change_updates_env_without_auth_tables
 
     changed = service.change_password(principal, "AppAdminPass123", "UpdatedPass123A")
 
-    assert changed.user_id == principal.user_id
+    assert changed.user_uuid == principal.user_uuid
     env_text = env_file.read_text(encoding="utf-8")
-    assert "APP_ADMIN_USERNAME=system_admin" in env_text
+    assert "APP_ADMIN_LOGIN_USER_ID=system_admin" in env_text
     assert "APP_ADMIN_PASSWORD=UpdatedPass123A" in env_text
-    assert env_text.index("APP_ADMIN_USERNAME=system_admin") < env_text.index(
+    assert env_text.index("APP_ADMIN_LOGIN_USER_ID=system_admin") < env_text.index(
         "APP_AUTH_ENABLED=true"
     )
     with pytest.raises(SecurityApiError):
@@ -532,16 +555,52 @@ def test_table_user_login_reports_503_when_auth_table_is_missing() -> None:
 
 def test_password_policy_requires_all_character_classes_without_expiry() -> None:
     with pytest.raises(PasswordPolicyError):
-        validate_password("onlylowercase", login_name="user", min_length=12, max_length=128)
+        validate_password("onlylowercase", login_user_id="user", min_length=12, max_length=128)
     with pytest.raises(PasswordPolicyError, match="推測"):
-        validate_password("Password123!", login_name="user", min_length=12, max_length=128)
-    validate_password("StrongPass!234", login_name="user", min_length=12, max_length=128)
+        validate_password("Password123!", login_user_id="user", min_length=12, max_length=128)
+    validate_password("StrongPass!234", login_user_id="user", min_length=12, max_length=128)
+
+
+def test_password_policy_ignores_login_user_id_similarity_for_short_names() -> None:
+    validate_password("AaaStrong!234", login_user_id="a", min_length=12, max_length=128)
+    validate_password("Number1!2345", login_user_id="1", min_length=12, max_length=128)
+    with pytest.raises(PasswordPolicyError, match="推測"):
+        validate_password("AbcStrong!234", login_user_id="abc", min_length=12, max_length=128)
 
 
 def test_security_migration_splitter_never_executes_comment_only_buffers() -> None:
     assert split_ddl("-- header\nCREATE TABLE EXAMPLE (ID NUMBER);\n-- trailing") == [
         "CREATE TABLE EXAMPLE (ID NUMBER)"
     ]
+
+
+def test_deepsec_entitlement_migration_uses_compressed_table_safe_column_type() -> None:
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "010_deepsec_real_data_entitlements.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+    scope_filters_migration = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "012_deepsec_scope_filters.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "COLUMN_NAMES VARCHAR2(4000)" in sql
+    assert "COLUMN_NAMES CLOB" not in sql
+    assert "TARGET_TYPE VARCHAR2(32)" in sql
+    assert "SCOPE_FILTERS VARCHAR2(4000)" in scope_filters_migration
+    assert "SCOPE_FILTERS CLOB" not in scope_filters_migration
+    assert "'FILTERS'" in scope_filters_migration
+
+    base_migration = (
+        Path(__file__).resolve().parents[1] / "migrations" / "004_app_security_rbac.sql"
+    )
+    base_sql = base_migration.read_text(encoding="utf-8")
+    assert "TARGET_TYPE VARCHAR2(32)" in base_sql
+    assert "SCOPE_FILTERS VARCHAR2(4000)" in base_sql
+    assert "'FILTERS'" in base_sql
 
 
 def test_dashboard_permission_is_retired_for_appearance_settings() -> None:
@@ -580,7 +639,7 @@ def test_stale_permission_codes_are_hidden_from_role_api_and_principals() -> Non
         )
     )
     service.create_user(
-        login_name="stale.user",
+        login_user_id="stale.user",
         display_name="旧権限ユーザー",
         role_ids=["role-stale"],
         temporary_password="IndependentPass!456",
@@ -599,9 +658,79 @@ def test_stale_permission_codes_are_hidden_from_role_api_and_principals() -> Non
 def test_data_entitlement_capability_is_structured() -> None:
     with pytest.raises(ValueError, match="capability"):
         DataEntitlementInput(
-            resource_code="NL2SQL_DEEPSEC_PROBE",
+            resource_code="HR.EMPLOYEES",
             scope_code="SALES",
             capability="ARBITRARY_SQL",
+        )
+
+
+def test_data_entitlement_input_generates_scope_filter_code() -> None:
+    record = DataEntitlementInput(
+        resource_code="HR.ORDERS",
+        capability="SELECT",
+        target_owner="HR",
+        target_object="ORDERS",
+        column_names=["REGION_CODE"],
+        scope_mode="FILTERS",
+        scope_filters=[
+            {
+                "column_name": "REGION_CODE",
+                "operator": "EQ",
+                "value_type": "TEXT",
+                "value": "SALES",
+            }
+        ],
+    ).to_record("role-sales")
+
+    assert record.scope_code == scope_filters_scope_code(record.scope_filters)
+    assert record.scope_code.startswith("FILTERS:")
+    assert record.scope_filters[0].column_name == "REGION_CODE"
+
+
+def test_data_entitlement_input_accepts_number_app_user_id_scope_filter() -> None:
+    record = DataEntitlementInput(
+        resource_code="HR.ORDERS",
+        capability="SELECT",
+        target_owner="HR",
+        target_object="ORDERS",
+        column_names=["APP_OWNER_USER_ID"],
+        scope_mode="FILTERS",
+        scope_filters=[
+            {
+                "column_name": "APP_OWNER_USER_ID",
+                "operator": "EQ",
+                "value_type": "NUMBER",
+                "value_source": "LOGIN_USER_ID",
+                "value": "123",
+            }
+        ],
+    ).to_record("role-sales")
+
+    assert record.scope_filters[0].value_source == "LOGIN_USER_ID"
+    assert record.scope_filters[0].value == ""
+    assert record.scope_filters[0].value_type == "NUMBER"
+
+
+@pytest.mark.parametrize("value", ["1.5", "-1", "0", ""])
+def test_data_entitlement_input_rejects_number_eq_non_positive_integer(
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="正整数"):
+        DataEntitlementInput(
+            resource_code="HR.ORDERS",
+            capability="SELECT",
+            target_owner="HR",
+            target_object="ORDERS",
+            column_names=["APP_OWNER_USER_ID"],
+            scope_mode="FILTERS",
+            scope_filters=[
+                {
+                    "column_name": "APP_OWNER_USER_ID",
+                    "operator": "EQ",
+                    "value_type": "NUMBER",
+                    "value": value,
+                }
+            ],
         )
 
 
@@ -613,7 +742,7 @@ def test_deepsec_entitlement_update_preserves_role_metadata_and_permissions() ->
         display_name="検索閲覧",
         description="メニュー権限は DeepSec 画面から変更しない",
         permissions={"menu.query"},
-        entitlements=[("NL2SQL_DEEPSEC_PROBE", "SALES", "ROW_READ")],
+        entitlements=[("HR.EMPLOYEES", "SALES", "SELECT")],
         actor=actor,
     )
 
@@ -621,8 +750,8 @@ def test_deepsec_entitlement_update_preserves_role_metadata_and_permissions() ->
         role.role_id,
         expected_version=role.version,
         entitlements=[
-            ("NL2SQL_DEEPSEC_PROBE", "SALES", "SENSITIVE_READ"),
-            ("NL2SQL_DEEPSEC_PROBE", "HR", "ROW_READ"),
+            ("HR.EMPLOYEES", "SALES", "SELECT"),
+            ("HR.EMPLOYEES", "HR", "SELECT"),
         ],
         actor=actor,
     )
@@ -633,8 +762,8 @@ def test_deepsec_entitlement_update_preserves_role_metadata_and_permissions() ->
     assert updated.description == role.description
     assert updated.permissions == role.permissions
     assert {(item.scope_code, item.capability) for item in updated.entitlements} == {
-        ("SALES", "SENSITIVE_READ"),
-        ("HR", "ROW_READ"),
+        ("SALES", "SELECT"),
+        ("HR", "SELECT"),
     }
     with pytest.raises(SecurityApiError, match="更新"):
         service.update_role_data_entitlements(
@@ -652,6 +781,234 @@ def test_deepsec_entitlement_update_preserves_role_metadata_and_permissions() ->
         )
 
 
+def test_deepsec_entitlement_update_preserves_applied_state_when_policy_unchanged() -> None:
+    service = _service()
+    store = cast(InMemorySecurityStore, service.store)
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    applied_at = datetime(2026, 8, 23, 1, 0, tzinfo=UTC)
+    entitlement = DataEntitlementRecord(
+        entitlement_id="entitlement-1",
+        role_id=role.role_id,
+        resource_code="HR.EMPLOYEES",
+        scope_code="*",
+        capability="SELECT",
+        target_owner="HR",
+        target_object="EMPLOYEES",
+        target_type="TABLE",
+        column_names=["EMPLOYEE_ID", "DISPLAY_NAME"],
+        scope_mode="ALL",
+        data_grant_name="NL2SQL_DG_APPLIED",
+        sql_checksum="abc123",
+        apply_status="APPLIED",
+        applied_at=applied_at,
+    )
+    store.roles[role.role_id] = RoleRecord(
+        role_id=role.role_id,
+        role_code=role.role_code,
+        display_name=role.display_name,
+        description=role.description,
+        is_built_in=role.is_built_in,
+        archived=role.archived,
+        version=role.version,
+        permissions=set(role.permissions),
+        entitlements=[entitlement],
+    )
+
+    updated = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[replace(entitlement)],
+        actor=actor,
+    )
+
+    stored = updated.entitlements[0]
+    assert stored.apply_status == "APPLIED"
+    assert stored.apply_error_message == ""
+    assert stored.data_grant_name == "NL2SQL_DG_APPLIED"
+    assert stored.sql_checksum == "abc123"
+    assert stored.applied_at == applied_at
+
+
+def test_deepsec_entitlement_update_resets_apply_state_when_policy_changes() -> None:
+    service = _service()
+    store = cast(InMemorySecurityStore, service.store)
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    applied_at = datetime(2026, 8, 23, 1, 0, tzinfo=UTC)
+    entitlement = DataEntitlementRecord(
+        entitlement_id="entitlement-1",
+        role_id=role.role_id,
+        resource_code="HR.EMPLOYEES",
+        scope_code="*",
+        capability="SELECT",
+        target_owner="HR",
+        target_object="EMPLOYEES",
+        target_type="TABLE",
+        column_names=["EMPLOYEE_ID", "DISPLAY_NAME"],
+        scope_mode="ALL",
+        data_grant_name="NL2SQL_DG_APPLIED",
+        sql_checksum="abc123",
+        apply_status="APPLIED",
+        applied_at=applied_at,
+    )
+    store.roles[role.role_id] = RoleRecord(
+        role_id=role.role_id,
+        role_code=role.role_code,
+        display_name=role.display_name,
+        description=role.description,
+        is_built_in=role.is_built_in,
+        archived=role.archived,
+        version=role.version,
+        permissions=set(role.permissions),
+        entitlements=[entitlement],
+    )
+    changed = replace(
+        entitlement,
+        column_names=["EMPLOYEE_ID"],
+        apply_error_message="client supplied stale error",
+    )
+
+    updated = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[changed],
+        actor=actor,
+    )
+
+    stored = updated.entitlements[0]
+    assert stored.apply_status == "PENDING"
+    assert stored.apply_error_message == ""
+    assert stored.data_grant_name == "NL2SQL_DG_APPLIED"
+    assert stored.sql_checksum == ""
+    assert stored.applied_at is None
+
+
+def test_deepsec_entitlement_update_resets_apply_state_when_scope_filters_change() -> None:
+    service = _service()
+    store = cast(InMemorySecurityStore, service.store)
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    filters = [
+        DataEntitlementScopeFilter(
+            column_name="REGION_CODE",
+            operator="EQ",
+            value_type="TEXT",
+            value="SALES",
+        )
+    ]
+    entitlement = DataEntitlementRecord(
+        entitlement_id="entitlement-1",
+        role_id=role.role_id,
+        resource_code="HR.ORDERS",
+        scope_code=scope_filters_scope_code(filters),
+        capability="SELECT",
+        target_owner="HR",
+        target_object="ORDERS",
+        target_type="TABLE",
+        column_names=["REGION_CODE"],
+        scope_mode="FILTERS",
+        scope_filters=filters,
+        data_grant_name="NL2SQL_DG_APPLIED",
+        sql_checksum="abc123",
+        apply_status="APPLIED",
+        applied_at=datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+    )
+    store.roles[role.role_id] = RoleRecord(
+        role_id=role.role_id,
+        role_code=role.role_code,
+        display_name=role.display_name,
+        description=role.description,
+        is_built_in=role.is_built_in,
+        archived=role.archived,
+        version=role.version,
+        permissions=set(role.permissions),
+        entitlements=[entitlement],
+    )
+    changed_filters = [replace(filters[0], value="HR")]
+
+    updated = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[
+            replace(
+                entitlement,
+                scope_code=scope_filters_scope_code(changed_filters),
+                scope_filters=changed_filters,
+            )
+        ],
+        actor=actor,
+    )
+
+    stored = updated.entitlements[0]
+    assert stored.scope_code == scope_filters_scope_code(changed_filters)
+    assert stored.apply_status == "PENDING"
+    assert stored.sql_checksum == ""
+    assert stored.applied_at is None
+
+
+def test_deepsec_entitlement_update_rejects_client_supplied_applied_state_for_new_policy() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    forged = DataEntitlementRecord(
+        entitlement_id="entitlement-forged",
+        role_id=role.role_id,
+        resource_code="HR.EMPLOYEES",
+        scope_code="*",
+        capability="SELECT",
+        target_owner="HR",
+        target_object="EMPLOYEES",
+        target_type="TABLE",
+        column_names=["EMPLOYEE_ID"],
+        scope_mode="ALL",
+        data_grant_name="NL2SQL_DG_FORGED",
+        sql_checksum="forged",
+        apply_status="APPLIED",
+        applied_at=datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+    )
+
+    updated = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[forged],
+        actor=actor,
+    )
+
+    stored = updated.entitlements[0]
+    assert stored.apply_status == "PENDING"
+    assert stored.sql_checksum == ""
+    assert stored.applied_at is None
+
+
 def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
     cursor = _RecordingCursor()
     role = RoleRecord(
@@ -667,9 +1024,15 @@ def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
             DataEntitlementRecord(
                 entitlement_id="entitlement-1",
                 role_id="role-1",
-                resource_code="NL2SQL_DEEPSEC_PROBE",
-                scope_code="*",
-                capability="ROW_READ",
+                resource_code="HR.EMPLOYEES",
+                scope_code="SALES",
+                capability="SELECT",
+                target_owner="HR",
+                target_object="EMPLOYEES",
+                target_type="TABLE",
+                column_names=["EMPLOYEE_ID", "DISPLAY_NAME"],
+                scope_mode="COLUMN_EQUALS",
+                scope_column="DEPARTMENT_CODE",
             )
         ],
     )
@@ -689,27 +1052,32 @@ def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
     assert params == {
         "entitlement_id": "entitlement-1",
         "role_id": "role-1",
-        "resource_code": "NL2SQL_DEEPSEC_PROBE",
-        "scope_code": "*",
-        "capability_code": "ROW_READ",
+        "resource_code": "HR.EMPLOYEES",
+        "scope_code": "SALES",
+        "capability_code": "SELECT",
+        "target_owner": "HR",
+        "target_object": "EMPLOYEES",
+        "target_type": "TABLE",
+        "column_names": '["EMPLOYEE_ID","DISPLAY_NAME"]',
+        "scope_mode": "COLUMN_EQUALS",
+        "scope_column": "DEPARTMENT_CODE",
+        "scope_filters": "[]",
+        "data_grant_name": None,
+        "sql_checksum": None,
+        "apply_status": "PENDING",
+        "apply_error_message": "-",
+        "applied_at": None,
     }
 
 
-def test_oracle_system_admin_probe_entitlement_uses_safe_bind_name() -> None:
-    cursor = _RecordingCursor(fetchone_rows=[(0,)])
+def test_bootstrap_system_admin_has_no_fake_probe_entitlement() -> None:
+    service = _service()
+    service.bootstrap()
 
-    OracleSecurityStore._ensure_system_admin_probe_entitlement(cursor)
+    system_admin = service.store.get_role(SYSTEM_ADMIN_ROLE_ID)
 
-    data_inserts = [
-        item for item in cursor.executed if "INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS" in item[0]
-    ]
-    assert len(data_inserts) == 1
-    sql, params = data_inserts[0]
-    assert re.search(r":id\b", sql) is None
-    assert ":entitlement_id" in sql
-    assert set(params) == {"entitlement_id", "role_id"}
-    assert params["role_id"] == SYSTEM_ADMIN_ROLE_ID
-    assert isinstance(params["entitlement_id"], str)
+    assert system_admin is not None
+    assert system_admin.entitlements == []
 
 
 def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
@@ -720,7 +1088,7 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         display_name="検索閲覧",
         description="",
         permissions={"search.view"},
-        entitlements=[("NL2SQL_DEEPSEC_PROBE", "SALES", "ROW_READ")],
+        entitlements=[("HR.EMPLOYEES", "SALES", "SELECT")],
         actor=actor,
     )
     role_b = service.create_role(
@@ -728,18 +1096,18 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         display_name="検索実行",
         description="",
         permissions={"search.execute"},
-        entitlements=[("NL2SQL_DEEPSEC_PROBE", "SALES", "SENSITIVE_READ")],
+        entitlements=[("FIN.INVOICES", "APPROVED", "SELECT")],
         actor=actor,
     )
     user, password = service.create_user(
-        login_name="query.user",
+        login_user_id="query.user",
         display_name="検索ユーザー",
         role_ids=[role_a.role_id, role_b.role_id],
         temporary_password="QueryUserPass!123",
         actor=actor,
     )
     assert password == "QueryUserPass!123"
-    principal, _, _ = service.login(user.login_name, password)
+    principal, _, _ = service.login(user.login_user_id, password)
     assert principal.permissions >= {
         "menu.query",
         "menu.direct_sql",
@@ -747,20 +1115,20 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         "menu.history",
     }
     assert {(item.scope_code, item.capability) for item in principal.data_entitlements} == {
-        ("SALES", "ROW_READ"),
-        ("SALES", "SENSITIVE_READ"),
+        ("SALES", "SELECT"),
+        ("APPROVED", "SELECT"),
     }
 
 
 def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
     service = _service()
     actor, _, _ = _login(service)
-    admin = service.store.get_user(actor.user_id)
+    admin = service.store.get_user(actor.user_uuid)
     assert admin is not None
     assert admin.role_ids == [SYSTEM_ADMIN_ROLE_ID]
     with pytest.raises(SecurityApiError, match="最後のシステム管理者"):
         service.update_user(
-            admin.user_id,
+            admin.user_uuid,
             expected_version=admin.version,
             display_name=admin.display_name,
             status="DISABLED",
@@ -769,7 +1137,7 @@ def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
         )
     with pytest.raises(SecurityConflict, match="最後のシステム管理者"):
         service.store.update_user(
-            admin.user_id,
+            admin.user_uuid,
             expected_version=admin.version,
             display_name=admin.display_name,
             status="DISABLED",
@@ -780,7 +1148,7 @@ def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
 def test_bootstrap_user_is_marked_in_user_response() -> None:
     service = _service()
     actor, _, _ = _login(service)
-    admin = service.store.get_user(actor.user_id)
+    admin = service.store.get_user(actor.user_uuid)
 
     assert admin is not None
     assert admin.is_bootstrap_admin is True
@@ -793,18 +1161,18 @@ def test_system_admin_role_cannot_be_assigned_to_new_user() -> None:
 
     with pytest.raises(SecurityApiError, match="初期システム管理者"):
         service.create_user(
-            login_name="extra.admin",
+            login_user_id="extra.admin",
             display_name="追加管理者",
             role_ids=[SYSTEM_ADMIN_ROLE_ID],
             temporary_password="ExtraAdminPass!123",
             actor=actor,
         )
 
-    assert service.store.get_user_by_login("extra.admin") is None
+    assert service.store.get_user_by_login_user_id("extra.admin") is None
 
 
-@pytest.mark.parametrize("login_name", ["system_admin", "System_Admin", "SYSTEM_ADMIN"])
-def test_reserved_system_admin_login_name_cannot_be_created(login_name: str) -> None:
+@pytest.mark.parametrize("login_user_id", ["system_admin", "System_Admin", "SYSTEM_ADMIN"])
+def test_reserved_system_admin_login_user_id_cannot_be_created(login_user_id: str) -> None:
     service = _service()
     actor, _, _ = _login(service)
     role = service.create_role(
@@ -818,7 +1186,7 @@ def test_reserved_system_admin_login_name_cannot_be_created(login_name: str) -> 
 
     with pytest.raises(SecurityApiError, match="構成管理者専用"):
         service.create_user(
-            login_name=login_name,
+            login_user_id=login_user_id,
             display_name="予約名",
             role_ids=[role.role_id],
             temporary_password="ReservedPass123A",
@@ -826,11 +1194,111 @@ def test_reserved_system_admin_login_name_cannot_be_created(login_name: str) -> 
         )
 
 
+_SHORT_LOGIN_USER_IDS = ["0", "1", "2", "00", "01", "a", "b", "aa", "bb", "a1", "001"]
+
+
+@pytest.mark.parametrize("login_user_id", _SHORT_LOGIN_USER_IDS)
+def test_user_create_request_accepts_short_login_user_ids(login_user_id: str) -> None:
+    payload = UserCreateRequest(
+        login_user_id=login_user_id,
+        display_name=f"user_{login_user_id}",
+        role_ids=["role-user"],
+        temporary_password="ShortLoginPass!789",
+    )
+
+    assert payload.login_user_id == login_user_id
+
+
+@pytest.mark.parametrize("login_user_id", ["", " ", ".", "_", "-", "__", ".-_", "a" * 65])
+def test_user_create_request_rejects_empty_or_punctuation_only_login_user_ids(
+    login_user_id: str,
+) -> None:
+    with pytest.raises(ValueError):
+        UserCreateRequest(
+            login_user_id=login_user_id,
+            display_name="短いログインユーザーID",
+            role_ids=["role-user"],
+            temporary_password="ShortLoginPass!789",
+        )
+
+
+@pytest.mark.parametrize("login_user_id", _SHORT_LOGIN_USER_IDS)
+def test_short_login_user_ids_can_be_created_and_login(login_user_id: str) -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="QUERY_VIEWER",
+        display_name="検索閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    password = "ShortLoginPass!789"
+
+    user, returned_password = service.create_user(
+        login_user_id=login_user_id,
+        display_name=f"user_{login_user_id}",
+        role_ids=[role.role_id],
+        temporary_password=password,
+        actor=actor,
+    )
+    principal, _token, _csrf = service.login(login_user_id, password)
+
+    assert user.login_user_id == login_user_id
+    assert returned_password == password
+    assert principal.user_uuid == user.user_uuid
+
+
+def test_security_users_api_accepts_one_character_login_user_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_app_admin_env(monkeypatch, tmp_path)
+    _configure_memory_api_auth(monkeypatch)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _current, csrf = await _login_api(client, "system_admin", "AppAdminPass123")
+            role_response = await client.post(
+                "/api/security/roles",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "role_code": "SHORT_LOGIN_USER",
+                    "display_name": "短いログインユーザーID",
+                    "permissions": ["menu.query"],
+                    "data_entitlements": [],
+                },
+            )
+            assert role_response.status_code == 200
+            role_id = role_response.json()["data"]["role_id"]
+
+            user_response = await client.post(
+                "/api/security/users",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "login_user_id": "1",
+                    "display_name": "1文字ログイン",
+                    "temporary_password": "ShortApiPass!789",
+                    "role_ids": [role_id],
+                },
+            )
+
+            assert user_response.status_code == 200
+            assert user_response.json()["data"]["user"]["login_user_id"] == "1"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
 def test_system_admin_role_cannot_be_added_to_non_bootstrap_user() -> None:
     service = _service()
     actor, _, _ = _login(service)
     user, _password = service.create_user(
-        login_name="query.user",
+        login_user_id="query.user",
         display_name="検索ユーザー",
         role_ids=[],
         temporary_password="QueryUserPass!123",
@@ -839,7 +1307,7 @@ def test_system_admin_role_cannot_be_added_to_non_bootstrap_user() -> None:
 
     with pytest.raises(SecurityApiError, match="初期システム管理者"):
         service.update_user(
-            user.user_id,
+            user.user_uuid,
             expected_version=user.version,
             display_name=user.display_name,
             status="ACTIVE",
@@ -853,8 +1321,8 @@ def test_legacy_non_bootstrap_system_admin_can_be_removed_but_not_reassigned() -
     actor, _, _ = _login(service)
     legacy_admin = service.store.create_user(
         UserRecord(
-            user_id="legacy-admin-user",
-            login_name="legacy.admin",
+            user_uuid="legacy-admin-user",
+            login_user_id="legacy.admin",
             display_name="旧管理者",
             password_hash="legacy-hash",
             status="ACTIVE",
@@ -868,7 +1336,7 @@ def test_legacy_non_bootstrap_system_admin_can_be_removed_but_not_reassigned() -
     )
 
     removed = service.update_user(
-        legacy_admin.user_id,
+        legacy_admin.user_uuid,
         expected_version=legacy_admin.version,
         display_name=legacy_admin.display_name,
         status="ACTIVE",
@@ -879,7 +1347,7 @@ def test_legacy_non_bootstrap_system_admin_can_be_removed_but_not_reassigned() -
     assert removed.role_ids == []
     with pytest.raises(SecurityApiError, match="初期システム管理者"):
         service.update_user(
-            removed.user_id,
+            removed.user_uuid,
             expected_version=removed.version,
             display_name=removed.display_name,
             status="ACTIVE",
@@ -893,8 +1361,11 @@ def test_login_lockout_is_generic() -> None:
     for _ in range(5):
         with pytest.raises(SecurityApiError) as error:
             service.login("ADMIN", "wrong")
-        assert error.value.public_message == "ログイン名またはパスワードを確認してください。"
-    user = service.store.get_user_by_login("admin")
+        assert (
+            error.value.public_message
+            == "ログインユーザーIDまたはパスワードを確認してください。"
+        )
+    user = service.store.get_user_by_login_user_id("admin")
     assert user is not None
     assert user.locked_until is not None
     assert user.locked_until > datetime.now(UTC)
@@ -924,31 +1395,23 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 ), f"unclassified route: {method.upper()} {path}"
 
     assert permission_for_route("POST", "/nl2sql/execute") == frozenset({SQL_EXECUTE_PERMISSION})
-    assert permission_for_route("POST", "/nl2sql/jobs") == frozenset(
-        {QUERY_GENERATE_PERMISSION}
-    )
-    assert permission_for_route("POST", "/nl2sql/rewrite") == frozenset(
-        {QUERY_GENERATE_PERMISSION}
-    )
-    assert permission_for_route("POST", "/nl2sql/analyze") == frozenset(
-        {SQL_EXECUTE_PERMISSION}
-    )
+    assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})
+    assert permission_for_route("POST", "/nl2sql/rewrite") == frozenset({QUERY_GENERATE_PERMISSION})
+    assert permission_for_route("POST", "/nl2sql/analyze") == frozenset({SQL_EXECUTE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
     assert permission_for_route("GET", "/nl2sql/profiles/search") == frozenset(
         {PROFILE_READ_PERMISSION}
     )
-    assert permission_for_route(
-        "GET", "/nl2sql/profiles/{profile_id}/usage-context"
-    ) == frozenset({PROFILE_READ_PERMISSION})
+    assert permission_for_route("GET", "/nl2sql/profiles/{profile_id}/usage-context") == frozenset(
+        {PROFILE_READ_PERMISSION}
+    )
     assert permission_for_route("GET", "/nl2sql/profiles/{profile_id}") == frozenset(
         {PROFILE_MANAGE_PERMISSION}
     )
     assert permission_for_route("POST", "/schema/refresh-jobs") == frozenset(
         {SCHEMA_REFRESH_PERMISSION}
     )
-    assert permission_for_route("GET", "/schema/objects") == frozenset(
-        {SCHEMA_READ_PERMISSION}
-    )
+    assert permission_for_route("GET", "/schema/objects") == frozenset({SCHEMA_READ_PERMISSION})
     assert permission_for_route("GET", "/nl2sql/feedback") == frozenset(
         {FEEDBACK_MANAGE_PERMISSION}
     )
@@ -1035,7 +1498,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
     _create_active_user(
         service,
         admin,
-        login_name="query.only",
+        login_user_id="query.only",
         display_name="SQL 生成のみ",
         role_ids=[query_role.role_id],
         password="QueryOnlyPass!123",
@@ -1043,7 +1506,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
     _create_active_user(
         service,
         admin,
-        login_name="reverse.only",
+        login_user_id="reverse.only",
         display_name="SQL から質問生成のみ",
         role_ids=[reverse_role.role_id],
         password="ReverseOnlyPass!123",
@@ -1051,7 +1514,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
     _create_active_user(
         service,
         admin,
-        login_name="profile.manager",
+        login_user_id="profile.manager",
         display_name="業務プロファイル管理",
         role_ids=[profile_manager_role.role_id],
         password="ProfileManagePass!123",
@@ -1162,7 +1625,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
     query_user = _create_active_user(
         service,
         admin,
-        login_name="query.capability",
+        login_user_id="query.capability",
         display_name="SQL 生成ユーザー",
         role_ids=[query_role.role_id],
         password="QueryCapabilityPass!123",
@@ -1170,7 +1633,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
     _create_active_user(
         service,
         admin,
-        login_name="direct.only",
+        login_user_id="direct.only",
         display_name="SELECT SQL 実行ユーザー",
         role_ids=[direct_role.role_id],
         password="DirectOnlyPass!123",
@@ -1178,7 +1641,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
     _create_active_user(
         service,
         admin,
-        login_name="feedback.manager",
+        login_user_id="feedback.manager",
         display_name="フィードバック管理者",
         role_ids=[feedback_role.role_id],
         password="FeedbackManagerPass!123",
@@ -1186,7 +1649,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
     _create_active_user(
         service,
         admin,
-        login_name="data.manager",
+        login_user_id="data.manager",
         display_name="データ管理者",
         role_ids=[data_role.role_id],
         password="DataManagerPass!123",
@@ -1200,7 +1663,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
             engine=Nl2SqlEngine.SELECT_AI,
             generated_sql="SELECT EMPLOYEE_ID FROM EMPLOYEE",
             created_at="2026-08-20T00:00:00+00:00",
-            actor_user_id=query_user.user_id,
+            actor_user_uuid=query_user.user_uuid,
         ),
         HistoryItem(
             id="other-history",
@@ -1208,7 +1671,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
             engine=Nl2SqlEngine.SELECT_AI,
             generated_sql="SELECT DEPARTMENT_ID FROM DEPARTMENT",
             created_at="2026-08-20T00:01:00+00:00",
-            actor_user_id="other-user",
+            actor_user_uuid="other-user",
         ),
     ]
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", feature_service)
@@ -1330,6 +1793,7 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert "migration=004" in output
     assert "migration=005" in output
     assert "migration=009" in output
+    assert "migration=012" in output
 
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(
@@ -1343,7 +1807,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
+    monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "BootstrapPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -1356,7 +1820,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
 
             login = await client.post(
                 "/api/auth/login",
-                json={"login_name": "system_admin", "password": "BootstrapPass123"},
+                json={"login_user_id": "system_admin", "password": "BootstrapPass123"},
             )
             assert login.status_code == 200
             assert "HttpOnly" in login.headers.get_list("set-cookie")[0]
@@ -1427,7 +1891,7 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
             assert response.status_code == 200
             data = response.json()["data"]
             assert data["deepsec_enabled"] is True
-            assert data["data_user"] == "NL2SQL_DEEPSEC_DATA_USER"
+            assert data["data_user"] == "DEEPSEC_DATA_USER"
             assert data["has_data_user_password"] is True
             assert "DeepSecret!456" not in response.text
 
@@ -1437,12 +1901,12 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
         reset_security_service()
 
     assert settings.oracle_deepsec_enabled is True
-    assert settings.oracle_deepsec_data_user == "NL2SQL_DEEPSEC_DATA_USER"
+    assert settings.oracle_deepsec_data_user == "DEEPSEC_DATA_USER"
     assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
     assert closed == [True]
     env_text = env_file.read_text(encoding="utf-8")
     assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER" in env_text
+    assert "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER" in env_text
     assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
     assert "ORACLE_DEEPSEC_END_USER" not in env_text
 
@@ -1456,7 +1920,7 @@ def test_api_enforces_menu_permissions(
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
+    monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -1465,7 +1929,7 @@ def test_api_enforces_menu_permissions(
     service = get_security_service()
     assert isinstance(service.store, InMemorySecurityStore)
     assert service.store.bootstrap(
-        login_name="ADMIN",
+        login_user_id="ADMIN",
         display_name="ADMIN（システム管理者）",
         password_hash=hash_password("BootstrapPass!123"),
     )
@@ -1475,7 +1939,7 @@ def test_api_enforces_menu_permissions(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "ADMIN", "password": "BootstrapPass!123"},
+                json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1492,7 +1956,7 @@ def test_api_enforces_menu_permissions(
             assert changed.status_code == 200
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "ADMIN", "password": "IndependentPass!456"},
+                json={"login_user_id": "ADMIN", "password": "IndependentPass!456"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1524,7 +1988,7 @@ def test_api_enforces_menu_permissions(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "viewer.user",
+                    "login_user_id": "viewer.user",
                     "display_name": "履歴閲覧ユーザー",
                     "temporary_password": "ViewerStart!123",
                     "role_ids": [role_id],
@@ -1535,7 +1999,7 @@ def test_api_enforces_menu_permissions(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "deepsec.user",
+                    "login_user_id": "deepsec.user",
                     "display_name": "DeepSec 管理ユーザー",
                     "temporary_password": "DeepSecStart!123",
                     "role_ids": [deepsec_role_id],
@@ -1546,7 +2010,7 @@ def test_api_enforces_menu_permissions(
 
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "viewer.user", "password": "ViewerStart!123"},
+                json={"login_user_id": "viewer.user", "password": "ViewerStart!123"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1560,7 +2024,7 @@ def test_api_enforces_menu_permissions(
             )
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "viewer.user", "password": "ViewerActive!456"},
+                json={"login_user_id": "viewer.user", "password": "ViewerActive!456"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1572,14 +2036,12 @@ def test_api_enforces_menu_permissions(
             )
             assert denied_execute.status_code == 403
             assert (await client.get("/api/security/users")).status_code == 403
-            assert (
-                await client.get("/api/security/deepsec/data-entitlements")
-            ).status_code == 403
+            assert (await client.get("/api/security/deepsec/data-entitlements")).status_code == 403
 
             await client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "deepsec.user", "password": "DeepSecStart!123"},
+                json={"login_user_id": "deepsec.user", "password": "DeepSecStart!123"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1593,7 +2055,7 @@ def test_api_enforces_menu_permissions(
             )
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "deepsec.user", "password": "DeepSecActive!456"},
+                json={"login_user_id": "deepsec.user", "password": "DeepSecActive!456"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -1611,9 +2073,15 @@ def test_api_enforces_menu_permissions(
                     "version": deepsec_role_response.json()["data"]["version"],
                     "data_entitlements": [
                         {
-                            "resource_code": "NL2SQL_DEEPSEC_PROBE",
+                            "resource_code": "HR.EMPLOYEES",
                             "scope_code": "SALES",
-                            "capability": "ROW_READ",
+                            "capability": "SELECT",
+                            "target_owner": "HR",
+                            "target_object": "EMPLOYEES",
+                            "target_type": "TABLE",
+                            "column_names": ["EMPLOYEE_ID", "DISPLAY_NAME"],
+                            "scope_mode": "COLUMN_EQUALS",
+                            "scope_column": "DEPARTMENT_CODE",
                         }
                     ],
                 },
@@ -1676,7 +2144,7 @@ def test_user_manager_can_load_role_options_but_not_manage_roles(
     _create_active_user(
         service,
         admin,
-        login_name="user.manager",
+        login_user_id="user.manager",
         display_name="ユーザー管理者",
         role_ids=[user_manager_role.role_id],
         password="UserManagerPass!123",
@@ -1692,9 +2160,7 @@ def test_user_manager_can_load_role_options_but_not_manage_roles(
 
             roles_response = await client.get("/api/security/roles?include_archived=true")
             assert roles_response.status_code == 200
-            assert [item["role_code"] for item in roles_response.json()["data"]] == [
-                "USER_MANAGER"
-            ]
+            assert [item["role_code"] for item in roles_response.json()["data"]] == ["USER_MANAGER"]
 
             own_role = await client.get(f"/api/security/roles/{user_manager_role.role_id}")
             assert own_role.status_code == 200
@@ -1768,7 +2234,7 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
     target = _create_active_user(
         service,
         admin,
-        login_name="query.target",
+        login_user_id="query.target",
         display_name="検索ユーザー",
         role_ids=[query_role.role_id],
         password="QueryTargetPass!123",
@@ -1776,7 +2242,7 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
     _create_active_user(
         service,
         admin,
-        login_name="role.manager",
+        login_user_id="role.manager",
         display_name="ロール管理者",
         role_ids=[role_manager_role.role_id],
         password="RoleManagerPass!123",
@@ -1790,8 +2256,7 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
             roles_response = await client.get("/api/security/roles")
             assert roles_response.status_code == 200
             assert any(
-                item["role_code"] == "ROLE_MANAGER_ONLY"
-                for item in roles_response.json()["data"]
+                item["role_code"] == "ROLE_MANAGER_ONLY" for item in roles_response.json()["data"]
             )
             assert (await client.get("/api/security/permissions")).status_code == 200
 
@@ -1812,7 +2277,7 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "blocked.user",
+                    "login_user_id": "blocked.user",
                     "display_name": "作成不可",
                     "temporary_password": "BlockedUserPass!123",
                     "role_ids": [query_role.role_id],
@@ -1821,7 +2286,7 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
             assert create_user.status_code == 403
 
             update_user = await client.patch(
-                f"/api/security/users/{target.user_id}",
+                f"/api/security/users/{target.user_uuid}",
                 headers={"X-CSRF-Token": csrf},
                 json={
                     "version": target.version,
@@ -1870,7 +2335,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
     target = _create_active_user(
         service,
         admin,
-        login_name="managed.user",
+        login_user_id="managed.user",
         display_name="管理対象",
         role_ids=[user_manager_role.role_id],
         password="ManagedUserPass!123",
@@ -1878,7 +2343,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
     high_privilege_user = _create_active_user(
         service,
         admin,
-        login_name="high.user",
+        login_user_id="high.user",
         display_name="高権限ユーザー",
         role_ids=[role_manager_role.role_id],
         password="HighUserPass!123",
@@ -1886,7 +2351,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
     _create_active_user(
         service,
         admin,
-        login_name="limited.manager",
+        login_user_id="limited.manager",
         display_name="限定管理者",
         role_ids=[user_manager_role.role_id],
         password="LimitedManagerPass!123",
@@ -1901,7 +2366,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "blocked.role.manager",
+                    "login_user_id": "blocked.role.manager",
                     "display_name": "ロール管理付与不可",
                     "temporary_password": "BlockedRolePass!123",
                     "role_ids": [role_manager_role.role_id],
@@ -1913,7 +2378,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "blocked.admin.sql",
+                    "login_user_id": "blocked.admin.sql",
                     "display_name": "管理 SQL 付与不可",
                     "temporary_password": "BlockedAdminPass!123",
                     "role_ids": [admin_sql_role.role_id],
@@ -1922,7 +2387,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
             assert denied_admin_sql.status_code == 403
 
             denied_update = await client.patch(
-                f"/api/security/users/{target.user_id}",
+                f"/api/security/users/{target.user_uuid}",
                 headers={"X-CSRF-Token": csrf},
                 json={
                     "version": target.version,
@@ -1934,7 +2399,7 @@ def test_user_manager_cannot_assign_role_outside_own_permissions(
             assert denied_update.status_code == 403
 
             denied_reset = await client.post(
-                f"/api/security/users/{high_privilege_user.user_id}/reset-password",
+                f"/api/security/users/{high_privilege_user.user_uuid}/reset-password",
                 headers={"X-CSRF-Token": csrf},
                 json={"temporary_password": "TakeoverPass!123"},
             )
@@ -1978,7 +2443,7 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
     _create_active_user(
         service,
         admin,
-        login_name="query.manager",
+        login_user_id="query.manager",
         display_name="SQL 生成ユーザー管理者",
         role_ids=[manager_role.role_id],
         password="QueryManagerPass!123",
@@ -1999,7 +2464,7 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "query.subset.user",
+                    "login_user_id": "query.subset.user",
                     "display_name": "SQL 生成利用者",
                     "temporary_password": "SubsetStartPass!123",
                     "role_ids": [query_role.role_id],
@@ -2057,7 +2522,7 @@ def test_role_permission_change_reflects_on_existing_session_next_request(
     _create_active_user(
         service,
         admin,
-        login_name="dynamic.user",
+        login_user_id="dynamic.user",
         display_name="動的反映ユーザー",
         role_ids=[dynamic_role.role_id],
         password="DynamicUserPass!123",
@@ -2113,7 +2578,7 @@ def test_archived_or_unassigned_role_removes_runtime_access(
     archived_user = _create_active_user(
         service,
         admin,
-        login_name="archived.runtime.user",
+        login_user_id="archived.runtime.user",
         display_name="アーカイブ反映ユーザー",
         role_ids=[archived_runtime_role.role_id],
         password="ArchivedRuntimePass!123",
@@ -2121,7 +2586,7 @@ def test_archived_or_unassigned_role_removes_runtime_access(
     unassigned_user = _create_active_user(
         service,
         admin,
-        login_name="unassigned.runtime.user",
+        login_user_id="unassigned.runtime.user",
         display_name="解除反映ユーザー",
         role_ids=[unassigned_runtime_role.role_id],
         password="UnassignedRuntimePass!123",
@@ -2130,7 +2595,7 @@ def test_archived_or_unassigned_role_removes_runtime_access(
     async def exercise() -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            await _login_api(client, archived_user.login_name, "ArchivedRuntimePass!123")
+            await _login_api(client, archived_user.login_user_id, "ArchivedRuntimePass!123")
             assert (await client.get("/api/nl2sql/history")).status_code == 200
             service.archive_role(
                 archived_runtime_role.role_id,
@@ -2142,10 +2607,10 @@ def test_archived_or_unassigned_role_removes_runtime_access(
             assert me_after_archive.status_code == 200
             assert me_after_archive.json()["data"]["permissions"] == []
 
-            await _login_api(client, unassigned_user.login_name, "UnassignedRuntimePass!123")
+            await _login_api(client, unassigned_user.login_user_id, "UnassignedRuntimePass!123")
             assert (await client.get("/api/nl2sql/history")).status_code == 200
             service.update_user(
-                unassigned_user.user_id,
+                unassigned_user.user_uuid,
                 expected_version=unassigned_user.version,
                 display_name=unassigned_user.display_name,
                 status=unassigned_user.status,
@@ -2168,10 +2633,10 @@ def test_restore_role_reactivates_existing_session_and_assigned_role_metadata(
 ) -> None:
     service = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
-    admin_user = service.store.get_user(admin.user_id)
+    admin_user = service.store.get_user(admin.user_uuid)
     assert admin_user is not None
     service.store.set_password(
-        admin_user.user_id,
+        admin_user.user_uuid,
         hash_password("BootstrapPass!123"),
         force_change=False,
     )
@@ -2186,7 +2651,7 @@ def test_restore_role_reactivates_existing_session_and_assigned_role_metadata(
     assigned_user = _create_active_user(
         service,
         admin,
-        login_name="restore.runtime.user",
+        login_user_id="restore.runtime.user",
         display_name="復元反映ユーザー",
         role_ids=[runtime_role.role_id],
         password="RestoreRuntimePass!123",
@@ -2209,7 +2674,7 @@ def test_restore_role_reactivates_existing_session_and_assigned_role_metadata(
             httpx.AsyncClient(transport=transport, base_url="http://test") as user_client,
             httpx.AsyncClient(transport=transport, base_url="http://test") as admin_client,
         ):
-            await _login_api(user_client, assigned_user.login_name, "RestoreRuntimePass!123")
+            await _login_api(user_client, assigned_user.login_user_id, "RestoreRuntimePass!123")
             assert (await user_client.get("/api/nl2sql/history")).status_code == 403
             before_me = await user_client.get("/api/auth/me")
             assert before_me.status_code == 200
@@ -2221,7 +2686,7 @@ def test_restore_role_reactivates_existing_session_and_assigned_role_metadata(
             before_user = next(
                 item
                 for item in before_users.json()["data"]
-                if item["user_id"] == assigned_user.user_id
+                if item["user_uuid"] == assigned_user.user_uuid
             )
             assert assigned_role_archived(before_user) is True
 
@@ -2240,7 +2705,7 @@ def test_restore_role_reactivates_existing_session_and_assigned_role_metadata(
             after_user = next(
                 item
                 for item in after_users.json()["data"]
-                if item["user_id"] == assigned_user.user_id
+                if item["user_uuid"] == assigned_user.user_uuid
             )
             assert assigned_role_archived(after_user) is False
 
@@ -2268,10 +2733,10 @@ def test_restore_role_api_rejects_invalid_targets(
 ) -> None:
     service = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
-    admin_user = service.store.get_user(admin.user_id)
+    admin_user = service.store.get_user(admin.user_uuid)
     assert admin_user is not None
     service.store.set_password(
-        admin_user.user_id,
+        admin_user.user_uuid,
         hash_password("BootstrapPass!123"),
         force_change=False,
     )
@@ -2343,10 +2808,10 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
 ) -> None:
     service = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
-    admin_user = service.store.get_user(admin.user_id)
+    admin_user = service.store.get_user(admin.user_uuid)
     assert admin_user is not None
     service.store.set_password(
-        admin_user.user_id,
+        admin_user.user_uuid,
         hash_password("BootstrapPass!123"),
         force_change=False,
     )
@@ -2361,7 +2826,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
     assigned_user = _create_active_user(
         service,
         admin,
-        login_name="archived.metadata.user",
+        login_user_id="archived.metadata.user",
         display_name="アーカイブ表示ユーザー",
         role_ids=[archived_role.role_id],
         password="ArchivedMetadataPass!123",
@@ -2392,16 +2857,16 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
             assert users_response.status_code == 200
             user_rows = users_response.json()["data"]
             user_row = next(
-                item for item in user_rows if item["user_id"] == assigned_user.user_id
+                item for item in user_rows if item["user_uuid"] == assigned_user.user_uuid
             )
             assert_archived_assignment(user_row)
 
-            detail = await client.get(f"/api/security/users/{assigned_user.user_id}")
+            detail = await client.get(f"/api/security/users/{assigned_user.user_uuid}")
             assert detail.status_code == 200
             assert_archived_assignment(detail.json()["data"])
 
             updated = await client.patch(
-                f"/api/security/users/{assigned_user.user_id}",
+                f"/api/security/users/{assigned_user.user_uuid}",
                 headers={"X-CSRF-Token": csrf},
                 json={
                     "version": assigned_user.version,
@@ -2416,7 +2881,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
             assert_archived_assignment(updated_user)
 
             disabled = await client.post(
-                f"/api/security/users/{assigned_user.user_id}/disable",
+                f"/api/security/users/{assigned_user.user_uuid}/disable",
                 headers={"X-CSRF-Token": csrf},
                 json={"version": updated_user["version"]},
             )
@@ -2424,7 +2889,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
             assert_archived_assignment(disabled.json()["data"])
 
             enabled = await client.post(
-                f"/api/security/users/{assigned_user.user_id}/enable",
+                f"/api/security/users/{assigned_user.user_uuid}/enable",
                 headers={"X-CSRF-Token": csrf},
                 json={"version": disabled.json()["data"]["version"]},
             )
@@ -2432,7 +2897,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
             assert_archived_assignment(enabled.json()["data"])
 
             reset = await client.post(
-                f"/api/security/users/{assigned_user.user_id}/reset-password",
+                f"/api/security/users/{assigned_user.user_uuid}/reset-password",
                 headers={"X-CSRF-Token": csrf},
                 json={"temporary_password": "ArchivedMetadataReset!123"},
             )
@@ -2455,8 +2920,8 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
 
 def test_user_data_marks_unresolved_assigned_role_as_inactive() -> None:
     user = UserRecord(
-        user_id="missing-role-user",
-        login_name="missing.role",
+        user_uuid="missing-role-user",
+        login_user_id="missing.role",
         display_name="ロール不明ユーザー",
         password_hash="unused",
         status="ACTIVE",
@@ -2483,7 +2948,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
-    monkeypatch.setattr(settings, "app_admin_username", "system_admin")
+    monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     _patch_security_threadpools(monkeypatch)
@@ -2493,7 +2958,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     service = get_security_service()
     assert isinstance(service.store, InMemorySecurityStore)
     assert service.store.bootstrap(
-        login_name="ADMIN",
+        login_user_id="ADMIN",
         display_name="ADMIN（システム管理者）",
         password_hash=hash_password("BootstrapPass!123"),
     )
@@ -2506,7 +2971,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             login = await client.post(
                 "/api/auth/login",
-                json={"login_name": "ADMIN", "password": "BootstrapPass!123"},
+                json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
             )
             assert login.status_code == 200
             csrf = client.cookies.get("nl2sql_csrf")
@@ -2522,10 +2987,10 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
             assert changed.status_code == 200
             admin_login = await client.post(
                 "/api/auth/login",
-                json={"login_name": "ADMIN", "password": "IndependentPass!456"},
+                json={"login_user_id": "ADMIN", "password": "IndependentPass!456"},
             )
             assert admin_login.status_code == 200
-            admin_user_id = admin_login.json()["data"]["user_id"]
+            admin_user_id = admin_login.json()["data"]["user_uuid"]
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
             role_response = await client.post(
@@ -2544,14 +3009,14 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "login_name": "owner.viewer",
+                    "login_user_id": "owner.viewer",
                     "display_name": "履歴所有者",
                     "temporary_password": "ViewerStart!123",
                     "role_ids": [role_id],
                 },
             )
             assert user_response.status_code == 200
-            viewer_user_id = user_response.json()["data"]["user"]["user_id"]
+            viewer_user_id = user_response.json()["data"]["user"]["user_uuid"]
 
             history_service._history = [  # noqa: SLF001 - API scope regression fixture
                 HistoryItem(
@@ -2567,7 +3032,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                     engine=Nl2SqlEngine.SELECT_AI,
                     generated_sql="SELECT 1 FROM DUAL",
                     created_at="2026-08-17T00:01:00+00:00",
-                    actor_user_id=admin_user_id,
+                    actor_user_uuid=admin_user_id,
                 ),
                 HistoryItem(
                     id="viewer-history",
@@ -2575,7 +3040,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                     engine=Nl2SqlEngine.SELECT_AI,
                     generated_sql="SELECT 1 FROM DUAL",
                     created_at="2026-08-17T00:02:00+00:00",
-                    actor_user_id=viewer_user_id,
+                    actor_user_uuid=viewer_user_id,
                 ),
                 HistoryItem(
                     id="other-history",
@@ -2583,7 +3048,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                     engine=Nl2SqlEngine.SELECT_AI,
                     generated_sql="SELECT 1 FROM DUAL",
                     created_at="2026-08-17T00:03:00+00:00",
-                    actor_user_id="other-user",
+                    actor_user_uuid="other-user",
                 ),
             ]
 
@@ -2599,7 +3064,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
 
             await client.post(
                 "/api/auth/login",
-                json={"login_name": "owner.viewer", "password": "ViewerStart!123"},
+                json={"login_user_id": "owner.viewer", "password": "ViewerStart!123"},
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
@@ -2614,7 +3079,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
             assert viewer_changed.status_code == 200
             viewer_login = await client.post(
                 "/api/auth/login",
-                json={"login_name": "owner.viewer", "password": "ReadOnlyPass!456"},
+                json={"login_user_id": "owner.viewer", "password": "ReadOnlyPass!456"},
             )
             assert viewer_login.status_code == 200
             scoped_history = await client.get("/api/nl2sql/history")

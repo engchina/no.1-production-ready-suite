@@ -38,6 +38,7 @@ import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
+import { selectedVisibleKey } from "@/lib/visible-selection";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
@@ -54,14 +55,14 @@ import type { AssignedRole, SecurityRole, SecurityUser } from "./types";
 type UserPanelView = "list" | "create" | "edit";
 
 interface UserDraftState {
-  loginName: string;
+  loginUserId: string;
   displayName: string;
   selectedRoleId: string;
   temporaryPassword: string;
 }
 
 const EMPTY_DRAFT: UserDraftState = {
-  loginName: "",
+  loginUserId: "",
   displayName: "",
   selectedRoleId: "",
   temporaryPassword: "",
@@ -99,6 +100,7 @@ export function SecurityUsersPage() {
   const [draft, setDraft] = useState<UserDraftState>(EMPTY_DRAFT);
   const [oneTimePassword, setOneTimePassword] = useState("");
   const loadSequence = useRef(0);
+  const selectedUserManualSelection = useRef(false);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const roleById = useMemo(
@@ -110,8 +112,7 @@ export function SecurityUsersPage() {
     [roles]
   );
 
-  const selectedUser = users.find((user) => user.user_id === selectedId) ?? null;
-  const editingUser = users.find((user) => user.user_id === editingId) ?? null;
+  const editingUser = users.find((user) => user.user_uuid === editingId) ?? null;
   const assignedRoles = (user: SecurityUser): AssignedRole[] => {
     if (user.assigned_roles?.length) return user.assigned_roles;
     return user.role_ids.map((id) => {
@@ -165,18 +166,26 @@ export function SecurityUsersPage() {
         if (!q) return true;
         return (
           user.display_name.toLowerCase().includes(q) ||
-          user.login_name.toLowerCase().includes(q) ||
+          user.login_user_id.toLowerCase().includes(q) ||
           user.status.toLowerCase().includes(q) ||
           roleSummary(user).toLowerCase().includes(q)
         );
       })
       .sort((left, right) => {
-        if (sort.key === "login") return compareText(left.login_name, right.login_name, sort.direction);
+        if (sort.key === "login") return compareText(left.login_user_id, right.login_user_id, sort.direction);
         if (sort.key === "roles") return compareText(roleSummary(left), roleSummary(right), sort.direction);
         if (sort.key === "status") return compareText(userStatusLabel(left), userStatusLabel(right), sort.direction);
         return compareText(left.display_name, right.display_name, sort.direction);
       });
   }, [roleById, search, sort, users]);
+
+  const visibleSelectedId =
+    activeView === "list"
+      ? selectedVisibleKey(filteredUsers, selectedId, (user) => user.user_uuid, {
+          preserveSelected: selectedUserManualSelection.current,
+        })
+      : selectedId;
+  const selectedUser = users.find((user) => user.user_uuid === visibleSelectedId) ?? null;
 
   const load = async (announce = false) => {
     const sequence = loadSequence.current + 1;
@@ -194,9 +203,9 @@ export function SecurityUsersPage() {
         setUsers(userRows);
         setRoles(roleRows.filter((role) => !role.archived));
         setSelectedId((current) =>
-          current && userRows.some((user) => user.user_id === current)
+          current && userRows.some((user) => user.user_uuid === current)
             ? current
-            : userRows[0]?.user_id ?? null
+            : null
         );
       });
       if (announce && sequence === loadSequence.current) {
@@ -224,6 +233,17 @@ export function SecurityUsersPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeView !== "list" || loading) return;
+    setSelectedId((current) => {
+      const nextId = selectedVisibleKey(filteredUsers, current, (user) => user.user_uuid, {
+        preserveSelected: selectedUserManualSelection.current,
+      });
+      if (nextId !== current) selectedUserManualSelection.current = false;
+      return nextId;
+    });
+  }, [activeView, filteredUsers, loading]);
+
   const startCreate = () => {
     setActiveView("create");
     setEditingId(null);
@@ -233,11 +253,12 @@ export function SecurityUsersPage() {
   };
 
   const startEdit = (user: SecurityUser) => {
-    setSelectedId(user.user_id);
-    setEditingId(user.user_id);
+    selectedUserManualSelection.current = true;
+    setSelectedId(user.user_uuid);
+    setEditingId(user.user_uuid);
     setActiveView("edit");
     setDraft({
-      loginName: user.login_name,
+      loginUserId: user.login_user_id,
       displayName: user.display_name,
       selectedRoleId: selectKnownRoleId(user.role_ids),
       temporaryPassword: "",
@@ -271,8 +292,9 @@ export function SecurityUsersPage() {
           display_name: draft.displayName,
           role_ids: selectedRoleIds,
         });
-        setUsers((rows) => rows.map((row) => (row.user_id === updated.user_id ? updated : row)));
-        setSelectedId(updated.user_id);
+        setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
+        selectedUserManualSelection.current = true;
+        setSelectedId(updated.user_uuid);
         setDraft((current) => ({
           ...current,
           displayName: updated.display_name,
@@ -281,18 +303,19 @@ export function SecurityUsersPage() {
         toast.success(t("security.common.saved"));
       } else {
         const created = await securityApi.createUser({
-          login_name: draft.loginName,
+          login_user_id: draft.loginUserId,
           display_name: draft.displayName,
           role_ids: selectedRoleIds,
           temporary_password: draft.temporaryPassword || undefined,
         });
         setUsers((rows) => [...rows, created.user]);
-        setSelectedId(created.user.user_id);
-        setEditingId(created.user.user_id);
+        selectedUserManualSelection.current = true;
+        setSelectedId(created.user.user_uuid);
+        setEditingId(created.user.user_uuid);
         setActiveView("edit");
         setOneTimePassword(created.temporary_password);
         setDraft({
-          loginName: created.user.login_name,
+          loginUserId: created.user.login_user_id,
           displayName: created.user.display_name,
           selectedRoleId: selectKnownRoleId(created.user.role_ids),
           temporaryPassword: "",
@@ -320,8 +343,9 @@ export function SecurityUsersPage() {
     }
     try {
       const updated = await securityApi.setUserEnabled(user, enabling);
-      setUsers((rows) => rows.map((row) => (row.user_id === updated.user_id ? updated : row)));
-      setSelectedId(updated.user_id);
+      setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
+      selectedUserManualSelection.current = true;
+      setSelectedId(updated.user_uuid);
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
@@ -339,8 +363,8 @@ export function SecurityUsersPage() {
       return;
     }
     try {
-      const result = await securityApi.resetPassword(user.user_id);
-      setUsers((rows) => rows.map((row) => (row.user_id === result.user.user_id ? result.user : row)));
+      const result = await securityApi.resetPassword(user.user_uuid);
+      setUsers((rows) => rows.map((row) => (row.user_uuid === result.user.user_uuid ? result.user : row)));
       startEdit(result.user);
       setOneTimePassword(result.temporary_password);
     } catch (cause) {
@@ -350,9 +374,10 @@ export function SecurityUsersPage() {
 
   const handleUnlock = async (user: SecurityUser) => {
     try {
-      const updated = await securityApi.unlockUser(user.user_id);
-      setUsers((rows) => rows.map((row) => (row.user_id === updated.user_id ? updated : row)));
-      setSelectedId(updated.user_id);
+      const updated = await securityApi.unlockUser(user.user_uuid);
+      setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
+      selectedUserManualSelection.current = true;
+      setSelectedId(updated.user_uuid);
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
@@ -404,7 +429,7 @@ export function SecurityUsersPage() {
       sortable: true,
       className: "min-w-48",
       render: (user) => {
-        const selected = selectedId === user.user_id;
+        const selected = visibleSelectedId === user.user_uuid;
         return (
           <button
             type="button"
@@ -415,11 +440,12 @@ export function SecurityUsersPage() {
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
-              setSelectedId(user.user_id);
+              selectedUserManualSelection.current = true;
+              setSelectedId(user.user_uuid);
             }}
           >
             <span className="block break-words font-medium">{user.display_name}</span>
-            <span className="block break-all font-mono text-[11px] text-muted">{user.login_name}</span>
+            <span className="block break-all font-mono text-[11px] text-muted">{user.login_user_id}</span>
           </button>
         );
       },
@@ -449,7 +475,7 @@ export function SecurityUsersPage() {
               <RowActionMenu
                 actions={userActions(user)}
                 ariaLabel={`${t("security.common.actions")}: ${user.display_name}`}
-                testId={`security-users-row-actions-${user.user_id}`}
+                testId={`security-users-row-actions-${user.user_uuid}`}
               />
             ),
           },
@@ -535,9 +561,12 @@ export function SecurityUsersPage() {
                   rows={filteredUsers}
                   sort={sort}
                   onSortChange={setSort}
-                  selectedRowKey={selectedId}
-                  onRowSelect={(user) => setSelectedId(user.user_id)}
-                  getRowKey={(user) => user.user_id}
+                  selectedRowKey={visibleSelectedId}
+                  onRowSelect={(user) => {
+                    selectedUserManualSelection.current = true;
+                    setSelectedId(user.user_uuid);
+                  }}
+                  getRowKey={(user) => user.user_uuid}
                   getRowAriaLabel={(user) => t("security.users.showUser", { name: user.display_name })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
@@ -583,15 +612,16 @@ export function SecurityUsersPage() {
                 ) : null}
                 <div className="grid gap-4 lg:grid-cols-2">
                   <div className="grid gap-1.5 text-sm font-medium">
-                    <FieldLabel htmlFor="security-user-login-name" label={t("security.users.loginName")} required />
+                    <FieldLabel htmlFor="security-user-login-user-id" label={t("security.users.loginUserId")} required />
                     <input
-                      id="security-user-login-name"
+                      id="security-user-login-user-id"
                       required
+                      maxLength={64}
                       disabled={activeView === "edit"}
                       className={INPUT_CLASS}
                       autoComplete="off"
-                      value={draft.loginName}
-                      onChange={(event) => setDraft((current) => ({ ...current, loginName: event.target.value }))}
+                      value={draft.loginUserId}
+                      onChange={(event) => setDraft((current) => ({ ...current, loginUserId: event.target.value }))}
                     />
                   </div>
                   <div className="grid gap-1.5 text-sm font-medium">
@@ -727,7 +757,7 @@ function UserDetailPanel({
             </h2>
             <UserStatusBadges user={user} />
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-muted">{user.login_name}</p>
+          <p className="mt-1 break-all font-mono text-xs text-muted">{user.login_user_id}</p>
         </div>
         {canManage ? (
           <ObjectActionBar
@@ -739,8 +769,8 @@ function UserDetailPanel({
       </div>
 
       <dl className="grid gap-3 md:grid-cols-2">
-        <SecurityDetailField label={t("security.users.loginName")}>
-          <code className="break-all font-mono text-xs">{user.login_name}</code>
+        <SecurityDetailField label={t("security.users.loginUserId")}>
+          <code className="break-all font-mono text-xs">{user.login_user_id}</code>
         </SecurityDetailField>
         <SecurityDetailField label={t("security.common.status")}>
           <UserStatusBadges user={user} />

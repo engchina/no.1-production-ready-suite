@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.clients.oracle_runtime import (
@@ -18,7 +21,16 @@ from app.clients.oracle_runtime import (
 from app.clients.oracle_statement_executor import oracle_statement_executor
 from app.settings import Settings, get_settings
 
-from .domain import Principal
+from .domain import (
+    LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE,
+    LOGIN_USER_ID_SCOPE_VALUE_SOURCE,
+    DataEntitlementRecord,
+    DataEntitlementScopeFilter,
+    Principal,
+    RoleRecord,
+    scope_filter_payload,
+    scope_filters_scope_code,
+)
 from .service import (
     _BACKEND_ENV_FILE,
     SecurityApiError,
@@ -30,8 +42,64 @@ from .service import (
 
 PLAN_VERSION = "V001"
 PASSWORD_PLACEHOLDER = "<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
-DEEPSEC_DATA_USER = "NL2SQL_DEEPSEC_DATA_USER"
+DEEPSEC_DATA_USER = "DEEPSEC_DATA_USER"
 DEEPSEC_APPLY_CONFIRMATION = "ADMIN_EXECUTE"
+DEEPSEC_RESET_CONFIRMATION = "ADMIN_RESET"
+DEEPSEC_DB_ROLE = "NL2SQL_APP_DB_ROLE"
+DEEPSEC_DATA_ROLE = "NL2SQL_APP_DATA_ROLE"
+MANAGED_DATA_GRANT_PREFIX = "NL2SQL_DG_"
+DATA_GRANT_PREDICATE_MAX_LENGTH = 4000
+_DEEPSEC_MANAGED_TARGET_TYPES = frozenset({"TABLE", "VIEW", "MATERIALIZED VIEW"})
+_DEEPSEC_TEXT_TYPES = frozenset({"CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2"})
+_DEEPSEC_NUMBER_TYPES = frozenset({"NUMBER", "FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"})
+_DEEPSEC_TEMPORAL_TYPES = frozenset({"DATE", "TIMESTAMP"})
+_DEEPSEC_SCOPE_VALUE_TYPES = frozenset({"TEXT", "NUMBER", "TEMPORAL"})
+_DEEPSEC_SCOPE_VALUE_SOURCES = frozenset({"LITERAL", LOGIN_USER_ID_SCOPE_VALUE_SOURCE})
+_DEEPSEC_SCOPE_MODES = frozenset({"ALL", "COLUMN_EQUALS", "FILTERS"})
+_DEEPSEC_NULL_OPERATORS = frozenset({"IS_NULL", "IS_NOT_NULL"})
+_DEEPSEC_TEXT_OPERATORS = frozenset(
+    {"EQ", "NE", "CONTAINS", "STARTS_WITH", "IN", *_DEEPSEC_NULL_OPERATORS}
+)
+_DEEPSEC_NUMBER_OPERATORS = frozenset(
+    {"EQ", "NE", "GT", "GTE", "LT", "LTE", "BETWEEN", "IN", *_DEEPSEC_NULL_OPERATORS}
+)
+_DEEPSEC_TEMPORAL_OPERATORS = frozenset(
+    {
+        "EQ",
+        "BEFORE",
+        "ON_OR_BEFORE",
+        "AFTER",
+        "ON_OR_AFTER",
+        "BETWEEN",
+        *_DEEPSEC_NULL_OPERATORS,
+    }
+)
+_DEEPSEC_SCOPE_OPERATORS_BY_TYPE = {
+    "TEXT": _DEEPSEC_TEXT_OPERATORS,
+    "NUMBER": _DEEPSEC_NUMBER_OPERATORS,
+    "TEMPORAL": _DEEPSEC_TEMPORAL_OPERATORS,
+}
+_DEEPSEC_MAX_SCOPE_FILTERS = 8
+_DEEPSEC_MAX_SCOPE_FILTER_VALUES = 25
+_DEEPSEC_PREDICATE_TABLE_GRANTS = (
+    ("predicate_user_roles_grant", "NL2SQL_APP_USER_ROLES"),
+    ("predicate_roles_grant", "NL2SQL_APP_ROLES"),
+    ("predicate_data_entitlements_grant", "NL2SQL_APP_DATA_ENTITLEMENTS"),
+)
+_DEEPSEC_APP_USER_CONTEXT_EXPR = "ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER"
+_DEEPSEC_LOGIN_USER_ID_CONTEXT_EXPR = "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')"
+_DEEPSEC_LEGACY_APP_USER_CONTEXT_EXPR = "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID')"
+_POSITIVE_INTEGER_LITERAL_RE = re.compile(r"[1-9]\d*")
+_NUMBER_LITERAL_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+_DATE_LITERAL_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATETIME_LITERAL_RE = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?")
+_DEEPSEC_INTERNAL_OWNER_NAMES = frozenset({"SYS", "SYSTEM"})
+_DEEPSEC_INTERNAL_OBJECT_PREFIXES = (
+    "NL2SQL_APP_",
+    "NL2SQL_AUTH_",
+    "NL2SQL_DEEPSEC_",
+)
+_DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT = 5
 _DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
 _DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
 _DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"
@@ -80,6 +148,11 @@ def _validate_data_user_password(value: str) -> str:
             "二重引用符と制御文字を含めずに指定してください。",
         )
     return value
+
+
+def _looks_like_missing_scope_filters_column(exc: Exception) -> bool:
+    message = str(exc).upper()
+    return "ORA-00904" in message and "SCOPE_FILTERS" in message
 
 
 def _replace_deepsec_env_file(path: Path, content: str) -> None:
@@ -166,12 +239,413 @@ class DeepSecStep:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class OracleManagedDataGrant:
+    grant_name: str
+    target_owner: str
+    target_object: str
+    grantee: str = ""
+    grantee_type: str = ""
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _managed_data_grant_grantee(settings: Settings) -> str:
+    _ = settings
+    return DEEPSEC_DATA_ROLE
+
+
+def _legacy_direct_end_user_data_grant_grantee(settings: Settings) -> str:
+    return _strict_identifier(settings.oracle_deepsec_data_user)
+
+
+def _oracle_base_type(data_type: str) -> str:
+    normalized = data_type.strip().upper()
+    if normalized.startswith("TIMESTAMP"):
+        return "TIMESTAMP"
+    return normalized.split("(", 1)[0].split(" ", 1)[0]
+
+
+def _scope_value_type(data_type: str) -> str:
+    base_type = _oracle_base_type(data_type)
+    if base_type in _DEEPSEC_TEXT_TYPES:
+        return "TEXT"
+    if base_type in _DEEPSEC_NUMBER_TYPES:
+        return "NUMBER"
+    if base_type in _DEEPSEC_TEMPORAL_TYPES:
+        return "TEMPORAL"
+    return ""
+
+
+def _like_pattern(value: str, *, prefix: str, suffix: str) -> str:
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"{prefix}{escaped}{suffix}"
+
+
+def _non_empty_value(value: str, label: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise SecurityApiError(400, f"{label} を指定してください。")
+    if any(ord(char) < 32 for char in normalized):
+        raise SecurityApiError(400, f"{label} に制御文字は使用できません。")
+    return normalized
+
+
+def _number_literal(value: str) -> str:
+    normalized = _non_empty_value(value, "数値 scope 値")
+    if not _NUMBER_LITERAL_RE.fullmatch(normalized):
+        raise SecurityApiError(400, "数値 scope 値は数値 literal で指定してください。")
+    try:
+        Decimal(normalized)
+    except InvalidOperation as exc:
+        raise SecurityApiError(400, "数値 scope 値は数値 literal で指定してください。") from exc
+    return normalized.removeprefix("+").upper()
+
+
+def _positive_integer_literal(value: str) -> str:
+    normalized = _non_empty_value(value, "正整数 scope 値")
+    if not _POSITIVE_INTEGER_LITERAL_RE.fullmatch(normalized):
+        raise SecurityApiError(400, "NUMBER の EQ scope 値は正整数で指定してください。")
+    return normalized
+
+
+def _normalize_temporal_value(value: str) -> tuple[str, bool]:
+    normalized = _non_empty_value(value, "日付/時刻 scope 値").replace("T", " ")
+    if _DATE_LITERAL_RE.fullmatch(normalized):
+        try:
+            datetime.strptime(normalized, "%Y-%m-%d")
+        except ValueError as exc:
+            raise SecurityApiError(
+                400, "日付 scope 値は YYYY-MM-DD で指定してください。"
+            ) from exc
+        return normalized, False
+    if _DATETIME_LITERAL_RE.fullmatch(normalized):
+        if len(normalized) == 16:
+            normalized = f"{normalized}:00"
+        try:
+            datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+        except ValueError as exc:
+            raise SecurityApiError(
+                400, "日付/時刻 scope 値は YYYY-MM-DD HH:MM[:SS] で指定してください。"
+            ) from exc
+        return normalized, True
+    raise SecurityApiError(
+        400, "日付/時刻 scope 値は YYYY-MM-DD または YYYY-MM-DD HH:MM[:SS] で指定してください。"
+    )
+
+
+def _temporal_literal(value: str, data_type: str) -> str:
+    normalized, has_time = _normalize_temporal_value(value)
+    if _oracle_base_type(data_type) == "DATE":
+        if not has_time:
+            return f"DATE {_sql_literal(normalized)}"
+        return f"TO_DATE({_sql_literal(normalized)}, 'YYYY-MM-DD HH24:MI:SS')"
+    if not has_time:
+        normalized = f"{normalized} 00:00:00"
+    return f"TIMESTAMP {_sql_literal(normalized)}"
+
+
+def _scope_filter_literal(
+    filter_item: DataEntitlementScopeFilter,
+    *,
+    data_type: str,
+    value: str,
+) -> str:
+    if filter_item.value_type == "TEXT":
+        return _sql_literal(_non_empty_value(value, "文字列 scope 値"))
+    if filter_item.value_type == "NUMBER":
+        return _number_literal(value)
+    if filter_item.value_type == "TEMPORAL":
+        return _temporal_literal(value, data_type)
+    raise SecurityApiError(400, "scope filter value_type が不正です。")
+
+
+def _scope_filter_values(
+    filter_item: DataEntitlementScopeFilter,
+    *,
+    data_type: str,
+) -> list[str]:
+    values = [
+        _scope_filter_literal(filter_item, data_type=data_type, value=value)
+        for value in filter_item.values
+        if str(value).strip()
+    ]
+    if not values:
+        raise SecurityApiError(400, "IN scope filter は 1 件以上の値を指定してください。")
+    if len(values) > _DEEPSEC_MAX_SCOPE_FILTER_VALUES:
+        raise SecurityApiError(
+            400,
+            f"IN scope filter の値は {_DEEPSEC_MAX_SCOPE_FILTER_VALUES} 件以内で指定してください。",
+        )
+    return values
+
+
+def _scope_filter_predicate(
+    target: str,
+    filter_item: DataEntitlementScopeFilter,
+    *,
+    data_type: str,
+) -> str:
+    column = f"{target}.{_strict_identifier(filter_item.column_name)}"
+    operator = filter_item.operator.strip().upper()
+    value_type = filter_item.value_type.strip().upper()
+    value_source = filter_item.value_source.strip().upper() or "LITERAL"
+    if value_source == LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE:
+        value_source = LOGIN_USER_ID_SCOPE_VALUE_SOURCE
+    normalized_filter = replace(
+        filter_item,
+        operator=operator,
+        value_type=value_type,
+        value_source=value_source,
+    )
+    if value_source not in _DEEPSEC_SCOPE_VALUE_SOURCES:
+        raise SecurityApiError(400, "scope filter value_source が不正です。")
+    if operator not in _DEEPSEC_SCOPE_OPERATORS_BY_TYPE.get(value_type, frozenset()):
+        raise SecurityApiError(400, "scope filter operator が列型に対応していません。")
+    if value_source == LOGIN_USER_ID_SCOPE_VALUE_SOURCE:
+        if value_type not in {"TEXT", "NUMBER"} or operator != "EQ":
+            raise SecurityApiError(
+                400,
+                "ログインユーザーID scope 値は文字列列または NUMBER 列の "
+                "EQ 条件でのみ指定できます。",
+            )
+        context_value = _DEEPSEC_LOGIN_USER_ID_CONTEXT_EXPR
+        if value_type == "NUMBER":
+            numeric_context_value = (
+                f"CASE WHEN REGEXP_LIKE({context_value}, '^[0-9]+$') "
+                f"THEN TO_NUMBER({context_value}) END"
+            )
+            return f"{column} = {numeric_context_value}"
+        return f"{column} = {context_value}"
+    if operator == "IS_NULL":
+        return f"{column} IS NULL"
+    if operator == "IS_NOT_NULL":
+        return f"{column} IS NOT NULL"
+    if operator == "IN":
+        values = ", ".join(_scope_filter_values(normalized_filter, data_type=data_type))
+        return f"{column} IN ({values})"
+    if operator == "BETWEEN":
+        start = _scope_filter_literal(
+            normalized_filter,
+            data_type=data_type,
+            value=normalized_filter.value,
+        )
+        end = _scope_filter_literal(
+            normalized_filter,
+            data_type=data_type,
+            value=normalized_filter.value_to,
+        )
+        return f"{column} BETWEEN {start} AND {end}"
+    if value_type == "TEXT" and operator in {"CONTAINS", "STARTS_WITH"}:
+        prefix = "%" if operator == "CONTAINS" else ""
+        pattern = _like_pattern(
+            _non_empty_value(normalized_filter.value, "文字列 scope 値"),
+            prefix=prefix,
+            suffix="%",
+        )
+        escape_literal = _sql_literal("\\")
+        return f"{column} LIKE {_sql_literal(pattern)} ESCAPE {escape_literal}"
+    if value_type == "NUMBER" and operator == "EQ":
+        value = _positive_integer_literal(normalized_filter.value)
+    else:
+        value = _scope_filter_literal(
+            normalized_filter,
+            data_type=data_type,
+            value=normalized_filter.value,
+        )
+    operator_sql = {
+        "EQ": "=",
+        "NE": "<>",
+        "GT": ">",
+        "GTE": ">=",
+        "LT": "<",
+        "LTE": "<=",
+        "BEFORE": "<",
+        "ON_OR_BEFORE": "<=",
+        "AFTER": ">",
+        "ON_OR_AFTER": ">=",
+    }.get(operator)
+    if operator_sql is None:
+        raise SecurityApiError(400, "scope filter operator が不正です。")
+    return f"{column} {operator_sql} {value}"
+
+
+def _qualified(owner: str, name: str) -> str:
+    return f"{_strict_identifier(owner)}.{_strict_identifier(name)}"
+
+
+def _disable_data_grants_only_statement(target_owner: str, target_object: str) -> str:
+    target_owner = _strict_identifier(target_owner)
+    target_object = _strict_identifier(target_object)
+    target = f"{target_owner}.{target_object}"
+    return _trusted_identifier_sql(
+        """
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM ALL_OBJECTS
+           WHERE OWNER = '{target_owner}'
+             AND OBJECT_NAME = '{target_object}'
+             AND OBJECT_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW');
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'SET USE DATA GRANTS ONLY ON {target} DISABLED';
+          END IF;
+        END;
+        """,
+        target_owner=target_owner,
+        target_object=target_object,
+        target=target,
+    )
+
+
+def _data_grant_checksum(statements: tuple[str, ...]) -> str:
+    payload = "\n-- statement --\n".join(statement.strip() for statement in statements)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _data_grant_name(entitlement: DataEntitlementRecord) -> str:
+    source = "|".join(
+        (
+            entitlement.entitlement_id,
+            entitlement.role_id,
+            entitlement.target_owner,
+            entitlement.target_object,
+            entitlement.scope_code,
+        )
+    )
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24].upper()
+    return f"{MANAGED_DATA_GRANT_PREFIX}{digest}"
+
+
+def _is_real_data_entitlement(entitlement: DataEntitlementRecord) -> bool:
+    return bool(entitlement.target_owner and entitlement.target_object)
+
+
+def _is_complete_data_entitlement(entitlement: DataEntitlementRecord) -> bool:
+    if not _is_real_data_entitlement(entitlement):
+        return False
+    if not entitlement.column_names:
+        return False
+    if entitlement.scope_mode == "FILTERS":
+        return bool(entitlement.scope_filters)
+    return not (
+        entitlement.scope_mode == "COLUMN_EQUALS"
+        and (not entitlement.scope_column or not entitlement.scope_code)
+    )
+
+
+def _uses_login_user_id_scope(entitlement: DataEntitlementRecord) -> bool:
+    return any(
+        (filter_item.value_source.strip().upper() or "LITERAL")
+        in {LOGIN_USER_ID_SCOPE_VALUE_SOURCE, LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE}
+        for filter_item in entitlement.scope_filters
+    )
+
+
+def build_data_entitlement_statements(
+    settings: Settings,
+    entitlement: DataEntitlementRecord,
+    *,
+    column_types: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    owner = _strict_identifier(settings.oracle_user)
+    data_grant_grantee = _managed_data_grant_grantee(settings)
+    target_owner = _strict_identifier(entitlement.target_owner)
+    target_object = _strict_identifier(entitlement.target_object)
+    target = f"{target_owner}.{target_object}"
+    grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
+    grant = f"{owner}.{_strict_identifier(grant_name)}"
+    if not entitlement.column_names:
+        raise SecurityApiError(400, "Data Grant に含める列を選択してください。")
+    columns = ", ".join(_strict_identifier(column) for column in entitlement.column_names)
+    entitlement_id_literal = _sql_literal(entitlement.entitlement_id)
+    role_id_literal = _sql_literal(entitlement.role_id)
+    predicate = f"""
+        EXISTS (
+          SELECT 1
+            FROM {owner}.NL2SQL_APP_USER_ROLES ur
+            JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID
+            JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID
+           WHERE ur.USER_UUID = {_DEEPSEC_APP_USER_CONTEXT_EXPR}
+             AND r.ARCHIVED = 0
+             AND e.ENTITLEMENT_ID = {entitlement_id_literal}
+             AND e.ROLE_ID = {role_id_literal}
+             AND e.CAPABILITY = 'SELECT'
+             AND e.APPLY_STATUS = 'APPLIED'
+        """.rstrip()
+    scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
+    if scope_mode == "COLUMN_EQUALS":
+        scope_column = _strict_identifier(entitlement.scope_column)
+        predicate += f"\n             AND {target}.{scope_column} = e.SCOPE_CODE"
+    elif scope_mode == "FILTERS":
+        type_by_column = {
+            str(column).strip().upper(): str(data_type)
+            for column, data_type in (column_types or {}).items()
+        }
+        for filter_item in entitlement.scope_filters:
+            column_name = _strict_identifier(filter_item.column_name)
+            data_type = type_by_column.get(column_name, filter_item.value_type)
+            filter_predicate = _scope_filter_predicate(
+                target,
+                filter_item,
+                data_type=data_type,
+            )
+            predicate += f"\n             AND {filter_predicate}"
+    elif scope_mode != "ALL":
+        raise SecurityApiError(400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS のいずれかです。")
+    predicate += "\n        )"
+    if len(predicate.strip()) > DATA_GRANT_PREDICATE_MAX_LENGTH:
+        raise SecurityApiError(
+            400,
+            "Data Grant predicate は Oracle の上限 4000 文字以内にしてください。",
+        )
+    return (
+        f"GRANT SELECT ON {target} TO {DEEPSEC_DB_ROLE}",
+        f"DROP DATA GRANT IF EXISTS {grant}",
+        f"""
+        CREATE OR REPLACE DATA GRANT {grant}
+          AS SELECT ({columns})
+          ON {target}
+          WHERE {predicate.strip()}
+          TO {data_grant_grantee}
+        """,
+        f"SET USE DATA GRANTS ONLY ON {target} ENABLED",
+    )
+
+
+def build_data_entitlement_preview(
+    settings: Settings,
+    entitlement: DataEntitlementRecord,
+    *,
+    column_types: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    if not _is_complete_data_entitlement(entitlement):
+        return ()
+    return tuple(
+        _preview_statement(item)
+        for item in build_data_entitlement_statements(
+            settings,
+            entitlement,
+            column_types=column_types,
+        )
+    )
+
+
+def _preview_statement(statement: str) -> str:
+    return re.sub(r"\s+$", "", statement.strip())
+
+
 def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     owner = _strict_identifier(settings.oracle_user)
     data_user = _strict_identifier(settings.oracle_deepsec_data_user)
     role = "NL2SQL_APP_DB_ROLE"
     data_role = "NL2SQL_APP_DATA_ROLE"
-    probe = f"{owner}.NL2SQL_DEEPSEC_PROBE"
 
     role_step = DeepSecStep(
         step_no=1,
@@ -181,6 +655,10 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
         statements=(
             f"CREATE ROLE {role}",
             f"GRANT CREATE SESSION TO {role}",
+            *(
+                f"GRANT SELECT ON {owner}.{table_name} TO {role}"
+                for _key, table_name in _DEEPSEC_PREDICATE_TABLE_GRANTS
+            ),
             f"CREATE DATA ROLE IF NOT EXISTS {data_role}",
             (
                 f"CREATE END USER IF NOT EXISTS {data_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
@@ -194,7 +672,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     context_package_spec = _trusted_identifier_sql(
         """
         CREATE OR REPLACE PACKAGE {owner}.NL2SQL_DEEPSEC_CTX_PKG AUTHID DEFINER AS
-          PROCEDURE SET_APP_USER(p_user_id IN VARCHAR2);
+          PROCEDURE SET_APP_USER_UUID(p_user_uuid IN VARCHAR2);
           PROCEDURE CLEAR_APP_USER;
         END NL2SQL_DEEPSEC_CTX_PKG;
         """,
@@ -203,21 +681,25 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     context_package_body = _trusted_identifier_sql(
         """
         CREATE OR REPLACE PACKAGE BODY {owner}.NL2SQL_DEEPSEC_CTX_PKG AS
-          PROCEDURE SET_APP_USER(p_user_id IN VARCHAR2) IS
-            v_count NUMBER;
+          PROCEDURE SET_APP_USER_UUID(p_user_uuid IN VARCHAR2) IS
+            v_login_user_id VARCHAR2(64);
           BEGIN
-            SELECT COUNT(*) INTO v_count
+            SELECT LOGIN_USER_ID INTO v_login_user_id
               FROM {owner}.NL2SQL_APP_USERS
-             WHERE USER_ID = p_user_id AND STATUS = 'ACTIVE';
-            IF v_count <> 1 THEN
+             WHERE USER_UUID = p_user_uuid AND STATUS = 'ACTIVE';
+            DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID', v_login_user_id);
+            DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL);
+            DBMS_SESSION.SET_IDENTIFIER(p_user_uuid);
+          EXCEPTION
+            WHEN NO_DATA_FOUND THEN
               RAISE_APPLICATION_ERROR(-20001, 'invalid application user');
-            END IF;
-            DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', p_user_id);
-          END SET_APP_USER;
+          END SET_APP_USER_UUID;
 
           PROCEDURE CLEAR_APP_USER IS
           BEGIN
+            DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID', NULL);
             DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL);
+            DBMS_SESSION.CLEAR_IDENTIFIER;
           END CLEAR_APP_USER;
         END NL2SQL_DEEPSEC_CTX_PKG;
         """,
@@ -260,114 +742,141 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
             f"GRANT EXECUTE ON {owner}.NL2SQL_DEEPSEC_CTX_PKG TO {role}",
         ),
     )
-    probe_create_sql = _trusted_identifier_sql(
+    return (role_step, context_step)
+
+
+def build_v001_reset_statements(
+    settings: Settings,
+    entitlements: list[DataEntitlementRecord] | tuple[DataEntitlementRecord, ...] = (),
+) -> tuple[str, ...]:
+    owner = _strict_identifier(settings.oracle_user)
+    data_user = _strict_identifier(settings.oracle_deepsec_data_user)
+    role = DEEPSEC_DB_ROLE
+    data_role = DEEPSEC_DATA_ROLE
+    probe = f"{owner}.NL2SQL_DEEPSEC_PROBE"
+    managed_targets: list[tuple[str, str, str]] = []
+    managed_grants: list[str] = []
+    seen_targets: set[tuple[str, str]] = set()
+    seen_grants: set[str] = set()
+    for entitlement in entitlements:
+        if not _is_real_data_entitlement(entitlement):
+            continue
+        target_owner = _strict_identifier(entitlement.target_owner)
+        target_object = _strict_identifier(entitlement.target_object)
+        target_key = (target_owner, target_object)
+        if target_key not in seen_targets:
+            seen_targets.add(target_key)
+            managed_targets.append((target_owner, target_object, f"{target_owner}.{target_object}"))
+        data_grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
+        data_grant_name = _strict_identifier(data_grant_name)
+        if data_grant_name not in seen_grants:
+            seen_grants.add(data_grant_name)
+            managed_grants.append(data_grant_name)
+    managed_disable_statements = tuple(
+        _trusted_identifier_sql(
+            """
+            DECLARE
+              v_count NUMBER;
+            BEGIN
+              SELECT COUNT(*) INTO v_count FROM ALL_OBJECTS
+               WHERE OWNER = '{target_owner}'
+                 AND OBJECT_NAME = '{target_object}'
+                 AND OBJECT_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW');
+              IF v_count > 0 THEN
+                EXECUTE IMMEDIATE 'SET USE DATA GRANTS ONLY ON {target} DISABLED';
+              END IF;
+            END;
+            """,
+            target_owner=target_owner,
+            target_object=target_object,
+            target=target,
+        )
+        for target_owner, target_object, target in managed_targets
+    )
+    managed_drop_statements = tuple(
+        f"DROP DATA GRANT IF EXISTS {owner}.{grant_name}" for grant_name in managed_grants
+    )
+    disable_probe_data_grants_only = _trusted_identifier_sql(
         """
         DECLARE
           v_count NUMBER;
         BEGIN
           SELECT COUNT(*) INTO v_count FROM ALL_TABLES
            WHERE OWNER = '{owner}' AND TABLE_NAME = 'NL2SQL_DEEPSEC_PROBE';
-          IF v_count = 0 THEN
-            EXECUTE IMMEDIATE '
-              CREATE TABLE {probe} (
-                PROBE_ID NUMBER PRIMARY KEY,
-                SCOPE_CODE VARCHAR2(64) NOT NULL,
-                PUBLIC_TEXT VARCHAR2(256) NOT NULL,
-                SENSITIVE_TEXT VARCHAR2(256) NOT NULL
-              )';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'SET USE DATA GRANTS ONLY ON {probe} DISABLED';
           END IF;
         END;
         """,
         owner=owner,
         probe=probe,
     )
-    probe_merge_sql = _trusted_identifier_sql(
+    drop_probe_table = _trusted_identifier_sql(
         """
-        MERGE INTO {probe} p
-        USING (
-          SELECT 1 PROBE_ID, 'SALES' SCOPE_CODE, '営業公開データ' PUBLIC_TEXT,
-                 '営業機密データ' SENSITIVE_TEXT FROM DUAL
-          UNION ALL
-          SELECT 2, 'HR', '人事公開データ', '人事機密データ' FROM DUAL
-        ) s
-        ON (p.PROBE_ID = s.PROBE_ID)
-        WHEN MATCHED THEN UPDATE SET
-          p.SCOPE_CODE = s.SCOPE_CODE, p.PUBLIC_TEXT = s.PUBLIC_TEXT,
-          p.SENSITIVE_TEXT = s.SENSITIVE_TEXT
-        WHEN NOT MATCHED THEN INSERT
-          (PROBE_ID, SCOPE_CODE, PUBLIC_TEXT, SENSITIVE_TEXT)
-        VALUES
-          (s.PROBE_ID, s.SCOPE_CODE, s.PUBLIC_TEXT, s.SENSITIVE_TEXT)
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM ALL_TABLES
+           WHERE OWNER = '{owner}' AND TABLE_NAME = 'NL2SQL_DEEPSEC_PROBE';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP TABLE {probe} CASCADE CONSTRAINTS PURGE';
+          END IF;
+        END;
         """,
+        owner=owner,
         probe=probe,
     )
-    probe_step = DeepSecStep(
-        step_no=3,
-        key="verification_object",
-        title="検証オブジェクト",
-        description="行・列分離を証明する専用 probe table と固定 fixture を作成します。",
-        statements=(
-            probe_create_sql,
-            probe_merge_sql,
-            f"GRANT SELECT ON {probe} TO {role}",
-        ),
-    )
-    row_predicate = _trusted_identifier_sql(
+    drop_context = """
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM DBA_CONTEXT
+           WHERE NAMESPACE = 'NL2SQL_APP_USER_CTX';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP CONTEXT NL2SQL_APP_USER_CTX';
+          END IF;
+        END;
         """
-        EXISTS (
-          SELECT 1
-            FROM {owner}.NL2SQL_APP_USER_ROLES ur
-            JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID
-            JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID
-           WHERE ur.USER_ID = SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID')
-             AND r.ARCHIVED = 0
-             AND e.RESOURCE_CODE = 'NL2SQL_DEEPSEC_PROBE'
-             AND e.CAPABILITY IN ('ROW_READ', 'FULL')
-             AND (e.SCOPE_CODE = '*' OR e.SCOPE_CODE = SCOPE_CODE)
-        )
+    drop_context_package = _trusted_identifier_sql(
+        """
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM ALL_OBJECTS
+           WHERE OWNER = '{owner}'
+             AND OBJECT_NAME = 'NL2SQL_DEEPSEC_CTX_PKG'
+             AND OBJECT_TYPE = 'PACKAGE';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP PACKAGE {owner}.NL2SQL_DEEPSEC_CTX_PKG';
+          END IF;
+        END;
         """,
         owner=owner,
-    ).strip()
-    sensitive_predicate = _trusted_identifier_sql(
-        """
-        EXISTS (
-          SELECT 1
-            FROM {owner}.NL2SQL_APP_USER_ROLES ur
-            JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID
-            JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID
-           WHERE ur.USER_ID = SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID')
-             AND r.ARCHIVED = 0
-             AND e.RESOURCE_CODE = 'NL2SQL_DEEPSEC_PROBE'
-             AND e.CAPABILITY IN ('SENSITIVE_READ', 'FULL')
-             AND (e.SCOPE_CODE = '*' OR e.SCOPE_CODE = SCOPE_CODE)
-        )
-        """,
-        owner=owner,
-    ).strip()
-    grants_step = DeepSecStep(
-        step_no=4,
-        key="data_grants",
-        title="Data Grants と mandatory enforcement",
-        description="classic context を参照する加法型の行・列 Data Grant を適用します。",
-        statements=(
-            f"""
-            CREATE OR REPLACE DATA GRANT {owner}.NL2SQL_DEEPSEC_PROBE_ROWS
-              AS SELECT (PROBE_ID, SCOPE_CODE, PUBLIC_TEXT)
-              ON {probe}
-              WHERE {row_predicate}
-              TO {data_role}
-            """,
-            f"""
-            CREATE OR REPLACE DATA GRANT {owner}.NL2SQL_DEEPSEC_PROBE_SENSITIVE
-              AS SELECT (SENSITIVE_TEXT)
-              ON {probe}
-              WHERE {sensitive_predicate}
-              TO {data_role}
-            """,
-            f"SET USE DATA GRANTS ONLY ON {probe} ENABLED",
-        ),
     )
-    return (role_step, context_step, probe_step, grants_step)
+    drop_role = f"""
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM DBA_ROLES
+           WHERE ROLE = '{role}';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP ROLE {role}';
+          END IF;
+        END;
+        """
+    return (
+        *managed_disable_statements,
+        *managed_drop_statements,
+        disable_probe_data_grants_only,
+        f"DROP DATA GRANT IF EXISTS {owner}.NL2SQL_DEEPSEC_PROBE_SENSITIVE",
+        f"DROP DATA GRANT IF EXISTS {owner}.NL2SQL_DEEPSEC_PROBE_ROWS",
+        drop_probe_table,
+        drop_context,
+        drop_context_package,
+        f"DROP END USER IF EXISTS {data_user}",
+        f"DROP DATA ROLE IF EXISTS {data_role}",
+        drop_role,
+    )
 
 
 class DeepSecService:
@@ -409,6 +918,316 @@ class DeepSecService:
             "steps": steps,
         }
 
+    def data_entitlements(self) -> list[dict[str, object]]:
+        try:
+            roles = self.security.list_roles(include_archived=True)
+        except Exception as exc:
+            if _looks_like_missing_scope_filters_column(exc):
+                raise SecurityApiError(
+                    409,
+                    "DeepSec Data Grant の schema migration が未適用です。"
+                    "app_security_migrate を実行して SCOPE_FILTERS 列を作成してください。",
+                ) from exc
+            raise
+        return [
+            self._role_entitlements_payload(role)
+            for role in roles
+        ]
+
+    def role_entitlements(self, role: RoleRecord) -> dict[str, object]:
+        return self._role_entitlements_payload(role)
+
+    def preview_data_entitlements(
+        self,
+        role_id: str,
+        *,
+        entitlements: list[DataEntitlementRecord],
+        actor: Principal,
+    ) -> dict[str, object]:
+        _ = actor
+        if not self.settings.oracle_deepsec_enabled:
+            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+        role = self.security.store.get_role(role_id)
+        if role is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if role.is_built_in:
+            raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールには設定できません。")
+        if role.archived:
+            raise SecurityApiError(409, "アーカイブ済みロールには preview できません。")
+
+        records = [
+            replace(
+                entitlement,
+                entitlement_id=entitlement.entitlement_id or str(uuid4()),
+                role_id=role_id,
+                capability="SELECT",
+                resource_code=f"{entitlement.target_owner}.{entitlement.target_object}",
+                scope_code=(
+                    "*"
+                    if entitlement.scope_mode == "ALL"
+                    else (
+                        scope_filters_scope_code(entitlement.scope_filters)
+                        if entitlement.scope_mode == "FILTERS"
+                        else entitlement.scope_code
+                    )
+                ),
+                scope_filters=list(entitlement.scope_filters),
+            )
+            for entitlement in entitlements
+        ]
+        current_by_id = {
+            entitlement.entitlement_id: entitlement
+            for entitlement in role.entitlements
+            if entitlement.entitlement_id
+        }
+        preview_entitlements: list[dict[str, object]] = []
+        self.pools.validate_deepsec_control_configuration()
+        with self.pools.control_connection() as conn, conn.cursor() as cursor:
+            for entitlement in records:
+                column_types = self._validate_data_entitlement(cursor, entitlement)
+                data_grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
+                normalized = replace(entitlement, data_grant_name=data_grant_name)
+                statements = build_data_entitlement_preview(
+                    self.settings,
+                    normalized,
+                    column_types=column_types,
+                )
+                checksum = _data_grant_checksum(statements) if statements else ""
+                current = current_by_id.get(normalized.entitlement_id)
+                preserved_status = "PENDING"
+                preserved_error = ""
+                preserved_applied_at = None
+                if current is not None and (
+                    self.security._data_entitlement_policy_signature(normalized)  # noqa: SLF001
+                    == self.security._data_entitlement_policy_signature(current)  # noqa: SLF001
+                ):
+                    preserved_status = current.apply_status
+                    preserved_error = current.apply_error_message
+                    preserved_applied_at = current.applied_at
+                preview_entitlements.append(
+                    {
+                        "entitlement_id": normalized.entitlement_id,
+                        "resource_code": normalized.resource_code,
+                        "scope_code": normalized.scope_code,
+                        "capability": normalized.capability,
+                        "target_owner": normalized.target_owner,
+                        "target_object": normalized.target_object,
+                        "target_type": normalized.target_type,
+                        "column_names": list(normalized.column_names),
+                        "scope_mode": normalized.scope_mode,
+                        "scope_column": normalized.scope_column,
+                        "scope_filters": [
+                            scope_filter_payload(item) for item in normalized.scope_filters
+                        ],
+                        "data_grant_name": data_grant_name,
+                        "sql_checksum": checksum,
+                        "apply_status": preserved_status,
+                        "apply_error_message": preserved_error,
+                        "applied_at": preserved_applied_at,
+                        "sql": list(statements),
+                        "checksum": checksum,
+                    }
+                )
+        return {"role_id": role_id, "data_entitlements": preview_entitlements}
+
+    def apply_data_entitlements(
+        self,
+        role_id: str,
+        *,
+        confirmation: str,
+        entitlement_ids: list[str],
+        actor: Principal,
+    ) -> dict[str, object]:
+        if confirmation.strip() != DEEPSEC_APPLY_CONFIRMATION:
+            raise SecurityApiError(
+                409,
+                f"Data Grant の適用には confirmation={DEEPSEC_APPLY_CONFIRMATION} が必要です。",
+            )
+        if not self.settings.oracle_deepsec_enabled:
+            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+        role = self.security.store.get_role(role_id)
+        if role is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if role.is_built_in:
+            raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールには設定できません。")
+        if role.archived:
+            raise SecurityApiError(409, "アーカイブ済みロールには適用できません。")
+        requested_ids = {item.strip() for item in entitlement_ids if item.strip()}
+        selected = [
+            entitlement
+            for entitlement in role.entitlements
+            if _is_real_data_entitlement(entitlement)
+            and (not requested_ids or entitlement.entitlement_id in requested_ids)
+        ]
+        if requested_ids and not selected:
+            raise SecurityApiError(400, "適用対象の Data Grant 設定がありません。")
+
+        prepared: list[tuple[DataEntitlementRecord, tuple[str, ...], str]] = []
+        self.pools.validate_deepsec_control_configuration()
+        try:
+            cleanup_statements: tuple[str, ...] = ()
+            with self.pools.control_connection() as conn, conn.cursor() as cursor:
+                for entitlement in selected:
+                    data_grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
+                    normalized = replace(
+                        entitlement,
+                        data_grant_name=data_grant_name,
+                        capability="SELECT",
+                        resource_code=f"{entitlement.target_owner}.{entitlement.target_object}",
+                        scope_code=(
+                            "*"
+                            if entitlement.scope_mode == "ALL"
+                            else (
+                                scope_filters_scope_code(entitlement.scope_filters)
+                                if entitlement.scope_mode == "FILTERS"
+                                else entitlement.scope_code
+                            )
+                        ),
+                        scope_filters=list(entitlement.scope_filters),
+                    )
+                    column_types = self._validate_data_entitlement(cursor, normalized)
+                    statements = tuple(
+                        _preview_statement(statement)
+                        for statement in build_data_entitlement_statements(
+                            self.settings,
+                            normalized,
+                            column_types=column_types,
+                        )
+                    )
+                    prepared.append((normalized, statements, _data_grant_checksum(statements)))
+                recreate_grant_names = {
+                    _strict_identifier(item.data_grant_name) for item, _sql, _checksum in prepared
+                }
+                cleanup_statements = self._stale_data_grant_cleanup_statements(
+                    cursor,
+                    recreate_grant_names=recreate_grant_names,
+                )
+
+            for entitlement, _statements, checksum in prepared:
+                self.security.store.set_deepsec_entitlement_apply_state(
+                    entitlement.entitlement_id,
+                    status="RUNNING",
+                    data_grant_name=entitlement.data_grant_name,
+                    sql_checksum=checksum,
+                    error_message="",
+                )
+            statements = [
+                *cleanup_statements,
+                *(statement for _entitlement, sql, _checksum in prepared for statement in sql),
+            ]
+            results: list[dict[str, object]] = []
+            if statements:
+                with self.pools.control_connection() as conn:
+                    results = oracle_statement_executor.execute(
+                        conn,
+                        statements,
+                        atomic=False,
+                        include_sql=False,
+                    )
+            errors = [item for item in results if item["status"] == "error"]
+            if errors:
+                raise SecurityApiError(
+                    409, str(errors[0].get("error_message") or "SQL execution failed")
+                )
+            for entitlement, _statements, checksum in prepared:
+                self.security.store.set_deepsec_entitlement_apply_state(
+                    entitlement.entitlement_id,
+                    status="APPLIED",
+                    data_grant_name=entitlement.data_grant_name,
+                    sql_checksum=checksum,
+                    error_message="",
+                )
+            close_oracle_pools()
+            return {
+                "role_id": role.role_id,
+                "status": "APPLIED",
+                "entitlement_ids": [item.entitlement_id for item, _sql, _checksum in prepared],
+                "cleanup_count": len(cleanup_statements),
+                "results": results,
+            }
+        except Exception as exc:
+            safe_error = self._safe_error(exc)
+            for entitlement, _statements, checksum in prepared:
+                with suppress(Exception):
+                    self.security.store.set_deepsec_entitlement_apply_state(
+                        entitlement.entitlement_id,
+                        status="FAILED",
+                        data_grant_name=entitlement.data_grant_name,
+                        sql_checksum=checksum,
+                        error_message=safe_error,
+                    )
+            if isinstance(exc, SecurityApiError):
+                raise
+            raise SecurityApiError(500, f"Data Grant の適用に失敗しました: {safe_error}") from exc
+
+    def _stale_data_grant_cleanup_statements(
+        self,
+        cursor: Any,
+        *,
+        recreate_grant_names: set[str] | None = None,
+    ) -> tuple[str, ...]:
+        recreate_grant_names = recreate_grant_names or set()
+        desired_by_name: dict[str, set[tuple[str, str]]] = {}
+        desired_targets: set[tuple[str, str]] = set()
+        for entitlement in self._managed_real_entitlements():
+            grant_name = _strict_identifier(
+                entitlement.data_grant_name or _data_grant_name(entitlement)
+            )
+            target = (
+                _strict_identifier(entitlement.target_owner),
+                _strict_identifier(entitlement.target_object),
+            )
+            desired_by_name.setdefault(grant_name, set()).add(target)
+            desired_targets.add(target)
+
+        owner = _strict_identifier(self.settings.oracle_user)
+        statements: list[str] = []
+        disabled_targets: set[tuple[str, str]] = set()
+        dropped_grants: set[str] = set()
+        for grant in self._managed_oracle_data_grants(cursor):
+            target = (grant.target_owner, grant.target_object)
+            desired_targets_for_grant = desired_by_name.get(grant.grant_name, set())
+            has_current_policy = target in desired_targets_for_grant
+            if grant.grant_name in recreate_grant_names:
+                continue
+            if target not in desired_targets and target not in disabled_targets:
+                statements.append(_disable_data_grants_only_statement(*target))
+                disabled_targets.add(target)
+            if not has_current_policy and grant.grant_name not in dropped_grants:
+                statements.append(f"DROP DATA GRANT IF EXISTS {owner}.{grant.grant_name}")
+                dropped_grants.add(grant.grant_name)
+        return tuple(statements)
+
+    def _managed_oracle_data_grants(self, cursor: Any) -> list[OracleManagedDataGrant]:
+        expected_grantee = _managed_data_grant_grantee(self.settings)
+        legacy_direct_grantee = _legacy_direct_end_user_data_grant_grantee(self.settings)
+        cursor.execute(
+            """
+            SELECT DISTINCT GRANT_NAME, OBJECT_OWNER, OBJECT_NAME, GRANTEE, GRANTEE_TYPE
+              FROM DBA_DATA_GRANTS
+             WHERE OWNER = :owner
+               AND GRANT_NAME LIKE :grant_prefix
+               AND GRANTEE IN (:expected_grantee, :legacy_grantee)
+             ORDER BY OBJECT_OWNER, OBJECT_NAME, GRANT_NAME
+            """,
+            {
+                "owner": _strict_identifier(self.settings.oracle_user),
+                "grant_prefix": f"{MANAGED_DATA_GRANT_PREFIX}%",
+                "expected_grantee": expected_grantee,
+                "legacy_grantee": legacy_direct_grantee,
+            },
+        )
+        return [
+            OracleManagedDataGrant(
+                grant_name=_strict_identifier(str(row[0])),
+                target_owner=_strict_identifier(str(row[1])),
+                target_object=_strict_identifier(str(row[2])),
+                grantee=_strict_identifier(str(row[3])),
+                grantee_type=str(row[4]).upper(),
+            )
+            for row in cursor.fetchall()
+        ]
+
     def status(self) -> dict[str, object]:
         result: dict[str, object] = {
             "configured": False,
@@ -422,54 +1241,103 @@ class DeepSecService:
         }
         if self.settings.oracle_deepsec_enabled:
             try:
-                self.pools.validate_deepsec_configuration()
+                self.pools.validate_deepsec_control_configuration()
             except Exception as exc:
                 result["message"] = f"DeepSec 状態を確認できませんでした: {self._safe_error(exc)}"
                 return result
         if not self.settings.oracle_user or not self.settings.oracle_dsn:
             return result
         owner = _strict_identifier(self.settings.oracle_user)
+        legacy_direct_grantee = _legacy_direct_end_user_data_grant_grantee(self.settings)
         try:
             with self.pools.control_connection() as conn, conn.cursor() as cursor:
-                checks = {
+                checks: dict[str, tuple[str, dict[str, object]]] = {
                     "data_user": (
                         "SELECT COUNT(*) FROM DBA_END_USERS WHERE USERNAME = :name",
-                        _strict_identifier(self.settings.oracle_deepsec_data_user),
+                        {"name": _strict_identifier(self.settings.oracle_deepsec_data_user)},
                     ),
                     "data_role": (
                         "SELECT COUNT(*) FROM DBA_DATA_ROLES WHERE DATA_ROLE = :name",
-                        "NL2SQL_APP_DATA_ROLE",
+                        {"name": DEEPSEC_DATA_ROLE},
+                    ),
+                    "db_role": (
+                        "SELECT COUNT(*) FROM DBA_ROLES WHERE ROLE = :name",
+                        {"name": DEEPSEC_DB_ROLE},
                     ),
                     "context": (
-                        "SELECT COUNT(*) FROM ALL_CONTEXT WHERE NAMESPACE = :name",
-                        "NL2SQL_APP_USER_CTX",
+                        "SELECT COUNT(*) FROM DBA_CONTEXT "
+                        "WHERE NAMESPACE = :name AND SCHEMA = :owner "
+                        "AND PACKAGE = 'NL2SQL_DEEPSEC_CTX_PKG'",
+                        {"name": "NL2SQL_APP_USER_CTX", "owner": owner},
                     ),
-                    "probe_table": (
-                        "SELECT COUNT(*) FROM ALL_TABLES WHERE OWNER = :owner "
-                        "AND TABLE_NAME = 'NL2SQL_DEEPSEC_PROBE'",
-                        owner,
+                    "context_package": (
+                        "SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER = :owner "
+                        "AND OBJECT_NAME = 'NL2SQL_DEEPSEC_CTX_PKG' "
+                        "AND OBJECT_TYPE = 'PACKAGE' AND STATUS = 'VALID'",
+                        {"owner": owner},
                     ),
-                    "data_grants": (
-                        "SELECT COUNT(*) FROM DBA_DATA_GRANTS WHERE OBJECT_OWNER = :owner "
-                        "AND OBJECT_NAME = 'NL2SQL_DEEPSEC_PROBE'",
-                        owner,
+                    "managed_data_grants": (
+                        "SELECT COUNT(DISTINCT GRANT_NAME) FROM DBA_DATA_GRANTS "
+                        "WHERE OWNER = :owner AND GRANT_NAME LIKE 'NL2SQL_DG_%'",
+                        {"owner": owner},
+                    ),
+                    "managed_data_grants_data_role": (
+                        "SELECT COUNT(DISTINCT GRANT_NAME) FROM DBA_DATA_GRANTS "
+                        "WHERE OWNER = :owner AND GRANT_NAME LIKE 'NL2SQL_DG_%' "
+                        "AND GRANTEE = :grantee AND GRANTEE_TYPE = 'DATA ROLE'",
+                        {"owner": owner, "grantee": DEEPSEC_DATA_ROLE},
+                    ),
+                    "managed_data_grants_direct_end_user": (
+                        "SELECT COUNT(DISTINCT GRANT_NAME) FROM DBA_DATA_GRANTS "
+                        "WHERE OWNER = :owner AND GRANT_NAME LIKE 'NL2SQL_DG_%' "
+                        "AND GRANTEE = :grantee AND GRANTEE_TYPE = 'END USER'",
+                        {"owner": owner, "grantee": legacy_direct_grantee},
                     ),
                 }
-                objects: dict[str, int] = {}
-                for key, (sql, value) in checks.items():
-                    bind_name = "owner" if ":owner" in sql else "name"
-                    cursor.execute(sql, {bind_name: value})
-                    objects[key] = int(cursor.fetchone()[0])
-                result["objects"] = objects
-                result["configured"] = (
-                    all(
-                        objects[key] > 0
-                        for key in ("data_user", "data_role", "context", "probe_table")
+                for key, table_name in _DEEPSEC_PREDICATE_TABLE_GRANTS:
+                    checks[key] = (
+                        "SELECT COUNT(*) FROM DBA_TAB_PRIVS "
+                        "WHERE OWNER = :owner AND TABLE_NAME = :table_name "
+                        "AND GRANTEE = :grantee AND PRIVILEGE = 'SELECT'",
+                        {
+                            "owner": owner,
+                            "table_name": table_name,
+                            "grantee": DEEPSEC_DB_ROLE,
+                        },
                     )
-                    and objects["data_grants"] >= 2
+                objects: dict[str, int] = {}
+                for key, (sql, params) in checks.items():
+                    cursor.execute(sql, params)
+                    objects[key] = int(cursor.fetchone()[0])
+                managed_target_vpd_policies = 0
+                for target_owner, target_object in sorted(self._managed_target_keys()):
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*)
+                          FROM DBA_POLICIES
+                         WHERE OBJECT_OWNER = :target_owner
+                           AND OBJECT_NAME = :target_object
+                           AND ENABLE = 'YES'
+                        """,
+                        {
+                            "target_owner": target_owner,
+                            "target_object": target_object,
+                        },
+                    )
+                    managed_target_vpd_policies += int(cursor.fetchone()[0])
+                objects["managed_target_vpd_policies"] = managed_target_vpd_policies
+                result["objects"] = objects
+                foundation_keys = (
+                    "data_user",
+                    "data_role",
+                    "db_role",
+                    "context",
+                    "context_package",
+                    *[key for key, _table_name in _DEEPSEC_PREDICATE_TABLE_GRANTS],
                 )
+                result["configured"] = all(objects[key] > 0 for key in foundation_keys)
                 result["message"] = (
-                    "Deep Data Security の検証オブジェクトは構成済みです。"
+                    "Deep Data Security の基盤構成は適用済みです。"
                     if result["configured"]
                     else "DeepSec V001 に未適用のオブジェクトがあります。"
                 )
@@ -532,7 +1400,7 @@ class DeepSecService:
             checksum=step.checksum,
             status="RUNNING",
             error_message="",
-            executed_by=actor.user_id,
+            executed_by_user_uuid=actor.user_uuid,
         )
         statements = [self._execution_sql(statement) for statement in step.statements]
         try:
@@ -556,7 +1424,7 @@ class DeepSecService:
                 checksum=step.checksum,
                 status="APPLIED",
                 error_message="",
-                executed_by=actor.user_id,
+                executed_by_user_uuid=actor.user_uuid,
             )
             close_oracle_pools()
             return {
@@ -574,81 +1442,454 @@ class DeepSecService:
                 checksum=step.checksum,
                 status="FAILED",
                 error_message=safe_error,
-                executed_by=actor.user_id,
+                executed_by_user_uuid=actor.user_uuid,
             )
             if isinstance(exc, SecurityApiError):
                 raise
             raise SecurityApiError(500, f"DeepSec step の実行に失敗しました: {safe_error}") from exc
 
+    def reset(
+        self,
+        version: str,
+        confirmation: str,
+        actor: Principal,
+    ) -> dict[str, object]:
+        if version != PLAN_VERSION:
+            raise SecurityApiError(404, "DeepSec plan version が見つかりません。")
+        if confirmation.strip() != DEEPSEC_RESET_CONFIRMATION:
+            raise SecurityApiError(
+                409,
+                f"DeepSec 構成の解除には confirmation={DEEPSEC_RESET_CONFIRMATION} が必要です。",
+            )
+        self.pools.validate_deepsec_control_configuration()
+        self.pools.close()
+        statements = [
+            self._preview_sql(statement)
+            for statement in build_v001_reset_statements(
+                self.settings,
+                self._managed_real_entitlements(),
+            )
+        ]
+        try:
+            with self.pools.control_connection() as conn:
+                results = oracle_statement_executor.execute(
+                    conn,
+                    statements,
+                    atomic=False,
+                    include_sql=False,
+                )
+            errors = [item for item in results if item["status"] == "error"]
+            if errors:
+                raise SecurityApiError(
+                    409, str(errors[0].get("error_message") or "SQL execution failed")
+                )
+            step_numbers = [1, 2, 3, 4]
+            self.security.store.clear_deepsec_states(
+                version=PLAN_VERSION,
+                step_numbers=step_numbers,
+            )
+            self.security.store.clear_deepsec_entitlement_apply_states()
+            close_oracle_pools()
+            return {
+                "version": PLAN_VERSION,
+                "status": "RESET",
+                "step_numbers": step_numbers,
+                "executed_by_user_uuid": actor.user_uuid,
+                "results": results,
+            }
+        except Exception as exc:
+            if isinstance(exc, SecurityApiError):
+                raise
+            safe_error = self._safe_error(exc)
+            raise SecurityApiError(
+                500,
+                f"DeepSec 構成の解除に失敗しました: {safe_error}",
+            ) from exc
+
+    def _role_entitlements_payload(self, role: RoleRecord) -> dict[str, object]:
+        entitlements: list[dict[str, object]] = []
+        for entitlement in role.entitlements:
+            data_grant_name = entitlement.data_grant_name or (
+                _data_grant_name(entitlement) if _is_real_data_entitlement(entitlement) else ""
+            )
+            normalized = replace(entitlement, data_grant_name=data_grant_name)
+            try:
+                statements = build_data_entitlement_preview(self.settings, normalized)
+            except SecurityApiError:
+                statements = ()
+            checksum = _data_grant_checksum(statements) if statements else entitlement.sql_checksum
+            entitlements.append(
+                {
+                    "entitlement_id": entitlement.entitlement_id,
+                    "resource_code": entitlement.resource_code,
+                    "scope_code": entitlement.scope_code,
+                    "capability": entitlement.capability,
+                    "target_owner": entitlement.target_owner,
+                    "target_object": entitlement.target_object,
+                    "target_type": entitlement.target_type,
+                    "column_names": list(entitlement.column_names),
+                    "scope_mode": entitlement.scope_mode,
+                    "scope_column": entitlement.scope_column,
+                    "scope_filters": [
+                        scope_filter_payload(item) for item in entitlement.scope_filters
+                    ],
+                    "data_grant_name": data_grant_name,
+                    "sql_checksum": entitlement.sql_checksum,
+                    "apply_status": entitlement.apply_status,
+                    "apply_error_message": entitlement.apply_error_message,
+                    "applied_at": entitlement.applied_at,
+                    "sql": list(statements),
+                    "checksum": checksum,
+                }
+            )
+        return {
+            "role_id": role.role_id,
+            "role_code": role.role_code,
+            "display_name": role.display_name,
+            "description": role.description,
+            "is_built_in": role.is_built_in,
+            "archived": role.archived,
+            "version": role.version,
+            "data_entitlements": entitlements,
+        }
+
+    def _managed_real_entitlements(self) -> list[DataEntitlementRecord]:
+        entitlements: list[DataEntitlementRecord] = []
+        for role in self.security.store.list_roles(include_archived=True):
+            entitlements.extend(
+                entitlement
+                for entitlement in role.entitlements
+                if _is_real_data_entitlement(entitlement)
+            )
+        return entitlements
+
+    def _managed_target_keys(self) -> set[tuple[str, str]]:
+        return {
+            (
+                _strict_identifier(entitlement.target_owner),
+                _strict_identifier(entitlement.target_object),
+            )
+            for entitlement in self._managed_real_entitlements()
+            if _is_real_data_entitlement(entitlement)
+        }
+
+    def _enabled_vpd_policy_rows(
+        self,
+        cursor: Any,
+        *,
+        target_owner: str,
+        target_object: str,
+    ) -> list[tuple[str, str, str, str]]:
+        cursor.execute(
+            """
+            SELECT POLICY_NAME, PF_OWNER, FUNCTION, POLICY_TYPE
+              FROM DBA_POLICIES
+             WHERE OBJECT_OWNER = :target_owner
+               AND OBJECT_NAME = :target_object
+               AND ENABLE = 'YES'
+             ORDER BY POLICY_NAME
+            """,
+            {
+                "target_owner": _strict_identifier(target_owner),
+                "target_object": _strict_identifier(target_object),
+            },
+        )
+        return [
+            (
+                str(row[0]),
+                str(row[1] or ""),
+                str(row[2] or ""),
+                str(row[3] or ""),
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _validate_data_entitlement(
+        self,
+        cursor: Any,
+        entitlement: DataEntitlementRecord,
+    ) -> dict[str, str]:
+        target_owner = _strict_identifier(entitlement.target_owner)
+        target_object = _strict_identifier(entitlement.target_object)
+        target_type = entitlement.target_type.strip().upper() or "TABLE"
+        if target_type not in _DEEPSEC_MANAGED_TARGET_TYPES:
+            raise SecurityApiError(400, "対象は TABLE / VIEW / MATERIALIZED VIEW のみです。")
+        if target_owner in _DEEPSEC_INTERNAL_OWNER_NAMES:
+            raise SecurityApiError(400, "SYS/SYSTEM schema の object は管理対象にできません。")
+        app_owner = _strict_identifier(self.settings.oracle_user)
+        if target_owner == app_owner and target_object.startswith(
+            _DEEPSEC_INTERNAL_OBJECT_PREFIXES
+        ):
+            raise SecurityApiError(400, "NL2SQL の内部/security object は管理対象にできません。")
+        if entitlement.capability != "SELECT":
+            raise SecurityApiError(400, "V1 の Data Grant は SELECT のみ対応しています。")
+        scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
+        if scope_mode not in _DEEPSEC_SCOPE_MODES:
+            raise SecurityApiError(
+                400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS のいずれかです。"
+            )
+        if not entitlement.column_names:
+            raise SecurityApiError(400, "Data Grant に含める列を選択してください。")
+
+        cursor.execute(
+            """
+            SELECT OBJECT_TYPE
+              FROM ALL_OBJECTS
+             WHERE OWNER = :owner
+               AND OBJECT_NAME = :object_name
+               AND OBJECT_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+               AND STATUS = 'VALID'
+            """,
+            {"owner": target_owner, "object_name": target_object},
+        )
+        object_types = {str(row[0]).upper() for row in cursor.fetchall()}
+        if not object_types:
+            raise SecurityApiError(400, "対象 table/view が見つかりません。")
+        if target_type not in object_types:
+            raise SecurityApiError(400, "対象 object type が metadata と一致しません。")
+
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME, DATA_TYPE
+              FROM ALL_TAB_COLUMNS
+             WHERE OWNER = :owner AND TABLE_NAME = :object_name
+            """,
+            {"owner": target_owner, "object_name": target_object},
+        )
+        columns = {str(row[0]).upper(): str(row[1]).upper() for row in cursor.fetchall()}
+        missing_columns = [
+            column
+            for column in entitlement.column_names
+            if _strict_identifier(column) not in columns
+        ]
+        if missing_columns:
+            raise SecurityApiError(
+                400,
+                "対象 object に存在しない列です: " + ", ".join(sorted(missing_columns)),
+            )
+        if scope_mode == "ALL":
+            if entitlement.scope_code != "*":
+                raise SecurityApiError(400, "ALL scope の scope_code は * にしてください。")
+            if entitlement.scope_filters:
+                raise SecurityApiError(400, "ALL scope では scope filters を指定できません。")
+            return columns
+        if scope_mode == "FILTERS":
+            if entitlement.scope_column:
+                raise SecurityApiError(400, "FILTERS scope では scope column を指定できません。")
+            self._validate_scope_filters(columns, entitlement)
+            return columns
+        scope_column = _strict_identifier(entitlement.scope_column)
+        if scope_column not in columns:
+            raise SecurityApiError(400, "scope column が対象 object に存在しません。")
+        if _scope_value_type(columns[scope_column]) != "TEXT":
+            raise SecurityApiError(400, "scope column は文字列型の列を指定してください。")
+        if entitlement.scope_code == "*":
+            raise SecurityApiError(400, "COLUMN_EQUALS scope は具体的な値を指定してください。")
+        if entitlement.scope_filters:
+            raise SecurityApiError(400, "COLUMN_EQUALS scope では scope filters を指定できません。")
+        return columns
+
+    def _validate_scope_filters(
+        self,
+        columns: dict[str, str],
+        entitlement: DataEntitlementRecord,
+    ) -> None:
+        if not entitlement.scope_filters:
+            raise SecurityApiError(400, "FILTERS scope は条件を 1 件以上指定してください。")
+        if len(entitlement.scope_filters) > _DEEPSEC_MAX_SCOPE_FILTERS:
+            raise SecurityApiError(
+                400,
+                f"scope filter は {_DEEPSEC_MAX_SCOPE_FILTERS} 件以内で指定してください。",
+            )
+        if entitlement.scope_code != scope_filters_scope_code(entitlement.scope_filters):
+            raise SecurityApiError(
+                400,
+                "FILTERS scope の scope_code が条件 checksum と一致しません。",
+            )
+        for filter_item in entitlement.scope_filters:
+            column_name = _strict_identifier(filter_item.column_name)
+            if column_name not in columns:
+                raise SecurityApiError(400, "scope filter column が対象 object に存在しません。")
+            value_type = filter_item.value_type.strip().upper()
+            if value_type not in _DEEPSEC_SCOPE_VALUE_TYPES:
+                raise SecurityApiError(400, "scope filter value_type が不正です。")
+            actual_type = _scope_value_type(columns[column_name])
+            if not actual_type:
+                raise SecurityApiError(400, "scope filter column は対応型の列を指定してください。")
+            if actual_type != value_type:
+                raise SecurityApiError(400, "scope filter value_type が対象列の型と一致しません。")
+            operator = filter_item.operator.strip().upper()
+            if operator not in _DEEPSEC_SCOPE_OPERATORS_BY_TYPE[value_type]:
+                raise SecurityApiError(400, "scope filter operator が列型に対応していません。")
+            _scope_filter_predicate(
+                _qualified(entitlement.target_owner, entitlement.target_object),
+                replace(
+                    filter_item,
+                    column_name=column_name,
+                    operator=operator,
+                    value_type=value_type,
+                ),
+                data_type=columns[column_name],
+            )
+
     def verify(self, actor: Principal) -> dict[str, object]:
+        _ = actor
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
-        owner = _strict_identifier(self.settings.oracle_user)
-        probe = f"{owner}.NL2SQL_DEEPSEC_PROBE"
+        self.pools.validate_deepsec_control_configuration()
+        entitlements = [
+            entitlement
+            for entitlement in self._managed_real_entitlements()
+            if entitlement.apply_status == "APPLIED"
+        ]
         checks: list[dict[str, object]] = []
         try:
-            with self.pools.unscoped_data_connection() as conn, conn.cursor() as cursor:
-                no_context_sql = _trusted_identifier_sql(
-                    "SELECT COUNT(*) FROM {probe}", probe=probe
-                )
-                cursor.execute(no_context_sql)
-                no_context_count = int(cursor.fetchone()[0])
+            status = self.status()
+            status_objects = status.get("objects")
+            status_object_counts = status_objects if isinstance(status_objects, dict) else {}
             checks.append(
                 {
-                    "key": "no_context",
-                    "passed": no_context_count == 0,
-                    "detail": f"context 未設定の取得行数: {no_context_count}",
+                    "key": "foundation",
+                    "passed": bool(status.get("configured")),
+                    "detail": str(status.get("message") or ""),
                 }
             )
-            with self.pools.data_connection(actor.user_id) as conn, conn.cursor() as cursor:
-                full_sql = _trusted_identifier_sql(
-                    "SELECT * FROM {probe} ORDER BY PROBE_ID", probe=probe
-                )
-                cursor.execute(full_sql)
-                full_rows = cursor.fetchall()
+            missing_predicate_grants = [
+                table_name
+                for key, table_name in _DEEPSEC_PREDICATE_TABLE_GRANTS
+                if int(status_object_counts.get(key, 0) or 0) <= 0
+            ]
             checks.append(
                 {
-                    "key": "full_subject",
-                    "passed": len(full_rows) == 2 and all(row[3] is not None for row in full_rows),
-                    "detail": f"SYSTEM_ADMIN probe rows: {len(full_rows)}",
+                    "key": "predicate_table_grants",
+                    "passed": not missing_predicate_grants,
+                    "detail": (
+                        "Data Grant predicate 用 app table SELECT grants are applied."
+                        if not missing_predicate_grants
+                        else (
+                            "Missing SELECT grants for Data Grant predicate tables: "
+                            + ", ".join(missing_predicate_grants)
+                        )
+                    ),
                 }
             )
-            limited = self._find_limited_subject(actor.user_id)
-            if limited is None:
-                checks.append(
-                    {
-                        "key": "limited_subject",
-                        "passed": False,
-                        "detail": (
-                            "ROW_READ の限定 role を持つ有効ユーザーを作成して再検証してください。"
-                        ),
-                    }
-                )
-            else:
-                limited_user_id, expected_scopes = limited
-                with self.pools.data_connection(limited_user_id) as conn, conn.cursor() as cursor:
-                    limited_sql = _trusted_identifier_sql(
-                        "SELECT PROBE_ID, SCOPE_CODE, PUBLIC_TEXT, SENSITIVE_TEXT, "
-                        "ORA_IS_COLUMN_AUTHORIZED(SENSITIVE_TEXT) FROM {probe} "
-                        "ORDER BY PROBE_ID",
-                        probe=probe,
+            with self.pools.control_connection() as conn, conn.cursor() as cursor:
+                if not entitlements:
+                    checks.append(
+                        {
+                            "key": "managed_data_grants",
+                            "passed": True,
+                            "detail": "適用済みの実データ Data Grant はありません。",
+                        }
                     )
-                    cursor.execute(limited_sql)
-                    limited_rows = cursor.fetchall()
-                actual_scopes = {str(row[1]) for row in limited_rows}
-                # Deep Sec の SELECT は未許可セルをエラーではなく NULL として返す。
-                # access-check function も併用し、実データ NULL と認可マスクを区別する。
-                sensitive_masked = all(row[3] is None and not bool(row[4]) for row in limited_rows)
-                checks.append(
-                    {
-                        "key": "limited_subject",
-                        "passed": actual_scopes == expected_scopes and sensitive_masked,
-                        "detail": (
-                            f"限定 subject scopes={sorted(actual_scopes)}, "
-                            f"sensitive_masked={sensitive_masked}"
-                        ),
-                    }
-                )
+                expected_grantee = _managed_data_grant_grantee(self.settings)
+                legacy_direct_grantee = _legacy_direct_end_user_data_grant_grantee(self.settings)
+                for entitlement in entitlements:
+                    grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
+                    cursor.execute(
+                        """
+                        SELECT GRANT_NAME, OBJECT_OWNER, OBJECT_NAME, GRANTEE,
+                               GRANTEE_TYPE, USE_DATA_GRANTS_ONLY, PREDICATE
+                          FROM DBA_DATA_GRANTS
+                         WHERE OWNER = :owner
+                           AND GRANT_NAME = :grant_name
+                           AND OBJECT_OWNER = :target_owner
+                           AND OBJECT_NAME = :target_object
+                           AND GRANTEE IN (:expected_grantee, :legacy_grantee)
+                        """,
+                        {
+                            "owner": _strict_identifier(self.settings.oracle_user),
+                            "grant_name": _strict_identifier(grant_name),
+                            "target_owner": _strict_identifier(entitlement.target_owner),
+                            "target_object": _strict_identifier(entitlement.target_object),
+                            "expected_grantee": expected_grantee,
+                            "legacy_grantee": legacy_direct_grantee,
+                        },
+                    )
+                    rows = cursor.fetchall()
+                    expected_rows = [
+                        row
+                        for row in rows
+                        if str(row[3]).upper() == expected_grantee
+                        and str(row[4]).upper() == "DATA ROLE"
+                    ]
+                    legacy_direct_rows = [
+                        row
+                        for row in rows
+                        if str(row[3]).upper() == legacy_direct_grantee
+                        and str(row[4]).upper() == "END USER"
+                    ]
+                    use_only = any(bool(row[5]) for row in expected_rows)
+                    predicates = [str(row[6] or "") for row in expected_rows]
+                    uses_runtime_context = any(
+                        _DEEPSEC_APP_USER_CONTEXT_EXPR in predicate for predicate in predicates
+                    )
+                    needs_login_user_id_context = _uses_login_user_id_scope(entitlement)
+                    uses_login_user_id_context = any(
+                        _DEEPSEC_LOGIN_USER_ID_CONTEXT_EXPR in predicate
+                        for predicate in predicates
+                    )
+                    uses_legacy_context = any(
+                        _DEEPSEC_LEGACY_APP_USER_CONTEXT_EXPR in predicate
+                        for predicate in predicates
+                    )
+                    target = f"{entitlement.target_owner}.{entitlement.target_object}"
+                    vpd_policy_rows = self._enabled_vpd_policy_rows(
+                        cursor,
+                        target_owner=entitlement.target_owner,
+                        target_object=entitlement.target_object,
+                    )
+                    vpd_policy_details = [
+                        f"{name}({owner}.{function}, {policy_type})"
+                        for name, owner, function, policy_type in vpd_policy_rows[
+                            :_DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT
+                        ]
+                    ]
+                    if len(vpd_policy_rows) > _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT:
+                        vpd_policy_details.append(
+                            f"...+{len(vpd_policy_rows) - _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT}"
+                        )
+                    checks.append(
+                        {
+                            "key": f"vpd_policy:{entitlement.entitlement_id}",
+                            "passed": not vpd_policy_rows,
+                            "detail": (
+                                f"{target}: enabled VPD/RLS policies are not present."
+                                if not vpd_policy_rows
+                                else (
+                                    f"{target}: enabled VPD/RLS policies can further filter "
+                                    "DeepSec rows: "
+                                    + ", ".join(vpd_policy_details)
+                                )
+                            ),
+                        }
+                    )
+                    checks.append(
+                        {
+                            "key": f"data_grant:{entitlement.entitlement_id}",
+                            "passed": (
+                                bool(expected_rows)
+                                and use_only
+                                and not legacy_direct_rows
+                                and uses_runtime_context
+                                and (
+                                    not needs_login_user_id_context
+                                    or uses_login_user_id_context
+                                )
+                                and not uses_legacy_context
+                            ),
+                            "detail": (
+                                f"{grant_name} -> {target}: rows={len(rows)}, "
+                                f"data_role_rows={len(expected_rows)}, "
+                                f"direct_end_user_rows={len(legacy_direct_rows)}, "
+                                f"use_data_grants_only={use_only}, "
+                                f"uses_runtime_context={uses_runtime_context}, "
+                                f"needs_login_user_id_context={needs_login_user_id_context}, "
+                                f"uses_login_user_id_context={uses_login_user_id_context}, "
+                                f"uses_legacy_context={uses_legacy_context}"
+                            ),
+                        }
+                    )
         except Exception as exc:
             safe_error = self._safe_error(exc)
             raise SecurityApiError(500, f"DeepSec 検証に失敗しました: {safe_error}") from exc
@@ -659,27 +1900,6 @@ class DeepSecService:
             "checked_at": datetime.now(UTC).isoformat(),
             "checks": checks,
         }
-
-    def _find_limited_subject(self, excluded_user_id: str) -> tuple[str, set[str]] | None:
-        for user in self.security.store.list_users():
-            if user.user_id == excluded_user_id or user.status != "ACTIVE":
-                continue
-            scopes: set[str] = set()
-            has_full = False
-            for role_id in user.role_ids:
-                role = self.security.store.get_role(role_id)
-                if role is None or role.archived:
-                    continue
-                for entitlement in role.entitlements:
-                    if entitlement.resource_code != "NL2SQL_DEEPSEC_PROBE":
-                        continue
-                    if entitlement.capability == "FULL" or entitlement.scope_code == "*":
-                        has_full = True
-                    elif entitlement.capability == "ROW_READ":
-                        scopes.add(entitlement.scope_code)
-            if scopes and not has_full:
-                return user.user_id, scopes
-        return None
 
     @staticmethod
     def _state_for_step(

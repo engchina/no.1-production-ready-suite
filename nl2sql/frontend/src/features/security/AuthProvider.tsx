@@ -10,7 +10,7 @@ import {
 
 import { isAbortError } from "@/lib/api";
 import { securityApi } from "./api";
-import { normalizeMenuPermissions, normalizePermissionCodes } from "./menu-permissions";
+import { currentUserHasPermission, normalizeMenuPermissions } from "./menu-permissions";
 import type { CurrentUser } from "./types";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated";
@@ -19,7 +19,7 @@ interface AuthContextValue {
   status: AuthStatus;
   user: CurrentUser | null;
   hasPermission: (permission: string) => boolean;
-  login: (loginName: string, password: string) => Promise<CurrentUser>;
+  login: (loginUserId: string, password: string) => Promise<CurrentUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -58,8 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("app-auth-unauthorized", handleUnauthorized);
   }, []);
 
-  const login = useCallback(async (loginName: string, password: string) => {
-    const current = await securityApi.login(loginName, password);
+  const login = useCallback(async (loginUserId: string, password: string) => {
+    const current = await securityApi.login(loginUserId, password);
     setUser(current);
     setStatus("authenticated");
     return current;
@@ -84,13 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         refresh,
         hasPermission: (permission) => {
-          const requestedPermissions = normalizePermissionCodes([permission]);
-          return Boolean(
-            user &&
-              (user.role_codes.includes("SYSTEM_ADMIN") ||
-                normalizedPermissions.has(permission) ||
-                [...requestedPermissions].some((code) => normalizedPermissions.has(code)))
-          );
+          return currentUserHasPermission(user, permission, normalizedPermissions);
         },
       };
     },

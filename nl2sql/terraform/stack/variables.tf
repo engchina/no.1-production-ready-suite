@@ -459,14 +459,14 @@ variable "app_auth_cookie_secure" {
   default     = false
 }
 
-variable "app_admin_username" {
-  description = "Fixed login name for the built-in SYSTEM_ADMIN configuration administrator."
+variable "app_admin_login_user_id" {
+  description = "Fixed login user ID for the built-in SYSTEM_ADMIN configuration administrator."
   type        = string
   default     = "system_admin"
 
   validation {
-    condition     = var.app_admin_username == "system_admin"
-    error_message = "app_admin_username is fixed and must be exactly system_admin."
+    condition     = var.app_admin_login_user_id == "system_admin"
+    error_message = "app_admin_login_user_id is fixed and must be exactly system_admin."
   }
 }
 
@@ -495,7 +495,7 @@ variable "app_admin_password" {
 }
 
 variable "oracle_deepsec_data_user_password" {
-  description = "Password for the shared NL2SQL_DEEPSEC_DATA_USER Deep Data Security DATA USER."
+  description = "Password for the shared DEEPSEC_DATA_USER Deep Data Security DATA USER."
   type        = string
   sensitive   = true
 

@@ -43,6 +43,7 @@ import {
   INFORMATION_TABLE_SCROLL_CLASS,
 } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
+import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbObjectManagementPanelShell,
@@ -252,18 +253,23 @@ export function FeedbackManagementPage() {
     history.length > 0 ? (feedbackPage - 1) * APP_FEEDBACK_PAGE_SIZE + 1 : 0;
   const feedbackPageEnd =
     history.length > 0 ? feedbackPageStart + history.length - 1 : 0;
+  const visibleSelectedFeedbackId = selectedVisibleStringKey(
+    appFeedbackItems,
+    selectedFeedbackId,
+    (item) => item.id
+  );
   const selectedAppFeedback = useMemo(
-    () => history.find((item) => item.id === selectedFeedbackId) ?? history[0] ?? null,
-    [history, selectedFeedbackId]
+    () => appFeedbackItems.find((item) => item.id === visibleSelectedFeedbackId) ?? null,
+    [appFeedbackItems, visibleSelectedFeedbackId]
   );
   const feedbackHistoryOptions = useMemo(
     () =>
-      history.map((item) => ({
+      appFeedbackItems.map((item) => ({
         value: item.id,
         label: item.question,
         description: `${formatDateTime(item.feedback_updated_at || item.created_at)} / ${profileRecordDisplayLabel(item)} / ${userFeedbackRatingBadgeLabel(item.feedback_rating)}`,
       })),
-    [history]
+    [appFeedbackItems]
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
 
@@ -633,6 +639,13 @@ export function FeedbackManagementPage() {
   useEffect(() => {
     setActiveView(requestedView);
   }, [requestedView]);
+
+  useEffect(() => {
+    if (history.length === 0 && appFeedbackItems.length === 0) return;
+    setSelectedFeedbackId((current) =>
+      selectedVisibleStringKey(appFeedbackItems, current, (item) => item.id)
+    );
+  }, [appFeedbackItems, history.length]);
 
   useEffect(() => {
     if (!selectedAppFeedback) {

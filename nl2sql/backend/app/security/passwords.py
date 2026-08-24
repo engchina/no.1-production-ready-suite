@@ -42,7 +42,13 @@ class PasswordPolicyError(ValueError):
     """公開可能な password policy 違反。"""
 
 
-def validate_password(password: str, *, login_name: str, min_length: int, max_length: int) -> None:
+def validate_password(
+    password: str,
+    *,
+    login_user_id: str,
+    min_length: int,
+    max_length: int,
+) -> None:
     errors: list[str] = []
     if len(password) < min_length or len(password) > max_length:
         errors.append(f"パスワードは {min_length}～{max_length} 文字で入力してください。")
@@ -55,7 +61,10 @@ def validate_password(password: str, *, login_name: str, min_length: int, max_le
     if not re.search(r"[^A-Za-z0-9]", password):
         errors.append("記号を 1 文字以上含めてください。")
     lowered = password.casefold()
-    if lowered in _COMMON_PASSWORDS or (login_name and login_name.casefold() in lowered):
+    normalized_login_user_id = login_user_id.strip().casefold()
+    if lowered in _COMMON_PASSWORDS or (
+        len(normalized_login_user_id) >= 3 and normalized_login_user_id in lowered
+    ):
         errors.append("推測されやすいパスワードは使用できません。")
     if errors:
         raise PasswordPolicyError(" ".join(errors))

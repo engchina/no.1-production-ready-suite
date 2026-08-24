@@ -1239,8 +1239,22 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
             training_status: feedbackCandidateAdded ? "added" : "pending",
             training_example_id: feedbackCandidateAdded ? "feedback-hist-001" : "",
           },
+          {
+            ...historyItem,
+            id: "hist-002",
+            question: "別プロファイルの請求確認",
+            generated_sql: "SELECT 2 FROM DUAL",
+            executable_sql: "SELECT 2 FROM DUAL",
+            feedback_rating: "bad",
+            feedback_comment: "条件が違います",
+            admin_feedback_rating: null,
+            admin_feedback_content: "",
+            admin_feedback_updated_at: "",
+            training_status: "pending",
+            training_example_id: "",
+          },
         ],
-        total: 1,
+        total: 2,
         next_cursor: "",
       });
     }
@@ -5821,6 +5835,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByText("質問の学習候補")).toHaveCount(0);
   await expect(page.getByText("既定プロファイル").last()).toBeVisible();
   await expect(page.getByLabel("生成 SQL")).toContainText("SELECT");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("履歴から再実行したい請求金額");
   await expect(page.getByText("確認待ち", { exact: true }).first()).toBeVisible();
   const feedbackFilters = page.getByTestId("feedback-app-filters");
   const feedbackSearch = feedbackFilters.getByLabel("履歴検索");
@@ -5931,6 +5946,11 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
+  await page.getByLabel("利用者評価フィルター").selectOption("bad");
+  await expect(
+    page.getByTestId("feedback-history-row").filter({ hasText: "別プロファイルの請求確認" }).filter({ hasText: "違う" })
+  ).toBeVisible();
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("別プロファイルの請求確認");
   const filterGate = createRequestGate();
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());

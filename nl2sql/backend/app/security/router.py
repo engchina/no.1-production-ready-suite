@@ -16,7 +16,11 @@ from .schemas import (
     CurrentUserData,
     DeepSecApplyRequest,
     DeepSecConfigUpdate,
+    DeepSecDataEntitlementApplyRequest,
+    DeepSecDataEntitlementPreviewData,
+    DeepSecDataEntitlementPreviewRequest,
     DeepSecDataEntitlementUpdateRequest,
+    DeepSecResetRequest,
     DeepSecRoleEntitlementsData,
     LoginRequest,
     PasswordChangeRequest,
@@ -74,13 +78,11 @@ def login(
 ) -> ApiResponse[CurrentUserData]:
     if get_settings().local_debug_enabled:
         return ApiResponse(
-            data=CurrentUserData.from_principal(
-                local_debug_principal(), debug_mode=True
-            )
-    )
+            data=CurrentUserData.from_principal(local_debug_principal(), debug_mode=True)
+        )
     request_id, client_ip = request_context(request)
     principal, session_token, csrf_token = get_security_service().login(
-        payload.login_name,
+        payload.login_user_id,
         payload.password,
         request_id=request_id,
         client_ip=client_ip,
@@ -165,7 +167,7 @@ def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[Use
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     user, password = get_security_service().create_user(
-        login_name=payload.login_name,
+        login_user_id=payload.login_user_id,
         display_name=payload.display_name,
         role_ids=payload.role_ids,
         temporary_password=payload.temporary_password,
@@ -173,14 +175,12 @@ def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[Use
         request_id=request_id,
         client_ip=client_ip,
     )
-    return ApiResponse(
-        data=UserCreateData(user=_user_data(user), temporary_password=password)
-    )
+    return ApiResponse(data=UserCreateData(user=_user_data(user), temporary_password=password))
 
 
-@router.get("/security/users/{user_id}", response_model=ApiResponse[UserData])
-def get_user(user_id: str) -> ApiResponse[UserData]:
-    user = get_security_service().store.get_user(user_id)
+@router.get("/security/users/{user_uuid}", response_model=ApiResponse[UserData])
+def get_user(user_uuid: str) -> ApiResponse[UserData]:
+    user = get_security_service().store.get_user(user_uuid)
     if user is None:
         from .service import SecurityApiError
 
@@ -188,9 +188,9 @@ def get_user(user_id: str) -> ApiResponse[UserData]:
     return ApiResponse(data=_user_data(user))
 
 
-@router.patch("/security/users/{user_id}", response_model=ApiResponse[UserData])
+@router.patch("/security/users/{user_uuid}", response_model=ApiResponse[UserData])
 def update_user(
-    user_id: str,
+    user_uuid: str,
     payload: UserUpdateRequest,
     request: Request,
     response: Response,
@@ -198,7 +198,7 @@ def update_user(
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     user = get_security_service().update_user(
-        user_id,
+        user_uuid,
         expected_version=payload.version,
         display_name=payload.display_name,
         status=payload.status,
@@ -212,33 +212,31 @@ def update_user(
 
 
 @router.post(
-    "/security/users/{user_id}/reset-password", response_model=ApiResponse[PasswordResetData]
+    "/security/users/{user_uuid}/reset-password", response_model=ApiResponse[PasswordResetData]
 )
 def reset_password(
-    user_id: str,
+    user_uuid: str,
     payload: PasswordResetRequest,
     request: Request,
 ) -> ApiResponse[PasswordResetData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     user, password = get_security_service().reset_password(
-        user_id,
+        user_uuid,
         payload.temporary_password,
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
     )
-    return ApiResponse(
-        data=PasswordResetData(user=_user_data(user), temporary_password=password)
-    )
+    return ApiResponse(data=PasswordResetData(user=_user_data(user), temporary_password=password))
 
 
-@router.post("/security/users/{user_id}/unlock", response_model=ApiResponse[UserData])
-def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
+@router.post("/security/users/{user_uuid}/unlock", response_model=ApiResponse[UserData])
+def unlock_user(user_uuid: str, request: Request) -> ApiResponse[UserData]:
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     user = get_security_service().unlock_user(
-        user_id,
+        user_uuid,
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
@@ -247,13 +245,13 @@ def unlock_user(user_id: str, request: Request) -> ApiResponse[UserData]:
 
 
 def _change_user_status(
-    user_id: str,
+    user_uuid: str,
     payload: VersionRequest,
     request: Request,
     status: str,
 ) -> ApiResponse[UserData]:
     service = get_security_service()
-    current = service.store.get_user(user_id)
+    current = service.store.get_user(user_uuid)
     if current is None:
         from .service import SecurityApiError
 
@@ -261,7 +259,7 @@ def _change_user_status(
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     updated = service.update_user(
-        user_id,
+        user_uuid,
         expected_version=payload.version,
         display_name=current.display_name,
         status=status,
@@ -273,18 +271,18 @@ def _change_user_status(
     return ApiResponse(data=_user_data(updated))
 
 
-@router.post("/security/users/{user_id}/enable", response_model=ApiResponse[UserData])
-def enable_user(
-    user_id: str, payload: VersionRequest, request: Request
-) -> ApiResponse[UserData]:
-    return _change_user_status(user_id, payload, request, "ACTIVE")
+@router.post("/security/users/{user_uuid}/enable", response_model=ApiResponse[UserData])
+def enable_user(user_uuid: str, payload: VersionRequest, request: Request) -> ApiResponse[UserData]:
+    return _change_user_status(user_uuid, payload, request, "ACTIVE")
 
 
-@router.post("/security/users/{user_id}/disable", response_model=ApiResponse[UserData])
+@router.post("/security/users/{user_uuid}/disable", response_model=ApiResponse[UserData])
 def disable_user(
-    user_id: str, payload: VersionRequest, request: Request
+    user_uuid: str,
+    payload: VersionRequest,
+    request: Request,
 ) -> ApiResponse[UserData]:
-    return _change_user_status(user_id, payload, request, "DISABLED")
+    return _change_user_status(user_uuid, payload, request, "DISABLED")
 
 
 @router.get("/security/roles", response_model=ApiResponse[list[RoleData]])
@@ -411,8 +409,7 @@ def permission_catalog() -> ApiResponse[list[PermissionData]]:
     response_model=ApiResponse[list[DeepSecRoleEntitlementsData]],
 )
 def list_deepsec_data_entitlements() -> ApiResponse[list[DeepSecRoleEntitlementsData]]:
-    roles = get_security_service().list_roles(include_archived=True)
-    return ApiResponse(data=[DeepSecRoleEntitlementsData.from_record(role) for role in roles])
+    return ApiResponse(data=get_deepsec_service().data_entitlements())
 
 
 @router.patch(
@@ -430,16 +427,50 @@ def update_deepsec_data_entitlements(
     role = get_security_service().update_role_data_entitlements(
         role_id,
         expected_version=payload.version,
-        entitlements=[
-            (item.resource_code, item.scope_code, item.capability)
-            for item in payload.data_entitlements
-        ],
+        entitlements=[item.to_record(role_id) for item in payload.data_entitlements],
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
     )
     response.headers["ETag"] = f'"{role.version}"'
-    return ApiResponse(data=DeepSecRoleEntitlementsData.from_record(role))
+    return ApiResponse(data=get_deepsec_service().role_entitlements(role))
+
+
+@router.post(
+    "/security/deepsec/data-entitlements/{role_id}/preview",
+    response_model=ApiResponse[DeepSecDataEntitlementPreviewData],
+)
+def preview_deepsec_data_entitlements(
+    role_id: str,
+    payload: DeepSecDataEntitlementPreviewRequest,
+    request: Request,
+) -> ApiResponse[DeepSecDataEntitlementPreviewData]:
+    return ApiResponse(
+        data=get_deepsec_service().preview_data_entitlements(
+            role_id,
+            entitlements=[item.to_record(role_id) for item in payload.data_entitlements],
+            actor=current_principal(request),
+        )
+    )
+
+
+@router.post(
+    "/security/deepsec/data-entitlements/{role_id}/apply",
+    response_model=ApiResponse[dict[str, object]],
+)
+def apply_deepsec_data_entitlements(
+    role_id: str,
+    payload: DeepSecDataEntitlementApplyRequest,
+    request: Request,
+) -> ApiResponse[dict[str, object]]:
+    return ApiResponse(
+        data=get_deepsec_service().apply_data_entitlements(
+            role_id,
+            confirmation=payload.confirmation,
+            entitlement_ids=payload.entitlement_ids,
+            actor=current_principal(request),
+        )
+    )
 
 
 @router.get("/security/deepsec/status", response_model=ApiResponse[dict[str, object]])
@@ -482,6 +513,24 @@ def apply_deepsec_step(
         current_principal(request),
     )
     return ApiResponse(data=result)
+
+
+@router.post(
+    "/security/deepsec/plan/{version}/reset",
+    response_model=ApiResponse[dict[str, object]],
+)
+def reset_deepsec_plan(
+    version: str,
+    payload: DeepSecResetRequest,
+    request: Request,
+) -> ApiResponse[dict[str, object]]:
+    return ApiResponse(
+        data=get_deepsec_service().reset(
+            version,
+            payload.confirmation,
+            current_principal(request),
+        )
+    )
 
 
 @router.post("/security/deepsec/verify", response_model=ApiResponse[dict[str, object]])

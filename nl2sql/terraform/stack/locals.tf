@@ -22,7 +22,7 @@ ENABLE_METRICS=true
 DEBUG=false
 
 APP_AUTH_ENABLED=true
-APP_ADMIN_USERNAME=${var.app_admin_username}
+APP_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}
 APP_ADMIN_PASSWORD=${var.app_admin_password}
 APP_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
 APP_AUTH_SESSION_COOKIE_NAME=nl2sql_session
@@ -37,7 +37,7 @@ ORACLE_CLIENT_LIB_DIR=
 ORACLE_WALLET_DIR=${local.wallet_dir_host}
 ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
 ORACLE_DEEPSEC_ENABLED=true
-ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER
+ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
 ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_data_user_password}
 ORACLE_ADB_OCID=${local.effective_adb_ocid}
 ORACLE_ADB_REGION=${var.region}

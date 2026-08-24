@@ -28,6 +28,8 @@ from .domain import (
     RoleRecord,
     SessionRecord,
     UserRecord,
+    scope_filters_canonical_json,
+    scope_filters_scope_code,
 )
 from .passwords import (
     PasswordPolicyError,
@@ -50,6 +52,8 @@ from .store import (
     SecurityStore,
 )
 
+DataEntitlementDraft = tuple[str, str, str] | DataEntitlementRecord
+
 
 class SecurityApiError(RuntimeError):
     def __init__(self, status_code: int, public_message: str) -> None:
@@ -60,7 +64,7 @@ class SecurityApiError(RuntimeError):
 
 class LoginFailed(SecurityApiError):
     def __init__(self) -> None:
-        super().__init__(401, "ログイン名またはパスワードを確認してください。")
+        super().__init__(401, "ログインユーザーIDまたはパスワードを確認してください。")
 
 
 def _now() -> datetime:
@@ -91,11 +95,12 @@ _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
     }
 )
 
-_CONFIGURED_SYSTEM_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002"
+_CONFIGURED_SYSTEM_ADMIN_USER_UUID = "00000000-0000-0000-0000-000000000002"
 _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
-_FIXED_APP_ADMIN_USERNAME = "system_admin"
-_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
+_FIXED_APP_ADMIN_LOGIN_USER_ID = "system_admin"
+_APP_ADMIN_LOGIN_USER_ID_KEY = "APP_ADMIN_LOGIN_USER_ID"
+_LEGACY_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
 _APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"
 _APP_AUTH_ENABLED_KEY = "APP_AUTH_ENABLED"
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -179,22 +184,22 @@ class SecurityService:
 
     def login(
         self,
-        login_name: str,
+        login_user_id: str,
         password: str,
         *,
         request_id: str = "",
         client_ip: str = "",
     ) -> tuple[Principal, str, str]:
-        normalized_login = login_name.strip()
-        if normalized_login == _FIXED_APP_ADMIN_USERNAME:
+        normalized_login_user_id = login_user_id.strip()
+        if normalized_login_user_id == _FIXED_APP_ADMIN_LOGIN_USER_ID:
             _, configured_password = self._ensure_configured_system_admin_ready()
             if _constant_time_equal(password, configured_password):
                 return self._create_configured_system_admin_session()
             raise LoginFailed()
-        if normalized_login.casefold() == _FIXED_APP_ADMIN_USERNAME:
+        if normalized_login_user_id.casefold() == _FIXED_APP_ADMIN_LOGIN_USER_ID:
             raise LoginFailed()
         try:
-            user = self.store.get_user_by_login(normalized_login.casefold())
+            user = self.store.get_user_by_login_user_id(normalized_login_user_id.casefold())
         except Exception as exc:
             if _looks_like_missing_security_schema(exc):
                 raise SecurityApiError(
@@ -218,17 +223,17 @@ class SecurityService:
                 locked_until = now + timedelta(minutes=self.settings.app_auth_lockout_minutes)
                 failed_count = 0
             self.store.record_login_failure(
-                user.user_id,
+                user.user_uuid,
                 failed_count=failed_count,
                 locked_until=locked_until,
             )
             raise LoginFailed()
-        self.store.record_login_success(user.user_id, password_hash=updated_hash)
+        self.store.record_login_success(user.user_uuid, password_hash=updated_hash)
         token = secrets.token_urlsafe(32)
         csrf_token = secrets.token_urlsafe(32)
         session = SessionRecord(
             session_id=str(uuid4()),
-            user_id=user.user_id,
+            user_uuid=user.user_uuid,
             token_hash=_hash_token(token),
             csrf_token_hash=_hash_token(csrf_token),
             idle_expires_at=now + timedelta(minutes=self.settings.app_auth_idle_timeout_minutes),
@@ -255,7 +260,7 @@ class SecurityService:
             raise SecurityApiError(
                 401, "セッションの有効期限が切れました。再度ログインしてください。"
             )
-        user = self.store.get_user(session.user_id)
+        user = self.store.get_user(session.user_uuid)
         if user is None or user.status != "ACTIVE":
             self.store.revoke_session(session.session_id)
             raise SecurityApiError(401, "ログインしてください。")
@@ -305,15 +310,15 @@ class SecurityService:
                 raise SecurityApiError(400, "現在のパスワードを確認してください。")
             self._validate_configured_system_admin_password_for_change(new_password)
             self._write_configured_system_admin_password(new_password)
-            self.settings.app_admin_username = _FIXED_APP_ADMIN_USERNAME
+            self.settings.app_admin_login_user_id = _FIXED_APP_ADMIN_LOGIN_USER_ID
             self.settings.app_admin_password = new_password
             return principal
-        user = self.store.get_user(principal.user_id)
+        user = self.store.get_user(principal.user_uuid)
         if user is None or not verify_password(current_password, user.password_hash)[0]:
             raise SecurityApiError(400, "現在のパスワードを確認してください。")
-        self._validate_new_password(new_password, user.login_name)
-        self.store.set_password(user.user_id, hash_password(new_password), force_change=False)
-        self.store.revoke_user_sessions(user.user_id)
+        self._validate_new_password(new_password, user.login_user_id)
+        self.store.set_password(user.user_uuid, hash_password(new_password), force_change=False)
+        self.store.revoke_user_sessions(user.user_uuid)
         # 現 session は revoke 済み。呼び出し側は cookie を削除して再ログインさせる。
         return principal
 
@@ -323,7 +328,7 @@ class SecurityService:
     def create_user(
         self,
         *,
-        login_name: str,
+        login_user_id: str,
         display_name: str,
         role_ids: list[str],
         temporary_password: str | None,
@@ -335,13 +340,14 @@ class SecurityService:
         if SYSTEM_ADMIN_ROLE_ID in normalized_role_ids:
             raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
         self._assert_actor_can_assign_roles(actor, normalized_role_ids)
-        if login_name.strip().casefold() == _FIXED_APP_ADMIN_USERNAME:
-            raise SecurityApiError(409, "system_admin は構成管理者専用のログイン名です。")
+        normalized_login_user_id = login_user_id.strip()
+        if normalized_login_user_id.casefold() == _FIXED_APP_ADMIN_LOGIN_USER_ID:
+            raise SecurityApiError(409, "system_admin は構成管理者専用のログインユーザーIDです。")
         password = temporary_password or generate_temporary_password()
-        self._validate_new_password(password, login_name)
+        self._validate_new_password(password, normalized_login_user_id)
         user = UserRecord(
-            user_id=str(uuid4()),
-            login_name=login_name,
+            user_uuid=str(uuid4()),
+            login_user_id=normalized_login_user_id,
             display_name=display_name.strip(),
             password_hash=hash_password(password),
             status="ACTIVE",
@@ -359,7 +365,7 @@ class SecurityService:
 
     def update_user(
         self,
-        user_id: str,
+        user_uuid: str,
         *,
         expected_version: int,
         display_name: str,
@@ -369,7 +375,7 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> UserRecord:
-        current = self.store.get_user(user_id)
+        current = self.store.get_user(user_uuid)
         if current is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         self._assert_actor_can_manage_user(actor, current)
@@ -399,7 +405,7 @@ class SecurityService:
             raise SecurityApiError(409, "最後のシステム管理者は無効化または権限解除できません。")
         try:
             updated = self.store.update_user(
-                user_id,
+                user_uuid,
                 expected_version=expected_version,
                 display_name=display_name.strip(),
                 status=status,
@@ -408,40 +414,40 @@ class SecurityService:
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
         if status != "ACTIVE":
-            self.store.revoke_user_sessions(user_id)
+            self.store.revoke_user_sessions(user_uuid)
         return updated
 
     def reset_password(
         self,
-        user_id: str,
+        user_uuid: str,
         temporary_password: str | None,
         *,
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
     ) -> tuple[UserRecord, str]:
-        user = self.store.get_user(user_id)
+        user = self.store.get_user(user_uuid)
         if user is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         self._assert_actor_can_manage_user(actor, user)
         password = temporary_password or generate_temporary_password()
-        self._validate_new_password(password, user.login_name)
-        self.store.set_password(user_id, hash_password(password), force_change=True)
-        self.store.revoke_user_sessions(user_id)
-        updated = self.store.get_user(user_id)
+        self._validate_new_password(password, user.login_user_id)
+        self.store.set_password(user_uuid, hash_password(password), force_change=True)
+        self.store.revoke_user_sessions(user_uuid)
+        updated = self.store.get_user(user_uuid)
         if updated is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         return updated, password
 
     def unlock_user(
-        self, user_id: str, *, actor: Principal, request_id: str = "", client_ip: str = ""
+        self, user_uuid: str, *, actor: Principal, request_id: str = "", client_ip: str = ""
     ) -> UserRecord:
-        user = self.store.get_user(user_id)
+        user = self.store.get_user(user_uuid)
         if user is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         self._assert_actor_can_manage_user(actor, user)
-        self.store.record_login_success(user_id)
-        updated = self.store.get_user(user_id)
+        self.store.record_login_success(user_uuid)
+        updated = self.store.get_user(user_uuid)
         if updated is None:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         return updated
@@ -477,7 +483,7 @@ class SecurityService:
         display_name: str,
         description: str,
         permissions: set[str],
-        entitlements: list[tuple[str, str, str]],
+        entitlements: list[DataEntitlementDraft],
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
@@ -505,7 +511,7 @@ class SecurityService:
         display_name: str,
         description: str,
         permissions: set[str],
-        entitlements: list[tuple[str, str, str]],
+        entitlements: list[DataEntitlementDraft],
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
@@ -535,7 +541,7 @@ class SecurityService:
         role_id: str,
         *,
         expected_version: int,
-        entitlements: list[tuple[str, str, str]],
+        entitlements: list[DataEntitlementDraft],
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
@@ -547,16 +553,11 @@ class SecurityService:
             raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。")
         if current.archived:
             raise SecurityApiError(409, "アーカイブ済みロールは変更できません。")
-        data_records = [
-            DataEntitlementRecord(
-                entitlement_id=str(uuid4()),
-                role_id=role_id,
-                resource_code=resource,
-                scope_code=scope,
-                capability=capability,
-            )
-            for resource, scope, capability in dict.fromkeys(entitlements)
-        ]
+        data_records = self._data_entitlement_records(
+            role_id,
+            entitlements,
+            current_entitlements=current.entitlements,
+        )
         role = RoleRecord(
             role_id=current.role_id,
             role_code=current.role_code,
@@ -616,19 +617,20 @@ class SecurityService:
             raise self._store_error(exc) from exc
         return restored
 
-    def _matches_configured_system_admin_login_name(self, login_name: str) -> bool:
-        configured_login, _ = self._ensure_configured_system_admin_ready()
-        return _constant_time_equal(login_name, configured_login)
+    def _matches_configured_system_admin_login_user_id(self, login_user_id: str) -> bool:
+        configured_login_user_id, _ = self._ensure_configured_system_admin_ready()
+        return _constant_time_equal(login_user_id, configured_login_user_id)
 
     def _create_configured_system_admin_session(self) -> tuple[Principal, str, str]:
         now = _now()
-        configured_login, _ = self._ensure_configured_system_admin_ready()
+        configured_login_user_id, _ = self._ensure_configured_system_admin_ready()
         csrf_token = secrets.token_urlsafe(32)
         session_id = f"configured-system-admin:{uuid4()}"
         payload = {
             "type": _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE,
             "sid": session_id,
-            "login": configured_login,
+            "user_uuid": _CONFIGURED_SYSTEM_ADMIN_USER_UUID,
+            "login_user_id": configured_login_user_id,
             "csrf_hash": _hash_token(csrf_token),
             "exp": int(
                 (now + timedelta(hours=self.settings.app_auth_absolute_timeout_hours)).timestamp()
@@ -636,7 +638,7 @@ class SecurityService:
         }
         token = self._sign_configured_system_admin_payload(payload)
         principal = self._configured_system_admin_principal(
-            login_name=configured_login,
+            login_user_id=configured_login_user_id,
             session_id=session_id,
             csrf_token_hash=str(payload["csrf_hash"]),
         )
@@ -659,8 +661,8 @@ class SecurityService:
             raise SecurityApiError(401, "ログインしてください。") from exc
         if payload.get("type") != _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE:
             raise SecurityApiError(401, "ログインしてください。")
-        login_name = str(payload.get("login") or "")
-        if not self._matches_configured_system_admin_login_name(login_name):
+        login_user_id = str(payload.get("login_user_id") or payload.get("login") or "")
+        if not self._matches_configured_system_admin_login_user_id(login_user_id):
             raise SecurityApiError(401, "ログインしてください。")
         try:
             expires_at = int(payload.get("exp"))
@@ -675,7 +677,7 @@ class SecurityService:
         if not session_id.startswith("configured-system-admin:") or not csrf_token_hash:
             raise SecurityApiError(401, "ログインしてください。")
         return self._configured_system_admin_principal(
-            login_name=login_name,
+            login_user_id=login_user_id,
             session_id=session_id,
             csrf_token_hash=csrf_token_hash,
         )
@@ -697,33 +699,35 @@ class SecurityService:
         )
 
     def _configured_system_admin_token_key(self) -> bytes:
-        configured_login, configured_password = self._ensure_configured_system_admin_ready()
+        configured_login_user_id, configured_password = self._ensure_configured_system_admin_ready()
         configured_secret = (
             f"{self.settings.service_name}:"
-            f"{configured_login}:"
+            f"{configured_login_user_id}:"
             f"{configured_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 
     def _ensure_configured_system_admin_ready(self) -> tuple[str, str]:
-        username, password = self._configured_system_admin_credentials()
-        if username != _FIXED_APP_ADMIN_USERNAME:
+        login_user_id, password = self._configured_system_admin_credentials()
+        if login_user_id != _FIXED_APP_ADMIN_LOGIN_USER_ID:
             raise SecurityApiError(
                 503,
                 "構成管理者の認証情報が正しく設定されていません。"
-                "APP_ADMIN_USERNAME は system_admin に固定してください。",
+                "APP_ADMIN_LOGIN_USER_ID は system_admin に固定してください。",
             )
         self._validate_configured_system_admin_password(password)
-        return username, password
+        return login_user_id, password
 
     def _configured_system_admin_credentials(self) -> tuple[str, str]:
-        username = _read_backend_env_value(_APP_ADMIN_USERNAME_KEY)
+        login_user_id = _read_backend_env_value(_APP_ADMIN_LOGIN_USER_ID_KEY)
+        if login_user_id is None:
+            login_user_id = _read_backend_env_value(_LEGACY_APP_ADMIN_USERNAME_KEY)
         password = _read_backend_env_value(_APP_ADMIN_PASSWORD_KEY)
-        if username is None:
-            username = self.settings.app_admin_username
+        if login_user_id is None:
+            login_user_id = self.settings.app_admin_login_user_id
         if password is None:
             password = self.settings.app_admin_password
-        return username.strip(), password
+        return login_user_id.strip(), password
 
     @staticmethod
     def _validate_configured_system_admin_password(password: str) -> None:
@@ -736,7 +740,7 @@ class SecurityService:
             raise SecurityApiError(
                 503,
                 "構成管理者の認証情報が設定されていません。"
-                "APP_ADMIN_USERNAME と APP_ADMIN_PASSWORD を設定してください。",
+                "APP_ADMIN_LOGIN_USER_ID と APP_ADMIN_PASSWORD を設定してください。",
             )
 
     @staticmethod
@@ -761,10 +765,15 @@ class SecurityService:
         next_lines = [
             line
             for line in lines
-            if _env_assignment_key(line) not in {_APP_ADMIN_USERNAME_KEY, _APP_ADMIN_PASSWORD_KEY}
+            if _env_assignment_key(line)
+            not in {
+                _APP_ADMIN_LOGIN_USER_ID_KEY,
+                _LEGACY_APP_ADMIN_USERNAME_KEY,
+                _APP_ADMIN_PASSWORD_KEY,
+            }
         ]
         admin_lines = [
-            f"{_APP_ADMIN_USERNAME_KEY}={_FIXED_APP_ADMIN_USERNAME}",
+            f"{_APP_ADMIN_LOGIN_USER_ID_KEY}={_FIXED_APP_ADMIN_LOGIN_USER_ID}",
             f"{_APP_ADMIN_PASSWORD_KEY}={_format_env_value(password)}",
         ]
         insert_at = next(
@@ -786,14 +795,14 @@ class SecurityService:
     def _configured_system_admin_principal(
         self,
         *,
-        login_name: str,
+        login_user_id: str,
         session_id: str,
         csrf_token_hash: str,
     ) -> Principal:
         return Principal(
-            user_id=_CONFIGURED_SYSTEM_ADMIN_USER_ID,
-            login_name=login_name,
-            display_name=f"{login_name}（構成管理者）",
+            user_uuid=_CONFIGURED_SYSTEM_ADMIN_USER_UUID,
+            login_user_id=login_user_id,
+            display_name=f"{login_user_id}（構成管理者）",
             status="ACTIVE",
             force_password_change=False,
             role_codes=[SYSTEM_ADMIN_ROLE_CODE],
@@ -807,7 +816,7 @@ class SecurityService:
     @staticmethod
     def _is_configured_system_admin_principal(principal: Principal) -> bool:
         return (
-            principal.user_id == _CONFIGURED_SYSTEM_ADMIN_USER_ID
+            principal.user_uuid == _CONFIGURED_SYSTEM_ADMIN_USER_UUID
             and principal.session_id.startswith("configured-system-admin:")
         )
 
@@ -820,11 +829,15 @@ class SecurityService:
         entitlements: dict[tuple[str, str, str], DataEntitlementRecord] = {}
         for role in active_roles:
             for entitlement in role.entitlements:
-                key = (entitlement.resource_code, entitlement.scope_code, entitlement.capability)
+                key = (
+                    entitlement.entitlement_id or entitlement.resource_code,
+                    entitlement.scope_code,
+                    entitlement.capability,
+                )
                 entitlements[key] = entitlement
         return Principal(
-            user_id=user.user_id,
-            login_name=user.login_name,
+            user_uuid=user.user_uuid,
+            login_user_id=user.login_user_id,
             display_name=user.display_name,
             status=user.status,
             force_password_change=user.force_password_change,
@@ -843,23 +856,14 @@ class SecurityService:
         display_name: str,
         description: str,
         permissions: set[str],
-        entitlements: list[tuple[str, str, str]],
+        entitlements: list[DataEntitlementDraft],
         version: int,
     ) -> RoleRecord:
         unknown = unknown_permission_codes(permissions)
         if unknown:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
         normalized = normalize_permission_codes(permissions)
-        data_records = [
-            DataEntitlementRecord(
-                entitlement_id=str(uuid4()),
-                role_id=role_id,
-                resource_code=resource,
-                scope_code=scope,
-                capability=capability,
-            )
-            for resource, scope, capability in dict.fromkeys(entitlements)
-        ]
+        data_records = self._data_entitlement_records(role_id, entitlements)
         return RoleRecord(
             role_id=role_id,
             role_code=role_code,
@@ -871,6 +875,114 @@ class SecurityService:
             permissions=normalized,
             entitlements=data_records,
         )
+
+    @staticmethod
+    def _data_entitlement_policy_signature(
+        entitlement: DataEntitlementRecord,
+    ) -> tuple[str, str, str, str, str, str, tuple[str, ...], str, str, str]:
+        return (
+            entitlement.resource_code.strip().upper(),
+            entitlement.scope_code.strip(),
+            entitlement.capability.strip().upper(),
+            entitlement.target_owner.strip().upper(),
+            entitlement.target_object.strip().upper(),
+            entitlement.target_type.strip().upper(),
+            tuple(column.strip().upper() for column in entitlement.column_names),
+            entitlement.scope_mode.strip().upper(),
+            entitlement.scope_column.strip().upper(),
+            scope_filters_canonical_json(entitlement.scope_filters),
+        )
+
+    @classmethod
+    def _data_entitlement_records(
+        cls,
+        role_id: str,
+        entitlements: list[DataEntitlementDraft],
+        *,
+        current_entitlements: list[DataEntitlementRecord] | None = None,
+    ) -> list[DataEntitlementRecord]:
+        records: list[DataEntitlementRecord] = []
+        seen: set[tuple[str, str, str, str, str, str, str, str, str]] = set()
+        current_by_id = {
+            entitlement.entitlement_id: entitlement
+            for entitlement in current_entitlements or []
+            if entitlement.entitlement_id
+        }
+        for entitlement in entitlements:
+            if isinstance(entitlement, DataEntitlementRecord):
+                record = DataEntitlementRecord(
+                    entitlement_id=entitlement.entitlement_id or str(uuid4()),
+                    role_id=role_id,
+                    resource_code=entitlement.resource_code,
+                    scope_code=(
+                        "*"
+                        if entitlement.scope_mode.strip().upper() == "ALL"
+                        else (
+                            scope_filters_scope_code(entitlement.scope_filters)
+                            if entitlement.scope_mode.strip().upper() == "FILTERS"
+                            else entitlement.scope_code
+                        )
+                    ),
+                    capability=entitlement.capability,
+                    target_owner=entitlement.target_owner,
+                    target_object=entitlement.target_object,
+                    target_type=entitlement.target_type,
+                    column_names=list(entitlement.column_names),
+                    scope_mode=entitlement.scope_mode,
+                    scope_column=entitlement.scope_column,
+                    scope_filters=list(entitlement.scope_filters),
+                    data_grant_name=entitlement.data_grant_name,
+                    sql_checksum=entitlement.sql_checksum,
+                    apply_status=entitlement.apply_status,
+                    apply_error_message=entitlement.apply_error_message,
+                    applied_at=entitlement.applied_at,
+                )
+                current = current_by_id.get(record.entitlement_id)
+                if current is not None:
+                    if cls._data_entitlement_policy_signature(
+                        record
+                    ) == cls._data_entitlement_policy_signature(current):
+                        record.apply_status = current.apply_status
+                        record.apply_error_message = current.apply_error_message
+                        record.data_grant_name = current.data_grant_name
+                        record.sql_checksum = current.sql_checksum
+                        record.applied_at = current.applied_at
+                    else:
+                        record.apply_status = "PENDING"
+                        record.apply_error_message = ""
+                        record.data_grant_name = current.data_grant_name
+                        record.sql_checksum = ""
+                        record.applied_at = None
+                elif current_entitlements is not None:
+                    record.apply_status = "PENDING"
+                    record.apply_error_message = ""
+                    record.sql_checksum = ""
+                    record.applied_at = None
+            else:
+                resource, scope, capability = entitlement
+                record = DataEntitlementRecord(
+                    entitlement_id=str(uuid4()),
+                    role_id=role_id,
+                    resource_code=resource,
+                    scope_code=scope,
+                    capability=capability,
+                )
+            key = (
+                record.resource_code,
+                record.scope_code,
+                record.capability,
+                record.target_owner,
+                record.target_object,
+                ",".join(record.column_names),
+                record.scope_mode,
+                record.scope_column,
+                scope_filters_canonical_json(record.scope_filters),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append(record)
+        return records
 
     def _assert_actor_can_assign_roles(
         self,
@@ -894,8 +1006,10 @@ class SecurityService:
             return
         for role_id in user.role_ids:
             role = self.store.get_role(role_id)
-            if role is not None and not role.archived and not self._actor_can_assign_role(
-                actor, role
+            if (
+                role is not None
+                and not role.archived
+                and not self._actor_can_assign_role(actor, role)
             ):
                 raise SecurityApiError(403, "このユーザーを管理する権限がありません。")
 
@@ -909,11 +1023,11 @@ class SecurityService:
             return False
         return expand_permissions(role.permissions).issubset(actor.permissions)
 
-    def _validate_new_password(self, password: str, login_name: str) -> None:
+    def _validate_new_password(self, password: str, login_user_id: str) -> None:
         try:
             validate_password(
                 password,
-                login_name=login_name,
+                login_user_id=login_user_id,
                 min_length=self.settings.app_auth_password_min_length,
                 max_length=self.settings.app_auth_password_max_length,
             )

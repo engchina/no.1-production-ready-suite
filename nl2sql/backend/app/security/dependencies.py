@@ -20,14 +20,14 @@ from .permissions import (
 from .request_actor import reset_actor_context, set_actor_context
 from .service import SecurityApiError, get_security_service
 
-LOCAL_DEBUG_USER_ID = "00000000-0000-0000-0000-000000000000"
+LOCAL_DEBUG_USER_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def local_debug_principal() -> Principal:
     """DB session を作らない local debug 専用 SYSTEM_ADMIN identity。"""
     return Principal(
-        user_id=LOCAL_DEBUG_USER_ID,
-        login_name="local-debug",
+        user_uuid=LOCAL_DEBUG_USER_UUID,
+        login_user_id="local-debug",
         display_name="ローカル DEBUG 管理者",
         status="ACTIVE",
         force_password_change=False,
@@ -46,7 +46,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         principal = local_debug_principal()
         request.state.principal = principal
         actor_token = set_actor_context(
-            principal.user_id,
+            principal.user_uuid,
             is_system_admin=principal.is_system_admin,
         )
         try:
@@ -85,7 +85,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
     except SecurityApiError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
     actor_token = set_actor_context(
-        principal.user_id,
+        principal.user_uuid,
         is_system_admin=principal.is_system_admin,
     )
     try:

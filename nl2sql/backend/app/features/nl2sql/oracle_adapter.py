@@ -528,9 +528,9 @@ class OracleNl2SqlAdapter:
             with self.connection() as connection:
                 yield connection
             return
-        if not actor.user_id:
+        if not actor.user_uuid:
             raise OracleAdapterError("DeepSec データ接続には認証済み application user が必要です。")
-        with get_oracle_pool_manager().data_connection(actor.user_id) as connection:
+        with get_oracle_pool_manager().data_connection(actor.user_uuid) as connection:
             yield connection
 
     def fetch_catalog(
@@ -1100,7 +1100,7 @@ class OracleNl2SqlAdapter:
             actor = current_actor_context()
             vpd_context_enforced = (
                 self.settings.oracle_deepsec_enabled
-                and bool(actor.user_id)
+                and bool(actor.user_uuid)
                 and not actor.is_system_admin
             )
             return QueryResults(

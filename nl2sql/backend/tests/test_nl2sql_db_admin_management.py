@@ -1974,8 +1974,8 @@ def test_oracle_adapter_non_admin_select_uses_deepsec_data_connection(
             self.actor_ids: list[str] = []
 
         @contextmanager
-        def data_connection(self, actor_user_id: str) -> Iterator[_Connection]:
-            self.actor_ids.append(actor_user_id)
+        def data_connection(self, actor_user_uuid: str) -> Iterator[_Connection]:
+            self.actor_ids.append(actor_user_uuid)
             yield _Connection()
 
     manager = _PoolManager()
@@ -2042,8 +2042,8 @@ def test_oracle_adapter_non_admin_select_ai_generation_uses_deepsec_data_connect
             self.calls: list[str] = []
 
         @contextmanager
-        def data_connection(self, actor_user_id: str) -> Iterator[_SelectAiConnection]:
-            self.actor_ids.append(actor_user_id)
+        def data_connection(self, actor_user_uuid: str) -> Iterator[_SelectAiConnection]:
+            self.actor_ids.append(actor_user_uuid)
             yield _SelectAiConnection(self.calls)
 
     manager = _PoolManager()
@@ -2074,7 +2074,7 @@ def test_oracle_adapter_system_admin_select_ai_generation_uses_normal_connection
         yield _SelectAiConnection(calls)
 
     class _PoolManager:
-        def data_connection(self, _actor_user_id: str) -> Iterator[_SelectAiConnection]:
+        def data_connection(self, _actor_user_uuid: str) -> Iterator[_SelectAiConnection]:
             raise AssertionError("system_admin Select AI generation must not use data connection")
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
@@ -2101,8 +2101,8 @@ def test_oracle_adapter_non_admin_select_ai_agent_team_uses_deepsec_data_connect
             self.calls: list[str] = []
 
         @contextmanager
-        def data_connection(self, actor_user_id: str) -> Iterator[_SelectAiConnection]:
-            self.actor_ids.append(actor_user_id)
+        def data_connection(self, actor_user_uuid: str) -> Iterator[_SelectAiConnection]:
+            self.actor_ids.append(actor_user_uuid)
             yield _SelectAiConnection(self.calls)
 
     manager = _PoolManager()
@@ -2138,8 +2138,8 @@ def test_oracle_adapter_non_admin_select_ai_agent_tool_uses_deepsec_data_connect
             self.calls: list[str] = []
 
         @contextmanager
-        def data_connection(self, actor_user_id: str) -> Iterator[_SelectAiConnection]:
-            self.actor_ids.append(actor_user_id)
+        def data_connection(self, actor_user_uuid: str) -> Iterator[_SelectAiConnection]:
+            self.actor_ids.append(actor_user_uuid)
             yield _SelectAiConnection(self.calls)
 
     manager = _PoolManager()

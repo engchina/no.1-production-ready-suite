@@ -176,7 +176,7 @@ const databaseDependentScenarios: Scenario[] = [
           driver_mode: "thin",
           connection_security: "wallet_mtls",
           deepsec_enabled: false,
-          data_user: "NL2SQL_DEEPSEC_DATA_USER",
+          data_user: "DEEPSEC_DATA_USER",
           has_data_user_password: false,
           objects: {},
           message: "未適用です。",
@@ -188,13 +188,28 @@ const databaseDependentScenarios: Scenario[] = [
           driver_mode: "thin",
           connection_security: "wallet_mtls",
           deepsec_enabled: false,
-          data_user: "NL2SQL_DEEPSEC_DATA_USER",
+          data_user: "DEEPSEC_DATA_USER",
           has_data_user_password: false,
           steps: [],
         })
       );
       await page.route("**/api/security/deepsec/data-entitlements", (route) =>
         fulfill(route, [])
+      );
+      await page.route("**/api/nl2sql/db-admin/objects**", (route) =>
+        fulfill(route, {
+          runtime: "oracle",
+          owner: "",
+          items: [],
+          total: 0,
+          table_count: 0,
+          view_count: 0,
+          counts_included: false,
+          next_cursor: null,
+          refreshed_at: "2026-07-19T00:00:00Z",
+          catalog_version: 0,
+          warnings: [],
+        })
       );
     },
   },

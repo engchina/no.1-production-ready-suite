@@ -1,4 +1,5 @@
 import type { HistoryItem } from "./types";
+import { selectedVisibleStringKey } from "../../lib/visible-selection";
 
 export type HistoryFeedbackFilter = "all" | "unrated" | "good" | "bad";
 export type HistorySafetyFilter = "all" | "safe" | "blocked";
@@ -64,6 +65,5 @@ export function filterAndSortHistory(items: HistoryItem[], query: HistoryManagem
 }
 
 export function selectedVisibleHistoryId(items: HistoryItem[], selectedId: string) {
-  if (items.some((item) => item.id === selectedId)) return selectedId;
-  return items[0]?.id ?? "";
+  return selectedVisibleStringKey(items, selectedId, (item) => item.id);
 }

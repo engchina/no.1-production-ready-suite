@@ -3,8 +3,8 @@
 ## 適用範囲
 
 本機能は OCI IAM を使用せず、Oracle に永続化した local application user と role で認証・認可する。
-ただし `backend/.env` の `APP_ADMIN_USERNAME=system_admin` / `APP_ADMIN_PASSWORD` に一致する構成管理者は、
-認証 table を参照しない `SYSTEM_ADMIN` として扱う。`APP_ADMIN_USERNAME` は `system_admin` 固定・
+ただし `backend/.env` の `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_PASSWORD` に一致する構成管理者は、
+認証 table を参照しない `SYSTEM_ADMIN` として扱う。`APP_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
 大小文字区別であり、`System_Admin` / `SYSTEM_ADMIN` などは database user へ fallback しない。
 `ORACLE_USER` / `ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
 アプリケーション機能権限は FastAPI の route manifest で default deny とし、画面表示制御に加えて API 側でも
@@ -39,7 +39,7 @@ HTTP 502 の実行エラーとして画面に表示する。これはアプリ�
 V001.2「アプリケーションコンテキスト」を再適用する。古い package を DB に残したままでは通常ユーザーの
 SELECT 実行で `DeepSec context を消去できないため接続を破棄しました。` が継続する。
 `CLEAR_APP_USER` は `DBMS_SESSION.CLEAR_CONTEXT` ではなく、trusted package 内で
-`DBMS_SESSION.SET_CONTEXT(..., NULL)` により `APP_USER_ID` を空に戻す。
+`DBMS_SESSION.SET_CONTEXT(..., NULL)` により `LOGIN_USER_ID` と legacy `APP_USER_ID` を空に戻す。
 `PLS-00905: object ... NL2SQL_DEEPSEC_CTX_PKG is invalid` が出る場合も V001.2 を再適用し、適用結果が
 失敗になったときは画面の compile error を修正してから再実行する。
 V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、DeepSec plan には `FAILED` と
@@ -50,7 +50,7 @@ V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、De
 
 ## 初期 migration と構成管理者
 
-`APP_ADMIN_USERNAME=system_admin` / `APP_ADMIN_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
+`APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
 アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` /
 `NL2SQL_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
 使う場合は、DB 接続後に次を一度実行する。
@@ -107,7 +107,7 @@ fail-fast する。DATA USER password は Deep Data Security 画面から保存�
 
 ```dotenv
 ORACLE_DEEPSEC_ENABLED=true
-ORACLE_DEEPSEC_DATA_USER=NL2SQL_DEEPSEC_DATA_USER
+ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
 ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
 ORACLE_DRIVER_MODE=thin
 ORACLE_CLIENT_LIB_DIR=
@@ -120,9 +120,9 @@ Thin mTLS の Wallet / config directory には `tnsnames.ora` と `ewallet.pem` 
 `sqlnet.ora` と `cwallet.sso` は Thick 互換の Oracle Net 構成向けであり、DeepSec 有効時の必須条件にはしない。
 DeepSec 無効の非標準運用で Thick 専用機能が必要な場合のみ、別 service/process として設計し直す。
 
-python-oracledb の `create_end_user_security_context()` / `set_end_user_security_context()` または
-`end_user_sec_provider` SPI による EndUserSecurityContext payload 伝播も Thin mode 限定である。
-本システムは現在 classic application context を使うが、DeepSec 全体の driver mode は Thin に統一する。
+本システムは database access token や python-oracledb の `set_end_user_security_context()` を使わず、
+共有 `DEEPSEC_DATA_USER` の direct logon と application context / `CLIENT_IDENTIFIER` で実行時 user を
+伝播する。ただし DeepSec 全体の driver mode は Thin に統一する。
 
 管理画面の `システム設定 > Deep Data Security` で以下を行う。
 
@@ -130,21 +130,61 @@ python-oracledb の `create_end_user_security_context()` / `set_end_user_securit
 2. V001 の SQL preview と SHA-256 checksum を確認する。password は placeholder のみ表示される。
 3. 各 step は `ADMIN_EXECUTE` 実行確認語を入力して順番に適用する。API は version、step、checksum、confirmation だけを受け付け、SQL 本文は受け付けない。
 4. 失敗した場合は ledger の完了 step を保持し、原因を解消して失敗 step から再開する。
-5. Limited user/role に `NL2SQL_DEEPSEC_PROBE` の `ROW_READ` entitlement を設定し、verify を実行する。
+5. `データ権限` tab で実 table/view/materialized view、許可列、必要な row scope を role ごとに設定し、SQL preview と checksum を確認してから `ADMIN_EXECUTE` で Data Grant を適用する。適用は現在保存済みの role policy への同期であり、新規作成・更新・削除・全削除を反映する。
 
 Oracle DDL は暗黙 commit を含むため、V001 全体を一括 rollback したようには表示しない。既存の無関係な
 END USER、DATA ROLE、context、Data Grant は DROP/上書きしない。
 
-## Data Grant 検証の判定
+## Data Grant ポリシーの判定
 
-- context 未設定: probe row は 0 件。
-- Limited subject: entitlement scope の row のみ取得でき、未認可の `SENSITIVE_TEXT` は `NULL`、
-  `ORA_IS_COLUMN_AUTHORIZED(SENSITIVE_TEXT)` は false。
-- Full subject: すべての probe row と sensitive column を取得できる。
-- 複数 role: entitlement は加法的に合成される。
+`データ権限` は fake/probe table を作成せず、既存の Oracle table/view/materialized view に対する role-based policy を
+`NL2SQL_APP_DATA_ENTITLEMENTS` に保存する。新規 app table は作成しない。UI は対象 object と column を
+既存 schema catalog / live metadata から選ばせ、任意 SQL や raw predicate は受け付けない。
+
+Data Grant SQL は backend が固定生成する。`NL2SQL_DEEPSEC_CTX_PKG.SET_APP_USER_UUID` は現在の
+内部 application user UUID を検証し、DDS policy evaluator から参照できる `CLIENT_IDENTIFIER` へ設定する。
+同時に、ユーザー管理で登録したログインユーザーIDを `NL2SQL_APP_USER_CTX.LOGIN_USER_ID` へ設定する。predicate は
+`ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER` で現在の内部 application user UUID を取得し、
+`NL2SQL_APP_USER_ROLES` / `NL2SQL_APP_ROLES` /
+`NL2SQL_APP_DATA_ENTITLEMENTS` から、その user に割り当てられた active role の policy を解決する。
+権限設定そのものは user id 単位ではなく `ROLE_ID` 単位であり、複数 role の policy は加法的に合成される。
+行 scope で値ソース「ログインユーザーID」を選んだ場合は、
+`SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')` を業務列と比較する。
+
+V1 の capability は SELECT Data Grant のみを対象にする。行 scope の UI は `ALL` と structured filter
+(`FILTERS`) で指定する。旧 UI の文字列系 column 値一致 (`COLUMN_EQUALS`) は互換入力として backend に
+残すが、画面では `FILTERS` の `EQ + 固定値` 条件へ統合する。`FILTERS` は UI/API から列・operator・
+値ソース・値を JSON として受け付け、backend が AND predicate へ固定生成する。`EQ` の文字列列と
+NUMBER 列では、値ソースとして固定値またはログインユーザーIDを選べる。ログインユーザーIDは
+`ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER` を使い、現在の application user id と対象列を比較する。
+NUMBER 列の `EQ` 値は正整数のみ許可し、ログインユーザーIDが正整数へ変換できない場合は
+一致なしになる。対応列型は文字列、数値、日付/時刻の主要型と NULL 判定に限定し、任意 SQL や raw predicate
+は受け付けない。列 scope は選択した column list から生成する。適用時は対象 object に
+`SET USE DATA GRANTS ONLY ... ENABLED` を設定するため、対象 object は管理対象であることを UI と preview
+で明示する。この enforcement は Deep Sec users に対する強制であり、通常 DB user / DB role への汎用
+VPD ではない。
+
+`Data Grant を適用` は UI の現在 draft をアプリ DB へ保存してから Oracle 側を同期する。backend は
+`NL2SQL_DG_%` prefix かつ `NL2SQL_APP_DATA_ROLE` grantee の managed Data Grant を Oracle metadata から
+照合し、アプリ DB の現在 policy に存在しない stale grant は DROP する。stale grant の対象 object に
+現在 policy が 1 件も残らない場合は、DROP 前に `SET USE DATA GRANTS ONLY ... DISABLED` を実行する。
+
+Data Grant の grantee は標準 DB role ではなく DeepSec の DATA ROLE / END USER を使う。本システムでは
+共有 connection pool END USER の `DEEPSEC_DATA_USER` が direct logon し、Data Grant の grantee は
+`NL2SQL_APP_DATA_ROLE` とする。V001 で `NL2SQL_APP_DB_ROLE` を `NL2SQL_APP_DATA_ROLE` へ付与し、
+さらに `DEEPSEC_DATA_USER` へ `GRANT DATA ROLE NL2SQL_APP_DATA_ROLE` を行うことで、共有 END USER の
+direct logon と対象 object 参照に必要な DB role を有効化する。生成 predicate は Oracle 仕様に合わせて
+4000 文字以内で検証し、超過時は SQL 実行前に validation error とする。
+
+`Data Grant を検証` は fake row count ではなく、適用済み role policy について metadata を照合する。
+具体的には foundation object、保存済み Data Grant 名、対象 owner/object、grantee、Data Grants Only の状態、
+対象 object 上の enabled VPD/RLS policy を確認し、不一致は運用エラーとして表示する。DeepSec が正しく
+許可していても、旧 VPD/RLS policy が同じ object に残っていると Oracle は追加で行を絞り込むため、
+`SQL_ASSIST_VPD_%` のような legacy policy は無効化または削除してから DeepSec を適用する。
 
 `SYSTEM_ADMIN` は application feature permission では将来権限を含む wildcard だが、data entitlement では
-wildcard ではない。bootstrap 時に `NL2SQL_DEEPSEC_PROBE/*/FULL` だけを明示付与する。
+wildcard ではない。実データへのアクセス範囲は、他の role と同じく `データ権限` workflow で明示的に
+設定・適用する。
 
 ## SQL 実行画面の安全境界
 

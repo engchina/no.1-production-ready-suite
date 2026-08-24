@@ -17,6 +17,7 @@ import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { securityApi } from "./api";
+import { currentUserHasPermission } from "./menu-permissions";
 import { firstAllowedRoute } from "./route-permissions";
 import { useAuth } from "./AuthProvider";
 
@@ -46,7 +47,7 @@ export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [loginName, setLoginName] = useState("");
+  const [loginUserId, setLoginUserId] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -57,17 +58,16 @@ export function LoginPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!loginName.trim() || !password) {
+    if (!loginUserId.trim() || !password) {
       setError(t("auth.login.required"));
       return;
     }
     setBusy(true);
     setError("");
     try {
-      const current = await auth.login(loginName, password);
+      const current = await auth.login(loginUserId, password);
       const requested = (location.state as { from?: string } | null)?.from;
-      const canAccess = (permission: string) =>
-        current.role_codes.includes("SYSTEM_ADMIN") || current.permissions.includes(permission);
+      const canAccess = (permission: string) => currentUserHasPermission(current, permission);
       navigate(
         current.force_password_change
           ? APP_ROUTES.passwordChange
@@ -93,16 +93,16 @@ export function LoginPage() {
             <RequiredFieldsNote />
             {error ? <Banner severity="danger">{error}</Banner> : null}
             <div className="block space-y-1.5 text-sm font-medium">
-              <FieldLabel htmlFor="auth-login-name" label={t("auth.login.name")} required />
+              <FieldLabel htmlFor="auth-login-user-id" label={t("auth.login.name")} required />
               <input
-                id="auth-login-name"
+                id="auth-login-user-id"
                 required
                 aria-required="true"
                 autoComplete="username"
                 autoFocus
                 className={INPUT_CLASS}
-                value={loginName}
-                onChange={(event) => setLoginName(event.target.value)}
+                value={loginUserId}
+                onChange={(event) => setLoginUserId(event.target.value)}
               />
             </div>
             <div className="block space-y-1.5 text-sm font-medium">

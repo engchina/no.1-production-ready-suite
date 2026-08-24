@@ -37,6 +37,10 @@ class OraclePoolManager:
         ):
             raise OracleAdapterError("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
 
+    def validate_deepsec_control_configuration(self) -> None:
+        """DeepSec 管理 DDL 用の control-plane 設定を検証する。"""
+        ensure_deepsec_thin_mode(self.settings)
+
     @contextmanager
     def control_connection(self) -> Iterator[Any]:
         pool = self._get_pool(data_plane=False)
@@ -47,13 +51,13 @@ class OraclePoolManager:
             connection.close()
 
     @contextmanager
-    def data_connection(self, actor_user_id: str) -> Iterator[Any]:
-        if not actor_user_id:
-            raise OracleAdapterError("データ接続には認証済み actor_user_id が必要です。")
+    def data_connection(self, actor_user_uuid: str) -> Iterator[Any]:
+        if not actor_user_uuid:
+            raise OracleAdapterError("データ接続には認証済み actor_user_uuid が必要です。")
         with self._data_connection_raw() as connection:
             try:
                 with connection.cursor() as cursor:
-                    cursor.callproc("NL2SQL_DEEPSEC_CTX_PKG.SET_APP_USER", [actor_user_id])
+                    cursor.callproc("NL2SQL_DEEPSEC_CTX_PKG.SET_APP_USER_UUID", [actor_user_uuid])
                 yield connection
             finally:
                 self._clear_context_or_drop(connection)
