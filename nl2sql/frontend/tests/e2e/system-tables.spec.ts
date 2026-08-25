@@ -135,12 +135,60 @@ function systemTables(
   };
 }
 
+function rdfNetwork(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    network_owner: "",
+    network_name: "",
+    tablespace: "",
+    options: "",
+    configured: false,
+    mode: "local_fallback",
+    status: "not_configured",
+    current_oracle_user: "NL2SQL_APP",
+    can_apply: false,
+    manual_action_required: false,
+    message_ja: "RDF network は未設定です。Ontology publish は local OWL2RL と SHACL Core 検証で公開します。",
+    warnings_ja: [],
+    metadata: {},
+    config_source: "runtime",
+    ...overrides,
+  };
+}
+
+function rdfNetworkPlan(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    version: "V001",
+    configured: false,
+    can_apply: false,
+    manual_action_required: false,
+    confirmation_phrase: "ADMIN_EXECUTE",
+    checksum: "rdf-checksum-empty",
+    steps: [
+      {
+        step_no: 1,
+        title_ja: "schema-private RDF network を作成",
+        sql: "",
+        checksum: "rdf-checksum-empty",
+        status: "ready",
+      },
+    ],
+    warnings_ja: [],
+    ...overrides,
+  };
+}
+
 async function mockDatabasePage(page: Page, user = systemAdminMe) {
   await page.route("**/api/auth/me", (route) => fulfill(route, user));
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "ok", check: "ok", detail: null })
   );
   await page.route("**/api/settings/database", (route) => fulfill(route, databaseSettings));
+  await page.route("**/api/settings/database/rdf-network", (route) =>
+    fulfill(route, rdfNetwork())
+  );
+  await page.route("**/api/settings/database/rdf-network/plan", (route) =>
+    fulfill(route, rdfNetworkPlan())
+  );
   await page.route("**/api/settings/database/adb", (route) => fulfill(route, adbInfo));
   await page.route("**/api/schema/owners", (route) =>
     fulfill(route, {
@@ -243,6 +291,112 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
   await card.getByText("システムテーブルの詳細を表示").click();
   await expect(card.getByRole("table")).toBeVisible();
   await expect(card.getByText("NL2SQL_PROFILES", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("RDF network は fallback 状態から設定を保存できる", async ({ page }) => {
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("ready"))
+  );
+  let patchBody: unknown = null;
+  await page.route("**/api/settings/database/rdf-network", async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchBody = route.request().postDataJSON();
+      await fulfill(
+        route,
+        rdfNetwork({
+          network_owner: "NL2SQL_APP",
+          network_name: "NET1",
+          tablespace: "RDFTBS",
+          options: "MODEL_PARTITIONS=16",
+          configured: true,
+          mode: "oracle_rdf",
+          status: "missing",
+          can_apply: true,
+          message_ja: "RDF network を確認できません。未作成または権限不足です。",
+          warnings_ja: [],
+        })
+      );
+      return;
+    }
+    await fulfill(route, rdfNetwork());
+  });
+
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#rdf-network");
+  await expect(card).toBeVisible();
+  await expect(card.getByText("local OWL2RL", { exact: true })).toBeVisible();
+
+  await card.getByLabel("Network owner").fill("NL2SQL_APP");
+  await card.getByLabel("Network name").fill("NET1");
+  await card.getByLabel("Tablespace").fill("RDFTBS");
+  await card.getByLabel("Options").fill("MODEL_PARTITIONS=16");
+  await card.getByRole("button", { name: "設定を保存" }).click();
+
+  await expect(page.getByText("RDF network 設定を保存しました。")).toBeVisible();
+  expect(patchBody).toEqual({
+    network_owner: "NL2SQL_APP",
+    network_name: "NET1",
+    tablespace: "RDFTBS",
+    options: "MODEL_PARTITIONS=16",
+  });
+  await expect(card.getByText("Oracle RDF", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("RDF network SQL plan は確認語つきで適用する", async ({ page }) => {
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("ready"))
+  );
+  const configured = rdfNetwork({
+    network_owner: "NL2SQL_APP",
+    network_name: "NET1",
+    tablespace: "RDFTBS",
+    options: "MODEL_PARTITIONS=16",
+    configured: true,
+    mode: "oracle_rdf",
+    status: "missing",
+    can_apply: true,
+    message_ja: "RDF network を確認できません。未作成または権限不足です。",
+  });
+  const ready = rdfNetwork({
+    ...configured,
+    status: "ready",
+    can_apply: false,
+    message_ja: "RDF network は利用可能です。Ontology publish は Oracle RDF staging を使います。",
+  });
+  const plan = rdfNetworkPlan({
+    configured: true,
+    can_apply: true,
+    checksum: "rdf-checksum-001",
+    steps: [
+      {
+        step_no: 1,
+        title_ja: "schema-private RDF network を作成",
+        sql: "BEGIN\n  SEM_APIS.CREATE_RDF_NETWORK(\n    tablespace_name => 'RDFTBS'\n  );\nEND;",
+        checksum: "rdf-checksum-001",
+        status: "pending",
+      },
+    ],
+  });
+  let applyBody: unknown = null;
+  await page.route("**/api/settings/database/rdf-network", (route) => fulfill(route, configured));
+  await page.route("**/api/settings/database/rdf-network/plan", (route) => fulfill(route, plan));
+  await page.route("**/api/settings/database/rdf-network/apply", async (route) => {
+    applyBody = route.request().postDataJSON();
+    await fulfill(route, { status: "applied", network: ready });
+  });
+
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#rdf-network");
+  await card.getByText("SQL とチェックサムを表示").click();
+  await expect(page.getByTestId("rdf-network-sql")).toContainText("SEM_APIS.CREATE_RDF_NETWORK");
+  await card.getByPlaceholder("ADMIN_EXECUTE").fill("ADMIN_EXECUTE");
+  await card.getByRole("button", { name: "RDF network を作成" }).click();
+
+  await expect(page.getByText("RDF network を作成しました。")).toBeVisible();
+  expect(applyBody).toEqual({ checksum: "rdf-checksum-001", confirmation: "ADMIN_EXECUTE" });
+  await expect(card.getByText("利用可能", { exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
 });
 

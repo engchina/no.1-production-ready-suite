@@ -7,6 +7,7 @@ import pytest
 from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 
 from app.features.nl2sql.models import (
+    AssetRefreshData,
     Nl2SqlEngine,
     SampleDataMutationRequest,
     SampleDataStep,
@@ -60,6 +61,20 @@ def _judge(*_args: object) -> QualityEvaluationJudge:
         confidence=0.92,
         summary="質問の意味と一致します。",
     )
+
+
+def _configure_strict_engine_runtime(
+    service: Nl2SqlService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_select_ai_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_select_ai_agent_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_enterprise_ai_direct_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_select_ai_provider", "oci")
+    monkeypatch.setattr(settings, "nl2sql_select_ai_credential_name", "NL2SQL_CRED")
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+    monkeypatch.setattr(service._oracle_adapter, "is_configured", lambda: True)
+    monkeypatch.setattr(service._enterprise_ai_client, "is_configured", lambda: True)
 
 
 def test_parse_cases_accepts_japanese_and_english_headers_and_active_sheet() -> None:
@@ -200,7 +215,7 @@ def test_submit_accepts_repeat_boundaries_and_rejects_unavailable_engine(
     unavailable = _service(
         engine_runner=lambda *_args: "SELECT 1 FROM dual",
         judge_runner=_judge,
-        readiness_provider=lambda: {
+        readiness_provider=lambda _profile_id: {
             Nl2SqlEngine.SELECT_AI: (False, "Select AI profile が未構成です。")
         },
     )
@@ -212,6 +227,69 @@ def test_submit_accepts_repeat_boundaries_and_rejects_unavailable_engine(
             content=workbook,
             filename="cases.xlsx",
         )
+
+
+def test_quality_evaluation_readiness_allows_profile_engines_without_cached_asset_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _configure_strict_engine_runtime(service, monkeypatch)
+
+    readiness = service.quality_evaluation_engine_readiness(profile_id="default")
+
+    assert readiness[Nl2SqlEngine.SELECT_AI] == (True, "")
+    assert readiness[Nl2SqlEngine.SELECT_AI_AGENT] == (True, "")
+    assert readiness[Nl2SqlEngine.ENTERPRISE_AI_DIRECT] == (True, "")
+
+
+def test_quality_evaluation_readiness_blocks_known_unsynced_current_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _configure_strict_engine_runtime(service, monkeypatch)
+    profile_name = service._select_ai_profile_name(service.get_profile("default"))  # noqa: SLF001
+    service._asset_meta[Nl2SqlEngine.SELECT_AI] = AssetRefreshData(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI,
+        refreshed=False,
+        status="error",
+        profile_name=profile_name,
+        engine_meta={
+            "profile_scope_states": {
+                profile_name.upper(): {"refreshed": False, "status": "error"}
+            }
+        },
+    )
+
+    readiness = service.quality_evaluation_engine_readiness(profile_id="default")
+
+    assert readiness[Nl2SqlEngine.SELECT_AI][0] is False
+    assert "未同期" in readiness[Nl2SqlEngine.SELECT_AI][1]
+    assert readiness[Nl2SqlEngine.SELECT_AI_AGENT][0] is False
+    assert "未同期" in readiness[Nl2SqlEngine.SELECT_AI_AGENT][1]
+
+
+def test_quality_evaluation_readiness_ignores_other_profile_stale_asset_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _configure_strict_engine_runtime(service, monkeypatch)
+    service._asset_meta[Nl2SqlEngine.SELECT_AI] = AssetRefreshData(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI,
+        refreshed=False,
+        status="error",
+        profile_name="NL2SQL_OTHER_PROFILE",
+    )
+    service._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = AssetRefreshData(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI_AGENT,
+        refreshed=False,
+        status="error",
+        profile_name="NL2SQL_OTHER_PROFILE",
+    )
+
+    readiness = service.quality_evaluation_engine_readiness(profile_id="default")
+
+    assert readiness[Nl2SqlEngine.SELECT_AI] == (True, "")
+    assert readiness[Nl2SqlEngine.SELECT_AI_AGENT] == (True, "")
 
 
 def test_worker_runs_every_attempt_and_isolates_generation_and_judge_errors(
@@ -347,7 +425,7 @@ def test_strict_generation_never_uses_deterministic_fallback(
     monkeypatch.setattr(
         service,
         "quality_evaluation_engine_readiness",
-        lambda: {engine: (True, "")},
+        lambda profile_id=None: {engine: (True, "")},
     )
     monkeypatch.setattr(service, "_use_oracle_runtime", lambda: False)
     monkeypatch.setattr(service._enterprise_ai_client, "is_configured", lambda: False)

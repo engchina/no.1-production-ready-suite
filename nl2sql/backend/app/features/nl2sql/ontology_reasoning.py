@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -37,6 +38,46 @@ from .ontology_semantics import (
 from .ontology_store import OntologyStore, canonical_json
 
 logger = logging.getLogger(__name__)
+
+_ORACLE_RDF_IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+
+
+def _normalize_oracle_rdf_identifier(value: str, setting_name: str) -> str:
+    normalized = value.strip().upper()
+    if not _ORACLE_RDF_IDENTIFIER_RE.fullmatch(normalized):
+        raise ValueError(
+            f"{setting_name} は英字で始まり、英数字とアンダースコアだけを使用してください。"
+        )
+    return normalized
+
+
+def _oracle_private_rdf_view_name(*, network_owner: str, network_name: str, graph_name: str) -> str:
+    graph_view_name = f"{network_name}#RDFT_{graph_name}"
+    if len(graph_view_name) > 128:
+        raise ValueError("Oracle RDF graph view 名が 128 文字を超えています。")
+    return f"{network_owner}.{graph_view_name}"
+
+
+def _oracle_error_codes(exc: Exception) -> list[str]:
+    codes = re.findall(r"(?:ORA|DPY)-\d{4,5}", str(exc), flags=re.IGNORECASE)
+    return list(dict.fromkeys(code.upper() for code in codes))
+
+
+def _oracle_rdf_failure_message(
+    exc: Exception,
+    *,
+    network_owner: str,
+    network_name: str,
+) -> str:
+    codes = _oracle_error_codes(exc)
+    code_suffix = f"（{', '.join(codes)}）" if codes else ""
+    return (
+        f"Oracle RDF network を利用した OWL2RL materialization に失敗しました{code_suffix}。"
+        "NL2SQL_ONTOLOGY_RDF_NETWORK_OWNER / NL2SQL_ONTOLOGY_RDF_NETWORK_NAME に指定した "
+        f"schema-private RDF network（owner={network_owner}, name={network_name}）を "
+        "SEM_APIS.CREATE_RDF_NETWORK で作成し、アプリケーション DB user に必要な "
+        "network access / RDF graph 操作権限を付与してください。"
+    )
 
 
 class Owl2RlMaterializer(Protocol):
@@ -73,8 +114,20 @@ class OracleOwl2RlMaterializer:
         network_name: str = "",
     ) -> None:
         self._connection_factory = connection_factory
-        self._network_owner = network_owner or None
-        self._network_name = network_name or None
+        if not network_owner.strip() or not network_name.strip():
+            raise ValueError(
+                "Oracle RDF staging を使う場合は "
+                "NL2SQL_ONTOLOGY_RDF_NETWORK_OWNER と "
+                "NL2SQL_ONTOLOGY_RDF_NETWORK_NAME を両方設定してください。"
+            )
+        self._network_owner = _normalize_oracle_rdf_identifier(
+            network_owner,
+            "NL2SQL_ONTOLOGY_RDF_NETWORK_OWNER",
+        )
+        self._network_name = _normalize_oracle_rdf_identifier(
+            network_name,
+            "NL2SQL_ONTOLOGY_RDF_NETWORK_NAME",
+        )
 
     def materialize(
         self,
@@ -85,67 +138,94 @@ class OracleOwl2RlMaterializer:
     ) -> str:
         from rdflib import Graph
 
+        rdf_graph_name = _normalize_oracle_rdf_identifier(rdf_graph_name, "rdf_graph_name")
+        inferred_graph_name = _normalize_oracle_rdf_identifier(
+            inferred_graph_name,
+            "inferred_graph_name",
+        )
+        rdf_view_name = _oracle_private_rdf_view_name(
+            network_owner=self._network_owner,
+            network_name=self._network_name,
+            graph_name=rdf_graph_name,
+        )
         graph = Graph()
         graph.parse(data=asserted_turtle, format="turtle")
-        with self._connection_factory() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
-                BEGIN
-                  SEM_APIS.CREATE_RDF_GRAPH(
-                    rdf_graph_name => :rdf_graph_name,
-                    table_name => 'NL2SQL_ONTOLOGY_RDF_DATA',
-                    column_name => 'TRIPLE',
-                    network_owner => :network_owner,
-                    network_name => :network_name
-                  );
-                END;
-                """,
-                {
-                    "rdf_graph_name": rdf_graph_name,
-                    "network_owner": self._network_owner,
-                    "network_name": self._network_name,
-                },
-            )
-            insert_sql = """
-                INSERT INTO NL2SQL_ONTOLOGY_RDF_DATA (ID, TRIPLE)
-                VALUES (
-                  NL2SQL_ONTOLOGY_RDF_SEQ.NEXTVAL,
-                  SDO_RDF_TRIPLE_S(:rdf_graph_name, :subject, :predicate, :object)
+        try:
+            with self._connection_factory() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    BEGIN
+                      SEM_APIS.CREATE_RDF_GRAPH(
+                        rdf_graph_name => :rdf_graph_name,
+                        table_name => NULL,
+                        column_name => NULL,
+                        network_owner => :network_owner,
+                        network_name => :network_name
+                      );
+                    END;
+                    """,
+                    {
+                        "rdf_graph_name": rdf_graph_name,
+                        "network_owner": self._network_owner,
+                        "network_name": self._network_name,
+                    },
                 )
-            """
-            rows = [
-                {
-                    "rdf_graph_name": rdf_graph_name,
-                    "subject": subject.n3(),
-                    "predicate": predicate.n3(),
-                    "object": object_.n3(),
-                }
-                for subject, predicate, object_ in graph
-            ]
-            if rows:
-                cursor.executemany(insert_sql, rows)
-            cursor.execute(
+                insert_sql = f"""
+                    INSERT INTO {rdf_view_name} (TRIPLE)
+                    VALUES (
+                      SDO_RDF_TRIPLE_S(
+                        :rdf_graph_name,
+                        :subject,
+                        :predicate,
+                        :object,
+                        :network_owner,
+                        :network_name
+                      )
+                    )
                 """
-                BEGIN
-                  SEM_APIS.CREATE_INFERRED_GRAPH(
-                    inferred_graph_name => :inferred_graph_name,
-                    rdf_graphs_in => SEM_MODELS(:rdf_graph_name),
-                    rulebases_in => SEM_RULEBASES('OWL2RL'),
-                    passes => SEM_APIS.REACH_CLOSURE,
-                    options => 'USER_RULES=F,PROOF=F',
-                    network_owner => :network_owner,
-                    network_name => :network_name
-                  );
-                END;
-                """,
-                {
-                    "inferred_graph_name": inferred_graph_name,
-                    "rdf_graph_name": rdf_graph_name,
-                    "network_owner": self._network_owner,
-                    "network_name": self._network_name,
-                },
-            )
-            connection.commit()
+                rows = [
+                    {
+                        "rdf_graph_name": rdf_graph_name,
+                        "subject": subject.n3(),
+                        "predicate": predicate.n3(),
+                        "object": object_.n3(),
+                        "network_owner": self._network_owner,
+                        "network_name": self._network_name,
+                    }
+                    for subject, predicate, object_ in graph
+                ]
+                if rows:
+                    cursor.executemany(insert_sql, rows)
+                cursor.execute(
+                    """
+                    BEGIN
+                      SEM_APIS.CREATE_INFERRED_GRAPH(
+                        inferred_graph_name => :inferred_graph_name,
+                        rdf_graphs_in => SEM_MODELS(:rdf_graph_name),
+                        rulebases_in => SEM_RULEBASES('OWL2RL'),
+                        passes => SEM_APIS.REACH_CLOSURE,
+                        options => 'USER_RULES=F,PROOF=F',
+                        network_owner => :network_owner,
+                        network_name => :network_name
+                      );
+                    END;
+                    """,
+                    {
+                        "inferred_graph_name": inferred_graph_name,
+                        "rdf_graph_name": rdf_graph_name,
+                        "network_owner": self._network_owner,
+                        "network_name": self._network_name,
+                    },
+                )
+                connection.commit()
+        except Exception as exc:
+            raise RuntimeError(
+                _oracle_rdf_failure_message(
+                    exc,
+                    network_owner=self._network_owner,
+                    network_name=self._network_name,
+                )
+            ) from exc
         # SHACL は Oracle へ登録したものと同じ asserted graph の標準 OWL2RL closure で行う。
         return materialize_local_owl2rl(asserted_turtle)
 
@@ -169,14 +249,25 @@ class OntologyPublishService:
             raise RuntimeError("Ontology 推論 profile は OWL 2 RL だけを指定できます。")
         if getattr(self.runtime.store, "mode", "memory") != "oracle":
             return LocalOwl2RlMaterializer()
+        network_owner = settings.nl2sql_ontology_rdf_network_owner.strip()
+        network_name = settings.nl2sql_ontology_rdf_network_name.strip()
+        if not network_owner and not network_name:
+            return LocalOwl2RlMaterializer()
+        if not network_owner or not network_name:
+            raise RuntimeError(
+                "Oracle RDF staging を使う場合は "
+                "NL2SQL_ONTOLOGY_RDF_NETWORK_OWNER と "
+                "NL2SQL_ONTOLOGY_RDF_NETWORK_NAME を両方設定してください。"
+                "未設定で local OWL2RL を使う場合は両方を空にしてください。"
+            )
         adapter = getattr(self.runtime.legacy_service, "_oracle_adapter", None)
         connection_factory = getattr(adapter, "connection", None)
         if not callable(connection_factory):
             raise RuntimeError("Oracle OWL2RL materialization 用 connection factory がありません。")
         return OracleOwl2RlMaterializer(
             connection_factory,
-            network_owner=settings.nl2sql_ontology_rdf_network_owner,
-            network_name=settings.nl2sql_ontology_rdf_network_name,
+            network_owner=network_owner,
+            network_name=network_name,
         )
 
     def start(
@@ -318,6 +409,13 @@ class OntologyPublishService:
             OntologyReasoningStatus.MATERIALIZING,
         )
         artifacts = build_semantic_artifacts(ontology)
+        draft_markdown_reader = getattr(self.runtime, "draft_markdown_for_revision", None)
+        draft_markdown = str(
+            draft_markdown_reader(job.revision_id)
+            if callable(draft_markdown_reader)
+            else ""
+        ).strip()
+        llm_markdown = draft_markdown or artifacts.llm_markdown
         rdf_graph_name, inferred_graph_name = revision_graph_names(job.revision_id)
         with observe_stage("owl2rl_materialize"):
             inferred_turtle = self._materializer.materialize(
@@ -360,7 +458,7 @@ class OntologyPublishService:
             "ontology_owl_turtle": artifacts.owl_turtle,
             "ontology_inferred_turtle": inferred_turtle,
             "ontology_shacl_turtle": artifacts.shacl_turtle,
-            "ontology_llm_markdown": artifacts.llm_markdown,
+            "ontology_llm_markdown": llm_markdown,
             "ontology_mermaid": artifacts.mermaid,
             "ontology_shacl_report": validation.report_turtle,
         }
@@ -414,10 +512,17 @@ class OntologyPublishService:
                 "renderer_version": ONTOLOGY_RENDERER_VERSION,
                 "artifact_hashes": {
                     **artifacts.hashes,
+                    "llm_markdown": hashlib.sha256(llm_markdown.encode("utf-8")).hexdigest(),
+                    "published_markdown": hashlib.sha256(
+                        llm_markdown.encode("utf-8")
+                    ).hexdigest(),
                     "inferred_turtle": hashlib.sha256(inferred_turtle.encode("utf-8")).hexdigest(),
                 },
             },
         )
+        markdown_publisher = getattr(self.runtime, "copy_draft_markdown_to_published", None)
+        if callable(markdown_publisher):
+            markdown_publisher(job.revision_id)
         published = self._update(
             job_id,
             status=OntologyPublishStatus.SUCCEEDED,

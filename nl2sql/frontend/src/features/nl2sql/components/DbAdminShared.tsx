@@ -246,7 +246,7 @@ export function ManagementTabs<TView extends string>({
   onViewChange,
 }: {
   activeView: TView;
-  tabs: Array<{ id: TView; label: string; icon: LucideIcon }>;
+  tabs: Array<{ id: TView; label: string; icon: LucideIcon; ariaLabel?: string }>;
   idPrefix: string;
   ariaLabel: string;
   onViewChange: (view: TView) => void;
@@ -280,6 +280,7 @@ export function ManagementTabs<TView extends string>({
               type="button"
               role="tab"
               aria-selected={selected}
+              aria-label={view.ariaLabel}
               aria-controls={`${idPrefix}-panel-${view.id}`}
               className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
                 selected

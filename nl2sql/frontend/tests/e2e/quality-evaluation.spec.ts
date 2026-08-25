@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 
@@ -16,14 +16,31 @@ function envelope(route: Route, data: unknown, status = 200) {
   });
 }
 
+async function visibleBox(locator: Locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  return box!;
+}
+
+async function expectVerticalOrder(locators: Locator[]) {
+  if (locators.length === 0) return;
+  let previous = await visibleBox(locators[0]!);
+  for (const locator of locators.slice(1)) {
+    const current = await visibleBox(locator);
+    expect(current.y).toBeGreaterThanOrEqual(previous.y + previous.height - 1);
+    previous = current;
+  }
+}
+
 const capabilities = {
   engines: [
     { engine: "select_ai", label: "Select AI", available: true, reason: "" },
     {
       engine: "select_ai_agent",
       label: "Select AI Agent",
-      available: false,
-      reason: "Agent team が未構成です。",
+      available: true,
+      reason: "",
     },
     {
       engine: "enterprise_ai_direct",
@@ -167,40 +184,48 @@ const results = [
 
 async function mockQualityApi(
   page: Page,
-  options: { judgeAvailable?: boolean; fixedStatus?: "completed_with_errors" | "failed" } = {}
+  options: {
+    judgeAvailable?: boolean;
+    fixedStatus?: "completed_with_errors" | "failed";
+    engines?: typeof capabilities.engines;
+  } = {}
 ) {
   let jobReads = 0;
   let submittedBody = "";
   await page.route("**/api/nl2sql/profiles**", (route) =>
-    envelope(route, [
-      {
-        id: "default",
-        name: "標準プロファイル",
-        category: "品質評価",
-        description: "",
-        allowed_tables: [],
-        allowed_views: [],
-        glossary: {},
-        sql_rules: [],
-        default_row_limit: 100,
-        safety_policy: "select_only",
-        few_shot_examples: [],
-        select_ai_config: {
-          profile_name: "",
-          region: "",
-          model: "",
-          embedding_model: "",
-          max_tokens: 32000,
-          enforce_object_list: true,
-          comments: true,
-          annotations: false,
-          constraints: false,
-          role: "",
-          additional_instructions: "",
+    envelope(route, {
+      items: [
+        {
+          id: "default",
+          name: "標準プロファイル",
+          category: "品質評価",
+          description: "",
+          allowed_tables: [],
+          allowed_views: [],
+          glossary: {},
+          sql_rules: [],
+          default_row_limit: 100,
+          safety_policy: "select_only",
+          few_shot_examples: [],
+          select_ai_config: {
+            profile_name: "",
+            region: "",
+            model: "",
+            embedding_model: "",
+            max_tokens: 32000,
+            enforce_object_list: true,
+            comments: true,
+            annotations: false,
+            constraints: false,
+            role: "",
+            additional_instructions: "",
+          },
+          archived: false,
         },
-        archived: false,
-      },
-    ])
+      ],
+      next_cursor: null,
+      total: 1,
+    })
   );
   await page.route("**/api/nl2sql/quality-evaluations**", async (route) => {
     const request = route.request();
@@ -209,6 +234,7 @@ async function mockQualityApi(
     if (path.endsWith("/capabilities")) {
       return envelope(route, {
         ...capabilities,
+        engines: options.engines ?? capabilities.engines,
         judge:
           options.judgeAvailable === false
             ? {
@@ -269,6 +295,62 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await page.goto("/evaluation");
 
   await expect(page.getByRole("heading", { name: "評価条件" })).toBeVisible();
+  const inputRow = page.getByTestId("quality-evaluation-input-row");
+  const profileField = page.getByTestId("quality-evaluation-profile-field");
+  const fileField = page.getByTestId("quality-evaluation-file");
+  const engineFieldset = page.getByTestId("quality-evaluation-engine-fieldset");
+  const repeatLabel = page.getByTestId("quality-evaluation-repeat-label");
+  const repeatInput = page.getByLabel("繰り返し回数");
+  const estimateSummary = page.getByTestId("quality-evaluation-estimate-summary");
+  const estimateLabel = page.getByTestId("quality-evaluation-estimate-label");
+  const estimateValue = page.getByTestId("quality-evaluation-estimate-value");
+  const actionFooter = page.getByTestId("quality-evaluation-action-footer");
+  const [
+    inputRowBox,
+    profileBox,
+    fileBox,
+    engineBox,
+    repeatLabelBox,
+    repeatInputBox,
+    estimateBox,
+    estimateLabelBox,
+    estimateValueBox,
+    footerBox,
+  ] =
+    await Promise.all([
+      visibleBox(inputRow),
+      visibleBox(profileField),
+      visibleBox(fileField),
+      visibleBox(engineFieldset),
+      visibleBox(repeatLabel),
+      visibleBox(repeatInput),
+      visibleBox(estimateSummary),
+      visibleBox(estimateLabel),
+      visibleBox(estimateValue),
+      visibleBox(actionFooter),
+    ]);
+  expect(Math.abs(profileBox.y - fileBox.y)).toBeLessThanOrEqual(3);
+  expect(engineBox.y).toBeGreaterThanOrEqual(inputRowBox.y + inputRowBox.height - 1);
+  expect(Math.abs(repeatLabelBox.y - estimateLabelBox.y)).toBeLessThanOrEqual(3);
+  expect(Math.abs(repeatInputBox.y - estimateValueBox.y)).toBeLessThanOrEqual(3);
+  expect(estimateValueBox.height).toBeLessThanOrEqual(repeatInputBox.height + 8);
+  expect(estimateBox.height).toBeLessThanOrEqual(repeatInputBox.height + repeatLabelBox.height + 16);
+  const estimateSurface = await estimateSummary.evaluate((element) => {
+    const styles = window.getComputedStyle(element);
+    return {
+      backgroundColor: styles.backgroundColor,
+      borderTopWidth: styles.borderTopWidth,
+      borderRightWidth: styles.borderRightWidth,
+      borderBottomWidth: styles.borderBottomWidth,
+      borderLeftWidth: styles.borderLeftWidth,
+    };
+  });
+  expect(estimateSurface.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(estimateSurface.borderTopWidth).toBe("0px");
+  expect(estimateSurface.borderRightWidth).toBe("0px");
+  expect(estimateSurface.borderBottomWidth).toBe("0px");
+  expect(estimateSurface.borderLeftWidth).toBe("0px");
+  expect(footerBox.y).toBeGreaterThanOrEqual(estimateBox.y + estimateBox.height - 1);
   const profileSelect = page.locator("#quality-evaluation-profile");
   await expect(profileSelect).toHaveValue("default");
   await expect(
@@ -284,17 +366,18 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
   await engineBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(checkboxes.nth(0)).toBeChecked();
-  await expect(checkboxes.nth(1)).toBeDisabled();
-  await expect(checkboxes.nth(1)).not.toBeChecked();
+  await expect(checkboxes.nth(1)).toBeEnabled();
+  await expect(checkboxes.nth(1)).toBeChecked();
   await expect(checkboxes.nth(2)).toBeChecked();
   await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeEnabled();
   await engineBulkActions.getByRole("button", { name: "すべて解除" }).click();
   await expect(checkboxes.nth(0)).not.toBeChecked();
+  await expect(checkboxes.nth(1)).not.toBeChecked();
   await expect(checkboxes.nth(2)).not.toBeChecked();
   await checkboxes.nth(0).focus();
   await page.keyboard.press("Space");
   await checkboxes.nth(2).check();
-  await expect(checkboxes.nth(1)).toBeDisabled();
+  await expect(checkboxes.nth(1)).toBeEnabled();
   await page.getByLabel("繰り返し回数").fill("2");
   await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [
     {
@@ -331,6 +414,27 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   );
 });
 
+test("unavailable engines remain disabled when capabilities mark them unavailable", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop unavailable engine state");
+  await mockQualityApi(page, {
+    engines: capabilities.engines.map((engine) =>
+      engine.engine === "select_ai_agent"
+        ? { ...engine, available: false, reason: "Agent team が未構成です。" }
+        : engine
+    ),
+  });
+  await page.goto("/evaluation");
+
+  const checkboxes = page.getByRole("checkbox");
+  await expect(checkboxes.nth(0)).toBeEnabled();
+  await expect(checkboxes.nth(1)).toBeDisabled();
+  await expect(checkboxes.nth(2)).toBeEnabled();
+  await expect(page.getByText("Agent team が未構成です。")).toBeVisible();
+  await expect(page.getByText("利用不可")).toBeVisible();
+});
+
 test("mobile restores completed results as cards without page overflow", async ({
   page,
 }, testInfo) => {
@@ -338,6 +442,15 @@ test("mobile restores completed results as cards without page overflow", async (
   await mockQualityApi(page, { fixedStatus: "completed_with_errors" });
   await page.goto("/evaluation?job=job-001");
 
+  await expectVerticalOrder([
+    page.getByTestId("quality-evaluation-profile-field"),
+    page.getByTestId("quality-evaluation-file"),
+    page.getByTestId("quality-evaluation-engine-fieldset"),
+    page.getByTestId("quality-evaluation-repeat-field"),
+    page.getByTestId("quality-evaluation-estimate-summary"),
+    page.getByTestId("quality-evaluation-judge-note"),
+    page.getByTestId("quality-evaluation-action-footer"),
+  ]);
   await expect(
     page
       .locator("article")

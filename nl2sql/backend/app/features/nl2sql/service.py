@@ -14034,56 +14034,120 @@ class Nl2SqlService:
             schema_catalog=generation_catalog,
         )
 
-    def quality_evaluation_engine_readiness(self) -> dict[Nl2SqlEngine, tuple[bool, str]]:
-        """品質評価で strict 実行できる engine だけを公開する。"""
+    def _quality_evaluation_profile(self, profile_id: str | None) -> tuple[Nl2SqlProfile | None, str]:
+        if not profile_id:
+            return None, ""
+        try:
+            return self.get_profile(profile_id), ""
+        except ValueError as exc:
+            return None, str(exc)
+
+    def _select_ai_known_scope_blocking_reason(self, profile: Nl2SqlProfile | None) -> str:
+        if profile is None:
+            return ""
+        profile_name = self._select_ai_profile_name(profile)
+        scope_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
+        if scope_meta is None:
+            return ""
+        raw_states = scope_meta.engine_meta.get("profile_scope_states", {})
+        profile_state = (
+            raw_states.get(profile_name.upper()) if isinstance(raw_states, dict) else None
+        )
+        if isinstance(profile_state, dict):
+            if (
+                not bool(profile_state.get("refreshed"))
+                or str(profile_state.get("status") or "") != "ready"
+            ):
+                return (
+                    "Oracle Select AI Profile の object scope が未同期です。"
+                    "Profile を再同期してから実行してください。"
+                )
+            return ""
+        if scope_meta.profile_name == profile_name and (
+            not scope_meta.refreshed or scope_meta.status != "ready"
+        ):
+            return (
+                "Oracle Select AI Profile の object scope が未同期です。"
+                "Profile を再同期してから実行してください。"
+            )
+        return ""
+
+    def _select_ai_agent_known_asset_blocking_reason(self, profile: Nl2SqlProfile | None) -> str:
+        if profile is None:
+            return ""
+        profile_name = self._select_ai_profile_name(profile)
+        asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
+        if (
+            asset_meta is not None
+            and asset_meta.profile_name == profile_name
+            and (not asset_meta.refreshed or asset_meta.status != "ready")
+        ):
+            return (
+                "Oracle Select AI Agent assets が未同期です。"
+                "Profile を再同期してから実行してください。"
+            )
+        return ""
+
+    def quality_evaluation_engine_readiness(
+        self, profile_id: str | None = None
+    ) -> dict[Nl2SqlEngine, tuple[bool, str]]:
+        """品質評価で strict 実行を試行できる engine を公開する。"""
 
         settings = get_settings()
+        profile, profile_error = self._quality_evaluation_profile(profile_id)
         oracle_ready = bool(
             self._use_oracle_runtime()
             and self._oracle_adapter.is_configured()
             and settings.nl2sql_select_ai_provider.strip()
             and settings.nl2sql_select_ai_credential_name.strip()
         )
-        select_ai_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
-        select_ai_assets_ready = bool(
-            select_ai_meta
-            and select_ai_meta.refreshed
-            and select_ai_meta.status in {"ready", "refreshed"}
+        select_ai_blocking_reason = self._select_ai_known_scope_blocking_reason(profile)
+        agent_blocking_reason = self._select_ai_agent_known_asset_blocking_reason(profile)
+        select_ai_ready = bool(
+            not profile_error
+            and settings.nl2sql_select_ai_enabled
+            and oracle_ready
+            and not select_ai_blocking_reason
         )
-        agent_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
-        agent_assets_ready = bool(
-            agent_meta and agent_meta.refreshed and agent_meta.status in {"ready", "refreshed"}
+        agent_ready = bool(
+            not profile_error
+            and settings.nl2sql_select_ai_agent_enabled
+            and oracle_ready
+            and not select_ai_blocking_reason
+            and not agent_blocking_reason
+        )
+        direct_ready = bool(
+            not profile_error
+            and settings.nl2sql_enterprise_ai_direct_enabled
+            and self._enterprise_ai_client.is_configured()
         )
         return {
             Nl2SqlEngine.SELECT_AI: (
-                bool(settings.nl2sql_select_ai_enabled and oracle_ready and select_ai_assets_ready),
+                select_ai_ready,
                 ""
-                if settings.nl2sql_select_ai_enabled and oracle_ready and select_ai_assets_ready
-                else "Oracle Select AI の接続・credential・profile が未構成です。",
+                if select_ai_ready
+                else (
+                    profile_error
+                    or select_ai_blocking_reason
+                    or "Oracle Select AI の接続・credential・profile が未構成です。"
+                ),
             ),
             Nl2SqlEngine.SELECT_AI_AGENT: (
-                bool(
-                    settings.nl2sql_select_ai_agent_enabled
-                    and oracle_ready
-                    and select_ai_assets_ready
-                    and agent_assets_ready
-                ),
+                agent_ready,
                 ""
-                if settings.nl2sql_select_ai_agent_enabled
-                and oracle_ready
-                and select_ai_assets_ready
-                and agent_assets_ready
-                else "Oracle Select AI Agent の接続・credential・team が未構成です。",
+                if agent_ready
+                else (
+                    profile_error
+                    or select_ai_blocking_reason
+                    or agent_blocking_reason
+                    or "Oracle Select AI Agent の接続・credential・team が未構成です。"
+                ),
             ),
             Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (
-                bool(
-                    settings.nl2sql_enterprise_ai_direct_enabled
-                    and self._enterprise_ai_client.is_configured()
-                ),
+                direct_ready,
                 ""
-                if settings.nl2sql_enterprise_ai_direct_enabled
-                and self._enterprise_ai_client.is_configured()
-                else "OCI Enterprise AI Direct が構成されていません。",
+                if direct_ready
+                else profile_error or "OCI Enterprise AI Direct が構成されていません。",
             ),
         }
 
@@ -14098,7 +14162,7 @@ class Nl2SqlService:
 
         if engine == Nl2SqlEngine.AUTO:
             raise ValueError("品質評価で auto engine は使用できません。")
-        ready, reason = self.quality_evaluation_engine_readiness().get(
+        ready, reason = self.quality_evaluation_engine_readiness(profile_id=profile_id).get(
             engine, (False, "未対応の engine です。")
         )
         if not ready:
@@ -14411,6 +14475,16 @@ class Nl2SqlService:
         if joins:
             lines.append("approved_join_conditions:")
             lines.extend(f"- {value}" for value in joins[:80])
+        published_markdown = str(getattr(context, "llm_markdown", "") or "").strip()
+        if published_markdown:
+            lines.append("published_markdown_ontology:")
+            lines.append("```markdown")
+            lines.append(
+                published_markdown
+                if len(published_markdown) <= 12000
+                else f"{published_markdown[:12000]}\n... truncated ..."
+            )
+            lines.append("```")
         sorts = list(getattr(context, "sort_summaries_ja", []) or [])
         if sorts:
             lines.append("sorts:")
@@ -14432,6 +14506,7 @@ class Nl2SqlService:
         lines.append(
             "- 上記 allowed_objects / allowed_columns / approved_join_conditions だけを使う。"
         )
+        lines.append("- published_markdown_ontology は業務語彙・指標説明の確認済み文脈として使う。")
         lines.append("- 未承認の JOIN、未確認の指標、未確認の filter を追加しない。")
         lines.append("- SQL は Oracle SELECT または WITH 1 statement のみ。")
         return "\n".join(lines)

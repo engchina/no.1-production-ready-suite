@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
+import { InputActionField } from "@/components/ui/input-action-field";
 import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
@@ -737,65 +738,30 @@ function ConfigFileField({
   readOnly?: boolean;
   required?: boolean;
 }) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  const importErrorId = `${id}-import-error`;
-  const describedBy = [
-    hintId,
-    error ? errorId : "",
-    importState === "error" ? importErrorId : "",
-  ].filter(Boolean).join(" ");
-
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <input
-          id={id}
-          type="text"
-          value={value}
-          readOnly={readOnly}
-          aria-readonly={readOnly || undefined}
-          required={required}
-          aria-required={required}
-          onChange={(event) => {
-            if (!readOnly) onChange?.(event.target.value);
-          }}
-          placeholder={placeholder}
-          aria-invalid={Boolean(error)}
-          aria-describedby={describedBy}
-          className={cn(
-            "h-11 w-full rounded-md border px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-            readOnly ? "cursor-default bg-background text-muted" : "bg-card",
-            error ? "border-danger" : "border-border"
-          )}
-        />
-        <Button
-          type="button"
-          variant="secondary"
-          size="lg"
-          className="h-11 w-full whitespace-nowrap"
-          loading={importState === "loading"}
-          onClick={onApply}
-        >
-          {importState !== "loading" ? <RefreshCw size={14} aria-hidden /> : null}
-          {configImportButtonLabel(importState)}
-        </Button>
-      </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-      {importState === "error" ? (
-        <FieldError
-          id={importErrorId}
-          message={importError || t("settings.oci.configContent.applyError")}
-        />
-      ) : null}
-    </div>
+    <InputActionField
+      id={id}
+      label={label}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      helper={helper}
+      error={error}
+      actionError={
+        importState === "error"
+          ? importError || t("settings.oci.configContent.applyError")
+          : undefined
+      }
+      readOnly={readOnly}
+      required={required}
+      requiredLabel={t("settings.oci.required")}
+      action={{
+        label: configImportButtonLabel(importState),
+        icon: <RefreshCw size={14} aria-hidden />,
+        loading: importState === "loading",
+        onClick: onApply,
+      }}
+    />
   );
 }
 
@@ -822,63 +788,33 @@ function NamespaceField({
   onFetch: () => void;
   required?: boolean;
 }) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  const fetchErrorId = `${id}-fetch-error`;
   const buttonLabel = namespaceFetchButtonLabel(fetchState);
-  const describedBy = [
-    hintId,
-    error ? errorId : "",
-    fetchState === "error" ? fetchErrorId : "",
-  ].filter(Boolean).join(" ");
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <input
-          id={id}
-          type="text"
-          value={value}
-          readOnly
-          aria-readonly="true"
-          required={required}
-          aria-required={required}
-          placeholder={placeholder}
-          aria-invalid={Boolean(error)}
-          aria-describedby={describedBy}
-          className={cn(
-            "h-11 w-full cursor-default rounded-md border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-            error ? "border-danger" : "border-border"
-          )}
-        />
-        <Button
-          type="button"
-          variant="secondary"
-          size="lg"
-          className="h-11 w-full whitespace-nowrap"
-          aria-label={`${label}: ${buttonLabel}`}
-          loading={fetchState === "loading"}
-          onClick={onFetch}
-        >
-          {fetchState !== "loading" ? <RefreshCw size={14} aria-hidden /> : null}
-          {buttonLabel}
-        </Button>
-      </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-      {fetchState === "error" ? (
-        <FieldError
-          id={fetchErrorId}
-          message={fetchError || t("settings.oci.actions.namespaceFetchFailed")}
-        />
-      ) : null}
-    </div>
+    <InputActionField
+      id={id}
+      label={label}
+      value={value}
+      placeholder={placeholder}
+      helper={helper}
+      error={error}
+      actionError={
+        fetchState === "error"
+          ? fetchError || t("settings.oci.actions.namespaceFetchFailed")
+          : undefined
+      }
+      readOnly
+      required={required}
+      requiredLabel={t("settings.oci.required")}
+      inputClassName="text-foreground"
+      action={{
+        label: buttonLabel,
+        ariaLabel: `${label}: ${buttonLabel}`,
+        icon: <RefreshCw size={14} aria-hidden />,
+        loading: fetchState === "loading",
+        onClick: onFetch,
+      }}
+    />
   );
 }
 

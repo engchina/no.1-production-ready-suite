@@ -3,6 +3,8 @@ import type {
   OntologyBuildJob,
   OntologyGraph,
   OntologyImprovementProposalRequest,
+  OntologyMarkdownDraftPatch,
+  OntologyMarkdownState,
   OntologyProposal,
   OntologyProposalReviewData,
   OntologyProfileRecommendation,
@@ -310,16 +312,29 @@ export function cancelOntologyBuildJob(
   ).then((data) => data.job);
 }
 
-export function retryOntologyBuildJob(
-  jobId: string,
+export function getOntologyMarkdownState(
+  profileId: string,
   options?: RequestOptions
-): Promise<OntologyBuildJob> {
-  return request<{ job: OntologyBuildJob }>(
-    `/api/nl2sql/ontology-build/${encodeURIComponent(jobId)}/retry`,
-    "POST",
+): Promise<OntologyMarkdownState> {
+  return request<OntologyMarkdownState>(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-markdown`,
+    "GET",
     undefined,
     options
-  ).then((data) => data.job);
+  );
+}
+
+export function saveOntologyMarkdownDraft(
+  profileId: string,
+  patch: OntologyMarkdownDraftPatch,
+  options?: RequestOptions
+): Promise<OntologyMarkdownState> {
+  return request<OntologyMarkdownState>(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-markdown/draft`,
+    "PATCH",
+    patch,
+    options
+  );
 }
 
 export function listProfileOntologyProposals(
@@ -456,113 +471,20 @@ export function confirmOntologyProfileRecommendation(
   );
 }
 
+export interface ProfileOntologyMermaidData {
+  profile_id: string;
+  ontology_revision_id: string;
+  mermaid: string;
+}
+
 export function fetchProfileOntologyMermaid(
   profileId: string,
   options?: RequestOptions
-): Promise<{ mermaid: string }> {
-  return request(
+): Promise<ProfileOntologyMermaidData> {
+  return request<ProfileOntologyMermaidData>(
     `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-view/mermaid`,
     "GET",
     undefined,
     options
   );
-}
-
-// --- Ontology 連携(業種テンプレート / OWL RDF import・export)---
-
-export interface OntologyTemplateSummary {
-  id: string;
-  metadata: {
-    name_ja: string;
-    description_ja: string;
-    icon: string;
-    category: string;
-    tags: string[];
-  };
-  entity_count: number;
-  relationship_count: number;
-  term_count: number;
-}
-
-export interface OntologyInterchangeApplyData {
-  proposal_ids: string[];
-  warnings_ja: string[];
-  resolved: Array<{ key: string; object_name: string }>;
-  unresolved: string[];
-  proposal_count: number;
-  term_proposal_count: number;
-}
-
-export interface OntologyImportData extends OntologyInterchangeApplyData {
-  counts: Record<string, number>;
-}
-
-export function listOntologyTemplates(
-  options?: RequestOptions
-): Promise<OntologyTemplateSummary[]> {
-  return request<{ templates: OntologyTemplateSummary[] }>(
-    "/api/nl2sql/ontology-templates",
-    "GET",
-    undefined,
-    options
-  ).then((data) => data.templates ?? []);
-}
-
-export function applyOntologyTemplate(
-  profileId: string,
-  templateId: string,
-  payload: { overrides?: Record<string, string>; dry_run?: boolean },
-  options?: RequestOptions
-): Promise<OntologyInterchangeApplyData> {
-  return request(
-    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-templates/${encodeURIComponent(templateId)}/apply`,
-    "POST",
-    { overrides: payload.overrides ?? {}, dry_run: payload.dry_run ?? false },
-    options
-  );
-}
-
-export async function downloadOntologyExport(
-  revisionId: string,
-  format: "rdfxml" | "turtle"
-): Promise<{ blob: Blob; response: Response }> {
-  const response = await apiFetch(
-    `/api/nl2sql/ontology/revisions/${encodeURIComponent(revisionId)}/export?format=${format}`,
-    { method: "GET" }
-  );
-  if (!response.ok) {
-    let payload: ApiEnvelope<unknown> = {};
-    try {
-      payload = (await response.json()) as ApiEnvelope<unknown>;
-    } catch {
-      payload = {};
-    }
-    throw new ApiError(payloadMessage(payload, response.status), response.status);
-  }
-  return { blob: await response.blob(), response };
-}
-
-export async function importOntologyRdf(
-  profileId: string,
-  file: File,
-  payload: { termsFallback?: boolean; dryRun?: boolean } = {}
-): Promise<OntologyImportData> {
-  const form = new FormData();
-  form.set("file", file, file.name);
-  form.set("terms_fallback", String(payload.termsFallback ?? true));
-  form.set("dry_run", String(payload.dryRun ?? false));
-  const response = await apiFetch(
-    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-import`,
-    { method: "POST", headers: { Accept: "application/json" }, body: form }
-  );
-  let envelope: ApiEnvelope<OntologyImportData>;
-  try {
-    envelope = (await response.json()) as ApiEnvelope<OntologyImportData>;
-  } catch {
-    envelope = {};
-  }
-  if (!response.ok || !envelope.data) {
-    throw new ApiError(payloadMessage(envelope, response.status), response.status);
-  }
-  return envelope.data;
 }

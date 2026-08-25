@@ -517,6 +517,63 @@ export interface DatabaseConnectionTestResult {
   error_type: string | null;
 }
 
+export type RdfNetworkStatus =
+  | "not_configured"
+  | "ready"
+  | "missing"
+  | "unavailable"
+  | "manual_required";
+export type RdfNetworkMode = "local_fallback" | "oracle_rdf";
+
+export interface RdfNetworkSettingsUpdate {
+  network_owner: string;
+  network_name: string;
+  tablespace: string;
+  options: string;
+}
+
+export interface RdfNetworkSettingsData extends RdfNetworkSettingsUpdate {
+  configured: boolean;
+  mode: RdfNetworkMode;
+  status: RdfNetworkStatus;
+  current_oracle_user: string;
+  can_apply: boolean;
+  manual_action_required: boolean;
+  message_ja: string;
+  warnings_ja: string[];
+  metadata: Record<string, string | number | boolean | null>;
+  config_source: "runtime";
+}
+
+export interface RdfNetworkPlanStep {
+  step_no: number;
+  title_ja: string;
+  sql: string;
+  checksum: string;
+  status: "pending" | "manual_required" | "blocked" | "ready";
+}
+
+export interface RdfNetworkPlanData {
+  version: "V001";
+  configured: boolean;
+  can_apply: boolean;
+  manual_action_required: boolean;
+  confirmation_phrase: string;
+  checksum: string;
+  steps: RdfNetworkPlanStep[];
+  warnings_ja: string[];
+}
+
+export interface RdfNetworkApplyRequest {
+  checksum: string;
+  confirmation: string;
+}
+
+export interface RdfNetworkApplyData {
+  status: "applied" | "already_configured";
+  network: RdfNetworkSettingsData;
+}
+
 export interface UploadStorageSettingsData {
   backend: UploadStorageBackend;
   local_storage_dir: string;
@@ -715,6 +772,25 @@ export const api = {
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     settingsRequest<SystemTablesOperationData>(
       "/api/settings/database/system-tables/initialize",
+      jsonBody(body)
+    ),
+  getRdfNetworkSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<RdfNetworkSettingsData>("/api/settings/database/rdf-network", {
+      signal: options.signal,
+    }),
+  updateRdfNetworkSettings: (body: RdfNetworkSettingsUpdate) =>
+    settingsRequest<RdfNetworkSettingsData>("/api/settings/database/rdf-network", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getRdfNetworkPlan: (options: ApiRequestOptions = {}) =>
+    settingsRequest<RdfNetworkPlanData>("/api/settings/database/rdf-network/plan", {
+      signal: options.signal,
+    }),
+  applyRdfNetworkPlan: (body: RdfNetworkApplyRequest) =>
+    settingsRequest<RdfNetworkApplyData>(
+      "/api/settings/database/rdf-network/apply",
       jsonBody(body)
     ),
   getSchemaOwners: (options: ApiRequestOptions = {}) =>

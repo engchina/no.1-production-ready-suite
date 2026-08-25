@@ -34,9 +34,9 @@ test("tabular formats always expose CSV, XLSX, and XLS in the shared order", () 
     accept: ".csv,.xlsx,.xls",
     formatLabel: ".CSV / .XLSX / .XLS",
   });
-  assert.deepEqual(tabularFileFormatConfig([".tsv", ".XLSM", "txt", ".xls"]), {
-    accept: ".csv,.xlsx,.xls,.tsv,.xlsm,.txt",
-    formatLabel: ".CSV / .XLSX / .XLS / .TSV / .XLSM / .TXT",
+  assert.deepEqual(tabularFileFormatConfig([".XLSM", "txt", ".xls"]), {
+    accept: ".csv,.xlsx,.xls,.xlsm,.txt",
+    formatLabel: ".CSV / .XLSX / .XLS / .XLSM / .TXT",
   });
   assert.equal(
     fileMatchesAccept(file("legacy-data.XLS", "application/vnd.ms-excel"), CORE_TABULAR_FILE_FORMATS.accept),

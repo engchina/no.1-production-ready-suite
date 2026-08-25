@@ -891,8 +891,11 @@ class OntologyBuildJob(OntologyContract):
     steps: list[OntologyBuildStep] = Field(default_factory=list)
     events: list[OntologyBuildEvent] = Field(default_factory=list)
     proposal_ids: list[str] = Field(default_factory=list)
+    draft_revision_id: str = ""
+    draft_etag: str = ""
     source_document_ids: list[str] = Field(default_factory=list)
     sources: list[OntologySourceProgress] = Field(default_factory=list)
+    markdown_output: str = ""
     warnings_ja: list[str] = Field(default_factory=list)
     error_message_ja: str = ""
     created_at: datetime = Field(default_factory=utc_now)

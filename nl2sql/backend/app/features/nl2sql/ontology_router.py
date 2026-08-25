@@ -37,7 +37,7 @@ from .models import (
     PreviewRequest,
     QueryResults,
 )
-from .ontology_build import OntologyBuildService
+from .ontology_build import OntologyBuildService, build_schema_context_from_catalog
 from .ontology_catalog import (
     SchemaOntology,
     build_schema_ontology,
@@ -151,6 +151,10 @@ _BUSINESS_EDGE_KINDS = frozenset(
         OntologyEdgeKind.GOVERNS,
     }
 )
+_MARKDOWN_DRAFT_ARTIFACT_TYPE = "ontology_markdown_draft"
+_MARKDOWN_PUBLISHED_ARTIFACT_TYPE = "ontology_markdown_published"
+_MARKDOWN_LLM_ARTIFACT_TYPE = "ontology_llm_markdown"
+_MARKDOWN_RENDERER_VERSION = "markdown_ontology_v1"
 
 
 class QuerySessionApiCreate(OntologyContract):
@@ -215,6 +219,20 @@ class OntologyDraftRequest(OntologyContract):
     edge_upserts: list[OntologyEdge] = Field(default_factory=list)
     remove_node_ids: list[str] = Field(default_factory=list)
     remove_edge_ids: list[str] = Field(default_factory=list)
+
+
+class OntologyMarkdownState(OntologyContract):
+    draft_markdown: str = ""
+    published_markdown: str = ""
+    draft_revision: OntologyRevision | None = None
+    published_revision: OntologyRevision | None = None
+    draft_etag: str = ""
+    published_at: datetime | None = None
+
+
+class OntologyMarkdownDraftPatch(OntologyContract):
+    markdown: str = ""
+    base_etag: str = Field(min_length=1)
 
 
 class OntologyPublishRequest(OntologyContract):
@@ -477,6 +495,316 @@ class OntologyApiRuntime:
             active_revision_id = self._query_ontology().revision.id
             return [item.model_copy(deep=True) for item in revisions], active_revision_id
 
+    @staticmethod
+    def _markdown_artifact_id(
+        *,
+        artifact_type: str,
+        profile_id: str,
+        revision_id: str,
+    ) -> str:
+        return stable_ontology_id(
+            "ontology_markdown",
+            artifact_type,
+            profile_id,
+            revision_id,
+            length=32,
+        )
+
+    @staticmethod
+    def _artifact_profile_id(document: Mapping[str, Any]) -> str:
+        profile_id = str(document.get("profile_id") or "")
+        if profile_id:
+            return profile_id
+        payload = document.get("payload")
+        if isinstance(payload, Mapping):
+            return str(payload.get("profile_id") or "")
+        return ""
+
+    @staticmethod
+    def _artifact_content(document: Mapping[str, Any] | None) -> str:
+        if document is None:
+            return ""
+        content = document.get("content")
+        if isinstance(content, str):
+            return content
+        payload = document.get("payload")
+        if isinstance(payload, Mapping):
+            payload_content = payload.get("content")
+            if isinstance(payload_content, str):
+                return payload_content
+        return ""
+
+    def _markdown_artifact_for_revision(
+        self,
+        *,
+        profile_id: str,
+        revision_id: str,
+        artifact_type: str,
+    ) -> dict[str, Any] | None:
+        artifact_id = self._markdown_artifact_id(
+            artifact_type=artifact_type,
+            profile_id=profile_id,
+            revision_id=revision_id,
+        )
+        stable_document = self.store.get_artifact(artifact_id)
+        if stable_document is not None:
+            return stable_document
+        candidates = [
+            document
+            for document in self.store.list_artifacts(revision_id)
+            if document.get("artifact_type") == artifact_type
+            and self._artifact_profile_id(document) in {"", profile_id}
+        ]
+        return (
+            max(
+                candidates,
+                key=lambda item: (
+                    str(item.get("updated_at") or item.get("created_at") or ""),
+                    str(item.get("artifact_id") or ""),
+                ),
+            )
+            if candidates
+            else None
+        )
+
+    def _save_markdown_artifact(
+        self,
+        *,
+        profile_id: str,
+        revision: OntologyRevision,
+        artifact_type: str,
+        markdown: str,
+        expected_etag: str | None = None,
+    ) -> dict[str, Any]:
+        artifact_id = self._markdown_artifact_id(
+            artifact_type=artifact_type,
+            profile_id=profile_id,
+            revision_id=revision.id,
+        )
+        current = self.store.get_artifact(artifact_id)
+        now = utc_now()
+        document = {
+            "artifact_id": artifact_id,
+            "session_id": revision.id,
+            "artifact_type": artifact_type,
+            "content_hash": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+            "content": markdown,
+            "profile_id": profile_id,
+            "revision_version": revision.version,
+            "renderer_version": _MARKDOWN_RENDERER_VERSION,
+            "created_at": current.get("created_at") if current is not None else now,
+            "updated_at": now,
+        }
+        return self.store.save_artifact(
+            document,
+            expected_etag=expected_etag if current is not None else None,
+        )
+
+    def _latest_profile_markdown_artifact(
+        self,
+        *,
+        profile_id: str,
+        artifact_type: str,
+        statuses: set[OntologyRevisionStatus] | None = None,
+    ) -> tuple[dict[str, Any], OntologyRevision] | None:
+        documents = [
+            document
+            for document in self.store.list_documents("artifacts", {"artifact_type": artifact_type})
+            if self._artifact_profile_id(document) == profile_id
+        ]
+        candidates: list[tuple[dict[str, Any], OntologyRevision]] = []
+        for document in documents:
+            revision_id = str(document.get("session_id") or "")
+            if not revision_id:
+                continue
+            ontology = self._load_ontology_revision(revision_id)
+            if ontology is None:
+                continue
+            revision = ontology.revision
+            if statuses is not None and revision.status not in statuses:
+                continue
+            candidates.append((document, revision))
+        return (
+            max(
+                candidates,
+                key=lambda item: (
+                    item[1].version,
+                    str(item[0].get("updated_at") or item[0].get("created_at") or ""),
+                    item[1].id,
+                ),
+            )
+            if candidates
+            else None
+        )
+
+    def ontology_markdown_state(self, profile_id: str) -> OntologyMarkdownState:
+        with self._lock:
+            self._ensure_store()
+            self._strict_profile(profile_id)
+            self._load_published_revision()
+            self._load_revision_headers()
+            draft_match = self._latest_profile_markdown_artifact(
+                profile_id=profile_id,
+                artifact_type=_MARKDOWN_DRAFT_ARTIFACT_TYPE,
+                statuses={OntologyRevisionStatus.DRAFT},
+            )
+            draft_document: dict[str, Any] | None = None
+            draft_revision: OntologyRevision | None = None
+            if draft_match is not None:
+                draft_document, draft_revision = draft_match
+
+            published_revisions = [
+                revision
+                for revision in self._revision_headers.values()
+                if revision.status == OntologyRevisionStatus.PUBLISHED
+            ]
+            published_revision = (
+                max(
+                    published_revisions,
+                    key=lambda item: (
+                        item.version,
+                        item.published_at or item.created_at,
+                        item.id,
+                    ),
+                )
+                if published_revisions
+                else None
+            )
+            published_document: dict[str, Any] | None = None
+            if published_revision is not None:
+                published_document = self._markdown_artifact_for_revision(
+                    profile_id=profile_id,
+                    revision_id=published_revision.id,
+                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+                )
+            if published_document is None:
+                published_match = self._latest_profile_markdown_artifact(
+                    profile_id=profile_id,
+                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+                    statuses={OntologyRevisionStatus.PUBLISHED},
+                )
+                if published_match is not None:
+                    published_document, published_revision = published_match
+
+            return OntologyMarkdownState(
+                draft_markdown=self._artifact_content(draft_document),
+                published_markdown=self._artifact_content(published_document),
+                draft_revision=draft_revision,
+                published_revision=published_revision,
+                draft_etag=str(draft_document.get("etag") or "") if draft_document else "",
+                published_at=published_revision.published_at if published_revision else None,
+            )
+
+    def save_ontology_markdown_draft(
+        self,
+        profile_id: str,
+        request: OntologyMarkdownDraftPatch,
+    ) -> OntologyMarkdownState:
+        with self._lock:
+            state = self.ontology_markdown_state(profile_id)
+            if state.draft_revision is None or not state.draft_etag:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_MARKDOWN_DRAFT_NOT_FOUND",
+                    "保存できる Markdown Draft がありません。AI 構築を実行してください。",
+                )
+            self._save_markdown_artifact(
+                profile_id=profile_id,
+                revision=state.draft_revision,
+                artifact_type=_MARKDOWN_DRAFT_ARTIFACT_TYPE,
+                markdown=request.markdown,
+                expected_etag=request.base_etag,
+            )
+            return self.ontology_markdown_state(profile_id)
+
+    def published_markdown_for_revision(self, revision_id: str, *, profile_id: str = "") -> str:
+        with self._lock:
+            self._ensure_store()
+            if profile_id:
+                published_document = self._markdown_artifact_for_revision(
+                    profile_id=profile_id,
+                    revision_id=revision_id,
+                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+                )
+                markdown = self._artifact_content(published_document)
+                if markdown:
+                    return markdown
+            artifacts = self.store.list_artifacts(revision_id)
+            published_documents = [
+                document
+                for document in artifacts
+                if document.get("artifact_type") == _MARKDOWN_PUBLISHED_ARTIFACT_TYPE
+            ]
+            if published_documents:
+                return self._artifact_content(
+                    max(
+                        published_documents,
+                        key=lambda item: (
+                            str(item.get("updated_at") or item.get("created_at") or ""),
+                            str(item.get("artifact_id") or ""),
+                        ),
+                    )
+                )
+            fallback_documents = [
+                document
+                for document in artifacts
+                if document.get("artifact_type") == _MARKDOWN_LLM_ARTIFACT_TYPE
+            ]
+            if fallback_documents:
+                return self._artifact_content(
+                    max(
+                        fallback_documents,
+                        key=lambda item: (
+                            str(item.get("updated_at") or item.get("created_at") or ""),
+                            str(item.get("artifact_id") or ""),
+                        ),
+                    )
+                )
+            return ""
+
+    def draft_markdown_for_revision(self, revision_id: str) -> str:
+        with self._lock:
+            self._ensure_store()
+            draft_documents = [
+                document
+                for document in self.store.list_artifacts(revision_id)
+                if document.get("artifact_type") == _MARKDOWN_DRAFT_ARTIFACT_TYPE
+            ]
+            if not draft_documents:
+                return ""
+            return self._artifact_content(
+                max(
+                    draft_documents,
+                    key=lambda item: (
+                        str(item.get("updated_at") or item.get("created_at") or ""),
+                        str(item.get("artifact_id") or ""),
+                    ),
+                )
+            )
+
+    def copy_draft_markdown_to_published(self, revision_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._ensure_store()
+            ontology = self.ontology_revision(revision_id)
+            draft_documents = [
+                document
+                for document in self.store.list_artifacts(revision_id)
+                if document.get("artifact_type") == _MARKDOWN_DRAFT_ARTIFACT_TYPE
+            ]
+            saved: list[dict[str, Any]] = []
+            for document in draft_documents:
+                profile_id = self._artifact_profile_id(document)
+                if not profile_id:
+                    continue
+                saved.append(
+                    self._save_markdown_artifact(
+                        profile_id=profile_id,
+                        revision=ontology.revision,
+                        artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+                        markdown=self._artifact_content(document),
+                    )
+                )
+            return saved
+
     def ontology_revision(self, revision_id: str) -> SchemaOntology:
         with self._lock:
             self._ensure_store()
@@ -579,7 +907,7 @@ class OntologyApiRuntime:
                 if set(view.node_ids) - set(node_by_id):
                     raise OntologyIntegrityError(
                         "PROFILE_ONTOLOGY_SCOPE_INVALID",
-                        "Profile Ontology view に範囲外 node が含まれています。",
+                        "プロファイル範囲に範囲外 node が含まれています。",
                     )
             return ontology.model_copy(deep=True)
 
@@ -587,12 +915,19 @@ class OntologyApiRuntime:
         self,
         base_revision_id: str,
         request: OntologyDraftRequest,
+        *,
+        prepared_base: SchemaOntology | None = None,
     ) -> SchemaOntology:
         """物理 schema node を不変に保ち、業務定義だけを新 revision へ反映する。"""
 
         with self._lock:
-            self._sync_ontology()
-            base = self._ontologies.get(base_revision_id)
+            if prepared_base is None:
+                self._sync_ontology()
+                base = self._ontologies.get(base_revision_id)
+            elif prepared_base.revision.id == base_revision_id:
+                base = prepared_base
+            else:
+                base = None
             if base is None:
                 raise OntologyNotFoundError(
                     "ONTOLOGY_REVISION_NOT_FOUND",
@@ -1083,6 +1418,55 @@ class OntologyApiRuntime:
             view = self._base_profile_view(profile, ontology)
             return view.model_copy(deep=True), ontology.model_copy(deep=True)
 
+    @staticmethod
+    def _profile_view_unresolved_object_warnings(
+        profile: Nl2SqlProfile,
+        view: ProfileOntologyView,
+        *,
+        source_label: str = "公開済み Ontology(スキーマ情報)",
+    ) -> list[str]:
+        resolved = {item.object_name.upper() for item in view.physical_objects} | {
+            f"{item.owner}.{item.object_name}".upper() for item in view.physical_objects
+        }
+
+        def normalize(value: str) -> str:
+            return value.replace('"', "").strip().upper()
+
+        return [
+            f"「{name}」を {source_label} に解決できません。"
+            "スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。"
+            for name in [*profile.allowed_tables, *profile.allowed_views]
+            if normalize(name) and normalize(name) not in resolved
+        ]
+
+    def prepare_build_schema_context(self, profile_id: str) -> Any:
+        """AI 構築 input は Ontology ではなく Profile + DB schema catalog から作る。"""
+
+        with self._lock:
+            profile = self._strict_profile(profile_id)
+            catalog = self.legacy_service.get_catalog()
+            return build_schema_context_from_catalog(profile, catalog)
+
+    def build_proposal_scope(
+        self,
+        profile_id: str,
+        *,
+        schema_fingerprint: str,
+    ) -> tuple[ProfileOntologyView, SchemaOntology]:
+        """AI 抽出結果を proposal 化するため、同じ DB schema 世代の revision を用意する。"""
+
+        with self._lock:
+            profile = self._strict_profile(profile_id)
+            latest = self._sync_ontology()
+            if schema_fingerprint and latest.revision.schema_fingerprint != schema_fingerprint:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_BUILD_SCHEMA_CHANGED",
+                    "AI 構築中に DB schema catalog が更新されました。"
+                    "同じ入力で再実行してください。",
+                )
+            view = self._base_profile_view(profile, latest)
+            return view.model_copy(deep=True), latest.model_copy(deep=True)
+
     def profile_view_persistence_state(self, view: ProfileOntologyView) -> tuple[bool, bool]:
         """現在 revision の永続 view 有無と、元 Profile からの stale 状態を返す。"""
 
@@ -1110,19 +1494,7 @@ class OntologyApiRuntime:
 
         with self._lock:
             profile = self._strict_profile(profile_id)
-        resolved = {item.object_name.upper() for item in view.physical_objects} | {
-            f"{item.owner}.{item.object_name}".upper() for item in view.physical_objects
-        }
-
-        def normalize(value: str) -> str:
-            return value.replace('"', "").strip().upper()
-
-        return [
-            f"「{name}」を公開 Ontology(スキーマ情報)に解決できません。"
-            "スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。"
-            for name in [*profile.allowed_tables, *profile.allowed_views]
-            if normalize(name) and normalize(name) not in resolved
-        ]
+        return self._profile_view_unresolved_object_warnings(profile, view)
 
     def patch_profile_view(
         self,
@@ -1138,7 +1510,7 @@ class OntologyApiRuntime:
             if request.base_etag != current.etag:
                 raise OntologyVersionConflictError(
                     "PROFILE_VIEW_ETAG_MISMATCH",
-                    "Profile Ontology view が更新されています。最新版を再読込してください。",
+                    "プロファイル範囲が更新されています。最新版を再読込してください。",
                 )
             node_by_id = {node.id: node for node in ontology.nodes}
             edge_by_id = {edge.id: edge for edge in ontology.edges}
@@ -1147,7 +1519,7 @@ class OntologyApiRuntime:
                 if unknown_usage_ids:
                     raise OntologyIntegrityError(
                         "PROFILE_VIEW_USAGE_NODE_UNKNOWN",
-                        "用途を設定した object が Profile Ontology view の範囲外です。",
+                        "用途を設定した object がプロファイル範囲外です。",
                     )
             if request.column_policies is not None:
                 allowed_column_keys = {
@@ -1160,7 +1532,7 @@ class OntologyApiRuntime:
                 if unknown_policy_keys:
                     raise OntologyIntegrityError(
                         "PROFILE_VIEW_COLUMN_UNKNOWN",
-                        "列 policy の対象が Profile Ontology view の範囲外です。",
+                        "列 policy の対象がプロファイル範囲外です。",
                     )
             if request.allowed_path_ids is not None:
                 invalid_paths = [
@@ -1187,7 +1559,7 @@ class OntologyApiRuntime:
                 if requested_scope - current_scope:
                     raise OntologyIntegrityError(
                         "PROFILE_DRAFT_SCOPE_OUTSIDE_VIEW",
-                        "Draft の物理 object が Profile Ontology view の範囲外です。",
+                        "Draft の物理 object がプロファイル範囲外です。",
                     )
             updates: dict[str, Any] = {}
             if request.table_usages_ja is not None:
@@ -1397,7 +1769,7 @@ class OntologyApiRuntime:
             return recommendation
 
     def materialize_profile_view(self, profile_id: str) -> ProfileOntologyView:
-        """Ontology view page から active revision view を明示的に再生成する。"""
+        """互換 API から active revision のプロファイル範囲を明示的に再生成する。"""
 
         with self._lock:
             ontology = self._query_ontology()
@@ -1641,6 +2013,10 @@ class OntologyApiRuntime:
                 for node_id in sorted(inferred_node_ids - existing_hit_ids)
                 if node_id in node_by_id
             )
+            published_markdown = self.published_markdown_for_revision(
+                ontology.revision.id,
+                profile_id=profile_id,
+            )
             context_hash = hashlib.sha256(
                 canonical_json(
                     {
@@ -1652,6 +2028,11 @@ class OntologyApiRuntime:
                         "node_ids": [node.id for node in nodes],
                         "edge_ids": [edge.id for edge in edges],
                         "artifact_hashes": artifacts.hashes,
+                        "published_markdown_hash": hashlib.sha256(
+                            published_markdown.encode("utf-8")
+                        ).hexdigest()
+                        if published_markdown
+                        else "",
                     }
                 ).encode("utf-8")
             ).hexdigest()
@@ -1663,7 +2044,7 @@ class OntologyApiRuntime:
                 nodes=nodes,
                 edges=edges,
                 mermaid=artifacts.mermaid,
-                llm_markdown=artifacts.llm_markdown,
+                llm_markdown=published_markdown or artifacts.llm_markdown,
                 owl_turtle=artifacts.owl_turtle,
                 shacl_turtle=artifacts.shacl_turtle,
                 context_hash=context_hash,
@@ -2163,7 +2544,14 @@ class OntologyApiRuntime:
             "metric_definitions": [item.model_dump(mode="json") for item in metric_definitions],
             "warnings_ja": warnings,
         }
-        payload["llm_markdown"] = build_semantic_artifacts(ontology, view).llm_markdown
+        published_markdown = self.published_markdown_for_revision(
+            ontology.revision.id,
+            profile_id=session.profile_id,
+        )
+        payload["llm_markdown"] = published_markdown or build_semantic_artifacts(
+            ontology,
+            view,
+        ).llm_markdown
         payload["context_hash"] = hashlib.sha256(
             canonical_json(payload).encode("utf-8")
         ).hexdigest()
@@ -2381,7 +2769,7 @@ class OntologyApiRuntime:
             if view_document is None:
                 raise OntologyIntegrityError(
                     "RESTORED_SESSION_VIEW_MISSING",
-                    "永続化 query session の Profile Ontology view を復元できません。",
+                    "永続化 query session のプロファイル範囲を復元できません。",
                 )
             view = ProfileOntologyView.model_validate(
                 self._stored_payload(view_document, collection="profile view")
@@ -2737,13 +3125,24 @@ class OntologyApiRuntime:
         description_ja: str,
         kind: OntologyProposalKind,
         proposal_payload: OntologyProposalPayload,
+        base_revision_id: str | None = None,
     ) -> OntologyProposal:
         """AI 構築 job の生成物を承認フローへ登録する(query session 非依存)。"""
 
         with self._lock:
             self._ensure_store()
             profile = self._strict_profile(profile_id)
-            ontology = self._query_ontology()
+            if base_revision_id:
+                ontology = self._ontologies.get(base_revision_id)
+                if ontology is None:
+                    ontology = self._load_ontology_revision(base_revision_id)
+                if ontology is None:
+                    raise OntologyNotFoundError(
+                        "ONTOLOGY_REVISION_NOT_FOUND",
+                        "提案の基準 Ontology revision が見つかりません。",
+                    )
+            else:
+                ontology = self._query_ontology()
             proposal = self.sessions.create_build_proposal(
                 session_id=f"ontology_build:{job_id}",
                 profile_id=profile.id,
@@ -2756,17 +3155,44 @@ class OntologyApiRuntime:
             self._persist_proposal(proposal)
             return proposal
 
-    def _accept_base_revision(self) -> SchemaOntology:
+    def _accept_base_revision(
+        self,
+        proposals: list[OntologyProposal] | None = None,
+    ) -> SchemaOntology:
         """提案を積み上げる基準 revision。
 
-        現行 published と同じ schema fingerprint の revision(published + そこから
-        派生した draft)の中で最新を選ぶ。永続化 store には過去のスキーマ世代の
-        draft が残り得るため、単純な max(version) だと古い物理 schema の draft を
-        拾って upsert 検証が矛盾(409)する。fingerprint で系列を固定して防ぐ。
+        通常は現行 published と同じ schema fingerprint の revision(published + そこから
+        派生した draft)の中で最新を選ぶ。AI 構築が stale published を避けて最新
+        schema revision から proposal を作った場合は、proposal の base revision と同じ
+        schema fingerprint の系列を選ぶ。永続化 store には過去のスキーマ世代の draft が
+        残り得るため、単純な max(version) だと古い物理 schema の draft を拾って upsert
+        検証が矛盾(409)する。fingerprint で系列を固定して防ぐ。
         """
 
-        published = self._query_ontology()
-        fingerprint = published.revision.schema_fingerprint
+        fingerprint = ""
+        if proposals:
+            self._sync_ontology()
+            base_fingerprints: set[str] = set()
+            for proposal in proposals:
+                ontology = self._ontologies.get(proposal.base_revision_id)
+                if ontology is None:
+                    ontology = self._load_ontology_revision(proposal.base_revision_id)
+                if ontology is None:
+                    raise OntologyNotFoundError(
+                        "ONTOLOGY_REVISION_NOT_FOUND",
+                        "提案の基準 Ontology revision が見つかりません。",
+                    )
+                base_fingerprints.add(ontology.revision.schema_fingerprint)
+            if len(base_fingerprints) != 1:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_PROPOSAL_SCHEMA_MIXED",
+                    "異なるスキーマ世代の提案は同時に承認できません。"
+                    "AI 構築を再実行してください。",
+                )
+            fingerprint = next(iter(base_fingerprints))
+        else:
+            published = self._query_ontology()
+            fingerprint = published.revision.schema_fingerprint
         candidates = [
             item
             for item in self._ontologies.values()
@@ -2774,6 +3200,11 @@ class OntologyApiRuntime:
             and item.revision.status != OntologyRevisionStatus.ARCHIVED
         ]
         if not candidates:
+            if proposals:
+                raise OntologyNotFoundError(
+                    "ONTOLOGY_REVISION_NOT_FOUND",
+                    "提案の基準 Ontology revision が見つかりません。",
+                )
             return published
         return max(
             candidates,
@@ -2784,19 +3215,22 @@ class OntologyApiRuntime:
             ),
         )
 
-    def _proposals_upsert_draft_request(
+    def _proposal_payloads_upsert_draft_request(
         self,
-        proposals: list[OntologyProposal],
+        payloads: list[OntologyProposalPayload],
         base: SchemaOntology,
+        *,
+        titles: list[str] | None = None,
+        note: str = "",
     ) -> OntologyDraftRequest:
-        """複数 proposal の node/edge upserts を 1 つの承認済み draft request へ合成する。"""
+        """複数 payload の node/edge upserts を 1 つの承認済み draft request へ合成する。"""
 
         base_node_ids = {node.id for node in base.nodes}
         node_map: dict[str, OntologyNode] = {}
         synthetic_ids: set[str] = set()
         edge_map: dict[str, OntologyEdge] = {}
-        for proposal in proposals:
-            values = proposal.proposal_payload.values
+        for payload in payloads:
+            values = payload.values
             for raw in values.get("node_upserts") or []:
                 node = OntologyNode.model_validate(raw)
                 is_synthetic = bool(node.metadata.get("synthetic_endpoint"))
@@ -2826,13 +3260,78 @@ class OntologyApiRuntime:
                     },
                     deep=True,
                 )
-        titles = "、".join(proposal.title_ja for proposal in proposals[:5])
+        title_text = "、".join((titles or [])[:5])
         return OntologyDraftRequest(
             base_etag=base.revision.etag,
-            note=f"AI 提案を承認: {titles}",
+            note=note or f"AI 提案を承認: {title_text}",
             node_upserts=sorted(node_map.values(), key=lambda node: node.id),
             edge_upserts=sorted(edge_map.values(), key=lambda edge: edge.id),
         )
+
+    def _proposals_upsert_draft_request(
+        self,
+        proposals: list[OntologyProposal],
+        base: SchemaOntology,
+    ) -> OntologyDraftRequest:
+        """複数 proposal の node/edge upserts を 1 つの承認済み draft request へ合成する。"""
+
+        return self._proposal_payloads_upsert_draft_request(
+            [proposal.proposal_payload for proposal in proposals],
+            base,
+            titles=[proposal.title_ja for proposal in proposals],
+        )
+
+    def create_build_markdown_draft(
+        self,
+        *,
+        profile_id: str,
+        base_revision_id: str,
+        payloads: list[OntologyProposalPayload],
+        titles: list[str],
+        markdown: str,
+        note: str,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> tuple[SchemaOntology, dict[str, Any]]:
+        """AI 構築結果を proposal 登録せず、承認済み draft revision として保存する。"""
+
+        with self._lock:
+            self._ensure_store()
+            self._strict_profile(profile_id)
+            if on_progress is not None:
+                on_progress("Markdown Draft の基準 revision を確認しています…")
+            base = self._load_ontology_revision(base_revision_id)
+            if base is None:
+                raise OntologyNotFoundError(
+                    "ONTOLOGY_REVISION_NOT_FOUND",
+                    "Markdown Draft の基準 Ontology revision が見つかりません。",
+                )
+            request = self._proposal_payloads_upsert_draft_request(
+                payloads,
+                base,
+                titles=titles,
+                note=note or "AI 構築から Markdown Draft を生成",
+            )
+            if on_progress is not None:
+                on_progress("Draft revision を保存しています…")
+            draft = self.create_ontology_draft(
+                base.revision.id,
+                request,
+                prepared_base=base,
+            )
+            if on_progress is not None:
+                on_progress(
+                    f"Draft revision v{draft.revision.version} を保存しました。"
+                    "Markdown artifact を保存しています…"
+                )
+            artifact = self._save_markdown_artifact(
+                profile_id=profile_id,
+                revision=draft.revision,
+                artifact_type=_MARKDOWN_DRAFT_ARTIFACT_TYPE,
+                markdown=markdown,
+            )
+            if on_progress is not None:
+                on_progress("Markdown artifact を保存しました。")
+            return draft, artifact
 
     def accept_proposals(
         self, proposal_ids: list[str]
@@ -2846,7 +3345,7 @@ class OntologyApiRuntime:
                 raise OntologyIntegrityError(
                     "ONTOLOGY_PROPOSAL_IDS_REQUIRED", "承認する提案を指定してください。"
                 )
-            base = self._accept_base_revision()
+            base = self._accept_base_revision(proposals)
             request = self._proposals_upsert_draft_request(proposals, base)
             try:
                 draft = self.create_ontology_draft(base.revision.id, request)
@@ -3810,6 +4309,37 @@ def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]
 
 
 @router.get(
+    "/profiles/{profile_id}/ontology-markdown",
+    response_model=ApiResponse[OntologyMarkdownState],
+)
+def get_profile_ontology_markdown(profile_id: str) -> ApiResponse[OntologyMarkdownState]:
+    try:
+        state = _run_runtime_sync(ontology_runtime.ontology_markdown_state, profile_id)
+        return ApiResponse(data=state)
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.patch(
+    "/profiles/{profile_id}/ontology-markdown/draft",
+    response_model=ApiResponse[OntologyMarkdownState],
+)
+def save_profile_ontology_markdown_draft(
+    profile_id: str,
+    request: OntologyMarkdownDraftPatch,
+) -> ApiResponse[OntologyMarkdownState]:
+    try:
+        state = _run_runtime_sync(
+            ontology_runtime.save_ontology_markdown_draft,
+            profile_id,
+            request,
+        )
+        return ApiResponse(data=state)
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.get(
     "/profiles/{profile_id}/ontology-view",
     response_model=ApiResponse[ProfileOntologyViewData],
 )
@@ -3849,7 +4379,7 @@ def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyVie
 def materialize_profile_ontology_view(
     profile_id: str,
 ) -> ApiResponse[ProfileOntologyViewData]:
-    """Ontology view page から現在の Profile scope を明示的に永続化する。"""
+    """互換 API として現在の Profile scope を明示的に永続化する。"""
 
     try:
         view = _run_runtime_sync(ontology_runtime.materialize_profile_view, profile_id)

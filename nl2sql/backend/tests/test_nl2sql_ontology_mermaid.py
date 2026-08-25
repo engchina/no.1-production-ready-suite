@@ -30,6 +30,14 @@ from app.features.nl2sql.ontology_models import (
 )
 
 
+def _assert_no_inline_entity_comments(rendered: str) -> None:
+    assert "{ %%" not in rendered
+    assert not any(
+        line.strip().startswith('"') and "%%" in line
+        for line in rendered.splitlines()
+    )
+
+
 def _column(name: str, logical_name: str, data_type: str = "NUMBER") -> SchemaColumn:
     return SchemaColumn(column_name=name, logical_name=logical_name, data_type=data_type)
 
@@ -156,6 +164,9 @@ def test_render_is_deterministic_and_contains_entities_fk_and_attributes() -> No
     assert "NUMBER CUSTOMER_ID FK" in first
     assert '"顧客ID"' in first
     assert 'VARCHAR2 CUSTOMER_NAME "顧客名"' in first
+    # Entity block のインラインコメントは Mermaid ER parser が受け付けないため出さない。
+    _assert_no_inline_entity_comments(first)
+    assert "%% 注文 = SALES.ORDERS" in first
 
 
 def test_profile_view_scopes_entities() -> None:
@@ -174,6 +185,7 @@ def test_profile_view_scopes_entities() -> None:
     assert "CRM.CUSTOMERS" not in rendered
     assert "ORDER_SUMMARY" not in rendered
     assert '"SALES.ORDERS" }o--|| "SALES.CUSTOMERS"' in rendered
+    _assert_no_inline_entity_comments(rendered)
 
 
 def test_only_approved_business_relationships_and_entities_are_rendered() -> None:
@@ -216,6 +228,7 @@ def test_max_entities_and_max_chars_degrade_gracefully() -> None:
 
     compact = render_mermaid_er(ontology, max_chars=600)
     assert len(compact) <= 600 or compact.endswith("%% truncated")
+    _assert_no_inline_entity_comments(compact)
     # 属性を落としても関係(構造)は優先して残す
     full = render_mermaid_er(ontology)
     assert "NUMBER CUSTOMER_ID" in full

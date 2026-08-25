@@ -118,7 +118,8 @@ class QualityEvaluationService:
         repository: QualityEvaluationRepository | None = None,
         engine_runner: EngineRunner | None = None,
         judge_runner: JudgeRunner | None = None,
-        readiness_provider: Callable[[], dict[Nl2SqlEngine, tuple[bool, str]]] | None = None,
+        readiness_provider: Callable[[str | None], dict[Nl2SqlEngine, tuple[bool, str]]]
+        | None = None,
     ) -> None:
         self._nl2sql = nl2sql
         self._repository = repository or self._build_repository()
@@ -140,12 +141,12 @@ class QualityEvaluationService:
     def repository_mode(self) -> str:
         return self._repository.mode
 
-    def capabilities(self) -> QualityEvaluationCapabilities:
+    def capabilities(self, profile_id: str | None = None) -> QualityEvaluationCapabilities:
         settings = get_settings()
         readiness = (
-            self._readiness_provider()
+            self._readiness_provider(profile_id)
             if self._readiness_provider
-            else self._nl2sql.quality_evaluation_engine_readiness()
+            else self._nl2sql.quality_evaluation_engine_readiness(profile_id=profile_id)
         )
         if self._engine_runner and not self._readiness_provider:
             readiness = {engine: (True, "") for engine in _ALLOWED_ENGINES}
@@ -322,7 +323,7 @@ class QualityEvaluationService:
         filename: str,
         actor_user_uuid: str = "",
     ) -> QualityEvaluationJobSummary:
-        capabilities = self.capabilities()
+        capabilities = self.capabilities(profile_id=profile_id)
         if not capabilities.judge.available:
             raise QualityEvaluationValidationError([capabilities.judge.reason])
         if not 1 <= repeat_count <= 10:

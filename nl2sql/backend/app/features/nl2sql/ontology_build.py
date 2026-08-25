@@ -1,12 +1,13 @@
 """AI オントロジー構築(業務エンティティ命名・Q/A 学習・自然言語補強)。
 
-OCI Enterprise AI の出力は Pydantic(:class:`OntologyBuildExtraction`)で検証し、
-profile view スコープ外の owner/object/column を参照する候補は proposal 化せず
-warnings に落とす。生成物は既存 PROPOSALS(承認フロー)にのみ登録され、
-accept → draft → publish の既存ゲートを通過するまで SQL 生成には使われない。
+OCI Enterprise AI の入力 schema は Profile + DB schema catalog から直接作る。
+出力は Pydantic(:class:`OntologyBuildExtraction`)で検証し、profile スコープ外の
+owner/object/column を参照する候補は Markdown Draft へ入れず warnings に落とす。
+生成物は承認済み draft revision と Markdown Draft artifact として保存され、
+publish で Published Markdown へコピーされるまで SQL 生成には使われない。
 
 job と実行入力は Oracle store に永続化する。local は thread、production は独立 worker が
-同じ処理を実行し、成果物は proposal の承認ゲートを通る。
+同じ処理を実行し、成果物は Markdown Draft の確認ゲートを通る。
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.features.nl2sql.ontology_catalog import SchemaOntology
+from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
+from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
 from app.features.nl2sql.ontology_models import (
     JoinCondition,
     MetricDefinition,
@@ -99,9 +101,7 @@ def _rows_from_content(filename: str, content: bytes, warnings: list[str]) -> li
     suffix = Path(filename).suffix.lower()
     if suffix in WORKBOOK_SUFFIXES:
         try:
-            sheet, sheet_warnings = select_workbook_sheet(
-                read_workbook_sheets(filename, content)
-            )
+            sheet, sheet_warnings = select_workbook_sheet(read_workbook_sheets(filename, content))
         except TabularFileReadError as exc:
             warnings.append(str(exc))
             return []
@@ -110,21 +110,18 @@ def _rows_from_content(filename: str, content: bytes, warnings: list[str]) -> li
             [normalize_workbook_scalar(value).strip() for value in raw_row]
             for raw_row in sheet.rows
         ]
-    if suffix in {".csv", ".tsv", ".txt", ""}:
+    if suffix in {".csv", ".txt", ""}:
         try:
             validate_tabular_text_signature(content)
         except TabularFileReadError as exc:
             warnings.append(str(exc))
             return []
         text = content.decode("utf-8-sig", errors="replace")
-        delimiter = "\t" if suffix == ".tsv" else ","
         return [
             [str(value).strip() for value in row]
-            for row in csv.reader(io.StringIO(text), delimiter=delimiter)
+            for row in csv.reader(io.StringIO(text), delimiter=",")
         ]
-    warnings.append(
-        f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
-    )
+    warnings.append(f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。")
     return []
 
 
@@ -167,7 +164,259 @@ def parse_qa_workbook(filename: str, content: bytes) -> tuple[list[QaPair], list
     return pairs, warnings
 
 
-# --- profile view スコープの解決 --------------------------------------------------------------
+# --- DB schema scope / profile view スコープの解決 -------------------------------------------
+
+
+@dataclass(frozen=True)
+class OntologyBuildSchemaContext:
+    schema_context: str
+    object_count: int
+    column_count: int
+    schema_fingerprint: str
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+def _normalize_oracle_identifier(value: str) -> str:
+    return value.replace('"', "").strip().upper()
+
+
+def _schema_object_kind(table: SchemaTable) -> str:
+    return "view" if "view" in table.table_type.casefold() else "table"
+
+
+def _schema_object_label(table: SchemaTable) -> str:
+    owner = _normalize_oracle_identifier(table.owner or "APP")
+    name = _normalize_oracle_identifier(table.table_name)
+    return f"{owner}.{name}" if owner else name
+
+
+def _resolve_catalog_object(
+    raw_name: str,
+    *,
+    object_kind: str,
+    candidates: list[SchemaTable],
+) -> tuple[SchemaTable | None, str | None]:
+    parts = [part for part in _normalize_oracle_identifier(raw_name).split(".") if part]
+    owner = parts[-2] if len(parts) >= 2 else ""
+    object_name = parts[-1] if parts else ""
+    matches = [
+        table
+        for table in candidates
+        if _schema_object_kind(table) == object_kind
+        and _normalize_oracle_identifier(table.table_name) == object_name
+        and (not owner or _normalize_oracle_identifier(table.owner or "APP") == owner)
+    ]
+    if len(matches) > 1:
+        qualified = ", ".join(sorted(_schema_object_label(table) for table in matches))
+        return (
+            None,
+            f"「{raw_name}」は DB schema catalog 内で複数 object に一致します: {qualified}。"
+            "owner 付きの object 名を Profile に設定してください。",
+        )
+    if not matches:
+        return (
+            None,
+            f"「{raw_name}」を DB schema catalog の {object_kind} として解決できません。"
+            "DB 構造を再取得するか、Profile の対象 object 名(owner 付き)を確認してください。",
+        )
+    return matches[0], None
+
+
+def _selected_schema_objects(
+    profile: Nl2SqlProfile,
+    catalog: SchemaCatalog,
+) -> tuple[list[SchemaTable], list[str], list[str]]:
+    if not profile.allowed_tables and not profile.allowed_views:
+        return sorted(catalog.tables, key=_schema_object_label), [], []
+
+    selected: dict[tuple[str, str, str], SchemaTable] = {}
+    warnings: list[str] = []
+    errors: list[str] = []
+    for raw_name, object_kind in [
+        *((name, "table") for name in profile.allowed_tables),
+        *((name, "view") for name in profile.allowed_views),
+    ]:
+        table, message = _resolve_catalog_object(
+            raw_name,
+            object_kind=object_kind,
+            candidates=catalog.tables,
+        )
+        if message:
+            if "複数 object" in message:
+                errors.append(message)
+            else:
+                warnings.append(message)
+            continue
+        if table is None:
+            continue
+        key = (
+            _normalize_oracle_identifier(table.owner or "APP"),
+            _normalize_oracle_identifier(table.table_name),
+            _schema_object_kind(table),
+        )
+        selected[key] = table
+    return sorted(selected.values(), key=_schema_object_label), warnings, errors
+
+
+def _constraint_cardinality(detail: Any, source_table: SchemaTable) -> str:
+    source_columns = tuple(_normalize_oracle_identifier(value) for value in detail.columns)
+    unique_column_sets = {
+        tuple(_normalize_oracle_identifier(value) for value in constraint.columns)
+        for constraint in source_table.constraint_details
+        if constraint.constraint_type in {"P", "U"}
+    }
+    return "one_to_one" if source_columns in unique_column_sets else "many_to_one"
+
+
+def build_schema_context_from_catalog(
+    profile: Nl2SqlProfile,
+    catalog: SchemaCatalog,
+) -> OntologyBuildSchemaContext:
+    """AI 構築 input 用に、Profile scope の DB schema 情報を catalog から直接作る。"""
+
+    selected_objects, warnings, errors = _selected_schema_objects(profile, catalog)
+    selected_keys = {
+        (
+            _normalize_oracle_identifier(table.owner or "APP"),
+            _normalize_oracle_identifier(table.table_name),
+        )
+        for table in selected_objects
+    }
+    objects: list[dict[str, Any]] = []
+    relationships: list[dict[str, Any]] = []
+    for table in selected_objects:
+        owner = _normalize_oracle_identifier(table.owner or "APP")
+        object_name = _normalize_oracle_identifier(table.table_name)
+        qualified_name = f"{owner}.{object_name}" if owner else object_name
+        objects.append(
+            {
+                "object": qualified_name,
+                "owner": owner,
+                "object_name": object_name,
+                "object_type": _schema_object_kind(table),
+                "logical_name": table.logical_name,
+                "comment": table.comment,
+                "row_count": table.row_count,
+                "columns": [
+                    {
+                        "column": _normalize_oracle_identifier(column.column_name),
+                        "qualified_column": (
+                            f"{qualified_name}."
+                            f"{_normalize_oracle_identifier(column.column_name)}"
+                        ),
+                        "data_type": column.data_type,
+                        "nullable": column.nullable,
+                        "ordinal": ordinal,
+                        "logical_name": column.logical_name,
+                        "comment": column.comment,
+                    }
+                    for ordinal, column in enumerate(table.columns, start=1)
+                ],
+                "constraints": [
+                    {
+                        "constraint_name": detail.constraint_name,
+                        "constraint_type": detail.constraint_type,
+                        "columns": [
+                            _normalize_oracle_identifier(column) for column in detail.columns
+                        ],
+                    }
+                    for detail in table.constraint_details
+                    if detail.constraint_type in {"P", "U", "C"}
+                ],
+            }
+        )
+        for detail in table.constraint_details:
+            if detail.constraint_type != "R" or not detail.referenced_table:
+                continue
+            target_owner = _normalize_oracle_identifier(detail.referenced_owner or owner)
+            target_name = _normalize_oracle_identifier(detail.referenced_table)
+            if (target_owner, target_name) not in selected_keys:
+                continue
+            relationships.append(
+                {
+                    "id": detail.constraint_name,
+                    "kind": "foreign_key",
+                    "source_object": qualified_name,
+                    "target_object": f"{target_owner}.{target_name}",
+                    "relationship_name_ja": f"{qualified_name} → {target_owner}.{target_name}",
+                    "description_ja": f"Oracle 外部キー {detail.constraint_name}",
+                    "cardinality": _constraint_cardinality(detail, table),
+                    "review_status": "approved" if detail.status == "ENABLED" else "proposed",
+                    "allowed_path": True,
+                    "join_conditions": [
+                        {
+                            "left": (f"{qualified_name}.{_normalize_oracle_identifier(left)}"),
+                            "right": (
+                                f"{target_owner}.{target_name}."
+                                f"{_normalize_oracle_identifier(right)}"
+                            ),
+                            "operator": "=",
+                            "ordinal": ordinal,
+                            "expression": (
+                                f"{qualified_name}.{_normalize_oracle_identifier(left)} = "
+                                f"{target_owner}.{target_name}."
+                                f"{_normalize_oracle_identifier(right)}"
+                            ),
+                        }
+                        for ordinal, (left, right) in enumerate(
+                            zip(detail.columns, detail.referenced_columns, strict=False),
+                            start=1,
+                        )
+                    ],
+                }
+            )
+
+    for dependency in catalog.view_dependencies:
+        source_owner = _normalize_oracle_identifier(dependency.owner or "APP")
+        source_name = _normalize_oracle_identifier(dependency.view_name)
+        target_owner = _normalize_oracle_identifier(dependency.referenced_owner or source_owner)
+        target_name = _normalize_oracle_identifier(dependency.referenced_name)
+        if (source_owner, source_name) not in selected_keys:
+            continue
+        if (target_owner, target_name) not in selected_keys:
+            continue
+        relationships.append(
+            {
+                "id": f"view_dependency:{source_owner}.{source_name}:{target_owner}.{target_name}",
+                "kind": "view_dependency",
+                "source_object": f"{source_owner}.{source_name}",
+                "target_object": f"{target_owner}.{target_name}",
+                "relationship_name_ja": "参照",
+                "description_ja": "Oracle view dependency",
+                "cardinality": "unknown",
+                "review_status": "approved",
+                "allowed_path": True,
+                "join_conditions": [],
+            }
+        )
+
+    schema_context = json.dumps(
+        {
+            "profile": {"id": profile.id, "name": profile.name},
+            "objects": sorted(objects, key=lambda item: str(item["object"])),
+            "relationships": sorted(
+                relationships,
+                key=lambda item: (
+                    str(item["kind"]),
+                    str(item["source_object"]),
+                    str(item["target_object"]),
+                    str(item["id"]),
+                ),
+            ),
+            "warnings": warnings,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return OntologyBuildSchemaContext(
+        schema_context=schema_context,
+        object_count=len(objects),
+        column_count=sum(len(item["columns"]) for item in objects),
+        schema_fingerprint=catalog_schema_fingerprint(catalog),
+        warnings=warnings,
+        errors=errors,
+    )
 
 
 class _ScopeResolver:
@@ -217,10 +466,40 @@ class _ScopeResolver:
         return None
 
 
+def _physical_object_label(node: OntologyNode) -> str:
+    if node.physical_mappings:
+        ref = node.physical_mappings[0].object_ref
+        return f"{ref.owner}.{ref.object_name}" if ref.owner else ref.object_name
+    owner = str(node.metadata.get("owner", "")).strip()
+    object_name = str(node.metadata.get("object_name", "")).strip()
+    if object_name:
+        return f"{owner}.{object_name}" if owner else object_name
+    return node.technical_name or node.id
+
+
+def _column_ref_label(ref: Any) -> str:
+    owner = str(getattr(ref, "owner", "") or "").strip()
+    object_name = str(getattr(ref, "object_name", "") or "").strip()
+    column_name = str(getattr(ref, "column_name", "") or "").strip()
+    if owner and object_name and column_name:
+        return f"{owner}.{object_name}.{column_name}"
+    if object_name and column_name:
+        return f"{object_name}.{column_name}"
+    return column_name or object_name or owner
+
+
+def _join_condition_label(condition: JoinCondition) -> str:
+    return (
+        f"{_column_ref_label(condition.left)} {condition.operator} "
+        f"{_column_ref_label(condition.right)}"
+    )
+
+
 def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) -> str:
     """LLM に渡す profile スコープの schema 情報(JSON 文字列、決定論)。"""
 
     scoped = set(view.node_ids)
+    scoped_edges = set(view.edge_ids)
     objects: dict[str, dict[str, Any]] = {}
     for node in sorted(ontology.nodes, key=lambda item: item.id):
         if node.id not in scoped:
@@ -231,6 +510,7 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
                 "object_type": node.kind.value,
                 "logical_name": node.business_name_ja,
                 "comment": node.description_ja,
+                "table_usage_ja": view.table_usages_ja.get(node.id, ""),
                 "columns": [],
             }
     for node in sorted(ontology.nodes, key=lambda item: item.id):
@@ -245,12 +525,55 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
             {
                 "column": str(node.metadata.get("column_name", "")),
                 "data_type": str(node.metadata.get("data_type", "")),
+                "nullable": bool(node.metadata.get("nullable", True)),
+                "ordinal": node.metadata.get("ordinal"),
                 "logical_name": node.business_name_ja,
                 "comment": node.description_ja,
             }
         )
+    node_by_id = {node.id: node for node in ontology.nodes}
+    relationships: list[dict[str, Any]] = []
+    for edge in sorted(ontology.edges, key=lambda item: item.id):
+        if edge.id not in scoped_edges:
+            continue
+        if edge.kind not in {
+            OntologyEdgeKind.FOREIGN_KEY,
+            OntologyEdgeKind.BUSINESS_RELATIONSHIP,
+            OntologyEdgeKind.JOINS,
+        }:
+            continue
+        source = node_by_id.get(edge.source_node_id)
+        target = node_by_id.get(edge.target_node_id)
+        if source is None or target is None:
+            continue
+        relationships.append(
+            {
+                "id": edge.id,
+                "kind": edge.kind.value,
+                "source_object": _physical_object_label(source),
+                "target_object": _physical_object_label(target),
+                "relationship_name_ja": edge.relationship_name_ja,
+                "description_ja": edge.description_ja,
+                "cardinality": edge.cardinality.value,
+                "review_status": edge.review_status.value,
+                "allowed_path": edge.id in set(view.allowed_path_ids),
+                "join_conditions": [
+                    {
+                        "left": _column_ref_label(condition.left),
+                        "right": _column_ref_label(condition.right),
+                        "operator": condition.operator,
+                        "ordinal": condition.ordinal,
+                        "expression": _join_condition_label(condition),
+                    }
+                    for condition in sorted(edge.join_conditions, key=lambda item: item.ordinal)
+                ],
+            }
+        )
     return json.dumps(
-        {"objects": sorted(objects.values(), key=lambda item: str(item["object"]))},
+        {
+            "objects": sorted(objects.values(), key=lambda item: str(item["object"])),
+            "relationships": relationships,
+        },
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -663,6 +986,491 @@ def convert_extraction_to_proposals(
     return result.drafts, result.warnings
 
 
+# --- Markdown output --------------------------------------------------------------------------
+
+
+def _md_text(value: Any, fallback: str = "未設定") -> str:
+    text = " ".join(str(value or "").split())
+    return text or fallback
+
+
+def _md_code(value: Any, fallback: str = "未設定") -> str:
+    text = _md_text(value, fallback).replace("`", "'")
+    return f"`{text}`"
+
+
+def _draft_nodes(draft: ProposalDraft) -> list[OntologyNode]:
+    nodes: list[OntologyNode] = []
+    for value in draft.payload.values.get("node_upserts") or []:
+        try:
+            nodes.append(OntologyNode.model_validate(value))
+        except Exception:
+            continue
+    return nodes
+
+
+def _draft_edges(draft: ProposalDraft) -> list[OntologyEdge]:
+    edges: list[OntologyEdge] = []
+    for value in draft.payload.values.get("edge_upserts") or []:
+        try:
+            edges.append(OntologyEdge.model_validate(value))
+        except Exception:
+            continue
+    return edges
+
+
+def _physical_mapping_label(node: OntologyNode) -> str:
+    if not node.physical_mappings:
+        return node.technical_name or node.id
+    mapping = node.physical_mappings[0]
+    if mapping.column_refs:
+        return _column_ref_label(mapping.column_refs[0])
+    ref = mapping.object_ref
+    return f"{ref.owner}.{ref.object_name}" if ref.owner else ref.object_name
+
+
+def _profile_node_override_map(view: ProfileOntologyView | None) -> dict[str, dict[str, Any]]:
+    if view is None:
+        return {}
+    return {
+        str(item.get("node_id") or ""): dict(item)
+        for item in view.draft_node_overrides
+        if str(item.get("node_id") or "")
+    }
+
+
+def _profile_edge_override_map(view: ProfileOntologyView | None) -> dict[str, dict[str, Any]]:
+    if view is None:
+        return {}
+    return {
+        str(item.get("edge_id") or ""): dict(item)
+        for item in view.draft_edge_overrides
+        if str(item.get("edge_id") or "")
+    }
+
+
+def _effective_business_name(node: OntologyNode, view: ProfileOntologyView | None) -> str:
+    override = _profile_node_override_map(view).get(node.id, {})
+    return _md_text(override.get("business_name_ja") or node.business_name_ja, node.id)
+
+
+def _effective_table_usage(node: OntologyNode, view: ProfileOntologyView | None) -> str:
+    if view is None:
+        return ""
+    override = _profile_node_override_map(view).get(node.id, {})
+    usage = str(override.get("table_usage") or view.table_usages_ja.get(node.id, "") or "")
+    return usage.strip()
+
+
+def _effective_edge_cardinality(edge: OntologyEdge, view: ProfileOntologyView | None) -> str:
+    override = _profile_edge_override_map(view).get(edge.id, {})
+    cardinality = override.get("cardinality") or edge.cardinality.value
+    return str(cardinality or "unknown")
+
+
+def _effective_edge_allowed(edge: OntologyEdge, view: ProfileOntologyView | None) -> bool:
+    if view is None:
+        return bool(edge.enabled)
+    override = _profile_edge_override_map(view).get(edge.id, {})
+    if "allowed_path" in override:
+        return bool(override.get("allowed_path"))
+    return edge.id in set(view.allowed_path_ids) or bool(edge.enabled)
+
+
+def _node_markdown_lines(node: OntologyNode, view: ProfileOntologyView | None) -> list[str]:
+    aliases = ", ".join(sorted(set(node.aliases))) or "なし"
+    usage = _effective_table_usage(node, view)
+    lines = [
+        f"- {_effective_business_name(node, view)} ({_md_code(_physical_mapping_label(node))})",
+        f"  - kind: {node.kind.value}",
+        f"  - description: {_md_text(node.description_ja)}",
+        f"  - aliases: {aliases}",
+    ]
+    if usage:
+        lines.append(f"  - usage: {_md_text(usage)}")
+    if node.provenance.evidence:
+        lines.append("  - evidence:")
+        for evidence in node.provenance.evidence[:5]:
+            label = str(evidence.label or evidence.location or evidence.source_id or "").strip()
+            if label:
+                lines.append(f"    - {_md_text(label)}")
+    return lines
+
+
+def _edge_markdown_lines(
+    edge: OntologyEdge,
+    *,
+    node_by_id: dict[str, OntologyNode],
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    source = node_by_id.get(edge.source_node_id)
+    target = node_by_id.get(edge.target_node_id)
+    source_label = (
+        f"{_effective_business_name(source, view)} ({_md_code(_physical_mapping_label(source))})"
+        if source is not None
+        else _md_code(edge.source_node_id)
+    )
+    target_label = (
+        f"{_effective_business_name(target, view)} ({_md_code(_physical_mapping_label(target))})"
+        if target is not None
+        else _md_code(edge.target_node_id)
+    )
+    lines = [
+        f"- {source_label} -> {target_label}: {_md_text(edge.relationship_name_ja)}",
+        f"  - kind: {edge.kind.value}",
+        f"  - cardinality: {_effective_edge_cardinality(edge, view)}",
+        f"  - allowed_path: {'true' if _effective_edge_allowed(edge, view) else 'false'}",
+        f"  - evidence: {_md_text(edge.description_ja)}",
+    ]
+    if edge.join_conditions:
+        lines.append("  - join_conditions:")
+        lines.extend(
+            f"    - {_md_code(_join_condition_label(condition))}"
+            for condition in sorted(edge.join_conditions, key=lambda item: item.ordinal)
+        )
+    return lines
+
+
+def _physical_object_lines(
+    *,
+    schema_objects: list[Any],
+    ontology: SchemaOntology | None,
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    if ontology is not None and view is not None and view.physical_objects:
+        node_by_id = {node.id: node for node in ontology.nodes}
+        lines: list[str] = []
+        for ref in sorted(
+            view.physical_objects,
+            key=lambda item: (item.owner, item.object_name, item.object_type),
+        ):
+            node = node_by_id.get(ref.node_id)
+            business_name = _effective_business_name(node, view) if node else ref.object_name
+            description = _md_text(node.description_ja if node else "")
+            usage = _effective_table_usage(node, view) if node else ""
+            lines.extend(
+                [
+                    f"- {_md_code(f'{ref.owner}.{ref.object_name}')} ({ref.object_type})",
+                    f"  - business_name: {_md_text(business_name)}",
+                    f"  - description: {description}",
+                    f"  - usage: {_md_text(usage, '未設定')}",
+                ]
+            )
+        return lines
+
+    lines = []
+    for item in schema_objects:
+        if not isinstance(item, dict):
+            continue
+        object_name = str(item.get("object") or item.get("object_name") or "")
+        object_type = str(item.get("object_type") or "")
+        logical_name = str(item.get("logical_name") or "")
+        comment = str(item.get("comment") or "")
+        columns = item.get("columns") if isinstance(item.get("columns"), list) else []
+        lines.extend(
+            [
+                f"- {_md_code(object_name)} ({_md_text(object_type)})",
+                f"  - business_name: {_md_text(logical_name)}",
+                f"  - description: {_md_text(comment)}",
+                f"  - columns: {len(columns)}",
+            ]
+        )
+    return lines
+
+
+def _profile_entity_lines(
+    ontology: SchemaOntology | None,
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    if ontology is None or view is None:
+        return []
+    scoped = set(view.node_ids)
+    return [
+        line
+        for node in sorted(ontology.nodes, key=lambda item: (item.kind.value, item.id))
+        if node.id in scoped
+        and node.kind
+        in {
+            OntologyNodeKind.TABLE,
+            OntologyNodeKind.VIEW,
+            OntologyNodeKind.BUSINESS_ENTITY,
+            OntologyNodeKind.BUSINESS_TERM,
+        }
+        for line in _node_markdown_lines(node, view)
+    ]
+
+
+def _profile_relationship_lines(
+    ontology: SchemaOntology | None,
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    if ontology is None or view is None:
+        return []
+    scoped = set(view.edge_ids)
+    node_by_id = {node.id: node for node in ontology.nodes}
+    return [
+        line
+        for edge in sorted(ontology.edges, key=lambda item: (item.kind.value, item.id))
+        if edge.id in scoped
+        and edge.kind
+        in {
+            OntologyEdgeKind.FOREIGN_KEY,
+            OntologyEdgeKind.BUSINESS_RELATIONSHIP,
+            OntologyEdgeKind.JOINS,
+        }
+        for line in _edge_markdown_lines(edge, node_by_id=node_by_id, view=view)
+    ]
+
+
+def _profile_metric_lines(
+    ontology: SchemaOntology | None,
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    if ontology is None or view is None:
+        return []
+    scoped = set(view.node_ids)
+    lines: list[str] = []
+    for node in sorted(ontology.nodes, key=lambda item: (item.kind.value, item.id)):
+        if node.id not in scoped:
+            continue
+        if node.kind == OntologyNodeKind.METRIC:
+            lines.extend(_node_markdown_lines(node, view))
+            definition = node.metadata.get("metric_definition")
+            if isinstance(definition, dict):
+                lines.append(f"  - expression_sql: {_md_code(definition.get('expression_sql'))}")
+                lines.append(f"  - aggregation: {_md_text(definition.get('aggregation'))}")
+                lines.append(f"  - unit: {_md_text(definition.get('unit'), 'なし')}")
+    return lines
+
+
+def _profile_rule_enum_lines(
+    ontology: SchemaOntology | None,
+    view: ProfileOntologyView | None,
+) -> list[str]:
+    if ontology is None or view is None:
+        return []
+    scoped = set(view.node_ids)
+    node_by_id = {node.id: node for node in ontology.nodes}
+    lines: list[str] = []
+    for node in sorted(ontology.nodes, key=lambda item: (item.kind.value, item.id)):
+        if node.id not in scoped:
+            continue
+        if node.business_rule_definition is not None:
+            rule = node.business_rule_definition
+            applies_to = ", ".join(
+                _effective_business_name(target, view)
+                for target_id in rule.applies_to_node_ids
+                if (target := node_by_id.get(target_id)) is not None
+            )
+            lines.extend(
+                [
+                    f"- {_effective_business_name(node, view)}",
+                    "  - type: business_rule",
+                    f"  - statement: {_md_text(rule.statement_ja)}",
+                    f"  - applies_to: {_md_text(applies_to, '未設定')}",
+                    f"  - severity: {rule.severity.value}",
+                    f"  - execution_mode: {rule.execution_mode.value}",
+                ]
+            )
+        elif node.enum_value_definition is not None:
+            enum_value = node.enum_value_definition
+            property_node = node_by_id.get(enum_value.property_node_id)
+            property_label = (
+                _effective_business_name(property_node, view)
+                if property_node is not None
+                else enum_value.property_node_id
+            )
+            lines.extend(
+                [
+                    f"- {_effective_business_name(node, view)}",
+                    "  - type: enum_value",
+                    f"  - code: {_md_text(enum_value.code)}",
+                    f"  - literal: {_md_code(enum_value.physical_literal)}",
+                    f"  - label: {_md_text(enum_value.label_ja)}",
+                    f"  - property: {_md_text(property_label)}",
+                    f"  - aliases: {', '.join(enum_value.aliases) or 'なし'}",
+                ]
+            )
+    return lines
+
+
+def render_ontology_build_markdown(
+    *,
+    profile_id: str,
+    schema_context: str,
+    drafts: list[ProposalDraft],
+    warnings: list[str],
+    source_count: int,
+    qa_pair_count: int,
+    business_text_present: bool,
+    ontology: SchemaOntology | None = None,
+    profile_view: ProfileOntologyView | None = None,
+) -> str:
+    """AI 構築結果から、確認・編集用 Markdown Draft を決定論生成する。"""
+
+    try:
+        schema = json.loads(schema_context)
+    except Exception:
+        schema = {}
+    objects = schema.get("objects") if isinstance(schema, dict) else []
+    relationships = schema.get("relationships") if isinstance(schema, dict) else []
+    object_count = len(objects) if isinstance(objects, list) else 0
+    column_count = (
+        sum(len(item.get("columns") or []) for item in objects if isinstance(item, dict))
+        if isinstance(objects, list)
+        else 0
+    )
+    relationship_count = len(relationships) if isinstance(relationships, list) else 0
+    physical_lines = _physical_object_lines(
+        schema_objects=objects if isinstance(objects, list) else [],
+        ontology=ontology,
+        view=profile_view,
+    )
+    profile_entity_lines = _profile_entity_lines(ontology, profile_view)
+    profile_relationship_lines = _profile_relationship_lines(ontology, profile_view)
+    profile_metric_lines = _profile_metric_lines(ontology, profile_view)
+    profile_rule_enum_lines = _profile_rule_enum_lines(ontology, profile_view)
+
+    lines = [
+        "# Ontology Draft",
+        "",
+        "## Input Summary",
+        f"- Profile: {_md_code(profile_id)}",
+        f"- Business description: {'あり' if business_text_present else 'なし'}",
+        f"- Q/A pairs: {qa_pair_count}",
+        f"- Source documents: {source_count}",
+        f"- DB schema objects: {object_count}",
+        f"- DB schema columns: {column_count}",
+        f"- Existing schema relationships: {relationship_count}",
+        "",
+        "## Physical Objects",
+    ]
+    lines.extend(physical_lines or ["- なし"])
+    lines.extend(
+        [
+            "",
+            "## Entities",
+        ]
+    )
+
+    entity_lines: list[str] = []
+    relationship_lines: list[str] = []
+    metric_lines: list[str] = []
+    synonym_lines: list[str] = []
+
+    for draft in drafts:
+        nodes = _draft_nodes(draft)
+        edges = _draft_edges(draft)
+        if draft.kind == OntologyProposalKind.MAPPING:
+            for node in nodes:
+                if node.kind != OntologyNodeKind.BUSINESS_ENTITY:
+                    continue
+                aliases = ", ".join(sorted(set(node.aliases))) or "なし"
+                entity_lines.extend(
+                    [
+                        f"- {node.business_name_ja} ({_md_code(_physical_mapping_label(node))})",
+                        f"  - description: {_md_text(node.description_ja)}",
+                        f"  - aliases: {aliases}",
+                        f"  - confidence: {node.confidence:.2f}",
+                    ]
+                )
+                if node.aliases:
+                    synonym_lines.extend(
+                        [
+                            f"- target: {_md_code(_physical_mapping_label(node))}",
+                            f"  - aliases: {aliases}",
+                            f"  - evidence: {_md_text(node.description_ja)}",
+                        ]
+                    )
+        elif draft.kind == OntologyProposalKind.RELATIONSHIP:
+            node_by_id = {node.id: node for node in nodes}
+            for edge in edges:
+                if edge.kind != OntologyEdgeKind.BUSINESS_RELATIONSHIP:
+                    continue
+                source = node_by_id.get(edge.source_node_id)
+                target = node_by_id.get(edge.target_node_id)
+                source_label = (
+                    f"{source.business_name_ja} ({_md_code(_physical_mapping_label(source))})"
+                    if source is not None
+                    else _md_code(edge.source_node_id)
+                )
+                target_label = (
+                    f"{target.business_name_ja} ({_md_code(_physical_mapping_label(target))})"
+                    if target is not None
+                    else _md_code(edge.target_node_id)
+                )
+                relationship_lines.extend(
+                    [
+                        f"- {source_label} -> {target_label}: {edge.relationship_name_ja}",
+                        f"  - cardinality: {edge.cardinality.value}",
+                        f"  - evidence: {_md_text(edge.description_ja)}",
+                        f"  - confidence: {edge.confidence:.2f}",
+                    ]
+                )
+                if edge.join_conditions:
+                    relationship_lines.append("  - join_conditions:")
+                    relationship_lines.extend(
+                        f"    - {_md_code(_join_condition_label(condition))}"
+                        for condition in sorted(edge.join_conditions, key=lambda item: item.ordinal)
+                    )
+        elif draft.kind == OntologyProposalKind.METRIC_DEFINITION:
+            for node in nodes:
+                if node.kind != OntologyNodeKind.METRIC:
+                    continue
+                metric_definition = node.metadata.get("metric_definition")
+                expression = ""
+                aggregation = ""
+                unit = ""
+                if isinstance(metric_definition, dict):
+                    expression = str(metric_definition.get("expression_sql") or "")
+                    aggregation = str(metric_definition.get("aggregation") or "")
+                    unit = str(metric_definition.get("unit") or "")
+                base_columns = ", ".join(
+                    _md_code(_column_ref_label(column_ref))
+                    for mapping in node.physical_mappings
+                    for column_ref in mapping.column_refs
+                )
+                metric_lines.extend(
+                    [
+                        f"- {node.business_name_ja}",
+                        f"  - expression_sql: {_md_code(expression)}",
+                        f"  - base_columns: {base_columns or 'なし'}",
+                        f"  - aggregation: {_md_text(aggregation)}",
+                        f"  - unit: {_md_text(unit, 'なし')}",
+                        f"  - description: {_md_text(node.description_ja)}",
+                        f"  - confidence: {node.confidence:.2f}",
+                    ]
+                )
+        elif draft.kind == OntologyProposalKind.ALIAS:
+            for node in nodes:
+                aliases = ", ".join(sorted(set(node.aliases))) or "なし"
+                synonym_lines.extend(
+                    [
+                        f"- target: {_md_code(_physical_mapping_label(node))}",
+                        f"  - aliases: {aliases}",
+                        f"  - evidence: {_md_text(node.description_ja)}",
+                    ]
+                )
+
+    merged_entity_lines = [*profile_entity_lines, *entity_lines]
+    merged_relationship_lines = [*profile_relationship_lines, *relationship_lines]
+    lines.extend(merged_entity_lines or ["- なし"])
+    lines.extend(["", "## Relationships / Join"])
+    lines.extend(merged_relationship_lines or ["- なし"])
+    lines.extend(["", "## Metrics"])
+    lines.extend([*profile_metric_lines, *metric_lines] or ["- なし"])
+    lines.extend(["", "## Business Rules / Enum Values"])
+    lines.extend(profile_rule_enum_lines or ["- なし"])
+    lines.extend(["", "## Synonyms"])
+    lines.extend(synonym_lines or ["- なし"])
+    lines.extend(["", "## Evidence / Warnings"])
+    unique_warnings = list(dict.fromkeys(warning for warning in warnings if warning.strip()))
+    lines.extend(f"- {warning}" for warning in unique_warnings)
+    if not unique_warnings:
+        lines.append("- なし")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # --- LLM 呼び出し -----------------------------------------------------------------------------
 
 _EXTRACTION_SYSTEM_PROMPT = (
@@ -719,7 +1527,7 @@ _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.SCHEMA_NAMING: "業務エンティティ命名",
     OntologyBuildStepName.QA_EXTRACTION: "Q/A からの抽出",
     OntologyBuildStepName.TEXT_EXTRACTION: "業務説明からの抽出",
-    OntologyBuildStepName.PROPOSAL_REGISTRATION: "提案の登録",
+    OntologyBuildStepName.PROPOSAL_REGISTRATION: "Markdown Draft 生成",
 }
 _MAX_JOB_EVENTS = 100
 # 完了(succeeded/failed/cancelled)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
@@ -728,6 +1536,11 @@ _TERMINAL_STATUSES = {
     OntologyBuildStatus.SUCCEEDED,
     OntologyBuildStatus.FAILED,
     OntologyBuildStatus.CANCELLED,
+}
+_TERMINAL_STEP_STATUSES = {
+    OntologyBuildStepStatus.SUCCEEDED,
+    OntologyBuildStepStatus.FAILED,
+    OntologyBuildStepStatus.SKIPPED,
 }
 
 
@@ -857,13 +1670,13 @@ class OntologyBuildService:
         if get_settings().nl2sql_ontology_worker_mode == "external":
             restored = self._restore_from_store(job_id)
             if restored is not None:
-                return restored.model_copy(deep=True)
+                return self._normalize_job_for_response(restored)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
-                return job.model_copy(deep=True)
+                return self._normalize_job_for_response(job)
         restored = self._restore_from_store(job_id)
-        return restored.model_copy(deep=True) if restored is not None else None
+        return self._normalize_job_for_response(restored) if restored is not None else None
 
     def _restore_from_store(self, job_id: str) -> OntologyBuildJob | None:
         """store の job を in-memory キャッシュへ再水和して返す(未登録は None)。"""
@@ -910,9 +1723,7 @@ class OntologyBuildService:
             job = OntologyBuildJob.model_validate(document["payload"])
             if job.status in _TERMINAL_STATUSES:
                 continue
-            self._save_cancelled(
-                document, job, "業務 Profile が削除されたため構築を中止しました。"
-            )
+            self._save_cancelled(document, job, "業務 Profile が削除されたため構築を中止しました。")
             cancelled += 1
         return cancelled
 
@@ -963,7 +1774,7 @@ class OntologyBuildService:
             if document.get("job_type") == "build"
         ]
         jobs.sort(key=lambda job: (job.created_at, job.id), reverse=True)
-        return [job.model_copy(deep=True) for job in jobs[: max(1, limit)]]
+        return [self._normalize_job_for_response(job) for job in jobs[: max(1, limit)]]
 
     def cancel(self, job_id: str) -> OntologyBuildJob:
         """ユーザー起点の単一 job キャンセル。
@@ -1091,6 +1902,51 @@ class OntologyBuildService:
         if updated is not None:
             self._persist_job(updated)
 
+    def _update_persisted_copy(self, job_id: str, mutate: Any) -> None:
+        persisted = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        if persisted is not None and persisted.get("status") == OntologyBuildStatus.CANCELLED.value:
+            cancelled = OntologyBuildJob.model_validate(persisted["payload"])
+            with self._lock:
+                self._jobs[job_id] = cancelled
+            return
+        updated: OntologyBuildJob | None = None
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                updated = job.model_copy(deep=True)
+        if updated is None:
+            return
+        mutate(updated)
+        self._persist_job(updated)
+        with self._lock:
+            self._jobs[job_id] = updated
+
+    def _normalize_job_for_response(self, job: OntologyBuildJob) -> OntologyBuildJob:
+        normalized = job.model_copy(deep=True)
+        if (
+            normalized.status != OntologyBuildStatus.SUCCEEDED
+            or not (
+                normalized.draft_revision_id
+                or normalized.draft_etag
+                or normalized.markdown_output
+            )
+        ):
+            return normalized
+        non_terminal = [
+            step for step in normalized.steps if step.status not in _TERMINAL_STEP_STATUSES
+        ]
+        if (
+            len(non_terminal) != 1
+            or non_terminal[0].name != OntologyBuildStepName.PROPOSAL_REGISTRATION
+        ):
+            return normalized
+        step = non_terminal[0]
+        step.status = OntologyBuildStepStatus.SUCCEEDED
+        if not step.detail_ja or "構築 job の完了状態" in step.detail_ja:
+            step.detail_ja = "Markdown Draft を生成しました。"
+        step.finished_at = normalized.finished_at or step.finished_at or step.started_at
+        return normalized
+
     def _persist_job(self, job: OntologyBuildJob) -> None:
         current = self._runtime.store.get_document("jobs", {"job_id": job.id})
         with self._lock:
@@ -1204,6 +2060,15 @@ class OntologyBuildService:
 
         self._update(job_id, mutate)
 
+    def _add_warnings(self, job_id: str, warnings: list[str]) -> None:
+        if not warnings:
+            return
+
+        def mutate(job: OntologyBuildJob) -> None:
+            job.warnings_ja = [*job.warnings_ja, *warnings]
+
+        self._update(job_id, mutate)
+
     def _run_safely(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
         try:
             self._run(job_id, business_text, qa_pairs)
@@ -1222,19 +2087,36 @@ class OntologyBuildService:
             self._update(job_id, mutate)
             record_job(job_type="build", status="failed", error_code="unexpected")
 
-    def _fail(self, job_id: str, message_ja: str, *, skip_pending_steps: bool = True) -> None:
+    def _fail(
+        self,
+        job_id: str,
+        message_ja: str,
+        *,
+        skip_pending_steps: bool = True,
+        failed_step: OntologyBuildStepName | None = None,
+        failed_step_detail_ja: str = "",
+    ) -> None:
+        now = utc_now()
+
         def mutate(job: OntologyBuildJob) -> None:
             job.status = OntologyBuildStatus.FAILED
             job.error_message_ja = message_ja
-            job.finished_at = utc_now()
-            if skip_pending_steps:
-                for step in job.steps:
-                    if step.status in {
-                        OntologyBuildStepStatus.PENDING,
-                        OntologyBuildStepStatus.RUNNING,
-                    }:
-                        step.status = OntologyBuildStepStatus.SKIPPED
-                        step.finished_at = utc_now()
+            job.finished_at = now
+            for step in job.steps:
+                if failed_step is not None and step.name == failed_step:
+                    step.status = OntologyBuildStepStatus.FAILED
+                    if failed_step_detail_ja:
+                        step.detail_ja = failed_step_detail_ja
+                    if step.started_at is None:
+                        step.started_at = now
+                    step.finished_at = now
+                    continue
+                if skip_pending_steps and step.status in {
+                    OntologyBuildStepStatus.PENDING,
+                    OntologyBuildStepStatus.RUNNING,
+                }:
+                    step.status = OntologyBuildStepStatus.SKIPPED
+                    step.finished_at = now
 
         self._update(job_id, mutate)
         self._emit(job_id, message_ja)
@@ -1373,43 +2255,50 @@ class OntologyBuildService:
             )
             return
 
-        # --- スキーマ情報の準備(公開 Ontology の同期を含むため時間がかかり得る) ---
+        # --- スキーマ情報の準備(DB catalog 直読みによる AI input 作成) ---
         self._set_step(
             job_id,
             OntologyBuildStepName.SCHEMA_CONTEXT,
             OntologyBuildStepStatus.RUNNING,
-            "公開 Ontology から profile 範囲のスキーマ情報を取得中…",
+            "DB から profile 範囲のスキーマ情報を取得中…",
         )
-        self._emit(job_id, "公開 Ontology から profile 範囲のスキーマ情報を取得しています。")
-        view, ontology = self._runtime.profile_view(job.profile_id)
-        scoped_node_ids = set(view.node_ids)
-        object_count = sum(
-            1
-            for node in ontology.nodes
-            if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}
-            and node.id in scoped_node_ids
-        )
-        column_count = sum(
-            1
-            for node in ontology.nodes
-            if node.kind == OntologyNodeKind.COLUMN and node.id in scoped_node_ids
-        )
-        if object_count == 0:
+        self._emit(job_id, "DB から profile 範囲のスキーマ情報を取得しています。")
+        prepared_schema = self._runtime.prepare_build_schema_context(job.profile_id)
+        schema_warnings = list(prepared_schema.warnings)
+        schema_errors = list(prepared_schema.errors)
+        object_count = int(prepared_schema.object_count)
+        column_count = int(prepared_schema.column_count)
+        for warning in schema_warnings:
+            self._emit(job_id, warning)
+        for error in schema_errors:
+            self._emit(job_id, error)
+        if object_count == 0 or schema_errors:
             # LLM を無駄撃ちせず、原因(schema 情報未解決)を明確に返す
             self._set_step(
                 job_id,
                 OntologyBuildStepName.SCHEMA_CONTEXT,
                 OntologyBuildStepStatus.FAILED,
-                "profile 範囲に表・ビューがありません。",
+                (
+                    "profile 範囲の DB object が曖昧です。"
+                    if schema_errors
+                    else "profile 範囲に DB 表・ビューがありません。"
+                ),
+            )
+            self._add_warnings(job_id, [*schema_warnings, *schema_errors])
+            unresolved_hint = (
+                f" 詳細: {' / '.join([*schema_errors, *schema_warnings])}"
+                if schema_errors or schema_warnings
+                else ""
             )
             self._fail(
                 job_id,
-                "profile の対象オブジェクトを公開 Ontology に解決できません。"
-                "スキーマ情報を更新してから再実行してください。",
+                "profile の対象オブジェクトを DB schema catalog に解決できません。"
+                "DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。"
+                f"{unresolved_hint}",
             )
             return
 
-        schema_context = build_schema_context(ontology, view)
+        schema_context = str(prepared_schema.schema_context)
         self._set_step(
             job_id,
             OntologyBuildStepName.SCHEMA_CONTEXT,
@@ -1424,9 +2313,13 @@ class OntologyBuildService:
         qa_sql_texts = [pair.sql for pair in qa_pairs]
 
         drafts: list[ProposalDraft] = []
-        warnings: list[str] = []
+        warnings: list[str] = [*schema_warnings]
         step_names = {step.name for step in job.steps}
         llm_steps: list[tuple[OntologyBuildStepName, str, str, list[str] | None]] = []
+        validated_extractions: list[
+            tuple[OntologyBuildStepName, str, OntologyBuildExtraction, list[str] | None]
+        ] = []
+        ontology: SchemaOntology | None = None
         if OntologyBuildStepName.SCHEMA_NAMING in step_names:
             llm_steps.append(
                 (
@@ -1516,6 +2409,47 @@ class OntologyBuildService:
                 self._set_step(job_id, name, OntologyBuildStepStatus.RUNNING, "応答を検証中…")
                 self._emit(job_id, f"{label}: 応答を受信しました。検証しています。")
                 extraction = parse_extraction(raw)
+                validated_extractions.append((name, label, extraction, cross_check))
+                self._set_step(
+                    job_id,
+                    name,
+                    OntologyBuildStepStatus.SUCCEEDED,
+                    "応答を検証しました。",
+                )
+                self._emit(job_id, f"{label}: 抽出候補を検証しました。")
+            except Exception as exc:
+                logger.warning("ontology_build_step_failed step=%s", name.value, exc_info=True)
+                warnings.append(f"{name.value} の抽出に失敗しました: {exc}")
+                self._set_step(
+                    job_id, name, OntologyBuildStepStatus.FAILED, "LLM 抽出に失敗しました。"
+                )
+                self._emit(job_id, f"{label}: LLM 抽出に失敗しました。")
+
+        if self._is_cancelled(job_id):
+            return
+        if validated_extractions:
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                OntologyBuildStepStatus.RUNNING,
+                "DB schema revision を準備中…",
+            )
+            try:
+                view, ontology = self._runtime.build_proposal_scope(
+                    job.profile_id,
+                    schema_fingerprint=str(prepared_schema.schema_fingerprint),
+                )
+            except (OntologyNotFoundError, OntologyStateConflictError, ValueError) as exc:
+                message = getattr(exc, "message_ja", str(exc))
+                self._set_step(
+                    job_id,
+                    OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                    OntologyBuildStepStatus.FAILED,
+                    "DB schema revision の準備に失敗しました。",
+                )
+                self._fail(job_id, message)
+                return
+            for name, label, extraction, cross_check in validated_extractions:
                 step_drafts, step_warnings = convert_extraction_to_proposals(
                     extraction,
                     ontology=ontology,
@@ -1531,38 +2465,45 @@ class OntologyBuildService:
                     job_id,
                     name,
                     OntologyBuildStepStatus.SUCCEEDED,
-                    f"提案 {len(step_drafts)} 件、警告 {len(step_warnings)} 件",
+                    f"候補 {len(step_drafts)} 件、警告 {len(step_warnings)} 件",
                 )
                 self._emit(
                     job_id,
-                    f"{label}: 提案 {len(step_drafts)} 件、"
+                    f"{label}: 候補 {len(step_drafts)} 件、"
                     f"警告 {len(step_warnings)} 件を抽出しました。",
                 )
-            except Exception as exc:
-                logger.warning("ontology_build_step_failed step=%s", name.value, exc_info=True)
-                warnings.append(f"{name.value} の抽出に失敗しました: {exc}")
-                self._set_step(
-                    job_id, name, OntologyBuildStepStatus.FAILED, "LLM 抽出に失敗しました。"
+        if ontology is None:
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                OntologyBuildStepStatus.RUNNING,
+                "Markdown Draft 生成用の DB schema revision を準備中…",
+            )
+            try:
+                view, ontology = self._runtime.build_proposal_scope(
+                    job.profile_id,
+                    schema_fingerprint=str(prepared_schema.schema_fingerprint),
                 )
-                self._emit(job_id, f"{label}: LLM 抽出に失敗しました。")
+            except (OntologyNotFoundError, OntologyStateConflictError, ValueError) as exc:
+                message = getattr(exc, "message_ja", str(exc))
+                self._set_step(
+                    job_id,
+                    OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                    OntologyBuildStepStatus.FAILED,
+                    "Markdown Draft 生成用の DB schema revision 準備に失敗しました。",
+                )
+                self._fail(job_id, message)
+                return
 
-        if self._is_cancelled(job_id):
-            return
-        # Profile 削除と競合した場合に proposal を再生成しないため、書込直前に再確認する。
+        # Profile 削除と競合した場合に draft を生成しないため、書込直前に再確認する。
         self._runtime.ensure_profile(job.profile_id)
         self._set_step(
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
             OntologyBuildStepStatus.RUNNING,
-            f"候補 {len(drafts)} 件を登録中…",
+            f"候補 {len(drafts)} 件から Markdown Draft を生成中…",
         )
-        proposal_ids: list[str] = []
-        # 新規 AI 構築のたびにレビュー一覧をリセットする(前回の承認/却下/レビュー待ちを
-        # 一掃してから今回の候補だけを登録する)。取得失敗は登録処理を止めない。
-        try:
-            self._runtime.supersede_profile_proposals(job.profile_id)
-        except Exception:  # pragma: no cover - 一掃失敗は登録処理を止めない
-            logger.warning("ontology_build_supersede_failed", exc_info=True)
+        draft_inputs: list[ProposalDraft] = []
         # 同一 run 内で複数ステップが同じ候補を出した場合の dedup。provenance の
         # timestamp は揺れるため、安定 ID(node/edge)と kind で同一性を判定する。
         seen_payload_keys: set[str] = set()
@@ -1573,55 +2514,146 @@ class OntologyBuildService:
             if payload_key in seen_payload_keys:
                 continue
             seen_payload_keys.add(payload_key)
-            proposal = self._runtime.create_build_proposal(
-                profile_id=job.profile_id,
-                job_id=job_id,
-                title_ja=draft.title_ja,
-                description_ja=draft.description_ja,
-                kind=draft.kind,
-                proposal_payload=draft.payload,
-            )
-            proposal_ids.append(proposal.id)
+            draft_inputs.append(draft)
             self._set_step(
                 job_id,
                 OntologyBuildStepName.PROPOSAL_REGISTRATION,
                 OntologyBuildStepStatus.RUNNING,
-                f"{len(proposal_ids)} 件登録済み(候補 {len(drafts)} 件)",
+                f"{len(draft_inputs)} 件を整理済み(候補 {len(drafts)} 件)",
             )
-        registered_note = f"提案 {len(proposal_ids)} 件を登録しました。"
         self._set_step(
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
-            OntologyBuildStepStatus.SUCCEEDED,
-            registered_note,
+            OntologyBuildStepStatus.RUNNING,
+            "Markdown Draft をレンダリング中…",
         )
-        self._emit(job_id, registered_note)
+        self._emit(job_id, "Markdown Draft をレンダリングしています。")
+        try:
+            markdown_output = render_ontology_build_markdown(
+                profile_id=job.profile_id,
+                schema_context=schema_context,
+                drafts=draft_inputs,
+                warnings=warnings,
+                source_count=len(job.source_document_ids),
+                qa_pair_count=len(qa_pairs),
+                business_text_present=bool(business_text.strip()),
+                ontology=ontology,
+                profile_view=view,
+            )
+        except Exception as exc:
+            logger.warning("ontology_build_markdown_render_failed", exc_info=True)
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                OntologyBuildStepStatus.FAILED,
+                "Markdown Draft のレンダリングに失敗しました。",
+            )
+            self._fail(job_id, f"Markdown Draft のレンダリングに失敗しました: {exc}")
+            return
+        self._set_step(
+            job_id,
+            OntologyBuildStepName.PROPOSAL_REGISTRATION,
+            OntologyBuildStepStatus.RUNNING,
+            f"Markdown Draft をレンダリングしました({len(markdown_output)} 文字)。",
+        )
+        self._emit(job_id, f"Markdown Draft をレンダリングしました({len(markdown_output)} 文字)。")
+
+        def save_progress(message_ja: str) -> None:
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                OntologyBuildStepStatus.RUNNING,
+                message_ja,
+            )
+            self._emit(job_id, message_ja)
+
+        try:
+            draft_ontology, markdown_artifact = self._runtime.create_build_markdown_draft(
+                profile_id=job.profile_id,
+                base_revision_id=ontology.revision.id,
+                payloads=[draft.payload for draft in draft_inputs],
+                titles=[draft.title_ja for draft in draft_inputs],
+                markdown=markdown_output,
+                note=f"AI 構築 Markdown Draft: {len(draft_inputs)} 件",
+                on_progress=save_progress,
+            )
+        except Exception as exc:
+            logger.warning("ontology_build_markdown_save_failed", exc_info=True)
+            message = getattr(exc, "message_ja", str(exc))
+            self._set_step(
+                job_id,
+                OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                OntologyBuildStepStatus.FAILED,
+                "Markdown Draft の保存に失敗しました。",
+            )
+            self._fail(job_id, message)
+            return
+        registered_note = (
+            f"Markdown Draft v{draft_ontology.revision.version} を生成しました"
+            f"(候補 {len(draft_inputs)} 件、警告 {len(warnings)} 件)。"
+        )
+        self._set_step(
+            job_id,
+            OntologyBuildStepName.PROPOSAL_REGISTRATION,
+            OntologyBuildStepStatus.RUNNING,
+            "構築 job の完了状態を保存しています…",
+        )
+        self._emit(job_id, "構築 job の完了状態を保存しています。")
 
         def finish(job: OntologyBuildJob) -> None:
+            finished_at = utc_now()
+            for step in job.steps:
+                if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION:
+                    step.status = OntologyBuildStepStatus.SUCCEEDED
+                    step.detail_ja = registered_note
+                    if step.started_at is None:
+                        step.started_at = finished_at
+                    step.finished_at = finished_at
+                    break
             job.status = (
                 OntologyBuildStatus.SUCCEEDED
                 if any(step.status == OntologyBuildStepStatus.SUCCEEDED for step in job.steps)
                 else OntologyBuildStatus.FAILED
             )
-            job.proposal_ids = proposal_ids
+            job.proposal_ids = []
+            job.draft_revision_id = draft_ontology.revision.id
+            job.draft_etag = str(markdown_artifact.get("etag") or "")
+            job.markdown_output = markdown_output
             job.warnings_ja = [*job.warnings_ja, *warnings]
-            job.finished_at = utc_now()
+            job.finished_at = finished_at
+            job.events.append(OntologyBuildEvent(message_ja=registered_note))
+            job.events.append(
+                OntologyBuildEvent(
+                    message_ja=(
+                        f"構築が完了しました(Markdown Draft v{draft_ontology.revision.version}、"
+                        f"警告 {len(warnings)} 件)。"
+                    )
+                )
+            )
+            if len(job.events) > _MAX_JOB_EVENTS:
+                del job.events[: len(job.events) - _MAX_JOB_EVENTS]
 
-        self._update(job_id, finish)
+        try:
+            self._update_persisted_copy(job_id, finish)
+        except Exception as exc:
+            logger.warning("ontology_build_job_finalize_failed", exc_info=True)
+            message = getattr(exc, "message_ja", str(exc))
+            self._fail(
+                job_id,
+                f"構築 job の完了状態の保存に失敗しました: {message}",
+                failed_step=OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                failed_step_detail_ja="構築 job の完了状態の保存に失敗しました。",
+            )
+            return
         finished_job = self.get(job_id)
         record_job(
             job_type="build",
             status=(
                 "succeeded"
-                if finished_job is not None
-                and finished_job.status == OntologyBuildStatus.SUCCEEDED
+                if finished_job is not None and finished_job.status == OntologyBuildStatus.SUCCEEDED
                 else "failed"
             ),
             error_code="none" if finished_job is not None else "result_missing",
-        )
-        self._emit(
-            job_id,
-            f"構築が完了しました(提案 {len(proposal_ids)} 件、警告 {len(warnings)} 件)。",
         )
 
     def _is_cancelled(self, job_id: str) -> bool:

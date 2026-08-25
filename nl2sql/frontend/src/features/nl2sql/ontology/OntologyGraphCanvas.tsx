@@ -39,7 +39,8 @@ import { Button } from "@/components/ui/button";
 
 import { t } from "@/lib/i18n";
 import { layoutOntologyGraphLayered } from "./graphLayout";
-import { cssVar, edgeStroke, nodeFill, nodeStroke } from "./graphPalette";
+import { cssVar, edgeStroke, nodeFill, nodeFillVar, nodeStroke } from "./graphPalette";
+import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
 import type { OntologyGraph, OntologyNode } from "./types";
 
 interface OntologyGraphCanvasProps {
@@ -51,8 +52,8 @@ interface OntologyGraphCanvasProps {
   highlightEdgeIds?: string[];
 }
 
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 64;
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 76;
 // 小規模グラフはエッジラベルを常時表示、混みだしたら hover/強調時のみ表示する
 const ALWAYS_LABEL_EDGE_LIMIT = 12;
 // 既定で畳む詳細ノード(物理列・列挙値)。トグルで展開できる。
@@ -90,10 +91,13 @@ interface OntologyNodeData extends Record<string, unknown> {
 function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>) {
   const { node, highlighted, dimmed } = data;
   const Icon = KIND_ICONS[node.kind] ?? Circle;
+  const display = ontologyNodeDisplay(node, { highlighted });
   const emphasizedBorder = selected || highlighted || node.validation_status === "blocked";
   return (
     <div
       className="grid h-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2"
+      data-testid={`ontology-node-card-${node.id}`}
+      data-ontology-node-kind={node.kind}
       style={{
         width: NODE_WIDTH,
         minHeight: NODE_HEIGHT,
@@ -113,13 +117,22 @@ function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>)
       >
         <Icon size={15} aria-hidden="true" />
       </span>
-      <span className="min-w-0">
-        <span className="block truncate text-[13px] font-semibold leading-5">
-          {node.business_name_ja}
+      <span className="grid min-w-0 gap-0.5">
+        <span
+          className="inline-flex max-w-full items-center justify-self-start truncate rounded border border-current/20 px-1.5 py-0.5 text-[10px] font-semibold leading-3 opacity-75"
+          data-testid="ontology-node-kind-label"
+        >
+          {display.kindLabel}
         </span>
-        {node.technical_name && node.technical_name !== node.business_name_ja ? (
-          <span className="block truncate text-[10px] leading-4 opacity-70">
-            {node.technical_name}
+        <span className="block truncate text-[13px] font-semibold leading-5">
+          {display.primaryLabel}
+        </span>
+        {display.secondaryLabel ? (
+          <span
+            className="block truncate text-[10px] leading-4 opacity-70"
+            title={display.secondaryLabel}
+          >
+            {display.secondaryLabel}
           </span>
         ) : null}
       </span>
@@ -164,6 +177,53 @@ function FlowControls() {
       >
         <Maximize2 size={15} aria-hidden="true" />
       </Button>
+    </div>
+  );
+}
+
+function LegendSwatch({ kind }: { kind: string }) {
+  return (
+    <span
+      className="h-2.5 w-2.5 shrink-0 rounded-[3px] border border-current/20"
+      style={{ background: cssVar(nodeFillVar(kind)) }}
+      aria-hidden="true"
+    />
+  );
+}
+
+function OntologyGraphLegend() {
+  return (
+    <div
+      className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-md border border-border bg-card px-2 py-1.5 shadow-sm"
+      aria-label={t("nl2sql.ontology.legendLabel")}
+      data-testid="ontology-graph-legend"
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-4 text-muted">
+        <span className="inline-flex items-center gap-1">
+          <LegendSwatch kind="business_entity" />
+          {t("nl2sql.ontology.legend.business")}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <LegendSwatch kind="table" />
+          {t("nl2sql.ontology.legend.physical")}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <LegendSwatch kind="property" />
+          {t("nl2sql.ontology.legend.attribute")}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <LegendSwatch kind="metric" />
+          {t("nl2sql.ontology.legend.metric")}
+        </span>
+        <span className="inline-flex items-center gap-1 whitespace-normal">
+          <span
+            className="h-px w-5 shrink-0 border-t"
+            style={{ borderColor: cssVar("--graph-line") }}
+            aria-hidden="true"
+          />
+          {t("nl2sql.ontology.legend.mapping")}
+        </span>
+      </div>
     </div>
   );
 }
@@ -225,9 +285,7 @@ function OntologyFlow({
     const nodes = new Set(
       visibleGraph.nodes
         .filter((node) =>
-          [node.business_name_ja, node.technical_name ?? "", ...(node.aliases ?? [])].some(
-            (name) => normalize(name).includes(query)
-          )
+          ontologyNodeSearchValues(node).some((name) => normalize(name).includes(query))
         )
         .map((node) => node.id)
     );
@@ -256,7 +314,7 @@ function OntologyFlow({
             highlighted,
             dimmed: emphasis.active && !highlighted,
           },
-          ariaLabel: `${node.business_name_ja}、${node.kind}、${node.validation_status ?? "未検証"}${highlighted ? "、質問に一致" : ""}`,
+          ariaLabel: ontologyNodeDisplay(node, { highlighted }).ariaLabel,
           selected: node.id === selectedNodeId,
           style: { width: NODE_WIDTH, minHeight: NODE_HEIGHT, padding: 0, border: "none" },
         };
@@ -353,6 +411,7 @@ function OntologyFlow({
         ) : null}
         <FlowControls />
       </ReactFlow>
+      <OntologyGraphLegend />
     </div>
   );
 }

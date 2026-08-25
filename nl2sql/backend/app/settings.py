@@ -176,6 +176,8 @@ class Settings(BaseServiceSettings):
     nl2sql_ontology_shacl_enabled: bool = True
     nl2sql_ontology_rdf_network_owner: str = ""
     nl2sql_ontology_rdf_network_name: str = ""
+    nl2sql_ontology_rdf_tablespace: str = ""
+    nl2sql_ontology_rdf_network_options: str = ""
     nl2sql_ontology_profile_confirmation_required: bool = True
     nl2sql_ontology_confirmation_ttl_seconds: int = 900
     # ユーザ要望により Oracle Select AI / Select AI Agent を NL2SQL エンジンとして同時サポートする。

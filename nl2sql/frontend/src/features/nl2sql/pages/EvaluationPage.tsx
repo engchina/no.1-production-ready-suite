@@ -56,7 +56,7 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "failed",
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
-const sectionClass = "min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm lg:p-6";
+const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4 shadow-sm lg:p-5";
 const controlClass =
   "min-h-11 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -79,11 +79,13 @@ export function EvaluationPage() {
   const [downloading, setDownloading] = useState(false);
 
   const capabilitiesQuery = useQuery({
-    queryKey: ["quality-evaluations", "capabilities"],
-    queryFn: () =>
-      apiGet<QualityEvaluationCapabilities>(
-        "/api/nl2sql/quality-evaluations/capabilities"
-      ),
+    queryKey: ["quality-evaluations", "capabilities", profileId],
+    queryFn: () => {
+      const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+      return apiGet<QualityEvaluationCapabilities>(
+        `/api/nl2sql/quality-evaluations/capabilities${query}`
+      );
+    },
   });
   const profilesQuery = useQuery({
     queryKey: ["nl2sql", "profiles", "quality-evaluation"],
@@ -287,7 +289,15 @@ export function EvaluationPage() {
           {pageLoading ? (
             <LoadingState label={t("common.loading")} placement="panel" />
           ) : pageError ? null : (
-            <div className="mt-5 grid min-w-0 gap-5">
+            <form
+              className="grid min-w-0 gap-5"
+              aria-label={t("qualityEvaluation.conditions.title")}
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                startEvaluation();
+              }}
+            >
               {capabilities && !capabilities.judge.available ? (
                 <Banner
                   severity="warning"
@@ -299,8 +309,14 @@ export function EvaluationPage() {
 
               <RequiredFieldsNote />
 
-              <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-                <div className="grid min-w-0 gap-1.5 text-sm font-medium text-foreground">
+              <div
+                className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start"
+                data-testid="quality-evaluation-input-row"
+              >
+                <div
+                  className="grid min-w-0 content-start gap-1.5 text-sm font-medium text-foreground"
+                  data-testid="quality-evaluation-profile-field"
+                >
                   <FieldLabel
                     htmlFor="quality-evaluation-profile"
                     label={t("qualityEvaluation.profile.label")}
@@ -331,7 +347,7 @@ export function EvaluationPage() {
                   <FieldError id="quality-profile-error" message={formErrors.profile} />
                 </div>
 
-                <div className="grid min-w-0 gap-1.5">
+                <div className="grid min-w-0 content-start gap-2">
                   <FileDropzone
                     label={t("qualityEvaluation.file.label")}
                     accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
@@ -382,36 +398,42 @@ export function EvaluationPage() {
               </div>
 
               <fieldset
-                className="grid min-w-0 gap-2"
+                className="grid min-w-0 gap-3 border-t border-border pt-4"
                 disabled={running}
                 aria-describedby="quality-engines-hint quality-engines-error"
+                data-testid="quality-evaluation-engine-fieldset"
               >
-                <legend className="text-sm font-semibold text-foreground">
-                  {t("qualityEvaluation.engines.label")}
-                </legend>
-                <p id="quality-engines-hint" className="text-xs text-muted">
-                  {t("qualityEvaluation.engines.hint")}
-                </p>
-                {availableEngineIds.length > 0 ? (
-                  <BulkSelectionActions
-                    selectLabel={t("common.selection.selectAll")}
-                    clearLabel={t("common.selection.clearAll")}
-                    selectDisabled={
-                      running || selectedAvailableEngineCount === availableEngineIds.length
-                    }
-                    clearDisabled={running || selectedAvailableEngineCount === 0}
-                    dataTestId="quality-evaluation-engine-selection-actions"
-                    onSelectAll={selectAllEngines}
-                    onClearAll={clearAllEngines}
-                  />
-                ) : null}
+                <legend className="sr-only">{t("qualityEvaluation.engines.label")}</legend>
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-foreground">
+                      {t("qualityEvaluation.engines.label")}
+                    </div>
+                    <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-muted">
+                      {t("qualityEvaluation.engines.hint")}
+                    </p>
+                  </div>
+                  {availableEngineIds.length > 0 ? (
+                    <BulkSelectionActions
+                      selectLabel={t("common.selection.selectAll")}
+                      clearLabel={t("common.selection.clearAll")}
+                      selectDisabled={
+                        running || selectedAvailableEngineCount === availableEngineIds.length
+                      }
+                      clearDisabled={running || selectedAvailableEngineCount === 0}
+                      dataTestId="quality-evaluation-engine-selection-actions"
+                      onSelectAll={selectAllEngines}
+                      onClearAll={clearAllEngines}
+                    />
+                  ) : null}
+                </div>
                 <div className="grid min-w-0 gap-3 md:grid-cols-3">
                   {(capabilities?.engines ?? []).map((capability) => {
                     const selected = engines.includes(capability.engine);
                     return (
                       <label
                         key={capability.engine}
-                        className={`grid min-w-0 gap-2 rounded-lg border p-4 outline-none transition focus-within:ring-2 focus-within:ring-ring/40 ${
+                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 outline-none transition focus-within:ring-2 focus-within:ring-ring/40 ${
                           capability.available
                             ? selected
                               ? "border-primary bg-primary/5"
@@ -446,6 +468,7 @@ export function EvaluationPage() {
                           <StatusBadge
                             variant="warning"
                             label={t("qualityEvaluation.engines.unavailable")}
+                            className="justify-self-start"
                           />
                         ) : null}
                       </label>
@@ -455,9 +478,17 @@ export function EvaluationPage() {
                 <FieldError id="quality-engines-error" message={formErrors.engines} />
               </fieldset>
 
-              <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(12rem,18rem)_1fr]">
-                <label className="grid gap-1.5 text-sm font-medium text-foreground">
-                  <span>{t("qualityEvaluation.repeat.label")}</span>
+              <div
+                className="grid min-w-0 gap-3 border-t border-border pt-4 lg:grid-cols-[minmax(13rem,20rem)_minmax(0,1fr)] lg:items-start"
+                data-testid="quality-evaluation-run-summary"
+              >
+                <label
+                  className="grid gap-1.5 text-sm font-medium text-foreground"
+                  data-testid="quality-evaluation-repeat-field"
+                >
+                  <span data-testid="quality-evaluation-repeat-label">
+                    {t("qualityEvaluation.repeat.label")}
+                  </span>
                   <input
                     type="number"
                     min={1}
@@ -479,11 +510,20 @@ export function EvaluationPage() {
                   </span>
                   <FieldError id="quality-repeat-error" message={formErrors.repeat} />
                 </label>
-                <div className="rounded-lg border border-border bg-muted/20 p-4">
-                  <div className="text-sm font-semibold text-foreground">
+                <div
+                  className="grid min-w-0 content-start gap-1.5 text-sm"
+                  data-testid="quality-evaluation-estimate-summary"
+                >
+                  <div
+                    className="font-medium text-foreground"
+                    data-testid="quality-evaluation-estimate-label"
+                  >
                     {t("qualityEvaluation.estimate.title")}
                   </div>
-                  <p className="mt-1 text-sm text-muted">
+                  <p
+                    className="flex min-h-11 min-w-0 items-center break-words leading-6 text-muted"
+                    data-testid="quality-evaluation-estimate-value"
+                  >
                     {currentJob
                       ? t("qualityEvaluation.estimate.confirmed", {
                           generations: currentJob.total_attempts,
@@ -497,11 +537,16 @@ export function EvaluationPage() {
                 </div>
               </div>
 
-              <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
-              <div className="flex justify-end">
+              <div data-testid="quality-evaluation-judge-note">
+                <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
+              </div>
+              <div
+                className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4"
+                data-testid="quality-evaluation-action-footer"
+              >
                 <Button
-                  type="button"
-                  size="md"
+                  type="submit"
+                  size="lg"
                   variant="primary"
                   loading={startMutation.isPending}
                   disabled={
@@ -510,90 +555,91 @@ export function EvaluationPage() {
                     !capabilities?.judge.available ||
                     selectedUnavailable
                   }
-                  onClick={startEvaluation}
                 >
                   <Play className="size-4" aria-hidden="true" />
                   {t("qualityEvaluation.action.start")}
                 </Button>
               </div>
-            </div>
+            </form>
           )}
         </section>
 
-        <section className={sectionClass} aria-labelledby="quality-evaluation-progress">
-          <SectionHeader
-            icon={Play}
-            id="quality-evaluation-progress"
-            title={t("qualityEvaluation.progress.title")}
-            description={t("qualityEvaluation.progress.description")}
-          />
-          <div className="mt-5">
-            {!currentJobId ? (
-              <EmptyState
-                title={t("qualityEvaluation.progress.emptyTitle")}
-                hint={t("qualityEvaluation.progress.emptyHint")}
-              />
-            ) : currentJobQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} placement="job" />
-            ) : currentJobQuery.isError || !currentJob ? (
-              <ErrorState
-                message={t("qualityEvaluation.error.load")}
-                onRetry={() => void currentJobQuery.refetch()}
-              />
-            ) : (
-              <JobProgress job={currentJob} />
-            )}
-          </div>
-        </section>
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start lg:gap-6">
+          <section className={sectionClass} aria-labelledby="quality-evaluation-progress">
+            <SectionHeader
+              icon={Play}
+              id="quality-evaluation-progress"
+              title={t("qualityEvaluation.progress.title")}
+              description={t("qualityEvaluation.progress.description")}
+            />
+            <div>
+              {!currentJobId ? (
+                <EmptyState
+                  title={t("qualityEvaluation.progress.emptyTitle")}
+                  hint={t("qualityEvaluation.progress.emptyHint")}
+                />
+              ) : currentJobQuery.isLoading ? (
+                <LoadingState label={t("common.loading")} placement="job" />
+              ) : currentJobQuery.isError || !currentJob ? (
+                <ErrorState
+                  message={t("qualityEvaluation.error.load")}
+                  onRetry={() => void currentJobQuery.refetch()}
+                />
+              ) : (
+                <JobProgress job={currentJob} />
+              )}
+            </div>
+          </section>
 
-        <section className={sectionClass} aria-labelledby="quality-evaluation-summary">
-          <SectionHeader
-            icon={BarChart3}
-            id="quality-evaluation-summary"
-            title={t("qualityEvaluation.summary.title")}
-            description={t("qualityEvaluation.summary.description")}
-            action={
-              currentJob && TERMINAL_STATUSES.has(currentJob.status) ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  loading={downloading}
-                  onClick={() =>
-                    void downloadFile(
-                      `/api/nl2sql/quality-evaluations/${encodeURIComponent(
-                        currentJob.job_id
-                      )}/results.xlsx`,
-                      "nl2sql_quality_evaluation.xlsx"
-                    )
-                  }
-                >
-                  <Download className="size-4" aria-hidden="true" />
-                  {t("qualityEvaluation.action.download")}
-                </Button>
-              ) : null
-            }
-          />
-          <div className="mt-5">
-            {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
-              <EmptyState
-                title={t("qualityEvaluation.summary.waitingTitle")}
-                hint={t("qualityEvaluation.summary.waitingHint")}
-              />
-            ) : currentJob.engine_summaries.length === 0 ? (
-              <EmptyState
-                title={t("qualityEvaluation.details.emptyTitle")}
-                hint={currentJob.error_message || t("qualityEvaluation.details.emptyHint")}
-              />
-            ) : (
-              <div className="grid min-w-0 gap-3 xl:grid-cols-3">
-                {currentJob.engine_summaries.map((summary) => (
-                  <EngineSummaryCard key={summary.engine} summary={summary} />
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+          <section className={sectionClass} aria-labelledby="quality-evaluation-summary">
+            <SectionHeader
+              icon={BarChart3}
+              id="quality-evaluation-summary"
+              title={t("qualityEvaluation.summary.title")}
+              description={t("qualityEvaluation.summary.description")}
+              action={
+                currentJob && TERMINAL_STATUSES.has(currentJob.status) ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    loading={downloading}
+                    onClick={() =>
+                      void downloadFile(
+                        `/api/nl2sql/quality-evaluations/${encodeURIComponent(
+                          currentJob.job_id
+                        )}/results.xlsx`,
+                        "nl2sql_quality_evaluation.xlsx"
+                      )
+                    }
+                  >
+                    <Download className="size-4" aria-hidden="true" />
+                    {t("qualityEvaluation.action.download")}
+                  </Button>
+                ) : null
+              }
+            />
+            <div>
+              {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
+                <EmptyState
+                  title={t("qualityEvaluation.summary.waitingTitle")}
+                  hint={t("qualityEvaluation.summary.waitingHint")}
+                />
+              ) : currentJob.engine_summaries.length === 0 ? (
+                <EmptyState
+                  title={t("qualityEvaluation.details.emptyTitle")}
+                  hint={currentJob.error_message || t("qualityEvaluation.details.emptyHint")}
+                />
+              ) : (
+                <div className="grid min-w-0 gap-3 xl:grid-cols-2">
+                  {currentJob.engine_summaries.map((summary) => (
+                    <EngineSummaryCard key={summary.engine} summary={summary} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
 
         <section className={sectionClass} aria-labelledby="quality-evaluation-details">
           <SectionHeader
@@ -602,7 +648,7 @@ export function EvaluationPage() {
             title={t("qualityEvaluation.details.title")}
             description={t("qualityEvaluation.details.description")}
           />
-          <div className="mt-5">
+          <div>
             {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
               <EmptyState
                 title={t("qualityEvaluation.details.emptyTitle")}
@@ -648,7 +694,7 @@ export function EvaluationPage() {
             title={t("qualityEvaluation.recent.title")}
             description={t("qualityEvaluation.recent.description")}
           />
-          <div className="mt-5">
+          <div>
             {recentJobsQuery.isLoading ? (
               <LoadingState label={t("common.loading")} placement="panel" />
             ) : recentJobsQuery.isError ? (

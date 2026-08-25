@@ -71,8 +71,8 @@
 | `Relationship` + cardinality | `OntologyEdge(kind=BUSINESS_RELATIONSHIP)` + `RelationshipCardinality` | **join_conditions 必須 + 列実在検証**(相違点・本プロジェクトの強み) |
 | enum values | `ENUM_VALUE` ノード | |
 | synonym(専用フィールドなし、文字列操作で吸収) | ノード `aliases` + プロファイル glossary | 本プロジェクトの方が明示的 |
-| RDF/XML カタログ(`<slug>.rdf` + `metadata.json`) | `serialize_owl_turtle`(Turtle)+ Oracle RDF ステージング(`SDO_RDF_TRIPLE_S`)+ 本複製の RDF/XML export/import | §5 Gap 2 |
-| 業種テンプレート(`designerTemplates.ts`) | 本複製のテンプレートカタログ(`ontology_templates/*.json`) | §5 Gap 1 |
+| RDF/XML カタログ(`<slug>.rdf` + `metadata.json`) | `serialize_owl_turtle`(Turtle)+ Oracle RDF ステージング(`SDO_RDF_TRIPLE_S`)。UI/API の RDF import/export は削除済み | §5 非採用 |
+| 業種テンプレート(`designerTemplates.ts`) | 非採用。Ontology 作成入口は `AI 構築を実行` に統一 | §5 非採用 |
 | Azure OpenAI 抽出(`generate-ontology`) | `OntologyBuildService`(OCI Enterprise AI)+ `OntologyBuildExtraction`(Pydantic 検証) | 抽出ルールを取り込み(§5 Gap 4) |
 | `queryEngine.ts`(決定論 NL マッピング) | 本複製の `queryPlayground.ts`(frontend 純関数) | §5 Gap 3 |
 | Cytoscape.js | ReactFlow(`OntologyGraphCanvas.tsx`) | 既存 canvas へ highlight props 追加 |
@@ -82,22 +82,20 @@
 
 ## 5. 複製方針(本プロジェクトへの取り込み)
 
-確定スタック(OCI Enterprise AI / Oracle 26ai)へ再マップし、**既存の draft → proposal → publish ライフサイクルと proposal 変換パイプ(`OntologyBuildExtraction` → `convert_extraction_to_proposals` → `create_build_proposal`)を再利用**する。新規 DDL・新規依存・スタンドアロンアプリは作らない。
+確定スタック(OCI Enterprise AI / Oracle 26ai)へ再マップし、**既存の draft → proposal → publish ライフサイクルと proposal 変換パイプ(`OntologyBuildExtraction` → `convert_extraction_to_proposals` → `create_build_proposal`)を再利用**する。新規 DDL・新規依存・スタンドアロンアプリは作らない。Ontology 作成入口は `AI 構築を実行` に統一し、テンプレート適用と RDF/OWL import/export の UI/API は削除済み。
 
-- **Gap 1: 業種テンプレートカタログ** — Playground の `designerTemplates` 相当。`backend/app/features/nl2sql/ontology_templates/*.json`(小売/製造/金融/医療/人事、決定論データ)を 1 クリックで proposal 群として適用する。エンティティは `object_name_hint`(+ユーザー override)で物理 object へ名前解決し、解決不能分は `BUSINESS_TERM` proposal + warning へ縮退する。
-- **Gap 2: RDF/XML (OWL) export / import** — Playground のカタログ互換。export は既存 `serialize_owl_turtle` の出力へ `ont:cardinality` 注釈を後付けし rdflib で RDF/XML 化(既存シリアライザ・artifact hash は非変更)。import は `owl:Class` → エンティティ候補、`owl:ObjectProperty` → リレーション候補として proposal 化し、人手レビューゲートを通す。round-trip 忠実性テストを持つ。
+- **非採用: 業種テンプレートカタログ** — Playground の `designerTemplates` 相当は、実 DB schema・業務説明・Q/A・構築資料から作る AI 構築と役割が重複するため削除。
+- **非採用: RDF/XML (OWL) export / import** — 外部ファイル連携導線は主用途外のため削除。公開時の OWL2RL/SHACL と Oracle RDF ステージングは既存の `ontology_semantics.py` / `ontology_reasoning.py` に残す。
 - **Gap 3: 決定論 NL Query Playground** — `queryEngine.ts` の日本語移植。frontend 純関数 `answerOntologyQuestion(graph, question)` が正規化 → alias 最長一致 → 定義/一覧/関係辿り/プロパティの段階マッチングでハイライト対象を返し、既存 `OntologyGraphCanvas` 上で減光+枠強調表示する。LLM 呼び出しなし。
 - **Gap 4: LLM 抽出プロンプト改善** — Playground の抽出ルール(名詞→エンティティ、動詞→リレーション、cardinality 必須、主識別子明記)を `ontology_build.py` の抽出プロンプトへ反映する。スキーマ・パーサは既存のまま。
 
 ## 6. 構築後オントロジーの NL2SQL での利用(既存経路・無変更)
 
-テンプレート適用・RDF import で作られた proposal は、人手承認 → draft → publish を経て既存の 2 経路でそのまま消費される:
+`AI 構築を実行` で作られた proposal は、人手承認 → draft → publish を経て既存の 2 経路でそのまま消費される:
 
 ```mermaid
 flowchart LR
     subgraph 構築
-        T[業種テンプレート] --> P[proposal]
-        R[RDF/XML import] --> P
         L[LLM 抽出<br/>OntologyBuildService] --> P
         S[物理スキーマ由来<br/>build_schema_ontology] --> O
         P -->|人手承認| D[draft] -->|publish| O[(published revision<br/>NL2SQL_ONTOLOGY_NODES/EDGES)]

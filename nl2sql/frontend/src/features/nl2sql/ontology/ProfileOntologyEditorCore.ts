@@ -165,7 +165,7 @@ export function createProfileOntologyDraftPayload(
     .map((override) => override.edge_id)
     .sort();
 
-  // Profile Ontology view の範囲外の物理 object は PATCH が拒否するため送らない。
+  // プロファイル範囲外の物理 object は PATCH が拒否するため送らない。
   const accepted = { table: new Set<string>(), view: new Set<string>() };
   (graph?.nodes ?? [])
     .filter((node) => node.kind === "table" || node.kind === "view")

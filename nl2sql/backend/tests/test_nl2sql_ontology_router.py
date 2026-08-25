@@ -1141,6 +1141,67 @@ async def test_http_contract_accepts_frontend_confirmation_and_draft_payloads(
 
 
 @pytest.mark.asyncio
+async def test_http_ontology_build_persists_current_form_inputs(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    api, store, _legacy = runtime
+    settings = get_settings()
+    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
+    monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
+    source_storage = ontology_router_module.OntologySourceStorage(settings)
+    build_service = ontology_router_module.OntologyBuildService(
+        api,
+        source_storage=source_storage,
+    )
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/nl2sql/profiles/sales/ontology-build",
+            headers={"Idempotency-Key": "test-ontology-build-form-inputs"},
+            data={
+                "business_text": "受注は顧客に紐づく。",
+                "run_schema_naming": "true",
+                "run_qa_extraction": "true",
+                "run_text_extraction": "true",
+            },
+            files=[
+                (
+                    "source_files",
+                    ("rules.md", "# 受注ルール\n".encode(), "text/markdown"),
+                ),
+                (
+                    "qa_file",
+                    (
+                        "qa_cases.csv",
+                        "QUESTION,SQL\n受注件数,SELECT COUNT(*) FROM APP.ORDERS\n".encode(),
+                        "text/csv",
+                    ),
+                ),
+            ],
+        )
+
+    assert response.status_code == 202
+    job = response.json()["data"]["job"]
+    assert len(job["source_document_ids"]) == 2
+    assert [source["filename"] for source in job["sources"]] == ["rules.md", "qa_cases.csv"]
+    persisted = store.get_job(job["id"])
+    assert persisted is not None
+    assert persisted["input_payload"]["business_text"] == "受注は顧客に紐づく。"
+    assert persisted["payload"]["source_document_ids"] == job["source_document_ids"]
+    stored_sources = store.list_documents("source_documents", {"profile_id": "sales"})
+    assert {document["payload"]["filename"] for document in stored_sources} == {
+        "rules.md",
+        "qa_cases.csv",
+    }
+
+
+@pytest.mark.asyncio
 async def test_ontology_proposals_does_not_block_unrelated_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1173,7 +1234,10 @@ async def test_ontology_proposals_does_not_block_unrelated_api(
         )
         try:
             started_at = time.perf_counter()
-            assert await asyncio.to_thread(started.wait, 1.0)
+            deadline = started_at + 1.0
+            while not started.is_set() and time.perf_counter() < deadline:
+                await asyncio.sleep(0.01)
+            assert started.is_set()
             assert time.perf_counter() - started_at < 0.2
 
             permissions_response = await asyncio.wait_for(
@@ -1184,6 +1248,7 @@ async def test_ontology_proposals_does_not_block_unrelated_api(
         finally:
             release.set()
             timer.cancel()
+            timer.join(timeout=1.0)
         proposal_response = await asyncio.wait_for(proposal_task, timeout=1.0)
         assert proposal_response.status_code == 200
         assert proposal_response.json()["data"]["proposals"] == []
@@ -1280,7 +1345,7 @@ def test_profile_view_warnings_report_unresolved_objects(
 
     assert len(warnings) == 1
     assert "APP.MISSING_TABLE" in warnings[0]
-    assert "スキーマ情報" in warnings[0]
+    assert "公開済み Ontology(スキーマ情報)" in warnings[0]
 
 
 def test_profile_recommendation_requires_explicit_confirmation_and_binds_token(
@@ -1469,7 +1534,17 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
 ) -> None:
     api, store, _legacy = runtime
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
-    revision = api.current_ontology().revision
+    base = api.current_ontology().revision
+    confirmed_markdown = "# Confirmed Markdown\n\n- SQL 生成に使う公開済み語彙"
+    draft, _artifact = api.create_build_markdown_draft(
+        profile_id="sales",
+        base_revision_id=base.id,
+        payloads=[],
+        titles=[],
+        markdown=confirmed_markdown,
+        note="publish markdown copy test",
+    )
+    revision = draft.revision
     publisher = OntologyPublishService(api)
 
     queued = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-1")
@@ -1489,8 +1564,53 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
         "ontology_owl_turtle",
         "ontology_shacl_turtle",
         "ontology_llm_markdown",
+        "ontology_markdown_published",
         "ontology_shacl_report",
     }
+    by_type = {item["artifact_type"]: item for item in artifacts}
+    assert by_type["ontology_llm_markdown"]["content"] == confirmed_markdown
+    assert by_type["ontology_markdown_published"]["content"] == confirmed_markdown
+    assert (
+        api.published_markdown_for_revision(revision.id, profile_id="sales")
+        == confirmed_markdown
+    )
+
+
+def test_oracle_store_publish_without_rdf_network_falls_back_to_local_and_copies_markdown(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "")
+    monkeypatch.setattr(store, "mode", "oracle", raising=False)
+    base = api.current_ontology().revision
+    confirmed_markdown = "# Oracle Fallback Markdown\n\n- RDF network 未設定でも公開する"
+    draft, _artifact = api.create_build_markdown_draft(
+        profile_id="sales",
+        base_revision_id=base.id,
+        payloads=[],
+        titles=[],
+        markdown=confirmed_markdown,
+        note="oracle local fallback publish markdown copy test",
+    )
+    publisher = OntologyPublishService(api)
+
+    queued = publisher.start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-oracle-local-fallback",
+    )
+    finished = publisher.run_persisted(queued.id)
+
+    assert finished.status.value == "succeeded"
+    assert api.ontology_revision(draft.revision.id).revision.reasoning_status.value == "ready"
+    assert (
+        api.published_markdown_for_revision(draft.revision.id, profile_id="sales")
+        == confirmed_markdown
+    )
 
 
 def test_publish_validates_review_gate_before_materialization(

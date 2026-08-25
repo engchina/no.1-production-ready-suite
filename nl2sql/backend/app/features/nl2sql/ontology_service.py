@@ -766,12 +766,12 @@ class OntologyQuerySessionService:
             if unknown_nodes or unknown_edges:
                 raise OntologyIntegrityError(
                     "PROFILE_VIEW_SCOPE_UNKNOWN",
-                    "Profile Ontology view に revision 内に存在しない node/edge があります。",
+                    "プロファイル範囲に revision 内に存在しない node/edge があります。",
                 )
             if any(path_id not in view.edge_ids for path_id in view.allowed_path_ids):
                 raise OntologyIntegrityError(
                     "PROFILE_PATH_OUTSIDE_SCOPE",
-                    "許可した関係 path が Profile Ontology view の範囲外です。",
+                    "許可した関係 path がプロファイル範囲外です。",
                 )
             stored = _copy_model(view)
             if not stored.etag:
@@ -795,16 +795,17 @@ class OntologyQuerySessionService:
             if view.archived:
                 raise OntologyGateBlockedError(
                     "PROFILE_VIEW_ARCHIVED",
-                    "アーカイブ済みの Profile Ontology view は利用できません。",
+                    "アーカイブ済みのプロファイル範囲は利用できません。",
                 )
             if request.profile_id != view.profile_id:
                 raise OntologyIntegrityError(
-                    "PROFILE_VIEW_MISMATCH", "指定した profile と Ontology view が一致しません。"
+                    "PROFILE_VIEW_MISMATCH",
+                    "指定した profile とオントロジー範囲が一致しません。",
                 )
             if request.ontology_revision_id != view.ontology_revision_id:
                 raise OntologyIntegrityError(
                     "ONTOLOGY_REVISION_MISMATCH",
-                    "指定した Ontology revision と view が一致しません。",
+                    "指定した Ontology revision とプロファイル範囲が一致しません。",
                 )
             self._require_revision(request.ontology_revision_id)
 
@@ -816,7 +817,7 @@ class OntologyQuerySessionService:
             if intent.profile_view_id != request.profile_view_id:
                 raise OntologyIntegrityError(
                     "INTENT_PROFILE_VIEW_MISMATCH",
-                    "質問の解釈と Profile Ontology view が一致しません。",
+                    "質問の解釈とプロファイル範囲が一致しません。",
                 )
             if intent.ontology_revision_id != request.ontology_revision_id:
                 raise OntologyIntegrityError(
@@ -857,7 +858,7 @@ class OntologyQuerySessionService:
             if view.profile_id != session.profile_id:
                 raise OntologyIntegrityError(
                     "RESTORED_SESSION_PROFILE_MISMATCH",
-                    "永続化 session と Profile Ontology view が一致しません。",
+                    "永続化 session とプロファイル範囲が一致しません。",
                 )
             if view.ontology_revision_id != revision.id:
                 raise OntologyIntegrityError(
@@ -924,7 +925,7 @@ class OntologyQuerySessionService:
             if scope_violations:
                 raise OntologyGateBlockedError(
                     "INTENT_SCOPE_INVALID",
-                    "質問の解釈に Profile Ontology view の範囲外、未承認、または"
+                    "質問の解釈にプロファイル範囲外、未承認、または"
                     "物理 mapping のない要素があります。",
                     finding_codes=scope_violations,
                 )
@@ -1424,7 +1425,7 @@ class OntologyQuerySessionService:
             add(
                 "SQL_OBJECT_OUTSIDE_PROFILE",
                 ValidationSeverity.BLOCKER,
-                "Profile Ontology view の範囲外の表または view が SQL に含まれています。",
+                "プロファイル範囲外の表または view が SQL に含まれています。",
                 sql_ids=[item.id for item in unauthorized],
                 action="Profile の対象範囲と生成 SQL を確認してください。",
             )
@@ -2228,7 +2229,7 @@ class OntologyQuerySessionService:
             add(
                 "ONTOLOGY_THREE_WAY_VALIDATED",
                 ValidationSeverity.PASS,
-                "質問の解釈、SQL の意味、Profile Ontology view が一致しています。",
+                "質問の解釈、SQL の意味、プロファイル範囲が一致しています。",
             )
         elif not any(item.severity == ValidationSeverity.BLOCKER for item in findings):
             add(
@@ -2494,7 +2495,7 @@ class OntologyQuerySessionService:
         if view is None:
             raise OntologyNotFoundError(
                 "PROFILE_ONTOLOGY_VIEW_NOT_FOUND",
-                "指定した Profile Ontology view が見つかりません。",
+                "指定したプロファイル範囲が見つかりません。",
             )
         return view
 

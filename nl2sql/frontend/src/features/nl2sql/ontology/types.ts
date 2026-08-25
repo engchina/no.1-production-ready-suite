@@ -515,8 +515,11 @@ export interface OntologyBuildJob {
   steps: OntologyBuildStep[];
   events?: OntologyBuildEvent[];
   proposal_ids: string[];
+  draft_revision_id?: string;
+  draft_etag?: string;
   source_document_ids?: string[];
   sources?: OntologySourceProgress[];
+  markdown_output?: string;
   warnings_ja: string[];
   error_message_ja?: string;
   created_at?: string;
@@ -544,6 +547,20 @@ export interface OntologyPublishJob {
   warnings_ja?: string[];
   error_code?: string;
   error_message_ja?: string;
+}
+
+export interface OntologyMarkdownState {
+  draft_markdown: string;
+  published_markdown: string;
+  draft_revision: OntologyRevision | null;
+  published_revision: OntologyRevision | null;
+  draft_etag: string;
+  published_at?: string | null;
+}
+
+export interface OntologyMarkdownDraftPatch {
+  markdown: string;
+  base_etag: string;
 }
 
 export interface OntologyProfileRecommendationCandidate {

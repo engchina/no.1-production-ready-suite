@@ -418,7 +418,7 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await expect(dialog.getByText("プロファイルを削除しますか")).toBeVisible();
   await expect(
     dialog.getByText(
-      "「営業プロファイル」とそのすべての Ontology view、Oracle DBMS_CLOUD_AI Profile、Select AI Agent 関連アセットを完全に削除します。監査履歴は削除されません。"
+      "「営業プロファイル」とそのすべてのオントロジー範囲設定、Oracle DBMS_CLOUD_AI Profile、Select AI Agent 関連アセットを完全に削除します。監査履歴は削除されません。"
     )
   ).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();

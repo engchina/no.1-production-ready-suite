@@ -191,11 +191,14 @@ def render_mermaid_er(
         name = _entity_name(node)
         header = f"    {_quoted(name)}"
         logical = _label(node.business_name_ja)
-        comment = f" %% {logical}" if logical and logical != name.split(".")[-1] else ""
+        lines: list[str] = []
+        if logical and logical != name.split(".")[-1]:
+            lines.append(f"    %% {logical} = {name}")
         columns = columns_by_object.get(name.upper(), []) if with_attributes else []
         if not columns:
-            return [f"{header}{comment}"]
-        lines = [f"{header} {{{comment}"]
+            lines.append(header)
+            return lines
+        lines.append(f"{header} {{")
         for column in columns:
             column_name = str(column.metadata.get("column_name", "")).strip() or column.id
             owner_key = (

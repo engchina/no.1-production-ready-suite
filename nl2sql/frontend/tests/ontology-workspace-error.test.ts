@@ -44,17 +44,17 @@ test("Profile 詳細の失敗を Ontology View の失敗と区別する", () => 
 test("ApiError の公開メッセージを原因として表示する", () => {
   const failure = classifyOntologyWorkspaceError(
     null,
-    new ApiError(503, ["Ontology view の準備に失敗しました。"])
+    new ApiError(503, ["プロファイル範囲の準備に失敗しました。"])
   );
 
   assert.deepEqual(failure, {
     source: "ontology",
     kind: "api",
-    publicMessage: "Ontology view の準備に失敗しました。",
+    publicMessage: "プロファイル範囲の準備に失敗しました。",
   });
   assert.deepEqual(failure ? ontologyWorkspaceErrorPresentation(failure) : null, {
     key: "ontologyBuild.workspace.apiError",
-    params: { message: "Ontology view の準備に失敗しました。" },
+    params: { message: "プロファイル範囲の準備に失敗しました。" },
   });
 });
 

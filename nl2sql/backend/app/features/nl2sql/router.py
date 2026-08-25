@@ -13,6 +13,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -1364,9 +1365,11 @@ def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
     "/quality-evaluations/capabilities",
     response_model=ApiResponse[QualityEvaluationCapabilities],
 )
-def quality_evaluation_capabilities() -> ApiResponse[QualityEvaluationCapabilities]:
+def quality_evaluation_capabilities(
+    profile_id: Annotated[str | None, Query()] = None,
+) -> ApiResponse[QualityEvaluationCapabilities]:
     """実行 engine / Judge の readiness と Excel 制限を返す。"""
-    return ApiResponse(data=quality_evaluation_service.capabilities())
+    return ApiResponse(data=quality_evaluation_service.capabilities(profile_id=profile_id))
 
 
 @router.get("/quality-evaluations/template.xlsx")

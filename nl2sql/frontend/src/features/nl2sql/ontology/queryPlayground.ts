@@ -27,7 +27,8 @@ interface NameVariant {
   name: string;
 }
 
-const ENTITY_KINDS = new Set(["business_entity", "business_event", "table", "view"]);
+const BUSINESS_ENTITY_KINDS = new Set(["business_entity", "business_event"]);
+const PHYSICAL_ENTITY_KINDS = new Set(["table", "view"]);
 const ATTRIBUTE_KINDS = new Set(["property", "metric", "business_term", "column", "enum_value"]);
 const LIST_PATTERNS = [/一覧/, /すべて/, /全て/, /リスト/, /list/i, /show me all/i];
 const DEFINITION_PATTERNS = [/とは/, /について/, /何ですか/, /どういう/, /what is/i];
@@ -85,14 +86,26 @@ export function answerOntologyQuestion(
   question: string
 ): PlaygroundResult {
   const normalized = normalizeQuestion(question);
-  const entityVariants = nameVariants(graph.nodes, ENTITY_KINDS);
-  const suggestions = [
+  const businessEntityVariants = nameVariants(graph.nodes, BUSINESS_ENTITY_KINDS);
+  const physicalEntityVariants = nameVariants(graph.nodes, PHYSICAL_ENTITY_KINDS);
+  const businessSuggestions = [
     ...new Set(
       graph.nodes
         .filter((node) => node.kind === "business_entity" || node.kind === "business_event")
         .map((node) => node.business_name_ja)
     ),
-  ].slice(0, 5);
+  ];
+  const physicalSuggestions = [
+    ...new Set(
+      graph.nodes
+        .filter((node) => node.kind === "table" || node.kind === "view")
+        .map((node) => node.business_name_ja)
+    ),
+  ];
+  const suggestions = (businessSuggestions.length > 0 ? businessSuggestions : physicalSuggestions).slice(
+    0,
+    5
+  );
 
   if (!normalized) {
     return {
@@ -105,7 +118,11 @@ export function answerOntologyQuestion(
     };
   }
 
-  const { matched, remaining } = consumeMatches(normalized, entityVariants);
+  const businessMatch = consumeMatches(normalized, businessEntityVariants);
+  const { matched, remaining } =
+    businessMatch.matched.length > 0
+      ? businessMatch
+      : consumeMatches(normalized, physicalEntityVariants);
 
   if (matched.length === 0) {
     return {

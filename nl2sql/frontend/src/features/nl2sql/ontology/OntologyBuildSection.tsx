@@ -8,9 +8,12 @@ import {
 } from "react";
 import {
   Ban,
-  Check,
-  Loader2,
-  RotateCcw,
+  BookOpenCheck,
+  ClipboardCopy,
+  FileText,
+  PencilLine,
+  RefreshCw,
+  Save,
   Sparkles,
   UploadCloud,
   X,
@@ -18,37 +21,38 @@ import {
 
 import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { TimedLoadingState } from "@/components/ProcessingState";
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
-import { ErrorState } from "@/components/StateViews";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
 import { tabularFileFormatConfig } from "@/lib/tabular-file-formats";
-import { DbManagementLoadingSkeleton, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { ManagementTabs } from "../components/DbAdminShared";
+import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
-  acceptOntologyProposal,
-  acceptOntologyProposalsBatch,
+  WorkflowProgressStrip,
+  type WorkflowProgressStepStatus,
+  type WorkflowProgressTone,
+} from "../components/WorkflowProgressStrip";
+import {
   ApiError,
   cancelOntologyBuildJob,
   getOntologyBuildJob,
+  getOntologyMarkdownState,
   getOntologyPublishJob,
   listOntologyBuildJobs,
-  listOntologyRevisions,
-  listProfileOntologyProposals,
   publishOntologyRevision,
-  rejectOntologyProposal,
-  retryOntologyBuildJob,
+  saveOntologyMarkdownDraft,
   startOntologyBuild,
 } from "./api";
 import type {
   OntologyBuildJob,
   OntologyBuildStep,
-  OntologyProposal,
+  OntologyMarkdownState,
   OntologyPublishJob,
   OntologyRevision,
 } from "./types";
@@ -56,24 +60,35 @@ import type {
 const POLL_INTERVAL_MS = 1000;
 // 状態取得が連続で失敗したらポーリングを止めてエラー表示する(404 は即終端)
 const MAX_POLL_FAILURES = 5;
+const MARKDOWN_DRAFT_STALE_MS = 120_000;
 const ONTOLOGY_SOURCE_FILE_FORMATS = tabularFileFormatConfig([
   ".pdf",
   ".docx",
   ".txt",
   ".md",
-  ".tsv",
   ".xlsm",
 ]);
-const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".tsv", ".xlsm"]);
+const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
 const textareaClass =
   "min-h-24 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+const markdownTextareaClass =
+  "min-h-[22rem] w-full resize-y rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg outline-none transition-colors placeholder:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-70";
+type MarkdownTab = "draft" | "published";
+type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save";
 
-function stepStatusVariant(status: OntologyBuildStep["status"]) {
-  if (status === "succeeded") return "success" as const;
-  if (status === "failed") return "danger" as const;
-  if (status === "running") return "info" as const;
-  return "neutral" as const;
+interface ApplyMarkdownStateOptions {
+  reason?: MarkdownStateApplyReason;
+  fallbackDraftMarkdown?: string;
 }
+
+interface LocalSavedDraft {
+  revisionId: string;
+  etag: string;
+  markdown: string;
+}
+
+const MARKDOWN_DRAFT_REFRESH_SIGNAL_PATTERN =
+  /(?:Draft\s*revision.*保存しました|Markdown\s*artifact.*保存しました|Markdown\s*Draft.*生成しました)/iu;
 
 function formatElapsed(startIso: string | null | undefined, endIso: string | null | undefined, now: number): string {
   const elapsed = elapsedMsBetween(startIso, endIso, now);
@@ -87,48 +102,284 @@ function formatEventTime(iso: string): string {
     : parsed.toLocaleTimeString("ja-JP", { hour12: false });
 }
 
-function proposalStatusVariant(status: OntologyProposal["status"]) {
-  if (status === "accepted") return "success" as const;
-  if (status === "rejected") return "danger" as const;
-  return "info" as const;
+type BuildEvent = NonNullable<OntologyBuildJob["events"]>[number];
+
+interface BuildEventAssignment {
+  event: BuildEvent;
+  index: number;
+}
+
+const SUPPRESSED_BUILD_EVENT_PREFIXES = [
+  "構築リクエストを受け付けました",
+  "AI オントロジー構築を開始しました",
+  "構築が完了しました",
+];
+
+function parseTimeMs(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const parsed = new Date(iso).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function eventBelongsToStep(eventMs: number | null, step: OntologyBuildStep): boolean {
+  if (eventMs === null) return false;
+  const startedAtMs = parseTimeMs(step.started_at);
+  if (startedAtMs === null || eventMs < startedAtMs) return false;
+  const finishedAtMs = parseTimeMs(step.finished_at);
+  return finishedAtMs === null || eventMs <= finishedAtMs;
+}
+
+function normalizedProgressText(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .replace(/\s+/gu, "")
+    .replace(/[。．.…]+$/gu, "");
+}
+
+function markdownStateHasDraft(
+  state: OntologyMarkdownState | null,
+  draftMarkdown: string,
+  draftRevision: OntologyRevision | null
+): boolean {
+  return Boolean(draftRevision || state?.draft_etag || draftMarkdown.trim());
+}
+
+function buildJobMarkdownSignalMessages(job: OntologyBuildJob): string[] {
+  return [
+    ...job.steps.map((step) => step.detail_ja ?? ""),
+    ...(job.events ?? []).map((event) => event.message_ja),
+  ].filter((message) => MARKDOWN_DRAFT_REFRESH_SIGNAL_PATTERN.test(message));
+}
+
+function buildJobDraftRefreshSignature(job: OntologyBuildJob): string {
+  const signalMessages = buildJobMarkdownSignalMessages(job);
+  const hasDraftSignal = Boolean(
+    job.draft_revision_id ||
+      job.draft_etag ||
+      job.markdown_output?.trim() ||
+      signalMessages.length > 0
+  );
+  if (!hasDraftSignal) return "";
+  const latestSignal = signalMessages[signalMessages.length - 1] ?? "";
+  return [
+    job.id,
+    job.draft_revision_id ?? "",
+    job.draft_etag ?? "",
+    String(job.markdown_output?.length ?? 0),
+    latestSignal,
+    String(job.events?.length ?? 0),
+  ].join("|");
+}
+
+function shouldSuppressBuildEvent(event: BuildEvent): boolean {
+  const message = event.message_ja.trim();
+  return SUPPRESSED_BUILD_EVENT_PREFIXES.some((prefix) => message.startsWith(prefix));
+}
+
+function eventDuplicatesStepDetail(event: BuildEvent, step: OntologyBuildStep): boolean {
+  const detail = normalizedProgressText(step.detail_ja);
+  if (!detail) return false;
+  return normalizedProgressText(event.message_ja) === detail;
+}
+
+function stepIndexForEventMessage(
+  steps: OntologyBuildStep[],
+  message: string
+): number | null {
+  const matchers: Array<[OntologyBuildStep["name"], (value: string) => boolean]> = [
+    [
+      "schema_context",
+      (value) => /スキーマ情報|DB から profile 範囲|DB schema|schema_context/iu.test(value),
+    ],
+    ["schema_naming", (value) => /業務エンティティ命名/iu.test(value)],
+    ["qa_extraction", (value) => /Q\/A|QA|正解 SQL/iu.test(value)],
+    ["text_extraction", (value) => /業務説明/iu.test(value)],
+    [
+      "proposal_registration",
+      (value) =>
+        /Markdown Draft|Draft revision|Markdown artifact|markdown artifact|構築 job の完了状態/iu.test(
+          value
+        ),
+    ],
+    ["source_extraction", (value) => /構築資料|資料|source document/iu.test(value)],
+  ];
+  for (const [name, matcher] of matchers) {
+    if (!matcher(message)) continue;
+    const index = steps.findIndex((step) => step.name === name);
+    if (index >= 0) return index;
+  }
+  return null;
+}
+
+function stepIndexForEventTime(job: OntologyBuildJob, eventMs: number | null): number | null {
+  if (job.steps.length === 0 || eventMs === null) return null;
+  const directIndex = job.steps.findIndex((step) => eventBelongsToStep(eventMs, step));
+  if (directIndex >= 0) return directIndex;
+
+  let previousTimedIndex = -1;
+  for (const [index, step] of job.steps.entries()) {
+    const startedAtMs = parseTimeMs(step.started_at);
+    const finishedAtMs = parseTimeMs(step.finished_at);
+    if (startedAtMs !== null && eventMs < startedAtMs) {
+      return previousTimedIndex >= 0 ? previousTimedIndex : index;
+    }
+    const stepBoundaryMs = finishedAtMs ?? startedAtMs;
+    if (stepBoundaryMs !== null && eventMs >= stepBoundaryMs) {
+      previousTimedIndex = index;
+    }
+  }
+
+  return previousTimedIndex >= 0 ? previousTimedIndex : job.steps.length - 1;
+}
+
+function groupBuildEvents(job: OntologyBuildJob): Map<number, BuildEventAssignment[]> {
+  const byStepIndex = new Map<number, BuildEventAssignment[]>();
+  for (const [index, event] of (job.events ?? []).entries()) {
+    if (shouldSuppressBuildEvent(event)) continue;
+    const eventMs = parseTimeMs(event.at);
+    const stepIndex =
+      stepIndexForEventMessage(job.steps, event.message_ja) ??
+      stepIndexForEventTime(job, eventMs);
+    if (stepIndex === null) continue;
+    const step = job.steps[stepIndex];
+    if (!step || eventDuplicatesStepDetail(event, step)) continue;
+    const assignment = { event, index };
+    const stepEvents = byStepIndex.get(stepIndex) ?? [];
+    if (
+      stepEvents.some(
+        ({ event: existing }) =>
+          normalizedProgressText(existing.message_ja) === normalizedProgressText(event.message_ja)
+      )
+    ) {
+      continue;
+    }
+    stepEvents.push(assignment);
+    byStepIndex.set(stepIndex, stepEvents);
+  }
+  return byStepIndex;
+}
+
+function latestJobActivityMs(job: OntologyBuildJob): number | null {
+  const values = [
+    parseTimeMs(job.started_at),
+    parseTimeMs(job.created_at),
+    ...(job.events ?? []).map((event) => parseTimeMs(event.at)),
+    ...job.steps.map((step) => parseTimeMs(step.started_at)),
+  ].filter((value): value is number => value !== null);
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function markdownDraftGenerationIsStale(job: OntologyBuildJob, now: number): boolean {
+  if (job.status !== "running") return false;
+  const markdownStep = job.steps.find((step) => step.name === "proposal_registration");
+  if (markdownStep?.status !== "running") return false;
+  const lastActivityMs = latestJobActivityMs(job);
+  return lastActivityMs !== null && now - lastActivityMs >= MARKDOWN_DRAFT_STALE_MS;
+}
+
+function BuildEventRows({ events }: { events: BuildEventAssignment[] }) {
+  return (
+    <>
+      {events.map(({ event, index }) => (
+        <li
+          key={`${event.at}-${index}`}
+          className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 text-xs leading-5"
+        >
+          <span className="tabular-nums text-muted">
+            {formatEventTime(event.at)}
+          </span>
+          <span className="break-words text-foreground">{event.message_ja}</span>
+        </li>
+      ))}
+    </>
+  );
+}
+
+function buildStatusVariant(status: OntologyBuildJob["status"]) {
+  if (status === "succeeded") return "success" as const;
+  if (status === "failed") return "danger" as const;
+  if (status === "cancelled") return "warning" as const;
+  return "pending" as const;
+}
+
+function buildProgressTone(status: OntologyBuildJob["status"]): WorkflowProgressTone {
+  if (status === "succeeded") return "success";
+  if (status === "failed") return "danger";
+  if (status === "cancelled") return "neutral";
+  return "active";
+}
+
+function buildProgressMessage(status: OntologyBuildJob["status"]) {
+  if (status === "succeeded") return t("profiles.ontologyBuild.progress.done");
+  if (status === "failed") return t("profiles.ontologyBuild.progress.failed");
+  if (status === "cancelled") return t("profiles.ontologyBuild.progress.cancelled");
+  if (status === "running") return t("profiles.ontologyBuild.progress.running");
+  return t("profiles.ontologyBuild.progress.pending");
+}
+
+function normalizeBuildStepStatus(status: OntologyBuildStep["status"]): WorkflowProgressStepStatus {
+  if (status === "succeeded") return "done";
+  if (status === "failed") return "error";
+  if (status === "running") return "running";
+  if (status === "skipped") return "skipped";
+  return "pending";
+}
+
+function effectiveBuildStepStatus(
+  jobStatus: OntologyBuildJob["status"],
+  stepStatus: OntologyBuildStep["status"]
+): OntologyBuildStep["status"] {
+  if (stepStatus !== "running" && stepStatus !== "pending") return stepStatus;
+  if (jobStatus === "succeeded") return "succeeded";
+  if (jobStatus === "failed") return "failed";
+  if (jobStatus === "cancelled") return "skipped";
+  return stepStatus;
 }
 
 export interface OntologyBuildSectionProps {
   profileId: string | null;
-  onPublished?: () => void;
-  /** 外部(テンプレート適用/RDF import)で提案が増えたときに増分して提案一覧を再読込する。 */
-  proposalsRefreshToken?: number;
+  hasProfileSchemaInput: boolean;
+  onPublished?: () => void | Promise<void>;
+  onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
+  onRefreshSchema?: () => void | Promise<void>;
+  refreshingSchema?: boolean;
 }
 
 export function OntologyBuildSection({
   profileId,
+  hasProfileSchemaInput,
   onPublished,
-  proposalsRefreshToken,
+  onMarkdownStateChange,
+  onRefreshSchema,
+  refreshingSchema = false,
 }: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useState("");
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
-  const [runNaming, setRunNaming] = useState(true);
-  const [runQa, setRunQa] = useState(true);
-  const [runText, setRunText] = useState(true);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
-  const [jobHistory, setJobHistory] = useState<OntologyBuildJob[]>([]);
-  const [proposals, setProposals] = useState<OntologyProposal[]>([]);
-  const [proposalsLoading, setProposalsLoading] = useState(false);
-  const [proposalsError, setProposalsError] = useState("");
+  const [markdownState, setMarkdownState] = useState<OntologyMarkdownState | null>(null);
+  const [markdownLoading, setMarkdownLoading] = useState(false);
+  const [markdownError, setMarkdownError] = useState("");
+  const [draftMarkdown, setDraftMarkdown] = useState("");
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [activeMarkdownTab, setActiveMarkdownTab] = useState<MarkdownTab>("draft");
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
   const [publishJob, setPublishJob] = useState<OntologyPublishJob | null>(null);
+  const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { notice, showNotice, clearNotice } = usePageNotice();
   const confirm = useConfirm();
   const [busy, setBusy] = useState("");
-  // 承認/却下は行単位の busy(他の行の操作をブロックしない)
-  const [reviewBusyIds, setReviewBusyIds] = useState<ReadonlySet<string>>(new Set());
   // 実行中ステップの経過秒を更新するための現在時刻(ポーリングと同じ周期で更新)
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const timelineRef = useRef<HTMLOListElement | null>(null);
   // プロファイル切替後に in-flight 応答が旧プロファイルの状態を上書きしないためのガード
   const profileIdRef = useRef(profileId);
-  const proposalsRequestIdRef = useRef(0);
+  const markdownStateRef = useRef<OntologyMarkdownState | null>(null);
+  const draftMarkdownRef = useRef("");
+  const draftDirtyRef = useRef(false);
+  const draftRevisionRef = useRef<OntologyRevision | null>(null);
+  const localSavedDraftRef = useRef<LocalSavedDraft | null>(null);
+  const markdownRequestIdRef = useRef(0);
+  const buildMarkdownRefreshSignatureRef = useRef("");
   const pollInFlightRef = useRef(false);
   const pollFailureCountRef = useRef(0);
   // 終端(完了/失敗)通知を job ごとに一度だけ出す
@@ -139,126 +390,245 @@ export function OntologyBuildSection({
     publishJob !== null &&
     ["queued", "materializing", "validating"].includes(publishJob.status);
   const jobId = job?.id ?? null;
+  const schemaScopeFailure =
+    job?.status === "failed" &&
+    (job.error_message_ja?.includes("profile の対象オブジェクトを DB schema catalog に解決できません") ||
+      job.steps.some(
+        (step) =>
+          step.name === "schema_context" &&
+          step.status === "failed" &&
+          (step.detail_ja?.includes("profile 範囲に DB 表・ビューがありません") ||
+            step.detail_ja?.includes("profile 範囲の DB object が曖昧です"))
+      ));
+  const groupedEvents = useMemo(() => (job ? groupBuildEvents(job) : null), [job]);
+  const markdownDraftStale = job ? markdownDraftGenerationIsStale(job, nowTick) : false;
+  const unscopedBuildError =
+    job?.status === "failed" && !schemaScopeFailure && job.error_message_ja
+      ? `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
+      : "";
 
-  // 最新の構築実行(session)分の提案だけをレビュー対象にする。
-  // 過去 run に残った submitted 提案を「すべて承認」へ混ぜない(混在防止)。
-  // created_at は ISO8601 なので辞書順比較で時系列順になる(Date 変換不要・決定論)。
-  const latestSessionId = useMemo(() => {
-    let latest: OntologyProposal | null = null;
-    for (const p of proposals) {
-      if (!latest || (p.created_at ?? "") > (latest.created_at ?? "")) latest = p;
-    }
-    return latest?.session_id ?? null;
-  }, [proposals]);
-
-  const runProposals = useMemo(
-    () =>
-      latestSessionId ? proposals.filter((p) => p.session_id === latestSessionId) : proposals,
-    [proposals, latestSessionId]
+  const markdownTabs = useMemo(
+    () => [
+      {
+        id: "draft" as const,
+        label: t("profiles.ontologyBuild.markdownTab.draft"),
+        icon: PencilLine,
+        ariaLabel: t("profiles.ontologyBuild.markdownTabAria.draft"),
+      },
+      {
+        id: "published" as const,
+        label: t("profiles.ontologyBuild.markdownTab.published"),
+        icon: BookOpenCheck,
+        ariaLabel: t("profiles.ontologyBuild.markdownTabAria.published"),
+      },
+    ],
+    []
   );
+  const publishedMarkdown = markdownState?.published_markdown ?? "";
+  const activeMarkdown =
+    activeMarkdownTab === "draft" ? draftMarkdown : publishedMarkdown;
+  const hasDraftRevision = draftRevision?.status === "draft";
 
-  const refreshProposals = useCallback(async (targetProfileId: string, signal?: AbortSignal) => {
-    const requestId = proposalsRequestIdRef.current + 1;
-    proposalsRequestIdRef.current = requestId;
-    setProposalsLoading(true);
-    setProposalsError("");
+  const applyMarkdownState = useCallback((
+    next: OntologyMarkdownState,
+    options: ApplyMarkdownStateOptions = {}
+  ) => {
+    const reason = options.reason ?? "background";
+    const currentState = markdownStateRef.current;
+    const currentDraftMarkdown = draftMarkdownRef.current;
+    const currentDraftDirty = draftDirtyRef.current;
+    const currentDraftRevision = draftRevisionRef.current;
+    const currentRevisionId = currentDraftRevision?.id ?? "";
+    const incomingDraftMarkdown = next.draft_markdown ?? "";
+    const incomingDraftRevision = next.draft_revision;
+    const incomingRevisionId = incomingDraftRevision?.id ?? "";
+    const incomingHasDraft = markdownStateHasDraft(
+      next,
+      incomingDraftMarkdown,
+      incomingDraftRevision
+    );
+    const currentHasDraft = markdownStateHasDraft(
+      currentState,
+      currentDraftMarkdown,
+      currentDraftRevision
+    );
+    const incomingIsNewBuildRevision =
+      reason === "build" &&
+      incomingHasDraft &&
+      (!currentRevisionId || incomingRevisionId !== currentRevisionId);
+    const localSavedDraft = localSavedDraftRef.current;
+    const staleAfterLocalSave =
+      reason !== "profile-load" &&
+      reason !== "save" &&
+      localSavedDraft !== null &&
+      currentRevisionId !== "" &&
+      incomingRevisionId === currentRevisionId &&
+      localSavedDraft.revisionId === currentRevisionId &&
+      currentState?.draft_etag === localSavedDraft.etag &&
+      currentDraftMarkdown === localSavedDraft.markdown &&
+      next.draft_etag !== localSavedDraft.etag;
+    const preserveCurrentDraft =
+      reason !== "profile-load" &&
+      reason !== "save" &&
+      currentHasDraft &&
+      (!incomingHasDraft ||
+        staleAfterLocalSave ||
+        (currentDraftDirty && !incomingIsNewBuildRevision));
+    const savedDraftMarkdown =
+      reason === "save" &&
+      options.fallbackDraftMarkdown !== undefined &&
+      !incomingDraftMarkdown.trim()
+        ? options.fallbackDraftMarkdown
+        : incomingDraftMarkdown;
+    const reconciled: OntologyMarkdownState = preserveCurrentDraft
+      ? {
+          ...next,
+          draft_markdown: currentDraftMarkdown,
+          draft_revision: currentDraftRevision,
+          draft_etag: currentState?.draft_etag ?? "",
+        }
+      : reason === "save"
+        ? { ...next, draft_markdown: savedDraftMarkdown }
+        : next;
+    const nextDraftDirty = preserveCurrentDraft ? currentDraftDirty : false;
+
+    markdownStateRef.current = reconciled;
+    draftRevisionRef.current = reconciled.draft_revision;
+    draftMarkdownRef.current = reconciled.draft_markdown ?? "";
+    draftDirtyRef.current = nextDraftDirty;
+    if (reason === "save") {
+      localSavedDraftRef.current = {
+        revisionId: reconciled.draft_revision?.id ?? "",
+        etag: reconciled.draft_etag,
+        markdown: reconciled.draft_markdown ?? "",
+      };
+    } else if (reason === "profile-load" || incomingIsNewBuildRevision) {
+      localSavedDraftRef.current = null;
+    }
+
+    setMarkdownState(reconciled);
+    setDraftRevision(reconciled.draft_revision);
+    setDraftMarkdown(reconciled.draft_markdown ?? "");
+    setDraftDirty(nextDraftDirty);
+    onMarkdownStateChange?.(reconciled);
+  }, [onMarkdownStateChange]);
+
+  const refreshMarkdown = useCallback(async (
+    targetProfileId: string,
+    signal?: AbortSignal,
+    options: ApplyMarkdownStateOptions = {}
+  ) => {
+    const requestId = markdownRequestIdRef.current + 1;
+    markdownRequestIdRef.current = requestId;
+    setMarkdownLoading(true);
+    setMarkdownError("");
     try {
-      const next = await listProfileOntologyProposals(targetProfileId, { signal });
+      const next = await getOntologyMarkdownState(targetProfileId, { signal });
       if (
         profileIdRef.current === targetProfileId &&
-        proposalsRequestIdRef.current === requestId
+        markdownRequestIdRef.current === requestId
       ) {
-        setProposals(next);
+        applyMarkdownState(next, options);
       }
     } catch (err) {
       if (isAbortError(err)) return;
       if (
         profileIdRef.current === targetProfileId &&
-        proposalsRequestIdRef.current === requestId
+        markdownRequestIdRef.current === requestId
       ) {
-        setProposalsError(t("profiles.ontologyBuild.proposalsLoadError"));
+        setMarkdownError(t("profiles.ontologyBuild.markdownLoadError"));
       }
     } finally {
       if (
         profileIdRef.current === targetProfileId &&
-        proposalsRequestIdRef.current === requestId
+        markdownRequestIdRef.current === requestId
       ) {
-        setProposalsLoading(false);
+        setMarkdownLoading(false);
       }
     }
-  }, []);
+  }, [applyMarkdownState]);
 
-  // 承認済みで未公開の draft をリロード後も検出し、「公開」導線を維持する。
-  const detectPendingDraft = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const data = await listOntologyRevisions({ signal });
-      const active = data.revisions.find(
-        (revision) => revision.id === data.active_revision_id
-      );
-      if (!active) return;
-      const pending = data.revisions
-        .filter(
-          (revision) =>
-            revision.status === "draft" &&
-            revision.schema_fingerprint === active.schema_fingerprint &&
-            revision.version > active.version
-        )
-        .sort((left, right) => right.version - left.version)[0];
-      setDraftRevision(pending ?? null);
-    } catch (err) {
-      if (isAbortError(err)) return;
-      // 取得できない場合は accept 応答由来の draft 表示にフォールバック
+  const applyBuildJobMarkdownOutput = useCallback((next: OntologyBuildJob) => {
+    const markdownOutput = next.markdown_output ?? "";
+    if (!markdownOutput.trim()) return;
+    const currentRevisionId = draftRevisionRef.current?.id ?? "";
+    const outputRevisionId = next.draft_revision_id ?? "";
+    const outputIsNewRevision = Boolean(outputRevisionId && outputRevisionId !== currentRevisionId);
+    if (draftDirtyRef.current && !outputIsNewRevision) return;
+    if (outputIsNewRevision) {
+      const currentState = markdownStateRef.current;
+      const previewState = currentState
+        ? {
+            ...currentState,
+            draft_markdown: markdownOutput,
+            draft_revision: null,
+            draft_etag: "",
+          }
+        : null;
+      markdownStateRef.current = previewState;
+      draftRevisionRef.current = null;
+      setMarkdownState(previewState);
+      setDraftRevision(null);
+      onMarkdownStateChange?.(previewState);
     }
-  }, []);
+    draftMarkdownRef.current = markdownOutput;
+    draftDirtyRef.current = false;
+    setDraftMarkdown(markdownOutput);
+    setDraftDirty(false);
+  }, [onMarkdownStateChange]);
 
   useEffect(() => {
     profileIdRef.current = profileId;
+    markdownStateRef.current = null;
+    draftMarkdownRef.current = "";
+    draftDirtyRef.current = false;
+    draftRevisionRef.current = null;
+    localSavedDraftRef.current = null;
+    buildMarkdownRefreshSignatureRef.current = "";
     setJob(null);
-    setJobHistory([]);
-    setProposals([]);
+    setMarkdownState(null);
+    onMarkdownStateChange?.(null);
+    setDraftMarkdown("");
+    setDraftDirty(false);
+    setActiveMarkdownTab("draft");
     setDraftRevision(null);
     setPublishJob(null);
+    setProgressCollapsed(false);
     clearNotice();
-    setProposalsLoading(Boolean(profileId));
-    setProposalsError("");
+    setMarkdownLoading(Boolean(profileId));
+    setMarkdownError("");
     setBusinessText("");
     setQaFile(null);
     setSourceFiles([]);
     const controller = new AbortController();
     if (profileId) {
-      void refreshProposals(profileId, controller.signal);
-      void detectPendingDraft(controller.signal);
+      void refreshMarkdown(profileId, controller.signal, { reason: "profile-load" });
       // リロード/プロファイル切替後も直近 job を復元する(実行中なら進捗追跡を再開)
-      listOntologyBuildJobs(profileId, 5, { signal: controller.signal })
+      listOntologyBuildJobs(profileId, 1, { signal: controller.signal })
         .then((jobs) => {
           if (controller.signal.aborted) return;
-          setJobHistory(jobs);
           const latest = jobs[0];
           if (!latest) return;
           if (latest.status === "queued" || latest.status === "running") {
             setJob(latest);
-          } else if (latest.status === "failed" || latest.status === "cancelled") {
-            // 終端カード(+再実行ボタン)を復元するが、完了トーストは再通知しない
+          } else if (
+            latest.status === "succeeded" ||
+            latest.status === "failed" ||
+            latest.status === "cancelled"
+          ) {
+            // 終端カード(+ Markdown)を復元するが、完了トーストは再通知しない
             terminalHandledRef.current = latest.id;
             setJob(latest);
           }
         })
         .catch(() => {
-          // 履歴は補助情報のため取得失敗で画面を止めない(新規実行は可能)
+          // 直近 job は補助情報のため取得失敗で画面を止めない(新規実行は可能)
         });
     }
     return () => controller.abort();
-  }, [detectPendingDraft, profileId, refreshProposals]);
+  }, [onMarkdownStateChange, profileId, refreshMarkdown]);
 
-  // 外部トリガー(テンプレート適用/RDF import)による提案一覧のみの再読込(フォームは保持)。
-  useEffect(() => {
-    if (!profileId || !proposalsRefreshToken) return;
-    const controller = new AbortController();
-    void refreshProposals(profileId, controller.signal);
-    return () => controller.abort();
-  }, [proposalsRefreshToken, profileId, refreshProposals]);
-
-  // job ポーリング(1s)。完了で停止し、提案一覧を更新する。
+  // job ポーリング(1s)。完了で停止し、Markdown Draft を更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
   useEffect(() => {
     if (!jobRunning || !jobId || !profileId) return;
@@ -279,26 +649,24 @@ export function OntologyBuildSection({
             next.status === "succeeded" ||
             next.status === "failed" ||
             next.status === "cancelled";
+          const draftRefreshSignature = buildJobDraftRefreshSignature(next);
+          applyBuildJobMarkdownOutput(next);
+          if (
+            !terminal &&
+            draftRefreshSignature &&
+            buildMarkdownRefreshSignatureRef.current !== draftRefreshSignature
+          ) {
+            buildMarkdownRefreshSignatureRef.current = draftRefreshSignature;
+            void refreshMarkdown(profileId, undefined, { reason: "build" });
+          }
           if (terminal && terminalHandledRef.current !== jobId) {
             terminalHandledRef.current = jobId;
-            void refreshProposals(profileId);
-            void listOntologyBuildJobs(profileId, 5)
-              .then(setJobHistory)
-              .catch(() => {});
+            buildMarkdownRefreshSignatureRef.current = "";
+            void refreshMarkdown(profileId, undefined, { reason: "build" });
             if (next.status === "succeeded") {
-              const count = next.proposal_ids.length;
-              toast.success(
-                count === 0
-                  ? t("profiles.ontologyBuild.jobSucceededEmpty")
-                  : t("profiles.ontologyBuild.jobSucceeded", { count })
-              );
+              toast.success(t("profiles.ontologyBuild.jobSucceeded"));
             } else if (next.status === "cancelled") {
               showNotice("info", t("profiles.ontologyBuild.cancelled"));
-            } else if (next.error_message_ja) {
-              showNotice(
-                "danger",
-                `${next.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
-              );
             }
           }
         })
@@ -317,8 +685,8 @@ export function OntologyBuildSection({
                   : "profiles.ontologyBuild.error.pollFailed"
               )
             );
-            // 提案は永続化済みなので job が消えても一覧は取得できる
-            void refreshProposals(profileId);
+            // Draft は永続化済みの場合があるため job が消えても再取得を試みる
+            void refreshMarkdown(profileId, undefined, { reason: "background" });
           }
           // それ以外の一時的な失敗は次のポーリングで回復を試みる
         })
@@ -332,7 +700,7 @@ export function OntologyBuildSection({
       window.clearInterval(timer);
       currentController?.abort();
     };
-  }, [jobRunning, jobId, profileId, refreshProposals, showNotice]);
+  }, [applyBuildJobMarkdownOutput, jobRunning, jobId, profileId, refreshMarkdown, showNotice]);
 
   useEffect(() => {
     if (!publishRunning || !publishJob) return;
@@ -345,9 +713,11 @@ export function OntologyBuildSection({
           if (cancelled) return;
           setPublishJob(next);
           if (next.status === "succeeded") {
-            setDraftRevision(null);
+            if (profileIdRef.current) {
+              void refreshMarkdown(profileIdRef.current, undefined, { reason: "background" });
+            }
             toast.success(t("profiles.ontologyBuild.published"));
-            onPublished?.();
+            void onPublished?.();
           } else if (next.status === "failed") {
             showNotice(
               "danger",
@@ -374,14 +744,7 @@ export function OntologyBuildSection({
       window.clearInterval(timer);
       currentController?.abort();
     };
-  }, [onPublished, publishJob, publishRunning, showNotice]);
-
-  // アクティビティタイムラインは新着イベントで末尾へ自動スクロールする
-  const eventCount = job?.events?.length ?? 0;
-  useEffect(() => {
-    const list = timelineRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [eventCount]);
+  }, [onPublished, publishJob, publishRunning, refreshMarkdown, showNotice]);
 
   if (!profileId) {
     return (
@@ -398,6 +761,10 @@ export function OntologyBuildSection({
 
   const startBuild = async () => {
     const targetProfileId = profileId;
+    const hasBusinessTextInput = businessText.trim().length > 0;
+    const hasSourceFilesInput = sourceFiles.length > 0;
+    buildMarkdownRefreshSignatureRef.current = "";
+    setProgressCollapsed(false);
     setBusy("start");
     clearNotice();
     try {
@@ -405,9 +772,9 @@ export function OntologyBuildSection({
         businessText,
         qaFile,
         sourceFiles,
-        runSchemaNaming: runNaming,
-        runQaExtraction: runQa,
-        runTextExtraction: runText,
+        runSchemaNaming: hasProfileSchemaInput,
+        runQaExtraction: qaFile !== null,
+        runTextExtraction: hasBusinessTextInput || hasSourceFilesInput,
       });
       // プロファイル切替後に旧プロファイルの job を表示しない
       if (profileIdRef.current === targetProfileId) setJob(started);
@@ -446,11 +813,6 @@ export function OntologyBuildSection({
       const next = await cancelOntologyBuildJob(targetJobId);
       setJob(next);
       showNotice("info", t("profiles.ontologyBuild.cancelled"));
-      if (profileId) {
-        void listOntologyBuildJobs(profileId, 5)
-          .then(setJobHistory)
-          .catch(() => {});
-      }
     } catch (err) {
       showNotice(
         "danger",
@@ -461,74 +823,51 @@ export function OntologyBuildSection({
     }
   };
 
-  const retryBuild = async () => {
-    const failedJob = job;
-    if (!failedJob) return;
-    setBusy("retry");
+  const saveDraftMarkdown = async ({ silent = false }: { silent?: boolean } = {}) => {
+    const currentMarkdownState = markdownStateRef.current;
+    const currentDraftRevision = draftRevisionRef.current;
+    if (!profileId || !currentMarkdownState?.draft_etag || currentDraftRevision?.status !== "draft") {
+      showNotice("danger", t("profiles.ontologyBuild.error.saveDraftNoDraft"));
+      return null;
+    }
+    if (!silent) setBusy("save-draft");
     clearNotice();
+    const markdownToSave = draftMarkdownRef.current;
+    const baseDraftEtag = currentMarkdownState.draft_etag;
     try {
-      const next = await retryOntologyBuildJob(failedJob.id);
-      terminalHandledRef.current = null;
-      setJob(next);
-      toast.success(t("profiles.ontologyBuild.retryStarted"));
+      const next = await saveOntologyMarkdownDraft(profileId, {
+        markdown: markdownToSave,
+        base_etag: baseDraftEtag,
+      });
+      applyMarkdownState(next, {
+        reason: "save",
+        fallbackDraftMarkdown: markdownToSave,
+      });
+      if (!silent) toast.success(t("profiles.ontologyBuild.markdownSaved"));
+      return next;
     } catch (err) {
       showNotice(
         "danger",
-        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.retry")
+        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.saveDraft")
       );
+      return null;
     } finally {
-      setBusy("");
-    }
-  };
-
-  const review = async (proposal: OntologyProposal, action: "accept" | "reject") => {
-    setReviewBusyIds((current) => new Set([...current, proposal.id]));
-    clearNotice();
-    try {
-      const result =
-        action === "accept"
-          ? await acceptOntologyProposal(proposal.id)
-          : await rejectOntologyProposal(proposal.id);
-      if (action === "accept" && result.draft?.revision) {
-        setDraftRevision(result.draft.revision);
-      }
-      // 応答の proposal でその行だけを楽観的に更新(全件再取得を待たない)
-      setProposals((current) =>
-        current.map((item) => (item.id === proposal.id ? result.proposal : item))
-      );
-    } catch (err) {
-      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"));
-    } finally {
-      setReviewBusyIds((current) => {
-        const next = new Set(current);
-        next.delete(proposal.id);
-        return next;
-      });
-    }
-  };
-
-  const acceptAll = async (pending: OntologyProposal[]) => {
-    const ids = pending.map((proposal) => proposal.id);
-    setBusy("accept-all");
-    clearNotice();
-    try {
-      const result = await acceptOntologyProposalsBatch(ids);
-      if (result.draft?.revision) setDraftRevision(result.draft.revision);
-      const byId = new Map(result.proposals.map((proposal) => [proposal.id, proposal]));
-      setProposals((current) => current.map((item) => byId.get(item.id) ?? item));
-    } catch (err) {
-      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.review"));
-    } finally {
-      setBusy("");
+      if (!silent) setBusy("");
     }
   };
 
   const publish = async () => {
-    if (!draftRevision) return;
+    if (!draftRevision || !hasDraftRevision) return;
     setBusy("publish");
     clearNotice();
     try {
-      setPublishJob(await publishOntologyRevision(draftRevision.id, draftRevision.etag));
+      let revisionToPublish = draftRevision;
+      if (draftDirty) {
+        const saved = await saveDraftMarkdown({ silent: true });
+        if (!saved?.draft_revision) return;
+        revisionToPublish = saved.draft_revision;
+      }
+      setPublishJob(await publishOntologyRevision(revisionToPublish.id, revisionToPublish.etag));
     } catch (err) {
       showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"));
     } finally {
@@ -536,15 +875,15 @@ export function OntologyBuildSection({
     }
   };
 
-  const toggles: Array<{
-    checked: boolean;
-    onChange: (value: boolean) => void;
-    label: string;
-  }> = [
-    { checked: runNaming, onChange: setRunNaming, label: t("profiles.ontologyBuild.targetNaming") },
-    { checked: runQa, onChange: setRunQa, label: t("profiles.ontologyBuild.targetQa") },
-    { checked: runText, onChange: setRunText, label: t("profiles.ontologyBuild.targetText") },
-  ];
+  const copyMarkdownOutput = async () => {
+    if (!activeMarkdown.trim()) return;
+    try {
+      await navigator.clipboard.writeText(activeMarkdown);
+      toast.success(t("common.action.copied"));
+    } catch {
+      toast.error(t("common.action.copyFailed"));
+    }
+  };
 
   return (
     <section
@@ -554,21 +893,16 @@ export function OntologyBuildSection({
     >
       <SectionHeading />
       <PageNotice notice={notice} />
-      <FixedSplitPane
-        splitId="ontology-build-workspace"
-        preferredWidePane="right"
-        minLeftPaneWidthPx={420}
-        minRightPaneWidthPx={520}
-        left={
-          <section
-            className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
-            aria-label={t("profiles.ontologyBuild.setupTitle")}
-          >
-            <DbObjectPanelHeader
-              icon={UploadCloud}
-              title={t("profiles.ontologyBuild.setupTitle")}
-              description={t("profiles.ontologyBuild.setupHint")}
-            />
+      <section
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        aria-label={t("profiles.ontologyBuild.setupTitle")}
+        data-testid="ontology-build-setup-panel"
+      >
+        <DbObjectPanelHeader
+          icon={UploadCloud}
+          title={t("profiles.ontologyBuild.setupTitle")}
+          description={t("profiles.ontologyBuild.setupHint")}
+        />
         <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-foreground">
           <span>{t("profiles.ontologyBuild.businessText")}</span>
           <textarea
@@ -581,7 +915,7 @@ export function OntologyBuildSection({
         </label>
         <div className="grid min-w-0 content-start gap-3">
           <div
-            className="grid gap-2 rounded-md border border-border bg-background p-3"
+            className="grid min-w-0 gap-2"
             data-testid="ontology-build-source-panel"
           >
             <FileDropzone
@@ -592,11 +926,11 @@ export function OntologyBuildSection({
               selectedCount={sourceFiles.length}
               hint={t("profiles.ontologyBuild.sourceFilesHint")}
               icon="file"
-              required
               dataTestId="ontology-build-source-files"
               onFiles={(picked) =>
                 setSourceFiles((current) => mergeUniqueFiles(current, picked))
               }
+              onClear={() => setSourceFiles([])}
             />
             {sourceFiles.length > 0 ? (
               <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
@@ -640,57 +974,38 @@ export function OntologyBuildSection({
             onFiles={([file]) => setQaFile(file)}
             onClear={() => setQaFile(null)}
           />
-          <fieldset className="grid gap-2">
-            <legend className="text-sm font-medium text-foreground">
-              {t("profiles.ontologyBuild.targets")}
-            </legend>
-            {toggles.map((toggle) => (
-              <label
-                key={toggle.label}
-                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md border border-border px-3 py-2 text-sm text-foreground focus-within:ring-2 focus-within:ring-ring/40"
-              >
-                <input
-                  type="checkbox"
-                  className="h-5 w-5 shrink-0 accent-primary"
-                  checked={toggle.checked}
-                  onChange={(event) => toggle.onChange(event.currentTarget.checked)}
-                />
-                <span>{toggle.label}</span>
-              </label>
-            ))}
-          </fieldset>
         </div>
 
-      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
-        <Button
-          type="button"
-          variant="primary"
-          size="lg"
-          className="w-full sm:w-auto"
-          loading={busy === "start" || jobRunning}
-          disabled={busy === "start" || jobRunning}
-          onClick={() => void startBuild()}
-        >
-          <UploadCloud size={15} aria-hidden="true" />
-          <span>
-            {jobRunning
-              ? t("profiles.ontologyBuild.running")
-              : t("profiles.ontologyBuild.run")}
-          </span>
-        </Button>
-      </div>
-          </section>
-        }
-        right={
-          <section
-            className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
-            aria-label={t("profiles.ontologyBuild.reviewTitle")}
+        <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            className="w-full sm:w-auto"
+            loading={busy === "start" || jobRunning}
+            disabled={busy === "start" || jobRunning}
+            onClick={() => void startBuild()}
           >
-            <DbObjectPanelHeader
-              icon={Check}
-              title={t("profiles.ontologyBuild.reviewTitle")}
-              description={t("profiles.ontologyBuild.reviewHint")}
-            />
+            <UploadCloud size={15} aria-hidden="true" />
+            <span>
+              {jobRunning
+                ? t("profiles.ontologyBuild.running")
+                : t("profiles.ontologyBuild.run")}
+            </span>
+          </Button>
+        </div>
+      </section>
+
+      <section
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        aria-label={t("profiles.ontologyBuild.reviewTitle")}
+        data-testid="ontology-build-review-panel"
+      >
+        <DbObjectPanelHeader
+          icon={FileText}
+          title={t("profiles.ontologyBuild.reviewTitle")}
+          description={t("profiles.ontologyBuild.reviewHint")}
+        />
       {!job && busy === "start" ? (
         <TimedLoadingState
           label={t("profiles.ontologyBuild.submitting")}
@@ -702,356 +1017,356 @@ export function OntologyBuildSection({
       ) : null}
 
       {job ? (
-        <section
-          className="grid gap-2 rounded-md border border-border bg-background p-3"
-          aria-label={t("profiles.ontologyBuild.stepsTitle")}
-          data-testid="ontology-build-steps"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h4 className="text-sm font-semibold text-foreground">
-                {t("profiles.ontologyBuild.stepsTitle")}
-              </h4>
-              <span className="text-xs tabular-nums text-muted" data-testid="ontology-build-step-progress">
-                {t("profiles.ontologyBuild.stepProgress", {
-                  done: job.steps.filter((step) =>
-                    ["succeeded", "skipped", "failed"].includes(step.status)
-                  ).length,
-                  total: job.steps.length,
-                })}
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {jobRunning ? (
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="sm"
-                  loading={busy === "cancel"}
-                  disabled={busy === "cancel"}
-                  onClick={() => void cancelBuild()}
-                  data-testid="ontology-build-cancel"
-                >
-                  <Ban size={14} aria-hidden="true" />
-                  <span>{t("profiles.ontologyBuild.cancel")}</span>
-                </Button>
-              ) : null}
-              {job.status === "failed" || job.status === "cancelled" ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={busy === "retry"}
-                  disabled={busy === "retry"}
-                  onClick={() => void retryBuild()}
-                  data-testid="ontology-build-retry"
-                >
-                  <RotateCcw size={14} aria-hidden="true" />
-                  <span>{t("profiles.ontologyBuild.retry")}</span>
-                </Button>
-              ) : null}
-            </div>
-          </div>
-          {job.started_at || job.created_at ? (
-            <ProcessingIndicator
-              active={jobRunning}
-              operationKey={job.id}
-              startedAt={job.started_at ?? job.created_at}
-              finishedAt={job.finished_at}
-              label={t("profiles.ontologyBuild.running")}
-              finalLabel={t(`profiles.ontologyBuild.jobStatus.${job.status}`)}
-              showSlowMessage={jobRunning}
-              placement="job"
-              testId="ontology-build-timing"
-            />
-          ) : null}
-          <ul className="grid gap-2">
-            {job.steps.map((step) => {
-              const elapsed = formatElapsed(step.started_at, step.finished_at, nowTick);
-              return (
-                <li
-                  key={step.name}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-card px-3 py-2"
-                >
-                  <span className="flex min-w-0 items-center gap-2 text-sm text-foreground">
-                    {step.status === "running" ? (
-                      <Loader2
-                        size={14}
-                        className="shrink-0 animate-spin text-primary"
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <span className="min-w-0">
-                      {t(`profiles.ontologyBuild.step.${step.name}`)}
-                      {step.detail_ja ? (
-                        <span className="ml-2 text-xs text-muted">{step.detail_ja}</span>
-                      ) : null}
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    {elapsed ? (
-                      <span className="text-xs tabular-nums text-muted">{elapsed}</span>
-                    ) : null}
-                    <StatusBadge
-                      variant={stepStatusVariant(step.status)}
-                      label={t(`profiles.ontologyBuild.stepStatus.${step.status}`)}
-                    />
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-          {(job.events?.length ?? 0) > 0 ? (
-            <div data-testid="ontology-build-timeline">
-              <h5 className="text-xs font-semibold text-muted">
-                {t("profiles.ontologyBuild.timelineTitle")}
-              </h5>
-              <ol
-                ref={timelineRef}
-                className="mt-1 grid max-h-40 gap-1 overflow-y-auto rounded-md border border-border bg-card p-2"
+        <WorkflowProgressStrip
+          active={jobRunning}
+          operationKey={job.id}
+          startedAt={job.started_at ?? job.created_at}
+          finishedAt={job.finished_at}
+          title={t("profiles.ontologyBuild.progress.title")}
+          titleId="ontology-build-progress-title"
+          message={buildProgressMessage(job.status)}
+          statusLabel={t(`profiles.ontologyBuild.jobStatus.${job.status}`)}
+          statusVariant={buildStatusVariant(job.status)}
+          tone={buildProgressTone(job.status)}
+          stepsAriaLabel={t("profiles.ontologyBuild.progress.stepsLabel")}
+          testId="ontology-build-steps"
+          dataJobStatus={job.status}
+          role={job.status === "failed" ? "alert" : jobRunning ? "status" : undefined}
+          collapsible={{
+            collapsed: progressCollapsed,
+            onCollapsedChange: setProgressCollapsed,
+            collapseLabel: t("profiles.ontologyBuild.progress.collapse"),
+            expandLabel: t("profiles.ontologyBuild.progress.expand"),
+            toggleTestId: "ontology-build-progress-toggle",
+          }}
+          headerExtra={
+            <span className="text-xs tabular-nums text-muted" data-testid="ontology-build-step-progress">
+              {t("profiles.ontologyBuild.stepProgress", {
+                done: job.steps.filter((step) =>
+                  ["succeeded", "skipped", "failed"].includes(
+                    effectiveBuildStepStatus(job.status, step.status)
+                  )
+                ).length,
+                total: job.steps.length,
+              })}
+            </span>
+          }
+          meta={
+            <span className="font-mono">
+              {t("nl2sql.status.jobId", { id: `${job.id.slice(0, 8)}...` })}
+            </span>
+          }
+          actions={
+            jobRunning ? (
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                loading={busy === "cancel"}
+                disabled={busy === "cancel"}
+                onClick={() => void cancelBuild()}
+                data-testid="ontology-build-cancel"
               >
-                {(job.events ?? []).map((event, index) => (
-                  <li
-                    key={`${event.at}-${index}`}
-                    className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 text-xs leading-5"
-                  >
-                    <span className="tabular-nums text-muted">
-                      {formatEventTime(event.at)}
-                    </span>
-                    <span className="break-words text-foreground">{event.message_ja}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ) : null}
-          {job.warnings_ja.length > 0 ? (
-            <details
-              open={job.status === "failed"}
-              className="rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
-            >
-              <summary className="cursor-pointer font-semibold">
-                {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
-              </summary>
-              <ul className="mt-2 grid gap-1 pl-4">
-                {job.warnings_ja.map((warning) => (
-                  <li key={warning} className="list-disc">
-                    {warning}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-          {(job.sources?.length ?? 0) > 0 ? (
-            <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>
-              {(job.sources ?? []).map((source) => (
-                <li
-                  key={source.source_document_id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
-                >
-                  <span className="min-w-0 break-all text-foreground">{source.filename}</span>
-                  <span className="flex items-center gap-2">
-                    <span className="text-xs tabular-nums text-muted">
-                      {source.extracted_chunk_count ?? 0} chunks
-                    </span>
-                    <StatusBadge
-                      variant={
-                        source.status === "failed"
-                          ? "danger"
-                          : source.status === "extracted"
-                            ? "success"
-                            : "info"
-                      }
-                      label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
-                    />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
-
-      {jobHistory.length > 0 ? (
-        <details
-          className="rounded-md border border-border bg-background p-2 text-sm"
-          data-testid="ontology-build-history"
-        >
-          <summary className="cursor-pointer font-semibold text-foreground">
-            {t("profiles.ontologyBuild.historyTitle")} ({jobHistory.length})
-          </summary>
-          <ul className="mt-2 grid gap-1">
-            {jobHistory.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-card px-3 py-2"
-              >
-                <span className="min-w-0 text-xs text-foreground">
-                  <span className="tabular-nums text-muted">
-                    {item.started_at ? formatEventTime(item.started_at) : "—"}
-                  </span>
-                  {item.error_message_ja ? (
-                    <span className="ml-2 break-words text-muted">
-                      {item.error_message_ja}
-                    </span>
+                <Ban size={14} aria-hidden="true" />
+                <span>{t("profiles.ontologyBuild.cancel")}</span>
+              </Button>
+            ) : null
+          }
+          steps={job.steps.map((step, stepIndex) => {
+            const displayStatus = effectiveBuildStepStatus(job.status, step.status);
+            const displayFinishedAt =
+              displayStatus !== step.status && job.finished_at ? job.finished_at : step.finished_at;
+            const elapsed = formatElapsed(step.started_at, displayFinishedAt, nowTick);
+            const stepEvents = groupedEvents?.get(stepIndex) ?? [];
+            return {
+              id: step.name,
+              label: t(`profiles.ontologyBuild.step.${step.name}`),
+              description: t(`profiles.ontologyBuild.stepDescription.${step.name}`),
+              status: normalizeBuildStepStatus(displayStatus),
+              statusLabel: t(`profiles.ontologyBuild.stepStatus.${displayStatus}`),
+              elapsedLabel: elapsed,
+              open:
+                displayStatus === "running" ||
+                displayStatus === "failed" ||
+                Boolean(step.detail_ja) ||
+                stepEvents.length > 0,
+              testId: `ontology-build-step-${step.name}`,
+              dataStatus: displayStatus,
+              content: (
+                <>
+                  {step.detail_ja ? (
+                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-muted">
+                      {step.detail_ja}
+                    </p>
                   ) : null}
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {item.started_at ? (
-                    <span className="text-xs tabular-nums text-muted">
-                      {formatElapsed(item.started_at, item.finished_at, nowTick)}
-                    </span>
+                  {stepEvents.length > 0 ? (
+                    <ol
+                      className="mt-2 grid gap-1 border-l border-border pl-3"
+                      aria-label={t("profiles.ontologyBuild.stepEventsLabel")}
+                    >
+                      <BuildEventRows events={stepEvents} />
+                    </ol>
                   ) : null}
-                  <StatusBadge
-                    variant={
-                      item.status === "succeeded"
-                        ? "success"
-                        : item.status === "failed"
-                          ? "danger"
-                          : item.status === "cancelled"
-                            ? "neutral"
-                            : "info"
+                </>
+              ),
+            };
+          })}
+          footer={
+            schemaScopeFailure ||
+            unscopedBuildError ||
+            markdownDraftStale ||
+            job.warnings_ja.length > 0 ||
+            (job.sources?.length ?? 0) > 0 ? (
+              <div className="mx-4 mb-4 grid gap-2">
+                {schemaScopeFailure ? (
+                  <Banner
+                    severity="warning"
+                    title={t("profiles.ontologyBuild.schemaRecoveryTitle")}
+                    action={
+                      onRefreshSchema ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          loading={refreshingSchema}
+                          disabled={refreshingSchema}
+                          onClick={() => void onRefreshSchema()}
+                          data-testid="ontology-build-schema-refresh"
+                        >
+                          <RefreshCw size={15} aria-hidden="true" />
+                          <span>{t("profiles.schemaRefresh.action")}</span>
+                        </Button>
+                      ) : undefined
                     }
-                    label={t(`profiles.ontologyBuild.jobStatus.${item.status}`)}
-                  />
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
+                  >
+                    {t("profiles.ontologyBuild.schemaRecoveryHint")}
+                  </Banner>
+                ) : null}
+                {unscopedBuildError ? (
+                  <Banner severity="danger">{unscopedBuildError}</Banner>
+                ) : null}
+                {markdownDraftStale ? (
+                  <Banner severity="warning">
+                    {t("profiles.ontologyBuild.markdownStaleWarning")}
+                  </Banner>
+                ) : null}
+                {job.warnings_ja.length > 0 ? (
+                  <details
+                    open={job.status === "failed"}
+                    className="rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
+                  >
+                    <summary className="cursor-pointer font-semibold">
+                      {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
+                    </summary>
+                    <ul className="mt-2 grid gap-1 pl-4">
+                      {job.warnings_ja.map((warning) => (
+                        <li key={warning} className="list-disc">
+                          {warning}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+                {(job.sources?.length ?? 0) > 0 ? (
+                  <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>
+                    {(job.sources ?? []).map((source) => (
+                      <li
+                        key={source.source_document_id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 break-all text-foreground">{source.filename}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs tabular-nums text-muted">
+                            {source.extracted_chunk_count ?? 0} chunks
+                          </span>
+                          <StatusBadge
+                            variant={
+                              source.status === "failed"
+                                ? "danger"
+                                : source.status === "extracted"
+                                  ? "success"
+                                  : "info"
+                            }
+                            label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
+                          />
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null
+          }
+        />
       ) : null}
 
       <section
-        className="grid gap-2"
-        aria-label={t("profiles.ontologyBuild.proposalsTitle")}
-        data-testid="ontology-build-proposals"
+        className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
+        aria-label={t("profiles.ontologyBuild.markdownTitle")}
+        data-testid="ontology-build-markdown"
       >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h4 className="text-sm font-semibold text-foreground">
-              {t("profiles.ontologyBuild.proposalsTitle")}
-            </h4>
-            <p className="mt-1 text-sm text-muted">
-              {t("profiles.ontologyBuild.proposalsHint")}
-            </p>
-          </div>
-          {(() => {
-            const pending = runProposals.filter((proposal) => proposal.status === "submitted");
-            if (pending.length < 2) return null;
-            return (
+        <ContentActionBar
+          ariaLabel={t("profiles.ontologyBuild.markdownActions")}
+          title={
+            <span className="flex min-w-0 items-center gap-2">
+              <FileText size={16} className="shrink-0 text-primary" aria-hidden="true" />
+              <span>{t("profiles.ontologyBuild.markdownTitle")}</span>
+            </span>
+          }
+          description={t("profiles.ontologyBuild.markdownHint")}
+          testId="ontology-build-markdown-actions"
+        >
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            aria-label={t("profiles.ontologyBuild.markdownCopy")}
+            disabled={!activeMarkdown.trim()}
+            onClick={() => void copyMarkdownOutput()}
+          >
+            <ClipboardCopy size={15} aria-hidden="true" />
+            <span>{t("profiles.ontologyBuild.markdownCopy")}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={busy === "save-draft"}
+            disabled={
+              activeMarkdownTab !== "draft" ||
+              !hasDraftRevision ||
+              !draftDirty ||
+              publishRunning ||
+              (busy !== "" && busy !== "save-draft")
+            }
+            onClick={() => void saveDraftMarkdown()}
+          >
+            <Save size={15} aria-hidden="true" />
+            <span>{t("profiles.ontologyBuild.markdownSave")}</span>
+          </Button>
+        </ContentActionBar>
+
+        <ManagementTabs
+          activeView={activeMarkdownTab}
+          tabs={markdownTabs}
+          idPrefix="ontology-markdown"
+          ariaLabel={t("profiles.ontologyBuild.markdownTabsLabel")}
+          onViewChange={setActiveMarkdownTab}
+        />
+
+        {markdownError ? (
+          <Banner
+            severity="danger"
+            action={
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                loading={busy === "accept-all"}
-                disabled={busy === "accept-all" || reviewBusyIds.size > 0}
-                onClick={() => void acceptAll(pending)}
+                onClick={() => void refreshMarkdown(profileId)}
               >
-                <Check size={15} aria-hidden="true" />
-                <span>{t("profiles.ontologyBuild.acceptAll", { count: pending.length })}</span>
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("common.action.retry")}</span>
               </Button>
-            );
-          })()}
-        </div>
-        {proposalsLoading ? (
-          <DbManagementLoadingSkeleton
-            idPrefix="ontology-proposals"
-            ariaLabel={t("profiles.ontologyBuild.proposalsLoading")}
-            variant="list"
-            rows={4}
+            }
+          >
+            {markdownError}
+          </Banner>
+        ) : null}
+
+        {markdownLoading ? (
+          <TimedLoadingState
+            label={t("profiles.ontologyBuild.markdownLoading")}
+            operationKey="ontology-markdown-load"
+            placement="panel"
+            testId="ontology-markdown-loading"
+            activityIcon="none"
           />
-        ) : proposalsError ? (
-          <ErrorState
-            message={proposalsError}
-            onRetry={() => void refreshProposals(profileId)}
-          />
-        ) : runProposals.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border bg-background p-4 text-sm text-muted">
-            {t("profiles.ontologyBuild.proposalsEmpty")}
-          </p>
+        ) : null}
+
+        {activeMarkdownTab === "draft" ? (
+          <div
+            id="ontology-markdown-panel-draft"
+            role="tabpanel"
+            aria-labelledby="ontology-markdown-tab-draft"
+            className="grid min-w-0 gap-2"
+          >
+            <label className="sr-only" htmlFor="ontology-markdown-draft-editor">
+              {t("profiles.ontologyBuild.markdownTabAria.draft")}
+            </label>
+            <textarea
+              id="ontology-markdown-draft-editor"
+              data-testid="ontology-markdown-draft-editor"
+              className={markdownTextareaClass}
+              value={draftMarkdown}
+              rows={18}
+              spellCheck={false}
+              placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
+              disabled={!hasDraftRevision || markdownLoading || busy === "save-draft"}
+              onChange={(event) => {
+                const nextDraftMarkdown = event.currentTarget.value;
+                draftMarkdownRef.current = nextDraftMarkdown;
+                draftDirtyRef.current = true;
+                setDraftMarkdown(nextDraftMarkdown);
+                setDraftDirty(true);
+              }}
+            />
+          </div>
         ) : (
-          // 約 5 件分の高さで固定し、それ以上は内側スクロール(件数でセクションが伸びない)
-          <ul className="grid max-h-96 gap-2 overflow-y-auto pr-1" data-testid="ontology-proposal-list">
-            {runProposals.map((proposal) => {
-              const title = proposal.title_ja || proposal.summary || proposal.id;
-              const reviewed = proposal.status === "accepted" || proposal.status === "rejected";
-              return (
-                <li
-                  key={proposal.id}
-                  className="grid gap-2 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge
-                        variant="neutral"
-                        label={t(`profiles.ontologyBuild.kind.${proposal.kind ?? "query_example"}`)}
-                      />
-                      <StatusBadge
-                        variant={proposalStatusVariant(proposal.status)}
-                        label={t(`profiles.ontologyBuild.status.${proposal.status}`)}
-                      />
-                      <span className="break-words text-sm font-semibold text-foreground">
-                        {title}
-                      </span>
-                    </div>
-                    {proposal.description_ja ? (
-                      <p className="mt-1 break-words text-xs leading-5 text-muted">
-                        {proposal.description_ja}
-                      </p>
-                    ) : null}
-                  </div>
-                  {!reviewed ? (
-                    <div className="flex shrink-0 gap-2">
-                      <Button
-                        type="button"
-                      variant="secondary"
-                        size="sm"
-                        loading={reviewBusyIds.has(proposal.id)}
-                        disabled={reviewBusyIds.has(proposal.id) || busy === "accept-all"}
-                        aria-label={t("profiles.ontologyBuild.acceptAria", { title })}
-                        onClick={() => void review(proposal, "accept")}
-                      >
-                        <Check size={15} aria-hidden="true" />
-                        <span>{t("profiles.ontologyBuild.accept")}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="danger"
-                        size="sm"
-                        loading={reviewBusyIds.has(proposal.id)}
-                        disabled={reviewBusyIds.has(proposal.id) || busy === "accept-all"}
-                        aria-label={t("profiles.ontologyBuild.rejectAria", { title })}
-                        onClick={() => void review(proposal, "reject")}
-                      >
-                        <X size={15} aria-hidden="true" />
-                        <span>{t("profiles.ontologyBuild.reject")}</span>
-                      </Button>
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+          <div
+            id="ontology-markdown-panel-published"
+            role="tabpanel"
+            aria-labelledby="ontology-markdown-tab-published"
+            className="grid min-w-0 gap-2"
+          >
+            <div
+              data-testid="ontology-markdown-published-viewer"
+              aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
+              className="max-h-[32rem] min-h-[22rem] max-w-full overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg"
+            >
+              {publishedMarkdown.trim() ? (
+                <pre className="whitespace-pre-wrap break-words">
+                  <code>{publishedMarkdown}</code>
+                </pre>
+              ) : (
+                <p className="text-muted">
+                  {t("profiles.ontologyBuild.markdownPublishedEmpty")}
+                </p>
+              )}
+            </div>
+          </div>
         )}
-        {draftRevision ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-primary/30 bg-primary/10 p-3">
-            <p className="min-w-0 flex-1 text-sm text-foreground">
-              {t("profiles.ontologyBuild.publishHint", {
+
+        <div
+          className="flex flex-wrap items-center gap-3 border-t border-border pt-4"
+          data-testid="ontology-publish-actions"
+        >
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            className="w-full sm:w-auto"
+            loading={busy === "publish"}
+            disabled={
+              !hasDraftRevision ||
+              publishRunning ||
+              (busy !== "" && busy !== "publish")
+            }
+            onClick={() => void publish()}
+          >
+            <Sparkles size={15} aria-hidden="true" />
+            <span>{t("profiles.ontologyBuild.publish")}</span>
+          </Button>
+          {draftDirty ? (
+            <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />
+          ) : draftRevision ? (
+            <span className="text-xs text-muted">
+              {t("profiles.ontologyBuild.markdownDraftRevision", {
                 version: String(draftRevision.version),
               })}
-            </p>
-            <Button
-              type="button"
-              variant="primary"
-              size="lg"
-              loading={busy === "publish"}
-              disabled={publishRunning || (busy !== "" && busy !== "publish")}
-              onClick={() => void publish()}
-            >
-              <Sparkles size={15} aria-hidden="true" />
-              <span>{t("profiles.ontologyBuild.publish")}</span>
-            </Button>
-          </div>
-        ) : null}
+            </span>
+          ) : null}
+        </div>
         {publishJob ? (
           <div
             className="grid gap-2 rounded-md border border-border bg-background p-3"
@@ -1082,9 +1397,7 @@ export function OntologyBuildSection({
           </div>
         ) : null}
       </section>
-          </section>
-        }
-      />
+      </section>
     </section>
   );
 }

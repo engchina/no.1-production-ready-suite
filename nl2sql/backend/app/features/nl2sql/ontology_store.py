@@ -17,8 +17,8 @@ import re
 import threading
 import unicodedata
 from array import array
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -26,6 +26,8 @@ from enum import Enum
 from importlib import import_module
 from typing import Any, Literal, Protocol, cast
 from uuid import UUID
+
+from app.settings import get_settings
 
 from .oracle_lob import configure_clob_fetch_as_text
 
@@ -998,6 +1000,16 @@ class OracleOntologyStore(_ConvenienceMethods):
         self._schema_ready = False
         self._schema_lock = threading.RLock()
 
+    @contextmanager
+    def _connection(self) -> Iterator[Any]:
+        with self._connection_factory() as connection:
+            call_timeout_ms = int(
+                max(1.0, float(get_settings().nl2sql_oracle_call_timeout_seconds)) * 1000
+            )
+            if hasattr(connection, "call_timeout"):
+                connection.call_timeout = call_timeout_ms
+            yield connection
+
     def ensure_schema(self) -> None:
         """Migration 済み schema を bounded query で確認する（DDL は実行しない）。"""
 
@@ -1006,7 +1018,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         with self._schema_lock:
             if self._schema_ready:
                 return
-            with self._connection_factory() as connection, connection.cursor() as cursor:
+            with self._connection() as connection, connection.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0")
             self._schema_ready = True
 
@@ -1022,7 +1034,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         if spec.has_embedding:
             select_columns += ", EMBEDDING"
         sql = f"SELECT {select_columns} FROM {spec.table_name} WHERE {where_sql}"  # nosec B608
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
             cursor.execute(sql, binds)
             row = cursor.fetchone()
@@ -1046,7 +1058,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             where_sql, binds = _where_clause(spec, accepted_filters)
             sql += f" WHERE {where_sql}"
         sql += " ORDER BY UPDATED_AT DESC"
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
             cursor.execute(sql, binds)
             rows = cursor.fetchall()
@@ -1065,7 +1077,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         normalized = deserialize_json(canonical_json(document))
         _document_identity(collection, normalized)
         spec = _SPECS[collection]
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             current = self._select_for_update(cursor, collection, normalized)
             prepared = next_versioned_document(
                 normalized,
@@ -1097,7 +1109,7 @@ class OracleOntologyStore(_ConvenienceMethods):
     ) -> list[dict[str, Any]]:
         spec = _SPECS[collection]
         prepared_documents: list[dict[str, Any]] = []
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             try:
                 if documents and all(
                     expected_etag is None
@@ -1158,7 +1170,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         spec = _SPECS[collection]
         where_sql, binds = _where_clause(spec, accepted_filters)
         sql = f"DELETE FROM {spec.table_name} WHERE {where_sql}"  # nosec B608
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             try:
                 cursor.execute(sql, binds)
                 deleted = int(getattr(cursor, "rowcount", 0) or 0)
@@ -1198,7 +1210,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             "limit": int(limit),
             **id_binds,
         }
-        with self._connection_factory() as connection, connection.cursor() as cursor:
+        with self._connection() as connection, connection.cursor() as cursor:
             cursor.execute(sql, binds)
             rows = cursor.fetchall()
         return [(str(row[0]), 1.0 - float(row[1])) for row in rows]

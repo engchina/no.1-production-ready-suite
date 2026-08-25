@@ -1,24 +1,13 @@
-import {
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  Clock3,
-  Database,
-  Loader2,
-  Route,
-  TriangleAlert,
-  X,
-} from "lucide-react";
+import { Database } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@engchina/production-ready-ui";
 
-import { useOperationTiming } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { QuestionText } from "./QuestionText";
+import { WorkflowProgressStrip, type WorkflowProgressStepStatus } from "./WorkflowProgressStrip";
 
 const JOB_STAGES = [
   "prepare_context",
@@ -74,14 +63,12 @@ function progressMessage(status: JobStatus) {
   return t("nl2sql.progress.pending");
 }
 
-function StepIcon({ status, index }: { status: JobStepStatus; index: number }) {
-  if (status === "running") {
-    return <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />;
-  }
-  if (status === "done") return <Check size={14} aria-hidden="true" />;
-  if (status === "error") return <X size={14} aria-hidden="true" />;
-  if (status === "skipped") return <span aria-hidden="true">—</span>;
-  return <span aria-hidden="true">{index + 1}</span>;
+function normalizeStepStatus(status: JobStepStatus): WorkflowProgressStepStatus {
+  if (status === "done") return "done";
+  if (status === "error") return "error";
+  if (status === "running") return "running";
+  if (status === "skipped") return "skipped";
+  return "pending";
 }
 
 export function OperationStatusStrip({
@@ -108,12 +95,6 @@ export function OperationStatusStrip({
   const active = job?.status === "pending" || job?.status === "running";
   const finalElapsed =
     job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
-  const timing = useOperationTiming({
-    active,
-    operationKey: job?.job_id ?? null,
-    startedAt: startedAtMs,
-    elapsedMs: finalElapsed,
-  });
   if (!job) return null;
 
   const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "pending";
@@ -124,213 +105,117 @@ export function OperationStatusStrip({
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
 
   return (
-    <section
-      className={`overflow-hidden rounded-md border border-border border-l-4 bg-card shadow-sm ${
-        job.status === "error"
-          ? "border-l-red-600"
-          : job.status === "done"
-            ? "border-l-emerald-600"
-            : "border-l-sky-700"
-      }`}
+    <WorkflowProgressStrip
+      active={active}
+      operationKey={job.job_id}
+      startedAt={startedAtMs}
+      elapsedMs={finalElapsed}
+      title={t("nl2sql.progress.title")}
+      titleId="nl2sql-progress-title"
+      message={
+        isPreview && job.status === "done"
+          ? t("nl2sql.progress.previewDone")
+          : progressMessage(job.status)
+      }
+      statusLabel={statusLabel(job.status)}
+      statusVariant={variant}
+      tone={job.status === "error" ? "danger" : job.status === "done" ? "success" : "active"}
+      stepsAriaLabel={t("nl2sql.progress.stepsLabel")}
+      testId="nl2sql-job-progress"
+      dataJobStatus={job.status}
       role={job.status === "error" ? "alert" : active ? "status" : undefined}
-      aria-labelledby="nl2sql-progress-title"
-      data-testid="nl2sql-job-progress"
-      data-job-status={job.status}
-    >
-      <div className="flex flex-col gap-3 border-b border-border bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <span
-            className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${
-              job.status === "error"
-                ? "bg-danger-bg text-danger"
-                : job.status === "done"
-                  ? "bg-success-bg text-success"
-                  : "bg-primary/10 text-primary"
-            }`}
-            aria-hidden="true"
-          >
-            {active ? (
-              <Route size={18} />
-            ) : job.status === "done" ? (
-              <CheckCircle2 size={18} />
-            ) : (
-              <TriangleAlert size={18} />
+      meta={
+        <span className="font-mono">
+          {t("nl2sql.status.jobId", { id: `${job.job_id.slice(0, 8)}...` })}
+        </span>
+      }
+      steps={steps.map((step) => ({
+        id: step.stage,
+        label: stepLabel(step.stage),
+        description: stepDescription(step.stage),
+        status: normalizeStepStatus(step.status),
+        statusLabel: stepStatusLabel(step.status),
+        elapsedLabel: step.elapsed_ms != null ? formatElapsed(step.elapsed_ms) : "",
+        open: step.status === "running" || (step.stage === "generate_sql" && Boolean(job.result)),
+        testId: `nl2sql-job-step-${step.stage}`,
+        dataStatus: step.status,
+        content: (
+          <>
+            {step.stage === "prepare_context" && job.result && (
+              <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
+                <div className="grid gap-0.5">
+                  <dt className="font-medium text-muted">{t("nl2sql.result.rewritten")}</dt>
+                  <dd className="leading-5 text-foreground">
+                    <QuestionText
+                      value={job.result.rewritten_question || "-"}
+                      variant="compact"
+                      maxLines={2}
+                      className="text-foreground"
+                    />
+                  </dd>
+                </div>
+                <div className="grid gap-0.5">
+                  <dt className="font-medium text-muted">{t("nl2sql.result.tables")}</dt>
+                  <dd className="break-words font-mono leading-5 text-foreground">
+                    {job.result.safety.referenced_tables.join(", ") || "-"}
+                  </dd>
+                </div>
+                <div className="grid gap-0.5">
+                  <dt className="font-medium text-muted">{t("nl2sql.result.columns")}</dt>
+                  <dd className="break-words font-mono leading-5 text-foreground">
+                    {job.result.safety.referenced_columns.join(", ") || "-"}
+                  </dd>
+                </div>
+              </dl>
             )}
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 id="nl2sql-progress-title" className="font-semibold text-foreground">
-                {t("nl2sql.progress.title")}
-              </h2>
-              <StatusBadge variant={variant} label={statusLabel(job.status)} />
-            </div>
-            <p className="mt-1 text-sm text-foreground" aria-live="polite">
-              {isPreview && job.status === "done"
-                ? t("nl2sql.progress.previewDone")
-                : progressMessage(job.status)}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-12 text-xs text-muted sm:justify-end sm:pl-0">
-          <span className="font-mono">{t("nl2sql.status.jobId", { id: `${job.job_id.slice(0, 8)}...` })}</span>
-          <span className="inline-flex items-center gap-1.5 font-mono tabular-nums" aria-label={t("nl2sql.progress.elapsedLabel")}>
-            <Clock3 size={14} aria-hidden="true" />
-            <span>{active ? t("common.processing.elapsed") : t("common.processing.duration")}</span>
-            <span
-              role="timer"
-              aria-live="off"
-              aria-label={`${active ? t("common.processing.elapsed") : t("common.processing.duration")} ${timing.elapsedClock}`}
-            >
-              {timing.elapsedClock}
-            </span>
-          </span>
-        </div>
-      </div>
-
-      <ol className="grid gap-0 px-4 py-2" aria-label={t("nl2sql.progress.stepsLabel")}>
-        {steps.map((step, index) => {
-          const running = step.status === "running";
-          const done = step.status === "done";
-          const failed = step.status === "error";
-          const skipped = step.status === "skipped";
-          return (
-            <li
-              key={step.stage}
-              className="relative grid min-w-0 grid-cols-[1.75rem_minmax(0,1fr)] gap-3 py-2"
-              aria-current={running ? "step" : undefined}
-              data-testid={`nl2sql-job-step-${step.stage}`}
-              data-step-status={step.status}
-            >
-              {index < steps.length - 1 && (
-                <span
-                  className={`absolute bottom-[-0.5rem] left-[0.84375rem] top-9 w-px ${
-                    done ? "bg-success" : "bg-border"
-                  }`}
-                  aria-hidden="true"
+            {step.stage === "generate_sql" && job.result && (
+              <div className="mt-2 border-l border-border pl-3">
+                <GeneratedSqlSummary
+                  result={job.result}
+                  onExecute={onPreviewExecute}
+                  executeLoading={previewExecuteLoading}
                 />
-              )}
-              <span
-                className={`relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${
-                  running
-                    ? "border-primary bg-primary text-white"
-                    : done
-                      ? "border-success bg-success text-white"
-                      : failed
-                        ? "border-danger bg-danger text-white"
-                        : skipped
-                          ? "border-border bg-muted/30 text-muted"
-                        : "border-border bg-card text-muted"
-                }`}
-              >
-                <StepIcon status={step.status} index={index} />
-              </span>
-              <details
-                className="group min-w-0 rounded-md border border-transparent px-2 py-1 open:border-border open:bg-background"
-                open={running || (step.stage === "generate_sql" && Boolean(job.result))}
-              >
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                  <span className="flex min-w-0 items-center gap-2 font-semibold text-foreground">
-                    <span className="truncate">{stepLabel(step.stage)}</span>
-                    <ChevronDown
-                      size={14}
-                      className="shrink-0 text-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
-                      aria-hidden="true"
-                    />
-                  </span>
-                  <span
-                    className={`shrink-0 text-xs font-medium ${
-                      running
-                        ? "text-primary"
-                        : done
-                          ? "text-success"
-                          : failed
-                            ? "text-danger"
-                            : skipped
-                              ? "text-muted"
-                            : "text-muted"
-                    }`}
-                  >
-                    {stepStatusLabel(step.status)}
-                    {step.elapsed_ms != null ? ` · ${formatElapsed(step.elapsed_ms)}` : ""}
-                  </span>
-                </summary>
-                <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-muted">
-                  {stepDescription(step.stage)}
-                </p>
-                {step.stage === "prepare_context" && job.result && (
-                  <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
-                    <div className="grid gap-0.5">
-                      <dt className="font-medium text-muted">{t("nl2sql.result.rewritten")}</dt>
-                      <dd className="leading-5 text-foreground">
-                        <QuestionText
-                          value={job.result.rewritten_question || "-"}
-                          variant="compact"
-                          maxLines={2}
-                          className="text-foreground"
-                        />
-                      </dd>
-                    </div>
-                    <div className="grid gap-0.5">
-                      <dt className="font-medium text-muted">{t("nl2sql.result.tables")}</dt>
-                      <dd className="break-words font-mono leading-5 text-foreground">
-                        {job.result.safety.referenced_tables.join(", ") || "-"}
-                      </dd>
-                    </div>
-                    <div className="grid gap-0.5">
-                      <dt className="font-medium text-muted">{t("nl2sql.result.columns")}</dt>
-                      <dd className="break-words font-mono leading-5 text-foreground">
-                        {job.result.safety.referenced_columns.join(", ") || "-"}
-                      </dd>
-                    </div>
-                  </dl>
-                )}
-                {step.stage === "generate_sql" && job.result && (
-                  <div className="mt-2 border-l border-border pl-3">
-                    <GeneratedSqlSummary
-                      result={job.result}
-                      onExecute={onPreviewExecute}
-                      executeLoading={previewExecuteLoading}
-                    />
-                  </div>
-                )}
-              </details>
-            </li>
-          );
-        })}
-      </ol>
-
-      {warningMessage && (
-        <div
-          className="mx-4 mb-4 rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm leading-6 text-warning"
-          role="status"
-        >
-          <p>{warningMessage}</p>
-        </div>
-      )}
-
-      {errorMessage && (
-        <div className="mx-4 mb-4 grid gap-3 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
-          <p>{errorMessage}</p>
-          {job.status === "error" && catalogEmpty && onImportSample && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                loading={importingSample}
-                onClick={onImportSample}
-              >
-                <Database size={15} aria-hidden="true" />
-                <span>{t("nl2sql.sample.import")}</span>
-              </Button>
-              <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
+              </div>
+            )}
+          </>
+        ),
+      }))}
+      footer={
+        <>
+          {warningMessage && (
+            <div
+              className="mx-4 mb-4 rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm leading-6 text-warning"
+              role="status"
+            >
+              <p>{warningMessage}</p>
             </div>
           )}
-          {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
-            <p className="text-xs text-muted">{sampleImportUnavailableHint}</p>
+
+          {errorMessage && (
+            <div className="mx-4 mb-4 grid gap-3 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
+              <p>{errorMessage}</p>
+              {job.status === "error" && catalogEmpty && onImportSample && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={importingSample}
+                    onClick={onImportSample}
+                  >
+                    <Database size={15} aria-hidden="true" />
+                    <span>{t("nl2sql.sample.import")}</span>
+                  </Button>
+                  <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
+                </div>
+              )}
+              {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
+                <p className="text-xs text-muted">{sampleImportUnavailableHint}</p>
+              )}
+            </div>
           )}
-        </div>
-      )}
-    </section>
+        </>
+      }
+    />
   );
 }

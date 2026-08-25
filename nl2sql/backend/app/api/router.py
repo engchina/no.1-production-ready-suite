@@ -3,9 +3,6 @@
 from fastapi import APIRouter, Depends
 
 from app.api.health import router as health_router
-from app.features.nl2sql.ontology_interchange_router import (
-    router as nl2sql_ontology_interchange_router,
-)
 from app.features.nl2sql.ontology_router import router as nl2sql_ontology_router
 from app.features.nl2sql.router import persistence_router as nl2sql_persistence_router
 from app.features.nl2sql.router import router as nl2sql_router
@@ -20,6 +17,5 @@ api_router.include_router(security_router)
 api_router.include_router(nl2sql_persistence_router)
 api_router.include_router(nl2sql_router)
 api_router.include_router(nl2sql_ontology_router)
-api_router.include_router(nl2sql_ontology_interchange_router)
 api_router.include_router(schema_router)
 api_router.include_router(settings_router)

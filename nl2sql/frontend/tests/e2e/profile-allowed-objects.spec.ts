@@ -378,12 +378,27 @@ async function mockProfileApi(
   await page.route("**/api/nl2sql/profiles/*", (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith("/search")) return route.fallback();
-    const profileId = pathname.split("/").at(-1);
+    const detailMatch = pathname.match(/^\/api\/nl2sql\/profiles\/([^/]+)$/);
+    if (!detailMatch) return route.fallback();
+    const profileId = detailMatch[1];
     const profile = profileItems.find((item) => item.id === profileId) ?? profileItems[0];
     return fulfillJson(route, { ...profile, etag: `etag-${profile.id}` });
   });
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [] })
+  );
   await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) =>
     fulfillJson(route, profileOntologyView)
+  );
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, {
+      draft_markdown: "",
+      published_markdown: "",
+      draft_revision: null,
+      published_revision: null,
+      draft_etag: "",
+      published_at: null,
+    })
   );
   await page.route("**/api/nl2sql/profiles/*/oracle-sync-jobs", (route) =>
     fulfillJson(route, {
@@ -1556,6 +1571,29 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   let schemaRefreshed = false;
   let refreshJobPolls = 0;
   let ontologyViewCalls = 0;
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
+    await fulfillJson(route, {
+      draft_markdown: "# Draft",
+      published_markdown: "# Published",
+      draft_revision: {
+        id: "revision-draft-1",
+        version: 2,
+        status: "draft",
+        schema_fingerprint: "fp",
+        etag: "draft-etag",
+      },
+      published_revision: {
+        id: "revision-published-1",
+        version: 1,
+        status: "published",
+        schema_fingerprint: "fp",
+        etag: "published-etag",
+        published_at: "2026-07-12T00:00:20Z",
+      },
+      draft_etag: "markdown-draft-etag",
+      published_at: "2026-07-12T00:00:20Z",
+    });
+  });
   await page.route("**/api/schema/refresh-jobs**", async (route) => {
     if (route.request().method() === "POST") {
       await fulfillJson(route, {
@@ -1596,7 +1634,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
         },
         ontology_graph: { ...profileOntologyView.ontology_graph, nodes: [], edges: [] },
         warnings_ja: [
-          "「TABLE_01」を公開 Ontology(スキーマ情報)に解決できません。スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。",
+          "「TABLE_01」を公開済み Ontology(スキーマ情報)に解決できません。スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。",
         ],
       });
       return;
@@ -1608,10 +1646,12 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
   const unresolved = page.getByTestId("profile-ontology-unresolved");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await expect(unresolved).toBeVisible();
+  await expect(playground.getByTestId("profile-ontology-unresolved")).toBeVisible();
   await expect(unresolved.getByText("TABLE_01", { exact: false })).toBeVisible();
 
-  await unresolved.getByRole("button", { name: "スキーマ情報を更新" }).click();
+  await unresolved.getByRole("button", { name: "DB 構造を再取得" }).click();
 
   const schemaRefreshProcessing = page.getByTestId("ontology-build-schema-refresh-processing");
   await expect(schemaRefreshProcessing).toBeVisible();
@@ -1621,25 +1661,50 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(schemaRefreshProcessing).toHaveCount(0);
   await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
   await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("3 ノード", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
+  await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
+  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
   expect(schemaRefreshed).toBe(true);
   expect(ontologyViewCalls).toBeGreaterThanOrEqual(2);
 });
 
-test("Ontology 未公開のとき物理・業務モデルは整った空状態カードで導線を示す", async ({ page }) => {
+test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft と接地確認の導線を示す", async ({ page }) => {
   await mockProfileApi(page);
-  // 公開済み Ontology が無い(graph=null)状態を返す。
+  // 公開済み Ontology が無い状態では warning が返っても Draft 編集面には出さない。
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
+    await fulfillJson(route, {
+      draft_markdown: "# Draft\n\n- TABLE_01",
+      published_markdown: "",
+      draft_revision: {
+        id: "revision-draft-1",
+        version: 1,
+        status: "draft",
+        schema_fingerprint: "fp",
+        etag: "draft-etag",
+      },
+      published_revision: null,
+      draft_etag: "markdown-draft-etag",
+      published_at: null,
+    });
+  });
   await page.route("**/api/nl2sql/profiles/*/ontology-view", async (route) => {
-    await fulfillJson(route, { ontology_graph: null, warnings_ja: [] });
+    await fulfillJson(route, {
+      ontology_graph: null,
+      warnings_ja: [
+        "「TABLE_01」を公開済み Ontology(スキーマ情報)に解決できません。スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。",
+      ],
+    });
   });
 
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
-  const empty = page.getByTestId("profile-ontology-empty");
-  await expect(empty).toBeVisible();
-  // セクション見出しとして成立し、正確な誘導文(公開が条件)が出ている。
-  await expect(empty.getByRole("heading", { name: "物理・業務モデル編集" })).toBeVisible();
-  await expect(empty.getByText("物理・業務モデルはまだ表示できません")).toBeVisible();
-  await expect(empty.getByText("Ontology を公開", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("profile-ontology-empty")).toHaveCount(0);
+  await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
+  await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
+  await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
+  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
+  await expect(page.getByText("公開済み Ontology がまだありません")).toBeVisible();
+  await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
 });

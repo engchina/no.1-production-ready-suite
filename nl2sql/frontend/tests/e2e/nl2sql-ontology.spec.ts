@@ -470,15 +470,23 @@ async function mockApi(page: Page) {
       return fulfill(route, {
         items: [
           {
-            id: profile.id,
-            name: profile.name,
-            category: profile.category,
-            description: profile.description,
-            archived: profile.archived,
-            allowed_table_count: profile.allowed_tables.length,
-            allowed_view_count: profile.allowed_views.length,
-            glossary_count: Object.keys(profile.glossary).length,
-            few_shot_count: profile.few_shot_examples.length,
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: profile.archived,
+        allowed_tables: profile.allowed_tables,
+        allowed_views: profile.allowed_views,
+        glossary: profile.glossary,
+        sql_rules: profile.sql_rules,
+        default_row_limit: profile.default_row_limit,
+        safety_policy: profile.safety_policy,
+        few_shot_examples: profile.few_shot_examples,
+        select_ai_config: profile.select_ai_config,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: Object.keys(profile.glossary).length,
+        few_shot_count: profile.few_shot_examples.length,
             version: 1,
             etag: "profile-etag",
             updated_at: "2026-07-11T00:00:00Z",
@@ -491,6 +499,21 @@ async function mockApi(page: Page) {
     }
     if (path === "/api/nl2sql/profiles" && request.method() === "GET") {
       return fulfill(route, [profile]);
+    }
+    if (path === "/api/nl2sql/profiles/default/usage-context" && request.method() === "GET") {
+      return fulfill(route, {
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        allowed_tables: profile.allowed_tables,
+        allowed_views: profile.allowed_views,
+        archived: profile.archived,
+        object_scope_version: 1,
+        version: 1,
+        etag: "profile-etag",
+        updated_at: "2026-07-11T00:00:00Z",
+      });
     }
     if (path === "/api/nl2sql/profiles/default" && request.method() === "GET") {
       return fulfill(route, profile);
@@ -543,6 +566,123 @@ async function mockApi(page: Page) {
         confirmation_token: "profile-confirmation-token",
       });
     }
+    if (path === "/api/nl2sql/jobs" && request.method() === "POST") {
+      payloads.job = request.postDataJSON();
+      return fulfill(route, {
+        job_id: "job-ontology-1",
+        status: "running",
+        created_at: "2026-07-11T00:00:00Z",
+        steps: [
+          { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+          { stage: "generate_sql", status: "running", elapsed_ms: null },
+          { stage: "safety_check", status: "pending", elapsed_ms: null },
+          { stage: "execute_sql", status: "pending", elapsed_ms: null },
+          { stage: "format_results", status: "pending", elapsed_ms: null },
+        ],
+      });
+    }
+    if (path === "/api/nl2sql/jobs/job-ontology-1" && request.method() === "GET") {
+      const question = String(
+        (payloads.job as { question?: unknown } | undefined)?.question ?? "受注件数を表示"
+      );
+      return fulfill(route, {
+        job_id: "job-ontology-1",
+        status: "done",
+        created_at: "2026-07-11T00:00:00Z",
+        started_at: "2026-07-11T00:00:00Z",
+        finished_at: "2026-07-11T00:00:01Z",
+        elapsed_ms: 1000,
+        error_message: null,
+        warning_message: null,
+        steps: [
+          { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+          { stage: "generate_sql", status: "done", elapsed_ms: 120 },
+          { stage: "safety_check", status: "done", elapsed_ms: 10 },
+          { stage: "execute_sql", status: "done", elapsed_ms: 20 },
+          { stage: "format_results", status: "done", elapsed_ms: 5 },
+        ],
+        timing: {
+          created_at: "2026-07-11T00:00:00Z",
+          started_at: "2026-07-11T00:00:00Z",
+          finished_at: "2026-07-11T00:00:01Z",
+          elapsed_ms: 1000,
+          stage_timings: [],
+        },
+        result: {
+          history_id: "hist-ontology-1",
+          engine: "select_ai",
+          engine_meta: { profile: "NL2SQL_DEFAULT_PROFILE" },
+          fallback_reason: "",
+          original_question: question,
+          rewritten_question: question,
+          generated_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+          executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+          explanation: "受注件数を集計します。",
+          safety: {
+            is_safe: true,
+            is_select_only: true,
+            row_limit_applied: 100,
+            blocked_reason: "",
+            warnings: [],
+            referenced_tables: ["APP.ORDERS"],
+            referenced_columns: [],
+          },
+          recommendations: ["公開済み Ontology context を利用しました。"],
+          repaired_sql: "",
+          optimization_hints: [],
+          results: {
+            columns: ["ORDER_COUNT"],
+            rows: [{ ORDER_COUNT: 3 }],
+            total: 1,
+          },
+          timing: {
+            created_at: "2026-07-11T00:00:00Z",
+            started_at: "2026-07-11T00:00:00Z",
+            finished_at: "2026-07-11T00:00:01Z",
+            elapsed_ms: 1000,
+            stage_timings: [],
+          },
+          interpretation: {
+            available: true,
+            question: {
+              available: true,
+              source: "deterministic",
+              original_question: question,
+              rewritten_question: question,
+              profile_id: "default",
+              profile_name: "標準プロファイル",
+              profile_category: "販売",
+              target_objects: ["APP.ORDERS"],
+              filters: [],
+              group_by: [],
+              order_by: [],
+              aggregations: ["COUNT"],
+              row_limit: 100,
+              confidence: 0.9,
+              warnings: [],
+            },
+            sql: {
+              available: true,
+              source: "deterministic",
+              summary: "受注件数を集計します。",
+              statement_type: "SELECT",
+              tables: ["APP.ORDERS"],
+              columns: ["ORDER_COUNT"],
+              joins: [],
+              filters: [],
+              aggregations: ["COUNT"],
+              group_by: [],
+              order_by: [],
+              limit: 100,
+              semantic_graph: artifact.semantic_graph,
+              warnings: [],
+            },
+            warnings: [],
+          },
+          show_prompt: null,
+        },
+      });
+    }
     if (path === "/api/nl2sql/query-sessions" && request.method() === "POST") {
       payloads.create = request.postDataJSON();
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
@@ -570,6 +710,16 @@ async function mockApi(page: Page) {
         ontology_graph: data.ontology_graph,
       });
     }
+    if (path.endsWith("/ontology-markdown") && request.method() === "GET") {
+      return fulfill(route, {
+        draft_markdown: "",
+        published_markdown: "",
+        draft_revision: null,
+        published_revision: null,
+        draft_etag: "",
+        published_at: null,
+      });
+    }
     if (
       path === "/api/nl2sql/ontology/revisions/revision-1/drafts" &&
       request.method() === "POST"
@@ -592,195 +742,87 @@ async function mockApi(page: Page) {
   return payloads;
 }
 
-async function startConfirmedOntologySession(page: Page) {
-  const start = page.getByRole("button", { name: "質問を解釈" });
-  await start.click();
-  const recommendation = page.getByTestId("nl2sql-ontology-profile-recommendation");
-  await expect(recommendation).toBeVisible();
-  await recommendation.getByRole("button", { name: "この Profile を確認" }).click();
-  await start.click();
+async function runCurrentOntologySearch(page: Page) {
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
 }
 
-test("質問と SQL の Ontology を二段階確認して hash binding で実行する", async ({ page }, testInfo) => {
+test("検索を実行すると公開済み Ontology context を使って結果と解釈を表示する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await startConfirmedOntologySession(page);
-  await expect(page.getByRole("tab", { name: "質問の解釈" })).toBeVisible();
-  await expect(page.getByText("受注件数", { exact: true }).filter({ visible: true }).first()).toBeVisible();
-
-  await page.getByRole("button", { name: "確認して SQL を生成" }).click();
-  await page.getByRole("tab", { name: "差分・確認" }).click();
-  await expect(page.getByText("質問、SQL、Profile の意味が一致しています。")).toBeVisible();
-  await page.getByRole("button", { name: "SQL の意味を確認" }).click();
-  await page.getByRole("button", { name: "確認済み SQL を実行" }).click();
+  await runCurrentOntologySearch(page);
 
   await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "3" })).toBeVisible();
+  await expect(page.getByTestId("nl2sql-interpretation-panel")).toContainText("受注件数を集計します。");
   await page.screenshot({ path: testInfo.outputPath("ontology-query.png"), fullPage: true });
-  expect(payloads.create).toMatchObject({
+  expect(payloads.job).toMatchObject({
     question: "受注件数を表示",
     profile_id: "default",
-    profile_confirmation_token: "profile-confirmation-token",
+    use_ontology_context: true,
+    include_interpretation: true,
   });
-  expect(payloads.generate).toMatchObject({ confirm_intent: true, intent_version: 1 });
-  expect(payloads.confirm).toMatchObject({
-    sql_hash: "sql-hash",
-    validation_hash: "validation-hash",
-    generation_context_hash: "context-hash",
-    confirm_sql: true,
-  });
-  expect(payloads.execute).toMatchObject({ confirm_sql: true, session_id: "session-1" });
 });
 
-test("非 SQL 利用者が質問の解釈をフォームで修正し、明示操作後だけ patch を送信する", async ({ page }, testInfo) => {
+test("検索実行は明示操作後だけ現在の質問と Ontology 利用設定を送信する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await startConfirmedOntologySession(page);
-
-  const openEditor = page.getByRole("button", { name: "解釈を編集" });
-  await openEditor.focus();
-  await expect(openEditor).toBeFocused();
-  await openEditor.press("Enter");
-  await expect(page.getByLabel("確認に使う質問")).toBeVisible();
-
-  await page.getByLabel("確認に使う質問").fill("確定した受注の月別売上金額");
-  const metricGroup = page.getByRole("group", { name: "確認したい指標" });
-  await metricGroup.getByLabel("指標", { exact: true }).selectOption({ label: "受注金額" });
-  await metricGroup.getByLabel("まとめ方").selectOption({ label: "合計する" });
-
-  const dimensionGroup = page.getByRole("group", { name: "結果の切り口" });
-  await dimensionGroup.getByRole("button", { name: "切り口を追加" }).click();
-  await dimensionGroup.getByLabel("切り口", { exact: true }).selectOption({ label: "受注日" });
-  await dimensionGroup.getByLabel("切り口の粒度").selectOption({ label: "月ごと" });
-
-  const filterGroup = page.getByRole("group", { name: "絞り込み条件" });
-  await filterGroup.getByRole("button", { name: "条件を追加" }).click();
-  await filterGroup.getByLabel("対象項目").selectOption({ label: "受注状態" });
-  await filterGroup.getByLabel("条件の値").fill("確定");
-
-  const timeGroup = page.getByRole("group", { name: "期間と全体の粒度" });
-  await timeGroup.getByLabel("日付・時刻の項目").selectOption({ label: "受注日" });
-  await timeGroup.getByLabel("開始日").fill("2026-06-01");
-  await timeGroup.getByLabel("終了日").fill("2026-06-30");
-  await timeGroup.getByLabel("相対的な期間").fill("先月");
-  await timeGroup.getByLabel("結果全体の粒度").selectOption({ label: "月ごと" });
-
-  const sortGroup = page.getByRole("group", { name: "並び順と件数" });
-  await sortGroup.getByRole("button", { name: "並び順を追加" }).click();
-  await sortGroup.getByLabel("並べる項目").selectOption({ label: "受注金額" });
-  await sortGroup.getByLabel("方向").selectOption({ label: "大きい順・新しい順" });
-  await sortGroup.getByLabel("最大件数").fill("50");
-  await page.getByRole("group", { name: "利用する関係経路" })
-    .getByLabel("候補経路")
-    .selectOption({ label: "受注から顧客 (確認済み)" });
-
-  expect(payloads.patch).toBeUndefined();
-  await expect(page.getByText(/変更 \d+ 件/)).toBeVisible();
-  await page.getByRole("button", { name: "変更を適用" }).click();
-  await expect.poll(() => payloads.patch).toBeTruthy();
-
-  const patch = payloads.patch as {
-    base_version: number;
-    operations: Array<{ path: string; value: unknown }>;
-  };
-  const operations = new Map(patch.operations.map((operation) => [operation.path, operation.value]));
-  expect(patch.base_version).toBe(1);
-  expect(operations.get("/question_effective")).toBe("確定した受注の月別売上金額");
-  expect(operations.get("/metrics")).toEqual([
-    expect.objectContaining({
-      ontology_node_id: "metric-order-amount",
-      name_ja: "受注金額",
-      aggregation: "SUM",
-    }),
-  ]);
-  expect(operations.get("/filters")).toEqual([
-    expect.objectContaining({
-      property_node_id: "property-order-status",
-      label_ja: "受注状態",
-      value: "確定",
-    }),
-  ]);
-  expect(operations.get("/time_range")).toEqual(
-    expect.objectContaining({
-      property_node_id: "property-order-date",
-      start: "2026-06-01",
-      end: "2026-06-30",
-      relative_expression: "先月",
-    })
-  );
-  expect(operations.get("/granularity")).toBe("month");
-  expect(operations.get("/limit")).toBe(50);
-  expect(operations.get("/selected_path_id")).toBe("path-order-customer");
+  expect(payloads.job).toBeUndefined();
+  await page.locator("#nl2sql-question-input").fill("確定した受注の月別売上金額");
+  await runCurrentOntologySearch(page);
+  expect(payloads.job).toMatchObject({
+    question: "確定した受注の月別売上金額",
+    profile_id: "default",
+    use_ontology_context: true,
+    include_interpretation: true,
+  });
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("ontology-intent-editor.png"), fullPage: true });
 });
 
-test("対象オブジェクトは業務プロファイル、構築とモデル編集は専用の単一ページに分離される", async ({ page }, testInfo) => {
+test("対象オブジェクトは業務プロファイル、構築と Markdown Draft は専用の単一ページに分離される", async ({ page }, testInfo) => {
   await mockApi(page);
 
-  // 業務プロファイル編集: 対象オブジェクト一覧は常時表示、オントロジー(構築/モデル)は非表示。
+  // 業務プロファイル編集: 対象オブジェクト一覧は常時表示、オントロジー構築は非表示。
   await page.goto("/profiles");
   await page.getByTestId("profile-management-grid").locator("tbody tr").first().locator("td").nth(1).click();
   await expect(page.getByTestId("profile-allowed-table-list")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
 
-  // 旧 tab URL は正規化され、構築とモデル編集が同じ専用ページに表示される。
+  // 旧 tab URL は正規化され、構築と Markdown Draft が同じ専用ページに表示される。
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
-  const modelSection = page.locator('section[aria-label="物理・業務モデル編集"]');
-  await expect(modelSection).toBeVisible();
-  await expect(page.getByText("受注", { exact: true }).filter({ visible: true }).first()).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
-  await modelSection.scrollIntoViewIfNeeded();
+  await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
+  await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
+  await expect(page.getByText("Inspector", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-build.png"), fullPage: true });
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
 });
 
-test("業務ルールと列挙値をキーボード操作できるフォームで確認し、revision Draft に保存する", async ({
+test("旧モデル編集 UI は表示せず Markdown Draft を唯一の編集入口にする", async ({
   page,
 }) => {
-  const payloads = await mockApi(page);
+  await mockApi(page);
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
-  const target = page.getByLabel("Inspector の編集対象");
-  await target.focus();
-  await target.selectOption("node:business-rule-order-status");
-  await page
-    .getByRole("textbox", { name: "業務ルール", exact: true })
-    .fill("受注状態を必須にします。");
-  await page.getByLabel("重大度").selectOption("warning");
-  await page.getByRole("button", { name: "意味定義を Draft に保存" }).click();
-
-  await expect(page.getByText("新しい Ontology revision の Draft に保存しました。")).toBeVisible();
-  await expect.poll(() => payloads.semanticDraft).toBeTruthy();
-  expect(payloads.semanticDraft).toMatchObject({
-    base_etag: "revision-etag",
-    node_upserts: [
-      expect.objectContaining({
-        id: "business-rule-order-status",
-        review_status: "approved",
-        business_rule_definition: expect.objectContaining({
-          statement_ja: "受注状態を必須にします。",
-          severity: "warning",
-          execution_mode: "shacl",
-        }),
-      }),
-    ],
-  });
-
-  await target.selectOption("node:enum-order-status-confirmed");
-  await expect(page.getByLabel("列挙コード", { exact: true })).toHaveValue("CONFIRMED");
-  await expect(page.getByLabel("日本語ラベル")).toHaveValue("確定済み");
-  await expect(page.getByLabel("対象属性")).toHaveValue("property-order-status");
+  await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Markdown Ontology Draft" })).toBeVisible();
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
+  await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
+  await expect(page.getByLabel("Inspector の編集対象")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Draft を保存", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "意味定義を Draft に保存" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
 });

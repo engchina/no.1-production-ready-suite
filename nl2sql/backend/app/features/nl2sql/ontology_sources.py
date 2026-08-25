@@ -37,7 +37,7 @@ from .tabular_files import (
 )
 
 SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES = frozenset(
-    {".pdf", ".docx", ".txt", ".md", ".csv", ".tsv", ".xlsx", ".xls", ".xlsm"}
+    {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xls", ".xlsm"}
 )
 _CHUNK_SIZE = 1024 * 1024
 _ALLOWED_MEDIA_TYPES: dict[str, frozenset[str]] = {
@@ -46,7 +46,6 @@ _ALLOWED_MEDIA_TYPES: dict[str, frozenset[str]] = {
     ".txt": frozenset({"text/plain"}),
     ".md": frozenset({"text/markdown", "text/plain"}),
     ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
-    ".tsv": frozenset({"text/tab-separated-values", "text/plain"}),
     ".xlsx": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
     ".xls": frozenset({"application/vnd.ms-excel"}),
     ".xlsm": frozenset({"application/vnd.ms-excel.sheet.macroenabled.12"}),
@@ -119,7 +118,7 @@ def validate_source_signature(filename: str, content: bytes) -> None:
     if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
+            "PDF、DOCX、TXT、MD、CSV、XLSX、XLS、XLSM のいずれかを指定してください。",
         )
     if not content:
         raise OntologySourceError("ONTOLOGY_SOURCE_EMPTY", "空の資料は登録できません。")
@@ -143,7 +142,7 @@ def validate_source_signature(filename: str, content: bytes) -> None:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_MIME_MISMATCH", "拡張子と Office ファイル内容が一致しません。"
             )
-    if suffix in {".txt", ".md", ".csv", ".tsv"} and (
+    if suffix in {".txt", ".md", ".csv"} and (
         b"\x00" in content[:4096]
         or content.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
     ):
@@ -160,7 +159,7 @@ def validate_source_path(filename: str, path: Path) -> None:
     if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-            "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
+            "PDF、DOCX、TXT、MD、CSV、XLSX、XLS、XLSM のいずれかを指定してください。",
         )
     if path.stat().st_size == 0:
         raise OntologySourceError("ONTOLOGY_SOURCE_EMPTY", "空の資料は登録できません。")
@@ -186,7 +185,7 @@ def validate_source_path(filename: str, path: Path) -> None:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_MIME_MISMATCH", "拡張子と Office ファイル内容が一致しません。"
             )
-    if suffix in {".txt", ".md", ".csv", ".tsv"} and (
+    if suffix in {".txt", ".md", ".csv"} and (
         b"\x00" in prefix
         or prefix.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
     ):
@@ -225,7 +224,7 @@ class OntologySourceStorage:
         if suffix not in SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES:
             raise OntologySourceError(
                 "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED",
-                "PDF、DOCX、TXT、MD、CSV、TSV、XLSX、XLS、XLSM のいずれかを指定してください。",
+                "PDF、DOCX、TXT、MD、CSV、XLSX、XLS、XLSM のいずれかを指定してください。",
             )
         source_id = f"ontology_source_{uuid4().hex}"
         profile_storage_key = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:24]
@@ -324,8 +323,8 @@ def extract_ontology_source(
     suffix = Path(source.filename).suffix.lower()
     if suffix in {".txt", ".md"}:
         return _extract_text(content)
-    if suffix in {".csv", ".tsv"}:
-        return _extract_delimited(content, delimiter="\t" if suffix == ".tsv" else ",")
+    if suffix == ".csv":
+        return _extract_delimited(content, delimiter=",")
     if suffix in WORKBOOK_SUFFIXES:
         return _extract_workbook(source.filename, content)
     if suffix == ".docx":

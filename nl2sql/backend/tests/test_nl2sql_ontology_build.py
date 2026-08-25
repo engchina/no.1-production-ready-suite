@@ -1,7 +1,7 @@
 """AI オントロジー構築(ontology_build)のテスト。
 
-LLM は fake、store は InMemoryOntologyStore。job → proposal → accept → publish →
-再起動復元までの経路と、スコープ外候補の warnings 落ちを検証する。
+LLM は fake、store は InMemoryOntologyStore。job → Markdown Draft → publish と、
+既存 proposal endpoint の accept → publish 経路、スコープ外候補の warnings 落ちを検証する。
 """
 
 from __future__ import annotations
@@ -19,27 +19,53 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaConstraintDetail,
     SchemaTable,
+    SchemaViewDependency,
 )
 from app.features.nl2sql.ontology_build import (
     OntologyBuildService,
+    build_schema_context_from_catalog,
     parse_qa_workbook,
+    render_ontology_build_markdown,
 )
+from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
 from app.features.nl2sql.ontology_models import (
+    BusinessRuleDefinition,
+    BusinessRuleExecutionMode,
+    BusinessRuleKind,
+    BusinessRuleSeverity,
+    EnumValueDefinition,
+    JoinCondition,
+    OntologyBuildJob,
     OntologyBuildStatus,
+    OntologyBuildStep,
     OntologyBuildStepName,
     OntologyBuildStepStatus,
+    OntologyEdge,
     OntologyEdgeKind,
+    OntologyNode,
     OntologyNodeKind,
     OntologyProposalKind,
+    OntologyProvenance,
     OntologyReviewStatus,
+    OntologyRevision,
+    OntologyRevisionStatus,
+    OntologySourceDocument,
+    OntologySourceKind,
+    PhysicalColumnRef,
+    PhysicalMapping,
+    PhysicalObjectRef,
+    ProfileOntologyView,
     QaPair,
+    RelationshipCardinality,
 )
 from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
+    OntologyDraftRequest,
+    OntologyMarkdownDraftPatch,
     OntologyPublishRequest,
 )
 from app.features.nl2sql.ontology_service import OntologyNotFoundError
-from app.features.nl2sql.ontology_store import InMemoryOntologyStore
+from app.features.nl2sql.ontology_store import InMemoryOntologyStore, OntologyVersionConflict
 from app.settings import get_settings
 
 
@@ -67,6 +93,18 @@ class _FakeLegacyNl2SqlService:
                         SchemaColumn(
                             column_name="AMOUNT", logical_name="受注金額", data_type="NUMBER"
                         ),
+                    ],
+                    constraint_details=[
+                        SchemaConstraintDetail(
+                            constraint_name="FK_ORDERS_CUSTOMER",
+                            constraint_type="R",
+                            owner="APP",
+                            table_name="ORDERS",
+                            columns=["CUSTOMER_ID"],
+                            referenced_owner="APP",
+                            referenced_table="CUSTOMERS",
+                            referenced_columns=["ID"],
+                        )
                     ],
                 ),
                 SchemaTable(
@@ -106,6 +144,7 @@ class _FakeEnterpriseAiClient:
         self.payload = payload
         self.configured = configured
         self.calls: list[str] = []
+        self.contexts: list[str] = []
 
     def is_configured(self) -> bool:
         return self.configured
@@ -115,6 +154,7 @@ class _FakeEnterpriseAiClient:
 
     def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
         self.calls.append(prompt)
+        self.contexts.append(context)
         return self.payload
 
 
@@ -195,6 +235,33 @@ def _wait_for_job(service: OntologyBuildService, job_id: str) -> Any:
     raise AssertionError("ontology build job did not finish")
 
 
+def _seed_build_proposals(runtime: OntologyApiRuntime) -> list[Any]:
+    from app.features.nl2sql.ontology_build import convert_extraction_to_proposals, parse_extraction
+
+    view, ontology = runtime.profile_view("sales")
+    drafts, warnings = convert_extraction_to_proposals(
+        parse_extraction(_FENCED_PAYLOAD),
+        ontology=ontology,
+        view=view,
+        job_id="seed-job",
+        inferred_by="test",
+        qa_sql_texts=[_QA_SQL],
+    )
+    assert warnings
+    return [
+        runtime.create_build_proposal(
+            profile_id="sales",
+            job_id="seed-job",
+            title_ja=draft.title_ja,
+            description_ja=draft.description_ja,
+            kind=draft.kind,
+            proposal_payload=draft.payload,
+            base_revision_id=ontology.revision.id,
+        )
+        for draft in drafts
+    ]
+
+
 def test_profile_delete_cancels_queued_build_and_worker_cannot_restart_it(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
@@ -253,15 +320,135 @@ def test_parse_qa_workbook_rejects_missing_headers_and_unknown_suffix() -> None:
     assert pairs == []
     assert any("未対応の形式" in warning for warning in warnings)
 
+    pairs, warnings = parse_qa_workbook(
+        "qa.tsv", b"QUESTION\tSQL\nq\tSELECT COUNT(*) FROM APP.ORDERS\n"
+    )
+    assert pairs == []
+    assert any("未対応の形式" in warning for warning in warnings)
 
-# --- job → proposal --------------------------------------------------------------------------
+
+# --- DB catalog schema context ---------------------------------------------------------------
 
 
-def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
+def test_build_schema_context_from_profile_and_db_catalog_includes_fk_and_views() -> None:
+    catalog = SchemaCatalog(
+        refreshed_at="2026-07-12T00:00:00Z",
+        tables=[
+            SchemaTable(
+                owner="APP",
+                table_name="CUSTOMERS",
+                logical_name="顧客",
+                columns=[
+                    SchemaColumn(column_name="ID", logical_name="顧客 ID", data_type="NUMBER")
+                ],
+                constraint_details=[
+                    SchemaConstraintDetail(
+                        constraint_name="PK_CUSTOMERS",
+                        constraint_type="P",
+                        owner="APP",
+                        table_name="CUSTOMERS",
+                        columns=["ID"],
+                    )
+                ],
+            ),
+            SchemaTable(
+                owner="APP",
+                table_name="ORDERS",
+                logical_name="受注",
+                columns=[
+                    SchemaColumn(column_name="ID", logical_name="受注 ID", data_type="NUMBER"),
+                    SchemaColumn(
+                        column_name="CUSTOMER_ID", logical_name="顧客 ID", data_type="NUMBER"
+                    ),
+                ],
+                constraint_details=[
+                    SchemaConstraintDetail(
+                        constraint_name="FK_ORDERS_CUSTOMER",
+                        constraint_type="R",
+                        owner="APP",
+                        table_name="ORDERS",
+                        columns=["CUSTOMER_ID"],
+                        referenced_owner="APP",
+                        referenced_table="CUSTOMERS",
+                        referenced_columns=["ID"],
+                    )
+                ],
+            ),
+            SchemaTable(
+                owner="APP",
+                table_name="V_ORDER_CUSTOMER",
+                table_type="view",
+                logical_name="受注顧客ビュー",
+                columns=[
+                    SchemaColumn(column_name="ORDER_ID", logical_name="受注 ID", data_type="NUMBER")
+                ],
+            ),
+        ],
+        view_dependencies=[
+            SchemaViewDependency(
+                owner="APP",
+                view_name="V_ORDER_CUSTOMER",
+                referenced_owner="APP",
+                referenced_name="ORDERS",
+                referenced_type="TABLE",
+            )
+        ],
+    )
+    profile = Nl2SqlProfile(
+        id="sales",
+        name="販売分析",
+        allowed_tables=["APP.ORDERS", "APP.CUSTOMERS"],
+        allowed_views=["APP.V_ORDER_CUSTOMER"],
+    )
+
+    prepared = build_schema_context_from_catalog(profile, catalog)
+    context = json.loads(prepared.schema_context)
+
+    assert prepared.errors == []
+    assert {item["object"] for item in context["objects"]} == {
+        "APP.CUSTOMERS",
+        "APP.ORDERS",
+        "APP.V_ORDER_CUSTOMER",
+    }
+    assert any(
+        relationship["kind"] == "foreign_key"
+        and relationship["join_conditions"][0]["expression"]
+        == "APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID"
+        for relationship in context["relationships"]
+    )
+    assert any(
+        relationship["kind"] == "view_dependency"
+        and relationship["source_object"] == "APP.V_ORDER_CUSTOMER"
+        and relationship["target_object"] == "APP.ORDERS"
+        for relationship in context["relationships"]
+    )
+
+
+def test_build_schema_context_fails_ambiguous_unqualified_profile_object() -> None:
+    catalog = SchemaCatalog(
+        refreshed_at="2026-07-12T00:00:00Z",
+        tables=[
+            SchemaTable(owner="APP", table_name="ORDERS", logical_name="受注"),
+            SchemaTable(owner="CRM", table_name="ORDERS", logical_name="CRM 受注"),
+        ],
+    )
+    profile = Nl2SqlProfile(id="sales", name="販売分析", allowed_tables=["ORDERS"])
+
+    prepared = build_schema_context_from_catalog(profile, catalog)
+
+    assert prepared.object_count == 0
+    assert any("複数 object" in error for error in prepared.errors)
+
+
+# --- job → Markdown Draft ---------------------------------------------------------------------
+
+
+def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
 
     qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
@@ -290,30 +477,290 @@ def test_build_job_registers_scoped_proposals_and_drops_outside_candidates(
     event_times = [event.at for event in finished.events]
     assert event_times == sorted(event_times)
     assert any("スキーマ情報を準備しました" in event.message_ja for event in finished.events)
-    assert any("提案" in event.message_ja for event in finished.events)
-    # スコープ外(APP.SECRET)は proposal 化されず warnings に落ちる
+    assert any("Markdown Draft" in event.message_ja for event in finished.events)
+    # スコープ外(APP.SECRET)は draft graph 化されず warnings に落ちる
     assert any("APP.SECRET" in warning for warning in finished.warnings_ja)
-    assert finished.proposal_ids
-
-    proposals = runtime.list_profile_proposals("sales")
-    assert {proposal.id for proposal in proposals} == set(finished.proposal_ids)
-    kinds = {proposal.kind for proposal in proposals}
-    assert OntologyProposalKind.MAPPING in kinds
-    assert OntologyProposalKind.RELATIONSHIP in kinds
-    assert OntologyProposalKind.METRIC_DEFINITION in kinds
-    # 同一内容(3 ステップとも同じ fake 応答)は payload 単位で dedup される
-    relationship_proposals = [
-        proposal for proposal in proposals if proposal.kind == OntologyProposalKind.RELATIONSHIP
-    ]
-    assert len(relationship_proposals) == 1
-    # session 非依存の予約プレフィクス
-    assert all(proposal.session_id.startswith("ontology_build:") for proposal in proposals)
-    # 同義語は entity 候補の aliases に合流している
-    mapping = next(
-        proposal for proposal in proposals if proposal.kind == OntologyProposalKind.MAPPING
+    assert finished.proposal_ids == []
+    assert finished.draft_revision_id
+    assert finished.draft_etag
+    schema_context = json.loads(client.contexts[0])
+    assert {item["object"] for item in schema_context["objects"]} == {
+        "APP.CUSTOMERS",
+        "APP.ORDERS",
+    }
+    orders = next(item for item in schema_context["objects"] if item["object"] == "APP.ORDERS")
+    assert any(
+        column["column"] == "CUSTOMER_ID" and column["data_type"] == "NUMBER"
+        for column in orders["columns"]
     )
-    node_upserts = mapping.proposal_payload.values["node_upserts"]
-    assert any(set(node["aliases"]) >= {"注文", "オーダー"} for node in node_upserts)
+    assert any(
+        relationship["source_object"] == "APP.ORDERS"
+        and relationship["target_object"] == "APP.CUSTOMERS"
+        and relationship["join_conditions"][0]["expression"]
+        == "APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID"
+        for relationship in schema_context["relationships"]
+    )
+    assert finished.markdown_output.startswith("# Ontology Draft")
+    assert "## Physical Objects" in finished.markdown_output
+    assert "`APP.ORDERS` (table)" in finished.markdown_output
+    assert "business_name: 受注" in finished.markdown_output
+    assert "## Entities" in finished.markdown_output
+    assert "受注 (`APP.ORDERS`)" in finished.markdown_output
+    assert "## Relationships / Join" in finished.markdown_output
+    assert "顧客を参照" in finished.markdown_output
+    assert "allowed_path: true" in finished.markdown_output
+    assert "`APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`" in finished.markdown_output
+    assert "## Metrics" in finished.markdown_output
+    assert "受注金額合計" in finished.markdown_output
+    assert "APP.ORDERS.AMOUNT" in finished.markdown_output
+    assert "## Business Rules / Enum Values" in finished.markdown_output
+    assert "## Synonyms" in finished.markdown_output
+    assert "オーダー" in finished.markdown_output
+    assert "## Evidence / Warnings" in finished.markdown_output
+    assert "APP.SECRET" in finished.markdown_output
+
+    assert runtime.list_profile_proposals("sales") == []
+    state = runtime.ontology_markdown_state("sales")
+    assert state.draft_revision is not None
+    assert state.draft_revision.id == finished.draft_revision_id
+    assert state.draft_etag == finished.draft_etag
+    assert state.draft_markdown == finished.markdown_output
+    saved_state = runtime.save_ontology_markdown_draft(
+        "sales",
+        OntologyMarkdownDraftPatch(
+            markdown=f"{state.draft_markdown}\n## Manual Notes\n- 確認済み\n",
+            base_etag=state.draft_etag,
+        ),
+    )
+    assert saved_state.draft_etag != state.draft_etag
+    assert "Manual Notes" in saved_state.draft_markdown
+    with pytest.raises(OntologyVersionConflict):
+        runtime.save_ontology_markdown_draft(
+            "sales",
+            OntologyMarkdownDraftPatch(markdown="stale", base_etag=state.draft_etag),
+        )
+    draft = runtime.ontology_revision(finished.draft_revision_id)
+    kinds = {node.kind for node in draft.nodes}
+    assert OntologyNodeKind.BUSINESS_ENTITY in kinds
+    assert OntologyNodeKind.METRIC in kinds
+    relationship_edges = [
+        edge for edge in draft.edges if edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP
+    ]
+    assert len(relationship_edges) == 1
+    assert relationship_edges[0].review_status == OntologyReviewStatus.APPROVED
+    orders_entity = next(
+        node
+        for node in draft.nodes
+        if node.kind == OntologyNodeKind.BUSINESS_ENTITY and node.technical_name == "APP.ORDERS"
+    )
+    assert set(orders_entity.aliases) >= {"注文", "オーダー"}
+
+
+def test_markdown_draft_merges_profile_view_overrides_rules_and_enums() -> None:
+    provenance = OntologyProvenance(source_kind=OntologySourceKind.MANUAL, source_id="test")
+    revision = OntologyRevision(
+        id="ontology_revision_test",
+        version=4,
+        status=OntologyRevisionStatus.PUBLISHED,
+        schema_fingerprint="fp-test",
+        etag="rev-etag-test",
+    )
+    orders_ref = PhysicalObjectRef(
+        node_id="table-orders",
+        owner="APP",
+        object_name="ORDERS",
+        object_type="table",
+    )
+    customers_ref = PhysicalObjectRef(
+        node_id="table-customers",
+        owner="APP",
+        object_name="CUSTOMERS",
+        object_type="table",
+    )
+    status_column = PhysicalColumnRef(
+        node_id="column-order-status",
+        owner="APP",
+        object_name="ORDERS",
+        column_name="STATUS",
+        ordinal=3,
+    )
+    customer_id_column = PhysicalColumnRef(
+        node_id="column-order-customer",
+        owner="APP",
+        object_name="ORDERS",
+        column_name="CUSTOMER_ID",
+        ordinal=2,
+    )
+    customer_pk_column = PhysicalColumnRef(
+        node_id="column-customer-id",
+        owner="APP",
+        object_name="CUSTOMERS",
+        column_name="ID",
+        ordinal=1,
+    )
+    orders = OntologyNode(
+        id="table-orders",
+        revision_id=revision.id,
+        kind=OntologyNodeKind.TABLE,
+        technical_name="APP.ORDERS",
+        business_name_ja="受注",
+        description_ja="受注トランザクション",
+        physical_mappings=[PhysicalMapping(object_ref=orders_ref)],
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    customers = OntologyNode(
+        id="table-customers",
+        revision_id=revision.id,
+        kind=OntologyNodeKind.TABLE,
+        technical_name="APP.CUSTOMERS",
+        business_name_ja="顧客",
+        description_ja="顧客マスタ",
+        physical_mappings=[PhysicalMapping(object_ref=customers_ref)],
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    status_property = OntologyNode(
+        id="property-order-status",
+        revision_id=revision.id,
+        kind=OntologyNodeKind.PROPERTY,
+        technical_name="APP.ORDERS.STATUS",
+        business_name_ja="受注状態",
+        description_ja="受注の状態",
+        physical_mappings=[PhysicalMapping(object_ref=orders_ref, column_refs=[status_column])],
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    rule = OntologyNode(
+        id="business-rule-order-status",
+        revision_id=revision.id,
+        kind=OntologyNodeKind.BUSINESS_RULE,
+        technical_name="order_status_required",
+        business_name_ja="受注状態必須",
+        description_ja="受注状態を空にしない。",
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+        business_rule_definition=BusinessRuleDefinition(
+            rule_kind=BusinessRuleKind.VALIDATION,
+            statement_ja="受注状態を必須にします。",
+            applies_to_node_ids=["table-orders"],
+            severity=BusinessRuleSeverity.WARNING,
+            execution_mode=BusinessRuleExecutionMode.DOCUMENTATION,
+        ),
+    )
+    enum_value = OntologyNode(
+        id="enum-order-confirmed",
+        revision_id=revision.id,
+        kind=OntologyNodeKind.ENUM_VALUE,
+        technical_name="CONFIRMED",
+        business_name_ja="確定済み",
+        description_ja="確定した受注。",
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+        enum_value_definition=EnumValueDefinition(
+            code="CONFIRMED",
+            label_ja="確定済み",
+            aliases=["確定"],
+            physical_literal="C",
+            property_node_id="property-order-status",
+        ),
+    )
+    relationship = OntologyEdge(
+        id="edge-order-customer",
+        revision_id=revision.id,
+        kind=OntologyEdgeKind.FOREIGN_KEY,
+        source_node_id="table-orders",
+        target_node_id="table-customers",
+        relationship_name_ja="受注の顧客",
+        description_ja="Oracle FK_ORDERS_CUSTOMER",
+        cardinality=RelationshipCardinality.MANY_TO_ONE,
+        join_conditions=[
+            JoinCondition(left=customer_id_column, right=customer_pk_column, operator="=")
+        ],
+        provenance=provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    ontology = SchemaOntology(
+        revision=revision,
+        nodes=[orders, customers, status_property, rule, enum_value],
+        edges=[relationship],
+    )
+    view = ProfileOntologyView(
+        id="profile-view-test",
+        profile_id="sales",
+        ontology_revision_id=revision.id,
+        etag="view-etag-test",
+        node_ids=[node.id for node in ontology.nodes],
+        edge_ids=[relationship.id],
+        physical_objects=[orders_ref, customers_ref],
+        table_usages_ja={"table-orders": "受注分析の主表"},
+        allowed_path_ids=[relationship.id],
+        draft_node_overrides=[{"node_id": "table-orders", "business_name_ja": "受注明細"}],
+        draft_edge_overrides=[
+            {
+                "edge_id": relationship.id,
+                "cardinality": "one_to_many",
+                "allowed_path": True,
+            }
+        ],
+    )
+
+    markdown = render_ontology_build_markdown(
+        profile_id="sales",
+        schema_context=json.dumps({"objects": [], "relationships": []}),
+        drafts=[],
+        warnings=["APP.MISSING を公開 Ontology に解決できません。"],
+        source_count=0,
+        qa_pair_count=0,
+        business_text_present=False,
+        ontology=ontology,
+        profile_view=view,
+    )
+
+    assert "## Physical Objects" in markdown
+    assert "`APP.ORDERS` (table)" in markdown
+    assert "business_name: 受注明細" in markdown
+    assert "usage: 受注分析の主表" in markdown
+    assert "受注明細 (`APP.ORDERS`)" in markdown
+    assert "## Relationships / Join" in markdown
+    assert "cardinality: one_to_many" in markdown
+    assert "allowed_path: true" in markdown
+    assert "`APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`" in markdown
+    assert "## Business Rules / Enum Values" in markdown
+    assert "statement: 受注状態を必須にします。" in markdown
+    assert "applies_to: 受注明細" in markdown
+    assert "code: CONFIRMED" in markdown
+    assert "literal: `C`" in markdown
+    assert "property: 受注状態" in markdown
+    assert "APP.MISSING" in markdown
+
+
+def test_build_job_uses_ontology_schema_fingerprint_for_registration_conflict(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """catalog head の fingerprint 口径差だけでは schema drift 扱いにしない。"""
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy.catalog = legacy.catalog.model_copy(
+        update={"schema_fingerprint": "oracle-style-different-hash"},
+        deep=True,
+    )
+    assert legacy.catalog.schema_fingerprint != catalog_schema_fingerprint(legacy.catalog)
+    service = OntologyBuildService(runtime)
+
+    job = service.start("sales", business_text="受注は顧客に紐づく。")
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert finished.proposal_ids == []
+    assert finished.draft_revision_id
+    assert not (
+        finished.error_message_ja
+        and "AI 構築中に DB schema catalog が更新されました" in finished.error_message_ja
+    )
+    assert runtime.ontology_markdown_state("sales").draft_revision is not None
+    assert runtime.list_profile_proposals("sales") == []
 
 
 def test_convert_extraction_warns_on_unknown_cardinality(
@@ -391,6 +838,138 @@ def test_build_job_survives_invalid_llm_json(
     assert text_step.status == OntologyBuildStepStatus.FAILED
     assert any("抽出に失敗" in warning for warning in finished.warnings_ja)
     assert finished.proposal_ids == []
+
+
+def test_build_job_fails_gracefully_when_markdown_draft_save_times_out(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+
+    def fail_create_build_markdown_draft(**kwargs: Any) -> Any:
+        on_progress = kwargs.get("on_progress")
+        if callable(on_progress):
+            on_progress("Draft revision を保存しています…")
+        raise TimeoutError("Oracle round-trip timeout")
+
+    monkeypatch.setattr(
+        runtime,
+        "create_build_markdown_draft",
+        fail_create_build_markdown_draft,
+    )
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    registration = next(
+        step
+        for step in finished.steps
+        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+    )
+    assert registration.status == OntologyBuildStepStatus.FAILED
+    assert registration.detail_ja == "Markdown Draft の保存に失敗しました。"
+    assert "Oracle round-trip timeout" in finished.error_message_ja
+    assert any("Draft revision を保存しています" in event.message_ja for event in finished.events)
+
+
+def test_build_job_fails_gracefully_when_final_status_save_times_out(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    original_save_document = store.save_document
+
+    def fail_final_status_save(
+        collection: str,
+        document: Any,
+        *,
+        expected_etag: str | None = None,
+    ) -> dict[str, Any]:
+        if collection == "jobs" and document.get("status") == OntologyBuildStatus.SUCCEEDED.value:
+            raise TimeoutError("Oracle final job timeout")
+        return original_save_document(collection, document, expected_etag=expected_etag)
+
+    monkeypatch.setattr(store, "save_document", fail_final_status_save)
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    registration = next(
+        step
+        for step in finished.steps
+        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+    )
+    assert registration.status == OntologyBuildStepStatus.FAILED
+    assert registration.detail_ja == "構築 job の完了状態の保存に失敗しました。"
+    assert "Oracle final job timeout" in finished.error_message_ja
+    assert runtime.ontology_markdown_state("sales").draft_revision is not None
+
+
+def test_get_build_job_normalizes_succeeded_markdown_job_with_running_final_step(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, store, _legacy = harness
+    stuck = OntologyBuildJob(
+        id="ontology_build_stuck_final_step",
+        profile_id="sales",
+        status=OntologyBuildStatus.SUCCEEDED,
+        steps=[
+            OntologyBuildStep(
+                name=OntologyBuildStepName.SCHEMA_CONTEXT,
+                status=OntologyBuildStepStatus.SUCCEEDED,
+            ),
+            OntologyBuildStep(
+                name=OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                status=OntologyBuildStepStatus.RUNNING,
+                detail_ja="構築 job の完了状態を保存しています…",
+            ),
+        ],
+        draft_revision_id="ontology_revision_draft_stuck",
+        draft_etag="markdown-etag-stuck",
+        markdown_output="# Ontology Draft\n",
+    )
+    stuck.started_at = stuck.created_at
+    stuck.finished_at = stuck.created_at
+    for step in stuck.steps:
+        step.started_at = stuck.created_at
+    store.save_document(
+        "jobs",
+        {
+            "job_id": stuck.id,
+            "job_type": "build",
+            "profile_id": stuck.profile_id,
+            "status": stuck.status.value,
+            "payload": stuck.model_dump(mode="json"),
+            "input_payload": {},
+        },
+    )
+    service = OntologyBuildService(runtime)
+
+    normalized = service.get(stuck.id)
+
+    assert normalized is not None
+    assert normalized.status == OntologyBuildStatus.SUCCEEDED
+    registration = next(
+        step
+        for step in normalized.steps
+        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+    )
+    assert registration.status == OntologyBuildStepStatus.SUCCEEDED
+    assert registration.detail_ja == "Markdown Draft を生成しました。"
+    assert registration.finished_at == normalized.finished_at
+    raw_document = store.get_document("jobs", {"job_id": stuck.id})
+    assert raw_document is not None
+    raw_job = OntologyBuildJob.model_validate(raw_document["payload"])
+    raw_registration = next(
+        step
+        for step in raw_job.steps
+        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+    )
+    assert raw_registration.status == OntologyBuildStepStatus.RUNNING
 
 
 def test_list_profile_jobs_returns_newest_first_with_limit(
@@ -547,12 +1126,7 @@ def test_accept_applies_upserts_accumulates_and_publishes(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
-    service = OntologyBuildService(runtime)
-    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
-    job = service.start("sales", business_text="受注は顧客に紐づく。", qa_pairs=qa_pairs)
-    _wait_for_job(service, job.id)
-    proposals = runtime.list_profile_proposals("sales")
+    proposals = _seed_build_proposals(runtime)
     relationship = next(
         proposal for proposal in proposals if proposal.kind == OntologyProposalKind.RELATIONSHIP
     )
@@ -608,15 +1182,15 @@ def test_accept_applies_upserts_accumulates_and_publishes(
     assert {proposal.id for proposal in restored} >= {relationship.id, mapping.id, metric.id}
 
 
-def test_build_job_fails_fast_when_profile_view_is_empty(
+def test_build_job_fails_fast_when_db_profile_scope_is_empty(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    """schema 未解決(view 空)のときは LLM を呼ばずに明確なエラーで失敗する。"""
+    """DB catalog で profile scope が空のときは LLM を呼ばずに明確なエラーで失敗する。"""
 
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    # 空カタログ → profile の対象オブジェクトが公開 Ontology に解決できない状態
+    # 空カタログ → profile の対象オブジェクトが DB schema catalog に解決できない状態
     legacy.catalog = SchemaCatalog(refreshed_at="2026-07-12T00:00:00Z", tables=[])
 
     service = OntologyBuildService(runtime)
@@ -624,12 +1198,14 @@ def test_build_job_fails_fast_when_profile_view_is_empty(
     finished = _wait_for_job(service, job.id)
 
     assert finished.status == OntologyBuildStatus.FAILED
-    assert "スキーマ情報を更新" in finished.error_message_ja
+    assert "DB schema catalog" in finished.error_message_ja
+    assert "DB 構造を再取得" in finished.error_message_ja
     assert client.calls == []
     schema_step = next(
         step for step in finished.steps if step.name == OntologyBuildStepName.SCHEMA_CONTEXT
     )
     assert schema_step.status == OntologyBuildStepStatus.FAILED
+    assert schema_step.detail_ja == "profile 範囲に DB 表・ビューがありません。"
     assert all(
         step.status == OntologyBuildStepStatus.SKIPPED
         for step in finished.steps
@@ -637,25 +1213,161 @@ def test_build_job_fails_fast_when_profile_view_is_empty(
     )
 
 
-def test_start_returns_immediately_even_if_profile_view_is_slow(
+def test_build_job_uses_latest_schema_when_published_profile_scope_is_stale(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    """start() は重いオントロジー同期(profile_view)を待たずに job を返す。"""
+    """published Ontology が古くても AI input は DB catalog から作る。"""
+
+    runtime, _store, legacy = harness
+    _view, published_base = runtime.profile_view("sales")
+    table_node = next(
+        node
+        for node in published_base.nodes
+        if node.kind == OntologyNodeKind.TABLE and node.technical_name == "APP.ORDERS"
+    )
+    business_node = OntologyNode(
+        id="business_orders_pinned_for_build",
+        revision_id=published_base.revision.id,
+        kind=OntologyNodeKind.BUSINESS_ENTITY,
+        technical_name="APP.ORDERS",
+        business_name_ja="受注",
+        physical_mappings=[PhysicalMapping(object_ref=table_node.physical_mappings[0].object_ref)],
+        provenance=OntologyProvenance(source_kind=OntologySourceKind.MANUAL),
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    draft = runtime.create_ontology_draft(
+        published_base.revision.id,
+        OntologyDraftRequest(
+            base_etag=published_base.revision.etag,
+            node_upserts=[business_node],
+        ),
+    )
+    published_with_business = runtime.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+
+    invoice_table = SchemaTable(
+        table_name="INVOICES",
+        logical_name="請求",
+        owner="APP",
+        columns=[
+            SchemaColumn(column_name="ID", logical_name="請求 ID", data_type="NUMBER"),
+            SchemaColumn(column_name="AMOUNT", logical_name="請求金額", data_type="NUMBER"),
+        ],
+    )
+    legacy.catalog = legacy.catalog.model_copy(
+        update={"tables": [*legacy.catalog.tables, invoice_table]}
+    )
+    legacy.profile = legacy.profile.model_copy(update={"allowed_tables": ["APP.INVOICES"]})
+
+    pinned_view, pinned_ontology = runtime.profile_view("sales")
+    assert pinned_ontology.revision.id == published_with_business.revision.id
+    pinned_node_ids = set(pinned_view.node_ids)
+    assert not any(
+        node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW} and node.id in pinned_node_ids
+        for node in pinned_ontology.nodes
+    )
+
+    invoice_extraction = {
+        "entities": [
+            {
+                "object_name": "APP.INVOICES",
+                "business_name_ja": "請求",
+                "description_ja": "顧客への請求を表す。",
+                "aliases": ["インボイス"],
+                "confidence": 0.9,
+            }
+        ],
+        "relationships": [],
+        "metrics": [
+            {
+                "metric_name_ja": "請求金額合計",
+                "expression_sql": "SUM(AMOUNT)",
+                "aggregation": "sum",
+                "base_columns": ["APP.INVOICES.AMOUNT"],
+                "unit": "円",
+                "description_ja": "請求金額の合計",
+                "evidence_ja": "業務説明",
+                "confidence": 0.8,
+            }
+        ],
+        "synonyms": [],
+        "warnings_ja": [],
+    }
+    client = _FakeEnterpriseAiClient(
+        "抽出結果:\n" + json.dumps(invoice_extraction, ensure_ascii=False)
+    )
+    legacy._enterprise_ai_client = client
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="請求は顧客への請求金額を管理する。")
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert not any("公開 Ontology" in warning for warning in finished.warnings_ja)
+    assert not any("公開 Ontology" in event.message_ja for event in finished.events)
+    assert any("DB から profile 範囲" in event.message_ja for event in finished.events)
+    schema_context = json.loads(client.contexts[0])
+    assert {item["object"] for item in schema_context["objects"]} == {"APP.INVOICES"}
+    assert runtime.list_profile_proposals("sales") == []
+    state = runtime.ontology_markdown_state("sales")
+    assert state.draft_revision is not None
+    assert state.draft_revision.id == finished.draft_revision_id
+    assert state.draft_revision.schema_fingerprint != (
+        published_with_business.revision.schema_fingerprint
+    )
+
+    query_view_after, query_ontology_after = runtime.profile_view("sales")
+    assert query_ontology_after.revision.id == published_with_business.revision.id
+    assert query_view_after.ontology_revision_id == published_with_business.revision.id
+
+
+def test_build_job_does_not_read_profile_view_for_ai_schema_input(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """AI input の schema は DB catalog 直読みにし、profile view API へ依存しない。"""
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+
+    class _NoProfileViewRuntime:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(runtime, name)
+
+        def profile_view(self, profile_id: str) -> Any:
+            raise AssertionError(f"profile_view must not be used for AI build: {profile_id}")
+
+        def profile_view_for_build(self, profile_id: str) -> Any:
+            raise AssertionError(
+                f"profile_view_for_build must not be used for AI build: {profile_id}"
+            )
+
+    service = OntologyBuildService(_NoProfileViewRuntime())
+    job = service.start("sales", business_text="受注は顧客に紐づく。")
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+
+
+def test_start_returns_immediately_even_if_build_schema_context_is_slow(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """start() は重い DB schema context 準備を待たずに job を返す。"""
 
     import threading as _threading
 
     runtime, _store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     release = _threading.Event()
-    original_profile_view = runtime.profile_view
+    original_prepare_build_schema_context = runtime.prepare_build_schema_context
 
     class _SlowRuntime:
         def __getattr__(self, name: str) -> Any:
             return getattr(runtime, name)
 
-        def profile_view(self, profile_id: str) -> Any:
+        def prepare_build_schema_context(self, profile_id: str) -> Any:
             release.wait(timeout=5)
-            return original_profile_view(profile_id)
+            return original_prepare_build_schema_context(profile_id)
 
     service = OntologyBuildService(_SlowRuntime())
     started = time.monotonic()
@@ -663,7 +1375,7 @@ def test_start_returns_immediately_even_if_profile_view_is_slow(
     elapsed = time.monotonic() - started
 
     try:
-        # profile_view がブロックしていても POST(start)は即時に返る
+        # prepare_build_schema_context がブロックしていても POST(start)は即時に返る
         assert elapsed < 1.0
         assert job.status in {OntologyBuildStatus.QUEUED, OntologyBuildStatus.RUNNING}
         assert job.steps[0].name == OntologyBuildStepName.SCHEMA_CONTEXT
@@ -689,12 +1401,8 @@ def test_accept_ignores_stale_drafts_from_previous_schema_generations(
 
     runtime, _store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
-    service = OntologyBuildService(runtime)
-
     # 旧スキーマ世代で提案を承認して draft を作る(store に残留する)
-    job = service.start("sales", business_text="受注は顧客に紐づく。")
-    _wait_for_job(service, job.id)
-    old_proposal = runtime.list_profile_proposals("sales")[0]
+    old_proposal = _seed_build_proposals(runtime)[0]
     runtime.accept_proposal(old_proposal.id)
 
     # スキーマ drift(列追加で fingerprint が変わる)→ 公開世代が変わる
@@ -718,14 +1426,8 @@ def test_accept_ignores_stale_drafts_from_previous_schema_generations(
         },
         deep=True,
     )
-    # 新世代で AI 構築 → 提案は新 published を基準に生成される
-    job2 = service.start("sales", business_text="受注は顧客に紐づく。")
-    finished2 = _wait_for_job(service, job2.id)
-    new_proposals = [
-        proposal
-        for proposal in runtime.list_profile_proposals("sales")
-        if proposal.id in set(finished2.proposal_ids)
-    ]
+    # 新世代で提案を作る
+    new_proposals = _seed_build_proposals(runtime)
     assert new_proposals
 
     # 旧世代 draft(business 定義持ち)が store に残っていても、新提案の accept は成功する
@@ -740,15 +1442,11 @@ def test_accept_ignores_stale_drafts_from_previous_schema_generations(
 def test_batch_accept_creates_single_draft_for_all_proposals(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
-    service = OntologyBuildService(runtime)
-    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
-    job = service.start("sales", business_text="受注は顧客に紐づく。", qa_pairs=qa_pairs)
-    finished = _wait_for_job(service, job.id)
-    assert len(finished.proposal_ids) >= 3
+    runtime, _store, _legacy = harness
+    proposals = _seed_build_proposals(runtime)
+    assert len(proposals) >= 3
 
-    accepted, draft = runtime.accept_proposals(finished.proposal_ids)
+    accepted, draft = runtime.accept_proposals([proposal.id for proposal in proposals])
 
     # すべて同じ draft revision に反映され、全提案が accepted になる
     assert {proposal.status.value for proposal in accepted} == {"accepted"}
@@ -767,40 +1465,35 @@ def test_batch_accept_creates_single_draft_for_all_proposals(
     assert published.revision.status.value == "published"
 
 
-def test_rerun_clears_previous_proposals(
+def test_rerun_replaces_markdown_draft_without_creating_proposals(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    """AI 構築を再実行すると、前回のレビュー一覧(承認/却下/レビュー待ち)は一掃され、
-    今回の候補だけが残る。SUPERSEDED は再起動後も一覧に復活しない。"""
+    """AI 構築を再実行すると proposal は作らず、最新 Markdown Draft が差し替わる。"""
 
     runtime, store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
     first = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
-    first_proposals = runtime.list_profile_proposals("sales")
-    count_after_first = len(first_proposals)
-    assert count_after_first == len(first.proposal_ids)
-    first_ids = {proposal.id for proposal in first_proposals}
-    # 1 件は承認、1 件は却下しておき、それらも次回実行で一掃されることを確認する。
-    runtime.accept_proposal(first.proposal_ids[0])
-    runtime.reject_proposal(first.proposal_ids[1])
+    assert first.proposal_ids == []
+    first_state = runtime.ontology_markdown_state("sales")
+    assert first_state.draft_revision is not None
+    assert first_state.draft_revision.id == first.draft_revision_id
 
     second = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
     assert second.status == OntologyBuildStatus.SUCCEEDED
-    # 今回分は新規に登録される(空ではない)。
-    assert second.proposal_ids
-    after_second = runtime.list_profile_proposals("sales")
-    # 前回の提案(承認/却下含む)は一覧から消え、今回の候補だけが残る。
-    assert len(after_second) == count_after_first
-    assert {proposal.id for proposal in after_second} == set(second.proposal_ids)
-    assert first_ids.isdisjoint({proposal.id for proposal in after_second})
+    assert second.proposal_ids == []
+    second_state = runtime.ontology_markdown_state("sales")
+    assert second_state.draft_revision is not None
+    assert second_state.draft_revision.id == second.draft_revision_id
+    assert second_state.draft_revision.id != first_state.draft_revision.id
+    assert second_state.draft_markdown == second.markdown_output
+    assert runtime.list_profile_proposals("sales") == []
 
-    # 再起動(同じ store)でも SUPERSEDED は一覧に復活しない。
+    # 再起動(同じ store)でも proposal は復活せず、最新 Draft を読める。
     restarted = OntologyApiRuntime(legacy_service=legacy, store=store)
-    restored_ids = {proposal.id for proposal in restarted.list_profile_proposals("sales")}
-    assert restored_ids == set(second.proposal_ids)
-    assert first_ids.isdisjoint(restored_ids)
+    assert restarted.list_profile_proposals("sales") == []
+    assert restarted.ontology_markdown_state("sales").draft_revision is not None
 
 
 def test_start_prunes_oldest_finished_jobs(
@@ -866,4 +1559,59 @@ def test_external_worker_rehydrates_persisted_build_input(
     worker_service = OntologyBuildService(runtime)
     finished = worker_service.run_persisted(queued.id)
     assert finished.status == OntologyBuildStatus.SUCCEEDED
-    assert finished.proposal_ids
+    assert finished.proposal_ids == []
+    assert finished.draft_revision_id
+    assert runtime.ontology_markdown_state("sales").draft_revision is not None
+
+
+def test_start_persists_business_text_and_source_document_refs(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    source_documents = [
+        OntologySourceDocument(
+            id="ontology_source_rules",
+            profile_id="sales",
+            filename="rules.md",
+            media_type="text/markdown",
+            size_bytes=12,
+            sha256="0" * 64,
+            storage_uri="/tmp/rules.md",
+        ),
+        OntologySourceDocument(
+            id="ontology_source_qa",
+            profile_id="sales",
+            filename="qa_cases.csv",
+            media_type="text/csv",
+            size_bytes=48,
+            sha256="1" * 64,
+            storage_uri="/tmp/qa_cases.csv",
+        ),
+    ]
+
+    queued = service.start(
+        "sales",
+        business_text="受注は顧客に紐づく。",
+        run_qa_extraction=True,
+        run_text_extraction=True,
+        source_documents=source_documents,
+        idempotency_key="persist-build-inputs-1",
+    )
+
+    assert queued.source_document_ids == ["ontology_source_rules", "ontology_source_qa"]
+    assert [source.filename for source in queued.sources] == ["rules.md", "qa_cases.csv"]
+    persisted = store.get_job(queued.id)
+    assert persisted is not None
+    assert persisted["input_payload"]["business_text"] == "受注は顧客に紐づく。"
+    assert persisted["payload"]["source_document_ids"] == [
+        "ontology_source_rules",
+        "ontology_source_qa",
+    ]
+    stored_sources = store.list_documents("source_documents", {"profile_id": "sales"})
+    assert {document["payload"]["filename"] for document in stored_sources} == {
+        "rules.md",
+        "qa_cases.csv",
+    }

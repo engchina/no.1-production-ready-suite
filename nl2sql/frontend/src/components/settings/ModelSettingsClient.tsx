@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { InputActionField } from "@/components/ui/input-action-field";
 import { RequiredIndicator } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -710,25 +711,27 @@ function TestableTextField({
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <input
-          id={id}
-          type="text"
-          value={value}
-          placeholder={placeholder}
-          onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
-        />
-        <TestButton
-          modelId={value.trim()}
-          fallbackLabel={label}
-          testing={testing}
-          disabled={!value.trim()}
-          onClick={onTest}
-        />
-      </div>
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      <InputActionField
+        id={id}
+        label={
+          <>
+            {label}
+            {badge ? <RequiredIndicator label={badge} /> : null}
+          </>
+        }
+        value={value}
+        placeholder={placeholder}
+        helper={helper}
+        onChange={onChange}
+        action={{
+          label: testing ? t("settings.model.test.testing") : t("settings.model.test.action"),
+          ariaLabel: t("settings.model.test.aria", { model: value.trim() || label }),
+          icon: <TestTube2 size={15} aria-hidden />,
+          loading: testing,
+          disabled: !value.trim(),
+          onClick: onTest,
+        }}
+      />
       <ModelTestResultPanel result={testResult} />
     </div>
   );

@@ -10,6 +10,14 @@ const ontologyPage = readFileSync(
   new URL("../src/features/nl2sql/pages/OntologyBuildPage.tsx", import.meta.url),
   "utf8",
 );
+const ontologyBuildSection = readFileSync(
+  new URL("../src/features/nl2sql/ontology/OntologyBuildSection.tsx", import.meta.url),
+  "utf8",
+);
+const ontologyMermaidPanel = readFileSync(
+  new URL("../src/features/nl2sql/ontology/OntologyMermaidPanel.tsx", import.meta.url),
+  "utf8",
+);
 const messages = readFileSync(new URL("../src/lib/i18n.ts", import.meta.url), "utf8");
 
 test("profile save queues Oracle sync without touching Ontology or detail refresh", () => {
@@ -32,17 +40,51 @@ test("profile Oracle sync exposes progress, failure recovery and retry", () => {
   assert.doesNotMatch(messages, /Oracle Profile 反映結果/u);
 });
 
-test("Ontology view materialization belongs to the Ontology page", () => {
-  assert.match(ontologyPage, /\/ontology-view\/materialize/u);
-  assert.match(ontologyPage, /ontologyViewStale/u);
-  assert.match(ontologyPage, /data-testid="ontology-view-lifecycle"/u);
-  assert.match(messages, /業務 Profile の保存では更新されません/u);
+test("Ontology page uses AI build as the only user-facing build action", () => {
+  assert.doesNotMatch(ontologyPage, /\/ontology-view\/materialize/u);
+  assert.doesNotMatch(ontologyPage, /ontologyViewStale/u);
+  assert.doesNotMatch(ontologyPage, /data-testid="ontology-view-lifecycle"/u);
+  assert.match(ontologyPage, /OntologyBuildSection/u);
+  assert.match(ontologyBuildSection, /ontology-build-markdown/u);
+});
+
+test("Ontology publish refreshes the graph and refresh-tokened Mermaid export", () => {
+  assert.match(ontologyPage, /const \[mermaidRefreshToken, setMermaidRefreshToken\] = useState\(0\)/u);
+  assert.match(ontologyPage, /await refreshOntologyView\(\);\s*setMermaidRefreshToken\(\(token\) => token \+ 1\)/u);
+  assert.match(ontologyPage, /onPublished=\{handleOntologyPublished\}/u);
+  assert.match(ontologyPage, /graphRevisionId=\{ontologyGraphRevisionId\}/u);
+  assert.match(ontologyPage, /refreshToken=\{mermaidRefreshToken\}/u);
+  assert.match(ontologyBuildSection, /onPublished\?: \(\) => void \| Promise<void>/u);
+  assert.match(ontologyBuildSection, /void onPublished\?\.\(\)/u);
+});
+
+test("Mermaid export panel displays revision identity and mismatch recovery", () => {
+  assert.match(ontologyMermaidPanel, /graphRevisionId\?: string/u);
+  assert.match(ontologyMermaidPanel, /refreshToken\?: number/u);
+  assert.match(ontologyMermaidPanel, /handledRefreshTokenRef/u);
+  assert.match(ontologyMermaidPanel, /setMermaidRevisionId\(data\.ontology_revision_id\)/u);
+  assert.match(ontologyMermaidPanel, /ontology-graph-revision-id/u);
+  assert.match(ontologyMermaidPanel, /ontology-mermaid-revision-id/u);
+  assert.match(ontologyMermaidPanel, /ontology-mermaid-revision-mismatch/u);
+  assert.match(messages, /SQL 生成用 Mermaid ER 技術表現/u);
+  assert.match(messages, /編集用・標準図示ではありません/u);
+});
+
+test("Mermaid export appears before grounding graph and supports code/rendered tabs", () => {
+  assert.match(ontologyPage, /<OntologyMermaidPanel[\s\S]*?<OntologyQueryPlayground/u);
+  assert.match(ontologyMermaidPanel, /ManagementTabs/u);
+  assert.match(ontologyMermaidPanel, /type MermaidPanelTab = "code" \| "graph"/u);
+  assert.match(ontologyMermaidPanel, /await import\("mermaid"\)/u);
+  assert.match(ontologyMermaidPanel, /mermaidApi\.render/u);
+  assert.match(ontologyMermaidPanel, /ontology-mermaid-rendered-graph/u);
+  assert.match(messages, /Mermaid ER 表現を表示/u);
+  assert.match(messages, /Mermaid ER コードの描画結果/u);
 });
 
 test("all profiles share the physical delete flow and retained-state confirmation", () => {
   assert.match(
     messages,
-    /そのすべての Ontology view、Oracle DBMS_CLOUD_AI Profile、Select AI Agent 関連アセットを完全に削除/u
+    /そのすべてのオントロジー範囲設定、Oracle DBMS_CLOUD_AI Profile、Select AI Agent 関連アセットを完全に削除/u
   );
   assert.match(messages, /監査履歴は削除されません/u);
   assert.doesNotMatch(profilePage, /profile\.id !== "default"/u);

@@ -71,11 +71,6 @@ def _docx_bytes() -> bytes:
             "QUESTION,SQL\n受注件数,SELECT COUNT(*) FROM APP.ORDERS\n".encode(),
             OntologyEvidenceLocatorKind.LINE,
         ),
-        (
-            "qa.tsv",
-            "QUESTION\tSQL\n受注件数\tSELECT COUNT(*) FROM APP.ORDERS\n".encode(),
-            OntologyEvidenceLocatorKind.LINE,
-        ),
         ("model.xlsx", _workbook_bytes(), OntologyEvidenceLocatorKind.SHEET_ROW),
         ("model.xlsm", _workbook_bytes(), OntologyEvidenceLocatorKind.SHEET_ROW),
         ("rules.docx", _docx_bytes(), OntologyEvidenceLocatorKind.PARAGRAPH),
@@ -93,8 +88,22 @@ def test_supported_sources_preserve_locator_and_hash(
     evidence = extracted.chunks[0].evidence(source)
     assert evidence.source_sha256 == source.sha256
     assert len(evidence.excerpt_hash) == 64
-    if filename.endswith((".csv", ".tsv", ".xlsx", ".xlsm")):
+    if filename.endswith((".csv", ".xlsx", ".xlsm")):
         assert extracted.qa_pairs[0].question == "受注件数"
+
+
+def test_tsv_source_is_rejected() -> None:
+    content = "QUESTION\tSQL\n受注件数\tSELECT COUNT(*) FROM APP.ORDERS\n".encode()
+
+    with pytest.raises(OntologySourceError) as unsupported:
+        validate_source_signature("qa.tsv", content)
+
+    assert unsupported.value.code == "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED"
+
+    with pytest.raises(OntologySourceError) as extract_error:
+        extract_ontology_source(_source("qa.tsv", content), content)
+
+    assert extract_error.value.code == "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED"
 
 
 def test_scanned_pdf_uses_vlm_and_encrypted_pdf_is_rejected() -> None:

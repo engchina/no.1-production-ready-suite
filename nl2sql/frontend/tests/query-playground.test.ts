@@ -73,6 +73,61 @@ test("日本語 alias(得意先)でも一致する", () => {
   assert.deepEqual(result.highlightNodeIds, ["customer"]);
 });
 
+test("同じ物理名に業務概念と物理表がある場合は業務概念を優先する", () => {
+  const result = answerOntologyQuestion(
+    {
+      nodes: [
+        {
+          id: "employee-business",
+          kind: "business_entity",
+          business_name_ja: "従業員",
+          technical_name: "ADMIN.EMPLOYEE",
+          aliases: ["社員"],
+        },
+        {
+          id: "employee-table",
+          kind: "table",
+          business_name_ja: "従業員情報",
+          technical_name: "ADMIN.EMPLOYEE",
+        },
+      ],
+      edges: [
+        {
+          id: "employee-maps-to",
+          kind: "maps_to",
+          source_node_id: "employee-business",
+          target_node_id: "employee-table",
+          relationship_name_ja: "物理マッピング",
+        },
+      ],
+    },
+    "ADMIN.EMPLOYEE とは?"
+  );
+
+  assert.equal(result.stage, "entity_definition");
+  assert.deepEqual(result.highlightNodeIds, ["employee-business"]);
+});
+
+test("業務概念がない場合は物理表・ビューに fallback する", () => {
+  const result = answerOntologyQuestion(
+    {
+      nodes: [
+        {
+          id: "project-table",
+          kind: "table",
+          business_name_ja: "PROJECT",
+          technical_name: "ADMIN.PROJECT",
+        },
+      ],
+      edges: [],
+    },
+    "ADMIN.PROJECT とは?"
+  );
+
+  assert.equal(result.stage, "entity_definition");
+  assert.deepEqual(result.highlightNodeIds, ["project-table"]);
+});
+
 test("一覧質問は list_all になる", () => {
   const result = answerOntologyQuestion(graph, "注文の一覧を見せて");
   assert.equal(result.stage, "list_all");

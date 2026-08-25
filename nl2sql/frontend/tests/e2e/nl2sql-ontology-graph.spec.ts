@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -102,6 +102,59 @@ const edges = [
   },
 ];
 
+const employeeOntologyGraph = {
+  nodes: [
+    {
+      id: "employee-business",
+      kind: "business_entity",
+      business_name_ja: "従業員",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      validation_status: "passed",
+      aliases: ["社員"],
+      physical_mappings: [
+        {
+          object_ref: {
+            node_id: "employee-table",
+            owner: "ADMIN",
+            object_name: "EMPLOYEE",
+            object_type: "table",
+          },
+        },
+      ],
+    },
+    {
+      id: "employee-table",
+      kind: "table",
+      business_name_ja: "従業員情報",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      validation_status: "passed",
+      physical_mappings: [
+        {
+          object_ref: {
+            node_id: "employee-table",
+            owner: "ADMIN",
+            object_name: "EMPLOYEE",
+            object_type: "table",
+          },
+        },
+      ],
+    },
+  ],
+  edges: [
+    {
+      id: "employee-maps-to",
+      kind: "maps_to",
+      source_node_id: "employee-business",
+      target_node_id: "employee-table",
+      relationship_name_ja: "物理マッピング",
+      review_status: "approved",
+      validation_status: "passed",
+    },
+  ],
+};
+
 const relationshipRows = Array.from({ length: 30 }, (_, index) => {
   const source = edges[index % edges.length];
   return {
@@ -111,47 +164,6 @@ const relationshipRows = Array.from({ length: 30 }, (_, index) => {
   };
 });
 
-function expectedInformationRows(testInfo: TestInfo) {
-  return testInfo.project.name === "mobile-375" ? 5 : 8;
-}
-
-async function expectInformationTableRowLimit(
-  list: Locator,
-  rowSelector: string,
-  visibleRows: number
-) {
-  const fit = await list.evaluate(
-    (node, { rowSelector: selector }) => {
-      const listBox = node.getBoundingClientRect();
-      const rows = Array.from(node.querySelectorAll(selector)).map((row) =>
-        row.getBoundingClientRect()
-      );
-      const header = node.querySelector("thead");
-      const computed = window.getComputedStyle(node);
-      const rootFontSize = Number.parseFloat(
-        window.getComputedStyle(document.documentElement).fontSize
-      );
-      return {
-        listHeight: listBox.height,
-        maxHeight: Number.parseFloat(computed.maxHeight),
-        rootFontSize,
-        headerPosition: header ? window.getComputedStyle(header).position : "",
-        rowCount: rows.length,
-        scrollHeight: node.scrollHeight,
-        clientHeight: node.clientHeight,
-      };
-    },
-    { rowSelector }
-  );
-  const expectedMaxHeight = fit.rootFontSize * (2.5 + 3.5 * visibleRows);
-  expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
-  expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
-  expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
-  expect(fit.rowCount).toBeGreaterThan(visibleRows);
-  expect(fit.scrollHeight).toBeGreaterThan(fit.clientHeight);
-  expect(fit.headerPosition).toBe("sticky");
-}
-
 async function expectNoHorizontalScroll(page: Page) {
   const size = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
@@ -160,7 +172,41 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
-async function mockApi(page: Page) {
+async function expectQuestionActionLayout(page: Page, playground: Locator) {
+  const input = playground.getByTestId("ontology-playground-question");
+  const button = playground.getByTestId("ontology-playground-run");
+  const [inputBox, buttonBox] = await Promise.all([input.boundingBox(), button.boundingBox()]);
+  expect(inputBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(inputBox!.height).toBeGreaterThanOrEqual(43);
+  expect(buttonBox!.height).toBeGreaterThanOrEqual(43);
+  expect(Math.abs(inputBox!.height - buttonBox!.height)).toBeLessThanOrEqual(1);
+
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  if (viewportWidth >= 640) {
+    expect(buttonBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
+    expect(Math.abs(buttonBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
+    return;
+  }
+
+  expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+  expect(Math.abs(buttonBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
+  expect(buttonBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
+}
+
+type MockApiOptions = {
+  ontologyGraph?: {
+    nodes: unknown[];
+    edges: unknown[];
+  };
+};
+
+async function mockApi(page: Page, options: MockApiOptions = {}) {
+  const ontologyGraph = options.ontologyGraph ?? {
+    nodes,
+    edges: relationshipRows,
+  };
+
   await page.route("**/api/schema/catalog", (route) =>
     fulfillJson(route, { refreshed_at: "2026-07-12T00:00:00Z", tables: [] })
   );
@@ -209,8 +255,8 @@ async function mockApi(page: Page) {
           schema_fingerprint: "fp",
           etag: "re",
         },
-        nodes,
-        edges: relationshipRows,
+        nodes: ontologyGraph.nodes,
+        edges: ontologyGraph.edges,
       },
     })
   );
@@ -223,11 +269,18 @@ async function mockApi(page: Page) {
   await page.route("**/api/nl2sql/profiles/*/ontology-proposals", (route) =>
     fulfillJson(route, { proposals: [] })
   );
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, {
+      draft_markdown: "",
+      published_markdown: "",
+      draft_revision: null,
+      published_revision: null,
+      draft_etag: "",
+      published_at: null,
+    })
+  );
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
-  );
-  await page.route("**/api/nl2sql/ontology-templates", (route) =>
-    fulfillJson(route, { templates: [] })
   );
 }
 
@@ -235,8 +288,14 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問プレイグラウンド(決定論)" });
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
+  await expect(
+    playground.getByText("質問を入力すると、一致したノードと関係をグラフで強調表示します。")
+  ).toBeVisible();
+  await expect(playground.getByText("確認対象: 5 ノード / 30 関係")).toBeVisible();
+  await expectQuestionActionLayout(page, playground);
+  await expectNoHorizontalScroll(page);
 
   // カードノード: 業務名 + 技術名の 2 段表示
   const customer = playground.locator(".react-flow__node", { hasText: "顧客" }).first();
@@ -264,40 +323,82 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   });
 });
 
-test("Ontology 関連一覧はデスクトップ8行・モバイル5行相当の高さで内部スクロールする", async ({
-  page,
-}, testInfo) => {
+test("同じ物理名の業務概念と物理表をカード上で区別できる", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: employeeOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+
+  const businessCard = playground.getByTestId("ontology-node-card-employee-business");
+  await expect(businessCard).toBeVisible();
+  await expect(businessCard).toHaveAttribute("data-ontology-node-kind", "business_entity");
+  await expect(businessCard).toContainText("業務概念");
+  await expect(businessCard).toContainText("従業員");
+  await expect(businessCard).toContainText("対応表: ADMIN.EMPLOYEE");
+
+  const tableCard = playground.getByTestId("ontology-node-card-employee-table");
+  await expect(tableCard).toBeVisible();
+  await expect(tableCard).toHaveAttribute("data-ontology-node-kind", "table");
+  await expect(tableCard).toContainText("物理表");
+  await expect(tableCard).toContainText("従業員情報");
+  await expect(tableCard).toContainText("物理名: ADMIN.EMPLOYEE");
+
+  const legend = playground.getByTestId("ontology-graph-legend");
+  await expect(legend).toContainText("業務概念");
+  await expect(legend).toContainText("物理表・ビュー");
+  await expect(legend).toContainText("物理マッピング = 業務概念と物理表・ビューの対応");
+  await expectNoHorizontalScroll(page);
+});
+
+test("質問を接地すると分類とグラフ強調が表示される", async ({ page }) => {
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
-  if (testInfo.project.name === "mobile-375") {
-    const cardList = page.getByTestId("ontology-relationship-card-list");
-    await expect(cardList).toBeVisible();
-    expect(await cardList.locator("button").count()).toBeGreaterThan(expectedInformationRows(testInfo));
-    const state = await cardList.evaluate((node) => {
-      const computed = window.getComputedStyle(node);
-      const rootFontSize = Number.parseFloat(
-        window.getComputedStyle(document.documentElement).fontSize
-      );
-      return {
-        listHeight: node.getBoundingClientRect().height,
-        maxHeight: Number.parseFloat(computed.maxHeight),
-        rootFontSize,
-        scrollHeight: node.scrollHeight,
-        clientHeight: node.clientHeight,
-      };
-    });
-    expect(state.maxHeight).toBeGreaterThanOrEqual(state.rootFontSize * 17.5 - 2);
-    expect(state.maxHeight).toBeLessThanOrEqual(state.rootFontSize * 17.5 + 2);
-    expect(Math.abs(state.listHeight - state.maxHeight)).toBeLessThanOrEqual(2);
-    expect(state.scrollHeight).toBeGreaterThan(state.clientHeight);
-    await expectNoHorizontalScroll(page);
-    return;
-  }
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await playground.getByTestId("ontology-playground-question").fill("顧客と注文の関係は?");
+  await playground.getByTestId("ontology-playground-run").click();
 
-  const table = page.getByTestId("ontology-relationship-table-scroll-region");
-  await expect(table).toBeVisible();
-  expect(await table.locator("tbody tr").count()).toBeGreaterThan(expectedInformationRows(testInfo));
-  await expectInformationTableRowLimit(table, "tbody tr", expectedInformationRows(testInfo));
+  const result = playground.getByTestId("ontology-playground-result");
+  await expect(result).toContainText("関係の一致");
+  await expect(result).toContainText("注文する");
+  await expect(playground.getByTestId("ontology-playground-ready-state")).toHaveCount(0);
+
+  const metricCard = playground
+    .locator(".react-flow__node", { hasText: "売上合計" })
+    .locator("div")
+    .first();
+  await expect(metricCard).toHaveCSS("opacity", "0.35");
+});
+
+test("公開済み Ontology がない場合は準備手順を表示する", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: { nodes: [], edges: [] } });
+  await page.goto("/ontology-build?profile=default");
+
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await expect(playground.getByText("公開済み Ontology がまだありません")).toBeVisible();
+  await expect(
+    playground.getByText("AI 構築の Markdown Draft を確認して公開すると、質問がどの業務モデルに接地するかをここで確認できます。")
+  ).toBeVisible();
+  await expect(playground.getByText("準備: AI 構築 → Markdown Draft 確認 → Ontology 公開")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-question")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("Ontology グラフはデスクトップとモバイルで主要ノード・凡例を表示し横スクロールしない", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/ontology-build?profile=default");
+
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await expect(playground.locator(".react-flow")).toBeVisible();
+  await expect(playground.locator(".react-flow__node")).toHaveCount(3);
+  await expect(playground.getByTestId("ontology-graph-legend")).toBeVisible();
+  await expect(playground.locator(".react-flow__node", { hasText: "顧客" })).toBeVisible();
+  await expect(playground.locator(".react-flow__node", { hasText: "注文" })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });

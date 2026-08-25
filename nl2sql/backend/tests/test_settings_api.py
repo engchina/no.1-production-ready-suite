@@ -987,6 +987,250 @@ def test_update_database_settings_persists_thin_wallet_dir_separately(
     assert "ORACLE_WALLET_PASSWORD=wallet-secret" in env_text
 
 
+def test_rdf_network_config_get_patch_saves_env_and_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "oracle_user", "NL2SQL_APP")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_tablespace", "")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_options", "")
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _sql: str, _bindings: object | None = None) -> None:
+            return None
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class _Connection:
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    monkeypatch.setattr(
+        settings_router,
+        "get_oracle_pool_manager",
+        lambda: SimpleNamespace(control_connection=lambda: _Connection()),
+    )
+
+    initial = client.get("/api/settings/database/rdf-network")
+    assert initial.status_code == 200
+    assert initial.json()["data"]["mode"] == "local_fallback"
+
+    resp = client.patch(
+        "/api/settings/database/rdf-network",
+        json={
+            "network_owner": "nl2sql_app",
+            "network_name": "net1",
+            "tablespace": "rdftbs",
+            "options": "model_partitioning=by_hash_p model_partitions=16",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["network_owner"] == "NL2SQL_APP"
+    assert data["network_name"] == "NET1"
+    assert data["tablespace"] == "RDFTBS"
+    assert data["options"] == "MODEL_PARTITIONING=BY_HASH_P MODEL_PARTITIONS=16"
+    assert data["status"] == "ready"
+    assert settings.nl2sql_ontology_rdf_network_owner == "NL2SQL_APP"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "NL2SQL_ONTOLOGY_RDF_NETWORK_OWNER=NL2SQL_APP" in env_text
+    assert "NL2SQL_ONTOLOGY_RDF_NETWORK_NAME=NET1" in env_text
+    assert "NL2SQL_ONTOLOGY_RDF_TABLESPACE=RDFTBS" in env_text
+    assert (
+        "NL2SQL_ONTOLOGY_RDF_NETWORK_OPTIONS="
+        '"MODEL_PARTITIONING=BY_HASH_P MODEL_PARTITIONS=16"'
+    ) in env_text
+
+
+def test_rdf_network_config_rejects_unsafe_identifiers_and_options() -> None:
+    owner_resp = client.patch(
+        "/api/settings/database/rdf-network",
+        json={
+            "network_owner": "NL2SQL_APP;DROP",
+            "network_name": "NET1",
+            "tablespace": "RDFTBS",
+            "options": "",
+        },
+    )
+    assert owner_resp.status_code == 422
+
+    options_resp = client.patch(
+        "/api/settings/database/rdf-network",
+        json={
+            "network_owner": "NL2SQL_APP",
+            "network_name": "NET1",
+            "tablespace": "RDFTBS",
+            "options": "MODEL_PARTITIONS=16;DROP",
+        },
+    )
+    assert options_resp.status_code == 422
+
+
+def test_rdf_network_plan_rejects_checksum_and_confirmation(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_user", "NL2SQL_APP")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "NL2SQL_APP")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "NET1")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_tablespace", "RDFTBS")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_options", "")
+
+    plan = client.get("/api/settings/database/rdf-network/plan")
+    assert plan.status_code == 200
+    checksum = plan.json()["data"]["checksum"]
+
+    missing_confirmation = client.post(
+        "/api/settings/database/rdf-network/apply",
+        json={"checksum": checksum, "confirmation": ""},
+    )
+    assert missing_confirmation.status_code == 409
+
+    mismatched_checksum = client.post(
+        "/api/settings/database/rdf-network/apply",
+        json={"checksum": "bad", "confirmation": "ADMIN_EXECUTE"},
+    )
+    assert mismatched_checksum.status_code == 409
+
+
+def test_rdf_network_apply_uses_fixed_create_network_statement(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_user", "NL2SQL_APP")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "NL2SQL_APP")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "NET1")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_tablespace", "RDFTBS")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_options", "MODEL_PARTITIONS=16")
+    calls: list[tuple[str, object | None]] = []
+    metadata_attempts = 0
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, bindings: object | None = None) -> None:
+            nonlocal metadata_attempts
+            calls.append((sql, bindings))
+            if "RDF_PARAMETER" in sql:
+                metadata_attempts += 1
+                if metadata_attempts == 1:
+                    raise RuntimeError("ORA-00942: table or view does not exist")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class _Connection:
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+        def commit(self) -> None:
+            calls.append(("COMMIT", None))
+
+    monkeypatch.setattr(
+        settings_router,
+        "get_oracle_pool_manager",
+        lambda: SimpleNamespace(control_connection=lambda: _Connection()),
+    )
+    checksum = client.get("/api/settings/database/rdf-network/plan").json()["data"]["checksum"]
+
+    resp = client.post(
+        "/api/settings/database/rdf-network/apply",
+        json={"checksum": checksum, "confirmation": "ADMIN_EXECUTE"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "applied"
+    create_call = next(call for call in calls if "CREATE_RDF_NETWORK" in call[0])
+    assert ":tablespace_name" in create_call[0]
+    assert create_call[1] == {
+        "tablespace_name": "RDFTBS",
+        "options": "MODEL_PARTITIONS=16",
+        "network_owner": "NL2SQL_APP",
+        "network_name": "NET1",
+    }
+    assert ("COMMIT", None) in calls
+
+
+def test_rdf_network_owner_mismatch_requires_manual_action(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_user", "APP_USER")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "RDFUSER")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "NET1")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_tablespace", "RDFTBS")
+    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_options", "")
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _sql: str, _bindings: object | None = None) -> None:
+            raise RuntimeError("ORA-00942: table or view does not exist")
+
+    class _Connection:
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    monkeypatch.setattr(
+        settings_router,
+        "get_oracle_pool_manager",
+        lambda: SimpleNamespace(control_connection=lambda: _Connection()),
+    )
+
+    status = client.get("/api/settings/database/rdf-network")
+    assert status.status_code == 200
+    assert status.json()["data"]["status"] == "manual_required"
+    plan = client.get("/api/settings/database/rdf-network/plan")
+    plan_data = plan.json()["data"]
+    assert plan_data["manual_action_required"] is True
+    assert plan_data["can_apply"] is False
+    apply = client.post(
+        "/api/settings/database/rdf-network/apply",
+        json={"checksum": plan_data["checksum"], "confirmation": "ADMIN_EXECUTE"},
+    )
+    assert apply.status_code == 409
+
+
 def test_database_connection_test_rejects_dsn_missing_from_wallet(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,

@@ -21,6 +21,7 @@ from app.features.nl2sql.ontology_store import (
     stable_ontology_id,
     stable_physical_id,
 )
+from app.settings import get_settings
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,8 @@ class _SchemaCursor:
 class _SchemaConnection:
     def __init__(self, database: _SchemaDatabase) -> None:
         self.database = database
+        self.call_timeout = 0
+        self.database.connections.append(self)
 
     def __enter__(self) -> _SchemaConnection:
         return self
@@ -86,6 +89,7 @@ class _SchemaConnection:
 class _SchemaDatabase:
     def __init__(self) -> None:
         self.factory_calls = 0
+        self.connections: list[_SchemaConnection] = []
         self.executed: list[str] = []
         self.executed_many: list[tuple[str, list[dict[str, Any]]]] = []
         self.commits = 0
@@ -269,6 +273,44 @@ def test_oracle_object_node_lookup_filters_indexes_without_selecting_embedding()
     assert "REVISION_ID = :filter_revision_id" in sql
     assert "NODE_TYPE = :filter_node_type" in sql
     assert "PHYSICAL_ID = :filter_physical_id" in sql
+
+
+def test_oracle_store_applies_round_trip_timeout_to_connections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_oracle_call_timeout_seconds", 7.5)
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+
+    store.ensure_schema()
+    store.get_document("revisions", {"revision_id": "missing"})
+    store.list_documents("revisions")
+    store.save_document(
+        "revisions",
+        {
+            "revision_id": "rev-1",
+            "status": "draft",
+            "schema_fingerprint": "a" * 64,
+        },
+    )
+    store.save_documents_atomic(
+        "edges",
+        [
+            (
+                {
+                    "revision_id": "rev-1",
+                    "edge_id": "edge-1",
+                    "source_node_id": "node-1",
+                    "target_node_id": "node-2",
+                    "review_status": "approved",
+                },
+                None,
+            )
+        ],
+    )
+
+    assert database.connections
+    assert {connection.call_timeout for connection in database.connections} == {7500}
 
 
 def test_memory_atomic_save_rolls_back_entire_revision_switch_on_conflict() -> None:

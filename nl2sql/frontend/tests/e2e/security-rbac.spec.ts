@@ -1482,7 +1482,7 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
     etag: "profile-etag",
     updated_at: "2026-07-21T00:00:00Z",
   };
-  let proposalRequests = 0;
+  let markdownRequests = 0;
   let releaseProposals = () => {};
   const proposalsGate = new Promise<void>((resolve) => {
     releaseProposals = resolve;
@@ -1518,20 +1518,24 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
   await page.route("**/api/nl2sql/ontology/revisions", (route) =>
     fulfill(route, { revisions: [], active_revision_id: "" })
   );
-  await page.route("**/api/nl2sql/profiles/default/ontology-proposals", async (route) => {
-    proposalRequests += 1;
+  await page.route("**/api/nl2sql/profiles/default/ontology-markdown", async (route) => {
+    markdownRequests += 1;
     await proposalsGate;
     try {
-      await fulfill(route, { proposals: [] });
+      await fulfill(route, {
+        draft_markdown: "",
+        published_markdown: "",
+        draft_revision: null,
+        published_revision: null,
+        draft_etag: "",
+        published_at: null,
+      });
     } catch {
       // 画面遷移で abort 済みの request は fulfill できない場合がある。
     }
   });
   await page.route("**/api/nl2sql/profiles/default/ontology-build-jobs**", (route) =>
     fulfill(route, { jobs: [] })
-  );
-  await page.route("**/api/nl2sql/ontology-templates", (route) =>
-    fulfill(route, { templates: [] })
   );
   await page.route("**/api/security/roles?include_archived=true", (route) =>
     fulfill(route, [systemRole])
@@ -1543,7 +1547,7 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
     await expect(page.getByTestId("profile-ontology-build")).toBeVisible({
       timeout: 30_000,
     });
-    await expect.poll(() => proposalRequests).toBeGreaterThan(0);
+    await expect.poll(() => markdownRequests).toBeGreaterThan(0);
 
     await page.goto("/settings/security/roles");
 
