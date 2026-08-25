@@ -1981,53 +1981,6 @@ const nl2sqlJa = {
   "settings.database.systemTables.recreate.title": "システムテーブルをすべて再作成しますか",
   "settings.database.systemTables.recreate.description":
     "削除: Profile、Ontology、schema catalog、履歴・評価・学習・状態データ。保持: 認証/RBAC/DeepSec、Oracle 接続設定、ユーザー業務表、旧 snapshot、Feedback Vector。削除した中核データは復元できません。",
-  "settings.database.rdfNetwork.title": "RDF Network",
-  "settings.database.rdfNetwork.description":
-    "Ontology publish の Oracle RDF staging に使う schema-private RDF network を管理します。",
-  "settings.database.rdfNetwork.loading": "RDF network の状態を読み込んでいます",
-  "settings.database.rdfNetwork.status.not_configured": "未設定",
-  "settings.database.rdfNetwork.status.ready": "利用可能",
-  "settings.database.rdfNetwork.status.missing": "未作成",
-  "settings.database.rdfNetwork.status.unavailable": "利用不可",
-  "settings.database.rdfNetwork.status.manual_required": "手動作成",
-  "settings.database.rdfNetwork.mode.local_fallback": "local OWL2RL",
-  "settings.database.rdfNetwork.mode.oracle_rdf": "Oracle RDF",
-  "settings.database.rdfNetwork.summary.owner": "Network owner",
-  "settings.database.rdfNetwork.summary.network": "Network name",
-  "settings.database.rdfNetwork.summary.currentUser": "ORACLE_USER",
-  "settings.database.rdfNetwork.warningTitle": "確認してください",
-  "settings.database.rdfNetwork.readOnly":
-    "状態は参照できます。保存・作成するには管理 SQL 実行権限が必要です。",
-  "settings.database.rdfNetwork.configTitle": "接続先 RDF network",
-  "settings.database.rdfNetwork.configDescription":
-    "owner と name を空にすると、公開時は local OWL2RL fallback を使用します。",
-  "settings.database.rdfNetwork.field.owner": "Network owner",
-  "settings.database.rdfNetwork.field.name": "Network name",
-  "settings.database.rdfNetwork.field.tablespace": "Tablespace",
-  "settings.database.rdfNetwork.field.options": "Options",
-  "settings.database.rdfNetwork.action.save": "設定を保存",
-  "settings.database.rdfNetwork.action.refresh": "状態を再取得",
-  "settings.database.rdfNetwork.saved": "RDF network 設定を保存しました。",
-  "settings.database.rdfNetwork.planTitle": "DDL plan",
-  "settings.database.rdfNetwork.planDescription":
-    "SQL はサーバー生成の読み取り専用 plan です。現在の ORACLE_USER と同じ owner の場合だけ画面から適用できます。",
-  "settings.database.rdfNetwork.sqlDetails": "SQL とチェックサムを表示",
-  "settings.database.rdfNetwork.sqlEmpty": "RDF network owner、name、tablespace を保存すると SQL plan を表示します。",
-  "settings.database.rdfNetwork.applyHelper": "{phrase} を入力すると RDF network 作成 DDL を実行します。",
-  "settings.database.rdfNetwork.action.apply": "RDF network を作成",
-  "settings.database.rdfNetwork.applied": "RDF network を作成しました。",
-  "settings.database.rdfNetwork.alreadyConfigured": "RDF network はすでに利用可能です。",
-  "settings.database.rdfNetwork.error.loadTitle": "RDF network 状態を取得できません",
-  "settings.database.rdfNetwork.error.load": "Oracle 接続と設定値を確認して再試行してください。",
-  "settings.database.rdfNetwork.error.operationTitle": "RDF network 操作に失敗しました",
-  "settings.database.rdfNetwork.error.save": "RDF network 設定の保存に失敗しました。",
-  "settings.database.rdfNetwork.error.apply": "RDF network の作成に失敗しました。",
-  "settings.database.rdfNetwork.validation.ownerNamePair":
-    "Network owner と network name は両方入力するか、両方空にしてください。",
-  "settings.database.rdfNetwork.validation.tablespaceRequired":
-    "RDF network を作成する tablespace を入力してください。",
-  "settings.database.rdfNetwork.validation.systemTablespace":
-    "SYSTEM tablespace は指定できません。",
   "dbGate.setupRequired.message":
     "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
 

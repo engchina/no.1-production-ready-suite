@@ -6,8 +6,6 @@ import {
   type DatabaseSettingsUpdate,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
-  type RdfNetworkApplyRequest,
-  type RdfNetworkSettingsUpdate,
   type SystemTablesInitializeRequest,
   type UploadStorageSettingsUpdate,
 } from "@/lib/api";
@@ -18,8 +16,6 @@ export const queryKeys = {
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   systemTables: ["settings", "database", "system-tables"] as const,
-  rdfNetworkSettings: ["settings", "database", "rdf-network"] as const,
-  rdfNetworkPlan: ["settings", "database", "rdf-network", "plan"] as const,
   schemaOwners: ["schema", "owners"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
@@ -128,45 +124,6 @@ export function useInitializeSystemTables() {
     },
     onError: () => {
       qc.invalidateQueries({ queryKey: queryKeys.systemTables });
-    },
-  });
-}
-
-export function useRdfNetworkSettings() {
-  return useQuery({
-    queryKey: queryKeys.rdfNetworkSettings,
-    queryFn: ({ signal }) => api.getRdfNetworkSettings({ signal }),
-    retry: false,
-  });
-}
-
-export function useUpdateRdfNetworkSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: RdfNetworkSettingsUpdate) =>
-      api.updateRdfNetworkSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.rdfNetworkSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.rdfNetworkPlan });
-    },
-  });
-}
-
-export function useRdfNetworkPlan() {
-  return useQuery({
-    queryKey: queryKeys.rdfNetworkPlan,
-    queryFn: ({ signal }) => api.getRdfNetworkPlan({ signal }),
-    retry: false,
-  });
-}
-
-export function useApplyRdfNetworkPlan() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: RdfNetworkApplyRequest) => api.applyRdfNetworkPlan(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.rdfNetworkSettings, data.network);
-      qc.invalidateQueries({ queryKey: queryKeys.rdfNetworkPlan });
     },
   });
 }

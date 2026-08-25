@@ -1,14 +1,18 @@
 {
-  "schema_head": 6,
-  "expected_object_count": 49,
-  "expected_table_count": 18,
+  "schema_head": 15,
+  "expected_object_count": 51,
+  "expected_table_count": 27,
   "required_versions": [
     0,
     1,
     2,
     3,
     5,
-    6
+    6,
+    7,
+    8,
+    9,
+    15
   ],
   "representative_tables": [
     "NL2SQL_PROFILES",
@@ -16,4 +20,3 @@
     "NL2SQL_SYSTEM_TABLE_OPS"
   ]
 }
-

@@ -165,7 +165,7 @@ class Settings(BaseServiceSettings):
     nl2sql_quality_evaluation_max_file_bytes: int = 10 * 1024 * 1024
     nl2sql_quality_evaluation_max_cases: int = 100
     nl2sql_quality_evaluation_max_attempts: int = 1000
-    # Ontology worker / reasoning。production では external worker + Oracle RDF network を指定する。
+    # Ontology worker / reasoning。
     nl2sql_ontology_worker_mode: str = "inprocess"
     nl2sql_ontology_worker_poll_seconds: float = 1.0
     nl2sql_ontology_worker_claim_timeout_seconds: float = 900.0
@@ -174,10 +174,6 @@ class Settings(BaseServiceSettings):
     nl2sql_profile_sync_job_timeout_seconds: float = 300.0
     nl2sql_ontology_reasoning_profile: str = "owl2rl"
     nl2sql_ontology_shacl_enabled: bool = True
-    nl2sql_ontology_rdf_network_owner: str = ""
-    nl2sql_ontology_rdf_network_name: str = ""
-    nl2sql_ontology_rdf_tablespace: str = ""
-    nl2sql_ontology_rdf_network_options: str = ""
     nl2sql_ontology_profile_confirmation_required: bool = True
     nl2sql_ontology_confirmation_ttl_seconds: int = 900
     # ユーザ要望により Oracle Select AI / Select AI Agent を NL2SQL エンジンとして同時サポートする。

@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,6 +26,7 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaTable,
 )
+from app.features.nl2sql.ontology_build import OntologyBuildService
 from app.features.nl2sql.ontology_models import (
     ColumnQueryPolicy,
     GraphPatch,
@@ -56,6 +58,7 @@ from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
+from app.features.nl2sql.ontology_sources import OntologySourceStorage
 from app.features.nl2sql.ontology_store import (
     InMemoryOntologyStore,
     OntologyCollection,
@@ -1144,15 +1147,16 @@ async def test_http_contract_accepts_frontend_confirmation_and_draft_payloads(
 async def test_http_ontology_build_persists_current_form_inputs(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     api, store, _legacy = runtime
     settings = get_settings()
     monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
     monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
     monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
-    source_storage = ontology_router_module.OntologySourceStorage(settings)
-    build_service = ontology_router_module.OntologyBuildService(
+    source_storage = OntologySourceStorage(settings)
+    build_service = OntologyBuildService(
         api,
         source_storage=source_storage,
     )
@@ -1576,18 +1580,16 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     )
 
 
-def test_oracle_store_publish_without_rdf_network_falls_back_to_local_and_copies_markdown(
+def test_oracle_store_publish_uses_local_owl2rl_and_copies_markdown(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api, store, _legacy = runtime
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "")
     monkeypatch.setattr(store, "mode", "oracle", raising=False)
     base = api.current_ontology().revision
-    confirmed_markdown = "# Oracle Fallback Markdown\n\n- RDF network 未設定でも公開する"
+    confirmed_markdown = "# Local OWL2RL Markdown\n\n- local OWL2RL で公開する"
     draft, _artifact = api.create_build_markdown_draft(
         profile_id="sales",
         base_revision_id=base.id,

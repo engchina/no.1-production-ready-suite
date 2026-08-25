@@ -30,7 +30,6 @@ from app.features.nl2sql.ontology_models import (
 from app.features.nl2sql.ontology_reasoning import (
     LocalOwl2RlMaterializer,
     OntologyPublishService,
-    OracleOwl2RlMaterializer,
 )
 from app.features.nl2sql.ontology_semantics import (
     build_semantic_artifacts,
@@ -262,13 +261,11 @@ def test_publish_service_rejects_non_owl2rl_profile(
         OntologyPublishService(SimpleNamespace(store=SimpleNamespace()))
 
 
-def test_oracle_store_without_rdf_network_uses_local_materializer(
+def test_oracle_store_uses_local_materializer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_ontology_reasoning_profile", "owl2rl")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "")
     runtime = SimpleNamespace(
         store=SimpleNamespace(mode="oracle"),
         legacy_service=SimpleNamespace(),
@@ -277,146 +274,3 @@ def test_oracle_store_without_rdf_network_uses_local_materializer(
     publisher = OntologyPublishService(runtime)
 
     assert isinstance(publisher._materializer, LocalOwl2RlMaterializer)
-
-
-def test_oracle_store_rejects_partial_rdf_network_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "nl2sql_ontology_reasoning_profile", "owl2rl")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_owner", "RDFUSER")
-    monkeypatch.setattr(settings, "nl2sql_ontology_rdf_network_name", "")
-    runtime = SimpleNamespace(
-        store=SimpleNamespace(mode="oracle"),
-        legacy_service=SimpleNamespace(),
-    )
-
-    with pytest.raises(RuntimeError, match="両方設定"):
-        OntologyPublishService(runtime)
-
-
-def test_oracle_materializer_uses_only_builtin_owl2rl_without_proof_or_user_rules() -> None:
-    calls: list[str] = []
-    bulk_rows: list[dict[str, str]] = []
-
-    class _Cursor:
-        def __enter__(self) -> _Cursor:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def execute(self, sql: str, _bindings: object) -> None:
-            calls.append(sql)
-
-        def executemany(self, sql: str, rows: list[dict[str, str]]) -> None:
-            calls.append(sql)
-            bulk_rows.extend(rows)
-
-    class _Connection:
-        def __enter__(self) -> _Connection:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def cursor(self) -> _Cursor:
-            return _Cursor()
-
-        def commit(self) -> None:
-            calls.append("COMMIT")
-
-    ontology, view = _semantic_ontology()
-    asserted = build_semantic_artifacts(ontology, view).owl_turtle
-    materializer = OracleOwl2RlMaterializer(
-        lambda: _Connection(),
-        network_owner="rdfuser",
-        network_name="net1",
-    )
-    closure = materializer.materialize(
-        asserted_turtle=asserted,
-        rdf_graph_name="ONT_TEST",
-        inferred_graph_name="INF_TEST",
-    )
-
-    statements = "\n".join(calls)
-    assert "table_name => NULL" in statements
-    assert "column_name => NULL" in statements
-    assert "INSERT INTO RDFUSER.NET1#RDFT_ONT_TEST" in statements
-    assert "NL2SQL_ONTOLOGY_RDF_DATA" not in statements
-    assert "NL2SQL_ONTOLOGY_RDF_SEQ" not in statements
-    assert ":network_owner" in statements
-    assert ":network_name" in statements
-    assert bulk_rows
-    assert {row["network_owner"] for row in bulk_rows} == {"RDFUSER"}
-    assert {row["network_name"] for row in bulk_rows} == {"NET1"}
-    assert "SEM_APIS.CREATE_INFERRED_GRAPH" in statements
-    assert "SEM_RULEBASES('OWL2RL')" in statements
-    assert "SEM_APIS.REACH_CLOSURE" in statements
-    assert "USER_RULES=F,PROOF=F" in statements
-    assert "swrl" not in statements.lower()
-    assert closure
-
-
-def test_oracle_materializer_rejects_unsafe_rdf_identifiers() -> None:
-    with pytest.raises(ValueError, match="英数字"):
-        OracleOwl2RlMaterializer(
-            lambda: SimpleNamespace(),
-            network_owner="RDFUSER",
-            network_name="NET1;DROP",
-        )
-
-    materializer = OracleOwl2RlMaterializer(
-        lambda: SimpleNamespace(),
-        network_owner="RDFUSER",
-        network_name="NET1",
-    )
-    with pytest.raises(ValueError, match="英数字"):
-        materializer.materialize(
-            asserted_turtle="",
-            rdf_graph_name="ONT_TEST;DROP",
-            inferred_graph_name="INF_TEST",
-        )
-
-
-def test_oracle_materializer_reports_missing_rdf_network_diagnosis() -> None:
-    class _Cursor:
-        def __enter__(self) -> _Cursor:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def execute(self, _sql: str, _bindings: object) -> None:
-            raise RuntimeError("ORA-13199: GET_VALUES_TABLESPACE_NAME ORA-01403")
-
-    class _Connection:
-        def __enter__(self) -> _Connection:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def cursor(self) -> _Cursor:
-            return _Cursor()
-
-    ontology, view = _semantic_ontology()
-    asserted = build_semantic_artifacts(ontology, view).owl_turtle
-    materializer = OracleOwl2RlMaterializer(
-        lambda: _Connection(),
-        network_owner="RDFUSER",
-        network_name="NET1",
-    )
-
-    with pytest.raises(RuntimeError) as exc_info:
-        materializer.materialize(
-            asserted_turtle=asserted,
-            rdf_graph_name="ONT_TEST",
-            inferred_graph_name="INF_TEST",
-        )
-
-    message = str(exc_info.value)
-    assert "SEM_APIS.CREATE_RDF_NETWORK" in message
-    assert "ORA-13199" in message
-    assert "ORA-01403" in message
-    assert "owner=RDFUSER" in message

@@ -90,9 +90,11 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8, 9]
+    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8, 9, 15]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
+    assert "NL2SQL_ONTOLOGY_RDF_DATA" not in MANAGED_TABLES
+    assert "NL2SQL_ONTOLOGY_RDF_SEQ" not in MANAGED_SEQUENCES
     assert "NL2SQL_FEEDBACK_VECTORS" not in MANAGED_TABLES
     assert "NL2SQL_STATE_STORE" not in MANAGED_TABLES
     assert "USER_BUSINESS_SENTINEL" not in MANAGED_TABLES
@@ -123,6 +125,35 @@ def test_system_schema_status_has_four_deterministic_states() -> None:
 def test_splitter_ignores_comments_and_keeps_multiline_statements() -> None:
     sql = "-- header\nCREATE TABLE EXAMPLE (\n ID NUMBER\n);\n-- trailing\n"
     assert split_migration_sql(sql) == ["CREATE TABLE EXAMPLE (\n ID NUMBER\n)"]
+
+
+def test_splitter_keeps_single_line_plsql_cleanup_blocks() -> None:
+    migration = next(item for item in MIGRATIONS if item.version == 15)
+    statements = split_migration_sql(migration.path.read_text(encoding="utf-8"))
+
+    assert len(statements) == 2
+    assert "DROP TABLE NL2SQL_ONTOLOGY_RDF_DATA" in statements[0]
+    assert "SQLCODE != -942" in statements[0]
+    assert "DROP SEQUENCE NL2SQL_ONTOLOGY_RDF_SEQ" in statements[1]
+    assert "SQLCODE != -2289" in statements[1]
+
+
+def test_rdf_cleanup_migration_updates_stale_v2_and_drops_retired_objects() -> None:
+    manager = SystemSchemaManager()
+    status = _partial_status(
+        applied_versions=[0, 1, 3, 5, 6, 7, 8, 9],
+        pending_versions=[2, 15],
+        missing_objects=[],
+    )
+
+    planned = manager._plan_migrations(status)
+
+    assert [migration.version for migration in planned] == [2, 15]
+    cleanup = planned[-1]
+    assert cleanup.created_objects == frozenset()
+    statements = split_migration_sql(cleanup.path.read_text(encoding="utf-8"))
+    assert "DROP TABLE NL2SQL_ONTOLOGY_RDF_DATA" in statements[0]
+    assert "DROP SEQUENCE NL2SQL_ONTOLOGY_RDF_SEQ" in statements[1]
 
 
 class _LeaseState:
@@ -329,7 +360,7 @@ def _partial_status(
     }
 
 
-def test_selective_plan_for_49_of_53_only_applies_versions_7_and_8() -> None:
+def test_selective_plan_only_applies_versions_for_missing_evaluation_objects() -> None:
     manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
     status = _partial_status(
         applied_versions=[0, 1, 2, 3, 5, 6],
@@ -374,7 +405,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9],
+            pending_versions=[7, 8, 9, 15],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -392,7 +423,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9]
+    assert manager.applied_migrations == [7, 8, 9, 15]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)

@@ -15,15 +15,6 @@ ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "e
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 DatabaseConnectionSecurity = Literal["wallet_mtls", "walletless_tls"]
 DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
-RdfNetworkStatus = Literal[
-    "not_configured",
-    "ready",
-    "missing",
-    "unavailable",
-    "manual_required",
-]
-RdfNetworkMode = Literal["local_fallback", "oracle_rdf"]
-RdfNetworkApplyStatus = Literal["applied", "already_configured"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 AdbOperationStatus = Literal[
@@ -295,71 +286,6 @@ class DatabaseConnectionTestResult(BaseModel):
     details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_type: str | None = None
-
-
-class RdfNetworkSettingsUpdate(BaseModel):
-    """Ontology publish が使う schema-private RDF network 設定。"""
-
-    network_owner: str = Field(default="", max_length=128)
-    network_name: str = Field(default="", max_length=128)
-    tablespace: str = Field(default="", max_length=128)
-    options: str = Field(default="", max_length=512)
-
-    @field_validator("network_owner", "network_name", "tablespace", "options")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class RdfNetworkSettingsData(RdfNetworkSettingsUpdate):
-    """RDF network 設定と DDL なし status。"""
-
-    configured: bool
-    mode: RdfNetworkMode
-    status: RdfNetworkStatus
-    current_oracle_user: str
-    can_apply: bool
-    manual_action_required: bool = False
-    message_ja: str
-    warnings_ja: list[str] = Field(default_factory=list)
-    metadata: dict[str, str | int | bool | None] = Field(default_factory=dict)
-    config_source: Literal["runtime"] = "runtime"
-
-
-class RdfNetworkPlanStep(BaseModel):
-    step_no: int
-    title_ja: str
-    sql: str
-    checksum: str
-    status: Literal["pending", "manual_required", "blocked", "ready"] = "pending"
-
-
-class RdfNetworkPlanData(BaseModel):
-    version: Literal["V001"] = "V001"
-    configured: bool
-    can_apply: bool
-    manual_action_required: bool
-    confirmation_phrase: str
-    checksum: str
-    steps: list[RdfNetworkPlanStep] = Field(default_factory=list)
-    warnings_ja: list[str] = Field(default_factory=list)
-
-
-class RdfNetworkApplyRequest(BaseModel):
-    """RDF network DDL apply request。"""
-
-    checksum: str = Field(default="", max_length=128)
-    confirmation: str = Field(default="", max_length=128)
-
-    @field_validator("checksum", "confirmation")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class RdfNetworkApplyData(BaseModel):
-    status: RdfNetworkApplyStatus
-    network: RdfNetworkSettingsData
 
 
 class SystemTableMissingObject(BaseModel):

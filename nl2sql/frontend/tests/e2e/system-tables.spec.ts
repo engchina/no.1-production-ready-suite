@@ -56,6 +56,10 @@ const adbInfo = {
 };
 
 type SchemaStatus = "missing" | "partial" | "outdated" | "ready";
+const SCHEMA_HEAD = 15;
+const EXPECTED_OBJECT_COUNT = 51;
+const EXPECTED_TABLE_COUNT = 27;
+const APPLIED_VERSIONS = [0, 1, 2, 3, 5, 6, 7, 8, 9, 15] as const;
 
 function systemTableRows(status: SchemaStatus, count: number) {
   const ready = status === "ready";
@@ -96,7 +100,7 @@ function systemTables(
   } = {}
 ) {
   const ready = status === "ready";
-  const missingCount = status === "missing" ? 53 : status === "partial" ? 4 : 0;
+  const missingCount = status === "missing" ? EXPECTED_OBJECT_COUNT : status === "partial" ? 4 : 0;
   const operationStatus = options.operationStatus ?? "idle";
   const missingObjects =
     status === "partial"
@@ -112,13 +116,13 @@ function systemTables(
         }));
   return {
     status,
-    schema_head: 9,
-    applied_versions: ready ? [0, 1, 2, 3, 5, 6, 7, 8, 9] : [0, 1, 2, 3, 5, 6],
-    pending_versions: ready ? [] : [7, 8, 9],
-    expected_object_count: 53,
-    existing_object_count: 53 - missingCount,
-    expected_table_count: 28,
-    existing_table_count: ready ? 28 : Math.max(0, 28 - missingCount),
+    schema_head: SCHEMA_HEAD,
+    applied_versions: ready ? [...APPLIED_VERSIONS] : [0, 1, 2, 3, 5, 6],
+    pending_versions: ready ? [] : [7, 8, 9, 15],
+    expected_object_count: EXPECTED_OBJECT_COUNT,
+    existing_object_count: EXPECTED_OBJECT_COUNT - missingCount,
+    expected_table_count: EXPECTED_TABLE_COUNT,
+    existing_table_count: ready ? EXPECTED_TABLE_COUNT : Math.max(0, EXPECTED_TABLE_COUNT - missingCount),
     missing_objects: missingObjects,
     tables: systemTableRows(status, options.tableCount ?? 2),
     operation_state: {
@@ -135,60 +139,12 @@ function systemTables(
   };
 }
 
-function rdfNetwork(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    network_owner: "",
-    network_name: "",
-    tablespace: "",
-    options: "",
-    configured: false,
-    mode: "local_fallback",
-    status: "not_configured",
-    current_oracle_user: "NL2SQL_APP",
-    can_apply: false,
-    manual_action_required: false,
-    message_ja: "RDF network は未設定です。Ontology publish は local OWL2RL と SHACL Core 検証で公開します。",
-    warnings_ja: [],
-    metadata: {},
-    config_source: "runtime",
-    ...overrides,
-  };
-}
-
-function rdfNetworkPlan(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    version: "V001",
-    configured: false,
-    can_apply: false,
-    manual_action_required: false,
-    confirmation_phrase: "ADMIN_EXECUTE",
-    checksum: "rdf-checksum-empty",
-    steps: [
-      {
-        step_no: 1,
-        title_ja: "schema-private RDF network を作成",
-        sql: "",
-        checksum: "rdf-checksum-empty",
-        status: "ready",
-      },
-    ],
-    warnings_ja: [],
-    ...overrides,
-  };
-}
-
 async function mockDatabasePage(page: Page, user = systemAdminMe) {
   await page.route("**/api/auth/me", (route) => fulfill(route, user));
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "ok", check: "ok", detail: null })
   );
   await page.route("**/api/settings/database", (route) => fulfill(route, databaseSettings));
-  await page.route("**/api/settings/database/rdf-network", (route) =>
-    fulfill(route, rdfNetwork())
-  );
-  await page.route("**/api/settings/database/rdf-network/plan", (route) =>
-    fulfill(route, rdfNetworkPlan())
-  );
   await page.route("**/api/settings/database/adb", (route) => fulfill(route, adbInfo));
   await page.route("**/api/schema/owners", (route) =>
     fulfill(route, {
@@ -294,109 +250,21 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
   await expectNoPageOverflow(page);
 });
 
-test("RDF network は fallback 状態から設定を保存できる", async ({ page }) => {
+test("Oracle RDF Network 管理カードと API 呼び出しを表示しない", async ({ page }) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready"))
   );
-  let patchBody: unknown = null;
-  await page.route("**/api/settings/database/rdf-network", async (route) => {
-    if (route.request().method() === "PATCH") {
-      patchBody = route.request().postDataJSON();
-      await fulfill(
-        route,
-        rdfNetwork({
-          network_owner: "NL2SQL_APP",
-          network_name: "NET1",
-          tablespace: "RDFTBS",
-          options: "MODEL_PARTITIONS=16",
-          configured: true,
-          mode: "oracle_rdf",
-          status: "missing",
-          can_apply: true,
-          message_ja: "RDF network を確認できません。未作成または権限不足です。",
-          warnings_ja: [],
-        })
-      );
-      return;
-    }
-    await fulfill(route, rdfNetwork());
+  let rdfRequests = 0;
+  await page.route("**/api/settings/database/rdf-network**", (route) => {
+    rdfRequests += 1;
+    return fulfill(route, null, 410, ["RDF Network API は削除済みです。"]);
   });
 
   await page.goto("/settings/system-tables");
-  const card = page.locator("#rdf-network");
-  await expect(card).toBeVisible();
-  await expect(card.getByText("local OWL2RL", { exact: true })).toBeVisible();
-
-  await card.getByLabel("Network owner").fill("NL2SQL_APP");
-  await card.getByLabel("Network name").fill("NET1");
-  await card.getByLabel("Tablespace").fill("RDFTBS");
-  await card.getByLabel("Options").fill("MODEL_PARTITIONS=16");
-  await card.getByRole("button", { name: "設定を保存" }).click();
-
-  await expect(page.getByText("RDF network 設定を保存しました。")).toBeVisible();
-  expect(patchBody).toEqual({
-    network_owner: "NL2SQL_APP",
-    network_name: "NET1",
-    tablespace: "RDFTBS",
-    options: "MODEL_PARTITIONS=16",
-  });
-  await expect(card.getByText("Oracle RDF", { exact: true })).toBeVisible();
-  await expectNoPageOverflow(page);
-});
-
-test("RDF network SQL plan は確認語つきで適用する", async ({ page }) => {
-  await page.route("**/api/settings/database/system-tables", (route) =>
-    fulfill(route, systemTables("ready"))
-  );
-  const configured = rdfNetwork({
-    network_owner: "NL2SQL_APP",
-    network_name: "NET1",
-    tablespace: "RDFTBS",
-    options: "MODEL_PARTITIONS=16",
-    configured: true,
-    mode: "oracle_rdf",
-    status: "missing",
-    can_apply: true,
-    message_ja: "RDF network を確認できません。未作成または権限不足です。",
-  });
-  const ready = rdfNetwork({
-    ...configured,
-    status: "ready",
-    can_apply: false,
-    message_ja: "RDF network は利用可能です。Ontology publish は Oracle RDF staging を使います。",
-  });
-  const plan = rdfNetworkPlan({
-    configured: true,
-    can_apply: true,
-    checksum: "rdf-checksum-001",
-    steps: [
-      {
-        step_no: 1,
-        title_ja: "schema-private RDF network を作成",
-        sql: "BEGIN\n  SEM_APIS.CREATE_RDF_NETWORK(\n    tablespace_name => 'RDFTBS'\n  );\nEND;",
-        checksum: "rdf-checksum-001",
-        status: "pending",
-      },
-    ],
-  });
-  let applyBody: unknown = null;
-  await page.route("**/api/settings/database/rdf-network", (route) => fulfill(route, configured));
-  await page.route("**/api/settings/database/rdf-network/plan", (route) => fulfill(route, plan));
-  await page.route("**/api/settings/database/rdf-network/apply", async (route) => {
-    applyBody = route.request().postDataJSON();
-    await fulfill(route, { status: "applied", network: ready });
-  });
-
-  await page.goto("/settings/system-tables");
-  const card = page.locator("#rdf-network");
-  await card.getByText("SQL とチェックサムを表示").click();
-  await expect(page.getByTestId("rdf-network-sql")).toContainText("SEM_APIS.CREATE_RDF_NETWORK");
-  await card.getByPlaceholder("ADMIN_EXECUTE").fill("ADMIN_EXECUTE");
-  await card.getByRole("button", { name: "RDF network を作成" }).click();
-
-  await expect(page.getByText("RDF network を作成しました。")).toBeVisible();
-  expect(applyBody).toEqual({ checksum: "rdf-checksum-001", confirmation: "ADMIN_EXECUTE" });
-  await expect(card.getByText("利用可能", { exact: true })).toBeVisible();
+  await expect(page.locator("#system-tables")).toBeVisible();
+  await expect(page.locator("#rdf-network")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "RDF Network" })).toHaveCount(0);
+  expect(rdfRequests).toBe(0);
   await expectNoPageOverflow(page);
 });
 
@@ -511,9 +379,9 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "initialized",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
+      applied_versions: [...APPLIED_VERSIONS],
       dropped_object_count: 0,
-      created_object_count: 53,
+      created_object_count: EXPECTED_OBJECT_COUNT,
     });
   });
 
@@ -526,9 +394,9 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(card.getByRole("button", { name: "状態を再取得" })).toBeDisabled();
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
-  await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
+  await expect(card.getByText("51 / 51", { exact: true })).toBeVisible();
   await card.getByText("システムテーブルの詳細を表示").click();
-  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9/)).toBeVisible();
+  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9, 15/)).toBeVisible();
   await expect(
     page
       .getByRole("region", { name: "通知" })
@@ -547,7 +415,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
     fulfill(route, {
       ...systemTables("ready"),
       operation: "no_op",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
+      applied_versions: [...APPLIED_VERSIONS],
       dropped_object_count: 0,
       created_object_count: 0,
     })
@@ -604,9 +472,9 @@ test("全再作成は実行確認語の完全一致まで実行できない", as
     await fulfill(route, {
       ...systemTables("ready"),
       operation: "recreated",
-      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9],
-      dropped_object_count: 52,
-      created_object_count: 52,
+      applied_versions: [...APPLIED_VERSIONS],
+      dropped_object_count: EXPECTED_OBJECT_COUNT - 1,
+      created_object_count: EXPECTED_OBJECT_COUNT - 1,
     });
   });
 

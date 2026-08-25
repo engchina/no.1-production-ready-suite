@@ -64,7 +64,7 @@ export function SystemTablesCard() {
   const recreateConfirmed = recreateConfirmation.trim() === RECREATE_CONFIRMATION;
 
   const data = statusQuery.data;
-  const mayExecute = hasPermission(MENU_PERMISSIONS.settingsSystemTables);
+  const mayExecute = hasPermission(MENU_PERMISSIONS.adminSql);
   const schemaOperationRunning = data?.operation_state.status === "running";
   const busy = systemTableControlsBusy(
     operation.isPending,

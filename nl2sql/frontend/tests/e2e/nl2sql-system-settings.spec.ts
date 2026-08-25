@@ -207,11 +207,11 @@ async function mockNl2sqlSettingsApi(page: Page) {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfillJson(route, {
       status: "ready",
-      schema_head: 6,
-      applied_versions: [0, 1, 2, 3, 5, 6],
+      schema_head: 15,
+      applied_versions: [0, 1, 2, 3, 5, 6, 7, 8, 9, 15],
       pending_versions: [],
-      expected_object_count: 49,
-      existing_object_count: 49,
+      expected_object_count: 51,
+      existing_object_count: 51,
       missing_objects: [],
       tables: [
         {

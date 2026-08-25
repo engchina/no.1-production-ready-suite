@@ -86,6 +86,168 @@ async function expectSourceDropzoneMatchesQaStyle(page: Page) {
   await expect(page.locator("label").filter({ hasText: /^構築資料$/ })).toHaveCount(1);
 }
 
+async function mermaidGraphTransform(content: Locator) {
+  return content.evaluate((element) => ({
+    scale: Number(element.getAttribute("data-transform-scale")),
+    x: Number(element.getAttribute("data-transform-x")),
+    y: Number(element.getAttribute("data-transform-y")),
+  }));
+}
+
+async function mermaidGraphFitMetrics(graph: Locator, content: Locator) {
+  const [viewport, data] = await Promise.all([
+    graph.boundingBox(),
+    content.evaluate((element) => ({
+      boundsHeight: Number(element.getAttribute("data-content-bounds-height")),
+      boundsWidth: Number(element.getAttribute("data-content-bounds-width")),
+      boundsX: Number(element.getAttribute("data-content-bounds-x")),
+      boundsY: Number(element.getAttribute("data-content-bounds-y")),
+      source: element.getAttribute("data-content-bounds-source"),
+      scale: Number(element.getAttribute("data-transform-scale")),
+      x: Number(element.getAttribute("data-transform-x")),
+      y: Number(element.getAttribute("data-transform-y")),
+    })),
+  ]);
+  expect(viewport).not.toBeNull();
+  const contentLeft = data.x + data.boundsX * data.scale;
+  const contentTop = data.y + data.boundsY * data.scale;
+  const contentWidth = data.boundsWidth * data.scale;
+  const contentHeight = data.boundsHeight * data.scale;
+  return {
+    contentBottom: contentTop + contentHeight,
+    contentHeight,
+    contentLeft,
+    contentRight: contentLeft + contentWidth,
+    contentTop,
+    contentWidth,
+    largestAxisRatio: Math.max(contentWidth / viewport!.width, contentHeight / viewport!.height),
+    source: data.source,
+    viewportHeight: viewport!.height,
+    viewportWidth: viewport!.width,
+  };
+}
+
+async function mermaidGraphScreenMetrics(content: Locator) {
+  return content.evaluate((element) => {
+    const graph = element.closest("[data-testid='ontology-mermaid-rendered-graph']");
+    const svg = element.querySelector("svg");
+    if (!(graph instanceof HTMLElement) || !(svg instanceof SVGSVGElement)) {
+      throw new Error("Mermaid graph viewport or SVG was not rendered.");
+    }
+    const graphRect = graph.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    const controls = graph.querySelector("[data-testid='ontology-mermaid-graph-controls']");
+    const controlsRect = controls?.getBoundingClientRect() ?? null;
+    const declaredWidth =
+      svg.viewBox.baseVal.width || Number.parseFloat(svg.getAttribute("width") ?? "");
+    const declaredHeight =
+      svg.viewBox.baseVal.height || Number.parseFloat(svg.getAttribute("height") ?? "");
+    const boundsX = Number(element.getAttribute("data-content-bounds-x"));
+    const boundsY = Number(element.getAttribute("data-content-bounds-y"));
+    const boundsWidth = Number(element.getAttribute("data-content-bounds-width"));
+    const boundsHeight = Number(element.getAttribute("data-content-bounds-height"));
+    if (
+      !Number.isFinite(declaredWidth) ||
+      !Number.isFinite(declaredHeight) ||
+      !Number.isFinite(boundsX) ||
+      !Number.isFinite(boundsY) ||
+      !Number.isFinite(boundsWidth) ||
+      !Number.isFinite(boundsHeight) ||
+      declaredWidth <= 0 ||
+      declaredHeight <= 0 ||
+      boundsWidth <= 0 ||
+      boundsHeight <= 0
+    ) {
+      throw new Error("Mermaid graph content bounds were empty.");
+    }
+    const scaleX = svgRect.width / declaredWidth;
+    const scaleY = svgRect.height / declaredHeight;
+    const union = {
+      bottom: svgRect.top + (boundsY + boundsHeight) * scaleY,
+      left: svgRect.left + boundsX * scaleX,
+      right: svgRect.left + (boundsX + boundsWidth) * scaleX,
+      top: svgRect.top + boundsY * scaleY,
+    };
+    const overlapLeft = controlsRect ? Math.max(union.left, controlsRect.left) : 0;
+    const overlapRight = controlsRect ? Math.min(union.right, controlsRect.right) : 0;
+    const overlapTop = controlsRect ? Math.max(union.top, controlsRect.top) : 0;
+    const overlapBottom = controlsRect ? Math.min(union.bottom, controlsRect.bottom) : 0;
+    const overlapWidth = Math.max(0, overlapRight - overlapLeft);
+    const overlapHeight = Math.max(0, overlapBottom - overlapTop);
+    const contentWidth = union.right - union.left;
+    const contentHeight = union.bottom - union.top;
+    return {
+      contentBottom: union.bottom - graphRect.top,
+      contentHeight,
+      contentLeft: union.left - graphRect.left,
+      contentRight: union.right - graphRect.left,
+      contentTop: union.top - graphRect.top,
+      contentWidth,
+      controlsOverlapArea: overlapWidth * overlapHeight,
+      largestAxisRatio: Math.max(contentWidth / graphRect.width, contentHeight / graphRect.height),
+      viewportHeight: graphRect.height,
+      viewportWidth: graphRect.width,
+    };
+  });
+}
+
+async function expectMermaidGraphFitsViewport(content: Locator) {
+  const screenFit = await mermaidGraphScreenMetrics(content);
+  expect(screenFit.contentLeft).toBeGreaterThanOrEqual(-1);
+  expect(screenFit.contentTop).toBeGreaterThanOrEqual(-1);
+  expect(screenFit.contentRight).toBeLessThanOrEqual(screenFit.viewportWidth + 1);
+  expect(screenFit.contentBottom).toBeLessThanOrEqual(screenFit.viewportHeight + 1);
+  expect(screenFit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
+  expect(screenFit.controlsOverlapArea).toBe(0);
+  return screenFit;
+}
+
+async function mockRepresentativeMermaidExport(page: Page) {
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-view/mermaid");
+  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) =>
+    fulfillJson(route, {
+      profile_id: "default",
+      ontology_revision_id: "revision-1",
+      mermaid: `erDiagram
+    "ADMIN.PROJECT" {
+        NUMBER PROJECT_ID "プロジェクトID"
+        NUMBER DEPARTMENT_ID FK "部門ID"
+        VARCHAR2 PROJECT_NAME "プロジェクト名"
+        DATE START_DATE "開始日"
+        NUMBER BUDGET "予算"
+    }
+    "ADMIN.EMPLOYEE" {
+        NUMBER EMPLOYEE_ID "従業員ID"
+        NUMBER DEPARTMENT_ID FK "所属部門ID"
+        VARCHAR2 EMPLOYEE_NAME "従業員氏名"
+        VARCHAR2 EMAIL "メールアドレス"
+        DATE HIRE_DATE "入社日"
+        NUMBER SALARY "給与"
+    }
+    "ADMIN.DEPARTMENT" {
+        NUMBER DEPARTMENT_ID "部門ID"
+        VARCHAR2 DEPARTMENT_NAME "部門名"
+    }
+    "ADMIN.PROJECT" }o--|| "ADMIN.DEPARTMENT" : "部門情報を管理するテーブル"
+    "ADMIN.EMPLOYEE" }o--|| "ADMIN.DEPARTMENT" : "所属部門を参照するテーブル"`,
+    })
+  );
+}
+
+async function mockTinyMermaidExport(page: Page) {
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-view/mermaid");
+  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) =>
+    fulfillJson(route, {
+      profile_id: "default",
+      ontology_revision_id: "revision-1",
+      mermaid: `erDiagram
+    "A" {
+        NUMBER ID
+    }`,
+    })
+  );
+}
+
 type BuildRunOptions = {
   runSchemaNaming: boolean | null;
   runQaExtraction: boolean | null;
@@ -622,6 +784,109 @@ async function mockApi(page: Page) {
   });
   return state;
 }
+
+test("Mermaid ER グラフは拡大縮小・ドラッグ・全体表示できる", async ({ page }) => {
+  await mockApi(page);
+  await mockRepresentativeMermaidExport(page);
+  await page.goto("/ontology-build?profile=default");
+
+  const mermaidPanel = page.getByTestId("ontology-mermaid-panel");
+  await expect(mermaidPanel.getByRole("heading", { name: "SQL 生成用 Mermaid ER 技術表現" })).toBeVisible();
+  await mermaidPanel.scrollIntoViewIfNeeded();
+  await mermaidPanel.getByRole("button", { name: "コードを取得" }).click();
+  await mermaidPanel.getByRole("tab", { name: "グラフ" }).click();
+
+  const graph = mermaidPanel.getByTestId("ontology-mermaid-rendered-graph");
+  const content = graph.getByTestId("ontology-mermaid-graph-content");
+  await expect(graph.locator("svg")).toBeVisible();
+  await expect(content).toHaveAttribute("data-transform-ready", "true");
+  await expect(graph.getByTestId("ontology-mermaid-graph-controls")).toBeVisible();
+  const initialFit = await mermaidGraphFitMetrics(graph, content);
+  expect(initialFit.contentLeft).toBeGreaterThanOrEqual(0);
+  expect(initialFit.contentTop).toBeGreaterThanOrEqual(0);
+  expect(initialFit.contentRight).toBeLessThanOrEqual(initialFit.viewportWidth + 1);
+  expect(initialFit.contentBottom).toBeLessThanOrEqual(initialFit.viewportHeight + 1);
+  expect(initialFit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
+  expect(initialFit.source).toBe("content");
+  await expectMermaidGraphFitsViewport(content);
+
+  const zoomIn = graph.getByRole("button", { name: "グラフを拡大" });
+  const zoomOut = graph.getByRole("button", { name: "グラフを縮小" });
+  const fit = graph.getByRole("button", { name: "グラフ全体を表示" });
+  await expect(zoomIn).toBeVisible();
+  await expect(zoomOut).toBeVisible();
+  await expect(fit).toBeVisible();
+
+  const initial = await mermaidGraphTransform(content);
+  await zoomIn.click();
+  await expect
+    .poll(async () => (await mermaidGraphTransform(content)).scale)
+    .toBeGreaterThan(initial.scale + 0.001);
+  const zoomedIn = await mermaidGraphTransform(content);
+
+  await zoomOut.click();
+  await expect
+    .poll(async () => (await mermaidGraphTransform(content)).scale)
+    .toBeLessThan(zoomedIn.scale - 0.001);
+  const beforeDrag = await mermaidGraphTransform(content);
+
+  const graphBox = await graph.boundingBox();
+  expect(graphBox).not.toBeNull();
+  const startX = graphBox!.x + graphBox!.width / 2;
+  const startY = graphBox!.y + graphBox!.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + 82, startY + 48, { steps: 6 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await mermaidGraphTransform(content)).x)
+    .toBeGreaterThan(beforeDrag.x + 30);
+  await expect
+    .poll(async () => (await mermaidGraphTransform(content)).y)
+    .toBeGreaterThan(beforeDrag.y + 20);
+
+  await fit.click();
+  await expect
+    .poll(async () => Math.abs((await mermaidGraphTransform(content)).scale - initial.scale))
+    .toBeLessThan(0.02);
+  await expect
+    .poll(async () => Math.abs((await mermaidGraphTransform(content)).x - initial.x))
+    .toBeLessThan(2);
+  await expect
+    .poll(async () => Math.abs((await mermaidGraphTransform(content)).y - initial.y))
+    .toBeLessThan(2);
+  const refit = await mermaidGraphFitMetrics(graph, content);
+  expect(refit.contentLeft).toBeGreaterThanOrEqual(0);
+  expect(refit.contentTop).toBeGreaterThanOrEqual(0);
+  expect(refit.contentRight).toBeLessThanOrEqual(refit.viewportWidth + 1);
+  expect(refit.contentBottom).toBeLessThanOrEqual(refit.viewportHeight + 1);
+  expect(refit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
+  expect(refit.source).toBe("content");
+  await expectMermaidGraphFitsViewport(content);
+});
+
+test("Mermaid ER グラフは小さい図でも fit で大きく表示できる", async ({ page }) => {
+  await mockApi(page);
+  await mockTinyMermaidExport(page);
+  await page.goto("/ontology-build?profile=default");
+
+  const mermaidPanel = page.getByTestId("ontology-mermaid-panel");
+  await mermaidPanel.scrollIntoViewIfNeeded();
+  await mermaidPanel.getByRole("button", { name: "コードを取得" }).click();
+  await mermaidPanel.getByRole("tab", { name: "グラフ" }).click();
+
+  const graph = mermaidPanel.getByTestId("ontology-mermaid-rendered-graph");
+  const content = graph.getByTestId("ontology-mermaid-graph-content");
+  await expect(graph.locator("svg")).toBeVisible();
+  await expect(content).toHaveAttribute("data-transform-ready", "true");
+  const initialFit = await mermaidGraphFitMetrics(graph, content);
+  expect(initialFit.source).toBe("content");
+  if (initialFit.viewportWidth >= 700) {
+    const initial = await mermaidGraphTransform(content);
+    expect(initial.scale).toBeGreaterThan(3);
+  }
+  await expectMermaidGraphFitsViewport(content);
+});
 
 test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 → 公開の導線が機能する", async ({ context, page }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {

@@ -288,7 +288,7 @@ function NodeInspector({
   };
   const rule = semanticNode.business_rule_definition;
   const enumValue = semanticNode.enum_value_definition;
-  const isInferred = node.provenance?.inferred_by === "oracle_owl2rl";
+  const isInferred = node.provenance?.inferred_by === "owl2rl_local";
 
   const saveSemanticNode = async () => {
     if (!onSaveSemanticNode || semanticSaveState === "saving" || isInferred) return;

@@ -113,6 +113,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "009_rbac_permission_cleanup.sql",
         "RBAC permission cleanup for appearance settings",
     ),
+    MigrationArtifact(
+        15,
+        "015_remove_ontology_rdf_network.sql",
+        "remove retired ontology semantic staging objects",
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -130,7 +135,6 @@ MANAGED_TABLES: tuple[str, ...] = (
     "NL2SQL_ONTOLOGY_SOURCE_DOCS",
     "NL2SQL_ONTOLOGY_JOBS",
     "NL2SQL_ONTOLOGY_RECOMMENDATIONS",
-    "NL2SQL_ONTOLOGY_RDF_DATA",
     "NL2SQL_CHANGE_TOKENS",
     "NL2SQL_PROFILES",
     "NL2SQL_SCHEMA_CATALOG_HEAD",
@@ -174,7 +178,6 @@ MANAGED_INDEXES: tuple[str, ...] = (
 )
 
 MANAGED_SEQUENCES: tuple[str, ...] = (
-    "NL2SQL_ONTOLOGY_RDF_SEQ",
     "NL2SQL_MIGRATION_SNAPSHOT_SEQ",
 )
 

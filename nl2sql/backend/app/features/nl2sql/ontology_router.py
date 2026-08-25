@@ -849,7 +849,7 @@ class OntologyApiRuntime:
         *,
         etag: str,
     ) -> SchemaOntology:
-        """RDF staging より前に contract・参照閉包・物理 mapping・Profile 範囲を検証する。"""
+        """semantic publish より前に contract・参照閉包・物理 mapping・Profile 範囲を検証する。"""
 
         with self._lock:
             self._sync_ontology()
@@ -1992,8 +1992,8 @@ class OntologyApiRuntime:
                     matched_terms=hit.matched_terms,
                     sources=list(hit.sources),
                     inference_source=(
-                        "oracle_owl2rl"
-                        if node_by_id[hit.node_id].provenance.inferred_by == "oracle_owl2rl"
+                        "owl2rl_local"
+                        if node_by_id[hit.node_id].provenance.inferred_by == "owl2rl_local"
                         else "asserted"
                     ),
                 )
@@ -2001,14 +2001,13 @@ class OntologyApiRuntime:
                 if hit.node_id in node_by_id
             ]
             existing_hit_ids = {hit.node.id for hit in hits}
-            inference_source = "oracle_owl2rl" if self.store.mode == "oracle" else "owl2rl_local"
             hits.extend(
                 OntologyContextHit(
                     node=node_by_id[node_id],
                     score=0.35,
                     matched_terms=[],
                     sources=["inference"],
-                    inference_source=inference_source,
+                    inference_source="owl2rl_local",
                 )
                 for node_id in sorted(inferred_node_ids - existing_hit_ids)
                 if node_id in node_by_id

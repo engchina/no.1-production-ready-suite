@@ -154,11 +154,6 @@ const SystemTablesCard = lazy(() =>
     default: module.SystemTablesCard,
   }))
 );
-const RdfNetworkCard = lazy(() =>
-  import("@/components/settings/RdfNetworkCard").then((module) => ({
-    default: module.RdfNetworkCard,
-  }))
-);
 const AppearanceSettings = lazy(() =>
   import("@/components/settings/AppearanceSettings").then((module) => ({
     default: module.AppearanceSettings,
@@ -516,7 +511,6 @@ function SettingsSystemTablesRoute() {
       />
       <div className="space-y-6 p-8">
         <SystemTablesCard />
-        <RdfNetworkCard />
       </div>
     </>
   );
