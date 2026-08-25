@@ -18,6 +18,14 @@ const ontologyQueryPlayground = readFileSync(
   new URL("../src/features/nl2sql/ontology/OntologyQueryPlayground.tsx", import.meta.url),
   "utf8",
 );
+const fileDropzone = readFileSync(
+  new URL("../src/components/ui/file-dropzone.tsx", import.meta.url),
+  "utf8",
+);
+const clearActionButton = readFileSync(
+  new URL("../src/components/ui/clear-action-button.tsx", import.meta.url),
+  "utf8",
+);
 const messages = readFileSync(new URL("../src/lib/i18n.ts", import.meta.url), "utf8");
 
 test("profile save queues Oracle sync without touching Ontology or detail refresh", () => {
@@ -65,6 +73,16 @@ test("Grounding graph displays revision identity and supports reset", () => {
   assert.match(ontologyQueryPlayground, /ontology-playground-clear/u);
   assert.match(messages, /接地確認をクリア/u);
   assert.doesNotMatch(messages, /SQL 生成用 Mermaid ER 技術表現/u);
+});
+
+test("Grounding graph and file dropzones share the clear button implementation", () => {
+  assert.match(clearActionButton, /export function ClearActionButton/u);
+  assert.match(clearActionButton, /variant="secondary"/u);
+  assert.match(clearActionButton, /size="sm"/u);
+  assert.match(clearActionButton, /h-\[44px\] whitespace-nowrap/u);
+  assert.match(fileDropzone, /<ClearActionButton/u);
+  assert.match(ontologyQueryPlayground, /<ClearActionButton/u);
+  assert.doesNotMatch(ontologyQueryPlayground, /variant="ghost"[\s\S]*ontology-playground-clear/u);
 });
 
 test("Grounding graph remains the single user-facing ontology graph", () => {

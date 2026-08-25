@@ -134,8 +134,46 @@ def test_splitter_keeps_single_line_plsql_cleanup_blocks() -> None:
     assert len(statements) == 2
     assert "DROP TABLE NL2SQL_ONTOLOGY_RDF_DATA" in statements[0]
     assert "SQLCODE != -942" in statements[0]
+    assert statements[0].endswith("END;")
     assert "DROP SEQUENCE NL2SQL_ONTOLOGY_RDF_SEQ" in statements[1]
     assert "SQLCODE != -2289" in statements[1]
+    assert statements[1].endswith("END;")
+
+
+def test_splitter_keeps_multiline_plsql_until_top_level_end_and_ignores_slash() -> None:
+    sql = """
+-- SQL*Plus style anonymous block.
+BEGIN
+    EXECUTE IMMEDIATE 'DROP TABLE NL2SQL_TEMP';
+    IF SQLCODE != -942 THEN
+        RAISE;
+    END IF;
+END;
+/
+CREATE TABLE NL2SQL_TEMP (
+    ID NUMBER
+);
+"""
+
+    assert split_migration_sql(sql) == [
+        "\n".join(
+            [
+                "BEGIN",
+                "    EXECUTE IMMEDIATE 'DROP TABLE NL2SQL_TEMP';",
+                "    IF SQLCODE != -942 THEN",
+                "        RAISE;",
+                "    END IF;",
+                "END;",
+            ]
+        ),
+        "\n".join(
+            [
+                "CREATE TABLE NL2SQL_TEMP (",
+                "    ID NUMBER",
+                ")",
+            ]
+        ),
+    ]
 
 
 def test_rdf_cleanup_migration_updates_stale_v2_and_drops_retired_objects() -> None:
@@ -469,6 +507,23 @@ class _ForeignKeyStateManager(SystemSchemaManager):
 
     def _foreign_key_state(self, connection: Any, expected: Any) -> Any:
         return self.states[expected.name]
+
+
+def test_apply_migration_sends_plsql_blocks_with_terminating_semicolon() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    connection = _RecordingConnection()
+
+    manager._apply_migration(connection, next(item for item in MIGRATIONS if item.version == 15))
+
+    plsql_statements = [
+        statement
+        for statement in connection.statements
+        if statement.lstrip().upper().startswith("BEGIN")
+    ]
+    assert len(plsql_statements) == 2
+    assert all(statement.rstrip().endswith("END;") for statement in plsql_statements)
+    assert "/" not in connection.statements
+    assert "MERGE INTO NL2SQL_SCHEMA_MIGRATIONS" in connection.statements[-1]
 
 
 def test_v7_resume_skips_matching_first_foreign_key_and_creates_second() -> None:

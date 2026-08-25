@@ -257,21 +257,99 @@ def split_migration_sql(sql: str) -> list[str]:
 
     statements: list[str] = []
     current: list[str] = []
+    in_plsql = False
     for line in sql.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("--"):
             continue
+        if stripped == "/":
+            statement = "\n".join(current).strip()
+            if statement:
+                statements.append(
+                    statement if in_plsql else _strip_sql_statement_terminator(statement)
+                )
+            current = []
+            in_plsql = False
+            continue
+        if not current:
+            in_plsql = _is_plsql_block_start(stripped)
         current.append(line)
-        if stripped.endswith(";"):
-            statement = "\n".join(current).rstrip().rstrip(";").strip()
+        statement = "\n".join(current).strip()
+        if in_plsql:
+            if _plsql_block_complete(statement):
+                statements.append(statement)
+                current = []
+                in_plsql = False
+        elif stripped.endswith(";"):
+            statement = _strip_sql_statement_terminator(statement)
             if statement:
                 statements.append(statement)
             current = []
     if current:
         statement = "\n".join(current).strip()
         if statement:
-            statements.append(statement)
+            statements.append(
+                statement if in_plsql else _strip_sql_statement_terminator(statement)
+            )
     return statements
+
+
+def _strip_sql_statement_terminator(statement: str) -> str:
+    """Oracle driver に渡す通常 SQL から SQL*Plus 風の終端だけを外す。"""
+
+    stripped = statement.rstrip()
+    if stripped.endswith(";"):
+        stripped = stripped[:-1].rstrip()
+    return stripped.strip()
+
+
+def _is_plsql_block_start(stripped_line: str) -> bool:
+    return re.match(r"^(BEGIN|DECLARE)\b", stripped_line, flags=re.IGNORECASE) is not None
+
+
+def _plsql_block_complete(statement: str) -> bool:
+    """PL/SQL anonymous block の最外層 END; まで待つ。"""
+
+    sql = _blank_sql_string_literals(statement)
+    if (
+        re.search(
+            r"\bEND\b(?!\s+(?:IF|LOOP|CASE)\b)(?:\s+[A-Z][A-Z0-9_$#]*)?\s*;\s*$",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        is None
+    ):
+        return False
+    begin_count = len(re.findall(r"\bBEGIN\b", sql, flags=re.IGNORECASE))
+    end_count = len(
+        re.findall(
+            r"\bEND\b(?!\s+(?:IF|LOOP|CASE)\b)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+    )
+    return begin_count > 0 and end_count >= begin_count
+
+
+def _blank_sql_string_literals(statement: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    while index < len(statement):
+        char = statement[index]
+        if char == "'":
+            result.append(" ")
+            if in_string and index + 1 < len(statement) and statement[index + 1] == "'":
+                result.append(" ")
+                index += 2
+                continue
+            in_string = not in_string
+        elif in_string:
+            result.append(" ")
+        else:
+            result.append(char)
+        index += 1
+    return "".join(result)
 
 
 def oracle_error_code(exc: Exception) -> str:

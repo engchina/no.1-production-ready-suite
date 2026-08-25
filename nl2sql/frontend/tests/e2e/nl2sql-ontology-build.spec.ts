@@ -659,7 +659,11 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   const sourceClear = page
     .getByTestId("ontology-build-source-files")
     .getByRole("button", { name: "クリア" });
+  const qaClear = page
+    .getByTestId("ontology-build-qa-file")
+    .getByRole("button", { name: "クリア" });
   await expect(sourceClear).toBeDisabled();
+  await expect(qaClear).toBeDisabled();
   await dropFiles(
     page,
     page.getByTestId("ontology-build-source-files-dropzone"),
@@ -740,6 +744,19 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   ]);
   await expect(sourceFileList.getByText("terms.csv", { exact: true })).toBeVisible();
   await expect(section.getByText("選択済み: qa_cases.csv")).toBeVisible();
+  await expect(qaClear).toBeEnabled();
+  await qaClear.click();
+  await expect(section.getByText("選択済み: qa_cases.csv")).toHaveCount(0);
+  await expect(qaClear).toBeDisabled();
+  await dropFiles(page, page.getByTestId("ontology-build-qa-file-dropzone"), [
+    {
+      name: "qa_cases.csv",
+      type: "text/csv",
+      content: "QUESTION,SQL\n受注件数は,SELECT COUNT(*) FROM ORDERS",
+    },
+  ]);
+  await expect(section.getByText("選択済み: qa_cases.csv")).toBeVisible();
+  await expect(qaClear).toBeEnabled();
   await section.getByRole("button", { name: "AI 構築を実行" }).click();
   const steps = page.getByTestId("ontology-build-steps");
   await expect(steps.getByText("スキーマ情報の準備")).toBeVisible();
@@ -1496,6 +1513,14 @@ test("Ontology View の API エラーを表示し、キーボードで再試行�
   await mockApi(page);
   await page.unroute("**/api/nl2sql/profiles/*/ontology-view");
   let ontologyViewReads = 0;
+  let releaseRetryOntologyView: () => void = () => undefined;
+  const retryOntologyViewGate = new Promise<void>((resolve) => {
+    releaseRetryOntologyView = resolve;
+  });
+  let reportRetryOntologyViewStarted: () => void = () => undefined;
+  const retryOntologyViewStarted = new Promise<void>((resolve) => {
+    reportRetryOntologyViewStarted = resolve;
+  });
   await page.route("**/api/nl2sql/profiles/*/ontology-view", async (route) => {
     if (route.request().method() !== "GET") {
       await fulfillJson(route, ontologyView);
@@ -1513,6 +1538,10 @@ test("Ontology View の API エラーを表示し、キーボードで再試行�
       });
       return;
     }
+    if (ontologyViewReads === 2) {
+      reportRetryOntologyViewStarted();
+      await retryOntologyViewGate;
+    }
     await fulfillJson(route, { ...ontologyView, materialized: true, stale: false });
   });
 
@@ -1526,6 +1555,10 @@ test("Ontology View の API エラーを表示し、キーボードで再試行�
   await retry.focus();
   await page.keyboard.press("Enter");
 
+  await retryOntologyViewStarted;
+  await expect(page.getByTestId("ontology-workspace-detail-skeleton")).toBeVisible();
+  await expect(alert).toHaveCount(0);
+  releaseRetryOntologyView();
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-editor")).toHaveCount(0);
   await expect(alert).toHaveCount(0);

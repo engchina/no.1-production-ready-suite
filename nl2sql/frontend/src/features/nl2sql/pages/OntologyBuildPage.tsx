@@ -177,18 +177,26 @@ export function OntologyBuildPage() {
     await refreshOntologyView();
   }, [refreshOntologyView]);
 
-  const workspaceLoading =
-    Boolean(selectedProfileId) && (profileDetailQuery.isLoading || ontologyViewQuery.isLoading);
   const workspaceFailure = classifyOntologyWorkspaceError(
     profileDetailQuery.error,
     ontologyViewQuery.error
   );
+  const workspaceRefreshingAfterFailure =
+    Boolean(workspaceFailure) && (profileDetailQuery.isFetching || ontologyViewQuery.isFetching);
+  const workspaceLoading =
+    Boolean(selectedProfileId) &&
+    (profileDetailQuery.isLoading ||
+      ontologyViewQuery.isLoading ||
+      workspaceRefreshingAfterFailure);
   const workspaceErrorPresentation = workspaceFailure
     ? ontologyWorkspaceErrorPresentation(workspaceFailure)
     : null;
   const workspaceErrorMessage = workspaceErrorPresentation
     ? t(workspaceErrorPresentation.key, workspaceErrorPresentation.params)
     : "";
+  const handleWorkspaceRetry = useCallback(() => {
+    void Promise.allSettled([profileDetailQuery.refetch(), ontologyViewQuery.refetch()]);
+  }, [ontologyViewQuery, profileDetailQuery]);
   return (
     <>
       <PageHeader title={t("nav.ontologyBuild")} subtitle={t("ontologyBuild.subtitle")} />
@@ -295,10 +303,7 @@ export function OntologyBuildPage() {
         ) : workspaceFailure ? (
           <ErrorState
             message={workspaceErrorMessage}
-            onRetry={() => {
-              void profileDetailQuery.refetch();
-              void ontologyViewQuery.refetch();
-            }}
+            onRetry={handleWorkspaceRetry}
           />
         ) : selectedProfileId ? (
           <>

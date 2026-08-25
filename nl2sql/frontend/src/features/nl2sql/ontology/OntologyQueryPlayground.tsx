@@ -9,10 +9,10 @@ import {
   Route,
   Search,
   Table2,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { Banner, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
@@ -613,13 +613,7 @@ export function OntologyQueryPlayground({
             >
               {t("ontologyPlayground.questionLabel")}
             </label>
-            <div
-              className={`grid min-w-0 gap-2 ${
-                hasResettableGroundingState
-                  ? "sm:grid-cols-[minmax(0,1fr)_auto_auto]"
-                  : "sm:grid-cols-[minmax(0,1fr)_auto]"
-              }`}
-            >
+            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
               <input
                 id="ontology-playground-question"
                 type="text"
@@ -640,20 +634,14 @@ export function OntologyQueryPlayground({
                 <Search size={15} aria-hidden="true" />
                 <span>{t("ontologyPlayground.run")}</span>
               </Button>
-              {hasResettableGroundingState ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="lg"
-                  className="h-11 min-h-[44px] w-full whitespace-nowrap sm:w-auto"
-                  aria-label={t("ontologyPlayground.clearAriaLabel")}
-                  onClick={() => resetGroundingState({ clearQuestion: true })}
-                  data-testid="ontology-playground-clear"
-                >
-                  <X size={15} aria-hidden="true" />
-                  <span>{t("ontologyPlayground.clear")}</span>
-                </Button>
-              ) : null}
+              <ClearActionButton
+                className="w-full sm:w-auto"
+                disabled={!hasResettableGroundingState}
+                ariaLabel={t("ontologyPlayground.clearAriaLabel")}
+                onClick={() => resetGroundingState({ clearQuestion: true })}
+                dataTestId="ontology-playground-clear"
+                label={t("ontologyPlayground.clear")}
+              />
             </div>
           </form>
           {!result ? (

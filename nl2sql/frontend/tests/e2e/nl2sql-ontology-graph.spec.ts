@@ -348,28 +348,6 @@ async function openGraphIfCollapsed(page: Page, playground: Locator) {
   }
 }
 
-async function expectQuestionActionLayout(page: Page, playground: Locator) {
-  const input = playground.getByTestId("ontology-playground-question");
-  const button = playground.getByTestId("ontology-playground-run");
-  const [inputBox, buttonBox] = await Promise.all([input.boundingBox(), button.boundingBox()]);
-  expect(inputBox).not.toBeNull();
-  expect(buttonBox).not.toBeNull();
-  expect(inputBox!.height).toBeGreaterThanOrEqual(43);
-  expect(buttonBox!.height).toBeGreaterThanOrEqual(43);
-  expect(Math.abs(inputBox!.height - buttonBox!.height)).toBeLessThanOrEqual(1);
-
-  const viewportWidth = page.viewportSize()?.width ?? 0;
-  if (viewportWidth >= 640) {
-    expect(buttonBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
-    expect(Math.abs(buttonBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
-    return;
-  }
-
-  expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
-  expect(Math.abs(buttonBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
-  expect(buttonBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
-}
-
 async function expectQuestionActionLayoutWithClear(page: Page, playground: Locator) {
   const input = playground.getByTestId("ontology-playground-question");
   const runButton = playground.getByTestId("ontology-playground-run");
@@ -595,7 +573,8 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
     "確認対象: 5 ノード / 30 関係"
   );
   await expect(playground.getByTestId("ontology-playground-revision-id")).toContainText("rev1");
-  await expectQuestionActionLayout(page, playground);
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
+  await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);
   await openGraphIfCollapsed(page, playground);
   await expect(playground.getByTestId("ontology-graph-view-mode")).toBeVisible();
@@ -712,8 +691,10 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
   await playground.getByTestId("ontology-playground-question").fill("顧客と注文の関係は?");
   await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeEnabled();
   await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);
   await playground.getByTestId("ontology-playground-run").click();
@@ -746,10 +727,12 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
     "グラフ上のノードを選択"
   );
-  await expect(playground.getByTestId("ontology-playground-clear")).toHaveCount(0);
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
 
   await playground.getByTestId("ontology-playground-question").fill("顧客と注文の関係は?");
   await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeEnabled();
   await expectQuestionActionLayoutWithClear(page, playground);
   await playground.getByTestId("ontology-playground-run").click();
   await expect(playground.getByTestId("ontology-playground-result")).toContainText("関係の一致");
@@ -763,7 +746,8 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
     "グラフ上のノードを選択"
   );
-  await expect(playground.getByTestId("ontology-playground-clear")).toHaveCount(0);
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
   await expectNoHorizontalScroll(page);
 });
 

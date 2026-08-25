@@ -10,13 +10,12 @@ import {
   FileText,
   Loader2,
   Upload,
-  X,
 } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "@/lib/file-dropzone";
 import { cn } from "@/lib/utils";
-import { Button } from "./button";
+import { ClearActionButton } from "./clear-action-button";
 import { FieldError } from "./field-error";
 import { FieldLabel } from "./required-field";
 
@@ -257,21 +256,15 @@ export function FileDropzone({
           />
         </label>
         {onClear ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="h-[44px] whitespace-nowrap"
+          <ClearActionButton
             disabled={clearIsDisabled || interactionDisabled}
-            aria-label={clearAriaLabel ?? clearText}
+            ariaLabel={clearAriaLabel ?? clearText}
             onClick={() => {
               setValidationError("");
               onClear();
             }}
-          >
-            <X size={15} aria-hidden="true" />
-            <span>{clearText}</span>
-          </Button>
+            label={clearText}
+          />
         ) : null}
       </div>
       {hint ? (
