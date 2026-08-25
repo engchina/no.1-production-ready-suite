@@ -355,7 +355,7 @@ def _qa_pairs_from_rows(rows: list[list[str]]) -> list[QaPair]:
     if question_index is None or sql_index is None:
         return []
     result: list[QaPair] = []
-    for row in rows[1:201]:
+    for row in rows[1:]:
         question = row[question_index].strip() if len(row) > question_index else ""
         sql = row[sql_index].strip() if len(row) > sql_index else ""
         if question and sql and sql.split(None, 1)[0].upper() in {"SELECT", "WITH"}:
@@ -397,8 +397,7 @@ def _extract_workbook(filename: str, content: bytes) -> ExtractedOntologySource:
             [normalize_source_text(normalize_workbook_scalar(value)) for value in row]
             for row in sheet.rows
         ]
-        if not qa_pairs:
-            qa_pairs = _qa_pairs_from_rows(rows)
+        qa_pairs.extend(_qa_pairs_from_rows(rows))
         chunks.extend(
             ExtractedSourceChunk(
                 json.dumps(row, ensure_ascii=False),
@@ -479,9 +478,14 @@ def _extract_pdf(
                 image.save(image_buffer, format="JPEG", quality=90)
                 text = normalize_source_text(vlm_page_runner(image_buffer.getvalue(), index))
             except Exception as exc:
-                warnings.append(f"PDF {index} ページ目の VLM OCR に失敗しました: {exc}")
+                raise OntologySourceError(
+                    "ONTOLOGY_SOURCE_PDF_OCR_FAILED",
+                    f"PDF page:{index} の VLM OCR に失敗しました: {exc}",
+                ) from exc
         if not text:
-            warnings.append(f"PDF {index} ページ目はテキストを抽出できませんでした。")
-            continue
+            raise OntologySourceError(
+                "ONTOLOGY_SOURCE_PDF_TEXT_MISSING",
+                f"PDF page:{index} はテキストを抽出できませんでした。OCR 設定を確認してください。",
+            )
         chunks.append(ExtractedSourceChunk(text, OntologyEvidenceLocatorKind.PAGE, f"page:{index}"))
     return ExtractedOntologySource(chunks=chunks, qa_pairs=[], warnings_ja=warnings)

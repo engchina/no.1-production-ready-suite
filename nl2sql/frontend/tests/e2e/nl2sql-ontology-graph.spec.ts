@@ -155,6 +155,165 @@ const employeeOntologyGraph = {
   ],
 };
 
+const erDetailOntologyGraph = {
+  nodes: [
+    {
+      id: "employee-business",
+      kind: "business_entity",
+      business_name_ja: "従業員",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      validation_status: "passed",
+      physical_mappings: [
+        {
+          object_ref: {
+            node_id: "employee-table",
+            owner: "ADMIN",
+            object_name: "EMPLOYEE",
+            object_type: "table",
+          },
+        },
+      ],
+    },
+    {
+      id: "employee-table",
+      kind: "table",
+      business_name_ja: "従業員情報",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "EMPLOYEE",
+        object_type: "TABLE",
+      },
+    },
+    {
+      id: "department-table",
+      kind: "table",
+      business_name_ja: "部署情報",
+      technical_name: "ADMIN.DEPARTMENT",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "DEPARTMENT",
+        object_type: "TABLE",
+      },
+    },
+    {
+      id: "employee-id",
+      kind: "column",
+      business_name_ja: "従業員ID",
+      technical_name: "ADMIN.EMPLOYEE.EMPLOYEE_ID",
+      review_status: "approved",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "EMPLOYEE",
+        column_name: "EMPLOYEE_ID",
+        data_type: "NUMBER",
+        ordinal: 1,
+        primary_key: true,
+      },
+    },
+    {
+      id: "employee-department-id",
+      kind: "column",
+      business_name_ja: "所属部署ID",
+      technical_name: "ADMIN.EMPLOYEE.DEPARTMENT_ID",
+      review_status: "approved",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "EMPLOYEE",
+        column_name: "DEPARTMENT_ID",
+        data_type: "NUMBER",
+        ordinal: 2,
+      },
+    },
+    {
+      id: "employee-name",
+      kind: "column",
+      business_name_ja: "従業員氏名",
+      technical_name: "ADMIN.EMPLOYEE.EMPLOYEE_NAME",
+      description_ja: "従業員の氏名。",
+      review_status: "approved",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "EMPLOYEE",
+        column_name: "EMPLOYEE_NAME",
+        data_type: "VARCHAR2",
+        ordinal: 3,
+      },
+    },
+    {
+      id: "employee-hire-date",
+      kind: "column",
+      business_name_ja: "入社日",
+      technical_name: "ADMIN.EMPLOYEE.HIRE_DATE",
+      review_status: "approved",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "EMPLOYEE",
+        column_name: "HIRE_DATE",
+        data_type: "DATE",
+        ordinal: 4,
+      },
+    },
+    {
+      id: "department-id",
+      kind: "column",
+      business_name_ja: "部署ID",
+      technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_ID",
+      review_status: "approved",
+      metadata: {
+        owner: "ADMIN",
+        object_name: "DEPARTMENT",
+        column_name: "DEPARTMENT_ID",
+        data_type: "NUMBER",
+        ordinal: 1,
+        primary_key: true,
+      },
+    },
+  ],
+  edges: [
+    {
+      id: "employee-maps-to",
+      kind: "maps_to",
+      source_node_id: "employee-business",
+      target_node_id: "employee-table",
+      relationship_name_ja: "物理マッピング",
+      review_status: "approved",
+      validation_status: "passed",
+    },
+    {
+      id: "employee-department-fk",
+      kind: "foreign_key",
+      source_node_id: "employee-table",
+      target_node_id: "department-table",
+      relationship_name_ja: "所属部署を参照",
+      cardinality: "many_to_one",
+      review_status: "approved",
+      validation_status: "passed",
+      join_conditions: [
+        {
+          left: {
+            owner: "ADMIN",
+            object_name: "EMPLOYEE",
+            column_name: "DEPARTMENT_ID",
+          },
+          right: {
+            owner: "ADMIN",
+            object_name: "DEPARTMENT",
+            column_name: "DEPARTMENT_ID",
+          },
+          operator: "=",
+          ordinal: 1,
+        },
+      ],
+    },
+  ],
+};
+
 const relationshipRows = Array.from({ length: 30 }, (_, index) => {
   const source = edges[index % edges.length];
   return {
@@ -170,6 +329,23 @@ async function expectNoHorizontalScroll(page: Page) {
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+}
+
+function hasVisibleBoxShadow(value: string) {
+  if (value === "none") return false;
+  return value
+    .replace(/rgba\(0, 0, 0, 0\) 0px 0px 0px 0px/g, "")
+    .replace(/,\s*/g, "")
+    .trim().length > 0;
+}
+
+async function openGraphIfCollapsed(page: Page, playground: Locator) {
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  if (viewportWidth >= 1280) return;
+  const toggle = playground.getByRole("button", { name: "グラフを表示" });
+  if (await toggle.isVisible()) {
+    await toggle.click();
+  }
 }
 
 async function expectQuestionActionLayout(page: Page, playground: Locator) {
@@ -192,6 +368,128 @@ async function expectQuestionActionLayout(page: Page, playground: Locator) {
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
   expect(Math.abs(buttonBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
   expect(buttonBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
+}
+
+async function expectQuestionActionLayoutWithClear(page: Page, playground: Locator) {
+  const input = playground.getByTestId("ontology-playground-question");
+  const runButton = playground.getByTestId("ontology-playground-run");
+  const clearButton = playground.getByTestId("ontology-playground-clear");
+  const [inputBox, runBox, clearBox] = await Promise.all([
+    input.boundingBox(),
+    runButton.boundingBox(),
+    clearButton.boundingBox(),
+  ]);
+  expect(inputBox).not.toBeNull();
+  expect(runBox).not.toBeNull();
+  expect(clearBox).not.toBeNull();
+  expect(inputBox!.height).toBeGreaterThanOrEqual(43);
+  expect(runBox!.height).toBeGreaterThanOrEqual(43);
+  expect(clearBox!.height).toBeGreaterThanOrEqual(43);
+
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  if (viewportWidth >= 640) {
+    expect(runBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
+    expect(clearBox!.x).toBeGreaterThan(runBox!.x + runBox!.width);
+    expect(Math.abs(runBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(clearBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
+    return;
+  }
+
+  expect(runBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+  expect(clearBox!.y).toBeGreaterThan(runBox!.y + runBox!.height);
+  expect(Math.abs(runBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(clearBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
+  expect(runBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
+  expect(clearBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
+}
+
+async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
+  const field = playground.getByTestId("ontology-graph-search-field");
+  const input = playground.getByTestId("ontology-graph-search");
+  const modeControl = playground.getByTestId("ontology-graph-view-mode");
+  const detailsToggleField = playground.getByTestId("ontology-graph-details-toggle-field");
+
+  await expect(field).toBeVisible();
+  await expect(input).toBeVisible();
+
+  const [fieldBox, inputBox, modeBox, detailsBox] = await Promise.all([
+    field.boundingBox(),
+    input.boundingBox(),
+    modeControl.boundingBox(),
+    detailsToggleField.boundingBox(),
+  ]);
+  expect(fieldBox).not.toBeNull();
+  expect(inputBox).not.toBeNull();
+  expect(modeBox).not.toBeNull();
+  expect(detailsBox).not.toBeNull();
+
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  expect(fieldBox!.height).toBeGreaterThanOrEqual(viewportWidth < 640 ? 43 : 39);
+  expect(fieldBox!.height).toBeLessThanOrEqual(45);
+  expect(Math.abs(fieldBox!.height - modeBox!.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(fieldBox!.height - detailsBox!.height)).toBeLessThanOrEqual(1);
+
+  const fieldCenterY = fieldBox!.y + fieldBox!.height / 2;
+  const inputCenterY = inputBox!.y + inputBox!.height / 2;
+  expect(Math.abs(fieldCenterY - inputCenterY)).toBeLessThanOrEqual(1.5);
+  expect(inputBox!.x).toBeGreaterThan(fieldBox!.x + 28);
+  expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(fieldBox!.x + fieldBox!.width - 10);
+  expect(inputBox!.height).toBeLessThan(fieldBox!.height - 8);
+
+  const inputFrameStyles = await input.evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      borderTopWidth: style.borderTopWidth,
+      borderRightWidth: style.borderRightWidth,
+      borderBottomWidth: style.borderBottomWidth,
+      borderLeftWidth: style.borderLeftWidth,
+      boxShadow: style.boxShadow,
+      outlineStyle: style.outlineStyle,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+    };
+  });
+  expect(inputFrameStyles).toMatchObject({
+    borderTopWidth: "0px",
+    borderRightWidth: "0px",
+    borderBottomWidth: "0px",
+    borderLeftWidth: "0px",
+    outlineStyle: "none",
+    paddingTop: "0px",
+    paddingBottom: "0px",
+  });
+  expect(hasVisibleBoxShadow(inputFrameStyles.boxShadow)).toBe(false);
+
+  await playground.getByTestId("ontology-graph-mode-physical_er").focus();
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")))
+    .toBe("ontology-graph-search");
+
+  const focusedInputStyles = await input.evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      borderTopWidth: style.borderTopWidth,
+      boxShadow: style.boxShadow,
+      outlineStyle: style.outlineStyle,
+    };
+  });
+  expect(focusedInputStyles).toMatchObject({
+    borderTopWidth: "0px",
+    outlineStyle: "none",
+  });
+  expect(hasVisibleBoxShadow(focusedInputStyles.boxShadow)).toBe(false);
+
+  const focusedFieldShadow = await field.evaluate(
+    (element) => window.getComputedStyle(element).boxShadow
+  );
+  expect(hasVisibleBoxShadow(focusedFieldShadow)).toBe(true);
+
+  if (viewportWidth >= 640) {
+    const laneBox = await playground.getByTestId("ontology-graph-lane-business").boundingBox();
+    expect(laneBox).not.toBeNull();
+    expect(fieldBox!.y + fieldBox!.height + 4).toBeLessThanOrEqual(laneBox!.y);
+  }
 }
 
 type MockApiOptions = {
@@ -260,9 +558,6 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       },
     })
   );
-  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) =>
-    fulfillJson(route, { mermaid: "erDiagram" })
-  );
   await page.route("**/api/nl2sql/ontology/revisions", (route) =>
     fulfillJson(route, { revisions: [], active_revision_id: "" })
   );
@@ -285,6 +580,9 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
 }
 
 test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", async ({ page }, testInfo) => {
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
@@ -293,8 +591,19 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(
     playground.getByText("質問を入力すると、一致したノードと関係をグラフで強調表示します。")
   ).toBeVisible();
-  await expect(playground.getByText("確認対象: 5 ノード / 30 関係")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-graph-summary")).toContainText(
+    "確認対象: 5 ノード / 30 関係"
+  );
+  await expect(playground.getByTestId("ontology-playground-revision-id")).toContainText("rev1");
   await expectQuestionActionLayout(page, playground);
+  await expectNoHorizontalScroll(page);
+  await openGraphIfCollapsed(page, playground);
+  await expect(playground.getByTestId("ontology-graph-view-mode")).toBeVisible();
+  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
+  await expect(playground.getByTestId("ontology-graph-lane-attribute")).toContainText("属性・指標");
+  await expect(playground.getByTestId("ontology-graph-lane-detail")).toContainText("物理列・列挙値");
+  await expectGraphSearchFieldLayout(page, playground);
   await expectNoHorizontalScroll(page);
 
   // カードノード: 業務名 + 技術名の 2 段表示
@@ -329,6 +638,7 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
 
   const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
 
   const businessCard = playground.getByTestId("ontology-node-card-employee-business");
   await expect(businessCard).toBeVisible();
@@ -351,25 +661,110 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
   await expectNoHorizontalScroll(page);
 });
 
-test("質問を接地すると分類とグラフ強調が表示される", async ({ page }) => {
+test("質問接地グラフで選択した物理オブジェクトの ER 詳細を段階表示する", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+  await expect(playground.getByTestId("ontology-er-details-panel")).toHaveCount(0);
+
+  await expect(playground.getByTestId("ontology-inspector-node-picker")).toBeVisible();
+  await playground.getByTestId("ontology-inspector-node-employee-business").click();
+
+  const details = playground.getByTestId("ontology-er-details-panel");
+  await expect(details).toBeVisible();
+  await expect(details.getByRole("heading", { name: "ER 詳細" })).toBeVisible();
+  await expect(details.getByTestId("ontology-er-detail-object-name")).toContainText("ADMIN.EMPLOYEE");
+  await expect(details).toContainText("列 4");
+
+  const columns = details.getByTestId("ontology-er-columns");
+  await expect(columns).toContainText("EMPLOYEE_ID");
+  await expect(columns).toContainText("DEPARTMENT_ID");
+  await expect(columns).toContainText("EMPLOYEE_NAME");
+  await expect(columns).toContainText("HIRE_DATE");
+  await expect(columns).toContainText("NUMBER");
+  await expect(columns).toContainText("VARCHAR2");
+  await expect(columns).toContainText("DATE");
+  await expect(columns).toContainText("PK");
+  await expect(columns).toContainText("FK");
+
+  const joins = details.getByTestId("ontology-er-joins");
+  await expect(joins).toContainText("所属部署を参照");
+  await expect(joins).toContainText("ADMIN.EMPLOYEE.DEPARTMENT_ID = ADMIN.DEPARTMENT.DEPARTMENT_ID");
+  await expect(playground.getByTestId("ontology-node-card-employee-table")).toContainText("列 4");
+  await expect(playground.getByTestId("ontology-node-card-employee-table")).toContainText("Join 1");
+
+  await playground.getByTestId("ontology-graph-details-toggle").check();
+  await expect(playground.getByTestId("ontology-node-card-employee-department-id")).toBeVisible();
+  await expect(details).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
+test("質問を接地すると分類とグラフ強調が表示され、入力削除とクリアで reset できる", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
   const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
   await playground.getByTestId("ontology-playground-question").fill("顧客と注文の関係は?");
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expectQuestionActionLayoutWithClear(page, playground);
+  await expectNoHorizontalScroll(page);
   await playground.getByTestId("ontology-playground-run").click();
 
   const result = playground.getByTestId("ontology-playground-result");
   await expect(result).toContainText("関係の一致");
   await expect(result).toContainText("注文する");
   await expect(playground.getByTestId("ontology-playground-ready-state")).toHaveCount(0);
+  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
+  await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("接地パス");
+  await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("顧客");
+  await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("注文");
+  await expect(playground.getByTestId("ontology-inspector-relationships")).toContainText("注文する");
 
   const metricCard = playground
     .locator(".react-flow__node", { hasText: "売上合計" })
     .locator("div")
     .first();
   await expect(metricCard).toHaveCSS("opacity", "0.35");
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expectQuestionActionLayoutWithClear(page, playground);
+  await expectNoHorizontalScroll(page);
+
+  await playground.getByTestId("ontology-playground-question").fill("");
+  await expect(playground.getByTestId("ontology-playground-question")).toHaveValue("");
+  await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
+  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(metricCard).toHaveCSS("opacity", "1");
+  await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
+    "グラフ上のノードを選択"
+  );
+  await expect(playground.getByTestId("ontology-playground-clear")).toHaveCount(0);
+
+  await playground.getByTestId("ontology-playground-question").fill("顧客と注文の関係は?");
+  await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
+  await expectQuestionActionLayoutWithClear(page, playground);
+  await playground.getByTestId("ontology-playground-run").click();
+  await expect(playground.getByTestId("ontology-playground-result")).toContainText("関係の一致");
+  await expect(metricCard).toHaveCSS("opacity", "0.35");
+  await playground.getByTestId("ontology-playground-clear").click();
+  await expect(playground.getByTestId("ontology-playground-question")).toHaveValue("");
+  await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
+  await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
+  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(metricCard).toHaveCSS("opacity", "1");
+  await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
+    "グラフ上のノードを選択"
+  );
+  await expect(playground.getByTestId("ontology-playground-clear")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
 });
 
 test("公開済み Ontology がない場合は準備手順を表示する", async ({ page }) => {
@@ -395,8 +790,12 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
 
   const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
+  await expect(playground.getByTestId("ontology-playground-inspector")).toBeVisible();
+  await openGraphIfCollapsed(page, playground);
   await expect(playground.locator(".react-flow")).toBeVisible();
   await expect(playground.locator(".react-flow__node")).toHaveCount(3);
+  await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
+  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
   await expect(playground.getByTestId("ontology-graph-legend")).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "顧客" })).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "注文" })).toBeVisible();

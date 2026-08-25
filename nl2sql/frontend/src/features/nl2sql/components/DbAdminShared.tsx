@@ -246,7 +246,14 @@ export function ManagementTabs<TView extends string>({
   onViewChange,
 }: {
   activeView: TView;
-  tabs: Array<{ id: TView; label: string; icon: LucideIcon; ariaLabel?: string }>;
+  tabs: Array<{
+    id: TView;
+    label: string;
+    icon: LucideIcon;
+    ariaLabel?: string;
+    meta?: ReactNode;
+    metaTestId?: string;
+  }>;
   idPrefix: string;
   ariaLabel: string;
   onViewChange: (view: TView) => void;
@@ -281,6 +288,7 @@ export function ManagementTabs<TView extends string>({
               role="tab"
               aria-selected={selected}
               aria-label={view.ariaLabel}
+              aria-describedby={view.meta ? `${idPrefix}-tab-${view.id}-meta` : undefined}
               aria-controls={`${idPrefix}-panel-${view.id}`}
               className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
                 selected
@@ -296,6 +304,19 @@ export function ManagementTabs<TView extends string>({
                 className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
               />
               <span>{view.label}</span>
+              {view.meta ? (
+                <span
+                  id={`${idPrefix}-tab-${view.id}-meta`}
+                  data-testid={view.metaTestId}
+                  className={`rounded-full border px-1.5 py-0.5 text-xs font-semibold leading-4 tabular-nums ${
+                    selected
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "border-border bg-background text-muted"
+                  }`}
+                >
+                  {view.meta}
+                </span>
+              ) : null}
             </button>
           );
         })}

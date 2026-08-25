@@ -168,7 +168,7 @@ class Settings(BaseServiceSettings):
     # Ontology worker / reasoning。
     nl2sql_ontology_worker_mode: str = "inprocess"
     nl2sql_ontology_worker_poll_seconds: float = 1.0
-    nl2sql_ontology_worker_claim_timeout_seconds: float = 900.0
+    nl2sql_ontology_worker_claim_timeout_seconds: float = 3900.0
     # Oracle Profile 同期は永続 job で実行し、DB round-trip と job 全体を別々に制限する。
     nl2sql_oracle_call_timeout_seconds: float = 120.0
     nl2sql_profile_sync_job_timeout_seconds: float = 300.0

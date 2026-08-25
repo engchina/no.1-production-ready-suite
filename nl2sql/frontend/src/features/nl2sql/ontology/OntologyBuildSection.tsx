@@ -29,8 +29,13 @@ import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
+import { formatDateTime } from "@/lib/format";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
-import { tabularFileFormatConfig } from "@/lib/tabular-file-formats";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import {
+  tabularFileFormatConfig,
+  type TabularFileFormatConfig,
+} from "@/lib/tabular-file-formats";
 import { ManagementTabs } from "../components/DbAdminShared";
 import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
@@ -58,16 +63,15 @@ import type {
 } from "./types";
 
 const POLL_INTERVAL_MS = 1000;
-// 状態取得が連続で失敗したらポーリングを止めてエラー表示する(404 は即終端)
-const MAX_POLL_FAILURES = 5;
-const MARKDOWN_DRAFT_STALE_MS = 120_000;
-const ONTOLOGY_SOURCE_FILE_FORMATS = tabularFileFormatConfig([
-  ".pdf",
-  ".docx",
-  ".txt",
-  ".md",
-  ".xlsm",
-]);
+const ONTOLOGY_BUILD_LONG_RUNNING_GRACE_MS = API_TIMEOUT_MS.longRunningJob;
+// 長時間 job は一時的な状態取得失敗でも監視を継続する(404 は即終端)。
+const MAX_POLL_FAILURES = Math.ceil(ONTOLOGY_BUILD_LONG_RUNNING_GRACE_MS / POLL_INTERVAL_MS);
+const MARKDOWN_DRAFT_STALE_MS = ONTOLOGY_BUILD_LONG_RUNNING_GRACE_MS;
+const ONTOLOGY_SOURCE_FILE_FORMATS: TabularFileFormatConfig = {
+  accept: ".pdf,.docx,.txt,.md,.csv,.xlsx,.xls,.xlsm",
+  formatLabel: ".PDF / .DOCX / .TXT / .MD / .CSV / .XLSX / .XLS / .XLSM",
+};
+const ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5;
 const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
 const textareaClass =
   "min-h-24 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
@@ -356,6 +360,7 @@ export function OntologyBuildSection({
   const [businessText, setBusinessText] = useState("");
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
+  const [sourceFilesError, setSourceFilesError] = useState("");
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
   const [markdownState, setMarkdownState] = useState<OntologyMarkdownState | null>(null);
   const [markdownLoading, setMarkdownLoading] = useState(false);
@@ -406,6 +411,24 @@ export function OntologyBuildSection({
     job?.status === "failed" && !schemaScopeFailure && job.error_message_ja
       ? `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
       : "";
+  const publishedMarkdown = markdownState?.published_markdown ?? "";
+  const publishedRevision = markdownState?.published_revision ?? null;
+  const publishedAt = publishedRevision?.published_at ?? markdownState?.published_at ?? null;
+  const draftRevisionMeta = draftRevision
+    ? t("profiles.ontologyBuild.markdownTabVersion", {
+        version: String(draftRevision.version),
+      })
+    : t("profiles.ontologyBuild.markdownDraftMissing");
+  const publishedRevisionMeta = publishedRevision
+    ? t("profiles.ontologyBuild.markdownTabVersion", {
+        version: String(publishedRevision.version),
+      })
+    : t("profiles.ontologyBuild.markdownPublishedMissing");
+  const publishedAtMeta = publishedAt
+    ? t("profiles.ontologyBuild.markdownPublishedAt", {
+        date: formatDateTime(publishedAt),
+      })
+    : "";
 
   const markdownTabs = useMemo(
     () => [
@@ -414,17 +437,20 @@ export function OntologyBuildSection({
         label: t("profiles.ontologyBuild.markdownTab.draft"),
         icon: PencilLine,
         ariaLabel: t("profiles.ontologyBuild.markdownTabAria.draft"),
+        meta: draftRevisionMeta,
+        metaTestId: "ontology-markdown-tab-draft-meta",
       },
       {
         id: "published" as const,
         label: t("profiles.ontologyBuild.markdownTab.published"),
         icon: BookOpenCheck,
         ariaLabel: t("profiles.ontologyBuild.markdownTabAria.published"),
+        meta: publishedRevisionMeta,
+        metaTestId: "ontology-markdown-tab-published-meta",
       },
     ],
-    []
+    [draftRevisionMeta, publishedRevisionMeta]
   );
-  const publishedMarkdown = markdownState?.published_markdown ?? "";
   const activeMarkdown =
     activeMarkdownTab === "draft" ? draftMarkdown : publishedMarkdown;
   const hasDraftRevision = draftRevision?.status === "draft";
@@ -600,6 +626,7 @@ export function OntologyBuildSection({
     setBusinessText("");
     setQaFile(null);
     setSourceFiles([]);
+    setSourceFilesError("");
     const controller = new AbortController();
     if (profileId) {
       void refreshMarkdown(profileId, controller.signal, { reason: "profile-load" });
@@ -763,6 +790,14 @@ export function OntologyBuildSection({
     const targetProfileId = profileId;
     const hasBusinessTextInput = businessText.trim().length > 0;
     const hasSourceFilesInput = sourceFiles.length > 0;
+    if (sourceFiles.length > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
+      setSourceFilesError(
+        t("profiles.ontologyBuild.sourceFilesMaxExceeded", {
+          count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
+        })
+      );
+      return;
+    }
     buildMarkdownRefreshSignatureRef.current = "";
     setProgressCollapsed(false);
     setBusy("start");
@@ -875,6 +910,20 @@ export function OntologyBuildSection({
     }
   };
 
+  const handleSourceFiles = (picked: File[]) => {
+    const next = mergeUniqueFiles(sourceFiles, picked);
+    if (next.length > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
+      setSourceFilesError(
+        t("profiles.ontologyBuild.sourceFilesMaxExceeded", {
+          count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
+        })
+      );
+      return;
+    }
+    setSourceFilesError("");
+    setSourceFiles(next);
+  };
+
   const copyMarkdownOutput = async () => {
     if (!activeMarkdown.trim()) return;
     try {
@@ -903,6 +952,7 @@ export function OntologyBuildSection({
           title={t("profiles.ontologyBuild.setupTitle")}
           description={t("profiles.ontologyBuild.setupHint")}
         />
+        <Banner severity="info">{t("profiles.ontologyBuild.longRunningHint")}</Banner>
         <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-foreground">
           <span>{t("profiles.ontologyBuild.businessText")}</span>
           <textarea
@@ -924,13 +974,17 @@ export function OntologyBuildSection({
               formatLabel={ONTOLOGY_SOURCE_FILE_FORMATS.formatLabel}
               multiple
               selectedCount={sourceFiles.length}
-              hint={t("profiles.ontologyBuild.sourceFilesHint")}
+              hint={t("profiles.ontologyBuild.sourceFilesHint", {
+                count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
+              })}
+              errorText={sourceFilesError}
               icon="file"
               dataTestId="ontology-build-source-files"
-              onFiles={(picked) =>
-                setSourceFiles((current) => mergeUniqueFiles(current, picked))
-              }
-              onClear={() => setSourceFiles([])}
+              onFiles={handleSourceFiles}
+              onClear={() => {
+                setSourceFiles([]);
+                setSourceFilesError("");
+              }}
             />
             {sourceFiles.length > 0 ? (
               <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
@@ -950,9 +1004,10 @@ export function OntologyBuildSection({
                       aria-label={t("profiles.ontologyBuild.sourceFileRemove", {
                         name: file.name,
                       })}
-                      onClick={() =>
-                        setSourceFiles((current) => current.filter((item) => item !== file))
-                      }
+                      onClick={() => {
+                        setSourceFilesError("");
+                        setSourceFiles((current) => current.filter((item) => item !== file));
+                      }}
                     >
                       <X size={15} aria-hidden="true" />
                     </Button>
@@ -1255,6 +1310,17 @@ export function OntologyBuildSection({
           onViewChange={setActiveMarkdownTab}
         />
 
+        {activeMarkdownTab === "published" && publishedAtMeta ? (
+          <div
+            className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted"
+            role="status"
+            aria-live="polite"
+            data-testid="ontology-markdown-published-meta"
+          >
+            <span className="tabular-nums">{publishedAtMeta}</span>
+          </div>
+        ) : null}
+
         {markdownError ? (
           <Banner
             severity="danger"
@@ -1359,12 +1425,6 @@ export function OntologyBuildSection({
           </Button>
           {draftDirty ? (
             <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />
-          ) : draftRevision ? (
-            <span className="text-xs text-muted">
-              {t("profiles.ontologyBuild.markdownDraftRevision", {
-                version: String(draftRevision.version),
-              })}
-            </span>
           ) : null}
         </div>
         {publishJob ? (

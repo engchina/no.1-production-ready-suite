@@ -28,7 +28,6 @@ import {
 import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
 import { profileDisplayLabel } from "../profileDisplay";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
-import { OntologyMermaidPanel } from "../ontology/OntologyMermaidPanel";
 import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
 import type { OntologyMarkdownState } from "../ontology/types";
 
@@ -42,7 +41,7 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
 }
 
 /**
- * AI 構築、Markdown Draft 確認、質問の接地確認、技術表現を一続きで扱う単一ページ。
+ * AI 構築、Markdown Draft 確認、質問の接地確認を一続きで扱う単一ページ。
  * 旧 tab URL は profile だけを残す正規 URL へ置き換える。
  */
 export function OntologyBuildPage() {
@@ -53,7 +52,6 @@ export function OntologyBuildPage() {
     profileId: string;
     hasPublished: boolean;
   }>({ profileId: "", hasPublished: false });
-  const [mermaidRefreshToken, setMermaidRefreshToken] = useState(0);
   const completedSchemaRefreshJob = useRef("");
   const queryClient = useQueryClient();
 
@@ -80,8 +78,6 @@ export function OntologyBuildPage() {
   const ontologyViewQuery = useProfileOntologyView(selectedProfileId);
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
   const ontologyGraph = ontologyViewQuery.data?.ontology_graph ?? null;
-  const ontologyGraphRevisionId =
-    ontologyGraph?.revision?.id ?? ontologyGraph?.revision_id ?? "";
   const ontologyWarnings = ontologyViewQuery.data?.warnings_ja ?? [];
   const hasPublishedOntology =
     publishedMarkdownState.profileId === selectedProfileId &&
@@ -179,7 +175,6 @@ export function OntologyBuildPage() {
   );
   const handleOntologyPublished = useCallback(async () => {
     await refreshOntologyView();
-    setMermaidRefreshToken((token) => token + 1);
   }, [refreshOntologyView]);
 
   const workspaceLoading =
@@ -317,11 +312,6 @@ export function OntologyBuildPage() {
               onMarkdownStateChange={handleMarkdownStateChange}
               onRefreshSchema={refreshSchema}
               refreshingSchema={refreshing}
-            />
-            <OntologyMermaidPanel
-              profileId={selectedProfileId}
-              graphRevisionId={ontologyGraphRevisionId}
-              refreshToken={mermaidRefreshToken}
             />
             <OntologyQueryPlayground
               graph={ontologyGraph}

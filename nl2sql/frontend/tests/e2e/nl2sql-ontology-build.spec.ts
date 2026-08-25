@@ -86,168 +86,6 @@ async function expectSourceDropzoneMatchesQaStyle(page: Page) {
   await expect(page.locator("label").filter({ hasText: /^構築資料$/ })).toHaveCount(1);
 }
 
-async function mermaidGraphTransform(content: Locator) {
-  return content.evaluate((element) => ({
-    scale: Number(element.getAttribute("data-transform-scale")),
-    x: Number(element.getAttribute("data-transform-x")),
-    y: Number(element.getAttribute("data-transform-y")),
-  }));
-}
-
-async function mermaidGraphFitMetrics(graph: Locator, content: Locator) {
-  const [viewport, data] = await Promise.all([
-    graph.boundingBox(),
-    content.evaluate((element) => ({
-      boundsHeight: Number(element.getAttribute("data-content-bounds-height")),
-      boundsWidth: Number(element.getAttribute("data-content-bounds-width")),
-      boundsX: Number(element.getAttribute("data-content-bounds-x")),
-      boundsY: Number(element.getAttribute("data-content-bounds-y")),
-      source: element.getAttribute("data-content-bounds-source"),
-      scale: Number(element.getAttribute("data-transform-scale")),
-      x: Number(element.getAttribute("data-transform-x")),
-      y: Number(element.getAttribute("data-transform-y")),
-    })),
-  ]);
-  expect(viewport).not.toBeNull();
-  const contentLeft = data.x + data.boundsX * data.scale;
-  const contentTop = data.y + data.boundsY * data.scale;
-  const contentWidth = data.boundsWidth * data.scale;
-  const contentHeight = data.boundsHeight * data.scale;
-  return {
-    contentBottom: contentTop + contentHeight,
-    contentHeight,
-    contentLeft,
-    contentRight: contentLeft + contentWidth,
-    contentTop,
-    contentWidth,
-    largestAxisRatio: Math.max(contentWidth / viewport!.width, contentHeight / viewport!.height),
-    source: data.source,
-    viewportHeight: viewport!.height,
-    viewportWidth: viewport!.width,
-  };
-}
-
-async function mermaidGraphScreenMetrics(content: Locator) {
-  return content.evaluate((element) => {
-    const graph = element.closest("[data-testid='ontology-mermaid-rendered-graph']");
-    const svg = element.querySelector("svg");
-    if (!(graph instanceof HTMLElement) || !(svg instanceof SVGSVGElement)) {
-      throw new Error("Mermaid graph viewport or SVG was not rendered.");
-    }
-    const graphRect = graph.getBoundingClientRect();
-    const svgRect = svg.getBoundingClientRect();
-    const controls = graph.querySelector("[data-testid='ontology-mermaid-graph-controls']");
-    const controlsRect = controls?.getBoundingClientRect() ?? null;
-    const declaredWidth =
-      svg.viewBox.baseVal.width || Number.parseFloat(svg.getAttribute("width") ?? "");
-    const declaredHeight =
-      svg.viewBox.baseVal.height || Number.parseFloat(svg.getAttribute("height") ?? "");
-    const boundsX = Number(element.getAttribute("data-content-bounds-x"));
-    const boundsY = Number(element.getAttribute("data-content-bounds-y"));
-    const boundsWidth = Number(element.getAttribute("data-content-bounds-width"));
-    const boundsHeight = Number(element.getAttribute("data-content-bounds-height"));
-    if (
-      !Number.isFinite(declaredWidth) ||
-      !Number.isFinite(declaredHeight) ||
-      !Number.isFinite(boundsX) ||
-      !Number.isFinite(boundsY) ||
-      !Number.isFinite(boundsWidth) ||
-      !Number.isFinite(boundsHeight) ||
-      declaredWidth <= 0 ||
-      declaredHeight <= 0 ||
-      boundsWidth <= 0 ||
-      boundsHeight <= 0
-    ) {
-      throw new Error("Mermaid graph content bounds were empty.");
-    }
-    const scaleX = svgRect.width / declaredWidth;
-    const scaleY = svgRect.height / declaredHeight;
-    const union = {
-      bottom: svgRect.top + (boundsY + boundsHeight) * scaleY,
-      left: svgRect.left + boundsX * scaleX,
-      right: svgRect.left + (boundsX + boundsWidth) * scaleX,
-      top: svgRect.top + boundsY * scaleY,
-    };
-    const overlapLeft = controlsRect ? Math.max(union.left, controlsRect.left) : 0;
-    const overlapRight = controlsRect ? Math.min(union.right, controlsRect.right) : 0;
-    const overlapTop = controlsRect ? Math.max(union.top, controlsRect.top) : 0;
-    const overlapBottom = controlsRect ? Math.min(union.bottom, controlsRect.bottom) : 0;
-    const overlapWidth = Math.max(0, overlapRight - overlapLeft);
-    const overlapHeight = Math.max(0, overlapBottom - overlapTop);
-    const contentWidth = union.right - union.left;
-    const contentHeight = union.bottom - union.top;
-    return {
-      contentBottom: union.bottom - graphRect.top,
-      contentHeight,
-      contentLeft: union.left - graphRect.left,
-      contentRight: union.right - graphRect.left,
-      contentTop: union.top - graphRect.top,
-      contentWidth,
-      controlsOverlapArea: overlapWidth * overlapHeight,
-      largestAxisRatio: Math.max(contentWidth / graphRect.width, contentHeight / graphRect.height),
-      viewportHeight: graphRect.height,
-      viewportWidth: graphRect.width,
-    };
-  });
-}
-
-async function expectMermaidGraphFitsViewport(content: Locator) {
-  const screenFit = await mermaidGraphScreenMetrics(content);
-  expect(screenFit.contentLeft).toBeGreaterThanOrEqual(-1);
-  expect(screenFit.contentTop).toBeGreaterThanOrEqual(-1);
-  expect(screenFit.contentRight).toBeLessThanOrEqual(screenFit.viewportWidth + 1);
-  expect(screenFit.contentBottom).toBeLessThanOrEqual(screenFit.viewportHeight + 1);
-  expect(screenFit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
-  expect(screenFit.controlsOverlapArea).toBe(0);
-  return screenFit;
-}
-
-async function mockRepresentativeMermaidExport(page: Page) {
-  await page.unroute("**/api/nl2sql/profiles/*/ontology-view/mermaid");
-  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) =>
-    fulfillJson(route, {
-      profile_id: "default",
-      ontology_revision_id: "revision-1",
-      mermaid: `erDiagram
-    "ADMIN.PROJECT" {
-        NUMBER PROJECT_ID "プロジェクトID"
-        NUMBER DEPARTMENT_ID FK "部門ID"
-        VARCHAR2 PROJECT_NAME "プロジェクト名"
-        DATE START_DATE "開始日"
-        NUMBER BUDGET "予算"
-    }
-    "ADMIN.EMPLOYEE" {
-        NUMBER EMPLOYEE_ID "従業員ID"
-        NUMBER DEPARTMENT_ID FK "所属部門ID"
-        VARCHAR2 EMPLOYEE_NAME "従業員氏名"
-        VARCHAR2 EMAIL "メールアドレス"
-        DATE HIRE_DATE "入社日"
-        NUMBER SALARY "給与"
-    }
-    "ADMIN.DEPARTMENT" {
-        NUMBER DEPARTMENT_ID "部門ID"
-        VARCHAR2 DEPARTMENT_NAME "部門名"
-    }
-    "ADMIN.PROJECT" }o--|| "ADMIN.DEPARTMENT" : "部門情報を管理するテーブル"
-    "ADMIN.EMPLOYEE" }o--|| "ADMIN.DEPARTMENT" : "所属部門を参照するテーブル"`,
-    })
-  );
-}
-
-async function mockTinyMermaidExport(page: Page) {
-  await page.unroute("**/api/nl2sql/profiles/*/ontology-view/mermaid");
-  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) =>
-    fulfillJson(route, {
-      profile_id: "default",
-      ontology_revision_id: "revision-1",
-      mermaid: `erDiagram
-    "A" {
-        NUMBER ID
-    }`,
-    })
-  );
-}
-
 type BuildRunOptions = {
   runSchemaNaming: boolean | null;
   runQaExtraction: boolean | null;
@@ -524,7 +362,6 @@ async function mockApi(page: Page) {
     latestRunOptions: null as BuildRunOptions | null,
     ontologyDraftPayload: null as Record<string, unknown> | null,
     ontologyViewCalls: 0,
-    mermaidRequests: 0,
     draftMarkdown: generatedDraftMarkdown,
     draftMarkdownEtag: "markdown-etag-1",
     savedDraftMarkdown: null as string | null,
@@ -660,26 +497,6 @@ async function mockApi(page: Page) {
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
     fulfillJson(route, markdownStatePayload())
   );
-  await page.route("**/api/nl2sql/profiles/*/ontology-view/mermaid", (route) => {
-    state.mermaidRequests += 1;
-    const revisionId = currentOntologyViewPayload().ontology_graph.revision.id;
-    return fulfillJson(route, {
-      profile_id: "default",
-      ontology_revision_id: revisionId,
-      mermaid: `erDiagram
-    %% 受注 = APP.ORDERS
-    "APP.ORDERS" {
-        NUMBER ORDER_ID "注文ID"
-        NUMBER CUSTOMER_ID FK "顧客ID"
-    }
-    %% 顧客 = APP.CUSTOMERS
-    "APP.CUSTOMERS" {
-        NUMBER ID "顧客ID"
-    }
-    %% ${revisionId}
-    "APP.ORDERS" }o--|| "APP.CUSTOMERS" : "顧客を参照"`,
-    });
-  });
   await page.route("**/api/nl2sql/profiles/*/ontology-build", async (route) => {
     state.startPayloadSeen = true;
     state.startCalls += 1;
@@ -785,109 +602,6 @@ async function mockApi(page: Page) {
   return state;
 }
 
-test("Mermaid ER グラフは拡大縮小・ドラッグ・全体表示できる", async ({ page }) => {
-  await mockApi(page);
-  await mockRepresentativeMermaidExport(page);
-  await page.goto("/ontology-build?profile=default");
-
-  const mermaidPanel = page.getByTestId("ontology-mermaid-panel");
-  await expect(mermaidPanel.getByRole("heading", { name: "SQL 生成用 Mermaid ER 技術表現" })).toBeVisible();
-  await mermaidPanel.scrollIntoViewIfNeeded();
-  await mermaidPanel.getByRole("button", { name: "コードを取得" }).click();
-  await mermaidPanel.getByRole("tab", { name: "グラフ" }).click();
-
-  const graph = mermaidPanel.getByTestId("ontology-mermaid-rendered-graph");
-  const content = graph.getByTestId("ontology-mermaid-graph-content");
-  await expect(graph.locator("svg")).toBeVisible();
-  await expect(content).toHaveAttribute("data-transform-ready", "true");
-  await expect(graph.getByTestId("ontology-mermaid-graph-controls")).toBeVisible();
-  const initialFit = await mermaidGraphFitMetrics(graph, content);
-  expect(initialFit.contentLeft).toBeGreaterThanOrEqual(0);
-  expect(initialFit.contentTop).toBeGreaterThanOrEqual(0);
-  expect(initialFit.contentRight).toBeLessThanOrEqual(initialFit.viewportWidth + 1);
-  expect(initialFit.contentBottom).toBeLessThanOrEqual(initialFit.viewportHeight + 1);
-  expect(initialFit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
-  expect(initialFit.source).toBe("content");
-  await expectMermaidGraphFitsViewport(content);
-
-  const zoomIn = graph.getByRole("button", { name: "グラフを拡大" });
-  const zoomOut = graph.getByRole("button", { name: "グラフを縮小" });
-  const fit = graph.getByRole("button", { name: "グラフ全体を表示" });
-  await expect(zoomIn).toBeVisible();
-  await expect(zoomOut).toBeVisible();
-  await expect(fit).toBeVisible();
-
-  const initial = await mermaidGraphTransform(content);
-  await zoomIn.click();
-  await expect
-    .poll(async () => (await mermaidGraphTransform(content)).scale)
-    .toBeGreaterThan(initial.scale + 0.001);
-  const zoomedIn = await mermaidGraphTransform(content);
-
-  await zoomOut.click();
-  await expect
-    .poll(async () => (await mermaidGraphTransform(content)).scale)
-    .toBeLessThan(zoomedIn.scale - 0.001);
-  const beforeDrag = await mermaidGraphTransform(content);
-
-  const graphBox = await graph.boundingBox();
-  expect(graphBox).not.toBeNull();
-  const startX = graphBox!.x + graphBox!.width / 2;
-  const startY = graphBox!.y + graphBox!.height / 2;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + 82, startY + 48, { steps: 6 });
-  await page.mouse.up();
-  await expect
-    .poll(async () => (await mermaidGraphTransform(content)).x)
-    .toBeGreaterThan(beforeDrag.x + 30);
-  await expect
-    .poll(async () => (await mermaidGraphTransform(content)).y)
-    .toBeGreaterThan(beforeDrag.y + 20);
-
-  await fit.click();
-  await expect
-    .poll(async () => Math.abs((await mermaidGraphTransform(content)).scale - initial.scale))
-    .toBeLessThan(0.02);
-  await expect
-    .poll(async () => Math.abs((await mermaidGraphTransform(content)).x - initial.x))
-    .toBeLessThan(2);
-  await expect
-    .poll(async () => Math.abs((await mermaidGraphTransform(content)).y - initial.y))
-    .toBeLessThan(2);
-  const refit = await mermaidGraphFitMetrics(graph, content);
-  expect(refit.contentLeft).toBeGreaterThanOrEqual(0);
-  expect(refit.contentTop).toBeGreaterThanOrEqual(0);
-  expect(refit.contentRight).toBeLessThanOrEqual(refit.viewportWidth + 1);
-  expect(refit.contentBottom).toBeLessThanOrEqual(refit.viewportHeight + 1);
-  expect(refit.largestAxisRatio).toBeGreaterThanOrEqual(0.9);
-  expect(refit.source).toBe("content");
-  await expectMermaidGraphFitsViewport(content);
-});
-
-test("Mermaid ER グラフは小さい図でも fit で大きく表示できる", async ({ page }) => {
-  await mockApi(page);
-  await mockTinyMermaidExport(page);
-  await page.goto("/ontology-build?profile=default");
-
-  const mermaidPanel = page.getByTestId("ontology-mermaid-panel");
-  await mermaidPanel.scrollIntoViewIfNeeded();
-  await mermaidPanel.getByRole("button", { name: "コードを取得" }).click();
-  await mermaidPanel.getByRole("tab", { name: "グラフ" }).click();
-
-  const graph = mermaidPanel.getByTestId("ontology-mermaid-rendered-graph");
-  const content = graph.getByTestId("ontology-mermaid-graph-content");
-  await expect(graph.locator("svg")).toBeVisible();
-  await expect(content).toHaveAttribute("data-transform-ready", "true");
-  const initialFit = await mermaidGraphFitMetrics(graph, content);
-  expect(initialFit.source).toBe("content");
-  if (initialFit.viewportWidth >= 700) {
-    const initial = await mermaidGraphTransform(content);
-    expect(initial.scale).toBeGreaterThan(3);
-  }
-  await expectMermaidGraphFitsViewport(content);
-});
-
 test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 → 公開の導線が機能する", async ({ context, page }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? "3101"}`,
@@ -903,6 +617,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await expect(page.getByText("OWL(RDF)エクスポート / インポート", { exact: true })).toHaveCount(
     0
   );
+  await expect(page.getByText("60 分以上かかることがあります", { exact: false })).toBeVisible();
   await expectBuildPanelsStackedFullWidth(page);
   await expectSourceDropzoneMatchesQaStyle(page);
   await expectExtractionTargetsHidden(page);
@@ -914,8 +629,21 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await section.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
   await expect(page.getByTestId("ontology-build-source-files-input")).toHaveAttribute(
     "accept",
-    ".csv,.xlsx,.xls,.pdf,.docx,.txt,.md,.xlsm"
+    ".pdf,.docx,.txt,.md,.csv,.xlsx,.xls,.xlsm"
   );
+  await expect(
+    page
+      .getByTestId("ontology-build-source-files")
+      .getByText(".PDF / .DOCX / .TXT / .MD / .CSV / .XLSX / .XLS / .XLSM", {
+        exact: true,
+      })
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "PDF / DOCX / TXT / MD / CSV / XLSX / XLS / XLSM を最大 5 件まで選択できます。原本と証拠位置を保持します。",
+      { exact: true }
+    )
+  ).toBeVisible();
   await expect(page.getByTestId("ontology-build-qa-file-input")).toHaveAttribute(
     "accept",
     ".csv,.xlsx,.xls,.xlsm"
@@ -931,6 +659,24 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   const sourceClear = page
     .getByTestId("ontology-build-source-files")
     .getByRole("button", { name: "クリア" });
+  await expect(sourceClear).toBeDisabled();
+  await dropFiles(
+    page,
+    page.getByTestId("ontology-build-source-files-dropzone"),
+    Array.from({ length: 6 }, (_, index) => ({
+      name: `source-${index + 1}.md`,
+      type: "text/markdown",
+      content: `# 資料 ${index + 1}`,
+      lastModified: 1_700_000_010_000 + index,
+    }))
+  );
+  await expect(
+    page.getByText(
+      "構築資料は最大 5 件までアップロードできます。ファイルを減らして再度選択してください。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  await expect(section.getByRole("list", { name: "選択した構築資料" })).toHaveCount(0);
   await expect(sourceClear).toBeDisabled();
   await dropFiles(page, page.getByTestId("ontology-build-source-files-dropzone"), [
     {
@@ -1035,6 +781,8 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   ).toBeVisible();
   await expect(markdown.getByRole("tab", { name: "Markdown Ontology Draft" })).toBeVisible();
   await expect(markdown.getByRole("tab", { name: "Markdown Ontology Published" })).toBeVisible();
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
   const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
   await expect(draftEditor).toHaveValue(/# Ontology Draft/);
   await expect(draftEditor).toHaveValue(/## Relationships \/ Join/);
@@ -1047,39 +795,24 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   );
   await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
 
-  // Mermaid は SQL 生成用の技術表現で、publish 後は同じ公開 revision へ再取得される
-  const mermaidPanel = page.getByTestId("ontology-mermaid-panel");
+  // 標準図示は質問の接地確認グラフへ一本化され、公開後は同じ公開 revision へ更新される
   const ontologyQueryPanel = page.locator("#ontology-query-playground-panel");
-  await expect(mermaidPanel.getByRole("heading", { name: "SQL 生成用 Mermaid ER 技術表現" })).toBeVisible();
+  await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await expect(
     ontologyQueryPanel.getByRole("heading", { name: "質問の Ontology 接地確認用グラフ" })
   ).toBeVisible();
-  const [mermaidBox, ontologyQueryBox] = await Promise.all([
-    mermaidPanel.boundingBox(),
-    ontologyQueryPanel.boundingBox(),
-  ]);
-  expect(mermaidBox).not.toBeNull();
-  expect(ontologyQueryBox).not.toBeNull();
-  expect(mermaidBox!.y).toBeLessThan(ontologyQueryBox!.y);
-  const mermaidCodeTab = mermaidPanel.getByRole("tab", { name: "コード" });
-  const mermaidGraphTab = mermaidPanel.getByRole("tab", { name: "グラフ" });
-  await expect(mermaidCodeTab).toHaveAttribute("aria-selected", "true");
-  await expect(mermaidGraphTab).toHaveAttribute("aria-selected", "false");
-  await mermaidPanel.getByRole("button", { name: "コードを取得" }).click();
-  await expect(mermaidPanel.getByTestId("ontology-graph-revision-id")).toContainText("revision-1");
-  await expect(mermaidPanel.getByTestId("ontology-mermaid-revision-id")).toContainText("revision-1");
-  await expect(mermaidPanel.getByTestId("ontology-build-mermaid")).toContainText("revision-1");
-  await mermaidGraphTab.click();
-  await expect(mermaidGraphTab).toHaveAttribute("aria-selected", "true");
-  await expect(
-    mermaidPanel.getByTestId("ontology-mermaid-rendered-graph").locator("svg")
-  ).toBeVisible();
-  await expect(mermaidPanel.getByTestId("ontology-mermaid-render-error")).toHaveCount(0);
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
+    "revision-1"
+  );
+  const graphExpandButton = ontologyQueryPanel.getByRole("button", { name: "グラフを表示" });
+  if (await graphExpandButton.isVisible()) {
+    await graphExpandButton.click();
+  }
+  await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toBeVisible();
 
   await draftEditor.fill(`${generatedDraftMarkdown}\n\n## Manual Notes\n- 公開確認済み`);
   await expect(markdown.getByText("未保存")).toBeVisible();
   const ontologyViewCallsBeforePublish = state.ontologyViewCalls;
-  const mermaidRequestsBeforePublish = state.mermaidRequests;
 
   await expect(page.getByTestId("ontology-build-proposals")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /承認/ })).toHaveCount(0);
@@ -1095,18 +828,17 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   expect(state.published).toBe(true);
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
-  await expect.poll(() => state.mermaidRequests).toBeGreaterThan(mermaidRequestsBeforePublish);
-  await expect(mermaidPanel.getByTestId("ontology-graph-revision-id")).toContainText("revision-draft-4");
-  await expect(mermaidPanel.getByTestId("ontology-mermaid-revision-id")).toContainText("revision-draft-4");
-  await expect(
-    mermaidPanel.getByTestId("ontology-mermaid-rendered-graph").locator("svg")
-  ).toBeVisible();
-  await mermaidCodeTab.click();
-  await expect(mermaidPanel.getByTestId("ontology-build-mermaid")).toContainText("revision-draft-4");
-  await expect(mermaidPanel.getByTestId("ontology-mermaid-revision-mismatch")).toHaveCount(0);
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
+    "revision-draft-4"
+  );
+  await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
     "Manual Notes"
+  );
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
+  await expect(markdown.getByTestId("ontology-markdown-published-meta")).toContainText(
+    /公開日時: 07\/12 \d{2}:00/u
   );
 
   // 旧「物理・業務モデル編集」は Markdown Draft に統合され、別編集 UI は表示しない
@@ -1115,14 +847,10 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await expect(page.getByRole("button", { name: "Draft を保存", exact: true })).toHaveCount(0);
   await expect(markdown.getByRole("button", { name: "Markdown Draft を保存" })).toBeVisible();
   await expect(markdown.getByRole("tab")).toHaveCount(2);
-  await expect(mermaidPanel.getByRole("tab")).toHaveCount(2);
   await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
   await expect(draftEditor).toHaveValue(/## Physical Objects/);
   await expect(draftEditor).toHaveValue(/## Business Rules \/ Enum Values/);
-
-  // Mermaid は接地確認グラフより上の読み取り専用技術表現として維持される
-  await expect(page.getByTestId("ontology-build-mermaid")).toContainText("erDiagram");
-  await expect(page.getByTestId("ontology-build-mermaid")).toContainText("APP.ORDERS");
+  await expect(page.getByTestId("ontology-build-mermaid")).toHaveCount(0);
   await expect(section).toBeVisible();
 
   // 横スクロールが発生しない
@@ -1131,7 +859,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   );
   expect(overflow).toBe(false);
 
-  await mermaidPanel.scrollIntoViewIfNeeded();
+  await ontologyQueryPanel.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("ontology-build.png"), fullPage: true });
 });
 
@@ -1592,7 +1320,9 @@ test("未公開 Markdown Draft はリロード後も公開ボタンが表示さ�
   await page.goto("/ontology-build?profile=default");
 
   const markdown = page.getByTestId("ontology-build-markdown");
-  await expect(markdown.getByText("Draft v4")).toBeVisible();
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
+  await expect(page.getByTestId("ontology-publish-actions").getByText("Draft v4")).toHaveCount(0);
   await expect(page.getByTestId("ontology-publish-actions").getByRole("button", { name: "Ontology を公開" })).toBeVisible();
 });
 
@@ -1694,7 +1424,7 @@ test("job 取得が 404 のときポーリングを停止しエラー表示で�
   expect(polls).toBe(stopped);
 });
 
-test("job 取得が連続失敗したらポーリングを停止しエラーを表示する", async ({ page }) => {
+test("job 取得が連続失敗しても長時間猶予内は監視を継続する", async ({ page }) => {
   await mockApi(page);
   let polls = 0;
   await page.route("**/api/nl2sql/ontology-build/*", async (route) => {
@@ -1711,12 +1441,13 @@ test("job 取得が連続失敗したらポーリングを停止しエラーを�
   await section.getByRole("button", { name: "AI 構築を実行" }).click();
   await expect(
     section.getByText("構築状況の取得に連続して失敗した", { exact: false })
-  ).toBeVisible({ timeout: 20000 });
-  await expect(section.getByRole("button", { name: "AI 構築を実行" })).toBeEnabled();
-  const stopped = polls;
-  expect(stopped).toBeGreaterThanOrEqual(5);
+  ).toHaveCount(0);
+  await expect.poll(() => polls, { timeout: 12000 }).toBeGreaterThanOrEqual(8);
+  await expect(section.getByRole("button", { name: "構築中…" })).toBeDisabled();
+  await expect(page.getByTestId("ontology-build-steps")).toBeVisible();
+  const before = polls;
   await page.waitForTimeout(2500);
-  expect(polls).toBe(stopped);
+  expect(polls).toBeGreaterThan(before);
 });
 
 test("プロファイルが無いときは案内を表示し AI 構築は出さない", async ({ page }) => {
@@ -1742,12 +1473,12 @@ test("旧 tab URL を正規化し、モバイルでは単一ページを縦積�
 
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
   await expect(page.getByTestId("ontology-build-markdown").getByRole("tab")).toHaveCount(2);
-  await expect(page.getByTestId("ontology-mermaid-panel").getByRole("tab")).toHaveCount(2);
+  await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await expect(page.getByText("利用・コンテキスト")).toHaveCount(0);
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-editor")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
-  await expect(page.getByTestId("ontology-mermaid-panel")).toBeVisible();
+  await expect(page.locator("#ontology-query-playground-panel")).toBeVisible();
   await expectBuildPanelsStackedFullWidth(page);
   await expect(page.getByTestId("fixed-split-pane-profile-ontology-editor")).toHaveCount(0);
 
@@ -1896,7 +1627,7 @@ test("Markdown Draft 生成が長時間更新されない場合に警告を表�
   await section.getByRole("button", { name: "AI 構築を実行" }).click();
 
   await expect(
-    page.getByText("想定より時間がかかっています。キャンセル後に再実行できます。")
+    page.getByText("60 分以上、Markdown Draft 生成の更新がありません。", { exact: false })
   ).toBeVisible();
   await expect(page.getByTestId("ontology-build-cancel")).toBeVisible();
 });

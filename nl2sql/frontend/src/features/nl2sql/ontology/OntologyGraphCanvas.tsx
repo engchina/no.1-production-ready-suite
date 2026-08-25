@@ -12,7 +12,9 @@ import {
   Maximize2,
   MessageSquare,
   Minus,
+  Network,
   Plus,
+  Route,
   Search,
   ShieldCheck,
   Sigma,
@@ -28,6 +30,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  ViewportPortal,
   useReactFlow,
   type Edge,
   type Node,
@@ -36,28 +39,52 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 import { t } from "@/lib/i18n";
-import { layoutOntologyGraphLayered } from "./graphLayout";
+import {
+  layoutOntologyGraphSemanticMatrix,
+  ontologyGraphObjectClusterKey,
+  type OntologyGraphSemanticLane,
+  type OntologyGraphSemanticLaneId,
+} from "./graphLayout";
 import { cssVar, edgeStroke, nodeFill, nodeFillVar, nodeStroke } from "./graphPalette";
+import {
+  isOntologyDetailNodeKind,
+  ontologyGraphForViewMode,
+  ontologyGraphWithDetailVisibility,
+  type OntologyGraphViewMode,
+} from "./graphView";
 import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
 import type { OntologyGraph, OntologyNode } from "./types";
 
 interface OntologyGraphCanvasProps {
   graph: OntologyGraph;
   selectedNodeId?: string | null;
+  selectedEdgeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
+  onSelectEdge?: (edgeId: string) => void;
   /** 決定論 NL Playground 等のハイライト。指定時は非対象を減光し、対象の枠を強調する。 */
   highlightNodeIds?: string[];
   highlightEdgeIds?: string[];
+  viewMode?: OntologyGraphViewMode;
+  defaultViewMode?: OntologyGraphViewMode;
+  onViewModeChange?: (mode: OntologyGraphViewMode) => void;
 }
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 76;
-// 小規模グラフはエッジラベルを常時表示、混みだしたら hover/強調時のみ表示する
-const ALWAYS_LABEL_EDGE_LIMIT = 12;
-// 既定で畳む詳細ノード(物理列・列挙値)。トグルで展開できる。
-const DETAIL_KINDS = new Set(["column", "enum_value"]);
+const GRAPH_VIEW_MODES: Array<{ id: OntologyGraphViewMode; labelKey: string; icon: LucideIcon }> = [
+  { id: "grounding", labelKey: "nl2sql.ontology.graphMode.grounding", icon: Route },
+  { id: "all", labelKey: "nl2sql.ontology.graphMode.all", icon: Network },
+  { id: "physical_er", labelKey: "nl2sql.ontology.graphMode.physicalEr", icon: Table2 },
+];
+const LANE_LABEL_KEYS: Record<OntologyGraphSemanticLaneId, string> = {
+  business: "nl2sql.ontology.graphLane.business",
+  attribute: "nl2sql.ontology.graphLane.attribute",
+  physical: "nl2sql.ontology.graphLane.physical",
+  detail: "nl2sql.ontology.graphLane.detail",
+};
 
 const KIND_ICONS: Record<string, LucideIcon> = {
   schema: Database,
@@ -85,14 +112,21 @@ interface OntologyNodeData extends Record<string, unknown> {
   node: OntologyNode;
   highlighted: boolean;
   dimmed: boolean;
+  stats?: {
+    columnCount: number;
+    joinCount: number;
+  };
 }
 
 /** アイコン + 業務名 + 技術名のカード。型=塗り/状態=枠のチャネル分離は graphPalette を踏襲。 */
 function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>) {
-  const { node, highlighted, dimmed } = data;
+  const { node, highlighted, dimmed, stats } = data;
   const Icon = KIND_ICONS[node.kind] ?? Circle;
   const display = ontologyNodeDisplay(node, { highlighted });
   const emphasizedBorder = selected || highlighted || node.validation_status === "blocked";
+  const showStats =
+    (node.kind === "table" || node.kind === "view") &&
+    Boolean(stats && (stats.columnCount > 0 || stats.joinCount > 0));
   return (
     <div
       className="grid h-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2"
@@ -135,6 +169,18 @@ function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>)
             {display.secondaryLabel}
           </span>
         ) : null}
+        {showStats ? (
+          <span className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-[10px] leading-3">
+            <span className="rounded border border-current/15 px-1 py-0.5 opacity-75">
+              {t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 })}
+            </span>
+            {stats?.joinCount ? (
+              <span className="rounded border border-current/15 px-1 py-0.5 opacity-75">
+                {t("nl2sql.ontology.nodeStats.joins", { count: stats.joinCount })}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
       <Handle type="source" position={Position.Right} style={{ visibility: "hidden" }} />
     </div>
@@ -173,7 +219,7 @@ function FlowControls() {
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphFit")}
         title={t("nl2sql.ontology.graphFit")}
-        onClick={() => void flow.fitView({ padding: 0.16, duration: 0 })}
+        onClick={() => void flow.fitView({ padding: 0.28, duration: 0 })}
       >
         <Maximize2 size={15} aria-hidden="true" />
       </Button>
@@ -232,46 +278,183 @@ function normalize(text: string): string {
   return text.normalize("NFKC").toLowerCase();
 }
 
+function objectNodeStats(graph: OntologyGraph): Map<string, { columnCount: number; joinCount: number }> {
+  const stats = new Map<string, { columnCount: number; joinCount: number }>();
+  const ensure = (key: string) => {
+    const current = stats.get(key) ?? { columnCount: 0, joinCount: 0 };
+    stats.set(key, current);
+    return current;
+  };
+  for (const node of graph.nodes) {
+    if (node.kind !== "column") continue;
+    const objectKey = ontologyGraphObjectClusterKey(node);
+    if (objectKey) ensure(objectKey).columnCount += 1;
+  }
+  const objectKeyByNodeId = new Map(
+    graph.nodes
+      .map((node) => [node.id, ontologyGraphObjectClusterKey(node)] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[1]))
+  );
+  const counted = new Set<string>();
+  for (const edge of graph.edges) {
+    if ((edge.join_conditions ?? []).length === 0) continue;
+    for (const nodeId of [edge.source_node_id, edge.target_node_id]) {
+      const objectKey = objectKeyByNodeId.get(nodeId);
+      if (!objectKey) continue;
+      const countKey = `${edge.id}\u0000${objectKey}`;
+      if (counted.has(countKey)) continue;
+      counted.add(countKey);
+      ensure(objectKey).joinCount += 1;
+    }
+  }
+  return stats;
+}
+
+function GraphModeControl({
+  mode,
+  onChange,
+}: {
+  mode: OntologyGraphViewMode;
+  onChange: (mode: OntologyGraphViewMode) => void;
+}) {
+  return (
+    <div
+      className="pointer-events-auto flex h-[44px] items-center gap-1 rounded-md border border-border bg-card p-1 shadow-sm sm:h-[40px]"
+      role="group"
+      aria-label={t("nl2sql.ontology.graphMode.label")}
+      data-testid="ontology-graph-view-mode"
+    >
+      {GRAPH_VIEW_MODES.map((item) => {
+        const Icon = item.icon;
+        const selected = item.id === mode;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={selected}
+            className={cn(
+              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none sm:h-[32px]",
+              selected ? "bg-primary text-primary-foreground" : "text-muted hover:bg-background hover:text-foreground"
+            )}
+            onClick={() => onChange(item.id)}
+            data-testid={`ontology-graph-mode-${item.id}`}
+          >
+            <Icon size={13} aria-hidden="true" />
+            <span>{t(item.labelKey)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function GraphToolbarSearchField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const label = t("nl2sql.ontology.graphSearch");
+  return (
+    <label
+      className="pointer-events-auto flex h-[44px] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-card px-3 text-sm text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px] sm:w-72 sm:max-w-[18rem]"
+      data-testid="ontology-graph-search-field"
+    >
+      <Search size={15} aria-hidden="true" className="shrink-0 text-muted" />
+      <input
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        placeholder={label}
+        aria-label={label}
+        className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-foreground shadow-none outline-none placeholder:text-muted/70 focus:border-transparent focus:shadow-none focus:outline-none focus:ring-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+        style={{ WebkitAppearance: "none", boxShadow: "none" }}
+        data-testid="ontology-graph-search"
+      />
+    </label>
+  );
+}
+
+function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
+  return (
+    <ViewportPortal>
+      {lanes.map((lane) => (
+        <div
+          key={lane.id}
+          className="pointer-events-none absolute flex items-start"
+          data-testid={`ontology-graph-lane-${lane.id}`}
+          style={{
+            transform: `translate(18px, ${lane.y + 2}px)`,
+            height: lane.height,
+            width: 176,
+          }}
+        >
+          <span className="rounded-md border border-border bg-card/95 px-2 py-1 text-[10px] font-semibold leading-4 text-muted shadow-sm">
+            {t(LANE_LABEL_KEYS[lane.id])}
+          </span>
+        </div>
+      ))}
+    </ViewportPortal>
+  );
+}
+
 function OntologyFlow({
   graph,
   selectedNodeId,
+  selectedEdgeId,
   onSelectNode,
+  onSelectEdge,
   highlightNodeIds,
   highlightEdgeIds,
+  viewMode,
+  defaultViewMode,
+  onViewModeChange,
 }: OntologyGraphCanvasProps) {
   const [search, setSearch] = useState("");
   const [showDetails, setShowDetails] = useState(false);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [internalViewMode, setInternalViewMode] = useState<OntologyGraphViewMode>(
+    defaultViewMode ?? "all"
+  );
+  const currentViewMode = viewMode ?? internalViewMode;
+  const changeViewMode = (nextMode: OntologyGraphViewMode) => {
+    setInternalViewMode(nextMode);
+    onViewModeChange?.(nextMode);
+  };
 
   const detailCount = useMemo(
-    () => graph.nodes.filter((node) => DETAIL_KINDS.has(node.kind)).length,
+    () => graph.nodes.filter((node) => isOntologyDetailNodeKind(node.kind)).length,
     [graph.nodes]
   );
+  const externalHighlight =
+    (highlightNodeIds?.length ?? 0) > 0 || (highlightEdgeIds?.length ?? 0) > 0;
   const visibleGraph = useMemo<OntologyGraph>(() => {
-    if (showDetails || detailCount === 0) return graph;
-    const nodes = graph.nodes.filter((node) => !DETAIL_KINDS.has(node.kind));
-    const visibleIds = new Set(nodes.map((node) => node.id));
-    return {
-      ...graph,
-      nodes,
-      edges: graph.edges.filter(
-        (edge) => visibleIds.has(edge.source_node_id) && visibleIds.has(edge.target_node_id)
-      ),
-    };
-  }, [graph, showDetails, detailCount]);
+    const scoped = ontologyGraphForViewMode(graph, currentViewMode, highlightNodeIds, highlightEdgeIds);
+    const forcedDetails = new Set<string>([...(highlightNodeIds ?? [])]);
+    if (selectedNodeId) forcedDetails.add(selectedNodeId);
+    return ontologyGraphWithDetailVisibility(scoped, showDetails || detailCount === 0, forcedDetails);
+  }, [
+    graph,
+    currentViewMode,
+    highlightNodeIds,
+    highlightEdgeIds,
+    selectedNodeId,
+    showDetails,
+    detailCount,
+  ]);
 
-  const layout = useMemo(
+  const semanticLayout = useMemo(
     () =>
-      layoutOntologyGraphLayered(visibleGraph, {
+      layoutOntologyGraphSemanticMatrix(visibleGraph, {
         nodeWidth: NODE_WIDTH,
         nodeHeight: NODE_HEIGHT,
       }),
     [visibleGraph]
   );
+  const statsByObject = useMemo(() => objectNodeStats(graph), [graph]);
 
   // 強調対象: 外部ハイライト(Playground 等)が最優先、なければ検索一致。
-  const externalHighlight =
-    (highlightNodeIds?.length ?? 0) > 0 || (highlightEdgeIds?.length ?? 0) > 0;
   const query = normalize(search.trim());
   const emphasis = useMemo(() => {
     if (externalHighlight) {
@@ -308,26 +491,27 @@ function OntologyFlow({
         return {
           id: node.id,
           type: "ontology",
-          position: layout.get(node.id) ?? { x: 0, y: 0 },
+          position: semanticLayout.positions.get(node.id) ?? { x: 0, y: 0 },
           data: {
             node,
             highlighted,
             dimmed: emphasis.active && !highlighted,
+            stats: statsByObject.get(ontologyGraphObjectClusterKey(node) ?? ""),
           },
           ariaLabel: ontologyNodeDisplay(node, { highlighted }).ariaLabel,
           selected: node.id === selectedNodeId,
           style: { width: NODE_WIDTH, minHeight: NODE_HEIGHT, padding: 0, border: "none" },
         };
       }),
-    [visibleGraph.nodes, layout, selectedNodeId, emphasis]
+    [visibleGraph.nodes, semanticLayout.positions, selectedNodeId, emphasis, statsByObject]
   );
 
-  const alwaysShowLabels = visibleGraph.edges.length <= ALWAYS_LABEL_EDGE_LIMIT;
   const edges = useMemo<Edge[]>(
     () =>
       visibleGraph.edges.map((edge) => {
         const highlighted = emphasis.edges.has(edge.id);
-        const showLabel = alwaysShowLabels || highlighted || edge.id === hoveredEdgeId;
+        const selected = edge.id === selectedEdgeId;
+        const showLabel = highlighted || selected || edge.id === hoveredEdgeId;
         return {
           id: edge.id,
           source: edge.source_node_id,
@@ -336,8 +520,8 @@ function OntologyFlow({
           ariaLabel: `${edge.relationship_name_ja}${highlighted ? "、質問に一致" : ""}`,
           markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--graph-line") },
           style: {
-            stroke: highlighted ? cssVar("--primary") : edgeStroke(edge),
-            strokeWidth: highlighted ? 2.5 : edge.validation_status === "blocked" ? 2 : 1.25,
+            stroke: highlighted || selected ? cssVar("--primary") : edgeStroke(edge),
+            strokeWidth: highlighted || selected ? 2.5 : edge.validation_status === "blocked" ? 2 : 1.25,
             strokeDasharray: edge.review_status === "proposed" ? "5 4" : undefined,
             opacity: emphasis.active && !highlighted ? 0.3 : 1,
           },
@@ -345,26 +529,19 @@ function OntologyFlow({
           labelBgStyle: { fill: cssVar("--card"), fillOpacity: 0.92 },
         };
       }),
-    [visibleGraph.edges, emphasis, alwaysShowLabels, hoveredEdgeId]
+    [visibleGraph.edges, emphasis, hoveredEdgeId, selectedEdgeId]
   );
 
   return (
     <div className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-background">
-      <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-2">
-        <label className="flex h-9 items-center gap-1 rounded-md border border-border bg-card px-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/40">
-          <Search size={14} aria-hidden="true" className="shrink-0 text-muted" />
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
-            placeholder={t("nl2sql.ontology.graphSearch")}
-            aria-label={t("nl2sql.ontology.graphSearch")}
-            className="w-32 bg-transparent text-xs text-foreground outline-none placeholder:text-muted sm:w-40"
-            data-testid="ontology-graph-search"
-          />
-        </label>
+      <div className="pointer-events-none absolute left-3 top-3 z-10 flex max-w-[calc(100%-7rem)] flex-wrap items-center gap-2">
+        <GraphModeControl mode={currentViewMode} onChange={changeViewMode} />
+        <GraphToolbarSearchField value={search} onChange={setSearch} />
         {detailCount > 0 ? (
-          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-2 text-xs text-foreground shadow-sm">
+          <label
+            className="pointer-events-auto flex h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px]"
+            data-testid="ontology-graph-details-toggle-field"
+          >
             <input
               type="checkbox"
               className="h-4 w-4 accent-primary"
@@ -381,7 +558,7 @@ function OntologyFlow({
         edges={edges}
         nodeTypes={NODE_TYPES}
         fitView
-        fitViewOptions={{ padding: 0.16 }}
+        fitViewOptions={{ padding: 0.28 }}
         minZoom={0.25}
         maxZoom={1.8}
         nodesDraggable
@@ -390,11 +567,13 @@ function OntologyFlow({
         nodesFocusable
         edgesFocusable
         onNodeClick={(_event, node) => onSelectNode?.(node.id)}
+        onEdgeClick={(_event, edge) => onSelectEdge?.(edge.id)}
         onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         proOptions={{ hideAttribution: true }}
       >
         <Background color={cssVar("--border")} gap={20} size={1} />
+        <LaneOverlays lanes={semanticLayout.lanes} />
         {visibleGraph.nodes.length > 20 ? (
           // 小規模グラフでは全体が一目で見えるため出さない(白い矩形ノイズを避ける)
           <MiniMap

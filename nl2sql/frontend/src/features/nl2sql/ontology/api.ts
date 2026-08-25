@@ -17,6 +17,7 @@ import type {
   QuerySessionSqlConfirmationRequest,
 } from "./types";
 import { apiFetch } from "../../../lib/api.ts";
+import { API_TIMEOUT_MS } from "../../../lib/requestPolicy.ts";
 
 interface ApiEnvelope<T> {
   data?: T;
@@ -225,8 +226,8 @@ export function createOntologyImprovementProposal(
 
 // --- AI オントロジー構築 ---
 
-// POST はバックエンドで Q/A ファイルを同期パースするため、無応答時の固まり防止に timeout を設ける
-const ONTOLOGY_BUILD_START_TIMEOUT_MS = 30_000;
+// 大きな資料アップロードでは受付にも時間がかかるため、長時間 job と同じ猶予を使う。
+const ONTOLOGY_BUILD_START_TIMEOUT_MS = API_TIMEOUT_MS.longRunningJob;
 
 export interface OntologyBuildStartInput {
   businessText: string;
@@ -467,24 +468,6 @@ export function confirmOntologyProfileRecommendation(
       selected_profile_id: selectedProfileId,
       selected_revision_id: selectedRevisionId,
     },
-    options
-  );
-}
-
-export interface ProfileOntologyMermaidData {
-  profile_id: string;
-  ontology_revision_id: string;
-  mermaid: string;
-}
-
-export function fetchProfileOntologyMermaid(
-  profileId: string,
-  options?: RequestOptions
-): Promise<ProfileOntologyMermaidData> {
-  return request<ProfileOntologyMermaidData>(
-    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-view/mermaid`,
-    "GET",
-    undefined,
     options
   );
 }

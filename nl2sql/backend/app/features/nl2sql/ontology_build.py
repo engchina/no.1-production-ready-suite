@@ -38,6 +38,8 @@ from app.features.nl2sql.ontology_models import (
     OntologyBuildStepStatus,
     OntologyEdge,
     OntologyEdgeKind,
+    OntologyEvidence,
+    OntologyEvidenceLocatorKind,
     OntologyMetricCandidate,
     OntologyNode,
     OntologyNodeKind,
@@ -60,7 +62,11 @@ from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyStateConflictError,
 )
-from app.features.nl2sql.ontology_sources import OntologySourceStorage, extract_ontology_source
+from app.features.nl2sql.ontology_sources import (
+    ExtractedSourceChunk,
+    OntologySourceStorage,
+    extract_ontology_source,
+)
 from app.features.nl2sql.ontology_store import canonical_json, stable_ontology_id
 from app.features.nl2sql.tabular_files import (
     WORKBOOK_SUFFIXES,
@@ -78,7 +84,8 @@ _QUESTION_HEADERS = ("QUESTION", "質問", "TEXT", "PROMPT")
 _SQL_HEADERS = ("SQL", "ANSWER_SQL", "回答SQL", "正解SQL")
 _NOTE_HEADERS = ("NOTE", "備考", "COMMENT", "メモ")
 _DANGEROUS_EXPRESSION_TOKENS = (";", "--", "/*")
-_MAX_QA_PAIRS = 200
+_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS = 100_000
+_LLM_CONTEXT_HEADROOM_CHARS = 512
 
 
 # --- Q/A workbook ---------------------------------------------------------------------------
@@ -156,9 +163,6 @@ def parse_qa_workbook(filename: str, content: bytes) -> tuple[list[QaPair], list
             continue
         note = row[note_index] if note_index is not None and len(row) > note_index else ""
         pairs.append(QaPair(question=question.strip(), sql=sql.strip(), note_ja=note.strip()))
-        if len(pairs) >= _MAX_QA_PAIRS:
-            warnings.append(f"Q/A は先頭 {_MAX_QA_PAIRS} 件だけを利用します。")
-            break
     if not pairs and not warnings:
         warnings.append("有効な Q/A 行がありません。")
     return pairs, warnings
@@ -1519,6 +1523,202 @@ def parse_extraction(raw: str) -> OntologyBuildExtraction:
     return OntologyBuildExtraction.model_validate(json.loads(cleaned))
 
 
+class OntologyBuildContextBudgetError(ValueError):
+    """LLM 入力を省略せずに分割しても context 予算へ収まらない。"""
+
+
+@dataclass(frozen=True)
+class _BuildTextUnit:
+    source_document: OntologySourceDocument | None
+    source_label: str
+    locator_kind: OntologyEvidenceLocatorKind
+    locator: str
+    text: str
+
+    def context_payload(self) -> dict[str, str]:
+        return {
+            "source": self.source_label,
+            "locator_kind": self.locator_kind.value,
+            "locator": self.locator,
+            "text": self.text,
+        }
+
+    def evidence(self) -> OntologyEvidence | None:
+        if self.source_document is None:
+            return None
+        return ExtractedSourceChunk(
+            self.text,
+            self.locator_kind,
+            self.locator,
+        ).evidence(self.source_document)
+
+
+@dataclass(frozen=True)
+class _OntologyBuildLlmTask:
+    name: OntologyBuildStepName
+    prompt: str
+    context: str
+    progress_ja: str
+    cross_check_sql: list[str] | None = None
+    source_evidence: list[OntologyEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _ValidatedBuildExtraction:
+    name: OntologyBuildStepName
+    label_ja: str
+    extraction: OntologyBuildExtraction
+    cross_check_sql: list[str] | None
+    source_evidence: list[OntologyEvidence]
+
+
+def _llm_call_chars(prompt: str, context: str) -> int:
+    return (
+        len(_EXTRACTION_SYSTEM_PROMPT)
+        + len(prompt)
+        + len(context)
+        + _LLM_CONTEXT_HEADROOM_CHARS
+    )
+
+
+def _ensure_llm_call_fits(prompt: str, context: str) -> None:
+    if _llm_call_chars(prompt, context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+        return
+    raise OntologyBuildContextBudgetError(
+        "LLM 入力が上限を超えています。Profile の対象 object を減らすか、"
+        "単一行・単一ページ・単一セルの内容を分割して再実行してください。"
+    )
+
+
+def _schema_context_payload(schema_context: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(schema_context)
+    except Exception as exc:
+        raise OntologyBuildContextBudgetError("schema_context を解析できません。") from exc
+    if not isinstance(loaded, dict):
+        raise OntologyBuildContextBudgetError("schema_context が不正です。")
+    return loaded
+
+
+def _dump_text_context(
+    schema_context: dict[str, Any],
+    units: list[_BuildTextUnit],
+) -> str:
+    return json.dumps(
+        {
+            "schema_context": schema_context,
+            "business_text_chunks": [unit.context_payload() for unit in units],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _dump_qa_context(schema_context: dict[str, Any], pairs: list[QaPair]) -> str:
+    return json.dumps(
+        {
+            "schema_context": schema_context,
+            "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _split_text_unit_for_budget(
+    schema_context: dict[str, Any],
+    unit: _BuildTextUnit,
+    prompt: str,
+) -> list[_BuildTextUnit]:
+    empty_unit = _BuildTextUnit(
+        source_document=unit.source_document,
+        source_label=unit.source_label,
+        locator_kind=unit.locator_kind,
+        locator=unit.locator,
+        text="",
+    )
+    empty_context = _dump_text_context(schema_context, [empty_unit])
+    available = (
+        _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS
+        - _llm_call_chars(prompt, empty_context)
+        - _LLM_CONTEXT_HEADROOM_CHARS
+    )
+    if available <= 0:
+        raise OntologyBuildContextBudgetError(
+            "schema_context が大きすぎるため、資料本文を 1 chunk も LLM 入力へ追加できません。"
+            "Profile の対象 object を減らして再実行してください。"
+        )
+    if len(unit.text) <= available:
+        return [unit]
+    parts: list[_BuildTextUnit] = []
+    total_parts = (len(unit.text) + available - 1) // available
+    for index, start in enumerate(range(0, len(unit.text), available), start=1):
+        part_text = unit.text[start : start + available]
+        parts.append(
+            _BuildTextUnit(
+                source_document=unit.source_document,
+                source_label=unit.source_label,
+                locator_kind=unit.locator_kind,
+                locator=f"{unit.locator};part:{index}/{total_parts}",
+                text=part_text,
+            )
+        )
+    return parts
+
+
+def _batch_text_units(
+    schema_context: dict[str, Any],
+    units: list[_BuildTextUnit],
+    prompt: str,
+) -> list[list[_BuildTextUnit]]:
+    expanded: list[_BuildTextUnit] = []
+    for unit in units:
+        if unit.text.strip():
+            expanded.extend(_split_text_unit_for_budget(schema_context, unit, prompt))
+    batches: list[list[_BuildTextUnit]] = []
+    current: list[_BuildTextUnit] = []
+    for unit in expanded:
+        candidate = [*current, unit]
+        candidate_context = _dump_text_context(schema_context, candidate)
+        if _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+            current = candidate
+            continue
+        if not current:
+            _ensure_llm_call_fits(prompt, candidate_context)
+        batches.append(current)
+        current = [unit]
+        _ensure_llm_call_fits(prompt, _dump_text_context(schema_context, current))
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _batch_qa_pairs(
+    schema_context: dict[str, Any],
+    pairs: list[QaPair],
+    prompt: str,
+) -> list[list[QaPair]]:
+    batches: list[list[QaPair]] = []
+    current: list[QaPair] = []
+    for pair in pairs:
+        candidate = [*current, pair]
+        candidate_context = _dump_qa_context(schema_context, candidate)
+        if _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+            current = candidate
+            continue
+        if not current:
+            raise OntologyBuildContextBudgetError(
+                "1 件の Q/A が LLM 入力上限を超えています。"
+                "質問または SQL を分割して再実行してください。"
+            )
+        batches.append(current)
+        current = [pair]
+        _ensure_llm_call_fits(prompt, _dump_qa_context(schema_context, current))
+    if current:
+        batches.append(current)
+    return batches
+
+
 # --- job service ------------------------------------------------------------------------------
 
 _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
@@ -2138,7 +2338,18 @@ class OntologyBuildService:
 
         client = getattr(self._runtime.legacy_service, "_enterprise_ai_client", None)
         configured = getattr(client, "is_configured", None)
-        source_evidence: list[Any] = []
+        text_units: list[_BuildTextUnit] = []
+        if business_text.strip():
+            text_units.append(
+                _BuildTextUnit(
+                    source_document=None,
+                    source_label="業務説明(入力フォーム)",
+                    locator_kind=OntologyEvidenceLocatorKind.LINE,
+                    locator="manual:1",
+                    text=business_text.strip(),
+                )
+            )
+        source_evidence_count = 0
         if job.source_document_ids:
             self._set_step(
                 job_id,
@@ -2146,7 +2357,6 @@ class OntologyBuildService:
                 OntologyBuildStepStatus.RUNNING,
                 f"資料 {len(job.source_document_ids)} 件を抽出中…",
             )
-            extracted_texts: list[str] = []
             extracted_pairs: list[QaPair] = []
             seen_hashes: set[str] = set()
             for source_id in job.source_document_ids:
@@ -2194,11 +2404,26 @@ class OntologyBuildService:
                         self._source_storage.load(source),
                         vlm_page_runner=image_runner,
                     )
-                    extracted_texts.append(extracted.business_text)
+                    if extracted.warnings_ja:
+                        raise RuntimeError(" / ".join(extracted.warnings_ja))
+                    if not extracted.chunks and not extracted.qa_pairs:
+                        raise RuntimeError(
+                            f"{source.filename}: 抽出可能なテキストまたは Q/A がありません。"
+                        )
+                    for chunk in extracted.chunks:
+                        if not chunk.text.strip():
+                            continue
+                        text_units.append(
+                            _BuildTextUnit(
+                                source_document=source,
+                                source_label=source.filename,
+                                locator_kind=chunk.locator_kind,
+                                locator=chunk.locator,
+                                text=chunk.text,
+                            )
+                        )
+                    source_evidence_count += len(extracted.chunks)
                     extracted_pairs.extend(extracted.qa_pairs)
-                    source_evidence.extend(
-                        chunk.evidence(source) for chunk in extracted.chunks[:100]
-                    )
                     source = self._update_source_document(
                         source,
                         status=OntologySourceStatus.EXTRACTED,
@@ -2216,36 +2441,36 @@ class OntologyBuildService:
                         file_format=Path(source.filename).suffix, status="extracted"
                     )
                 except Exception as exc:
+                    error_message = f"{source.filename}: {exc}"
                     source = self._update_source_document(
                         source,
                         status=OntologySourceStatus.FAILED,
-                        error_message_ja=str(exc),
+                        error_message_ja=error_message,
                     )
                     self._update_source_progress(
                         job_id,
                         source.id,
                         status=OntologySourceStatus.FAILED,
-                        error_message_ja=str(exc),
+                        error_message_ja=error_message,
                     )
                     record_source_extraction(
                         file_format=Path(source.filename).suffix, status="failed"
                     )
-            business_text = "\n\n".join(
-                item for item in [business_text.strip(), *extracted_texts] if item.strip()
-            )
+                    self._fail(
+                        job_id,
+                        error_message,
+                        failed_step=OntologyBuildStepName.SOURCE_EXTRACTION,
+                        failed_step_detail_ja="資料の抽出に失敗しました。",
+                    )
+                    return
             qa_by_key = {(item.question, item.sql): item for item in [*qa_pairs, *extracted_pairs]}
             qa_pairs = list(qa_by_key.values())
-            current_job = self.get(job_id)
-            current_sources = current_job.sources if current_job is not None else []
-            failed_sources = sum(
-                source.status == OntologySourceStatus.FAILED for source in current_sources
-            )
             self._set_step(
                 job_id,
                 OntologyBuildStepName.SOURCE_EXTRACTION,
                 OntologyBuildStepStatus.SUCCEEDED,
-                f"資料 {len(job.source_document_ids)} 件、証拠 {len(source_evidence)} 件"
-                + (f"、失敗 {failed_sources} 件" if failed_sources else ""),
+                f"資料 {len(job.source_document_ids)} 件、証拠 {source_evidence_count} 件、"
+                f"Q/A {len(extracted_pairs)} 件を抽出しました。",
             )
             self._emit(job_id, "資料の抽出と証拠位置の記録が完了しました。")
         if client is None or not callable(configured) or not configured():
@@ -2310,24 +2535,45 @@ class OntologyBuildService:
             f"スキーマ情報を準備しました(表・ビュー {object_count} 件、列 {column_count} 件)。",
         )
         inferred_by = str(getattr(client, "model_id", lambda: "enterprise-ai")())
-        qa_sql_texts = [pair.sql for pair in qa_pairs]
+        qa_pairs = list({(item.question, item.sql): item for item in qa_pairs}.values())
+        try:
+            schema_payload = _schema_context_payload(schema_context)
+        except OntologyBuildContextBudgetError as exc:
+            self._fail(
+                job_id,
+                str(exc),
+                failed_step=OntologyBuildStepName.SCHEMA_CONTEXT,
+                failed_step_detail_ja="LLM 入力用 schema_context の準備に失敗しました。",
+            )
+            return
 
         drafts: list[ProposalDraft] = []
         warnings: list[str] = [*schema_warnings]
         step_names = {step.name for step in job.steps}
-        llm_steps: list[tuple[OntologyBuildStepName, str, str, list[str] | None]] = []
-        validated_extractions: list[
-            tuple[OntologyBuildStepName, str, OntologyBuildExtraction, list[str] | None]
-        ] = []
+        llm_tasks: list[_OntologyBuildLlmTask] = []
+        validated_extractions: list[_ValidatedBuildExtraction] = []
         ontology: SchemaOntology | None = None
         if OntologyBuildStepName.SCHEMA_NAMING in step_names:
-            llm_steps.append(
-                (
-                    OntologyBuildStepName.SCHEMA_NAMING,
-                    "schema_context の各表・ビューに日本語の業務エンティティ名・説明・同義語を"
-                    "提案してください。関係と指標は提案不要です。",
-                    schema_context,
-                    None,
+            prompt = (
+                "schema_context の各表・ビューに日本語の業務エンティティ名・説明・同義語を"
+                "提案してください。関係と指標は提案不要です。"
+            )
+            try:
+                _ensure_llm_call_fits(prompt, schema_context)
+            except OntologyBuildContextBudgetError as exc:
+                self._fail(
+                    job_id,
+                    str(exc),
+                    failed_step=OntologyBuildStepName.SCHEMA_NAMING,
+                    failed_step_detail_ja="業務エンティティ命名の LLM 入力が上限を超えています。",
+                )
+                return
+            llm_tasks.append(
+                _OntologyBuildLlmTask(
+                    name=OntologyBuildStepName.SCHEMA_NAMING,
+                    prompt=prompt,
+                    context=schema_context,
+                    progress_ja="業務エンティティ命名を処理中です。",
                 )
             )
         if OntologyBuildStepName.QA_EXTRACTION in step_names:
@@ -2339,26 +2585,38 @@ class OntologyBuildService:
                     "有効な Q/A 行がないためスキップしました。",
                 )
             else:
-                qa_context = json.dumps(
-                    {
-                        "schema_context": json.loads(schema_context),
-                        "qa_pairs": [pair.model_dump(mode="json") for pair in qa_pairs],
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
+                prompt = (
+                    "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
+                    "(relationships)と業務指標(metrics)を抽出してください。"
+                    "SQL に現れない関係を推測しないでください。"
                 )
-                llm_steps.append(
-                    (
-                        OntologyBuildStepName.QA_EXTRACTION,
-                        "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
-                        "(relationships)と業務指標(metrics)を抽出してください。"
-                        "SQL に現れない関係を推測しないでください。",
-                        qa_context,
-                        qa_sql_texts,
+                try:
+                    qa_batches = _batch_qa_pairs(schema_payload, qa_pairs, prompt)
+                except OntologyBuildContextBudgetError as exc:
+                    self._fail(
+                        job_id,
+                        str(exc),
+                        failed_step=OntologyBuildStepName.QA_EXTRACTION,
+                        failed_step_detail_ja="Q/A の LLM 入力が上限を超えています。",
                     )
-                )
+                    return
+                processed = 0
+                for batch_index, batch in enumerate(qa_batches, start=1):
+                    processed += len(batch)
+                    llm_tasks.append(
+                        _OntologyBuildLlmTask(
+                            name=OntologyBuildStepName.QA_EXTRACTION,
+                            prompt=prompt,
+                            context=_dump_qa_context(schema_payload, batch),
+                            progress_ja=(
+                                f"Q/A batch {batch_index}/{len(qa_batches)} を処理中"
+                                f"({processed}/{len(qa_pairs)} 件)。"
+                            ),
+                            cross_check_sql=[pair.sql for pair in batch],
+                        )
+                    )
         if OntologyBuildStepName.TEXT_EXTRACTION in step_names:
-            if not business_text.strip():
+            if not text_units:
                 self._set_step(
                     job_id,
                     OntologyBuildStepName.TEXT_EXTRACTION,
@@ -2366,64 +2624,99 @@ class OntologyBuildService:
                     "抽出できる業務説明がないためスキップしました。",
                 )
             else:
-                text_context = json.dumps(
-                    {
-                        "schema_context": json.loads(schema_context),
-                        "business_text": business_text,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
+                prompt = (
+                    "business_text_chunks の全項目を読み、関係候補(relationships)・同義語"
+                    "(synonyms)・業務指標(metrics)を抽出してください。名詞をエンティティ、"
+                    "動詞・述語を関係の手がかりとして読み取り、schema_context に対応づかない"
+                    "内容は warnings_ja に残してください。"
                 )
-                llm_steps.append(
-                    (
-                        OntologyBuildStepName.TEXT_EXTRACTION,
-                        "business_text の業務説明から、関係候補(relationships)・同義語(synonyms)・"
-                        "業務指標(metrics)を抽出してください。名詞をエンティティ、動詞・述語を"
-                        "関係の手がかりとして読み取り、schema_context に対応づかない内容は "
-                        "warnings_ja に残してください。",
-                        text_context,
-                        None,
+                try:
+                    text_batches = _batch_text_units(schema_payload, text_units, prompt)
+                except OntologyBuildContextBudgetError as exc:
+                    self._fail(
+                        job_id,
+                        str(exc),
+                        failed_step=OntologyBuildStepName.TEXT_EXTRACTION,
+                        failed_step_detail_ja="業務説明の LLM 入力が上限を超えています。",
                     )
-                )
+                    return
+                processed = 0
+                total_units = sum(len(batch) for batch in text_batches)
+                for batch_index, batch in enumerate(text_batches, start=1):
+                    processed += len(batch)
+                    llm_tasks.append(
+                        _OntologyBuildLlmTask(
+                            name=OntologyBuildStepName.TEXT_EXTRACTION,
+                            prompt=prompt,
+                            context=_dump_text_context(schema_payload, batch),
+                            progress_ja=(
+                                f"業務説明 chunk batch {batch_index}/{len(text_batches)} を処理中"
+                                f"({processed}/{total_units} chunk)。"
+                            ),
+                            source_evidence=[
+                                evidence
+                                for unit in batch
+                                if (evidence := unit.evidence()) is not None
+                            ],
+                        )
+                    )
 
-        for index, (name, prompt, context, cross_check) in enumerate(llm_steps, start=1):
+        for index, task in enumerate(llm_tasks, start=1):
             if self._is_cancelled(job_id):
                 return
-            label = _STEP_LABELS_JA[name]
+            label = _STEP_LABELS_JA[task.name]
             self._set_step(
                 job_id,
-                name,
+                task.name,
                 OntologyBuildStepStatus.RUNNING,
-                f"Enterprise AI({inferred_by})に問い合わせ中…",
+                task.progress_ja,
             )
             self._emit(
                 job_id,
-                f"Enterprise AI に問い合わせています({index}/{len(llm_steps)}: {label})。",
+                f"Enterprise AI に問い合わせています({index}/{len(llm_tasks)}: {label})。"
+                f"{task.progress_ja}",
             )
             try:
                 raw = client.generate(
-                    prompt=prompt,
-                    context=context,
+                    prompt=task.prompt,
+                    context=task.context,
                     system_prompt=_EXTRACTION_SYSTEM_PROMPT,
                 )
-                self._set_step(job_id, name, OntologyBuildStepStatus.RUNNING, "応答を検証中…")
+                self._set_step(job_id, task.name, OntologyBuildStepStatus.RUNNING, "応答を検証中…")
                 self._emit(job_id, f"{label}: 応答を受信しました。検証しています。")
                 extraction = parse_extraction(raw)
-                validated_extractions.append((name, label, extraction, cross_check))
+                validated_extractions.append(
+                    _ValidatedBuildExtraction(
+                        name=task.name,
+                        label_ja=label,
+                        extraction=extraction,
+                        cross_check_sql=task.cross_check_sql,
+                        source_evidence=task.source_evidence,
+                    )
+                )
                 self._set_step(
                     job_id,
-                    name,
+                    task.name,
                     OntologyBuildStepStatus.SUCCEEDED,
                     "応答を検証しました。",
                 )
                 self._emit(job_id, f"{label}: 抽出候補を検証しました。")
             except Exception as exc:
-                logger.warning("ontology_build_step_failed step=%s", name.value, exc_info=True)
-                warnings.append(f"{name.value} の抽出に失敗しました: {exc}")
+                logger.warning("ontology_build_step_failed step=%s", task.name.value, exc_info=True)
+                warning = f"{task.name.value} の抽出に失敗しました: {exc}"
+                warnings.append(warning)
+                self._add_warnings(job_id, [warning])
                 self._set_step(
-                    job_id, name, OntologyBuildStepStatus.FAILED, "LLM 抽出に失敗しました。"
+                    job_id, task.name, OntologyBuildStepStatus.FAILED, "LLM 抽出に失敗しました。"
                 )
                 self._emit(job_id, f"{label}: LLM 抽出に失敗しました。")
+                self._fail(
+                    job_id,
+                    f"{label}: LLM 抽出に失敗しました。{exc}",
+                    failed_step=task.name,
+                    failed_step_detail_ja="LLM 抽出に失敗しました。",
+                )
+                return
 
         if self._is_cancelled(job_id):
             return
@@ -2449,27 +2742,27 @@ class OntologyBuildService:
                 )
                 self._fail(job_id, message)
                 return
-            for name, label, extraction, cross_check in validated_extractions:
+            for validated in validated_extractions:
                 step_drafts, step_warnings = convert_extraction_to_proposals(
-                    extraction,
+                    validated.extraction,
                     ontology=ontology,
                     view=view,
                     job_id=job_id,
                     inferred_by=inferred_by,
-                    qa_sql_texts=cross_check,
-                    source_evidence=source_evidence,
+                    qa_sql_texts=validated.cross_check_sql,
+                    source_evidence=validated.source_evidence,
                 )
                 drafts.extend(step_drafts)
                 warnings.extend(step_warnings)
                 self._set_step(
                     job_id,
-                    name,
+                    validated.name,
                     OntologyBuildStepStatus.SUCCEEDED,
                     f"候補 {len(step_drafts)} 件、警告 {len(step_warnings)} 件",
                 )
                 self._emit(
                     job_id,
-                    f"{label}: 候補 {len(step_drafts)} 件、"
+                    f"{validated.label_ja}: 候補 {len(step_drafts)} 件、"
                     f"警告 {len(step_warnings)} 件を抽出しました。",
                 )
         if ontology is None:
@@ -2536,7 +2829,7 @@ class OntologyBuildService:
                 warnings=warnings,
                 source_count=len(job.source_document_ids),
                 qa_pair_count=len(qa_pairs),
-                business_text_present=bool(business_text.strip()),
+                business_text_present=bool(text_units),
                 ontology=ontology,
                 profile_view=view,
             )

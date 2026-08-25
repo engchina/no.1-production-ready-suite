@@ -1206,6 +1206,49 @@ async def test_http_ontology_build_persists_current_form_inputs(
 
 
 @pytest.mark.asyncio
+async def test_http_ontology_build_rejects_too_many_source_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _UnexpectedSourceStorage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def save_upload(self, **_kwargs: Any) -> None:
+            self.calls += 1
+            raise AssertionError("source files should be rejected before storage")
+
+    source_storage = _UnexpectedSourceStorage()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/nl2sql/profiles/sales/ontology-build",
+            headers={"Idempotency-Key": "test-ontology-build-too-many-sources"},
+            data={
+                "business_text": "受注は顧客に紐づく。",
+                "run_schema_naming": "true",
+                "run_qa_extraction": "true",
+                "run_text_extraction": "true",
+            },
+            files=[
+                (
+                    "source_files",
+                    (f"source-{index}.md", f"# 資料 {index}\n".encode(), "text/markdown"),
+                )
+                for index in range(ontology_router_module.ONTOLOGY_SOURCE_FILE_MAX_COUNT + 1)
+            ],
+        )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert "ONTOLOGY_SOURCE_FILE_COUNT_EXCEEDED" in payload["error_messages"][0]
+    assert "最大 5 件" in payload["error_messages"][0]
+    assert source_storage.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_ontology_proposals_does_not_block_unrelated_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

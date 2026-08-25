@@ -6,6 +6,7 @@ LLM は fake、store は InMemoryOntologyStore。job → Markdown Draft → publ
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import time
@@ -13,6 +14,7 @@ from typing import Any
 
 import pytest
 
+import app.features.nl2sql.ontology_build as ontology_build_module
 from app.features.nl2sql.models import (
     Nl2SqlProfile,
     SchemaCatalog,
@@ -51,6 +53,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyRevisionStatus,
     OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceStatus,
     PhysicalColumnRef,
     PhysicalMapping,
     PhysicalObjectRef,
@@ -158,6 +161,14 @@ class _FakeEnterpriseAiClient:
         return self.payload
 
 
+class _FakeOntologySourceStorage:
+    def __init__(self, contents: dict[str, bytes]) -> None:
+        self.contents = contents
+
+    def load(self, document: OntologySourceDocument) -> bytes:
+        return self.contents[document.id]
+
+
 _EXTRACTION = {
     "entities": [
         {
@@ -221,6 +232,24 @@ def _xlsx_bytes(rows: list[list[str]]) -> bytes:
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _source_document(
+    source_id: str,
+    filename: str,
+    content: bytes,
+    *,
+    media_type: str = "text/markdown",
+) -> OntologySourceDocument:
+    return OntologySourceDocument(
+        id=source_id,
+        profile_id="sales",
+        filename=filename,
+        media_type=media_type,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        storage_uri=f"/tmp/{filename}",
+    )
 
 
 def _wait_for_job(service: OntologyBuildService, job_id: str) -> Any:
@@ -309,6 +338,21 @@ def test_parse_qa_workbook_xlsx_and_csv() -> None:
     csv_pairs, csv_warnings = parse_qa_workbook("qa.csv", csv_content)
     assert len(csv_pairs) == 1
     assert csv_warnings == []
+
+
+def test_parse_qa_workbook_keeps_more_than_two_hundred_valid_rows() -> None:
+    rows = [
+        "QUESTION,SQL",
+        *[
+            f"質問 {index},SELECT {index} AS VALUE FROM APP.ORDERS"
+            for index in range(205)
+        ],
+    ]
+    pairs, warnings = parse_qa_workbook("qa.csv", "\n".join(rows).encode())
+
+    assert warnings == []
+    assert len(pairs) == 205
+    assert pairs[-1].question == "質問 204"
 
 
 def test_parse_qa_workbook_rejects_missing_headers_and_unknown_suffix() -> None:
@@ -554,6 +598,143 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
         if node.kind == OntologyNodeKind.BUSINESS_ENTITY and node.technical_name == "APP.ORDERS"
     )
     assert set(orders_entity.aliases) >= {"注文", "オーダー"}
+
+
+def test_build_job_batches_all_source_chunks_without_omission(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, legacy = harness
+    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = client
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 6_500)
+
+    contents: dict[str, bytes] = {}
+    source_documents: list[OntologySourceDocument] = []
+    markers: list[str] = []
+    for source_index in range(6):
+        lines: list[str] = []
+        for chunk_index in range(3):
+            marker = f"FULL_SOURCE_MARKER_{source_index}_{chunk_index}"
+            markers.append(marker)
+            lines.append(f"{marker} " + ("受注は顧客に紐づく。" * 80))
+        content = "\n".join(lines).encode()
+        source_id = f"ontology_source_{source_index}"
+        contents[source_id] = content
+        source_documents.append(_source_document(source_id, f"source-{source_index}.md", content))
+
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_FakeOntologySourceStorage(contents),  # type: ignore[arg-type]
+    )
+    queued = service.start(
+        "sales",
+        run_schema_naming=False,
+        run_qa_extraction=False,
+        source_documents=source_documents,
+    )
+    finished = _wait_for_job(service, queued.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    text_contexts = [
+        context for context in client.contexts if "business_text_chunks" in context
+    ]
+    assert len(text_contexts) > 1
+    assert all(
+        ontology_build_module._llm_call_chars(client.calls[index], context)
+        <= ontology_build_module._ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS
+        for index, context in enumerate(client.contexts)
+    )
+    combined_context = "\n".join(text_contexts)
+    for marker in markers:
+        assert marker in combined_context
+    processed_chunks = sum(
+        len(json.loads(context)["business_text_chunks"]) for context in text_contexts
+    )
+    assert processed_chunks == len(markers)
+    assert any("chunk batch" in event.message_ja for event in finished.events)
+
+
+def test_build_job_batches_more_than_two_hundred_qa_pairs(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, legacy = harness
+    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = client
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 8_500)
+    qa_pairs = [
+        QaPair(
+            question=f"顧客別売上 {index}",
+            sql=(
+                "SELECT C.NAME, SUM(O.AMOUNT) FROM APP.ORDERS O "
+                "JOIN APP.CUSTOMERS C ON O.CUSTOMER_ID = C.ID "
+                f"WHERE O.ID >= {index} GROUP BY C.NAME"
+            ),
+        )
+        for index in range(205)
+    ]
+    service = OntologyBuildService(runtime)
+
+    queued = service.start(
+        "sales",
+        qa_pairs=qa_pairs,
+        run_schema_naming=False,
+        run_text_extraction=False,
+    )
+    finished = _wait_for_job(service, queued.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    qa_contexts = [context for context in client.contexts if '"qa_pairs"' in context]
+    assert len(qa_contexts) > 1
+    sent_pairs = [
+        pair
+        for context in qa_contexts
+        for pair in json.loads(context)["qa_pairs"]
+    ]
+    assert len(sent_pairs) == 205
+    assert sent_pairs[-1]["question"] == "顧客別売上 204"
+    assert any("Q/A batch" in event.message_ja for event in finished.events)
+
+
+def test_build_job_fails_when_pdf_page_requires_ocr_without_image_runner(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    from pypdf import PdfWriter
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    content = buffer.getvalue()
+    source_id = "ontology_source_blank_pdf"
+    source = _source_document(
+        source_id,
+        "scan.pdf",
+        content,
+        media_type="application/pdf",
+    )
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_FakeOntologySourceStorage({source_id: content}),  # type: ignore[arg-type]
+    )
+
+    queued = service.start(
+        "sales",
+        run_schema_naming=False,
+        run_qa_extraction=False,
+        source_documents=[source],
+    )
+    finished = _wait_for_job(service, queued.id)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    assert "page:1" in finished.error_message_ja
+    assert "OCR 設定" in finished.error_message_ja
+    source_progress = finished.sources[0]
+    assert source_progress.status == OntologySourceStatus.FAILED
+    assert "page:1" in source_progress.error_message_ja
 
 
 def test_markdown_draft_merges_profile_view_overrides_rules_and_enums() -> None:

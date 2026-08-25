@@ -114,6 +114,8 @@ from .service import nl2sql_service
 
 logger = logging.getLogger(__name__)
 
+ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5
+
 _STORE_IDENTITY_FIELDS: dict[OntologyCollection, tuple[str, ...]] = {
     "revisions": ("revision_id",),
     "nodes": ("revision_id", "node_id"),
@@ -4807,6 +4809,18 @@ async def start_ontology_build(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[OntologyBuildJobData]:
     """資料を保存し、永続 AI オントロジー構築 job を投入する。"""
+
+    if source_files and len(source_files) > ONTOLOGY_SOURCE_FILE_MAX_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "ONTOLOGY_SOURCE_FILE_COUNT_EXCEEDED",
+                "message_ja": (
+                    f"構築資料は最大 {ONTOLOGY_SOURCE_FILE_MAX_COUNT} 件までアップロードできます。"
+                    "ファイルを減らして再度実行してください。"
+                ),
+            },
+        )
 
     stored_sources = []
     # 互換 qa_file も source_files と同じ永続資料として保存し、解析は worker だけで行う。

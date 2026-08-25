@@ -50,6 +50,20 @@ def _workbook_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _multi_sheet_qa_workbook_bytes() -> bytes:
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "Q&A-1"
+    first.append(["QUESTION", "SQL"])
+    first.append(["受注件数", "SELECT COUNT(*) FROM APP.ORDERS"])
+    second = workbook.create_sheet("Q&A-2")
+    second.append(["QUESTION", "SQL"])
+    second.append(["顧客一覧", "SELECT * FROM APP.CUSTOMERS"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def _docx_bytes() -> bytes:
     document = Document()
     document.add_paragraph("受注は顧客に紐づきます。")
@@ -104,6 +118,13 @@ def test_tsv_source_is_rejected() -> None:
         extract_ontology_source(_source("qa.tsv", content), content)
 
     assert extract_error.value.code == "ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED"
+
+
+def test_workbook_source_collects_qa_pairs_from_all_sheets() -> None:
+    content = _multi_sheet_qa_workbook_bytes()
+    extracted = extract_ontology_source(_source("qa.xlsx", content), content)
+
+    assert [pair.question for pair in extracted.qa_pairs] == ["受注件数", "顧客一覧"]
 
 
 def test_scanned_pdf_uses_vlm_and_encrypted_pdf_is_rejected() -> None:
