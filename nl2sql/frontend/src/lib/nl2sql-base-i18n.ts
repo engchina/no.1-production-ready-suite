@@ -109,7 +109,7 @@ export const ja = {
   "nav.nl2sqlConsole.sidebar": "NL2SQL コンソール",
   "nav.businessViews": "業務アシスタント (Assistant)",
   "nav.businessViews.sidebar": "業務アシスタント (Assistant)",
-  "nav.evaluation": "NL2SQL 評価",
+  "nav.evaluation": "SQL生成評価",
   // ページタイトルは AGENTS.md 準拠の正式名を維持し、サイドバー表示のみ短縮形(*.sidebar)。
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",

@@ -41,6 +41,135 @@ async function expectNoPageHorizontalScroll(page: Page) {
     .toBeTruthy();
 }
 
+async function expectNoElementHorizontalOverflow(locator: Locator) {
+  await expect
+    .poll(() =>
+      locator.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)
+    )
+    .toBeTruthy();
+}
+
+async function waitForAnimationFrames(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+      })
+  );
+}
+
+async function setMainScrollTop(page: Page, top: number) {
+  const main = page.getByRole("main", { name: "メイン領域" });
+  await main.evaluate((node, value) => {
+    node.scrollTop = value;
+  }, top);
+  await waitForAnimationFrames(page);
+}
+
+async function expectMainScrollPreserved(page: Page, action: () => Promise<void>) {
+  const main = page.getByRole("main", { name: "メイン領域" });
+  const before = await main.evaluate((node) => node.scrollTop);
+  await action();
+  await waitForAnimationFrames(page);
+  await expect
+    .poll(async () => {
+      const after = await main.evaluate((node) => node.scrollTop);
+      return Math.abs(after - before);
+    })
+    .toBeLessThanOrEqual(2);
+}
+
+async function expectMainScrollPreservedAfterClick(page: Page, locator: Locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await waitForAnimationFrames(page);
+  await expectMainScrollPreserved(page, async () => {
+    await locator.click();
+  });
+}
+
+async function setElementScrollTop(locator: Locator, top: number) {
+  await locator.evaluate((node, value) => {
+    node.scrollTop = value;
+  }, top);
+  await expect
+    .poll(() => locator.evaluate((node) => node.scrollTop >= 0))
+    .toBeTruthy();
+}
+
+async function expectElementScrollTop(locator: Locator, top: number) {
+  await expect
+    .poll(() => locator.evaluate((node) => Math.round(node.scrollTop)))
+    .toBe(top);
+}
+
+async function expectElementCenterUnobscured(locator: Locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await expect(locator).toBeVisible();
+  await expect
+    .poll(() =>
+      locator.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const topElement = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2
+        );
+        return Boolean(topElement && (topElement === node || node.contains(topElement)));
+      })
+    )
+    .toBeTruthy();
+}
+
+async function expectDeepSecDataGrantRegionsDoNotOverlap(page: Page, selectedRuleTestId: string) {
+  await expect
+    .poll(() =>
+      page.evaluate((ruleId) => {
+        const selectors = [
+          ["roles", '[data-testid="security-deepsec-entitlement-roles"]'],
+          ["rules", '[data-testid="security-deepsec-entitlement-rules-list"]'],
+          ["editor", `[data-testid="${ruleId}"]`],
+          ["actions", '[data-testid="security-deepsec-entitlement-action-region"]'],
+        ] as const;
+        const boxes = selectors.flatMap(([name, selector]) => {
+          const node = document.querySelector(selector);
+          if (!node) return [];
+          const rect = node.getBoundingClientRect();
+          return [
+            {
+              name,
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+              width: rect.width,
+              height: rect.height,
+            },
+          ];
+        });
+        const overlaps: string[] = [];
+        for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+            const left = boxes[leftIndex];
+            const right = boxes[rightIndex];
+            if (left.width <= 0 || left.height <= 0 || right.width <= 0 || right.height <= 0) {
+              overlaps.push(`${left.name}:${right.name}:zero-size`);
+              continue;
+            }
+            const separated =
+              left.right <= right.left + 1 ||
+              right.right <= left.left + 1 ||
+              left.bottom <= right.top + 1 ||
+              right.bottom <= left.top + 1;
+            if (!separated) {
+              overlaps.push(`${left.name}:${right.name}`);
+            }
+          }
+        }
+        return overlaps;
+      }, selectedRuleTestId)
+    )
+    .toEqual([]);
+}
+
 async function expectFloatingMenuInsideViewport(page: Page, menu: Locator) {
   await expect(menu).toBeVisible();
   const [box, viewport] = await Promise.all([menu.boundingBox(), page.viewportSize()]);
@@ -615,6 +744,308 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
 
   await page.goto("/settings/security/users");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+});
+
+test("SQL 生成だけのユーザーは結果接地で ontology 管理 API の 403 に遷移しない", async ({ page }) => {
+  test.slow();
+  await mockDatabaseGateReady(page);
+  const limited = {
+    ...systemAdminMe,
+    user_uuid: "query-only-ontology-result",
+    login_user_id: "query.only.ontology",
+    display_name: "SQL 生成ユーザー",
+    role_codes: ["QUERY_MENU"],
+    is_system_admin: false,
+    permissions: ["menu.query"],
+    allowed_profile_ids: ["default"],
+    password_change_allowed: true,
+  };
+  const createdAt = "2026-08-20T00:00:00Z";
+  const question = "部署ごとの人数を表示";
+  const generatedSql =
+    'SELECT "d"."DEPARTMENT_NAME", COUNT(*) AS "EMPLOYEE_COUNT" FROM "APP"."DEPARTMENT" "d" GROUP BY "d"."DEPARTMENT_NAME"';
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "sql-table-department",
+        owner: "APP",
+        name: "DEPARTMENT",
+        alias: "d",
+        qualified_name: "APP.DEPARTMENT",
+        source_sql: '"APP"."DEPARTMENT" "d"',
+      },
+    ],
+    columns: [
+      {
+        id: "sql-column-department-name",
+        table: "d",
+        name: "DEPARTMENT_NAME",
+        expression_sql: '"d"."DEPARTMENT_NAME"',
+      },
+    ],
+    joins: [],
+    projections: [],
+    filters: [],
+    aggregates: [{ id: "sql-aggregate-count", expression_sql: "COUNT(*)" }],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    parse_warnings: [],
+  };
+  const ontologyGraph = {
+    revision_id: "revision-query-result",
+    revision: {
+      id: "revision-query-result",
+      version: 1,
+      status: "published",
+      schema_fingerprint: "schema-v1",
+      etag: "revision-query-result-etag",
+    },
+    nodes: [
+      {
+        id: "department-table",
+        kind: "table",
+        technical_name: "APP.DEPARTMENT",
+        business_name_ja: "部署情報",
+        review_status: "approved",
+        metadata: { owner: "APP", object_name: "DEPARTMENT" },
+      },
+      {
+        id: "department-name",
+        kind: "column",
+        technical_name: "APP.DEPARTMENT.DEPARTMENT_NAME",
+        business_name_ja: "部署名",
+        review_status: "approved",
+        metadata: { owner: "APP", object_name: "DEPARTMENT", column_name: "DEPARTMENT_NAME" },
+      },
+    ],
+    edges: [
+      {
+        id: "department-name-column",
+        kind: "column",
+        source_node_id: "department-table",
+        target_node_id: "department-name",
+        relationship_name_ja: "列",
+        review_status: "approved",
+      },
+    ],
+  };
+  let ontologyViewRequests = 0;
+
+  await page.unroute("**/api/auth/me");
+  await page.route("**/api/auth/me**", (route) => fulfill(route, limited));
+  await page.route("**/api/nl2sql/persistence", (route) =>
+    fulfill(route, {
+      mode: "oracle",
+      ready: true,
+      durable: true,
+      writable: true,
+      snapshot_loaded: true,
+      reason_code: null,
+      checked_at: createdAt,
+    })
+  );
+  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/schema/catalog/head", (route) =>
+    fulfill(route, {
+      catalog_version: 1,
+      schema_fingerprint: "schema-v1",
+      refreshed_at: createdAt,
+      object_count: 1,
+      column_count: 2,
+      change_token: 1,
+      etag: "schema-v1",
+    })
+  );
+  await page.route("**/api/schema/objects**", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          owner: "APP",
+          object_name: "DEPARTMENT",
+          object_type: "TABLE",
+          logical_name: "部署",
+          comment: "部署情報",
+          row_count: 3,
+          column_count: 2,
+          last_ddl_at: "",
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      table_count: 1,
+      view_count: 0,
+      counts_included: true,
+      refreshed_at: createdAt,
+      catalog_version: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/search*", (route) =>
+    fulfill(route, {
+      items: [
+        {
+          id: "default",
+          name: "標準プロファイル",
+          category: "",
+          description: "",
+          archived: false,
+          allowed_table_count: 1,
+          allowed_view_count: 0,
+          glossary_count: 0,
+          few_shot_count: 0,
+          version: 1,
+          etag: "profile-default-v1",
+          updated_at: createdAt,
+        },
+      ],
+      next_cursor: null,
+      total: 1,
+      change_token: 1,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfill(route, {
+      id: "default",
+      name: "標準プロファイル",
+      category: "",
+      description: "",
+      allowed_tables: ["APP.DEPARTMENT"],
+      allowed_views: [],
+      archived: false,
+      object_scope_version: 1,
+      version: 1,
+      etag: "profile-default-v1",
+      updated_at: createdAt,
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/ontology-view", (route) => {
+    ontologyViewRequests += 1;
+    return fulfill(route, "この機能を利用する権限がありません。", 403);
+  });
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfill(route, {
+      job_id: "job-query-ontology-403",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-query-ontology-403", (route) =>
+    fulfill(route, {
+      job_id: "job-query-ontology-403",
+      status: "done",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 40,
+      error_message: null,
+      warning_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 4 },
+        { stage: "format_results", status: "done", elapsed_ms: 2 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-query-ontology-403",
+        engine: "select_ai",
+        engine_meta: { profile: "NL2SQL_DEFAULT_PROFILE" },
+        fallback_reason: "",
+        original_question: question,
+        rewritten_question: question,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "部署ごとの人数を集計します。",
+        safety: {
+          is_safe: true,
+          is_select_only: true,
+          row_limit_applied: null,
+          blocked_reason: "",
+          warnings: [],
+          referenced_tables: ["APP.DEPARTMENT"],
+          referenced_columns: ["APP.DEPARTMENT.DEPARTMENT_NAME"],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["DEPARTMENT_NAME", "EMPLOYEE_COUNT"],
+          rows: [{ DEPARTMENT_NAME: "開発部", EMPLOYEE_COUNT: 3 }],
+          total: 1,
+        },
+        timing: {
+          created_at: createdAt,
+          started_at: createdAt,
+          finished_at: createdAt,
+          elapsed_ms: 40,
+          stage_timings: [],
+        },
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: question,
+            rewritten_question: question,
+            profile_id: "default",
+            profile_name: "標準プロファイル",
+            profile_category: "",
+            target_objects: ["APP.DEPARTMENT"],
+            filters: [],
+            group_by: ["DEPARTMENT_NAME"],
+            order_by: [],
+            aggregations: ["COUNT"],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "APP.DEPARTMENT を参照し、部署ごとに集計します。",
+            statement_type: "SELECT",
+            tables: ["APP.DEPARTMENT"],
+            columns: ["APP.DEPARTMENT.DEPARTMENT_NAME"],
+            joins: [],
+            filters: [],
+            aggregations: ["COUNT"],
+            group_by: ["APP.DEPARTMENT.DEPARTMENT_NAME"],
+            order_by: [],
+            limit: null,
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: ontologyGraph,
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
+  await page.locator("#nl2sql-question-input").fill(question);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(page.getByText("開発部")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-sql-grounding-panel")).toBeVisible();
+  await expect(page).toHaveURL(/\/query$/);
+  expect(ontologyViewRequests).toBe(0);
 });
 
 test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボタンを表示しない", async ({ page }) => {
@@ -1813,7 +2244,12 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await page.getByRole("tab", { name: "データ権限" }).click();
   await expect(page.getByText("Data Grant を適用する前に", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "基盤構成へ" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Data Grant を検証" })).toBeDisabled();
+  const verificationCard = page.getByTestId("security-deepsec-verification-card");
+  await expect(verificationCard).toBeVisible();
+  await expect(verificationCard.getByText("検証を実行すると", { exact: false })).toBeVisible();
+  const verifyButton = verificationCard.getByRole("button", { name: "Data Grant を検証" });
+  await expect(verifyButton).toBeDisabled();
+  await expectNoElementHorizontalOverflow(verifyButton);
 
   releaseStatus();
   await expect(page.getByText("未構成", { exact: true })).toBeVisible();
@@ -2245,14 +2681,12 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
 
   await page.getByTestId("security-deepsec-entitlement-role-role-query").click();
   await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  const firstRuleTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0");
   const firstRule = entitlementForm.getByTestId("security-deepsec-entitlement-rule-0");
-  await expect(firstRule).toHaveAttribute("open", "");
+  await expect(firstRuleTab).toHaveAttribute("aria-pressed", "true");
   await expect(firstRule.getByText("Data Grant", { exact: true })).toBeVisible();
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const objectPicker = firstRule.getByTestId("security-deepsec-object-picker-0");
-  await firstRule.locator("summary").click();
-  await expect(objectPicker).toBeHidden();
-  await firstRule.locator("summary").click();
   await expect(objectPicker).toBeVisible();
   const loadMoreButton = objectPicker.getByTestId("security-deepsec-object-picker-load-more-0");
   await expect(loadMoreButton).toBeVisible();
@@ -2309,7 +2743,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(firstRule.getByRole("checkbox", { name: /CUSTOMER_NAME/ })).not.toBeChecked();
   await expect(firstRule.getByRole("checkbox", { name: /REGION_CODE/ })).not.toBeChecked();
   await expect(objectPicker.locator("#deepsec-entitlement-resource-0 [aria-hidden='true']")).toHaveText("*");
-  await expect(firstRule.locator("summary").getByText("SALES.ORDERS", { exact: true })).toBeVisible();
+  await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const scopeModeLabelText = entitlementForm.getByTestId("security-deepsec-scope-mode-label-text-0");
   const scopeModeRequired = entitlementForm.locator(
@@ -2601,6 +3035,222 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expectNoPageHorizontalScroll(page);
 });
 
+test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維持する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const dataRole = {
+    role_id: "role-data",
+    role_code: "DATA_USER",
+    display_name: "データユーザー",
+    description: "構造化データ参照",
+    is_built_in: false,
+    archived: false,
+    version: 1,
+    data_entitlements: [
+      {
+        entitlement_id: "entitlement-existing-1",
+        data_grant_name: "NL2SQL_DG_EMPLOYEES_READ",
+        resource_code: "HR.EMPLOYEES",
+        scope_code: "*",
+        capability: "SELECT",
+        target_owner: "HR",
+        target_object: "EMPLOYEES",
+        target_type: "TABLE",
+        column_names: ["EMPLOYEE_ID"],
+        scope_mode: "ALL",
+        scope_column: "",
+        scope_filters: [],
+        apply_status: "PENDING",
+        apply_error_message: "",
+        applied_at: null,
+        sql: [],
+        checksum: "a".repeat(64),
+      },
+      {
+        entitlement_id: "entitlement-existing-2",
+        data_grant_name: "NL2SQL_DG_EMPLOYEES_PROFILE",
+        resource_code: "HR.EMPLOYEES",
+        scope_code: "*",
+        capability: "SELECT",
+        target_owner: "HR",
+        target_object: "EMPLOYEES",
+        target_type: "TABLE",
+        column_names: ["DISPLAY_NAME"],
+        scope_mode: "ALL",
+        scope_column: "",
+        scope_filters: [],
+        apply_status: "PENDING",
+        apply_error_message: "",
+        applied_at: null,
+        sql: [],
+        checksum: "b".repeat(64),
+      },
+    ],
+  };
+  const auditRole = {
+    ...dataRole,
+    role_id: "role-audit",
+    role_code: "AUDIT_USER",
+    display_name: "監査ユーザー",
+    data_entitlements: [
+      {
+        entitlement_id: "entitlement-audit-1",
+        data_grant_name: "NL2SQL_DG_AUDIT_EMPLOYEES",
+        resource_code: "HR.EMPLOYEES",
+        scope_code: "*",
+        capability: "SELECT",
+        target_owner: "HR",
+        target_object: "EMPLOYEES",
+        target_type: "TABLE",
+        column_names: ["EMPLOYEE_ID", "DISPLAY_NAME"],
+        scope_mode: "ALL",
+        scope_column: "",
+        scope_filters: [],
+        apply_status: "PENDING",
+        apply_error_message: "",
+        applied_at: null,
+        sql: [],
+        checksum: "c".repeat(64),
+      },
+    ],
+  };
+  await page.route("**/api/nl2sql/db-admin/objects**", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    fulfill(route, {
+      runtime: "oracle",
+      owner: "",
+      items: [deepSecTargetObject],
+      total: 2,
+      table_count: 2,
+      view_count: 0,
+      counts_included: false,
+      next_cursor: cursor ? null : "deepsec-page-2",
+      refreshed_at: "2026-07-19T00:00:00Z",
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/tables/EMPLOYEES**", (route) =>
+    fulfill(route, deepSecTargetObjectDetail)
+  );
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 0 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await page.route("**/api/security/deepsec/data-entitlements", (route) =>
+    fulfill(route, [dataRole, auditRole])
+  );
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限" }).click();
+  const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+  const addGrantButton = entitlementForm.getByRole("button", { name: "データ権限を追加" });
+  const dataRoleCard = page.getByTestId("security-deepsec-entitlement-role-role-data");
+  const auditRoleCard = page.getByTestId("security-deepsec-entitlement-role-role-audit");
+
+  await expect(dataRoleCard).toBeVisible();
+  await expect(auditRoleCard).toBeVisible();
+  await setMainScrollTop(page, 0);
+  await expectMainScrollPreservedAfterClick(page, dataRoleCard);
+  await expect(dataRoleCard).toHaveAttribute("aria-pressed", "true");
+  await expectElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 0);
+  await setElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 96);
+  await setMainScrollTop(page, 0);
+  await expectMainScrollPreservedAfterClick(page, auditRoleCard);
+  await expect(auditRoleCard).toHaveAttribute("aria-pressed", "true");
+  await expectElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 0);
+  await setMainScrollTop(page, 0);
+  await expectMainScrollPreservedAfterClick(page, dataRoleCard);
+  await expect(dataRoleCard).toHaveAttribute("aria-pressed", "true");
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0")).toBeVisible();
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-1")).toBeVisible();
+  await setElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 96);
+  await setMainScrollTop(page, 0);
+  await expectMainScrollPreservedAfterClick(page, addGrantButton);
+
+  const rulesList = entitlementForm.getByTestId("security-deepsec-entitlement-rules-list");
+  const firstRuleTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0");
+  const secondRuleTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-1");
+  const thirdRuleTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-2");
+  const actionRegion = entitlementForm.getByTestId("security-deepsec-entitlement-action-region");
+
+  await expect(rulesList).toBeVisible();
+  await expect(firstRuleTab).toHaveAttribute("aria-pressed", "false");
+  await expect(secondRuleTab).toHaveAttribute("aria-pressed", "false");
+  await expect(thirdRuleTab).toHaveAttribute("aria-pressed", "true");
+  await expectElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2"), 0);
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2").getByTestId("security-deepsec-object-picker-2")).toBeVisible();
+  await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-2");
+  const thirdObjectPicker = entitlementForm
+    .getByTestId("security-deepsec-entitlement-rule-2")
+    .getByTestId("security-deepsec-object-picker-2");
+  await expectElementCenterUnobscured(thirdObjectPicker.getByRole("option", { name: /HR\.EMPLOYEES/u }));
+  await expectElementCenterUnobscured(
+    thirdObjectPicker.getByTestId("security-deepsec-object-picker-load-more-2")
+  );
+  await expectElementCenterUnobscured(entitlementForm.getByRole("button", { name: "データ権限を削除" }));
+  await thirdObjectPicker.getByTestId("security-deepsec-object-picker-load-more-2").click();
+  await setElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2"), 96);
+  await setMainScrollTop(page, 0);
+  await expectMainScrollPreservedAfterClick(page, firstRuleTab);
+  await expect(firstRuleTab).toHaveAttribute("aria-pressed", "true");
+  await expect(thirdRuleTab).toHaveAttribute("aria-pressed", "false");
+  await expectElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 0);
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0").getByTestId("security-deepsec-object-picker-0")).toBeVisible();
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2")).toHaveCount(0);
+  await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-0");
+
+  await expect(actionRegion.getByTestId("security-deepsec-sql-preview")).toBeVisible();
+  await expect(actionRegion.getByTestId("execution-confirmation-field")).toBeVisible();
+  const applyField = actionRegion.getByTestId("execution-confirmation-field");
+  const applyButton = actionRegion.getByRole("button", { name: "Data Grant を適用" });
+  await expect(applyButton).toBeVisible();
+  await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await expect(applyButton).toBeEnabled();
+  await expectElementCenterUnobscured(applyButton);
+  await expect
+    .poll(() =>
+      entitlementForm.evaluate((node) => {
+        const list = node.querySelector('[data-testid="security-deepsec-entitlement-rules-list"]');
+        const actions = node.querySelector('[data-testid="security-deepsec-entitlement-action-region"]');
+        const formStyle = window.getComputedStyle(node);
+        const listStyle = list ? window.getComputedStyle(list) : null;
+        const formBox = node.getBoundingClientRect();
+        const actionBox = actions?.getBoundingClientRect();
+        return {
+          formOverflow: formStyle.overflow,
+          listOverflowY: listStyle?.overflowY,
+          actionsInsideForm: Boolean(
+            actionBox &&
+              actionBox.y >= formBox.y - 1 &&
+              actionBox.y + actionBox.height <= formBox.y + formBox.height + 1
+          ),
+        };
+      })
+    )
+    .toEqual({
+      formOverflow: "hidden",
+      listOverflowY: "auto",
+      actionsInsideForm: true,
+    });
+  await expectNoElementHorizontalOverflow(entitlementForm);
+  await expectNoPageHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+  await expectNoElementHorizontalOverflow(entitlementForm);
+  await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-0");
+  await expectElementCenterUnobscured(applyButton);
+});
+
 test("DeepSec は基盤構成からDB構成を確認語つきで解除する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   let applied = true;
@@ -2778,10 +3428,19 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   });
 
   await page.getByRole("tab", { name: "データ権限" }).click();
-  await page.getByRole("button", { name: "Data Grant を検証" }).click();
+  const dataPermissionsPanel = page.locator("#security-deepsec-panel-data-permissions");
+  const dataPermissionsHeader = dataPermissionsPanel.locator("xpath=./div[1]");
+  const verificationCard = page.getByTestId("security-deepsec-verification-card");
+  await expect(dataPermissionsHeader.getByRole("button", { name: "Data Grant を検証" })).toHaveCount(0);
+  await expect(verificationCard.getByText("検証を実行すると", { exact: false })).toBeVisible();
+  const verifyButton = verificationCard.getByRole("button", { name: "Data Grant を検証" });
+  await expect(verifyButton).toBeEnabled();
+  await expectNoElementHorizontalOverflow(verifyButton);
+  await verifyButton.click();
   await page.getByRole("alertdialog").getByRole("button", { name: "実行" }).click();
-  await expect(page.getByText("no_context", { exact: true })).toBeVisible();
-  await expect(page.getByText("sensitive_masked=true", { exact: true })).toBeVisible();
+  await expect(verificationCard.getByText("no_context", { exact: true })).toBeVisible();
+  await expect(verificationCard.getByText("sensitive_masked=true", { exact: true })).toBeVisible();
+  await expect(verificationCard.getByText(/2026\/07\/19/u)).toHaveCount(0);
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth

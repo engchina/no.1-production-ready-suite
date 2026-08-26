@@ -35,6 +35,27 @@ test("DeepSec 対象ロール list は 5 行相当の固定高 scroll container 
   assert.doesNotMatch(entitlementsPanel, /max-h-\[30rem\]/u);
 });
 
+test("DeepSec Data Grant editor は bounded workspace と固定操作領域を持つ", () => {
+  assert.match(
+    entitlementsPanel,
+    /className="[^"]*grid-rows-\[auto_minmax\(0,1fr\)_auto\][^"]*overflow-hidden[^"]*"[\s\S]*data-testid="security-deepsec-entitlement-form"/u
+  );
+  assert.match(
+    entitlementsPanel,
+    /className="[^"]*min-h-0[^"]*overflow-y-auto[^"]*"[\s\S]*data-testid="security-deepsec-entitlement-rules-list"/u
+  );
+  assert.match(
+    entitlementsPanel,
+    /className="min-h-0 overflow-y-auto pr-1"[\s\S]*ref=\{entitlementEditorScrollRef\}[\s\S]*security-deepsec-entitlement-rule-\$\{selectedEntitlementDraftIndex\}/u
+  );
+  assert.match(
+    entitlementsPanel,
+    /className="[^"]*border-t border-border[^"]*"[\s\S]*data-testid="security-deepsec-entitlement-action-region"/u
+  );
+  assert.match(entitlementsPanel, /security\.deepsec\.entitlements\.emptyRulesTitle/u);
+  assert.match(entitlementsPanel, /security\.deepsec\.entitlements\.emptyRulesHint/u);
+});
+
 test("DeepSec object picker は native select ではなく低い検索 picker を使う", () => {
   assert.match(entitlementsPanel, /<DeepSecTargetObjectPicker/u);
   assert.match(objectPicker, /role="listbox"/u);
@@ -144,7 +165,13 @@ test("DeepSec Data Grant editor は SQL preview と適用時の自動保存を�
     pageSource,
     /const handleApplyEntitlements = async \(\) => \{[\s\S]*securityApi\.updateDeepSecDataEntitlements\(\{[\s\S]*data_entitlements: normalizedEntitlementDraftRows[\s\S]*securityApi\.applyDeepSecDataEntitlements/u
   );
-  assert.match(entitlementsPanel, /<details[\s\S]*data-testid=\{`security-deepsec-entitlement-rule-\$\{index\}`\}/u);
+  assert.match(pageSource, /type DataEntitlementDraft = DataEntitlement & \{ client_key: string \}/u);
+  assert.match(entitlementsPanel, /key=\{entitlement\.client_key\}/u);
+  assert.match(entitlementsPanel, /data-testid=\{`security-deepsec-entitlement-rule-tab-\$\{index\}`\}/u);
+  assert.match(entitlementsPanel, /aria-pressed=\{selected\}/u);
+  assert.match(entitlementsPanel, /setSelectedEntitlementDraftKey\(entitlement\.client_key\)/u);
+  assert.doesNotMatch(entitlementsPanel, /<details[\s\S]*security-deepsec-entitlement-rule-\$\{index\}/u);
+  assert.doesNotMatch(apiSource, /client_key/u);
   assert.match(entitlementsPanel, /targetKey \|\| t\("security\.deepsec\.entitlements\.ruleTitle"\)/u);
   assert.doesNotMatch(entitlementsPanel, /security\.deepsec\.entitlements\.ruleTitle"[\s\S]*index: index \+ 1/u);
   assert.doesNotMatch(applyButtonBlock, /normalizedEntitlementDraftRows\.length === 0/u);

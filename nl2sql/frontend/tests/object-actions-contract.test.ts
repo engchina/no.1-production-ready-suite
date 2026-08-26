@@ -51,7 +51,9 @@ test("行/詳細の overflow menu は ARIA とキーボード契約を持つ", (
   for (const key of ["Escape", "ArrowDown", "ArrowUp", "Home", "End"]) {
     assert.match(source, new RegExp(`event\\.key === "${key}"`, "u"));
   }
-  assert.match(source, /triggerRef\.current\?\.focus/u);
+  assert.match(source, /firstEnabled\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
 });
 
 test("行/詳細の overflow menu は viewport 基準で反転し、狭い時だけ内部スクロールする", () => {

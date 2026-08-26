@@ -6,14 +6,13 @@ import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { t } from "@/lib/i18n";
-import { useProfileOntologyView } from "../incrementalQueries";
 import { engineLabel } from "../labels";
 import {
   groundSqlSemanticGraphOnOntologyGraph,
   isSqlSemanticGraph,
   type SqlOntologyGroundingResult,
 } from "../ontology/sqlGrounding";
-import type { SqlSemanticGraph } from "../ontology/types";
+import type { OntologyGraph, SqlSemanticGraph } from "../ontology/types";
 import type {
   GeneratedSqlPanelData,
   Nl2SqlInterpretationArtifact,
@@ -140,16 +139,16 @@ function UnmatchedList({ values }: { values: string[] }) {
 function SqlOntologyGroundingPanel({
   sqlGraph,
   profileId,
+  ontologyGraph,
 }: {
   sqlGraph: SqlSemanticGraph | null;
   profileId: string;
+  ontologyGraph?: OntologyGraph | null;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const ontologyQuery = useProfileOntologyView(sqlGraph && profileId ? profileId : "");
-  const ontologyGraph = ontologyQuery.data?.ontology_graph ?? null;
   const grounding = useMemo(
-    () => groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph),
+    () => groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph ?? null),
     [ontologyGraph, sqlGraph]
   );
   const unmatchedValues = [
@@ -189,16 +188,9 @@ function SqlOntologyGroundingPanel({
 
       {!profileId ? (
         <Banner severity="info">{t("nl2sql.interpretation.graphNoProfile")}</Banner>
-      ) : !ontologyGraph && (ontologyQuery.isLoading || ontologyQuery.isFetching) ? (
-        <div
-          className="grid h-80 animate-pulse place-items-center rounded-md border border-border bg-background text-sm text-muted"
-          data-testid="nl2sql-sql-grounding-loading"
-        >
-          {t("nl2sql.interpretation.graphLoading")}
-        </div>
-      ) : ontologyQuery.isError ? (
+      ) : !ontologyGraph ? (
         <Banner severity="warning">{t("nl2sql.interpretation.graphLoadFailed")}</Banner>
-      ) : !ontologyGraph || ontologyGraph.nodes.length === 0 ? (
+      ) : ontologyGraph.nodes.length === 0 ? (
         <Banner severity="info">{t("nl2sql.interpretation.graphEmpty")}</Banner>
       ) : (
         <>
@@ -295,7 +287,11 @@ function InterpretationArtifactPanel({
           {t("nl2sql.interpretation.emptyFilterMismatch")}
         </Banner>
       )}
-      <SqlOntologyGroundingPanel sqlGraph={sqlGraph} profileId={effectiveProfileId} />
+      <SqlOntologyGroundingPanel
+        sqlGraph={sqlGraph}
+        profileId={effectiveProfileId}
+        ontologyGraph={artifact.ontology_graph ?? null}
+      />
     </div>
   );
 }

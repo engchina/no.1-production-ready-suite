@@ -41,7 +41,7 @@ import {
   WorkSection,
 } from "@/features/nl2sql/components/DbAdminShared";
 import { isAbortError } from "@/lib/api";
-import { formatDateTime, formatDateTimeWithYear } from "@/lib/format";
+import { formatDateTimeWithYear } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
@@ -78,6 +78,7 @@ const SCOPE_OPERATORS_BY_VALUE_TYPE: Record<DataEntitlementScopeValueType, DataE
   TEMPORAL: ["EQ", "BEFORE", "ON_OR_BEFORE", "AFTER", "ON_OR_AFTER", "BETWEEN", "IS_NULL", "IS_NOT_NULL"],
 };
 type DeepSecView = "data-user" | "foundation" | "data-permissions";
+type DataEntitlementDraft = DataEntitlement & { client_key: string };
 
 const INPUT_CLASS =
   "h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
@@ -151,8 +152,65 @@ function migrateLegacyColumnEqualsEntitlement(item: DataEntitlement): DataEntitl
   };
 }
 
-function entitlementDraft(role: DeepSecRoleEntitlements | null) {
-  return role?.data_entitlements.map((item) => migrateLegacyColumnEqualsEntitlement({ ...item })) ?? [];
+function entitlementDraftClientKey(item: DataEntitlement, index: number) {
+  const entitlementId = item.entitlement_id?.trim();
+  if (entitlementId) return `saved:${entitlementId}`;
+  const targetKey =
+    item.target_owner && item.target_object
+      ? `${item.target_owner}.${item.target_object}`
+      : item.resource_code || "blank";
+  return `draft:${index}:${targetKey.toUpperCase()}`;
+}
+
+function toEntitlementDraft(item: DataEntitlement, index: number): DataEntitlementDraft {
+  const migrated = migrateLegacyColumnEqualsEntitlement({ ...item });
+  return {
+    ...migrated,
+    client_key: entitlementDraftClientKey(migrated, index),
+  };
+}
+
+function blankEntitlementDraft(clientKey: string): DataEntitlementDraft {
+  return {
+    client_key: clientKey,
+    resource_code: "",
+    scope_code: "*",
+    capability: "SELECT",
+    target_owner: "",
+    target_object: "",
+    target_type: "TABLE",
+    column_names: [],
+    scope_mode: "ALL",
+    scope_column: "",
+    scope_filters: [],
+  };
+}
+
+function entitlementDraft(role: DeepSecRoleEntitlements | null): DataEntitlementDraft[] {
+  return role?.data_entitlements.map((item, index) => toEntitlementDraft(item, index)) ?? [];
+}
+
+function entitlementColumnsSummary(
+  entitlement: DataEntitlement,
+  detail: DeepSecTargetObjectDetail | undefined
+) {
+  const selectedCount = entitlement.column_names?.length ?? 0;
+  if (!detail) {
+    return t("security.deepsec.entitlements.columnsCount", { count: selectedCount });
+  }
+  return t("security.deepsec.entitlements.columnsSummary", {
+    selected: selectedCount,
+    total: detail.columns.length,
+  });
+}
+
+function entitlementScopeSummary(entitlement: DataEntitlement) {
+  if ((entitlement.scope_mode ?? "ALL") === "FILTERS") {
+    return t("security.deepsec.entitlements.scopeFilterCount", {
+      count: entitlement.scope_filters?.length ?? 0,
+    });
+  }
+  return t("security.deepsec.entitlements.scopeAll");
 }
 
 function entitlementRoleStatus(role: DeepSecRoleEntitlements) {
@@ -645,8 +703,10 @@ export function SecurityDeepSecPage() {
   const [verification, setVerification] = useState<DeepSecVerification | null>(null);
   const [entitlementRoles, setEntitlementRoles] = useState<DeepSecRoleEntitlements[]>([]);
   const [selectedEntitlementRoleId, setSelectedEntitlementRoleId] = useState<string | null>(null);
-  const [entitlementDraftRows, setEntitlementDraftRows] = useState<DataEntitlement[]>([]);
+  const [entitlementDraftRows, setEntitlementDraftRows] = useState<DataEntitlementDraft[]>([]);
+  const [selectedEntitlementDraftKey, setSelectedEntitlementDraftKey] = useState<string | null>(null);
   const [entitlementPreviewRows, setEntitlementPreviewRows] = useState<DataEntitlement[]>([]);
+  const [entitlementSqlPreviewOpen, setEntitlementSqlPreviewOpen] = useState(false);
   const [entitlementSearch, setEntitlementSearch] = useState("");
   const [targetObjectSearch, setTargetObjectSearch] = useState("");
   const [targetObjectOwner, setTargetObjectOwner] = useState("");
@@ -686,6 +746,8 @@ export function SecurityDeepSecPage() {
   const planLoadSequence = useRef(0);
   const entitlementLoadSequence = useRef(0);
   const targetObjectsLoadSequence = useRef(0);
+  const entitlementDraftKeySequence = useRef(0);
+  const entitlementEditorScrollRef = useRef<HTMLDivElement | null>(null);
   const targetObjectFilterMounted = useRef(false);
   const { abortAll: abortStatusRequests, run: runStatusRequest } = useRequestScope();
   const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
@@ -757,6 +819,23 @@ export function SecurityDeepSecPage() {
     () => Array.from(new Set(entitlementDraftRows.map(entitlementTargetKey).filter(Boolean))),
     [entitlementDraftRows]
   );
+  const visibleSelectedEntitlementDraftKey =
+    selectedEntitlementDraftKey &&
+    entitlementDraftRows.some((item) => item.client_key === selectedEntitlementDraftKey)
+      ? selectedEntitlementDraftKey
+      : entitlementDraftRows[0]?.client_key ?? null;
+  const selectedEntitlementDraftIndex = visibleSelectedEntitlementDraftKey
+    ? entitlementDraftRows.findIndex((item) => item.client_key === visibleSelectedEntitlementDraftKey)
+    : -1;
+  const selectedEntitlementDraft =
+    selectedEntitlementDraftIndex >= 0 ? entitlementDraftRows[selectedEntitlementDraftIndex] : null;
+  useEffect(() => {
+    if (!visibleSelectedEntitlementDraftKey || typeof window === "undefined") return;
+    const frame = window.requestAnimationFrame(() => {
+      entitlementEditorScrollRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [visibleSelectedEntitlementDraftKey]);
   const foundationSteps = useMemo(
     () =>
       (plan?.steps.filter((step) => step.step_no === 1 || step.step_no === 2) ?? []).sort(
@@ -976,8 +1055,11 @@ export function SecurityDeepSecPage() {
   }, [targetObjectSearch, targetObjectOwner]);
 
   useEffect(() => {
-    setEntitlementDraftRows(entitlementDraft(selectedEntitlementRole));
+    const nextDraftRows = entitlementDraft(selectedEntitlementRole);
+    setEntitlementDraftRows(nextDraftRows);
+    setSelectedEntitlementDraftKey(nextDraftRows[0]?.client_key ?? null);
     setEntitlementPreviewRows([]);
+    setEntitlementSqlPreviewOpen(false);
     setEntitlementFormError("");
     setEntitlementApplyConfirmation("");
   }, [selectedEntitlementRole?.role_id, selectedEntitlementRole?.version]);
@@ -1125,27 +1207,20 @@ export function SecurityDeepSecPage() {
   };
 
   const addEntitlement = () => {
+    entitlementDraftKeySequence.current += 1;
+    const nextDraft = blankEntitlementDraft(
+      `new:${selectedEntitlementRole?.role_id ?? "role"}:${entitlementDraftKeySequence.current}`
+    );
     setEntitlementPreviewRows([]);
-    setEntitlementDraftRows((current) => [
-      ...current,
-      {
-        resource_code: "",
-        scope_code: "*",
-        capability: "SELECT",
-        target_owner: "",
-        target_object: "",
-        target_type: "TABLE",
-        column_names: [],
-        scope_mode: "ALL",
-        scope_column: "",
-        scope_filters: [],
-      },
-    ]);
+    setEntitlementSqlPreviewOpen(false);
+    setEntitlementDraftRows((current) => [...current, nextDraft]);
+    setSelectedEntitlementDraftKey(nextDraft.client_key);
     setEntitlementFormError("");
   };
 
   const patchEntitlement = (index: number, patch: Partial<DataEntitlement>) => {
     setEntitlementPreviewRows([]);
+    setEntitlementSqlPreviewOpen(false);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
     );
@@ -1299,8 +1374,17 @@ export function SecurityDeepSecPage() {
   };
 
   const removeEntitlement = (index: number) => {
+    const nextRows = entitlementDraftRows.filter((_, itemIndex) => itemIndex !== index);
+    const removedKey = entitlementDraftRows[index]?.client_key ?? null;
     setEntitlementPreviewRows([]);
-    setEntitlementDraftRows((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setEntitlementSqlPreviewOpen(false);
+    setEntitlementDraftRows(nextRows);
+    setSelectedEntitlementDraftKey((current) => {
+      if (current && current !== removedKey && nextRows.some((item) => item.client_key === current)) {
+        return current;
+      }
+      return nextRows[Math.min(index, nextRows.length - 1)]?.client_key ?? null;
+    });
     setEntitlementFormError("");
   };
 
@@ -1380,11 +1464,16 @@ export function SecurityDeepSecPage() {
         normalizedEntitlementDraftRows
       );
       setEntitlementPreviewRows(preview.data_entitlements);
+      setEntitlementSqlPreviewOpen(true);
       setEntitlementDraftRows((current) =>
-        preview.data_entitlements.map((item, index) => ({
-          ...current[index],
-          ...item,
-        }))
+        preview.data_entitlements.map((item, index) => {
+          const currentDraft = current[index];
+          return {
+            ...(currentDraft ?? {}),
+            ...item,
+            client_key: currentDraft?.client_key ?? entitlementDraftClientKey(item, index),
+          };
+        })
       );
       toast.success(t("security.deepsec.entitlements.previewed"));
     } catch (cause) {
@@ -1749,18 +1838,6 @@ export function SecurityDeepSecPage() {
               title={t("security.deepsec.tabs.dataPermissions")}
               description={t("security.deepsec.tabs.dataPermissionsHint")}
               icon={ShieldCheck}
-              action={
-                mayVerify ? (
-                  <Button
-                    onClick={() => void handleVerify()}
-                    loading={verifying}
-                    disabled={!status?.configured}
-                  >
-                    <ShieldCheck size={15} aria-hidden />
-                    {t("security.deepsec.verify")}
-                  </Button>
-                ) : null
-              }
             />
             {actionError ? <FormStatus tone="danger" message={actionError} /> : null}
             {plan && !foundationReady ? (
@@ -1859,66 +1936,151 @@ export function SecurityDeepSecPage() {
                       </div>
                     ) : (
                       <div
-                        className="grid gap-4"
+                        className="grid h-[64rem] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden md:h-[calc(100dvh-4rem)] md:min-h-[42rem] md:max-h-[52rem]"
                         data-testid="security-deepsec-entitlement-form"
+                        data-selected-entitlement-rule={selectedEntitlementDraft?.client_key}
                       >
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0">
-                            <h3 id="deepsec-entitlement-editor-title" className="break-words text-base font-semibold">
-                              {selectedEntitlementRole.display_name}
-                            </h3>
-                            <p className="mt-1 break-all font-mono text-xs text-muted">{selectedEntitlementRole.role_code}</p>
+                        <div className="grid min-w-0 gap-3 border-b border-border pb-3">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div className="min-w-0">
+                              <h3 id="deepsec-entitlement-editor-title" className="break-words text-base font-semibold">
+                                {selectedEntitlementRole.display_name}
+                              </h3>
+                              <p className="mt-1 break-all font-mono text-xs text-muted">{selectedEntitlementRole.role_code}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <StatusBadge
+                                variant={entitlementRoleStatus(selectedEntitlementRole).variant}
+                                label={entitlementRoleStatus(selectedEntitlementRole).label}
+                              />
+                              <StatusBadge
+                                variant="info"
+                                label={t("security.deepsec.entitlements.count", {
+                                  count: entitlementDraftRows.length,
+                                })}
+                              />
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <StatusBadge
-                              variant={entitlementRoleStatus(selectedEntitlementRole).variant}
-                              label={entitlementRoleStatus(selectedEntitlementRole).label}
-                            />
-                            <StatusBadge
-                              variant="info"
-                              label={t("security.deepsec.entitlements.count", {
-                                count: selectedEntitlementRole.data_entitlements.length,
-                              })}
-                            />
+                          {selectedEntitlementRole.is_built_in ? (
+                            <Banner severity="info">{t("security.deepsec.entitlements.readOnlyBuiltIn")}</Banner>
+                          ) : null}
+                          {selectedEntitlementRole.archived ? (
+                            <Banner severity="info">{t("security.deepsec.entitlements.readOnlyArchived")}</Banner>
+                          ) : null}
+                          {entitlementDraftChanged ? (
+                            <Banner severity="info">{t("security.deepsec.entitlements.unsavedPreview")}</Banner>
+                          ) : null}
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="text-sm font-semibold">{t("security.deepsec.entitlements.rows")}</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedEntitlementDraft ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label={t("security.deepsec.entitlements.remove")}
+                                  onClick={() => removeEntitlement(selectedEntitlementDraftIndex)}
+                                  disabled={entitlementReadOnly || selectedEntitlementDraftIndex < 0}
+                                >
+                                  <Trash2 size={14} aria-hidden />
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                onClick={addEntitlement}
+                                disabled={entitlementReadOnly}
+                              >
+                                <Plus size={14} aria-hidden />
+                                {t("security.deepsec.entitlements.add")}
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                        {selectedEntitlementRole.is_built_in ? (
-                          <Banner severity="info">{t("security.deepsec.entitlements.readOnlyBuiltIn")}</Banner>
-                        ) : null}
-                        {selectedEntitlementRole.archived ? (
-                          <Banner severity="info">{t("security.deepsec.entitlements.readOnlyArchived")}</Banner>
-                        ) : null}
-                        {entitlementDraftChanged ? (
-                          <Banner severity="info">{t("security.deepsec.entitlements.unsavedPreview")}</Banner>
-                        ) : null}
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <h4 className="text-sm font-semibold">{t("security.deepsec.entitlements.rows")}</h4>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={addEntitlement}
-                            disabled={entitlementReadOnly}
-                          >
-                            <Plus size={14} aria-hidden />
-                            {t("security.deepsec.entitlements.add")}
-                          </Button>
                         </div>
                         {entitlementDraftRows.length === 0 ? (
-                          <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
-                            {t("security.common.empty")}
-                          </p>
+                          <div
+                            className="grid content-center rounded-md border border-dashed border-border p-4 text-center"
+                            data-testid="security-deepsec-entitlement-rules-empty"
+                          >
+                            <h4 className="text-sm font-semibold">
+                              {t("security.deepsec.entitlements.emptyRulesTitle")}
+                            </h4>
+                            <p className="mt-1 text-sm text-muted">
+                              {t("security.deepsec.entitlements.emptyRulesHint")}
+                            </p>
+                          </div>
                         ) : (
-                          <div className="grid gap-2">
-                            {entitlementDraftRows.map((entitlement, index) => (
-                              (() => {
+                          <div
+                            className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden 2xl:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)] 2xl:grid-rows-1"
+                            data-testid="security-deepsec-entitlement-workspace"
+                          >
+                            <div
+                              className="grid max-h-36 min-h-0 content-start gap-2 overflow-y-auto pr-1 2xl:max-h-none"
+                              aria-label={t("security.deepsec.entitlements.ruleList")}
+                              data-testid="security-deepsec-entitlement-rules-list"
+                            >
+                              {entitlementDraftRows.map((entitlement, index) => {
                                 const targetKey = entitlementTargetKey(entitlement);
                                 const detail = targetDetails[targetKey];
-                                const loadingDetail = Boolean(targetDetailLoading[targetKey]);
-                                const detailError = targetDetailErrors[targetKey] ?? "";
-                                const selectedColumns = new Set(
-                                  (entitlement.column_names ?? []).map((column) => column.toUpperCase())
+                                const statusBadge = entitlementApplyStatus(entitlement);
+                                const ruleTitle =
+                                  targetKey || t("security.deepsec.entitlements.ruleTitle");
+                                const selected = entitlement.client_key === visibleSelectedEntitlementDraftKey;
+                                return (
+                                  <button
+                                    key={entitlement.client_key}
+                                    type="button"
+                                    className={cn(
+                                      "min-w-0 rounded-md border border-border bg-card/30 p-3 text-left outline-none transition hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40",
+                                      selected && "border-primary bg-primary/5"
+                                    )}
+                                    aria-pressed={selected}
+                                    data-testid={`security-deepsec-entitlement-rule-tab-${index}`}
+                                    onClick={() => {
+                                      setSelectedEntitlementDraftKey(entitlement.client_key);
+                                      setEntitlementFormError("");
+                                    }}
+                                  >
+                                    <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                                      <span className="min-w-0">
+                                        <span className="block break-all text-sm font-semibold">{ruleTitle}</span>
+                                        <span className="mt-1 block break-all font-mono text-[11px] text-muted">
+                                          {entitlement.data_grant_name ||
+                                            t("security.deepsec.entitlements.notGenerated")}
+                                        </span>
+                                      </span>
+                                      <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
+                                    </span>
+                                    <span className="mt-2 flex min-w-0 flex-wrap gap-2 text-[11px] text-muted">
+                                      <span>{entitlementColumnsSummary(entitlement, detail)}</span>
+                                      <span aria-hidden="true">/</span>
+                                      <span>{entitlementScopeSummary(entitlement)}</span>
+                                    </span>
+                                  </button>
                                 );
+                              })}
+                            </div>
+                            <div
+                              className="min-h-0 overflow-y-auto pr-1"
+                              ref={entitlementEditorScrollRef}
+                              data-testid={
+                                selectedEntitlementDraft
+                                  ? `security-deepsec-entitlement-rule-${selectedEntitlementDraftIndex}`
+                                  : "security-deepsec-entitlement-editor-empty"
+                              }
+                            >
+                              {selectedEntitlementDraft ? (
+                                (() => {
+                                  const entitlement = selectedEntitlementDraft;
+                                  const index = selectedEntitlementDraftIndex;
+                                  const targetKey = entitlementTargetKey(entitlement);
+                                  const detail = targetDetails[targetKey];
+                                  const loadingDetail = Boolean(targetDetailLoading[targetKey]);
+                                  const detailError = targetDetailErrors[targetKey] ?? "";
+                                  const selectedColumns = new Set(
+                                    (entitlement.column_names ?? []).map((column) => column.toUpperCase())
+                                  );
                                 const availableColumnNames =
                                   detail?.columns.map((column) => column.column_name.toUpperCase()) ?? [];
                                 const selectedAvailableColumnCount = availableColumnNames.filter(
@@ -1931,46 +2093,32 @@ export function SecurityDeepSecPage() {
                                 const ruleTitle =
                                   targetKey || t("security.deepsec.entitlements.ruleTitle");
                                 return (
-                                  <details
-                                    key={`${index}-${entitlement.entitlement_id ?? "new"}`}
-                                    open
-                                    className="group min-w-0 rounded-md border border-border bg-card/30"
-                                    data-testid={`security-deepsec-entitlement-rule-${index}`}
+                                  <section
+                                    className="min-w-0 rounded-md border border-border bg-background"
                                   >
-                                    <summary className="flex min-h-12 cursor-pointer list-none items-start justify-between gap-3 px-3 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                                      <div className="flex min-w-0 items-start gap-2">
-                                        <ChevronDown
-                                          size={16}
-                                          className="mt-0.5 shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
-                                          aria-hidden
-                                        />
-                                        <div className="min-w-0">
-                                          <p className="break-all text-sm font-semibold">{ruleTitle}</p>
-                                          <p className="mt-1 break-all font-mono text-[11px] text-muted">
-                                            {entitlement.data_grant_name ||
-                                              t("security.deepsec.entitlements.notGenerated")}
-                                          </p>
-                                        </div>
+                                    <div className="flex min-h-12 items-start justify-between gap-3 border-b border-border px-3 py-3">
+                                      <div className="min-w-0">
+                                        <p
+                                          className="break-all text-sm font-semibold"
+                                          data-testid={`security-deepsec-entitlement-editor-title-${index}`}
+                                        >
+                                          {ruleTitle}
+                                        </p>
+                                        <p className="mt-1 break-all font-mono text-[11px] text-muted">
+                                          {entitlement.data_grant_name ||
+                                            t("security.deepsec.entitlements.notGenerated")}
+                                        </p>
+                                        <p className="mt-1 text-[11px] text-muted">
+                                          {entitlementColumnsSummary(entitlement, detail)}
+                                          {" / "}
+                                          {entitlementScopeSummary(entitlement)}
+                                        </p>
                                       </div>
                                       <div className="flex shrink-0 items-center gap-2">
                                         <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="ghost"
-                                          aria-label={t("security.deepsec.entitlements.remove")}
-                                          disabled={entitlementReadOnly}
-                                          onClick={(event) => {
-                                            event.preventDefault();
-                                            event.stopPropagation();
-                                            removeEntitlement(index);
-                                          }}
-                                        >
-                                          <Trash2 size={14} aria-hidden />
-                                        </Button>
                                       </div>
-                                    </summary>
-                                    <div className="grid gap-3 border-t border-border p-3">
+                                    </div>
+                                    <div className="grid gap-3 p-3">
                                       {entitlement.apply_error_message ? (
                                         <FormStatus tone="danger" message={entitlement.apply_error_message} />
                                       ) : null}
@@ -2447,123 +2595,142 @@ export function SecurityDeepSecPage() {
                                       </div>
                                     ) : null}
                                   </div>
-                                  </details>
+                                  </section>
                                 );
-                              })()
-                            ))}
+                                })()
+                              ) : (
+                                <div className="grid content-center rounded-md border border-dashed border-border p-4 text-center">
+                                  <p className="text-sm text-muted">
+                                    {t("security.deepsec.entitlements.noSelectionHint")}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
-                        {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
-                        <details
-                          className="group min-w-0 rounded-md border border-border bg-background"
-                          data-testid="security-deepsec-sql-preview"
+                        <div
+                          className="grid min-h-0 gap-3 border-t border-border bg-card/60 pt-3"
+                          data-testid="security-deepsec-entitlement-action-region"
                         >
-                          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                            <span>{t("security.deepsec.entitlements.sqlPreview")}</span>
-                            <ChevronDown
-                              size={16}
-                              className="shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
-                              aria-hidden
-                            />
-                          </summary>
-                          <div className="space-y-3 border-t border-border p-3">
-                            <div
-                              className="grid min-w-0 gap-2"
-                              data-testid="security-deepsec-sql-preview-toolbar"
+                          {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
+                          <details
+                            open={entitlementSqlPreviewOpen}
+                            className="group min-w-0 rounded-md border border-border bg-background"
+                            data-testid="security-deepsec-sql-preview"
+                          >
+                            <summary
+                              className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setEntitlementSqlPreviewOpen((current) => !current);
+                              }}
                             >
-                              <p className="min-w-0 text-sm leading-6 text-muted">
-                                {t("security.deepsec.entitlements.sqlReadonly")}
-                              </p>
-                              <div className="flex min-w-0 justify-end">
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="sm"
-                                  className="w-full min-w-0 justify-center lg:w-auto"
-                                  loading={entitlementPreviewing}
-                                  disabled={
-                                    entitlementReadOnly ||
-                                    entitlementPreviewing ||
-                                    entitlementApplying ||
-                                    normalizedEntitlementDraftRows.length === 0
-                                  }
-                                  data-testid="security-deepsec-sql-preview-generate"
-                                  onClick={() => void handlePreviewEntitlements()}
-                                >
-                                  <RefreshCw size={14} aria-hidden />
-                                  {t("security.deepsec.entitlements.generatePreview")}
-                                </Button>
-                              </div>
-                            </div>
-                            {selectedRolePreviewChecksum ? (
-                              <div className="space-y-1">
-                                <p className="text-xs font-medium text-muted">
-                                  {t("security.deepsec.checksum")}
+                              <span>{t("security.deepsec.entitlements.sqlPreview")}</span>
+                              <ChevronDown
+                                size={16}
+                                className="shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
+                                aria-hidden
+                              />
+                            </summary>
+                            <div className="space-y-3 border-t border-border p-3">
+                              <div
+                                className="grid min-w-0 gap-2"
+                                data-testid="security-deepsec-sql-preview-toolbar"
+                              >
+                                <p className="min-w-0 text-sm leading-6 text-muted">
+                                  {t("security.deepsec.entitlements.sqlReadonly")}
                                 </p>
-                                <code className="block break-all rounded-md bg-card p-2 text-[11px]">
-                                  {selectedRolePreviewChecksum}
-                                </code>
-                              </div>
-                            ) : null}
-                            {selectedRolePreviewSql.length ? (
-                              <div className="grid gap-3">
-                                {selectedRolePreviewSql.map((sql, index) => (
-                                  <pre
-                                    key={`${selectedEntitlementRole.role_id}-sql-${index}`}
-                                    className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-slate-950 p-3 text-xs leading-5 text-slate-100"
-                                    tabIndex={0}
+                                <div className="flex min-w-0 justify-end">
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    className="w-full min-w-0 justify-center lg:w-auto"
+                                    loading={entitlementPreviewing}
+                                    disabled={
+                                      entitlementReadOnly ||
+                                      entitlementPreviewing ||
+                                      entitlementApplying ||
+                                      normalizedEntitlementDraftRows.length === 0
+                                    }
+                                    data-testid="security-deepsec-sql-preview-generate"
+                                    onClick={() => void handlePreviewEntitlements()}
                                   >
-                                    {sql}
-                                  </pre>
-                                ))}
+                                    <RefreshCw size={14} aria-hidden />
+                                    {t("security.deepsec.entitlements.generatePreview")}
+                                  </Button>
+                                </div>
                               </div>
-                            ) : (
-                              <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-                                {t("security.deepsec.entitlements.sqlEmpty")}
-                              </p>
-                            )}
-                          </div>
-                        </details>
-                        <ExecutionConfirmationField
-                          value={entitlementApplyConfirmation}
-                          onChange={(value) => {
-                            setEntitlementApplyConfirmation(value);
-                            setEntitlementFormError("");
-                          }}
-                          confirmed={entitlementApplyConfirmed}
-                          placeholder={ADMIN_EXECUTE_CONFIRMATION}
-                          expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
-                          helper={t("security.deepsec.entitlements.applyHelper", {
-                            phrase: ADMIN_EXECUTE_CONFIRMATION,
-                          })}
-                          tone="danger"
-                          disabled={
-                            entitlementReadOnly ||
-                            entitlementPreviewing ||
-                            entitlementApplying ||
-                            !status?.configured
-                          }
-                          actions={
-                            <Button
-                              type="button"
-                              variant="danger"
-                              size="sm"
-                              className="w-full sm:w-auto"
-                              loading={entitlementApplying}
-                              disabled={
-                                entitlementReadOnly ||
-                                entitlementPreviewing ||
-                                entitlementApplying ||
-                                !status?.configured ||
-                                !entitlementApplyConfirmed
-                              }
-                              onClick={() => void handleApplyEntitlements()}
-                            >
-                              <ShieldCheck size={15} aria-hidden />
-                              {t("security.deepsec.entitlements.apply")}
-                            </Button>
-                          }
-                        />
+                              {selectedRolePreviewChecksum ? (
+                                <div className="space-y-1">
+                                  <p className="text-xs font-medium text-muted">
+                                    {t("security.deepsec.checksum")}
+                                  </p>
+                                  <code className="block break-all rounded-md bg-card p-2 text-[11px]">
+                                    {selectedRolePreviewChecksum}
+                                  </code>
+                                </div>
+                              ) : null}
+                              {selectedRolePreviewSql.length ? (
+                                <div className="grid gap-3">
+                                  {selectedRolePreviewSql.map((sql, index) => (
+                                    <pre
+                                      key={`${selectedEntitlementRole.role_id}-sql-${index}`}
+                                      className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-slate-950 p-3 text-xs leading-5 text-slate-100"
+                                      tabIndex={0}
+                                    >
+                                      {sql}
+                                    </pre>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                  {t("security.deepsec.entitlements.sqlEmpty")}
+                                </p>
+                              )}
+                            </div>
+                          </details>
+                          <ExecutionConfirmationField
+                            value={entitlementApplyConfirmation}
+                            onChange={(value) => {
+                              setEntitlementApplyConfirmation(value);
+                              setEntitlementFormError("");
+                            }}
+                            confirmed={entitlementApplyConfirmed}
+                            placeholder={ADMIN_EXECUTE_CONFIRMATION}
+                            expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
+                            helper={t("security.deepsec.entitlements.applyHelper", {
+                              phrase: ADMIN_EXECUTE_CONFIRMATION,
+                            })}
+                            tone="danger"
+                            disabled={
+                              entitlementReadOnly ||
+                              entitlementPreviewing ||
+                              entitlementApplying ||
+                              !status?.configured
+                            }
+                            actions={
+                              <Button
+                                type="button"
+                                variant="danger"
+                                size="sm"
+                                className="w-full sm:w-auto"
+                                loading={entitlementApplying}
+                                disabled={
+                                  entitlementReadOnly ||
+                                  entitlementPreviewing ||
+                                  entitlementApplying ||
+                                  !status?.configured ||
+                                  !entitlementApplyConfirmed
+                                }
+                                onClick={() => void handleApplyEntitlements()}
+                              >
+                                <ShieldCheck size={15} aria-hidden />
+                                {t("security.deepsec.entitlements.apply")}
+                              </Button>
+                            }
+                          />
+                        </div>
                       </div>
                     )}
                   </section>
@@ -2571,29 +2738,55 @@ export function SecurityDeepSecPage() {
               </CardContent>
             </Card>
 
-            {verification ? (
-              <Card>
-                <CardHeader className="flex-row items-center justify-between gap-3">
-                  <CardTitle>{t("security.deepsec.result")}</CardTitle>
-                  <StatusBadge
-                    variant={verification.passed ? "success" : "warning"}
-                    label={verification.passed ? t("security.deepsec.complete") : t("security.deepsec.failed")}
-                  />
+            {mayVerify ? (
+              <Card data-testid="security-deepsec-verification-card">
+                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <CardTitle>{t("security.deepsec.result")}</CardTitle>
+                    <p className="mt-1 text-sm leading-6 text-muted">
+                      {t("security.deepsec.resultEmpty")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                    {verification ? (
+                      <StatusBadge
+                        variant={verification.passed ? "success" : "warning"}
+                        label={verification.passed ? t("security.deepsec.complete") : t("security.deepsec.failed")}
+                      />
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      loading={verifying}
+                      disabled={!status?.configured || verifying}
+                      data-testid="security-deepsec-verify-action"
+                      onClick={() => void handleVerify()}
+                    >
+                      <ShieldCheck size={14} aria-hidden />
+                      {t("security.deepsec.verify")}
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {verification.checks.map((check) => (
-                    <div key={check.key} className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
-                      <CheckCircle2 size={16} className={check.passed ? "text-success" : "text-warning"} aria-hidden />
-                      <div>
-                        <p className="font-mono text-xs font-medium">{check.key}</p>
-                        <p className="mt-1 text-muted">{check.detail}</p>
-                      </div>
-                    </div>
-                  ))}
-                  <FormStatus
-                    tone={verification.passed ? "success" : "warning"}
-                    message={formatDateTime(verification.checked_at)}
-                  />
+                  {verification ? (
+                    <>
+                      {verification.checks.map((check) => (
+                        <div key={check.key} className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
+                          <CheckCircle2 size={16} className={check.passed ? "text-success" : "text-warning"} aria-hidden />
+                          <div>
+                            <p className="font-mono text-xs font-medium">{check.key}</p>
+                            <p className="mt-1 text-muted">{check.detail}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border p-3 text-sm leading-6 text-muted">
+                      {t("security.deepsec.resultPending")}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             ) : null}

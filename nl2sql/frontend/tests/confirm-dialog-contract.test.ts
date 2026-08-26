@@ -35,8 +35,10 @@ test("ConfirmDialog keeps modal accessibility and escape behavior", () => {
   assert.match(source, /aria-modal="true"/u);
   assert.match(source, /aria-labelledby=\{titleId\}/u);
   assert.match(source, /aria-describedby=\{description \? descriptionId : undefined\}/u);
-  assert.match(source, /confirmRef\.current\?\.focus\(\)/u);
-  assert.match(source, /previouslyFocused\.current\.focus\(\)/u);
+  assert.match(source, /confirmRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /previouslyFocused\.current\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /last\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /first\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /event\.key === "Escape"/u);
   assert.match(source, /event\.key !== "Tab"/u);
   assert.match(source, /dismissOnOverlay/u);

@@ -1,3 +1,5 @@
+import type { OntologyGraph } from "./ontology/types";
+
 export type Nl2SqlEngine = "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
@@ -467,6 +469,7 @@ export interface Nl2SqlInterpretationArtifact {
   available: boolean;
   question: Nl2SqlQuestionInterpretation;
   sql: Nl2SqlSqlInterpretation;
+  ontology_graph?: OntologyGraph | null;
   warnings: string[];
 }
 

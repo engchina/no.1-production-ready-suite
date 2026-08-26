@@ -142,13 +142,13 @@ export function PageActionBar({
       const firstEnabled = menuRef.current?.querySelector<HTMLButtonElement>(
         '[role="menuitem"]:not(:disabled)'
       );
-      firstEnabled?.focus();
+      firstEnabled?.focus({ preventScroll: true });
     });
   }, [menuOpen]);
 
   const closeMenu = (restoreFocus = false) => {
     setMenuOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -172,7 +172,7 @@ export function PageActionBar({
     if (nextIndex === null) return;
 
     event.preventDefault();
-    items[nextIndex]?.focus();
+    items[nextIndex]?.focus({ preventScroll: true });
   };
 
   if (ordered.length === 0) return null;

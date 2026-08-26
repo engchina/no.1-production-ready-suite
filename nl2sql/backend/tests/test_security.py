@@ -1537,6 +1537,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("GET", "/nl2sql/profiles/{profile_id}/usage-context") == frozenset(
         {PROFILE_READ_PERMISSION}
     )
+    assert permission_for_route("GET", "/nl2sql/profiles/{profile_id}/ontology-view") == frozenset(
+        {PROFILE_MANAGE_PERMISSION}
+    )
     assert permission_for_route("GET", "/nl2sql/profiles/{profile_id}") == frozenset(
         {PROFILE_MANAGE_PERMISSION}
     )
@@ -1689,6 +1692,8 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
             assert "select_ai_config" not in usage_payload
             assert (await client.get("/api/schema/objects")).status_code == 200
             assert (await client.get("/api/nl2sql/profiles/default")).status_code == 403
+            ontology_view = await client.get("/api/nl2sql/profiles/default/ontology-view")
+            assert ontology_view.status_code == 403
             denied_profile_create = await client.post(
                 "/api/nl2sql/profiles",
                 headers={"X-CSRF-Token": csrf},

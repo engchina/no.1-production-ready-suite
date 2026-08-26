@@ -107,6 +107,36 @@ async function hasDocumentHorizontalScroll(page: Page) {
   );
 }
 
+async function waitForAnimationFrames(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+      })
+  );
+}
+
+async function expectMainScrollPreserved(page: Page, action: () => Promise<void>) {
+  const main = page.getByRole("main", { name: "メイン領域" });
+  const before = await main.evaluate((node) => node.scrollTop);
+  await action();
+  await waitForAnimationFrames(page);
+  await expect
+    .poll(async () => {
+      const after = await main.evaluate((node) => node.scrollTop);
+      return Math.abs(after - before);
+    })
+    .toBeLessThanOrEqual(2);
+}
+
+async function expectMainScrollPreservedAfterClick(page: Page, locator: Locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await waitForAnimationFrames(page);
+  await expectMainScrollPreserved(page, async () => {
+    await locator.click();
+  });
+}
+
 function historyRows(page: Page) {
   return page.getByTestId("history-grid").getByTestId("history-row");
 }
@@ -261,11 +291,37 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
     expect(right).not.toBeNull();
     expect(right!.y).toBeGreaterThan(left!.y);
 
-    await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" }).click();
-    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("history-detail-heading");
+    const firstHistoryButton = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
+    await expectMainScrollPreservedAfterClick(page, firstHistoryButton);
+    await expect(firstHistoryButton).toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
   }
   await expect(pane).toBeVisible();
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+});
+
+test("実行履歴行クリックは主スクロールを保持して詳細だけ切り替える", async ({ page }) => {
+  await mockHistory(page);
+  await page.goto("/history");
+
+  const firstHistoryButton = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
+  const secondHistoryButton = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
+  const thirdHistoryButton = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
+
+  await expect(firstHistoryButton).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
+
+  await expectMainScrollPreservedAfterClick(page, secondHistoryButton);
+  await expect(secondHistoryButton).toHaveAttribute("aria-current", "true");
+  await expect(firstHistoryButton).not.toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
+  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
+
+  await expectMainScrollPreservedAfterClick(page, thirdHistoryButton);
+  await expect(thirdHistoryButton).toHaveAttribute("aria-current", "true");
+  await expect(secondHistoryButton).not.toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("history-detail-question")).toContainText("監査ログを削除");
+  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
 });
 
 test("実行履歴は長い質問を分割比率と画面幅に応じて安全に折り返す", async ({ page }) => {
@@ -333,8 +389,10 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
       })
     )
     .toEqual({ sameColumn: true, separated: true });
-  await selectedRow.click();
-  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("history-detail-heading");
+  await expectMainScrollPreservedAfterClick(page, selectedRow);
+  await expect(selectedRow).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("history-detail-question")).toContainText("VERY_LONG_UNBROKEN_IDENTIFIER");
+  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
   await expectDenseLayoutContained(page);
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });

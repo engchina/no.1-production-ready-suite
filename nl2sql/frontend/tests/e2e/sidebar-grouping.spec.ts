@@ -117,7 +117,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   }
   expect(adminSqlBox.y).toBeLessThan(tableManagementBox.y);
 
-  for (const label of ["フィードバック管理", "質問分類モデル管理", "品質評価"]) {
+  for (const label of ["フィードバック管理", "質問分類モデル管理", "SQL生成評価"]) {
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
   await expect(sidebar.getByRole("link", { name: "安全境界" })).toHaveCount(0);
@@ -275,7 +275,7 @@ test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リ
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "SQL から質問を生成" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "検証用サンプルデータ" })).toBeVisible();
-  await expect(sidebar.getByRole("link", { name: "品質評価" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "SQL生成評価" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "安全境界" })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "ユーザー管理" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "ロール・権限管理" })).toBeVisible();

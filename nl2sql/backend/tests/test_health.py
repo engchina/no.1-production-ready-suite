@@ -26,6 +26,7 @@ from app.features.nl2sql.models import (
     JobStatus,
     JobStepStatus,
     Nl2SqlEngine,
+    Nl2SqlOntologyGraphSnapshot,
     Nl2SqlProfile,
     PreviewRequest,
     QueryResults,
@@ -1183,7 +1184,9 @@ def test_select_ai_showprompt_uses_ontology_attributes(
         assert "context-hash-showprompt" in instructions
 
 
-def test_select_ai_job_returns_interpretation_and_showprompt_artifacts() -> None:
+def test_select_ai_job_returns_interpretation_and_showprompt_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
     profile = service.create_profile(
@@ -1192,6 +1195,24 @@ def test_select_ai_job_returns_interpretation_and_showprompt_artifacts() -> None
             name="Artifact profile",
             allowed_tables=["INVOICES"],
         )
+    )
+    ontology_graph = Nl2SqlOntologyGraphSnapshot(
+        revision_id="revision-artifact",
+        revision={"id": "revision-artifact", "version": 1, "status": "published"},
+        nodes=[
+            {
+                "id": "node-invoices",
+                "kind": "table",
+                "business_name_ja": "請求",
+                "technical_name": "INVOICES",
+            }
+        ],
+        edges=[],
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_interpretation_ontology_graph_snapshot",
+        lambda **_kwargs: (ontology_graph, []),
     )
 
     created = service.start_job(
@@ -1213,10 +1234,50 @@ def test_select_ai_job_returns_interpretation_and_showprompt_artifacts() -> None
     assert job.result.interpretation.available is True
     assert job.result.interpretation.question.rewritten_question == "請求金額を確認したい"
     assert any(table.endswith(".INVOICES") for table in job.result.interpretation.sql.tables)
+    assert job.result.interpretation.ontology_graph is not None
+    assert job.result.interpretation.ontology_graph.revision_id == "revision-artifact"
+    assert job.result.interpretation.ontology_graph.nodes[0]["id"] == "node-invoices"
     assert job.result.show_prompt is not None
     assert job.result.show_prompt.available is True
     assert "Select AI" in job.result.show_prompt.prompt
     assert adapter.actions == ["showsql", "showprompt"]
+
+
+def test_interpretation_ontology_graph_failure_keeps_job_done(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="artifact_graph_failure_profile",
+            name="Artifact graph failure profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_interpretation_ontology_graph_snapshot",
+        lambda **_kwargs: (None, ["Ontology グラフ artifact の生成に失敗しました: graph boom"]),
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            include_interpretation=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert job.result.interpretation is not None
+    assert job.result.interpretation.available is True
+    assert job.result.interpretation.ontology_graph is None
+    assert "graph boom" in " ".join(job.result.interpretation.warnings)
 
 
 def test_interpretation_failure_keeps_job_done(monkeypatch: pytest.MonkeyPatch) -> None:

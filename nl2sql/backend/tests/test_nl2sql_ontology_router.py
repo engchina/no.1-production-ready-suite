@@ -314,6 +314,53 @@ def test_initial_profile_view_persists_graph_in_collection_batches() -> None:
     )
 
 
+def test_profile_scoped_graph_snapshot_for_job_narrows_to_allowed_objects(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    legacy.profile.allowed_tables = ["APP.ORDERS", "APP.CUSTOMERS"]
+    legacy.catalog.tables.append(
+        SchemaTable(
+            table_name="CUSTOMERS",
+            logical_name="顧客",
+            owner="APP",
+            comment="顧客情報",
+            columns=[
+                SchemaColumn(
+                    column_name="ID",
+                    logical_name="顧客 ID",
+                    data_type="NUMBER",
+                    nullable=False,
+                ),
+                SchemaColumn(
+                    column_name="NAME",
+                    logical_name="顧客名",
+                    data_type="VARCHAR2",
+                ),
+            ],
+        )
+    )
+
+    snapshot = api.profile_scoped_graph_snapshot_for_job(
+        profile=legacy.profile,
+        allowed=AllowedObjects(table_names=["APP.ORDERS"], enforce_table_scope=True),
+    )
+
+    assert snapshot["revision_id"] == snapshot["revision"]["id"]
+    technical_names = {
+        node.get("technical_name")
+        for node in snapshot["nodes"]
+        if node.get("kind") in {"table", "view", "column"}
+    }
+    assert any(str(name).startswith("APP.ORDERS") for name in technical_names)
+    assert not any(str(name).startswith("APP.CUSTOMERS") for name in technical_names)
+    node_ids = {node["id"] for node in snapshot["nodes"]}
+    assert all(
+        edge["source_node_id"] in node_ids and edge["target_node_id"] in node_ids
+        for edge in snapshot["edges"]
+    )
+
+
 def test_incremental_catalog_signature_avoids_reloading_unchanged_catalog() -> None:
     service = _IncrementalCatalogLegacyService()
     api = OntologyApiRuntime(

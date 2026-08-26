@@ -12,6 +12,14 @@ async function fulfillJson(route: Route, data: unknown) {
   });
 }
 
+function createRequestGate() {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 async function expectButtonLabelFits(button: Locator) {
   const label = button.locator("span").last();
   await expect(label).toBeVisible();
@@ -1156,18 +1164,13 @@ test("Markdown Draft 保存後は stale refresh でエディタ値を戻さな�
 });
 
 test("Profile と Markdown Ontology の初期読込では loading を表示する", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-07-29T00:00:00.000Z") });
   await mockApi(page);
-  let releaseProfiles: () => void = () => undefined;
-  const profilesGate = new Promise<void>((resolve) => {
-    releaseProfiles = resolve;
-  });
-  let releaseMarkdown: () => void = () => undefined;
-  const markdownGate = new Promise<void>((resolve) => {
-    releaseMarkdown = resolve;
-  });
+  const profilesGate = createRequestGate();
+  const markdownGate = createRequestGate();
   await page.unroute("**/api/nl2sql/profiles/search?*");
   await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
-    await profilesGate;
+    await profilesGate.promise;
     await fulfillJson(route, {
       items: profiles.map((profile) => ({
         id: profile.id,
@@ -1190,7 +1193,7 @@ test("Profile と Markdown Ontology の初期読込では loading を表示す�
   });
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
-    await markdownGate;
+    await markdownGate.promise;
     await fulfillJson(route, {
       draft_markdown: "",
       published_markdown: "",
@@ -1203,11 +1206,58 @@ test("Profile と Markdown Ontology の初期読込では loading を表示す�
 
   await page.goto("/ontology-build?profile=default");
   await expect(page.getByTestId("ontology-profile-compact-skeleton")).toBeVisible();
-  releaseProfiles();
+  profilesGate.release();
   await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
-  await expect(page.getByTestId("ontology-markdown-loading")).toBeVisible();
-  releaseMarkdown();
+  const skeleton = page.getByTestId("ontology-markdown-loading");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
+  await expect(skeleton.locator("svg.lucide-loader-circle")).toBeVisible();
+  await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveCount(0);
+  await expect(page.getByTestId("ontology-publish-actions")).toHaveCount(0);
+
+  await page.clock.fastForward(11_000);
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:11");
+  await expect(skeleton).toContainText("通常より時間がかかっています");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
+        document.body.scrollWidth > document.body.clientWidth + 1,
+    ),
+  ).toBe(false);
+
+  markdownGate.release();
   await expect(page.getByPlaceholder("AI 構築を実行すると Markdown Draft が生成されます。")).toBeVisible();
+});
+
+test("Markdown Ontology の初期読込はキャンセルでき、取消後の応答で上書きしない", async ({ page }) => {
+  await mockApi(page);
+  const markdownGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
+    await markdownGate.promise;
+    try {
+      await fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown));
+    } catch {
+      // ユーザー取消で破棄された request は fulfill できなくても正常。
+    }
+  });
+
+  await page.goto("/ontology-build?profile=default");
+  const skeleton = page.getByTestId("ontology-markdown-loading");
+  await expect(skeleton).toBeVisible();
+  await skeleton.getByRole("button", { name: "キャンセル" }).click();
+
+  await expect(skeleton).toHaveCount(0);
+  await expect(page.getByText("Markdown Ontology を読み込めませんでした。")).toHaveCount(0);
+  await expect(page.getByPlaceholder("AI 構築を実行すると Markdown Draft が生成されます。")).toBeVisible();
+  markdownGate.release();
+  await page.waitForTimeout(50);
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).not.toHaveValue(/# Ontology Draft/);
 });
 
 test("Profile の読込失敗から再試行できる", async ({ page }) => {

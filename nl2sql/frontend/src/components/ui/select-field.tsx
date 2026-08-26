@@ -96,7 +96,7 @@ export function SelectField<T extends string>({
   function selectOption(option: SelectFieldOption<T>) {
     onValueChange(option.value);
     closeList();
-    window.requestAnimationFrame(() => buttonRef.current?.focus());
+    window.requestAnimationFrame(() => buttonRef.current?.focus({ preventScroll: true }));
   }
 
   function moveHighlight(delta: number) {

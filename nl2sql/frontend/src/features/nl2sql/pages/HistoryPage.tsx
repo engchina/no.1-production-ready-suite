@@ -58,7 +58,7 @@ function columnsLabel(item: HistoryItem) {
 }
 
 function focusHistoryTab(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus());
+  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
 }
 
 function HistorySkeletonBlock({ className = "" }: { className?: string }) {
@@ -162,7 +162,7 @@ function HistoryGrid({
   onFeedbackFilterChange: (value: HistoryFeedbackFilter) => void;
   onSafetyFilterChange: (value: HistorySafetyFilter) => void;
   onSortChange: (key: HistorySortKey) => void;
-  onSelect: (item: HistoryItem, moveFocus: boolean) => void;
+  onSelect: (item: HistoryItem) => void;
   onClearFilters: () => void;
 }) {
   const { page, setPage, totalPages, pageItems, range } = usePagination(items, DEFAULT_PAGE_SIZE);
@@ -257,7 +257,7 @@ function HistoryGrid({
                             ? "border-l-primary bg-primary/10"
                             : "border-l-transparent hover:bg-background"
                         }`}
-                        onClick={() => onSelect(item, true)}
+                        onClick={() => onSelect(item)}
                       >
                         <QuestionText
                           value={item.question}
@@ -581,13 +581,8 @@ export function HistoryPage() {
     setSafetyFilter("all");
   };
 
-  const selectItem = (item: HistoryItem, moveFocus: boolean) => {
+  const selectItem = (item: HistoryItem) => {
     setSelectedId(item.id);
-    if (!moveFocus || !window.matchMedia("(max-width: 1279px)").matches) return;
-    window.requestAnimationFrame(() => {
-      detailHeadingRef.current?.focus();
-      detailHeadingRef.current?.scrollIntoView({ block: "start" });
-    });
   };
 
   return (

@@ -46,13 +46,13 @@ function useActionMenu() {
       const firstEnabled = menuRef.current?.querySelector<HTMLButtonElement>(
         '[role="menuitem"]:not(:disabled)'
       );
-      firstEnabled?.focus();
+      firstEnabled?.focus({ preventScroll: true });
     });
   }, [open]);
 
   const close = (restoreFocus = false) => {
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -76,7 +76,7 @@ function useActionMenu() {
     if (nextIndex === null) return;
 
     event.preventDefault();
-    items[nextIndex]?.focus();
+    items[nextIndex]?.focus({ preventScroll: true });
   };
 
   return { open, setOpen, close, containerRef, triggerRef, menuRef, handleMenuKeyDown };

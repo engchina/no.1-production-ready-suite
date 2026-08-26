@@ -73,7 +73,9 @@ test("compact 操作メニューは lg 未満で 44px とキーボード・ARIA 
   for (const key of ["Escape", "ArrowDown", "ArrowUp", "Home", "End"]) {
     assert.match(source, new RegExp(`event\\.key === "${key}"`, "u"));
   }
-  assert.match(source, /triggerRef\.current\?\.focus/u);
+  assert.match(source, /firstEnabled\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
 });
 
 test("compact 操作メニューは shared floating menu で viewport 内に配置する", () => {

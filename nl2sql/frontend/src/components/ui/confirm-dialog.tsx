@@ -110,10 +110,10 @@ function ConfirmDialog({
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement;
-    confirmRef.current?.focus();
+    confirmRef.current?.focus({ preventScroll: true });
     return () => {
       if (previouslyFocused.current instanceof HTMLElement) {
-        previouslyFocused.current.focus();
+        previouslyFocused.current.focus({ preventScroll: true });
       }
     };
   }, []);
@@ -134,10 +134,10 @@ function ConfirmDialog({
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     }
     document.addEventListener("keydown", onKeyDown);

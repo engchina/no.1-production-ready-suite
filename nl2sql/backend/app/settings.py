@@ -158,7 +158,7 @@ class Settings(BaseServiceSettings):
         ge=0,
         le=120,
     )
-    # 品質評価は local で inprocess、Oracle 運用で external worker を使う。
+    # SQL生成評価は local で inprocess、Oracle 運用で external worker を使う。
     nl2sql_quality_evaluation_worker_mode: str = "inprocess"
     nl2sql_quality_evaluation_worker_poll_seconds: float = 1.0
     nl2sql_quality_evaluation_lease_seconds: float = 900.0

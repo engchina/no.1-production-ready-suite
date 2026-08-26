@@ -2288,6 +2288,35 @@ class OntologyApiRuntime:
                 runtime_context=runtime_context,
             )
 
+    def profile_scoped_graph_snapshot_for_job(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+    ) -> dict[str, Any]:
+        """通常 NL2SQL job 結果に同梱する profile/request scope の graph snapshot。"""
+
+        with self._lock, observe_stage("job_profile_ontology_graph_snapshot"):
+            ontology = self._query_ontology()
+            base_view = self._base_profile_view(profile, ontology)
+            view = self._narrow_profile_view(base_view, ontology, allowed)
+            node_ids = set(view.node_ids)
+            edge_ids = set(view.edge_ids)
+            return {
+                "revision_id": ontology.revision.id,
+                "revision": ontology.revision.model_dump(mode="json"),
+                "nodes": [
+                    node.model_dump(mode="json")
+                    for node in ontology.nodes
+                    if node.id in node_ids
+                ],
+                "edges": [
+                    edge.model_dump(mode="json")
+                    for edge in ontology.edges
+                    if edge.id in edge_ids
+                ],
+            }
+
     def confirm_sql_idempotent(
         self,
         session_id: str,

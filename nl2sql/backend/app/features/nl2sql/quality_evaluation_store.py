@@ -1,4 +1,4 @@
-"""品質評価 job/result の memory / Oracle repository。"""
+"""SQL生成評価 job/result の memory / Oracle repository。"""
 
 from __future__ import annotations
 

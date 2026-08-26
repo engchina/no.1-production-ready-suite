@@ -658,7 +658,7 @@ def test_ora_00054_is_retryable_conflict_with_recovery_message() -> None:
     assert error.value.code == "ORA-00054"
     assert error.value.status_code == 409
     assert "1 秒以内" in error.value.public_message
-    assert "品質評価 job" in error.value.public_message
+    assert "SQL生成評価 job" in error.value.public_message
     assert manager.failures == ["ORA-00054"]
 
     result = manager.initialize()

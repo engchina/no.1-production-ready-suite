@@ -913,12 +913,22 @@ class Nl2SqlSqlInterpretation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class Nl2SqlOntologyGraphSnapshot(BaseModel):
+    """SQL 生成結果に同梱する profile-scoped Ontology graph snapshot。"""
+
+    revision_id: str = ""
+    revision: dict[str, Any] | None = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class Nl2SqlInterpretationArtifact(BaseModel):
     """質問解釈と SQL 意味グラフの表示用 artifact。"""
 
     available: bool = False
     question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
     sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
+    ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

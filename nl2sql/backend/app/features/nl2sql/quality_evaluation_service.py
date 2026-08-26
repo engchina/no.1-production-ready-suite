@@ -1,4 +1,4 @@
-"""NL2SQL 品質評価の Excel 検証、非同期実行、集計、出力。"""
+"""NL2SQL SQL生成評価の Excel 検証、非同期実行、集計、出力。"""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class QualityEvaluationValidationError(ValueError):
 
 
 class QualityEvaluationJobStateError(ValueError):
-    """品質評価 job の状態が要求された操作に合わない場合のエラー。"""
+    """SQL生成評価 job の状態が要求された操作に合わない場合のエラー。"""
 
 
 EngineRunner = Callable[[str, Nl2SqlEngine, str], GeneratedSql | str]
@@ -196,7 +196,7 @@ class QualityEvaluationService:
             ]
         )
         readme = workbook.create_sheet("記入方法", 0)
-        readme.append(["NL2SQL 品質評価テンプレート"])
+        readme.append(["NL2SQL SQL生成評価テンプレート"])
         readme.append(["必須列", "質問、期待SQL"])
         readme.append(["任意列", "ケースID（空欄時は自動付与）"])
         readme.append(["注意", "期待SQLは SELECT/WITH のみ。数式セルは使用できません。"])
@@ -410,7 +410,7 @@ class QualityEvaluationService:
     def get_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         self._wake_quality_evaluation_job_if_needed(job)
         return job_summary(job)
 
@@ -431,7 +431,7 @@ class QualityEvaluationService:
         self, *, job_id: str, cursor: str | None, limit: int
     ) -> QualityEvaluationResultPage:
         if self._repository.get_job(job_id) is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         offset = _decode_offset(cursor)
         page_size = min(max(limit, 1), 100)
         results, total = self._repository.list_results(
@@ -447,31 +447,31 @@ class QualityEvaluationService:
     def delete_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         if job.status not in _TERMINAL_STATUSES:
             raise QualityEvaluationJobStateError(
-                "実行中または待機中の品質評価 job は削除できません。完了後に削除してください。"
+                "実行中または待機中の SQL生成評価 job は削除できません。完了後に削除してください。"
             )
         deleted = self._repository.delete_job(job_id)
         if deleted is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         return job_summary(deleted)
 
     def cancel_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         if job.status == QualityEvaluationStatus.CANCELLED:
             return job_summary(job)
         if job.status in _TERMINAL_STATUSES:
             raise QualityEvaluationJobStateError(
-                "この品質評価 job は既に完了しているため中止できません。"
+                "このSQL生成評価 job は既に完了しているため中止できません。"
             )
         now = _utc_now()
         cancelled = job.model_copy(
             update={
                 "status": QualityEvaluationStatus.CANCELLED,
-                "error_message": "利用者の操作で品質評価 job を中止しました。",
+                "error_message": "利用者の操作で SQL生成評価 job を中止しました。",
                 "current_case_id": "",
                 "current_engine": None,
                 "current_repetition": 0,
@@ -951,7 +951,7 @@ class QualityEvaluationService:
             catalog=catalog,
         )
         system_prompt = (
-            "あなたは Oracle SQL の品質評価者です。SQL を実行せず、質問に対する期待 SQL "
+            "あなたは Oracle SQL の生成結果評価者です。SQL を実行せず、質問に対する期待 SQL "
             "と生成 SQL の意味が等価かを判定してください。表現の違いではなく、結合、条件、集計、"
             "NULL、重複、順序、行数制限の意味を比較します。必ず JSON object だけを返し、"
             "verdict は correct / incorrect / uncertain のいずれか、confidence は 0〜1、"
@@ -1019,7 +1019,7 @@ class QualityEvaluationService:
     def results_workbook(self, job_id: str) -> tuple[str, bytes]:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定された品質評価 job が見つかりません。")
+            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
         if job.status not in _TERMINAL_STATUSES:
             raise ValueError("評価が完了していないため Excel をダウンロードできません。")
         results = self._repository.all_results(job_id)

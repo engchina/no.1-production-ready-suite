@@ -1509,7 +1509,7 @@ async def create_quality_evaluation(
     repeat_count: Annotated[int, Form()],
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[QualityEvaluationJobSummary]:
-    """Excel 入力を検証し、永続品質評価 job を投入する。"""
+    """Excel 入力を検証し、永続 SQL生成評価 job を投入する。"""
     _assert_profile_access(request, profile_id)
     maximum = get_settings().nl2sql_quality_evaluation_max_file_bytes
     content = await file.read(maximum + 1)
@@ -1540,7 +1540,7 @@ async def create_quality_evaluation(
 def list_quality_evaluations(
     cursor: str | None = None, limit: int = 20
 ) -> ApiResponse[QualityEvaluationJobPage]:
-    """最近の品質評価 job をページ取得する。"""
+    """最近の SQL生成評価 job をページ取得する。"""
     try:
         return ApiResponse(data=quality_evaluation_service.list_jobs(cursor=cursor, limit=limit))
     except ValueError as exc:
@@ -1554,7 +1554,7 @@ def list_quality_evaluations(
 def quality_evaluation_results(
     job_id: str, cursor: str | None = None, limit: int = 25
 ) -> ApiResponse[QualityEvaluationResultPage]:
-    """品質評価結果の明細をページ取得する。"""
+    """SQL生成評価結果の明細をページ取得する。"""
     try:
         return ApiResponse(
             data=quality_evaluation_service.list_results(job_id=job_id, cursor=cursor, limit=limit)
@@ -1565,7 +1565,7 @@ def quality_evaluation_results(
 
 @router.get("/quality-evaluations/{job_id}/results.xlsx")
 def quality_evaluation_results_xlsx(job_id: str) -> Response:
-    """完了した品質評価の全結果を Excel で返す。"""
+    """完了した SQL生成評価の全結果を Excel で返す。"""
     try:
         filename, content = quality_evaluation_service.results_workbook(job_id)
     except ValueError as exc:
@@ -1582,7 +1582,7 @@ def quality_evaluation_results_xlsx(job_id: str) -> Response:
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
 def cancel_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
-    """待機中または実行中の品質評価 job を中止する。"""
+    """待機中または実行中の SQL生成評価 job を中止する。"""
     try:
         return ApiResponse(data=quality_evaluation_service.cancel_job(job_id))
     except QualityEvaluationJobStateError as exc:
@@ -1596,7 +1596,7 @@ def cancel_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSu
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
 def delete_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
-    """完了済みの品質評価 job と結果明細を削除する。"""
+    """完了済みの SQL生成評価 job と結果明細を削除する。"""
     try:
         return ApiResponse(data=quality_evaluation_service.delete_job(job_id))
     except QualityEvaluationJobStateError as exc:
@@ -1610,7 +1610,7 @@ def delete_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSu
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
 def get_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
-    """品質評価 job の進捗と集計を返す。"""
+    """SQL生成評価 job の進捗と集計を返す。"""
     try:
         return ApiResponse(data=quality_evaluation_service.get_job(job_id))
     except ValueError as exc:

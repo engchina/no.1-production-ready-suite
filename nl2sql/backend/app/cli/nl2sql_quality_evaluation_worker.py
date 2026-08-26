@@ -1,4 +1,4 @@
-"""Oracle 永続 queue から NL2SQL 品質評価 job を実行する worker。"""
+"""Oracle 永続 queue から NL2SQL SQL生成評価 job を実行する worker。"""
 
 from __future__ import annotations
 

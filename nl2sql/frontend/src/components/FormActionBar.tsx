@@ -185,13 +185,13 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
       const firstEnabled = menuRef.current?.querySelector<HTMLElement>(
         '[role="menuitem"]:not(:disabled):not([aria-disabled="true"])'
       );
-      firstEnabled?.focus();
+      firstEnabled?.focus({ preventScroll: true });
     });
   }, [open]);
 
   const closeMenu = (restoreFocus = false) => {
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -217,7 +217,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
     if (nextIndex === null) return;
 
     event.preventDefault();
-    items[nextIndex]?.focus();
+    items[nextIndex]?.focus({ preventScroll: true });
   };
 
   if (actions.length === 0) return null;

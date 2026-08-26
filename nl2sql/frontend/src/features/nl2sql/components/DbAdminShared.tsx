@@ -154,7 +154,7 @@ export function WorkSection({
 }
 
 export function focusManagementTabElement(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus());
+  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
 }
 
 export function ManagementPanelShell({

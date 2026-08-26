@@ -166,6 +166,7 @@ from .models import (
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
     Nl2SqlInterpretationArtifact,
+    Nl2SqlOntologyGraphSnapshot,
     Nl2SqlProfile,
     Nl2SqlQuestionInterpretation,
     Nl2SqlResult,
@@ -13488,6 +13489,8 @@ class Nl2SqlService:
         analysis: AnalyzeData,
         safety: SafetyReport,
         row_limit: int | None,
+        ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None,
+        ontology_graph_warnings: list[str] | None = None,
     ) -> Nl2SqlInterpretationArtifact:
         try:
             sql_for_analysis = executable_sql or generated_sql
@@ -13499,6 +13502,7 @@ class Nl2SqlService:
                 *analysis.llm_warnings,
                 *analysis.safety.warnings,
                 *graph_warnings,
+                *(ontology_graph_warnings or []),
             ]
             question_filters = _structured_question_filter_values(request.question)
             sql_summary = analysis.structure_summary or analysis.explanation
@@ -13539,6 +13543,7 @@ class Nl2SqlService:
                 available=question_interpretation.available or sql_interpretation.available,
                 question=question_interpretation,
                 sql=sql_interpretation,
+                ontology_graph=ontology_graph,
                 warnings=warnings,
             )
         except Exception as exc:  # pragma: no cover - artifact must never fail the job
@@ -13547,6 +13552,29 @@ class Nl2SqlService:
                 available=False,
                 warnings=[f"解釈 artifact の生成に失敗しました: {exc}"],
             )
+
+    def _build_interpretation_ontology_graph_snapshot(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+    ) -> tuple[Nl2SqlOntologyGraphSnapshot | None, list[str]]:
+        try:
+            # ontology_router imports nl2sql_service at module load time, so keep this lazy.
+            from app.features.nl2sql.ontology_router import ontology_runtime
+
+            snapshot = ontology_runtime.profile_scoped_graph_snapshot_for_job(
+                profile=profile,
+                allowed=allowed,
+            )
+            return Nl2SqlOntologyGraphSnapshot.model_validate(snapshot), []
+        except Exception as exc:  # pragma: no cover - artifact must never fail the job
+            logger.info(
+                "nl2sql_interpretation_ontology_graph_unavailable",
+                exc_info=True,
+                extra={"profile_id": profile.id},
+            )
+            return None, [f"Ontology グラフ artifact の生成に失敗しました: {exc}"]
 
     def _build_show_prompt_artifact(
         self,
@@ -13743,6 +13771,12 @@ class Nl2SqlService:
         interpretation: Nl2SqlInterpretationArtifact | None = None
         if request.include_interpretation:
             try:
+                ontology_graph, ontology_graph_warnings = (
+                    self._build_interpretation_ontology_graph_snapshot(
+                        profile=profile,
+                        allowed=allowed,
+                    )
+                )
                 interpretation = self._build_interpretation_artifact(
                     request=request,
                     profile=profile,
@@ -13752,6 +13786,8 @@ class Nl2SqlService:
                     analysis=analysis,
                     safety=safety,
                     row_limit=row_limit,
+                    ontology_graph=ontology_graph,
+                    ontology_graph_warnings=ontology_graph_warnings,
                 )
             except Exception as exc:  # pragma: no cover - defensive artifact boundary
                 logger.warning("nl2sql_interpretation_artifact_boundary_failed", exc_info=True)
@@ -14127,7 +14163,7 @@ class Nl2SqlService:
     def quality_evaluation_engine_readiness(
         self, profile_id: str | None = None
     ) -> dict[Nl2SqlEngine, tuple[bool, str]]:
-        """品質評価で strict 実行を試行できる engine を公開する。"""
+        """SQL生成評価で strict 実行を試行できる engine を公開する。"""
 
         settings = get_settings()
         profile, profile_error = self._quality_evaluation_profile(profile_id)
@@ -14198,7 +14234,7 @@ class Nl2SqlService:
         """fallback を一切許さず、選択された engine だけで SQL を生成する。"""
 
         if engine == Nl2SqlEngine.AUTO:
-            raise ValueError("品質評価で auto engine は使用できません。")
+            raise ValueError("SQL生成評価で auto engine は使用できません。")
         ready, reason = self.quality_evaluation_engine_readiness(profile_id=profile_id).get(
             engine, (False, "未対応の engine です。")
         )

@@ -1,4 +1,4 @@
-"""NL2SQL 品質評価の公開契約と永続レコード。"""
+"""NL2SQL SQL生成評価の公開契約と永続レコード。"""
 
 from __future__ import annotations
 

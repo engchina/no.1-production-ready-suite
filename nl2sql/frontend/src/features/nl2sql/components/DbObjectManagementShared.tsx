@@ -127,7 +127,7 @@ export interface DbObjectStatusMetric {
 }
 
 export function focusDbObjectTabElement(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus());
+  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
 }
 
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
@@ -210,6 +210,7 @@ export function DbManagementLoadingSkeleton({
   operationKey,
   onCancel,
   placement = "panel",
+  testId,
 }: {
   idPrefix: string;
   ariaLabel: string;
@@ -218,6 +219,7 @@ export function DbManagementLoadingSkeleton({
   operationKey?: string | number | null;
   onCancel?: () => void;
   placement?: ProcessingPlacement;
+  testId?: string;
 }) {
   if (variant === "list") {
     return (
@@ -226,7 +228,7 @@ export function DbManagementLoadingSkeleton({
         operationKey={operationKey}
         onCancel={onCancel}
         placement={placement}
-        testId={`${idPrefix}-list-skeleton`}
+        testId={testId ?? `${idPrefix}-list-skeleton`}
       >
         <div className="grid gap-2">
           <SkeletonBlock className="h-11" />
@@ -245,7 +247,7 @@ export function DbManagementLoadingSkeleton({
         operationKey={operationKey}
         onCancel={onCancel}
         placement={placement}
-        testId={`${idPrefix}-compact-skeleton`}
+        testId={testId ?? `${idPrefix}-compact-skeleton`}
       >
         <SkeletonBlock className="h-10" />
         <SkeletonBlock className="h-24" />
@@ -259,7 +261,7 @@ export function DbManagementLoadingSkeleton({
       operationKey={operationKey}
       onCancel={onCancel}
       placement={placement}
-      testId={`${idPrefix}-detail-skeleton`}
+      testId={testId ?? `${idPrefix}-detail-skeleton`}
     >
       <SkeletonBlock className="h-[64px]" />
       <SkeletonBlock className="h-[40px]" />

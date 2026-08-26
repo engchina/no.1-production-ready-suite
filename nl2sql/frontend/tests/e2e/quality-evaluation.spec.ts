@@ -130,7 +130,7 @@ function job(
     job_id: overrides.job_id ?? "job-001",
     profile_id: "default",
     profile_name: overrides.profile_name ?? "標準プロファイル",
-    profile_category: overrides.profile_category ?? "品質評価",
+    profile_category: overrides.profile_category ?? "SQL生成評価",
     engines: ["select_ai", "enterprise_ai_direct"],
     repeat_count: 2,
     case_count: 1,
@@ -150,7 +150,7 @@ function job(
       status === "failed"
         ? "worker の初期化に失敗しました。"
         : status === "cancelled"
-          ? "利用者の操作で品質評価 job を中止しました。"
+          ? "利用者の操作で SQL生成評価 job を中止しました。"
           : "",
     heartbeat_at:
       overrides.heartbeat_at ?? (status === "running" ? "2026-07-22T08:00:02Z" : null),
@@ -281,7 +281,7 @@ async function mockQualityApi(
         {
           id: "default",
           name: "標準プロファイル",
-          category: "品質評価",
+          category: "SQL生成評価",
           description: "",
           allowed_tables: [],
           allowed_views: [],
@@ -356,7 +356,7 @@ async function mockQualityApi(
         return route.fulfill({
           status: 404,
           contentType: "application/json",
-          body: JSON.stringify({ detail: "指定された品質評価 job が見つかりません。" }),
+          body: JSON.stringify({ detail: "指定されたSQL生成評価 job が見つかりません。" }),
         });
       }
       deletedJobIds.push(jobId);
@@ -382,7 +382,7 @@ async function mockQualityApi(
         lease_expires_at: null,
         finished_at: "2026-07-22T08:06:01Z",
         updated_at: "2026-07-22T08:06:01Z",
-        error_message: "利用者の操作で品質評価 job を中止しました。",
+        error_message: "利用者の操作で SQL生成評価 job を中止しました。",
       };
       if (!cancelledJobIds.includes(jobId)) cancelledJobIds.push(jobId);
       cancelledJobs.set(jobId, cancelled);
@@ -513,10 +513,10 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   const profileSelect = page.locator("#quality-evaluation-profile");
   await expect(profileSelect).toHaveValue("default");
   await expect(
-    profileSelect.locator("option", { hasText: "標準プロファイル（品質評価）" })
+    profileSelect.locator("option", { hasText: "標準プロファイル（SQL生成評価）" })
   ).toHaveCount(1);
   await expect(
-    page.getByText("標準プロファイル（品質評価）").filter({ visible: true }).first()
+    page.getByText("標準プロファイル（SQL生成評価）").filter({ visible: true }).first()
   ).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   const checkboxes = page.getByRole("checkbox");
@@ -648,7 +648,7 @@ test("desktop constrains result details and recent jobs to internal scroll regio
   await expect(recentRegion).toHaveAttribute("role", "region");
   await expect(recentRegion).toHaveAttribute(
     "aria-label",
-    "最近の評価 job 一覧。必要に応じて縦方向にスクロールできます。"
+    "最近の SQL生成評価 job 一覧。必要に応じて縦方向にスクロールできます。"
   );
   await expect(recentRegion.locator("article")).toHaveCount(5);
   const recentMetrics = await recentRegion.evaluate((node) => {
@@ -714,14 +714,14 @@ test("desktop shows stale attempt diagnostics and cancels a running job", async 
     .getByRole("button", { name: "中止" })
     .first()
     .click();
-  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を中止しますか" });
+  const dialog = page.getByRole("alertdialog", { name: "SQL生成評価 job を中止しますか" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "job を中止" }).click();
 
   await expect.poll(() => state.cancelledJobIds()).toEqual(["job-001"]);
-  await expect(page.getByText("品質評価 job を中止しました。", { exact: true })).toBeVisible();
+  await expect(page.getByText("SQL生成評価 job を中止しました。", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("利用者の操作で品質評価 job を中止しました。", { exact: true }).first()
+    page.getByText("利用者の操作で SQL生成評価 job を中止しました。", { exact: true }).first()
   ).toBeVisible();
   await expect(page.getByText("中止").first()).toBeVisible();
 });
@@ -762,7 +762,7 @@ test("desktop shows delete beside view and cancels without calling the API", asy
   await expect(runningRow.getByRole("button", { name: /実行中対象.*中止/ })).toBeVisible();
 
   await deleteButton.click();
-  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を削除しますか" });
+  const dialog = page.getByRole("alertdialog", { name: "SQL生成評価 job を削除しますか" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("削除対象");
   await dialog.getByRole("button", { name: "キャンセル" }).click();
@@ -791,14 +791,14 @@ test("desktop confirms delete, removes the current job URL and clears the page s
   const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
   const currentRow = recentRegion.locator("article").filter({ hasText: "現在 job" });
   await currentRow.getByRole("button", { name: /現在 job.*削除/ }).click();
-  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を削除しますか" });
+  const dialog = page.getByRole("alertdialog", { name: "SQL生成評価 job を削除しますか" });
   await dialog.getByRole("button", { name: "削除" }).click();
 
   await expect.poll(() => state.deletedJobIds()).toEqual(["job-001"]);
-  await expect(page.getByText("品質評価 job を削除しました。")).toBeVisible();
+  await expect(page.getByText("SQL生成評価 job を削除しました。")).toBeVisible();
   await expect(page).not.toHaveURL(/\?job=/);
   await expect(currentRow).toHaveCount(0);
-  await expect(page.getByText("評価 job はまだありません")).toBeVisible();
+  await expect(page.getByText("SQL生成評価 job はまだありません")).toBeVisible();
   await expect(page.getByText("結果明細はまだありません")).toBeVisible();
 });
 

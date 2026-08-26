@@ -64,7 +64,8 @@ test("execution options panel keeps Query Rewrite checkboxes and Select AI showp
 test("generated SQL summary renders ontology grounding and show prompt artifact panels", () => {
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-interpretation-panel"/);
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-sql-grounding-panel"/);
-  assert.match(generatedSqlPanelSource, /useProfileOntologyView/);
+  assert.doesNotMatch(generatedSqlPanelSource, /useProfileOntologyView/);
+  assert.match(generatedSqlPanelSource, /artifact\.ontology_graph/);
   assert.doesNotMatch(generatedSqlPanelSource, /nl2sql\.interpretation\.inputTitle/);
   assert.doesNotMatch(generatedSqlPanelSource, /nl2sql\.interpretation\.sqlTitle/);
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-show-prompt-panel"/);

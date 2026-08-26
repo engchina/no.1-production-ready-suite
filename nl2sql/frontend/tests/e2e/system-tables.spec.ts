@@ -532,7 +532,7 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   const longFailureDetail =
     `Oracle の対象オブジェクトのロックが 30 秒以内に解放されませんでした (ORA-00054)。` +
     `${"状態競合の原因を確認するための長い識別情報".repeat(24)}` +
-    "実行中の schema refresh、Ontology、品質評価 job を完了または停止してから、状態を再取得して再試行してください。";
+    "実行中の schema refresh、Ontology、SQL生成評価 job を完了または停止してから、状態を再取得して再試行してください。";
   await page.route("**/api/settings/database/system-tables**", (route) =>
     loadFails
       ? fulfill(route, null, 503, ["Oracle に接続できませんでした (ORA-12514)。"])
@@ -586,7 +586,7 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   await expect(operationAlert).toHaveCount(1);
   await expect(operationAlert).toContainText("ORA-00054");
   await expect(operationAlert).toContainText("30 秒以内に解放されませんでした");
-  await expect(operationAlert).toContainText("schema refresh、Ontology、品質評価 job");
+  await expect(operationAlert).toContainText("schema refresh、Ontology、SQL生成評価 job");
   await expect(operationAlert).toContainText("状態を再取得して再試行");
   await expect(operationAlert).not.toContainText("前回の操作が完了していません");
   await expect(operationAlert.locator("[data-message-sentence]")).not.toHaveCount(0);

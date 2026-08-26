@@ -252,7 +252,7 @@ class SystemSchemaActiveJobsError(SystemSchemaError):
     def __init__(self) -> None:
         super().__init__(
             "SCHEMA_JOBS_RUNNING",
-            "実行中の schema refresh、Ontology、または品質評価 job があります。"
+            "実行中の schema refresh、Ontology、または SQL生成評価 job があります。"
             "完了または停止してから再実行してください。",
             status_code=409,
         )
@@ -542,7 +542,7 @@ class SystemSchemaManager:
                     code,
                     "Oracle の対象オブジェクトのロックが "
                     f"{self._ddl_lock_timeout_seconds} 秒以内に解放されませんでした "
-                    "(ORA-00054)。実行中の schema refresh、Ontology、品質評価 job "
+                    "(ORA-00054)。実行中の schema refresh、Ontology、SQL生成評価 job "
                     "を完了または停止してから、状態を再取得して再試行してください。",
                     status_code=409,
                 ) from exc

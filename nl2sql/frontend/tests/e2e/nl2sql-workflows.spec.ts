@@ -4771,6 +4771,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
             semantic_graph: sqlGraph,
             warnings: [],
           },
+          ontology_graph: ontologyGraph,
           warnings: [],
         },
         show_prompt: null,

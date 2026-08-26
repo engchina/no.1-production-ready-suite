@@ -677,6 +677,7 @@ async function mockApi(page: Page) {
               semantic_graph: artifact.semantic_graph,
               warnings: [],
             },
+            ontology_graph: sessionData("awaiting_intent_confirmation").ontology_graph,
             warnings: [],
           },
           show_prompt: null,

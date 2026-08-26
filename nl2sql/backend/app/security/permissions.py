@@ -193,7 +193,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(
         "menu.evaluation",
         "改善・運用",
-        "品質評価",
+        "SQL生成評価",
         implies=(PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION),
     ),
     _menu_permission("menu.security_users", "セキュリティ管理", "ユーザー管理"),

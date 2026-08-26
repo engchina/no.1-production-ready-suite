@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../src/features/nl2sql/components/DbAdminShared.tsx", import.meta.url),
   "utf8"
 );
+const dbObjectSource = readFileSync(
+  new URL("../src/features/nl2sql/components/DbObjectManagementShared.tsx", import.meta.url),
+  "utf8"
+);
 
 function sliceBetween(text: string, startMarker: string, endMarker: string): string {
   const start = text.indexOf(startMarker);
@@ -44,4 +48,11 @@ test("DbAdminShared の details summary は普通の focus ring を使わない"
     assert.doesNotMatch(summaryTag, /focus:ring-/u);
     assert.doesNotMatch(summaryTag, /focus:ring-2/u);
   }
+});
+
+test("管理画面の共有 tab focus helper は主スクロールを動かさない", () => {
+  assert.match(source, /export function focusManagementTabElement/u);
+  assert.match(source, /document\.getElementById\(id\)\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(dbObjectSource, /export function focusDbObjectTabElement/u);
+  assert.match(dbObjectSource, /document\.getElementById\(id\)\?\.focus\(\{ preventScroll: true \}\)/u);
 });

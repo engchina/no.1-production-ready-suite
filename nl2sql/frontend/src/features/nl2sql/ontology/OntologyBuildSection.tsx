@@ -37,7 +37,10 @@ import {
   type TabularFileFormatConfig,
 } from "@/lib/tabular-file-formats";
 import { ManagementTabs } from "../components/DbAdminShared";
-import { DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import {
+  DbManagementLoadingSkeleton,
+  DbObjectPanelHeader,
+} from "../components/DbObjectManagementShared";
 import {
   WorkflowProgressStrip,
   type WorkflowProgressStepStatus,
@@ -384,6 +387,7 @@ export function OntologyBuildSection({
   const draftRevisionRef = useRef<OntologyRevision | null>(null);
   const localSavedDraftRef = useRef<LocalSavedDraft | null>(null);
   const markdownRequestIdRef = useRef(0);
+  const markdownLoadControllerRef = useRef<AbortController | null>(null);
   const buildMarkdownRefreshSignatureRef = useRef("");
   const pollInFlightRef = useRef(false);
   const pollFailureCountRef = useRef(0);
@@ -541,15 +545,19 @@ export function OntologyBuildSection({
 
   const refreshMarkdown = useCallback(async (
     targetProfileId: string,
-    signal?: AbortSignal,
     options: ApplyMarkdownStateOptions = {}
   ) => {
     const requestId = markdownRequestIdRef.current + 1;
     markdownRequestIdRef.current = requestId;
+    markdownLoadControllerRef.current?.abort();
+    const controller = new AbortController();
+    markdownLoadControllerRef.current = controller;
     setMarkdownLoading(true);
     setMarkdownError("");
     try {
-      const next = await getOntologyMarkdownState(targetProfileId, { signal });
+      const next = await getOntologyMarkdownState(targetProfileId, {
+        signal: controller.signal,
+      });
       if (
         profileIdRef.current === targetProfileId &&
         markdownRequestIdRef.current === requestId
@@ -571,8 +579,20 @@ export function OntologyBuildSection({
       ) {
         setMarkdownLoading(false);
       }
+      if (markdownLoadControllerRef.current === controller) {
+        markdownLoadControllerRef.current = null;
+      }
     }
   }, [applyMarkdownState]);
+
+  const cancelMarkdownLoad = useCallback(() => {
+    const controller = markdownLoadControllerRef.current;
+    if (!controller) return;
+    markdownLoadControllerRef.current = null;
+    markdownRequestIdRef.current += 1;
+    controller.abort();
+    setMarkdownLoading(false);
+  }, []);
 
   const applyBuildJobMarkdownOutput = useCallback((next: OntologyBuildJob) => {
     const markdownOutput = next.markdown_output ?? "";
@@ -627,13 +647,13 @@ export function OntologyBuildSection({
     setQaFile(null);
     setSourceFiles([]);
     setSourceFilesError("");
-    const controller = new AbortController();
+    const jobsController = new AbortController();
     if (profileId) {
-      void refreshMarkdown(profileId, controller.signal, { reason: "profile-load" });
+      void refreshMarkdown(profileId, { reason: "profile-load" });
       // リロード/プロファイル切替後も直近 job を復元する(実行中なら進捗追跡を再開)
-      listOntologyBuildJobs(profileId, 1, { signal: controller.signal })
+      listOntologyBuildJobs(profileId, 1, { signal: jobsController.signal })
         .then((jobs) => {
-          if (controller.signal.aborted) return;
+          if (jobsController.signal.aborted) return;
           const latest = jobs[0];
           if (!latest) return;
           if (latest.status === "queued" || latest.status === "running") {
@@ -652,7 +672,11 @@ export function OntologyBuildSection({
           // 直近 job は補助情報のため取得失敗で画面を止めない(新規実行は可能)
         });
     }
-    return () => controller.abort();
+    return () => {
+      markdownLoadControllerRef.current?.abort();
+      markdownLoadControllerRef.current = null;
+      jobsController.abort();
+    };
   }, [onMarkdownStateChange, profileId, refreshMarkdown]);
 
   // job ポーリング(1s)。完了で停止し、Markdown Draft を更新する。
@@ -684,12 +708,12 @@ export function OntologyBuildSection({
             buildMarkdownRefreshSignatureRef.current !== draftRefreshSignature
           ) {
             buildMarkdownRefreshSignatureRef.current = draftRefreshSignature;
-            void refreshMarkdown(profileId, undefined, { reason: "build" });
+            void refreshMarkdown(profileId, { reason: "build" });
           }
           if (terminal && terminalHandledRef.current !== jobId) {
             terminalHandledRef.current = jobId;
             buildMarkdownRefreshSignatureRef.current = "";
-            void refreshMarkdown(profileId, undefined, { reason: "build" });
+            void refreshMarkdown(profileId, { reason: "build" });
             if (next.status === "succeeded") {
               toast.success(t("profiles.ontologyBuild.jobSucceeded"));
             } else if (next.status === "cancelled") {
@@ -713,7 +737,7 @@ export function OntologyBuildSection({
               )
             );
             // Draft は永続化済みの場合があるため job が消えても再取得を試みる
-            void refreshMarkdown(profileId, undefined, { reason: "background" });
+            void refreshMarkdown(profileId, { reason: "background" });
           }
           // それ以外の一時的な失敗は次のポーリングで回復を試みる
         })
@@ -741,7 +765,7 @@ export function OntologyBuildSection({
           setPublishJob(next);
           if (next.status === "succeeded") {
             if (profileIdRef.current) {
-              void refreshMarkdown(profileIdRef.current, undefined, { reason: "background" });
+              void refreshMarkdown(profileIdRef.current, { reason: "background" });
             }
             toast.success(t("profiles.ontologyBuild.published"));
             void onPublished?.();
@@ -1341,16 +1365,16 @@ export function OntologyBuildSection({
         ) : null}
 
         {markdownLoading ? (
-          <TimedLoadingState
-            label={t("profiles.ontologyBuild.markdownLoading")}
-            operationKey="ontology-markdown-load"
+          <DbManagementLoadingSkeleton
+            idPrefix="ontology-markdown"
+            ariaLabel={t("profiles.ontologyBuild.markdownLoading")}
+            variant="detail"
+            operationKey={`ontology-markdown-load:${profileId ?? ""}`}
+            onCancel={cancelMarkdownLoad}
             placement="panel"
             testId="ontology-markdown-loading"
-            activityIcon="none"
           />
-        ) : null}
-
-        {activeMarkdownTab === "draft" ? (
+        ) : activeMarkdownTab === "draft" ? (
           <div
             id="ontology-markdown-panel-draft"
             role="tabpanel"
@@ -1368,7 +1392,7 @@ export function OntologyBuildSection({
               rows={18}
               spellCheck={false}
               placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
-              disabled={!hasDraftRevision || markdownLoading || busy === "save-draft"}
+              disabled={!hasDraftRevision || busy === "save-draft"}
               onChange={(event) => {
                 const nextDraftMarkdown = event.currentTarget.value;
                 draftMarkdownRef.current = nextDraftMarkdown;
@@ -1403,31 +1427,33 @@ export function OntologyBuildSection({
           </div>
         )}
 
-        <div
-          className="flex flex-wrap items-center gap-3 border-t border-border pt-4"
-          data-testid="ontology-publish-actions"
-        >
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            className="w-full sm:w-auto"
-            loading={busy === "publish"}
-            disabled={
-              !hasDraftRevision ||
-              publishRunning ||
-              (busy !== "" && busy !== "publish")
-            }
-            onClick={() => void publish()}
+        {!markdownLoading ? (
+          <div
+            className="flex flex-wrap items-center gap-3 border-t border-border pt-4"
+            data-testid="ontology-publish-actions"
           >
-            <Sparkles size={15} aria-hidden="true" />
-            <span>{t("profiles.ontologyBuild.publish")}</span>
-          </Button>
-          {draftDirty ? (
-            <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />
-          ) : null}
-        </div>
-        {publishJob ? (
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              className="w-full sm:w-auto"
+              loading={busy === "publish"}
+              disabled={
+                !hasDraftRevision ||
+                publishRunning ||
+                (busy !== "" && busy !== "publish")
+              }
+              onClick={() => void publish()}
+            >
+              <Sparkles size={15} aria-hidden="true" />
+              <span>{t("profiles.ontologyBuild.publish")}</span>
+            </Button>
+            {draftDirty ? (
+              <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />
+            ) : null}
+          </div>
+        ) : null}
+        {!markdownLoading && publishJob ? (
           <div
             className="grid gap-2 rounded-md border border-border bg-background p-3"
             role="status"
