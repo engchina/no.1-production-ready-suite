@@ -61,8 +61,12 @@ test("execution options panel keeps Query Rewrite checkboxes and Select AI showp
   assert.match(optionsPanelSource, /engine !== "select_ai"/);
 });
 
-test("generated SQL summary renders interpretation and show prompt artifact panels", () => {
+test("generated SQL summary renders ontology grounding and show prompt artifact panels", () => {
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-interpretation-panel"/);
+  assert.match(generatedSqlPanelSource, /data-testid="nl2sql-sql-grounding-panel"/);
+  assert.match(generatedSqlPanelSource, /useProfileOntologyView/);
+  assert.doesNotMatch(generatedSqlPanelSource, /nl2sql\.interpretation\.inputTitle/);
+  assert.doesNotMatch(generatedSqlPanelSource, /nl2sql\.interpretation\.sqlTitle/);
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-show-prompt-panel"/);
   assert.match(generatedSqlPanelSource, /artifact\.prompt/);
   assert.match(generatedSqlPanelSource, /whitespace-pre-wrap/);

@@ -73,6 +73,7 @@ function normalizeStepStatus(status: JobStepStatus): WorkflowProgressStepStatus 
 
 export function OperationStatusStrip({
   job,
+  profileId = "",
   startedAtMs,
   catalogEmpty = false,
   importingSample = false,
@@ -82,6 +83,7 @@ export function OperationStatusStrip({
   previewExecuteLoading = false,
 }: {
   job: JobData | null;
+  profileId?: string;
   startedAtMs: number | null;
   /** schema catalog が空（サンプル未投入）か。空 catalog 由来の失敗をアクション化する。 */
   catalogEmpty?: boolean;
@@ -172,6 +174,7 @@ export function OperationStatusStrip({
               <div className="mt-2 border-l border-border pl-3">
                 <GeneratedSqlSummary
                   result={job.result}
+                  profileId={profileId}
                   onExecute={onPreviewExecute}
                   executeLoading={previewExecuteLoading}
                 />

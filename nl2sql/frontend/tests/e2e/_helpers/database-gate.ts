@@ -22,6 +22,7 @@ export const systemAdminMe = {
   is_system_admin: true,
   permissions: [],
   data_entitlements: [],
+  allowed_profile_ids: [],
   debug_mode: false,
   password_change_allowed: true,
 };
@@ -29,6 +30,7 @@ export const systemAdminMe = {
 /** 通常の E2E は Oracle snapshot が利用可能な状態から開始する。 */
 export async function mockDatabaseGateReady(page: Page) {
   await page.route("**/api/auth/me", (route) => fulfill(route, systemAdminMe));
+  await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "ok", check: "ok", detail: null })
   );

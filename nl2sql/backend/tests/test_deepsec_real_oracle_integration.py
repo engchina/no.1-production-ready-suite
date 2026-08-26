@@ -65,6 +65,7 @@ _REQUIRED_SECURITY_TABLES = frozenset(
         "NL2SQL_APP_ROLES",
         "NL2SQL_APP_USER_ROLES",
         "NL2SQL_APP_ROLE_PERMISSIONS",
+        "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
         "NL2SQL_AUTH_SESSIONS",
         "NL2SQL_DEEPSEC_MIGRATIONS",
@@ -156,6 +157,7 @@ def _admin_principal() -> Principal:
         role_codes=[SYSTEM_ADMIN_ROLE_CODE],
         permissions={"menu.security_roles", "menu.security_deepsec"},
         data_entitlements=[],
+        allowed_profile_ids=set(),
         session_id="deepsec-real-oracle-integration-session",
         csrf_token_hash="deepsec-real-oracle-integration-csrf",
     )

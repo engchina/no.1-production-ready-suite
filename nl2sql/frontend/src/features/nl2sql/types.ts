@@ -676,7 +676,8 @@ export type QualityEvaluationStatus =
   | "running"
   | "completed"
   | "completed_with_errors"
-  | "failed";
+  | "failed"
+  | "cancelled";
 export type QualityEvaluationVerdict =
   | "correct"
   | "incorrect"
@@ -703,6 +704,7 @@ export interface QualityEvaluationCapabilities {
     max_attempts: number;
     min_repeat_count: number;
     max_repeat_count: number;
+    attempt_timeout_seconds: number;
   };
 }
 
@@ -735,8 +737,13 @@ export interface QualityEvaluationJobSummary {
   current_case_id: string;
   current_engine?: QualityEvaluationEngine | null;
   current_repetition: number;
+  current_attempt_started_at?: string | null;
   engine_summaries: QualityEvaluationEngineSummary[];
   error_message: string;
+  heartbeat_at?: string | null;
+  lease_expires_at?: string | null;
+  attempt_no: number;
+  attempt_timeout_seconds: number;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;

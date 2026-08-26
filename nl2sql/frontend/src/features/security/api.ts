@@ -13,6 +13,7 @@ import type {
   DeepSecTargetObjectPage,
   DeepSecVerification,
   PermissionDefinition,
+  ProfileAccessProfile,
   SecurityRole,
   SecurityUser,
 } from "./types";
@@ -30,6 +31,7 @@ export interface RoleDraft {
   description: string;
   permissions: string[];
   data_entitlements: DataEntitlement[];
+  allowed_profile_ids?: string[];
 }
 
 function dataEntitlementPayload(role: Pick<DeepSecRoleEntitlements, "data_entitlements">) {
@@ -115,6 +117,7 @@ export const securityApi = {
       description: role.description,
       permissions: role.permissions,
       data_entitlements: role.data_entitlements,
+      allowed_profile_ids: role.allowed_profile_ids,
     }),
   archiveRole: (role: SecurityRole) =>
     apiPost<SecurityRole>(`/api/security/roles/${role.role_id}/archive`, {
@@ -126,6 +129,8 @@ export const securityApi = {
     }),
   permissions: (options: ApiRequestOptions = {}) =>
     apiGet<PermissionDefinition[]>("/api/security/permissions", options),
+  profileAccessProfiles: (options: ApiRequestOptions = {}) =>
+    apiGet<ProfileAccessProfile[]>("/api/security/profile-access/profiles", options),
   deepSecStatus: (options: ApiRequestOptions = {}) =>
     apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
   deepSecPlan: (options: ApiRequestOptions = {}) =>

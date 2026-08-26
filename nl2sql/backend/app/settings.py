@@ -162,6 +162,7 @@ class Settings(BaseServiceSettings):
     nl2sql_quality_evaluation_worker_mode: str = "inprocess"
     nl2sql_quality_evaluation_worker_poll_seconds: float = 1.0
     nl2sql_quality_evaluation_lease_seconds: float = 900.0
+    nl2sql_quality_evaluation_attempt_timeout_seconds: float = 300.0
     nl2sql_quality_evaluation_max_file_bytes: int = 10 * 1024 * 1024
     nl2sql_quality_evaluation_max_cases: int = 100
     nl2sql_quality_evaluation_max_attempts: int = 1000

@@ -264,6 +264,7 @@ class RoleCreateRequest(BaseModel):
     description: str = Field(default="", max_length=1000)
     permissions: list[str] = Field(default_factory=list)
     data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
+    allowed_profile_ids: list[str] = Field(default_factory=list)
 
     @field_validator("role_code")
     @classmethod
@@ -280,6 +281,7 @@ class RoleUpdateRequest(BaseModel):
     description: str = Field(default="", max_length=1000)
     permissions: list[str] = Field(default_factory=list)
     data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
+    allowed_profile_ids: list[str] | None = None
 
 
 class RoleArchiveRequest(BaseModel):
@@ -427,6 +429,7 @@ class RoleData(BaseModel):
     version: int
     permissions: list[str]
     data_entitlements: list[DataEntitlementData]
+    allowed_profile_ids: list[str]
 
     @classmethod
     def from_record(cls, role: RoleRecord) -> RoleData:
@@ -440,6 +443,7 @@ class RoleData(BaseModel):
             version=role.version,
             permissions=sorted(normalize_permission_codes(role.permissions)),
             data_entitlements=[DataEntitlementData.from_record(item) for item in role.entitlements],
+            allowed_profile_ids=sorted(role.allowed_profile_ids),
         )
 
 
@@ -575,6 +579,7 @@ class CurrentUserData(BaseModel):
     is_system_admin: bool
     permissions: list[str]
     data_entitlements: list[DataEntitlementData]
+    allowed_profile_ids: list[str] = Field(default_factory=list)
     debug_mode: bool = False
     password_change_allowed: bool
 
@@ -592,9 +597,19 @@ class CurrentUserData(BaseModel):
             data_entitlements=[
                 DataEntitlementData.from_record(item) for item in principal.data_entitlements
             ],
+            allowed_profile_ids=sorted(principal.allowed_profile_ids),
             debug_mode=debug_mode,
             password_change_allowed=principal.password_change_allowed and not debug_mode,
         )
+
+
+class ProfileAccessProfileData(BaseModel):
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    archived: bool = False
+    allowed_role_ids: list[str] = Field(default_factory=list)
 
 
 class PermissionData(BaseModel):

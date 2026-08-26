@@ -68,7 +68,7 @@ class FakeEnterpriseAiClient:
     def __init__(self, *responses: str | Exception, configured: bool = True) -> None:
         self.responses = list(responses)
         self.configured = configured
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, Any]] = []
 
     def is_configured(self) -> bool:
         return self.configured
@@ -76,7 +76,15 @@ class FakeEnterpriseAiClient:
     def model_id(self) -> str:
         return "fake-enterprise-ai"
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         if not self.responses:
             return ""

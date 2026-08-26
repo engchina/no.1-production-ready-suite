@@ -90,7 +90,19 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert [migration.version for migration in MIGRATIONS] == [0, 1, 2, 3, 5, 6, 7, 8, 9, 15]
+    assert [migration.version for migration in MIGRATIONS] == [
+        0,
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        15,
+        17,
+    ]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
     assert "NL2SQL_ONTOLOGY_RDF_DATA" not in MANAGED_TABLES
@@ -443,7 +455,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9, 15],
+            pending_versions=[7, 8, 9, 15, 17],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -461,7 +473,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9, 15]
+    assert manager.applied_migrations == [7, 8, 9, 15, 17]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
@@ -869,6 +881,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
             role_codes=["DB_VIEWER"],
             permissions=permissions,
             data_entitlements=[],
+            allowed_profile_ids=set(),
             session_id="session-1",
             csrf_token_hash="hash",
         )

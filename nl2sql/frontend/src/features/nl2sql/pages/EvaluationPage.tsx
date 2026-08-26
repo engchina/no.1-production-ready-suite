@@ -1,12 +1,14 @@
 import { Button } from "@/components/ui/button";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
   CheckCircle2,
+  CircleStop,
   Download,
   FileSpreadsheet,
   Play,
+  Trash2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -24,14 +26,19 @@ import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
+import { FormStatus } from "@/components/ui/form-status";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
-import { ApiError, apiFetch, apiGet, apiPostForm } from "@/lib/api";
+import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
 import { QuestionText } from "../components/QuestionText";
 import {
+  qualityEvaluationAttemptTimedOut,
+  qualityEvaluationLastHeartbeatMs,
+  qualityEvaluationLeaseExpired,
   qualityEvaluationPollingInterval,
   toggleQualityEvaluationEngine,
   validateQualityEvaluationInput,
@@ -54,6 +61,7 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "completed",
   "completed_with_errors",
   "failed",
+  "cancelled",
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4 shadow-sm lg:p-5";
@@ -64,6 +72,7 @@ type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", stri
 
 export function EvaluationPage() {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const currentJobId = searchParams.get("job") ?? "";
   const { notice, showNotice, clearNotice } = usePageNotice();
@@ -72,6 +81,7 @@ export function EvaluationPage() {
   const [engines, setEngines] = useState<QualityEvaluationEngine[]>([]);
   const [repeatCount, setRepeatCount] = useState(1);
   const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const [startError, setStartError] = useState("");
   const [jobCursor, setJobCursor] = useState<string | null>(null);
   const [jobCursorHistory, setJobCursorHistory] = useState<Array<string | null>>([]);
   const [resultCursor, setResultCursor] = useState<string | null>(null);
@@ -100,6 +110,10 @@ export function EvaluationPage() {
           jobCursor ? `&cursor=${encodeURIComponent(jobCursor)}` : ""
         }`
       ),
+    refetchInterval: (query) =>
+      query.state.data?.items.some((job) => ACTIVE_STATUSES.has(job.status))
+        ? qualityEvaluationPollingInterval("running")
+        : false,
   });
   const currentJobQuery = useQuery({
     queryKey: ["quality-evaluations", "job", currentJobId],
@@ -154,22 +168,58 @@ export function EvaluationPage() {
       );
     },
     onSuccess: (job) => {
+      setStartError("");
       queryClient.setQueryData(["quality-evaluations", "job", job.job_id], job);
       void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
       const next = new URLSearchParams(searchParams);
       next.set("job", job.job_id);
       setSearchParams(next, { replace: true });
-      showNotice("success", t("qualityEvaluation.notice.started"));
       toast.success(t("qualityEvaluation.notice.started"));
     },
     onError: (cause) => {
-      const message =
-        cause instanceof ApiError
-          ? cause.messages.join("\n")
-          : cause instanceof Error
-            ? cause.message
-            : t("qualityEvaluation.error.start");
-      showNotice("danger", message);
+      setStartError(qualityEvaluationStartErrorMessage(cause));
+    },
+  });
+
+  const deleteJobMutation = useMutation({
+    mutationFn: (job: QualityEvaluationJobSummary) =>
+      apiDelete<QualityEvaluationJobSummary>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(job.job_id)}`
+      ),
+    onSuccess: (deleted) => {
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+      queryClient.removeQueries({ queryKey: ["quality-evaluations", "job", deleted.job_id] });
+      queryClient.removeQueries({
+        queryKey: ["quality-evaluations", "results", deleted.job_id],
+      });
+      if (deleted.job_id === currentJobId) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("job");
+        setSearchParams(next, { replace: true });
+        setResultCursor(null);
+        setResultCursorHistory([]);
+      }
+      toast.success(t("qualityEvaluation.notice.deleted"));
+    },
+    onError: () => {
+      toast.error(t("qualityEvaluation.error.delete"));
+    },
+  });
+  const cancelJobMutation = useMutation({
+    mutationFn: (job: QualityEvaluationJobSummary) =>
+      apiPost<QualityEvaluationJobSummary>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(job.job_id)}/cancel`
+      ),
+    onSuccess: (cancelled) => {
+      queryClient.setQueryData(["quality-evaluations", "job", cancelled.job_id], cancelled);
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["quality-evaluations", "results", cancelled.job_id],
+      });
+      toast.success(t("qualityEvaluation.notice.cancelled"));
+    },
+    onError: () => {
+      toast.error(t("qualityEvaluation.error.cancel"));
     },
   });
 
@@ -215,6 +265,7 @@ export function EvaluationPage() {
 
   const startEvaluation = () => {
     clearNotice();
+    setStartError("");
     if (validate()) startMutation.mutate();
   };
 
@@ -237,6 +288,33 @@ export function EvaluationPage() {
     next.set("job", jobId);
     setSearchParams(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteJob = async (job: QualityEvaluationJobSummary) => {
+    if (!TERMINAL_STATUSES.has(job.status)) return;
+    const confirmed = await confirm({
+      title: t("qualityEvaluation.confirm.delete.title"),
+      description: t("qualityEvaluation.confirm.delete.description", {
+        job: profileRecordDisplayLabel(job),
+        createdAt: formatDate(job.created_at),
+      }),
+      confirmLabel: t("qualityEvaluation.action.delete"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    deleteJobMutation.mutate(job);
+  };
+
+  const cancelJob = async (job: QualityEvaluationJobSummary) => {
+    if (!ACTIVE_STATUSES.has(job.status)) return;
+    const confirmed = await confirm({
+      title: t("qualityEvaluation.confirm.cancel.title"),
+      description: t("qualityEvaluation.confirm.cancel.description"),
+      confirmLabel: t("qualityEvaluation.confirm.cancel.confirm"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    cancelJobMutation.mutate(job);
   };
 
   const downloadFile = async (path: string, fallbackName: string) => {
@@ -541,7 +619,7 @@ export function EvaluationPage() {
                 <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
               </div>
               <div
-                className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4"
+                className="grid min-w-0 justify-items-end gap-2 border-t border-border pt-4"
                 data-testid="quality-evaluation-action-footer"
               >
                 <Button
@@ -559,6 +637,11 @@ export function EvaluationPage() {
                   <Play className="size-4" aria-hidden="true" />
                   {t("qualityEvaluation.action.start")}
                 </Button>
+                <FormStatus
+                  tone="danger"
+                  message={startError}
+                  className="w-full justify-self-stretch"
+                />
               </div>
             </form>
           )}
@@ -586,7 +669,14 @@ export function EvaluationPage() {
                   onRetry={() => void currentJobQuery.refetch()}
                 />
               ) : (
-                <JobProgress job={currentJob} />
+                <JobProgress
+                  job={currentJob}
+                  onCancel={cancelJob}
+                  cancelling={
+                    cancelJobMutation.isPending &&
+                    cancelJobMutation.variables?.job_id === currentJob.job_id
+                  }
+                />
               )}
             </div>
           </section>
@@ -709,7 +799,13 @@ export function EvaluationPage() {
               />
             ) : (
               <>
-                <div className="grid min-w-0 gap-2">
+                <div
+                  className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  role="region"
+                  aria-label={t("qualityEvaluation.recent.scrollRegion")}
+                  tabIndex={0}
+                  data-testid="quality-evaluation-recent-jobs-scroll-region"
+                >
                   {recentJobsQuery.data.items.map((job) => (
                     <article
                       key={job.job_id}
@@ -737,14 +833,66 @@ export function EvaluationPage() {
                           })}
                         </p>
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => openJob(job.job_id)}
-                      >
-                        {t("qualityEvaluation.action.view")}
-                      </Button>
+                      <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => openJob(job.job_id)}
+                        >
+                          {t("qualityEvaluation.action.view")}
+                        </Button>
+                        {ACTIVE_STATUSES.has(job.status) ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+                            disabled={cancelJobMutation.isPending}
+                            loading={
+                              cancelJobMutation.isPending &&
+                              cancelJobMutation.variables?.job_id === job.job_id
+                            }
+                            aria-label={t("qualityEvaluation.action.cancelJob", {
+                              job: profileRecordDisplayLabel(job),
+                            })}
+                            onClick={() => void cancelJob(job)}
+                          >
+                            <CircleStop size={15} aria-hidden="true" />
+                            {t("qualityEvaluation.action.cancel")}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+                          disabled={
+                            !TERMINAL_STATUSES.has(job.status) ||
+                            deleteJobMutation.isPending
+                          }
+                          loading={
+                            deleteJobMutation.isPending &&
+                            deleteJobMutation.variables?.job_id === job.job_id
+                          }
+                          title={
+                            TERMINAL_STATUSES.has(job.status)
+                              ? undefined
+                              : t("qualityEvaluation.action.deleteDisabled")
+                          }
+                          aria-label={
+                            TERMINAL_STATUSES.has(job.status)
+                              ? t("qualityEvaluation.action.deleteJob", {
+                                  job: profileRecordDisplayLabel(job),
+                                })
+                              : t("qualityEvaluation.action.deleteDisabled")
+                          }
+                          onClick={() => void deleteJob(job)}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          {t("qualityEvaluation.action.delete")}
+                        </Button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -801,21 +949,53 @@ function SectionHeader({
   );
 }
 
-function JobProgress({ job }: { job: QualityEvaluationJobSummary }) {
+function JobProgress({
+  job,
+  onCancel,
+  cancelling = false,
+}: {
+  job: QualityEvaluationJobSummary;
+  onCancel?: (job: QualityEvaluationJobSummary) => void | Promise<void>;
+  cancelling?: boolean;
+}) {
   const active = ACTIVE_STATUSES.has(job.status);
+  const attemptTimeoutSeconds = Math.round(Math.max(1, job.attempt_timeout_seconds || 0));
+  const lastHeartbeatMs = qualityEvaluationLastHeartbeatMs(job);
+  const lastHeartbeatLabel =
+    lastHeartbeatMs === null
+      ? t("qualityEvaluation.progress.heartbeatMissing")
+      : formatDate(job.heartbeat_at ?? "");
+  const attemptTimedOut = qualityEvaluationAttemptTimedOut(job);
+  const leaseExpired = qualityEvaluationLeaseExpired(job);
   const percentage = job.total_attempts
     ? Math.round((job.completed_attempts / job.total_attempts) * 100)
     : 0;
   return (
     <div className="grid min-w-0 gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <StatusBadge variant={statusVariant(job.status)} label={statusLabel(job.status)} />
-        <span className="text-sm font-semibold tabular-nums text-foreground">
-          {t("qualityEvaluation.progress.count", {
-            completed: job.completed_attempts,
-            total: job.total_attempts,
-          })}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge variant={statusVariant(job.status)} label={statusLabel(job.status)} />
+          <span className="text-sm font-semibold tabular-nums text-foreground">
+            {t("qualityEvaluation.progress.count", {
+              completed: job.completed_attempts,
+              total: job.total_attempts,
+            })}
+          </span>
+        </div>
+        {active && onCancel ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+            loading={cancelling}
+            disabled={cancelling}
+            onClick={() => void onCancel(job)}
+          >
+            <CircleStop className="size-4" aria-hidden="true" />
+            {t("qualityEvaluation.action.cancel")}
+          </Button>
+        ) : null}
       </div>
       <ProcessingIndicator
         active={active}
@@ -828,6 +1008,41 @@ function JobProgress({ job }: { job: QualityEvaluationJobSummary }) {
         placement="job"
         testId="quality-evaluation-timing"
       />
+      <div
+        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted"
+        data-testid="quality-evaluation-job-diagnostics"
+      >
+        <span>
+          {t("qualityEvaluation.progress.lastHeartbeat")}{" "}
+          <span className="font-medium text-foreground">{lastHeartbeatLabel}</span>
+        </span>
+        <span>
+          {t("qualityEvaluation.progress.attemptTimeout")}{" "}
+          <span className="font-medium text-foreground">
+            {t("qualityEvaluation.progress.timeoutSeconds", {
+              seconds: attemptTimeoutSeconds,
+            })}
+          </span>
+        </span>
+      </div>
+      {attemptTimedOut ? (
+        <div role="status" aria-live="polite">
+          <Banner
+            severity="warning"
+            title={t("qualityEvaluation.progress.attemptTimedOutTitle")}
+          >
+            {t("qualityEvaluation.progress.attemptTimedOutHint", {
+              seconds: attemptTimeoutSeconds,
+            })}
+          </Banner>
+        </div>
+      ) : leaseExpired ? (
+        <div role="status" aria-live="polite">
+          <Banner severity="warning" title={t("qualityEvaluation.progress.leaseExpiredTitle")}>
+            {t("qualityEvaluation.progress.leaseExpiredHint")}
+          </Banner>
+        </div>
+      ) : null}
       <div
         className="h-2 overflow-hidden rounded-full bg-muted/40"
         role="progressbar"
@@ -865,9 +1080,14 @@ function JobProgress({ job }: { job: QualityEvaluationJobSummary }) {
         />
       </dl>
       {job.error_message ? (
-        <Banner severity="danger" title={statusLabel(job.status)}>
-          {job.error_message}
-        </Banner>
+        <div role="status" aria-live="polite">
+          <Banner
+            severity={job.status === "cancelled" ? "info" : "danger"}
+            title={statusLabel(job.status)}
+          >
+            {job.error_message}
+          </Banner>
+        </div>
       ) : null}
     </div>
   );
@@ -922,9 +1142,15 @@ function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummar
 function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
   return (
     <>
-      <div className="hidden overflow-x-auto rounded-lg border border-border md:block">
+      <div
+        className="hidden max-h-[30.5rem] overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:block"
+        role="region"
+        aria-label={t("qualityEvaluation.details.scrollRegion")}
+        tabIndex={0}
+        data-testid="quality-evaluation-results-table"
+      >
         <table className="w-full min-w-[74rem] border-collapse text-left text-sm">
-          <thead className="bg-muted/30 text-xs text-muted">
+          <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
             <tr>
               <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.case")}</th>
               <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.engine")}</th>
@@ -934,40 +1160,58 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
               <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.elapsed")}</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
-            {results.map((result) => (
-              <tr key={result.result_id} className="align-top">
-                <td className="max-w-56 px-3 py-3">
-                  <div className="font-semibold text-foreground">{result.case_id}</div>
-                  <QuestionText
-                    value={result.question}
-                    variant="compact"
-                    maxLines={2}
-                    className="mt-1 text-muted"
-                  />
-                </td>
-                <td className="px-3 py-3">
-                  <div className="font-medium text-foreground">{engineLabel(result.engine)}</div>
-                  <div className="mt-1 text-xs text-muted">#{result.repetition_no}</div>
-                </td>
-                <td className="max-w-72 px-3 py-3">
-                  <SqlBlock sql={result.expected_sql} />
-                </td>
-                <td className="max-w-72 px-3 py-3">
-                  <SqlBlock sql={result.generated_sql} error={result.generation_error} />
-                </td>
-                <td className="max-w-64 px-3 py-3">
-                  <ResultJudgement result={result} />
-                </td>
-                <td className="whitespace-nowrap px-3 py-3 text-muted">
-                  {result.total_elapsed_ms} ms
-                </td>
-              </tr>
-            ))}
+          <tbody>
+            {results.map((result) => {
+              const hasAnalysis = hasResultAnalysis(result);
+              return (
+                <Fragment key={result.result_id}>
+                  <tr className="border-t border-border align-top first:border-t-0">
+                    <td className="max-w-56 px-3 py-3">
+                      <div className="font-semibold text-foreground">{result.case_id}</div>
+                      <QuestionText
+                        value={result.question}
+                        variant="compact"
+                        maxLines={2}
+                        className="mt-1 text-muted"
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="font-medium text-foreground">{engineLabel(result.engine)}</div>
+                      <div className="mt-1 text-xs text-muted">#{result.repetition_no}</div>
+                    </td>
+                    <td className="max-w-72 px-3 py-3">
+                      <SqlBlock sql={result.expected_sql} />
+                    </td>
+                    <td className="max-w-72 px-3 py-3">
+                      <SqlBlock sql={result.generated_sql} error={result.generation_error} />
+                    </td>
+                    <td className="max-w-64 px-3 py-3">
+                      <ResultJudgement result={result} showAnalysis={false} />
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-muted">
+                      {result.total_elapsed_ms} ms
+                    </td>
+                  </tr>
+                  {hasAnalysis ? (
+                    <tr className="border-t border-border/60 bg-muted/5">
+                      <td colSpan={6} className="px-3 pb-4 pt-2">
+                        <ResultAnalysisDetails result={result} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      <div className="grid min-w-0 gap-3 md:hidden">
+      <div
+        className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:hidden"
+        role="region"
+        aria-label={t("qualityEvaluation.details.scrollRegion")}
+        tabIndex={0}
+        data-testid="quality-evaluation-results-cards-scroll-region"
+      >
         {results.map((result) => (
           <article key={result.result_id} className="grid min-w-0 gap-3 rounded-lg border border-border p-4">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
@@ -1005,10 +1249,25 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
   );
 }
 
-function ResultJudgement({ result }: { result: QualityEvaluationResult }) {
-  const errors = [result.generation_error, result.judge_error].filter(Boolean);
+function ResultJudgement({
+  result,
+  showAnalysis = true,
+}: {
+  result: QualityEvaluationResult;
+  showAnalysis?: boolean;
+}) {
+  const hasAnalysis = hasResultAnalysis(result);
   return (
     <div className="grid min-w-0 gap-2">
+      <ResultJudgementSummary result={result} />
+      {showAnalysis && hasAnalysis ? <ResultAnalysisDetails result={result} /> : null}
+    </div>
+  );
+}
+
+function ResultJudgementSummary({ result }: { result: QualityEvaluationResult }) {
+  return (
+    <>
       <div className="flex flex-wrap items-center gap-2">
         <VerdictBadge verdict={result.verdict} />
         {result.judge ? (
@@ -1028,33 +1287,52 @@ function ResultJudgement({ result }: { result: QualityEvaluationResult }) {
       {result.judge?.summary ? (
         <p className="break-words text-xs leading-5 text-foreground">{result.judge.summary}</p>
       ) : null}
-      {result.judge || errors.length ? (
-        <details className="min-w-0 text-xs">
-          <summary className="cursor-pointer font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
-            {t("qualityEvaluation.details.analysis")}
-          </summary>
-          <div className="mt-2 grid min-w-0 gap-2 rounded-md bg-muted/20 p-3 text-muted">
-            <AnalysisList
-              label={t("qualityEvaluation.details.differences")}
-              items={result.judge?.differences ?? []}
-            />
-            <AnalysisList
-              label={t("qualityEvaluation.details.risks")}
-              items={[...(result.judge?.risks ?? []), ...result.deterministic_analysis.risk_findings]}
-            />
-            {result.judge?.correction_suggestion ? (
-              <div>
-                <div className="font-medium text-foreground">
-                  {t("qualityEvaluation.details.suggestion")}
-                </div>
-                <p className="mt-1 break-words">{result.judge.correction_suggestion}</p>
-              </div>
-            ) : null}
-            <AnalysisList label={t("qualityEvaluation.details.error")} items={errors} danger />
+    </>
+  );
+}
+
+function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) {
+  const errors = [result.generation_error, result.judge_error].filter(Boolean);
+  return (
+    <details className="min-w-0 text-xs">
+      <summary
+        className="cursor-pointer font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        data-testid="quality-evaluation-analysis-toggle"
+      >
+        {t("qualityEvaluation.details.analysis")}
+      </summary>
+      <div
+        className="mt-2 grid min-w-0 gap-2 rounded-md bg-muted/20 p-3 text-muted"
+        data-testid="quality-evaluation-analysis-detail"
+      >
+        <AnalysisList
+          label={t("qualityEvaluation.details.differences")}
+          items={result.judge?.differences ?? []}
+        />
+        <AnalysisList
+          label={t("qualityEvaluation.details.risks")}
+          items={[...(result.judge?.risks ?? []), ...result.deterministic_analysis.risk_findings]}
+        />
+        {result.judge?.correction_suggestion ? (
+          <div>
+            <div className="font-medium text-foreground">
+              {t("qualityEvaluation.details.suggestion")}
+            </div>
+            <p className="mt-1 break-words">{result.judge.correction_suggestion}</p>
           </div>
-        </details>
-      ) : null}
-    </div>
+        ) : null}
+        <AnalysisList label={t("qualityEvaluation.details.error")} items={errors} danger />
+      </div>
+    </details>
+  );
+}
+
+function hasResultAnalysis(result: QualityEvaluationResult) {
+  return Boolean(
+    result.judge ||
+      result.generation_error ||
+      result.judge_error ||
+      result.deterministic_analysis.risk_findings.length
   );
 }
 
@@ -1200,4 +1478,10 @@ function validationMessage(
   }
   if (code === "engine_required") return t("qualityEvaluation.engines.required");
   return t("qualityEvaluation.repeat.invalid");
+}
+
+function qualityEvaluationStartErrorMessage(cause: unknown) {
+  if (cause instanceof ApiError) return cause.messages.join(" ");
+  if (cause instanceof Error && cause.message) return cause.message;
+  return t("qualityEvaluation.error.start");
 }

@@ -486,7 +486,7 @@ class OracleNl2SqlAdapter:
             return False, f"Oracle 接続に失敗しました: {exc}"
 
     @contextmanager
-    def connection(self) -> Iterator[Any]:
+    def connection(self, *, call_timeout_seconds: float | None = None) -> Iterator[Any]:
         oracledb = self._load_oracledb()
         self._init_client(oracledb)
         if not self.is_configured():
@@ -500,7 +500,12 @@ class OracleNl2SqlAdapter:
         try:
             # python-oracledb call_timeout は 1 round-trip 単位の millisecond。
             # 0 (無期限) を避け、DBMS_CLOUD_AI/Agent PL/SQL が worker を占有し続けないようにする。
-            call_timeout_ms = int(max(1.0, self.settings.nl2sql_oracle_call_timeout_seconds) * 1000)
+            timeout_seconds = (
+                call_timeout_seconds
+                if call_timeout_seconds is not None
+                else self.settings.nl2sql_oracle_call_timeout_seconds
+            )
+            call_timeout_ms = int(max(1.0, float(timeout_seconds)) * 1000)
             if hasattr(conn, "call_timeout"):
                 conn.call_timeout = call_timeout_ms
             try:
@@ -2653,12 +2658,18 @@ class OracleNl2SqlAdapter:
         question: str,
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
         """Oracle Select AI profile で DBMS_CLOUD_AI.GENERATE の生テキストを返す。
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         """
-        with self.connection() as conn, conn.cursor() as cursor:
+        connection = (
+            self.connection(call_timeout_seconds=call_timeout_seconds)
+            if call_timeout_seconds is not None
+            else self.connection()
+        )
+        with connection as conn, conn.cursor() as cursor:
             binds: dict[str, str] = {
                 "prompt": question,
                 "profile_name": profile_name,
@@ -2701,6 +2712,7 @@ class OracleNl2SqlAdapter:
         question: str,
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
         """Oracle Select AI profile で SQL を生成する。"""
         text = self.generate_select_ai_text(
@@ -2708,6 +2720,7 @@ class OracleNl2SqlAdapter:
             question=question,
             action=action,
             attributes=attributes,
+            call_timeout_seconds=call_timeout_seconds,
         )
         return _extract_select_statement(text)
 
@@ -2717,6 +2730,7 @@ class OracleNl2SqlAdapter:
         profile_name: str,
         question: str,
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
         """Oracle Select AI profile の showprompt 結果を返す。"""
         return self.generate_select_ai_text(
@@ -2724,6 +2738,7 @@ class OracleNl2SqlAdapter:
             question=question,
             action="showprompt",
             attributes=attributes,
+            call_timeout_seconds=call_timeout_seconds,
         )
 
     def refresh_select_ai_profile(
@@ -2951,16 +2966,24 @@ class OracleNl2SqlAdapter:
         }
 
     def run_select_ai_agent_team(
-        self, *, team_name: str, question: str, tool_name: str | None = None
+        self,
+        *,
+        team_name: str,
+        question: str,
+        tool_name: str | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
         try:
-            conversation_id = self.create_agent_conversation()
+            conversation_id = self.create_agent_conversation(
+                call_timeout_seconds=call_timeout_seconds
+            )
         except OracleAdapterError as exc:
             if tool_name and tool_name.strip():
                 try:
                     return self.run_select_ai_agent_tool(
                         tool_name=tool_name.strip(),
                         question=question,
+                        call_timeout_seconds=call_timeout_seconds,
                     )
                 except OracleAdapterError as tool_exc:
                     raise OracleAdapterError(
@@ -3047,7 +3070,12 @@ class OracleNl2SqlAdapter:
             ]
         )
         errors: list[str] = []
-        with self.connection() as conn, conn.cursor() as cursor:
+        connection = (
+            self.connection(call_timeout_seconds=call_timeout_seconds)
+            if call_timeout_seconds is not None
+            else self.connection()
+        )
+        with connection as conn, conn.cursor() as cursor:
             for sql, bindings in candidates:
                 try:
                     cursor.execute(sql, bindings)
@@ -3060,6 +3088,7 @@ class OracleNl2SqlAdapter:
                         return self.run_select_ai_agent_tool(
                             tool_name=tool_name or self._tool_name_from_team_name(team_name),
                             question=question,
+                            call_timeout_seconds=call_timeout_seconds,
                         )
                     if self._looks_like_signature_error(message):
                         errors.append(message)
@@ -3069,12 +3098,23 @@ class OracleNl2SqlAdapter:
             raise self._agent_runtime_error(RuntimeError("; ".join(errors)))
         raise OracleAdapterError("Select AI Agent team の実行結果を取得できませんでした。")
 
-    def run_select_ai_agent_tool(self, *, tool_name: str, question: str) -> tuple[str, str]:
+    def run_select_ai_agent_tool(
+        self,
+        *,
+        tool_name: str,
+        question: str,
+        call_timeout_seconds: float | None = None,
+    ) -> tuple[str, str]:
         payload = json.dumps(
             {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
             ensure_ascii=False,
         )
-        with self.connection() as conn, conn.cursor() as cursor:
+        connection = (
+            self.connection(call_timeout_seconds=call_timeout_seconds)
+            if call_timeout_seconds is not None
+            else self.connection()
+        )
+        with connection as conn, conn.cursor() as cursor:
             try:
                 cursor.execute(
                     """
@@ -3092,8 +3132,13 @@ class OracleNl2SqlAdapter:
             text = _coerce_text(row[0] if row else "")
         return _extract_select_statement(text), f"run_tool:{tool_name}"
 
-    def create_agent_conversation(self) -> str:
-        with self.connection() as conn, conn.cursor() as cursor:
+    def create_agent_conversation(self, *, call_timeout_seconds: float | None = None) -> str:
+        connection = (
+            self.connection(call_timeout_seconds=call_timeout_seconds)
+            if call_timeout_seconds is not None
+            else self.connection()
+        )
+        with connection as conn, conn.cursor() as cursor:
             try:
                 cursor.execute("SELECT DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION() FROM DUAL")
             except Exception as exc:

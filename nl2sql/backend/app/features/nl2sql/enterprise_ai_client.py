@@ -34,7 +34,14 @@ class EnterpriseAiDirectClient(Protocol):
         """Return the configured text model id."""
         ...
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
 
@@ -59,7 +66,14 @@ class OciEnterpriseAiDirectClient:
             or self.settings.oci_enterprise_ai_llm_model.strip()
         )
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
         payload = _build_payload(
@@ -69,7 +83,11 @@ class OciEnterpriseAiDirectClient:
             context=context,
             system_prompt=system_prompt,
         )
-        response = self._post_json(payload, path=self.settings.oci_enterprise_ai_llm_path)
+        response = self._post_json(
+            payload,
+            path=self.settings.oci_enterprise_ai_llm_path,
+            timeout_seconds=timeout_seconds,
+        )
         return _parse_generated_text(
             response,
             response_path=self.settings.oci_enterprise_ai_llm_response_path,
@@ -107,7 +125,13 @@ class OciEnterpriseAiDirectClient:
             response_path=self.settings.oci_enterprise_ai_vlm_response_path,
         )
 
-    def _post_json(self, payload: Mapping[str, Any], *, path: str) -> Mapping[str, Any]:
+    def _post_json(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        path: str,
+        timeout_seconds: float | None = None,
+    ) -> Mapping[str, Any]:
         url = _join_endpoint_path(
             self.settings.oci_enterprise_ai_endpoint,
             path,
@@ -119,7 +143,11 @@ class OciEnterpriseAiDirectClient:
         }
         if project := self.settings.oci_enterprise_ai_project_ocid.strip():
             headers["OpenAI-Project"] = project
-        timeout = float(self.settings.oci_enterprise_ai_timeout_seconds)
+        timeout = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.settings.oci_enterprise_ai_timeout_seconds
+        )
         max_retries = max(int(self.settings.oci_enterprise_ai_max_retries), 0)
         retryable = {429, 500, 502, 503, 504}
         last_error = ""

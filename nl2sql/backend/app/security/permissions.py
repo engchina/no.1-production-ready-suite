@@ -529,6 +529,8 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return None
     if route_path.startswith("/security/users"):
         return _allowed("menu.security_users")
+    if route_path.startswith("/security/profile-access"):
+        return _allowed("menu.security_roles")
     if route_path.startswith("/security/roles") and method == "GET":
         return _allowed("menu.security_users", "menu.security_roles")
     if route_path.startswith("/security/roles") or route_path == "/security/permissions":

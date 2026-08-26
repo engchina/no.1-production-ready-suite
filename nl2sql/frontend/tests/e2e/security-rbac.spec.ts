@@ -94,7 +94,12 @@ const systemRole = {
   version: 1,
   permissions: [],
   data_entitlements: [],
+  allowed_profile_ids: [],
 };
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+});
 
 const deepSecTargetObject = {
   name: "EMPLOYEES",
@@ -468,6 +473,7 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
     role_codes: ["QUERY_MENU"],
     is_system_admin: false,
     permissions: ["menu.query"],
+    allowed_profile_ids: ["default"],
     password_change_allowed: true,
   };
   let usageContextRequested = false;
@@ -570,7 +576,7 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
   await page.goto("/query");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "検索を実行" })).toBeVisible();
   await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
   await expect(page).toHaveURL(/\/query$/);
   await expect(sidebar.getByText("業務プロファイル", { exact: true })).toHaveCount(0);
@@ -622,6 +628,7 @@ test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボ�
     role_codes: ["QUERY_MENU"],
     is_system_admin: false,
     permissions: ["menu.query"],
+    allowed_profile_ids: [],
     password_change_allowed: true,
   };
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
@@ -644,7 +651,7 @@ test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボ�
   await page.goto("/query");
 
   await expect(
-    page.getByText("利用できる業務プロファイルがありません。管理者に作成を依頼してください。")
+    page.getByText("利用可能な業務プロファイルがありません。管理者に権限付与を依頼してください。")
   ).toBeVisible({ timeout: 45_000 });
   await expect(page.getByRole("button", { name: "業務プロファイルを作成" })).toHaveCount(0);
 });
@@ -1213,6 +1220,147 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
   await expect(page.getByTestId("security-roles-row-actions-role-system-trigger")).toBeVisible();
+});
+
+test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を設定できる", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/security/profile-access/profiles**");
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, [
+      {
+        id: "default",
+        name: "標準プロファイル",
+        category: "共通",
+        description: "標準の業務プロファイル",
+        archived: false,
+        allowed_role_ids: ["role-query-default"],
+      },
+      {
+        id: "finance",
+        name: "財務プロファイル",
+        category: "会計",
+        description: "財務部門向け",
+        archived: false,
+        allowed_role_ids: [],
+      },
+    ])
+  );
+  const permissionRows = [
+    {
+      code: "menu.query",
+      group: "メニュー権限",
+      label: "SQL 生成",
+      description: "SQL 生成を表示し、関連操作を利用できます。",
+      implies: ["nl2sql.profiles.read"],
+    },
+    {
+      code: "nl2sql.profiles.read",
+      group: "参照権限",
+      label: "業務プロファイル参照",
+      description: "業務プロファイルの利用コンテキストを参照できます。",
+      implies: [],
+    },
+  ];
+  const queryRole = {
+    ...systemRole,
+    role_id: "role-query-default",
+    role_code: "QUERY_DEFAULT",
+    display_name: "SQL 利用者",
+    description: "標準 profile のみ",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+    allowed_profile_ids: ["default"],
+  };
+  let savedPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole, queryRole])
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
+  await page.route("**/api/security/roles/role-query-default", async (route) => {
+    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfill(route, {
+      ...queryRole,
+      version: 2,
+      allowed_profile_ids: savedPayload.allowed_profile_ids,
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/security/roles");
+  await page
+    .getByTestId("security-roles-grid")
+    .locator("tbody tr")
+    .filter({ hasText: "SQL 利用者" })
+    .locator("td")
+    .first()
+    .click();
+  await expect(page.getByText("1 件", { exact: true })).toBeVisible();
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  const profileSearch = page.getByTestId("security-roles-profile-access-search");
+  await expect(profileSearch).toBeVisible();
+  await profileSearch.focus();
+  await expect(profileSearch).toBeFocused();
+  await profileSearch.fill("財務");
+  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /標準プロファイル/ })).toHaveCount(0);
+
+  const profileBulkActions = page.getByTestId("security-roles-profile-access-selection-actions");
+  await profileBulkActions.getByRole("button", { name: "すべて選択" }).click();
+  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+  await expect(profileSearch).toBeVisible();
+  await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" }).click();
+
+  await expect
+    .poll(() => (savedPayload?.allowed_profile_ids as string[] | undefined)?.sort())
+    .toEqual(["default", "finance"]);
+});
+
+test("ロール・権限管理は業務プロファイル候補の取得失敗でもロール一覧を表示する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/security/profile-access/profiles**");
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, "業務プロファイル候補の取得に失敗しました。", 500)
+  );
+  await page.route("**/api/security/permissions", (route) =>
+    fulfill(route, [
+      {
+        code: "menu.query",
+        group: "メニュー権限",
+        label: "SQL 生成",
+        description: "SQL 生成を表示し、関連操作を利用できます。",
+        implies: [],
+      },
+    ])
+  );
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [
+      systemRole,
+      {
+        ...systemRole,
+        role_id: "role-query-default",
+        role_code: "QUERY_DEFAULT",
+        display_name: "SQL 利用者",
+        description: "標準 profile のみ",
+        is_built_in: false,
+        permissions: ["menu.query"],
+        data_entitlements: [],
+        allowed_profile_ids: ["default"],
+      },
+    ])
+  );
+
+  await page.goto("/settings/security/roles");
+
+  await expect(
+    page.getByText("業務プロファイル利用権限の候補を読み込めませんでした。", {
+      exact: false,
+    })
+  ).toBeVisible();
+  await expect(page.getByTestId("security-roles-grid").getByText("SQL 利用者")).toBeVisible();
+  await expect(page.getByText("対象データはありません。")).toHaveCount(0);
 });
 
 test("ロール・権限管理は詳細で権限名を伏せ、編集では SQL 生成由来の参照権限を継承表示する", async ({ page }) => {

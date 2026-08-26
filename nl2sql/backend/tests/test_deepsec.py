@@ -70,6 +70,7 @@ def _principal() -> Principal:
         role_codes=["SYSTEM_ADMIN"],
         permissions=set(),
         data_entitlements=[],
+        allowed_profile_ids=set(),
         session_id="session",
         csrf_token_hash="csrf",
     )

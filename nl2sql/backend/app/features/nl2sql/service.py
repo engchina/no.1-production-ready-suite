@@ -4363,7 +4363,23 @@ class Nl2SqlService:
         limit: int,
         query: str,
         include_archived: bool,
+        allowed_profile_ids: set[str] | None = None,
     ) -> ProfileSummaryPage:
+        if allowed_profile_ids is not None:
+            profiles = [
+                profile
+                for profile in self.list_profiles(include_archived=include_archived)
+                if profile.id in allowed_profile_ids
+            ]
+            memory_repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+            for profile in profiles:
+                memory_repository.save_profile(profile, expected_etag=None)
+            return memory_repository.search_profiles(
+                cursor=cursor,
+                limit=limit,
+                query=query,
+                include_archived=include_archived,
+            )
         repository = self._incremental_repository
         if repository is None:
             profiles = self.list_profiles(include_archived=include_archived)
@@ -6962,13 +6978,23 @@ class Nl2SqlService:
             stage_timings=[StageTiming(stage=stage, elapsed_ms=elapsed)],
         )
 
-    def recommend_profile(self, request: ProfileRecommendationRequest) -> ProfileRecommendationData:
+    def recommend_profile(
+        self,
+        request: ProfileRecommendationRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> ProfileRecommendationData:
         classifier_prediction, classifier_warnings = self._classifier_prediction(
             request.question, top_k=3
         )
         if classifier_prediction and classifier_prediction.candidates:
             mapped_candidates: list[ProfileRecommendationCandidate] = []
             for candidate in classifier_prediction.candidates:
+                if (
+                    allowed_profile_ids is not None
+                    and candidate.profile_id not in allowed_profile_ids
+                ):
+                    continue
                 profile = self.get_profile(candidate.profile_id) if candidate.profile_id else None
                 if profile is None:
                     continue
@@ -7010,8 +7036,12 @@ class Nl2SqlService:
                 )
 
         profiles = self.list_profiles()
+        if allowed_profile_ids is not None:
+            profiles = [profile for profile in profiles if profile.id in allowed_profile_ids]
         if not profiles:
             profile = self.get_profile(request.current_profile_id)
+            if allowed_profile_ids is not None and profile.id not in allowed_profile_ids:
+                raise ValueError("この業務プロファイルを利用する権限がありません。")
             return self._recommendation_from_profile(
                 profile=profile,
                 question=request.question,
@@ -13903,6 +13933,7 @@ class Nl2SqlService:
         ontology_context: Any | None = None,
         *,
         allow_deterministic_fallback: bool = True,
+        runtime_timeout_seconds: float | None = None,
     ) -> GeneratedSql:
         # テスト/デモ用の明示的 failure trigger。実 adapter では不要。
         if f"{engine.value}_fail" in question.lower():
@@ -13976,6 +14007,7 @@ class Nl2SqlService:
                     learning_examples=learning_examples,
                     select_ai_overrides=select_ai_overrides,
                     ontology_context=ontology_context,
+                    runtime_timeout_seconds=runtime_timeout_seconds,
                 )
             except OracleAdapterError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
@@ -14001,6 +14033,7 @@ class Nl2SqlService:
                     learning_examples=learning_examples,
                     ontology_context=ontology_context,
                     catalog=generation_catalog,
+                    runtime_timeout_seconds=runtime_timeout_seconds,
                 )
             except EnterpriseAiDirectError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
@@ -14034,7 +14067,10 @@ class Nl2SqlService:
             schema_catalog=generation_catalog,
         )
 
-    def _quality_evaluation_profile(self, profile_id: str | None) -> tuple[Nl2SqlProfile | None, str]:
+    def _quality_evaluation_profile(
+        self,
+        profile_id: str | None,
+    ) -> tuple[Nl2SqlProfile | None, str]:
         if not profile_id:
             return None, ""
         try:
@@ -14157,6 +14193,7 @@ class Nl2SqlService:
         question: str,
         engine: Nl2SqlEngine,
         profile_id: str,
+        timeout_seconds: float | None = None,
     ) -> GeneratedSql:
         """fallback を一切許さず、選択された engine だけで SQL を生成する。"""
 
@@ -14178,6 +14215,7 @@ class Nl2SqlService:
             row_limit,
             [],
             allow_deterministic_fallback=False,
+            runtime_timeout_seconds=timeout_seconds,
         )
 
     def _generate_enterprise_ai_direct_sql(
@@ -14192,6 +14230,7 @@ class Nl2SqlService:
         learning_examples: list[LearningExample],
         catalog: SchemaCatalog,
         ontology_context: Any | None = None,
+        runtime_timeout_seconds: float | None = None,
     ) -> GeneratedSql:
         context = self._enterprise_ai_schema_context(
             profile=profile,
@@ -14208,11 +14247,14 @@ class Nl2SqlService:
                 ]
             )
         system_prompt = self._enterprise_ai_sql_system_prompt(row_limit)
-        raw_text = self._enterprise_ai_client.generate(
-            prompt=question,
-            context=context,
-            system_prompt=system_prompt,
-        )
+        generate_kwargs: dict[str, Any] = {
+            "prompt": question,
+            "context": context,
+            "system_prompt": system_prompt,
+        }
+        if runtime_timeout_seconds is not None:
+            generate_kwargs["timeout_seconds"] = runtime_timeout_seconds
+        raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
         sql, explanation = self._extract_enterprise_ai_sql(raw_text)
         if not sql:
             raise EnterpriseAiDirectError("OCI Enterprise AI response から SQL を抽出できません。")
@@ -14349,6 +14391,7 @@ class Nl2SqlService:
         learning_examples: list[LearningExample],
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
+        runtime_timeout_seconds: float | None = None,
     ) -> GeneratedSql:
         self._assert_select_ai_scope_ready(profile)
         asset_meta = self._asset_meta.get(engine)
@@ -14376,16 +14419,19 @@ class Nl2SqlService:
             )
             attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             if attributes:
-                sql = self._oracle_adapter.generate_select_ai_sql(
-                    profile_name=profile_name,
-                    question=runtime_question,
-                    attributes=attributes,
-                )
+                select_ai_kwargs: dict[str, Any] = {
+                    "profile_name": profile_name,
+                    "question": runtime_question,
+                    "attributes": attributes,
+                }
             else:
-                sql = self._oracle_adapter.generate_select_ai_sql(
-                    profile_name=profile_name,
-                    question=runtime_question,
-                )
+                select_ai_kwargs = {
+                    "profile_name": profile_name,
+                    "question": runtime_question,
+                }
+            if runtime_timeout_seconds is not None:
+                select_ai_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
+            sql = self._oracle_adapter.generate_select_ai_sql(**select_ai_kwargs)
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
             if attributes:
                 meta.update(
@@ -14411,9 +14457,14 @@ class Nl2SqlService:
                         ontology_instructions,
                     ]
                 )
-            sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(
-                team_name=team_name, question=runtime_question, tool_name=tool_name
-            )
+            agent_kwargs: dict[str, Any] = {
+                "team_name": team_name,
+                "question": runtime_question,
+                "tool_name": tool_name,
+            }
+            if runtime_timeout_seconds is not None:
+                agent_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
+            sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(**agent_kwargs)
             meta.update(
                 {
                     "select_ai_profile": self._select_ai_profile_name(profile),

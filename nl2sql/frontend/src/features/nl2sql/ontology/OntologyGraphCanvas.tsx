@@ -70,6 +70,7 @@ interface OntologyGraphCanvasProps {
   viewMode?: OntologyGraphViewMode;
   defaultViewMode?: OntologyGraphViewMode;
   onViewModeChange?: (mode: OntologyGraphViewMode) => void;
+  readOnly?: boolean;
 }
 
 const NODE_WIDTH = 220;
@@ -410,6 +411,7 @@ function OntologyFlow({
   viewMode,
   defaultViewMode,
   onViewModeChange,
+  readOnly = false,
 }: OntologyGraphCanvasProps) {
   const [search, setSearch] = useState("");
   const [showDetails, setShowDetails] = useState(false);
@@ -517,7 +519,7 @@ function OntologyFlow({
           source: edge.source_node_id,
           target: edge.target_node_id,
           label: showLabel ? edge.relationship_name_ja : undefined,
-          ariaLabel: `${edge.relationship_name_ja}${highlighted ? "、質問に一致" : ""}`,
+          ariaLabel: `${edge.relationship_name_ja}${highlighted ? "、接地対象に一致" : ""}`,
           markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--graph-line") },
           style: {
             stroke: highlighted || selected ? cssVar("--primary") : edgeStroke(edge),
@@ -561,7 +563,7 @@ function OntologyFlow({
         fitViewOptions={{ padding: 0.28 }}
         minZoom={0.25}
         maxZoom={1.8}
-        nodesDraggable
+        nodesDraggable={!readOnly}
         nodesConnectable={false}
         elementsSelectable
         nodesFocusable

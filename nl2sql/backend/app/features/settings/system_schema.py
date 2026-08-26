@@ -118,6 +118,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "015_remove_ontology_rdf_network.sql",
         "remove retired ontology semantic staging objects",
     ),
+    MigrationArtifact(
+        17,
+        "017_quality_evaluation_cancelled_status.sql",
+        "allow cancelled quality evaluation jobs",
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -195,6 +200,7 @@ PRESERVED_TABLES = frozenset(
         "NL2SQL_APP_ROLES",
         "NL2SQL_APP_USER_ROLES",
         "NL2SQL_APP_ROLE_PERMISSIONS",
+        "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
         "NL2SQL_AUTH_SESSIONS",
         "NL2SQL_DEEPSEC_MIGRATIONS",

@@ -327,8 +327,11 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByRole("textbox", { name: "生成 SQL" })).toHaveValue(
     /SELECT TOTAL_AMOUNT FROM INVOICES/
   );
-  await expect(page.getByTestId("nl2sql-interpretation-panel")).toBeVisible();
-  await expect(page.getByText("APP.INVOICES を参照し、SELECT 操作を行います。")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-interpretation-panel")).toHaveCount(0);
+  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
+  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
+  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
+  await expect(page.getByText("APP.INVOICES を参照し、SELECT 操作を行います。")).toHaveCount(0);
   await expect(page.getByText("1200000")).toBeVisible();
 
   const showPromptPanel = page.getByTestId("nl2sql-show-prompt-panel");

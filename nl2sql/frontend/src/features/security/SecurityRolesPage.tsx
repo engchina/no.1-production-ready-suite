@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import {
   useEffect,
   useMemo,
@@ -6,6 +5,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+
 import {
   Archive,
   ArchiveRestore,
@@ -30,9 +30,10 @@ import {
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { FormActionBar } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
-import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
+import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { isAbortError } from "@/lib/api";
@@ -50,7 +51,7 @@ import {
   securityFilteredCount,
 } from "./SecurityManagementShared";
 import { securityApi } from "./api";
-import type { PermissionDefinition, SecurityRole } from "./types";
+import type { PermissionDefinition, ProfileAccessProfile, SecurityRole } from "./types";
 
 type RolePanelView = "list" | "create" | "edit";
 
@@ -59,6 +60,7 @@ interface RoleDraftState {
   displayName: string;
   description: string;
   permissions: string[];
+  allowedProfileIds: string[];
 }
 
 const EMPTY_DRAFT: RoleDraftState = {
@@ -66,6 +68,7 @@ const EMPTY_DRAFT: RoleDraftState = {
   displayName: "",
   description: "",
   permissions: [],
+  allowedProfileIds: [],
 };
 
 const INPUT_CLASS =
@@ -85,6 +88,19 @@ function roleStatusText(role: SecurityRole) {
   if (role.archived) return t("security.roles.archivedDisabled");
   if (role.is_built_in) return t("security.roles.builtIn");
   return t("security.roles.custom");
+}
+
+function normalizedRole(role: SecurityRole): SecurityRole {
+  return {
+    ...role,
+    allowed_profile_ids: role.allowed_profile_ids ?? [],
+    data_entitlements: role.data_entitlements ?? [],
+    permissions: role.permissions ?? [],
+  };
+}
+
+function profileAccessLabel(profile: ProfileAccessProfile) {
+  return [profile.name, profile.category ? `(${profile.category})` : ""].filter(Boolean).join(" ");
 }
 
 function permissionInheritanceSources(
@@ -127,10 +143,12 @@ export function SecurityRolesPage() {
   const canManage = hasPermission(MENU_PERMISSIONS.securityRoles);
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [permissions, setPermissions] = useState<PermissionDefinition[]>([]);
+  const [profileAccessProfiles, setProfileAccessProfiles] = useState<ProfileAccessProfile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<RolePanelView>("list");
   const [search, setSearch] = useState("");
+  const [profileAccessSearch, setProfileAccessSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "role", direction: "asc" });
   const [draft, setDraft] = useState<RoleDraftState>(EMPTY_DRAFT);
   const [loading, setLoading] = useState(true);
@@ -138,6 +156,7 @@ export function SecurityRolesPage() {
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
+  const [profileAccessLoadWarning, setProfileAccessLoadWarning] = useState("");
   const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
   const selectedRoleManualSelection = useRef(false);
@@ -169,6 +188,14 @@ export function SecurityRolesPage() {
       .map((code) => permissionByCode.get(code)?.label ?? code)
       .join(" ");
 
+  const roleProfileAccessText = (role: SecurityRole) =>
+    role.role_code === "SYSTEM_ADMIN"
+      ? t("security.roles.profileAccessAll")
+      : profileAccessProfiles
+          .filter((profile) => role.allowed_profile_ids.includes(profile.id))
+          .map(profileAccessLabel)
+          .join(" ");
+
   const roleSearchText = (role: SecurityRole) =>
     [
       role.role_code,
@@ -176,6 +203,7 @@ export function SecurityRolesPage() {
       role.description,
       roleStatusText(role),
       rolePermissionText(role),
+      roleProfileAccessText(role),
     ]
       .join(" ")
       .toLowerCase();
@@ -211,15 +239,35 @@ export function SecurityRolesPage() {
     setLoading(true);
     setLoadError("");
     setActionError("");
+    setProfileAccessLoadWarning("");
     try {
       await runScopedRequest(async (signal) => {
-        const [roleRows, permissionRows] = await Promise.all([
+        const profileRowsRequest = canManage
+          ? securityApi
+              .profileAccessProfiles({ signal })
+              .then((rows) => ({ rows, warning: "" }))
+              .catch((cause) => {
+                if (isAbortError(cause)) throw cause;
+                const message =
+                  cause instanceof Error && cause.message.trim()
+                    ? cause.message
+                    : t("security.common.loadError");
+                return {
+                  rows: [] as ProfileAccessProfile[],
+                  warning: t("security.roles.profileAccessLoadWarning", { message }),
+                };
+              })
+          : Promise.resolve({ rows: [] as ProfileAccessProfile[], warning: "" });
+        const [roleRows, permissionRows, profileRows] = await Promise.all([
           securityApi.roles(true, { signal }),
           securityApi.permissions({ signal }),
+          profileRowsRequest,
         ]);
         if (signal.aborted || sequence !== loadSequence.current) return;
-        setRoles(roleRows);
+        setRoles(roleRows.map(normalizedRole));
         setPermissions(permissionRows);
+        setProfileAccessProfiles(profileRows.rows);
+        setProfileAccessLoadWarning(profileRows.warning);
         setSelectedId((current) =>
           current && roleRows.some((role) => role.role_id === current)
             ? current
@@ -266,6 +314,7 @@ export function SecurityRolesPage() {
     setActiveView("create");
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
+    setProfileAccessSearch("");
     setFormError("");
   };
 
@@ -279,7 +328,9 @@ export function SecurityRolesPage() {
       displayName: role.display_name,
       description: role.description,
       permissions: role.permissions,
+      allowedProfileIds: role.allowed_profile_ids,
     });
+    setProfileAccessSearch("");
     setFormError("");
   };
 
@@ -301,10 +352,12 @@ export function SecurityRolesPage() {
           display_name: draft.displayName,
           description: draft.description,
           permissions: draft.permissions,
+          allowed_profile_ids: draft.allowedProfileIds,
           data_entitlements: editingRole.data_entitlements,
         });
-        setRoles((rows) => rows.map((row) => (row.role_id === updated.role_id ? updated : row)));
-        startEdit(updated);
+        const nextRole = normalizedRole(updated);
+        setRoles((rows) => rows.map((row) => (row.role_id === nextRole.role_id ? nextRole : row)));
+        startEdit(nextRole);
       } else {
         const created = await securityApi.createRole({
           role_code: draft.roleCode,
@@ -312,9 +365,11 @@ export function SecurityRolesPage() {
           description: draft.description,
           permissions: draft.permissions,
           data_entitlements: [],
+          allowed_profile_ids: draft.allowedProfileIds,
         });
-        setRoles((rows) => [...rows, created]);
-        startEdit(created);
+        const nextRole = normalizedRole(created);
+        setRoles((rows) => [...rows, nextRole]);
+        startEdit(nextRole);
       }
       toast.success(t("security.common.saved"));
     } catch (cause) {
@@ -421,6 +476,43 @@ export function SecurityRolesPage() {
     }));
   };
 
+  const filteredProfileAccessProfiles = useMemo(() => {
+    const q = profileAccessSearch.trim().toLowerCase();
+    return profileAccessProfiles.filter((profile) => {
+      if (!q) return true;
+      return [profile.id, profile.name, profile.category, profile.description]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [profileAccessProfiles, profileAccessSearch]);
+
+  const profileAccessIds = filteredProfileAccessProfiles.map((profile) => profile.id);
+  const selectedProfileAccessCount = profileAccessIds.filter((id) =>
+    draft.allowedProfileIds.includes(id)
+  ).length;
+  const toggleProfileAccess = (profileId: string) => {
+    setDraft((current) => ({
+      ...current,
+      allowedProfileIds: current.allowedProfileIds.includes(profileId)
+        ? current.allowedProfileIds.filter((value) => value !== profileId)
+        : [...current.allowedProfileIds, profileId],
+    }));
+  };
+  const selectProfileAccess = (ids: string[]) => {
+    setDraft((current) => ({
+      ...current,
+      allowedProfileIds: [...new Set([...current.allowedProfileIds, ...ids])],
+    }));
+  };
+  const clearProfileAccess = (ids: string[]) => {
+    const idSet = new Set(ids);
+    setDraft((current) => ({
+      ...current,
+      allowedProfileIds: current.allowedProfileIds.filter((id) => !idSet.has(id)),
+    }));
+  };
+
   const readOnly = Boolean(!canManage || editingRole?.is_built_in || editingRole?.archived);
 
   const roleColumns: Array<DataTableColumn<SecurityRole>> = [
@@ -522,6 +614,9 @@ export function SecurityRolesPage() {
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
+        {profileAccessLoadWarning ? (
+          <Banner severity="warning">{profileAccessLoadWarning}</Banner>
+        ) : null}
         {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
 
         {activeView === "list" ? (
@@ -583,6 +678,7 @@ export function SecurityRolesPage() {
                 role={selectedRole}
                 canManage={canManage}
                 permissionByCode={permissionByCode}
+                profileAccessProfiles={profileAccessProfiles}
                 actions={selectedRole ? roleActions(selectedRole) : []}
               />
             </SecurityManagementPanelShell>
@@ -738,6 +834,77 @@ export function SecurityRolesPage() {
                   )}
                 </fieldset>
 
+                <fieldset className="grid gap-3" disabled={readOnly}>
+                  <legend className="text-base font-semibold">{t("security.roles.profileAccess")}</legend>
+                  <p className="text-sm text-muted">{t("security.roles.profileAccessHint")}</p>
+                  {editingRole?.role_code === "SYSTEM_ADMIN" ? (
+                    <Banner severity="info">{t("security.roles.profileAccessSystemAdmin")}</Banner>
+                  ) : (
+                    <>
+                      <div className="rounded-md border border-border bg-background p-3">
+                        <SecuritySearchField
+                          label={t("security.roles.profileAccessSearch")}
+                          placeholder={t("security.roles.profileAccessSearchPlaceholder")}
+                          value={profileAccessSearch}
+                          testId="security-roles-profile-access-search"
+                          onChange={setProfileAccessSearch}
+                        />
+                      </div>
+                      {profileAccessProfiles.length > 0 ? (
+                        <BulkSelectionActions
+                          selectLabel={t("common.selection.selectAll")}
+                          clearLabel={t("common.selection.clearAll")}
+                          selectDisabled={readOnly || profileAccessIds.length === 0 || selectedProfileAccessCount === profileAccessIds.length}
+                          clearDisabled={readOnly || selectedProfileAccessCount === 0}
+                          dataTestId="security-roles-profile-access-selection-actions"
+                          onSelectAll={() => selectProfileAccess(profileAccessIds)}
+                          onClearAll={() => clearProfileAccess(profileAccessIds)}
+                        />
+                      ) : null}
+                      {profileAccessProfiles.length === 0 ? (
+                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
+                          {t("security.roles.profileAccessEmpty")}
+                        </p>
+                      ) : filteredProfileAccessProfiles.length === 0 ? (
+                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
+                          {t("security.roles.profileAccessNoResults")}
+                        </p>
+                      ) : (
+                        <div className="grid gap-2 rounded-md border border-border bg-background p-3 lg:grid-cols-2">
+                          {filteredProfileAccessProfiles.map((profile) => {
+                            const checked = draft.allowedProfileIds.includes(profile.id);
+                            return (
+                              <label
+                                key={profile.id}
+                                className={`flex min-h-11 items-start gap-2 text-sm ${
+                                  readOnly ? "cursor-not-allowed opacity-80" : "cursor-pointer"
+                                }`}
+                              >
+                                <input
+                                  className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={readOnly}
+                                  onChange={() => toggleProfileAccess(profile.id)}
+                                />
+                                <span className="min-w-0">
+                                  <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                                    <span>{profileAccessLabel(profile)}</span>
+                                  </span>
+                                  {profile.description ? (
+                                    <span className="block text-xs leading-5 text-muted">{profile.description}</span>
+                                  ) : null}
+                                  <code className="block break-all text-[10px] text-muted">{profile.id}</code>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </fieldset>
+
                 <FormActionBar
                   ariaLabel={t("security.roles.editActions")}
                   primaryActions={
@@ -807,11 +974,13 @@ function RoleDetailPanel({
   role,
   canManage,
   permissionByCode,
+  profileAccessProfiles,
   actions,
 }: {
   role: SecurityRole | null;
   canManage: boolean;
   permissionByCode: Map<string, PermissionDefinition>;
+  profileAccessProfiles: ProfileAccessProfile[];
   actions: EntityAction[];
 }) {
   if (!role) {
@@ -827,6 +996,10 @@ function RoleDetailPanel({
   const effectivePermissionCount = role.permissions.length + [...inheritedSources.keys()].filter(
     (code) => !role.permissions.includes(code)
   ).length;
+  const allowedProfiles =
+    role.role_code === "SYSTEM_ADMIN"
+      ? profileAccessProfiles
+      : profileAccessProfiles.filter((profile) => role.allowed_profile_ids.includes(profile.id));
 
   return (
     <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4" aria-labelledby="security-roles-detail-heading">
@@ -867,6 +1040,11 @@ function RoleDetailPanel({
         <SecurityDetailField label={t("security.roles.permissions")}>
           {t("security.roles.permissionCount", { count: effectivePermissionCount })}
         </SecurityDetailField>
+        <SecurityDetailField label={t("security.roles.profileAccess")}>
+          {role.role_code === "SYSTEM_ADMIN"
+            ? t("security.roles.profileAccessAll")
+            : t("security.roles.profileAccessCount", { count: allowedProfiles.length })}
+        </SecurityDetailField>
         <SecurityDetailField label={t("security.common.version")}>
           {String(role.version)}
         </SecurityDetailField>
@@ -874,6 +1052,16 @@ function RoleDetailPanel({
           {role.description || t("security.common.none")}
         </SecurityDetailField>
       </dl>
+      {role.role_code !== "SYSTEM_ADMIN" && allowedProfiles.length > 0 ? (
+        <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+          <h3 className="text-sm font-semibold text-foreground">{t("security.roles.profileAccess")}</h3>
+          <div className="flex flex-wrap gap-1.5">
+            {allowedProfiles.map((profile) => (
+              <StatusBadge key={profile.id} variant="neutral" label={profileAccessLabel(profile)} />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

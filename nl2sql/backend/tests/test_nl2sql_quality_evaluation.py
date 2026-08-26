@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
@@ -16,14 +17,19 @@ from app.features.nl2sql.quality_evaluation_models import (
     QualityEvaluationCase,
     QualityEvaluationJobRecord,
     QualityEvaluationJudge,
+    QualityEvaluationResult,
     QualityEvaluationStatus,
     QualityEvaluationVerdict,
 )
 from app.features.nl2sql.quality_evaluation_service import (
+    QualityEvaluationJobStateError,
     QualityEvaluationService,
     QualityEvaluationValidationError,
 )
-from app.features.nl2sql.quality_evaluation_store import MemoryQualityEvaluationRepository
+from app.features.nl2sql.quality_evaluation_store import (
+    MemoryQualityEvaluationRepository,
+    OracleQualityEvaluationRepository,
+)
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.main import app
@@ -63,6 +69,93 @@ def _judge(*_args: object) -> QualityEvaluationJudge:
     )
 
 
+def _evaluation_job(
+    job_id: str,
+    *,
+    status: QualityEvaluationStatus = QualityEvaluationStatus.PENDING,
+    created_at: datetime | None = None,
+    lease_expires_at: str | None = None,
+) -> QualityEvaluationJobRecord:
+    now = created_at or datetime.now(UTC)
+    finished_at = now.isoformat() if status in {
+        QualityEvaluationStatus.COMPLETED,
+        QualityEvaluationStatus.COMPLETED_WITH_ERRORS,
+        QualityEvaluationStatus.FAILED,
+        QualityEvaluationStatus.CANCELLED,
+    } else None
+    return QualityEvaluationJobRecord(
+        job_id=job_id,
+        profile_id="default",
+        profile_name="default",
+        engines=[Nl2SqlEngine.SELECT_AI],
+        repeat_count=1,
+        cases=[
+            QualityEvaluationCase(
+                case_no=1,
+                case_id="A",
+                excel_row=2,
+                question="q",
+                expected_sql="SELECT 1 FROM dual",
+            )
+        ],
+        status=status,
+        total_attempts=1,
+        lease_expires_at=lease_expires_at,
+        created_at=now.isoformat(),
+        finished_at=finished_at,
+        updated_at=now.isoformat(),
+    )
+
+
+def _evaluation_result(job_id: str) -> QualityEvaluationResult:
+    now = datetime.now(UTC).isoformat()
+    return QualityEvaluationResult(
+        result_id=f"{job_id}-result-1",
+        job_id=job_id,
+        case_no=1,
+        case_id="A",
+        excel_row=2,
+        question="q",
+        expected_sql="SELECT 1 FROM dual",
+        engine=Nl2SqlEngine.SELECT_AI,
+        repetition_no=1,
+        generated_sql="SELECT 1 FROM dual",
+        normalized_sql="SELECT 1 FROM DUAL",
+        verdict=QualityEvaluationVerdict.CORRECT,
+        created_at=now,
+    )
+
+
+class _FakeEnterpriseAiClient:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[dict[str, Any]] = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "enterprise-nl2sql-model"
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "context": context,
+                "system_prompt": system_prompt,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return self.text
+
+
 def _configure_strict_engine_runtime(
     service: Nl2SqlService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -75,6 +168,105 @@ def _configure_strict_engine_runtime(
     monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
     monkeypatch.setattr(service._oracle_adapter, "is_configured", lambda: True)
     monkeypatch.setattr(service._enterprise_ai_client, "is_configured", lambda: True)
+
+
+class _LobPayload:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _ConnectionBoundLob:
+    def __init__(self, connection: _QualityEvaluationOracleConnection, value: str) -> None:
+        self._connection = connection
+        self._value = value
+
+    def read(self) -> str:
+        if self._connection.closed:
+            raise RuntimeError("LOB locator is no longer valid")
+        return self._value
+
+
+_ResultSet = list[tuple[object, ...]]
+
+
+class _QualityEvaluationOracleCursor:
+    def __init__(
+        self,
+        connection: _QualityEvaluationOracleConnection,
+        result_sets: list[_ResultSet],
+    ) -> None:
+        self._connection = connection
+        self._result_sets = result_sets
+        self._current: _ResultSet = []
+        self.executed: list[tuple[str, Any]] = []
+
+    def __enter__(self) -> _QualityEvaluationOracleCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, binds: Any = None) -> None:
+        self.executed.append((sql, binds))
+        if not sql.lstrip().upper().startswith("SELECT"):
+            self._current = []
+            return
+        if not self._result_sets:
+            raise AssertionError("scripted result set is missing")
+        self._current = [self._materialize_row(row) for row in self._result_sets.pop(0)]
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._current[0] if self._current else None
+
+    def fetchall(self) -> _ResultSet:
+        return list(self._current)
+
+    def _materialize_row(self, row: tuple[object, ...]) -> tuple[object, ...]:
+        return tuple(
+            _ConnectionBoundLob(self._connection, value.value)
+            if isinstance(value, _LobPayload)
+            else value
+            for value in row
+        )
+
+
+class _QualityEvaluationOracleConnection:
+    def __init__(self, result_sets: list[_ResultSet]) -> None:
+        self._result_sets = result_sets
+        self.closed = False
+        self.cursors: list[_QualityEvaluationOracleCursor] = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __enter__(self) -> _QualityEvaluationOracleConnection:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.closed = True
+
+    def cursor(self) -> _QualityEvaluationOracleCursor:
+        cursor = _QualityEvaluationOracleCursor(self, self._result_sets)
+        self.cursors.append(cursor)
+        return cursor
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+class _QualityEvaluationOracleConnectionFactory:
+    def __init__(self, calls: list[list[_ResultSet]]) -> None:
+        self._calls = calls
+        self.connections: list[_QualityEvaluationOracleConnection] = []
+
+    def __call__(self) -> _QualityEvaluationOracleConnection:
+        if not self._calls:
+            raise AssertionError("scripted connection is missing")
+        connection = _QualityEvaluationOracleConnection(self._calls.pop(0))
+        self.connections.append(connection)
+        return connection
 
 
 def test_parse_cases_accepts_japanese_and_english_headers_and_active_sheet() -> None:
@@ -227,6 +419,305 @@ def test_submit_accepts_repeat_boundaries_and_rejects_unavailable_engine(
             content=workbook,
             filename="cases.xlsx",
         )
+
+
+def test_quality_evaluation_get_wakes_orphan_pending_job_inprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "inprocess")
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("pending-job"))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+    dispatched: list[str] = []
+    monkeypatch.setattr(service, "_dispatch", lambda job_id: dispatched.append(job_id))
+
+    fetched = service.get_job("pending-job")
+
+    assert fetched.status == QualityEvaluationStatus.PENDING
+    assert dispatched == ["pending-job"]
+
+
+def test_quality_evaluation_get_wakes_expired_running_job_only_inprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "inprocess")
+    now = datetime.now(UTC)
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(
+        _evaluation_job(
+            "expired-running",
+            status=QualityEvaluationStatus.RUNNING,
+            lease_expires_at=(now - timedelta(seconds=1)).isoformat(),
+        )
+    )
+    repository.save_job(
+        _evaluation_job(
+            "active-running",
+            status=QualityEvaluationStatus.RUNNING,
+            lease_expires_at=(now + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    repository.save_job(
+        _evaluation_job("completed", status=QualityEvaluationStatus.COMPLETED)
+    )
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+    dispatched: list[str] = []
+    monkeypatch.setattr(service, "_dispatch", lambda job_id: dispatched.append(job_id))
+
+    service.get_job("expired-running")
+    service.get_job("active-running")
+    service.get_job("completed")
+
+    assert dispatched == ["expired-running"]
+
+
+def test_quality_evaluation_get_does_not_wake_external_worker_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("pending-job"))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+    dispatched: list[str] = []
+    monkeypatch.setattr(service, "_dispatch", lambda job_id: dispatched.append(job_id))
+
+    fetched = service.get_job("pending-job")
+
+    assert fetched.status == QualityEvaluationStatus.PENDING
+    assert dispatched == []
+
+
+def test_quality_evaluation_list_wakes_visible_orphan_jobs_inprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "inprocess")
+    now = datetime.now(UTC)
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("older-pending", created_at=now - timedelta(minutes=2)))
+    repository.save_job(_evaluation_job("newer-pending", created_at=now - timedelta(minutes=1)))
+    repository.save_job(_evaluation_job("completed", status=QualityEvaluationStatus.COMPLETED))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+    dispatched: list[str] = []
+    monkeypatch.setattr(service, "_dispatch", lambda job_id: dispatched.append(job_id))
+
+    page = service.list_jobs(cursor=None, limit=10)
+
+    assert [item.job_id for item in page.items] == [
+        "completed",
+        "newer-pending",
+        "older-pending",
+    ]
+    assert dispatched == ["newer-pending", "older-pending"]
+
+
+def test_quality_evaluation_delete_terminal_job_removes_job_and_results() -> None:
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(
+        _evaluation_job("completed-job", status=QualityEvaluationStatus.COMPLETED)
+    )
+    repository.save_result(_evaluation_result("completed-job"))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+
+    deleted = service.delete_job("completed-job")
+
+    assert deleted.job_id == "completed-job"
+    assert repository.get_job("completed-job") is None
+    results, total = repository.list_results(job_id="completed-job", offset=0, limit=10)
+    assert results == []
+    assert total == 0
+
+
+def test_quality_evaluation_delete_missing_job_raises_not_found() -> None:
+    service = _service()
+
+    with pytest.raises(ValueError, match="見つかりません"):
+        service.delete_job("missing-job")
+
+
+@pytest.mark.parametrize(
+    "status",
+    [QualityEvaluationStatus.PENDING, QualityEvaluationStatus.RUNNING],
+)
+def test_quality_evaluation_delete_rejects_active_jobs(status: QualityEvaluationStatus) -> None:
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("active-job", status=status))
+    repository.save_result(_evaluation_result("active-job"))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+
+    with pytest.raises(QualityEvaluationJobStateError, match="削除できません"):
+        service.delete_job("active-job")
+
+    assert repository.get_job("active-job") is not None
+    results, total = repository.list_results(job_id="active-job", offset=0, limit=10)
+    assert [item.result_id for item in results] == ["active-job-result-1"]
+    assert total == 1
+
+
+def test_quality_evaluation_capabilities_exposes_attempt_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_attempt_timeout_seconds", 300.0)
+    service = _service(engine_runner=lambda *_args: "SELECT 1 FROM dual", judge_runner=_judge)
+
+    capabilities = service.capabilities(profile_id="default")
+
+    assert capabilities.limits.attempt_timeout_seconds == 300.0
+
+
+def test_quality_evaluation_cancel_is_idempotent_and_rejects_completed_jobs() -> None:
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("pending-job"))
+    repository.save_job(_evaluation_job("finished-job", status=QualityEvaluationStatus.COMPLETED))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+
+    cancelled = service.cancel_job("pending-job")
+    cancelled_again = service.cancel_job("pending-job")
+
+    assert cancelled.status == QualityEvaluationStatus.CANCELLED
+    assert cancelled_again.status == QualityEvaluationStatus.CANCELLED
+    assert cancelled_again.finished_at is not None
+    with pytest.raises(QualityEvaluationJobStateError, match="中止できません"):
+        service.cancel_job("finished-job")
+    with pytest.raises(ValueError, match="見つかりません"):
+        service.cancel_job("missing-job")
+
+
+def test_worker_records_select_ai_agent_timeout_as_error_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_attempt_timeout_seconds", 300.0)
+
+    def engine(_question: str, selected: Nl2SqlEngine, _profile: str) -> str:
+        assert selected == Nl2SqlEngine.SELECT_AI_AGENT
+        raise RuntimeError("DPI-1067: call timeout of 300000 ms exceeded")
+
+    service = _service(engine_runner=engine, judge_runner=_judge)
+    submitted = service.submit(
+        profile_id="default",
+        engines=[Nl2SqlEngine.SELECT_AI_AGENT],
+        repeat_count=1,
+        content=_xlsx([["A", "質問", "SELECT 1 FROM dual"]]),
+        filename="cases.xlsx",
+    )
+
+    service.run_job(job_id=submitted.job_id)
+
+    result = service.list_results(job_id=submitted.job_id, cursor=None, limit=1).items[0]
+    assert result.verdict == QualityEvaluationVerdict.NOT_ANALYZED
+    assert "Select AI Agent" in result.generation_error
+    assert "300 秒" in result.generation_error
+    assert "タイムアウト" in result.generation_error
+    assert service.get_job(submitted.job_id).status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
+
+
+def test_expired_lease_reclaim_synthesizes_timeout_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    now = datetime.now(UTC)
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(
+        QualityEvaluationJobRecord(
+            job_id="expired-attempt",
+            profile_id="default",
+            profile_name="default",
+            engines=[Nl2SqlEngine.SELECT_AI_AGENT],
+            repeat_count=1,
+            cases=[
+                QualityEvaluationCase(
+                    case_no=1,
+                    case_id="A",
+                    excel_row=2,
+                    question="q",
+                    expected_sql="SELECT 1 FROM dual",
+                )
+            ],
+            status=QualityEvaluationStatus.RUNNING,
+            total_attempts=1,
+            current_case_id="A",
+            current_engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            current_repetition=1,
+            current_attempt_started_at=(now - timedelta(seconds=360)).isoformat(),
+            heartbeat_at=(now - timedelta(seconds=360)).isoformat(),
+            lease_expires_at=(now - timedelta(seconds=1)).isoformat(),
+            attempt_timeout_seconds=300.0,
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+    )
+
+    def engine(*_args: object) -> str:
+        raise AssertionError("expired attempt should not be executed again")
+
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()),
+        repository=repository,
+        engine_runner=engine,
+        judge_runner=_judge,
+    )
+
+    service.run_job(job_id="expired-attempt", worker_id="reclaimer")
+
+    result = service.list_results(job_id="expired-attempt", cursor=None, limit=1).items[0]
+    job = service.get_job("expired-attempt")
+    assert "worker lease" in result.generation_error
+    assert "タイムアウト" in result.generation_error
+    assert result.verdict == QualityEvaluationVerdict.NOT_ANALYZED
+    assert job.status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
+    assert job.completed_attempts == 1
+
+
+def test_cancelled_job_is_not_overwritten_by_late_worker_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    service = _service(judge_runner=_judge)
+    submitted_job_id = ""
+
+    def engine(_question: str, _selected: Nl2SqlEngine, _profile: str) -> str:
+        service.cancel_job(submitted_job_id)
+        return "SELECT 1 FROM dual"
+
+    service._engine_runner = engine  # noqa: SLF001
+    submitted = service.submit(
+        profile_id="default",
+        engines=[Nl2SqlEngine.SELECT_AI],
+        repeat_count=1,
+        content=_xlsx([["A", "質問", "SELECT 1 FROM dual"]]),
+        filename="cases.xlsx",
+    )
+    submitted_job_id = submitted.job_id
+
+    service.run_job(job_id=submitted.job_id)
+
+    job = service.get_job(submitted.job_id)
+    results = service.list_results(job_id=submitted.job_id, cursor=None, limit=10)
+    assert job.status == QualityEvaluationStatus.CANCELLED
+    assert job.completed_attempts == 0
+    assert results.items == []
 
 
 def test_quality_evaluation_readiness_allows_profile_engines_without_cached_asset_meta(
@@ -407,6 +898,74 @@ def test_worker_records_empty_engine_output_as_generation_error(
     assert service.get_job(submitted.job_id).status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
 
 
+def test_default_judge_uses_profile_schema_catalog_without_argument_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
+    nl2sql.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+    )
+    fake_client = _FakeEnterpriseAiClient(
+        '{"verdict":"correct","confidence":0.91,"summary":"意味が一致します。",'
+        '"differences":[],"risks":[],"correction_suggestion":""}'
+    )
+    nl2sql._enterprise_ai_client = fake_client  # noqa: SLF001
+    service = QualityEvaluationService(
+        nl2sql,
+        repository=MemoryQualityEvaluationRepository(),
+        engine_runner=lambda *_args: "SELECT EMPLOYEE_ID FROM EMPLOYEE",
+    )
+
+    submitted = service.submit(
+        profile_id="sql_assist_sample",
+        engines=[Nl2SqlEngine.ENTERPRISE_AI_DIRECT],
+        repeat_count=1,
+        content=_xlsx([["A", "社員IDを取得してください", "SELECT EMPLOYEE_ID FROM EMPLOYEE"]]),
+        filename="cases.xlsx",
+    )
+    service.run_job(job_id=submitted.job_id)
+
+    result = service.list_results(job_id=submitted.job_id, cursor=None, limit=1).items[0]
+    assert result.judge_error == ""
+    assert "_enterprise_ai_schema_context" not in result.judge_error
+    assert result.verdict == QualityEvaluationVerdict.CORRECT
+    assert fake_client.calls
+    assert fake_client.calls[0]["timeout_seconds"] == 300.0
+    assert "schema:" in fake_client.calls[0]["context"]
+    assert "EMPLOYEE" in fake_client.calls[0]["context"]
+
+
+def test_strict_enterprise_ai_direct_generation_passes_timeout_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+    )
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT EMPLOYEE_ID FROM EMPLOYEE","explanation":"社員IDを取得します。"}'
+    )
+    service._enterprise_ai_client = fake_client  # noqa: SLF001
+    monkeypatch.setattr(
+        service,
+        "quality_evaluation_engine_readiness",
+        lambda profile_id=None: {Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (True, "")},
+    )
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: False)
+
+    generated = service.generate_sql_strict_for_quality_evaluation(
+        question="社員IDを取得してください",
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+        profile_id="sql_assist_sample",
+        timeout_seconds=123.0,
+    )
+
+    assert generated.generated_sql == "SELECT EMPLOYEE_ID FROM EMPLOYEE"
+    assert fake_client.calls[0]["timeout_seconds"] == 123.0
+
+
 @pytest.mark.parametrize(
     "engine",
     [
@@ -466,6 +1025,147 @@ def test_memory_repository_reclaims_expired_lease_and_preserves_result_idempoten
     assert reclaimed is not None
     assert reclaimed.worker_id == "new-worker"
     assert reclaimed.attempt_no == 1
+
+
+def test_oracle_repository_materializes_quality_evaluation_lobs_before_connection_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured_cursors: list[_QualityEvaluationOracleCursor] = []
+
+    def configure_clob_fetch(cursor: _QualityEvaluationOracleCursor) -> None:
+        configured_cursors.append(cursor)
+
+    monkeypatch.setattr(
+        "app.features.nl2sql.quality_evaluation_store.configure_clob_fetch_as_text",
+        configure_clob_fetch,
+    )
+    now = datetime.now(UTC).isoformat()
+    job = QualityEvaluationJobRecord(
+        job_id="job-1",
+        profile_id="default",
+        profile_name="default",
+        engines=[Nl2SqlEngine.SELECT_AI],
+        repeat_count=1,
+        cases=[
+            QualityEvaluationCase(
+                case_no=1,
+                case_id="A",
+                excel_row=2,
+                question="q",
+                expected_sql="SELECT 1 FROM dual",
+            )
+        ],
+        total_attempts=1,
+        created_at=now,
+        updated_at=now,
+    )
+    result = QualityEvaluationResult(
+        result_id="result-1",
+        job_id=job.job_id,
+        case_no=1,
+        case_id="A",
+        excel_row=2,
+        question="q",
+        expected_sql="SELECT 1 FROM dual",
+        engine=Nl2SqlEngine.SELECT_AI,
+        repetition_no=1,
+        generated_sql="SELECT 1 FROM dual",
+        normalized_sql="SELECT 1 FROM DUAL",
+        verdict=QualityEvaluationVerdict.CORRECT,
+        created_at=now,
+    )
+    job_payload = job.model_dump_json()
+    result_payload = result.model_dump_json()
+    factory = _QualityEvaluationOracleConnectionFactory(
+        [
+            [[(_LobPayload(job_payload),)]],
+            [[(1,)], [(_LobPayload(job_payload),)]],
+            [[(1,)], [(_LobPayload(result_payload),)]],
+            [[(_LobPayload(result_payload),)]],
+            [[("job-1", _LobPayload(job_payload))]],
+        ]
+    )
+    repository = OracleQualityEvaluationRepository(connection_factory=factory)
+
+    fetched = repository.get_job("job-1")
+    jobs, total_jobs = repository.list_jobs(offset=0, limit=10)
+    results, total_results = repository.list_results(job_id="job-1", offset=0, limit=10)
+    all_results = repository.all_results("job-1")
+    claimed = repository.claim_job(worker_id="worker-1", lease_seconds=60, job_id="job-1")
+
+    assert fetched is not None
+    assert fetched.job_id == "job-1"
+    assert total_jobs == 1
+    assert [item.job_id for item in jobs] == ["job-1"]
+    assert total_results == 1
+    assert [item.result_id for item in results] == ["result-1"]
+    assert [item.result_id for item in all_results] == ["result-1"]
+    assert claimed is not None
+    assert claimed.worker_id == "worker-1"
+    assert claimed.status == QualityEvaluationStatus.RUNNING
+    assert len(configured_cursors) == 5
+    assert all(connection.closed for connection in factory.connections)
+
+
+def test_oracle_repository_delete_job_uses_job_delete_and_transaction() -> None:
+    job = _evaluation_job("job-1", status=QualityEvaluationStatus.COMPLETED)
+    factory = _QualityEvaluationOracleConnectionFactory(
+        [
+            [[(_LobPayload(job.model_dump_json()),)]],
+        ]
+    )
+    repository = OracleQualityEvaluationRepository(connection_factory=factory)
+
+    deleted = repository.delete_job("job-1")
+
+    assert deleted is not None
+    assert deleted.job_id == "job-1"
+    connection = factory.connections[0]
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+    executed_sql = [sql for cursor in connection.cursors for sql, _binds in cursor.executed]
+    assert any(
+        "DELETE FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id" in sql
+        for sql in executed_sql
+    )
+
+
+def test_oracle_repository_delete_job_rolls_back_on_delete_error() -> None:
+    class _FailingDeleteCursor(_QualityEvaluationOracleCursor):
+        def execute(self, sql: str, binds: Any = None) -> None:
+            if sql.lstrip().upper().startswith("DELETE"):
+                self.executed.append((sql, binds))
+                raise RuntimeError("delete failed")
+            super().execute(sql, binds)
+
+    class _FailingDeleteConnection(_QualityEvaluationOracleConnection):
+        def cursor(self) -> _QualityEvaluationOracleCursor:
+            cursor = _FailingDeleteCursor(self, self._result_sets)
+            self.cursors.append(cursor)
+            return cursor
+
+    class _FailingDeleteConnectionFactory(_QualityEvaluationOracleConnectionFactory):
+        def __call__(self) -> _QualityEvaluationOracleConnection:
+            if not self._calls:
+                raise AssertionError("scripted connection is missing")
+            connection = _FailingDeleteConnection(self._calls.pop(0))
+            self.connections.append(connection)
+            return connection
+
+    job = _evaluation_job("job-1", status=QualityEvaluationStatus.COMPLETED)
+    factory = _FailingDeleteConnectionFactory(
+        [
+            [[(_LobPayload(job.model_dump_json()),)]],
+        ]
+    )
+    repository = OracleQualityEvaluationRepository(connection_factory=factory)
+
+    with pytest.raises(RuntimeError, match="delete failed"):
+        repository.delete_job("job-1")
+
+    connection = factory.connections[0]
+    assert connection.commits == 0
+    assert connection.rollbacks == 1
 
 
 def test_results_workbook_has_review_columns_format_and_formula_injection_guard(
@@ -546,10 +1246,13 @@ def test_openapi_exposes_new_quality_flow_and_removes_legacy_evaluation_routes()
         "/api/nl2sql/quality-evaluations/template.xlsx",
         "/api/nl2sql/quality-evaluations",
         "/api/nl2sql/quality-evaluations/{job_id}",
+        "/api/nl2sql/quality-evaluations/{job_id}/cancel",
         "/api/nl2sql/quality-evaluations/{job_id}/results",
         "/api/nl2sql/quality-evaluations/{job_id}/results.xlsx",
     }
     assert expected <= set(paths)
+    assert "post" in paths["/api/nl2sql/quality-evaluations/{job_id}/cancel"]
+    assert "delete" in paths["/api/nl2sql/quality-evaluations/{job_id}"]
     assert "/api/nl2sql/analyze" in paths
     assert "/api/nl2sql/repair" not in paths
     assert "/api/nl2sql/reverse" in paths

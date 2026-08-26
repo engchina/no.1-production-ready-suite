@@ -96,6 +96,7 @@ class _FakeOracleDb:
         self.synthetic_function_signature_failures = 0
         self.synthetic_procedure_calls = 0
         self.show_prompt_text = "PROMPT: Select AI will generate SQL for the question."
+        self.call_timeouts: list[int] = []
 
     def connection(self) -> "_FakeOracleConnection":
         return _FakeOracleConnection(self)
@@ -104,6 +105,7 @@ class _FakeOracleDb:
 class _FakeOracleConnection:
     def __init__(self, db: _FakeOracleDb) -> None:
         self.db = db
+        self.call_timeout = 0
 
     def __enter__(self) -> "_FakeOracleConnection":
         self.db.connection_open = True
@@ -283,8 +285,11 @@ class _FakeRuntimeOracleAdapter(OracleNl2SqlAdapter):
         return super().get_select_ai_profile_detail(profile_name=profile_name)
 
     @contextmanager
-    def connection(self) -> Iterator[Any]:
+    def connection(self, *, call_timeout_seconds: float | None = None) -> Iterator[Any]:
         with self.db.connection() as conn:
+            if call_timeout_seconds is not None:
+                conn.call_timeout = int(max(1.0, float(call_timeout_seconds)) * 1000)
+                self.db.call_timeouts.append(conn.call_timeout)
             yield conn
 
 
@@ -305,8 +310,9 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
         question: str,
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
-        del profile_name
+        del profile_name, call_timeout_seconds
         self.questions.append(question)
         self.attributes.append(attributes)
         self.actions.append(action)
@@ -318,16 +324,23 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
         profile_name: str,
         question: str,
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
-        del profile_name
+        del profile_name, call_timeout_seconds
         self.questions.append(question)
         self.attributes.append(attributes)
         self.actions.append("showprompt")
         return "PROMPT: Select AI will generate SQL for the question."
 
     def run_select_ai_agent_team(
-        self, *, team_name: str, question: str, tool_name: str | None = None
+        self,
+        *,
+        team_name: str,
+        question: str,
+        tool_name: str | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
+        del team_name, tool_name, call_timeout_seconds
         self.questions.append(question)
         return "SELECT TOTAL_AMOUNT FROM INVOICES", "conversation-001"
 
@@ -340,8 +353,9 @@ class _FailingSelectAiOracleAdapter(_QuestionCaptureOracleAdapter):
         question: str,
         action: str = "showsql",
         attributes: dict[str, str] | None = None,
+        call_timeout_seconds: float | None = None,
     ) -> str:
-        del profile_name, action, attributes
+        del profile_name, action, attributes, call_timeout_seconds
         self.questions.append(question)
         raise RuntimeError('ORA-00904: "DBMS_CLOUD_AI"."GENERATE": invalid identifier')
 
@@ -497,7 +511,15 @@ class _FakeEnterpriseAiClient:
     def model_id(self) -> str:
         return "enterprise-nl2sql-model"
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         return self.text
 
@@ -1347,6 +1369,20 @@ def test_oracle_adapter_generate_select_ai_sql_binds_unicode_attributes() -> Non
     assert "attributes => :attributes" in fake_db.executed[-1]
     params = fake_db.executed_params[-1] or {}
     assert '"role": "財務 SQL アシスタント"' in str(params["attributes"])
+
+
+def test_oracle_adapter_generate_select_ai_sql_applies_call_timeout_override() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql = adapter.generate_select_ai_sql(
+        profile_name="FINANCE_PROFILE",
+        question="前四半期の売上は?",
+        call_timeout_seconds=300.0,
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert fake_db.call_timeouts == [300000]
 
 
 def test_oracle_adapter_generate_select_ai_prompt_uses_showprompt_action() -> None:
@@ -3058,6 +3094,21 @@ def test_oracle_adapter_run_select_ai_agent_team_uses_conversation() -> None:
     assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
     assert any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
     assert any("conversation_id => :conversation_id" in sql for sql in fake_db.executed)
+
+
+def test_oracle_adapter_run_select_ai_agent_team_applies_call_timeout_override() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM",
+        question="請求金額を確認したい",
+        call_timeout_seconds=300.0,
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "conversation-001"
+    assert fake_db.call_timeouts == [300000, 300000]
 
 
 def test_oracle_adapter_run_select_ai_agent_team_falls_back_to_positional_signature() -> None:

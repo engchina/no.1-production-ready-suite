@@ -65,6 +65,7 @@ _TERMINAL_STATUSES = {
     QualityEvaluationStatus.COMPLETED,
     QualityEvaluationStatus.COMPLETED_WITH_ERRORS,
     QualityEvaluationStatus.FAILED,
+    QualityEvaluationStatus.CANCELLED,
 }
 
 
@@ -102,6 +103,10 @@ class QualityEvaluationValidationError(ValueError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__("\n".join(errors))
+
+
+class QualityEvaluationJobStateError(ValueError):
+    """品質評価 job の状態が要求された操作に合わない場合のエラー。"""
 
 
 EngineRunner = Callable[[str, Nl2SqlEngine, str], GeneratedSql | str]
@@ -172,6 +177,9 @@ class QualityEvaluationService:
                 max_file_bytes=settings.nl2sql_quality_evaluation_max_file_bytes,
                 max_cases=settings.nl2sql_quality_evaluation_max_cases,
                 max_attempts=settings.nl2sql_quality_evaluation_max_attempts,
+                attempt_timeout_seconds=max(
+                    1.0, settings.nl2sql_quality_evaluation_attempt_timeout_seconds
+                ),
             ),
         )
 
@@ -367,6 +375,7 @@ class QualityEvaluationService:
             actor_user_uuid=actor_user_uuid,
             input_filename=Path(filename).name[:255],
             created_at=now,
+            attempt_timeout_seconds=capabilities.limits.attempt_timeout_seconds,
             updated_at=now,
         )
         self._repository.save_job(job)
@@ -402,6 +411,7 @@ class QualityEvaluationService:
         job = self._repository.get_job(job_id)
         if job is None:
             raise ValueError("指定された品質評価 job が見つかりません。")
+        self._wake_quality_evaluation_job_if_needed(job)
         return job_summary(job)
 
     def list_jobs(self, *, cursor: str | None, limit: int) -> QualityEvaluationJobPage:
@@ -409,6 +419,8 @@ class QualityEvaluationService:
         page_size = min(max(limit, 1), 100)
         jobs, total = self._repository.list_jobs(offset=offset, limit=page_size)
         next_offset = offset + len(jobs)
+        for job in jobs:
+            self._wake_quality_evaluation_job_if_needed(job)
         return QualityEvaluationJobPage(
             items=[job_summary(item) for item in jobs],
             next_cursor=_encode_offset(next_offset) if next_offset < total else None,
@@ -432,27 +444,244 @@ class QualityEvaluationService:
             total=total,
         )
 
+    def delete_job(self, job_id: str) -> QualityEvaluationJobSummary:
+        job = self._repository.get_job(job_id)
+        if job is None:
+            raise ValueError("指定された品質評価 job が見つかりません。")
+        if job.status not in _TERMINAL_STATUSES:
+            raise QualityEvaluationJobStateError(
+                "実行中または待機中の品質評価 job は削除できません。完了後に削除してください。"
+            )
+        deleted = self._repository.delete_job(job_id)
+        if deleted is None:
+            raise ValueError("指定された品質評価 job が見つかりません。")
+        return job_summary(deleted)
+
+    def cancel_job(self, job_id: str) -> QualityEvaluationJobSummary:
+        job = self._repository.get_job(job_id)
+        if job is None:
+            raise ValueError("指定された品質評価 job が見つかりません。")
+        if job.status == QualityEvaluationStatus.CANCELLED:
+            return job_summary(job)
+        if job.status in _TERMINAL_STATUSES:
+            raise QualityEvaluationJobStateError(
+                "この品質評価 job は既に完了しているため中止できません。"
+            )
+        now = _utc_now()
+        cancelled = job.model_copy(
+            update={
+                "status": QualityEvaluationStatus.CANCELLED,
+                "error_message": "利用者の操作で品質評価 job を中止しました。",
+                "current_case_id": "",
+                "current_engine": None,
+                "current_repetition": 0,
+                "current_attempt_started_at": None,
+                "heartbeat_at": now,
+                "lease_expires_at": None,
+                "finished_at": now,
+                "updated_at": now,
+            },
+            deep=True,
+        )
+        saved = self._repository.save_job(cancelled)
+        logger.info(
+            "quality_evaluation_cancelled",
+            extra={"job_id": saved.job_id, "profile_id": saved.profile_id},
+        )
+        return job_summary(saved)
+
     def run_next_job(self, *, worker_id: str | None = None) -> bool:
         claimed = self._repository.claim_job(
             worker_id=worker_id or self._worker_id(),
-            lease_seconds=get_settings().nl2sql_quality_evaluation_lease_seconds,
+            lease_seconds=self._attempt_lease_seconds(),
         )
         if claimed is None:
             return False
-        self._process_claimed_job(claimed)
+        self._process_claimed_job(self._record_expired_current_attempt_if_needed(claimed))
         return True
 
     def run_job(self, *, job_id: str, worker_id: str | None = None) -> None:
         claimed = self._repository.claim_job(
             worker_id=worker_id or self._worker_id(),
-            lease_seconds=get_settings().nl2sql_quality_evaluation_lease_seconds,
+            lease_seconds=self._attempt_lease_seconds(),
             job_id=job_id,
         )
         if claimed is not None:
-            self._process_claimed_job(claimed)
+            self._process_claimed_job(self._record_expired_current_attempt_if_needed(claimed))
 
     def _worker_id(self) -> str:
         return f"{socket.gethostname()}:{threading.get_native_id()}:{uuid.uuid4().hex[:8]}"
+
+    def _wake_quality_evaluation_job_if_needed(
+        self,
+        job: QualityEvaluationJobRecord,
+        *,
+        settings: Any | None = None,
+    ) -> bool:
+        settings = settings or get_settings()
+        worker_mode = settings.nl2sql_quality_evaluation_worker_mode.strip().lower()
+        if worker_mode == "external":
+            return False
+        if job.status == QualityEvaluationStatus.PENDING:
+            self._dispatch(job.job_id)
+            return True
+        if job.status == QualityEvaluationStatus.RUNNING and self._quality_evaluation_lease_expired(
+            job
+        ):
+            self._dispatch(job.job_id)
+            return True
+        return False
+
+    @staticmethod
+    def _quality_evaluation_lease_expired(job: QualityEvaluationJobRecord) -> bool:
+        if not job.lease_expires_at:
+            return True
+        try:
+            expires_at = datetime.fromisoformat(job.lease_expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return expires_at <= datetime.now(UTC)
+
+    def _attempt_timeout_seconds(self, job: QualityEvaluationJobRecord | None = None) -> float:
+        if job is not None:
+            return max(1.0, float(job.attempt_timeout_seconds))
+        return max(1.0, float(get_settings().nl2sql_quality_evaluation_attempt_timeout_seconds))
+
+    def _attempt_lease_seconds(self, job: QualityEvaluationJobRecord | None = None) -> float:
+        return self._attempt_timeout_seconds(job) + 30.0
+
+    @staticmethod
+    def _parse_timestamp(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed
+
+    @staticmethod
+    def _is_timeout_exception(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        message = str(exc).casefold()
+        return (
+            "timeout" in message
+            or "timed out" in message
+            or "call timeout" in message
+            or "dpi-1067" in message
+            or "ora-01013" in message
+            or "タイムアウト" in message
+        )
+
+    def _attempt_error_message(
+        self,
+        exc: Exception,
+        *,
+        engine: Nl2SqlEngine,
+        stage_label: str,
+        timeout_seconds: float,
+    ) -> str:
+        if self._is_timeout_exception(exc):
+            return (
+                f"{_ENGINE_LABELS.get(engine, engine.value)} の{stage_label}が "
+                f"{timeout_seconds:.0f} 秒以内に完了しなかったためタイムアウトしました。"
+            )
+        return str(exc)[:1000]
+
+    def _timeout_result(
+        self,
+        *,
+        job: QualityEvaluationJobRecord,
+        case: QualityEvaluationCase,
+        engine: Nl2SqlEngine,
+        repetition: int,
+        elapsed_ms: int,
+        message: str,
+    ) -> QualityEvaluationResult:
+        return QualityEvaluationResult(
+            result_id=str(uuid.uuid4()),
+            job_id=job.job_id,
+            case_no=case.case_no,
+            case_id=case.case_id,
+            excel_row=case.excel_row,
+            question=case.question,
+            expected_sql=case.expected_sql,
+            engine=engine,
+            repetition_no=repetition,
+            generated_sql="",
+            normalized_sql="",
+            deterministic_analysis=QualityEvaluationDeterministicAnalysis(
+                risk_findings=[message]
+            ),
+            generation_elapsed_ms=elapsed_ms,
+            judge_elapsed_ms=0,
+            total_elapsed_ms=elapsed_ms,
+            verdict=QualityEvaluationVerdict.NOT_ANALYZED,
+            judge=None,
+            generation_error=message,
+            judge_error="",
+            created_at=_utc_now(),
+        )
+
+    def _record_expired_current_attempt_if_needed(
+        self, job: QualityEvaluationJobRecord
+    ) -> QualityEvaluationJobRecord:
+        if (
+            job.status != QualityEvaluationStatus.RUNNING
+            or not job.current_case_id
+            or job.current_engine is None
+            or not job.current_repetition
+        ):
+            return job
+        started_at = self._parse_timestamp(job.current_attempt_started_at)
+        if started_at is None:
+            return job
+        timeout_seconds = self._attempt_timeout_seconds(job)
+        now = datetime.now(UTC)
+        if started_at + timedelta(seconds=timeout_seconds) > now:
+            return job
+        case = next((item for item in job.cases if item.case_id == job.current_case_id), None)
+        if case is None:
+            return job
+        if not self._repository.has_result(
+            job_id=job.job_id,
+            case_no=case.case_no,
+            engine=job.current_engine.value,
+            repetition_no=job.current_repetition,
+        ):
+            elapsed_ms = max(0, round((now - started_at).total_seconds() * 1000))
+            message = (
+                f"{_ENGINE_LABELS.get(job.current_engine, job.current_engine.value)} の SQL 生成が "
+                f"{timeout_seconds:.0f} 秒以内に完了しなかったため、"
+                "worker lease の再取得時にタイムアウト結果として記録しました。"
+            )
+            self._repository.save_result(
+                self._timeout_result(
+                    job=job,
+                    case=case,
+                    engine=job.current_engine,
+                    repetition=job.current_repetition,
+                    elapsed_ms=elapsed_ms,
+                    message=message,
+                )
+            )
+            logger.warning(
+                "quality_evaluation_attempt_timeout_recorded",
+                extra={
+                    "job_id": job.job_id,
+                    "profile_id": job.profile_id,
+                    "engine": job.current_engine.value,
+                    "case_no": case.case_no,
+                    "repetition_no": job.current_repetition,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+        return self._refresh_progress(job)
 
     def _process_claimed_job(self, job: QualityEvaluationJobRecord) -> None:
         try:
@@ -466,34 +695,41 @@ class QualityEvaluationService:
                             repetition_no=repetition,
                         ):
                             continue
+                        latest = self._repository.get_job(job.job_id)
+                        if latest is None or latest.status in _TERMINAL_STATUSES:
+                            return
                         now = datetime.now(UTC)
-                        job = job.model_copy(
+                        timeout_seconds = self._attempt_timeout_seconds(latest)
+                        job = latest.model_copy(
                             update={
+                                "status": QualityEvaluationStatus.RUNNING,
                                 "current_case_id": case.case_id,
                                 "current_engine": engine,
                                 "current_repetition": repetition,
+                                "current_attempt_started_at": now.isoformat(),
                                 "heartbeat_at": now.isoformat(),
                                 "lease_expires_at": (
-                                    now
-                                    + timedelta(
-                                        seconds=max(
-                                            30.0,
-                                            get_settings().nl2sql_quality_evaluation_lease_seconds,
-                                        )
-                                    )
+                                    now + timedelta(seconds=self._attempt_lease_seconds(latest))
                                 ).isoformat(),
+                                "attempt_timeout_seconds": timeout_seconds,
                                 "updated_at": now.isoformat(),
                             },
                             deep=True,
                         )
                         self._repository.save_job(job)
                         result = self._evaluate_attempt(job, case, engine, repetition)
+                        latest = self._repository.get_job(job.job_id)
+                        if latest is None or latest.status in _TERMINAL_STATUSES:
+                            return
                         self._repository.save_result(result)
-                        job = self._refresh_progress(job)
+                        job = self._refresh_progress(latest)
+            latest = self._repository.get_job(job.job_id)
+            if latest is None or latest.status in _TERMINAL_STATUSES:
+                return
             results = self._repository.all_results(job.job_id)
             errors = sum(1 for item in results if item.generation_error or item.judge_error)
             finished = _utc_now()
-            job = job.model_copy(
+            job = latest.model_copy(
                 update={
                     "status": (
                         QualityEvaluationStatus.COMPLETED_WITH_ERRORS
@@ -507,6 +743,7 @@ class QualityEvaluationService:
                     "current_case_id": "",
                     "current_engine": None,
                     "current_repetition": 0,
+                    "current_attempt_started_at": None,
                     "heartbeat_at": finished,
                     "lease_expires_at": None,
                     "finished_at": finished,
@@ -530,29 +767,37 @@ class QualityEvaluationService:
                 "quality_evaluation_failed",
                 extra={"job_id": job.job_id, "profile_id": job.profile_id},
             )
-            failed = job.model_copy(
+            latest = self._repository.get_job(job.job_id)
+            if latest is None or latest.status in _TERMINAL_STATUSES:
+                return
+            now = _utc_now()
+            failed = latest.model_copy(
                 update={
                     "status": QualityEvaluationStatus.FAILED,
                     "error_message": str(exc)[:1000],
+                    "current_attempt_started_at": None,
                     "lease_expires_at": None,
-                    "finished_at": _utc_now(),
-                    "updated_at": _utc_now(),
+                    "finished_at": now,
+                    "updated_at": now,
                 },
                 deep=True,
             )
             self._repository.save_job(failed)
 
     def _refresh_progress(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
+        latest = self._repository.get_job(job.job_id)
+        if latest is None or latest.status in _TERMINAL_STATUSES:
+            return latest or job
         results = self._repository.all_results(job.job_id)
         now = _utc_now()
-        refreshed = job.model_copy(
+        refreshed = latest.model_copy(
             update={
                 "completed_attempts": len(results),
                 "success_count": sum(item.generation_succeeded for item in results),
                 "error_count": sum(
                     bool(item.generation_error or item.judge_error) for item in results
                 ),
-                "engine_summaries": self._summaries(job, results),
+                "engine_summaries": self._summaries(latest, results),
                 "heartbeat_at": now,
                 "updated_at": now,
             },
@@ -573,13 +818,17 @@ class QualityEvaluationService:
         judge_error = ""
         judge: QualityEvaluationJudge | None = None
         analysis = QualityEvaluationDeterministicAnalysis()
+        timeout_seconds = self._attempt_timeout_seconds(job)
         generation_started = time.perf_counter()
         try:
             generated = (
                 self._engine_runner(case.question, engine, job.profile_id)
                 if self._engine_runner
                 else self._nl2sql.generate_sql_strict_for_quality_evaluation(
-                    question=case.question, engine=engine, profile_id=job.profile_id
+                    question=case.question,
+                    engine=engine,
+                    profile_id=job.profile_id,
+                    timeout_seconds=timeout_seconds,
                 )
             )
             generated_sql = (
@@ -588,7 +837,12 @@ class QualityEvaluationService:
             if not generated_sql:
                 raise RuntimeError("選択された engine が SQL を返しませんでした。")
         except Exception as exc:
-            generation_error = str(exc)[:1000]
+            generation_error = self._attempt_error_message(
+                exc,
+                engine=engine,
+                stage_label="SQL 生成",
+                timeout_seconds=timeout_seconds,
+            )
         generation_elapsed_ms = round((time.perf_counter() - generation_started) * 1000)
         judge_elapsed_ms = 0
         if generated_sql:
@@ -628,10 +882,16 @@ class QualityEvaluationService:
                         generated_sql=generated_sql,
                         profile_id=job.profile_id,
                         analysis=analysis,
+                        timeout_seconds=timeout_seconds,
                     )
                 )
             except Exception as exc:
-                judge_error = str(exc)[:1000]
+                judge_error = self._attempt_error_message(
+                    exc,
+                    engine=engine,
+                    stage_label="LLM 判定",
+                    timeout_seconds=timeout_seconds,
+                )
                 judge = None
             judge_elapsed_ms = round((time.perf_counter() - judge_started) * 1000)
         result = QualityEvaluationResult(
@@ -680,11 +940,15 @@ class QualityEvaluationService:
         generated_sql: str,
         profile_id: str,
         analysis: QualityEvaluationDeterministicAnalysis,
+        timeout_seconds: float | None = None,
     ) -> QualityEvaluationJudge:
         profile = self._nl2sql.get_profile(profile_id)
         allowed = self._nl2sql.resolve_allowed_objects(profile_id, AllowedObjects())
+        catalog = self._nl2sql._generation_schema_catalog(profile, allowed)  # noqa: SLF001
         schema_context = self._nl2sql._enterprise_ai_schema_context(  # noqa: SLF001
-            profile=profile, allowed=allowed
+            profile=profile,
+            allowed=allowed,
+            catalog=catalog,
         )
         system_prompt = (
             "あなたは Oracle SQL の品質評価者です。SQL を実行せず、質問に対する期待 SQL "
@@ -707,6 +971,7 @@ class QualityEvaluationService:
             prompt=prompt,
             context=schema_context,
             system_prompt=system_prompt,
+            timeout_seconds=timeout_seconds,
         )
         payload = self._nl2sql._json_object_from_text(raw)  # noqa: SLF001
         return QualityEvaluationJudge.model_validate(payload)

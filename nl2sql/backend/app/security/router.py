@@ -27,6 +27,7 @@ from .schemas import (
     PasswordResetData,
     PasswordResetRequest,
     PermissionData,
+    ProfileAccessProfileData,
     RoleArchiveRequest,
     RoleCreateRequest,
     RoleData,
@@ -314,6 +315,11 @@ def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[Rol
             (item.resource_code, item.scope_code, item.capability)
             for item in payload.data_entitlements
         ],
+        allowed_profile_ids=(
+            set(payload.allowed_profile_ids)
+            if payload.allowed_profile_ids is not None
+            else None
+        ),
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
@@ -355,12 +361,52 @@ def update_role(
             (item.resource_code, item.scope_code, item.capability)
             for item in payload.data_entitlements
         ],
+        allowed_profile_ids=(
+            set(payload.allowed_profile_ids)
+            if payload.allowed_profile_ids is not None
+            else None
+        ),
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
     )
     response.headers["ETag"] = f'"{role.version}"'
     return ApiResponse(data=RoleData.from_record(role))
+
+
+@router.get(
+    "/security/profile-access/profiles",
+    response_model=ApiResponse[list[ProfileAccessProfileData]],
+)
+def list_profile_access_profiles(
+    include_archived: bool = Query(default=False),
+) -> ApiResponse[list[ProfileAccessProfileData]]:
+    """ロール管理画面向けに業務 profile の利用権限カタログを返す。"""
+    from app.features.nl2sql.service import nl2sql_service
+
+    profiles = nl2sql_service.list_profiles(include_archived=include_archived)
+    profile_ids = {profile.id for profile in profiles}
+    roles = get_security_service().list_roles(include_archived=True)
+    allowed_roles_by_profile: dict[str, list[str]] = {profile_id: [] for profile_id in profile_ids}
+    for role in roles:
+        if role.archived:
+            continue
+        for profile_id in role.allowed_profile_ids:
+            if profile_id in allowed_roles_by_profile:
+                allowed_roles_by_profile[profile_id].append(role.role_id)
+    return ApiResponse(
+        data=[
+            ProfileAccessProfileData(
+                id=profile.id,
+                name=profile.name,
+                category=profile.category,
+                description=profile.description,
+                archived=profile.archived,
+                allowed_role_ids=sorted(allowed_roles_by_profile.get(profile.id, [])),
+            )
+            for profile in profiles
+        ]
+    )
 
 
 @router.post("/security/roles/{role_id}/archive", response_model=ApiResponse[RoleData])

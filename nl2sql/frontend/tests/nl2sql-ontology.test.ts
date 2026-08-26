@@ -28,6 +28,7 @@ import {
   type QuestionIntentGraph,
   type SqlSemanticGraph,
 } from "../src/features/nl2sql/ontology/types.ts";
+import { groundSqlSemanticGraphOnOntologyGraph } from "../src/features/nl2sql/ontology/sqlGrounding.ts";
 
 test("ontology graph is bounded to 100 nodes and reports omitted kinds and edges", () => {
   const graph: OntologyGraph = {
@@ -182,6 +183,121 @@ test("Oracle SQL semantic graph converts AST elements and unreviewed join into g
   assert.ok(graph.nodes.some((node) => node.kind === "sql_group" && node.business_name_ja === "c.name"));
   assert.ok(graph.nodes.some((node) => node.kind === "sql_join" && node.validation_status === "blocked"));
   assert.ok(graph.nodes.some((node) => node.kind === "sql_limit" && node.business_name_ja === "上限 100 件"));
+});
+
+test("SQL semantic graph grounds generated SQL on profile ontology graph", () => {
+  const ontologyGraph: OntologyGraph = {
+    nodes: [
+      {
+        id: "dept-business",
+        kind: "business_entity",
+        business_name_ja: "部署",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "dept-table",
+              owner: "ADMIN",
+              object_name: "DEPARTMENT",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      {
+        id: "dept-table",
+        kind: "table",
+        technical_name: "ADMIN.DEPARTMENT",
+        business_name_ja: "部署情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT" },
+      },
+      {
+        id: "dept-name",
+        kind: "property",
+        technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
+        business_name_ja: "部署名",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: { node_id: "dept-table", owner: "ADMIN", object_name: "DEPARTMENT" },
+            column_refs: [{ owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_NAME" }],
+          },
+        ],
+      },
+      {
+        id: "employee-table",
+        kind: "table",
+        technical_name: "ADMIN.EMPLOYEE",
+        business_name_ja: "従業員情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "EMPLOYEE" },
+      },
+      {
+        id: "employee-name",
+        kind: "property",
+        technical_name: "ADMIN.EMPLOYEE.EMPLOYEE_NAME",
+        business_name_ja: "従業員氏名",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "EMPLOYEE_NAME" },
+      },
+    ],
+    edges: [
+      {
+        id: "dept-employee",
+        source_node_id: "dept-table",
+        target_node_id: "employee-table",
+        relationship_name_ja: "部署に所属する従業員",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+          },
+        ],
+        review_status: "approved",
+      },
+    ],
+  };
+  const sqlGraph: SqlSemanticGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql:
+      'SELECT d.DEPARTMENT_NAME, e.EMPLOYEE_NAME FROM ADMIN.DEPARTMENT d JOIN ADMIN.EMPLOYEE e ON e.DEPARTMENT_ID = d.DEPARTMENT_ID',
+    ctes: [],
+    tables: [
+      { owner: "ADMIN", name: "DEPARTMENT", alias: "d", qualified_name: "ADMIN.DEPARTMENT" },
+      { qualified_name: "ADMIN.EMPLOYEE", alias: "e" },
+    ],
+    columns: [
+      { table: "d", name: "DEPARTMENT_NAME", expression_sql: "d.DEPARTMENT_NAME" },
+      { expression_sql: "e.EMPLOYEE_NAME", referenced_columns: ["e.EMPLOYEE_NAME"] },
+    ],
+    joins: [
+      {
+        left_source: "ADMIN.DEPARTMENT d",
+        right_source: "ADMIN.EMPLOYEE e",
+        condition_sql: "e.DEPARTMENT_ID = d.DEPARTMENT_ID",
+      },
+    ],
+    filters: [{ expression_sql: "e.UNKNOWN_COLUMN IS NOT NULL", referenced_columns: ["e.UNKNOWN_COLUMN"] }],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+  };
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.equal(result.status, "partial");
+  assert.ok(result.highlightNodeIds.includes("dept-business"));
+  assert.ok(result.highlightNodeIds.includes("dept-table"));
+  assert.ok(result.highlightNodeIds.includes("dept-name"));
+  assert.ok(result.highlightNodeIds.includes("employee-name"));
+  assert.ok(result.highlightEdgeIds.includes("dept-employee"));
+  assert.deepEqual(result.unmatchedTables, []);
+  assert.deepEqual(result.unmatchedJoins, []);
+  assert.deepEqual(result.unmatchedColumns, ["e.UNKNOWN_COLUMN IS NOT NULL"]);
 });
 
 test("query session adapters restore current version and hash-bound execution request", () => {

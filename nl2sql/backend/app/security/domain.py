@@ -59,6 +59,7 @@ class RoleRecord:
     version: int
     permissions: set[str] = field(default_factory=set)
     entitlements: list[DataEntitlementRecord] = field(default_factory=list)
+    allowed_profile_ids: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -98,6 +99,7 @@ class Principal:
     role_codes: list[str]
     permissions: set[str]
     data_entitlements: list[DataEntitlementRecord]
+    allowed_profile_ids: set[str]
     session_id: str
     csrf_token_hash: str
     password_change_allowed: bool = True
@@ -111,6 +113,12 @@ class Principal:
 
     def has_any_permission(self, permissions: set[str] | frozenset[str]) -> bool:
         return self.is_system_admin or bool(self.permissions.intersection(permissions))
+
+    def can_use_profile(self, profile_id: str | None) -> bool:
+        if self.is_system_admin:
+            return True
+        normalized = str(profile_id or "").strip()
+        return bool(normalized and normalized in self.allowed_profile_ids)
 
 
 def scope_filter_payload(filter_item: DataEntitlementScopeFilter) -> dict[str, object]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from typing import Annotated
@@ -157,6 +158,7 @@ from .quality_evaluation_models import (
     QualityEvaluationResultPage,
 )
 from .quality_evaluation_service import (
+    QualityEvaluationJobStateError,
     QualityEvaluationValidationError,
     quality_evaluation_service,
 )
@@ -191,6 +193,43 @@ def _actor_access_args(request: Request, *, manage_permission: str) -> dict[str,
     }
 
 
+def _profile_access_denied() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail="この業務プロファイルを利用する権限がありません。",
+    )
+
+
+def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
+    principal = _principal_from_request(request)
+    if principal is None or principal.is_system_admin:
+        return None
+    return set(principal.allowed_profile_ids)
+
+
+def _profile_access_digest(request: Request) -> str:
+    allowed_profile_ids = _allowed_profile_ids_for_request(request)
+    if allowed_profile_ids is None:
+        return "all"
+    payload = "\n".join(sorted(allowed_profile_ids))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _assert_profile_access(
+    request: Request,
+    profile_id: str | None,
+    *,
+    default_profile: bool = False,
+) -> None:
+    principal = _principal_from_request(request)
+    if principal is None or principal.is_system_admin:
+        return
+    resolved = (profile_id or ("default" if default_profile else "")).strip()
+    if resolved and resolved in principal.allowed_profile_ids:
+        return
+    raise _profile_access_denied()
+
+
 persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
 router = APIRouter(
     prefix="/nl2sql",
@@ -223,8 +262,9 @@ def is_select_only(sql: str) -> bool:
 
 
 @router.post("/preview", response_model=ApiResponse[PreviewData])
-def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
+def preview(req: PreviewRequest, request: Request) -> ApiResponse[PreviewData]:
     """自然言語から SQL を生成して実行せずに safety / engine meta を返す。"""
+    _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
         return ApiResponse(data=nl2sql_service.preview(req))
     except ValueError as exc:
@@ -259,6 +299,7 @@ def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL 検索 job を開始する。"""
+    _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
         principal = getattr(request.state, "principal", None)
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
@@ -293,17 +334,22 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
 
 @router.get("/profiles", response_model=ApiResponse[list[Nl2SqlProfile]])
 def list_profiles(
-    response: Response, include_archived: bool = False
+    request: Request, response: Response, include_archived: bool = False
 ) -> ApiResponse[list[Nl2SqlProfile]]:
     """NL2SQL profile 一覧。"""
     response.headers["Deprecation"] = "true"
     response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
     response.headers["Link"] = '</api/nl2sql/profiles/search>; rel="successor-version"'
-    return ApiResponse(data=nl2sql_service.list_profiles(include_archived=include_archived))
+    allowed_profile_ids = _allowed_profile_ids_for_request(request)
+    profiles = nl2sql_service.list_profiles(include_archived=include_archived)
+    if allowed_profile_ids is not None:
+        profiles = [profile for profile in profiles if profile.id in allowed_profile_ids]
+    return ApiResponse(data=profiles)
 
 
 @router.get("/profiles/search", response_model=ApiResponse[ProfileSummaryPage])
 def search_profiles(
+    request: Request,
     response: Response,
     cursor: str | None = None,
     limit: int = 50,
@@ -319,8 +365,9 @@ def search_profiles(
         limit=limit,
         query=q,
         include_archived=include_archived,
+        allowed_profile_ids=_allowed_profile_ids_for_request(request),
     )
-    quoted_etag = f'"profiles-{page.change_token}"'
+    quoted_etag = f'"profiles-{page.change_token}-{_profile_access_digest(request)}"'
     if if_none_match == quoted_etag:
         return Response(status_code=304, headers={"ETag": quoted_etag})
     response.headers["ETag"] = quoted_etag
@@ -333,10 +380,12 @@ def search_profiles(
 )
 def get_profile_usage_context(
     profile_id: str,
+    request: Request,
     response: Response,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[ProfileUsageContext] | Response:
     """AI 活用画面向けに profile の最小利用コンテキストを返す。"""
+    _assert_profile_access(request, profile_id)
     try:
         profile = nl2sql_service.get_profile(profile_id, include_archived=False)
     except ValueError as exc:
@@ -370,10 +419,12 @@ def get_profile_usage_context(
 @router.get("/profiles/{profile_id}", response_model=ApiResponse[Nl2SqlProfile])
 def get_profile_detail(
     profile_id: str,
+    request: Request,
     response: Response,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[Nl2SqlProfile] | Response:
     """選択された profile だけを遅延取得する。"""
+    _assert_profile_access(request, profile_id)
     try:
         profile = nl2sql_service.get_profile(profile_id, include_archived=True)
     except ValueError as exc:
@@ -403,10 +454,12 @@ def create_profile(req: ProfileUpsertRequest, response: Response) -> ApiResponse
 def update_profile(
     profile_id: str,
     req: ProfilePatchRequest,
+    request: Request,
     response: Response,
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を更新する。"""
+    _assert_profile_access(request, profile_id)
     try:
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
@@ -458,9 +511,11 @@ def update_profile(
 @router.delete("/profiles/{profile_id}", response_model=ApiResponse[ProfileDeleteData])
 def delete_profile(
     profile_id: str,
+    request: Request,
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> ApiResponse[ProfileDeleteData]:
     """NL2SQL profile を物理削除する。"""
+    _assert_profile_access(request, profile_id)
     try:
         if nl2sql_service.uses_incremental_store and not if_match:
             raise HTTPException(status_code=428, detail="If-Match header が必要です。")
@@ -509,10 +564,12 @@ def delete_profile(
 )
 async def import_profile_learning_material(
     profile_id: str,
+    request: Request,
     file: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "merge",
 ) -> ApiResponse[ProfileLearningMaterialImportData]:
     """旧版 terms/rules/few-shot .xlsx テンプレートを取り込む。rules は追加指示へ吸収する。"""
+    _assert_profile_access(request, profile_id)
     content = await file.read()
     try:
         return ApiResponse(
@@ -533,8 +590,9 @@ async def import_profile_learning_material(
 
 
 @router.get("/profiles/{profile_id}/learning-material/export.xlsx")
-def export_profile_learning_material(profile_id: str) -> Response:
+def export_profile_learning_material(profile_id: str, request: Request) -> Response:
     """Profile learning material を Excel workbook として出力する。"""
+    _assert_profile_access(request, profile_id)
     try:
         filename, content = nl2sql_service.export_profile_learning_material_xlsx(profile_id)
     except KeyError as exc:
@@ -622,8 +680,9 @@ def export_legacy_rules() -> Response:
 
 
 @router.post("/profiles/{profile_id}/archive", response_model=ApiResponse[Nl2SqlProfile])
-def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+def archive_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を archive する。"""
+    _assert_profile_access(request, profile_id)
     try:
         return ApiResponse(data=nl2sql_service.archive_profile(profile_id))
     except KeyError as exc:
@@ -633,8 +692,9 @@ def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
 
 
 @router.post("/profiles/{profile_id}/restore", response_model=ApiResponse[Nl2SqlProfile])
-def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
+def restore_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProfile]:
     """archive 済みの NL2SQL profile を復元する。"""
+    _assert_profile_access(request, profile_id)
     try:
         return ApiResponse(data=nl2sql_service.restore_profile(profile_id))
     except KeyError as exc:
@@ -650,8 +710,10 @@ def restore_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
 def upsert_profile_select_ai_profile(
     profile_id: str,
     req: ProfileSelectAiProfileRequest,
+    request: Request,
 ) -> ApiResponse[SelectAiDbProfileMutationData]:
     """業務 profile から Oracle DBMS_CLOUD_AI profile を作成する。"""
+    _assert_profile_access(request, profile_id)
     try:
         return ApiResponse(data=nl2sql_service.upsert_profile_select_ai_profile(profile_id, req))
     except KeyError as exc:
@@ -669,8 +731,10 @@ def create_profile_oracle_sync_job(
     profile_id: str,
     req: ProfileSyncJobRequest,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    request: Request,
 ) -> ApiResponse[ProfileSyncJobData]:
     """保存済み業務 Profile の Oracle 反映を永続 queue へ投入する。"""
+    _assert_profile_access(request, profile_id)
 
     from .profile_sync import profile_sync_service
 
@@ -725,24 +789,35 @@ def retry_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData
 
 
 @router.post("/select-ai/profiles/refresh", response_model=ApiResponse[AssetRefreshData])
-def refresh_select_ai_profile(profile_id: str | None = None) -> ApiResponse[AssetRefreshData]:
+def refresh_select_ai_profile(
+    request: Request,
+    profile_id: str | None = None,
+) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
+    if profile_id:
+        _assert_profile_access(request, profile_id)
     return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
 
 
 @router.post("/select-ai-agent/assets/refresh", response_model=ApiResponse[AssetRefreshData])
 def refresh_select_ai_agent_assets(
+    request: Request,
     profile_id: str | None = None,
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI Agent assets を作成/更新する adapter boundary。"""
+    if profile_id:
+        _assert_profile_access(request, profile_id)
     return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
 
 
 @router.post("/select-ai/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
 def cleanup_select_ai_assets(
     req: AssetCleanupRequest,
+    request: Request,
 ) -> ApiResponse[list[AssetCleanupData]]:
     """Oracle Select AI / Agent assets の cleanup を実行する。"""
+    if req.profile_id:
+        _assert_profile_access(request, req.profile_id)
     return ApiResponse(
         data=nl2sql_service.cleanup_select_ai_assets(
             profile_id=req.profile_id,
@@ -1046,6 +1121,7 @@ def admin_review_feedback(req: AdminFeedbackReviewRequest) -> ApiResponse[AdminF
 
 @router.get("/feedback", response_model=ApiResponse[FeedbackListData])
 def list_feedback(
+    request: Request,
     cursor: str | None = None,
     limit: int = 20,
     rating: str = "all",
@@ -1055,6 +1131,8 @@ def list_feedback(
     """アプリ内 SQL feedback を Profile/評価/キーワードで一覧する。"""
     if rating not in {"all", "good", "bad", "unrated"}:
         raise HTTPException(status_code=422, detail="rating が不正です。")
+    if profile_id.strip():
+        _assert_profile_access(request, profile_id.strip())
     try:
         data = nl2sql_service.list_feedback(
             cursor=cursor,
@@ -1177,6 +1255,7 @@ def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
     response_model=ApiResponse[ClassifierTrainingCandidatesData],
 )
 def classifier_training_candidates(
+    request: Request,
     cursor: str | None = None,
     limit: int = 20,
     status: str = "all",
@@ -1196,6 +1275,8 @@ def classifier_training_candidates(
     }
     if status not in allowed_statuses:
         raise HTTPException(status_code=422, detail="status が不正です。")
+    if profile_id.strip():
+        _assert_profile_access(request, profile_id.strip())
     try:
         data = nl2sql_service.classifier_training_candidates(
             cursor=cursor,
@@ -1216,8 +1297,12 @@ def classifier_training_candidates(
 )
 def import_classifier_training_data_from_feedback(
     req: ClassifierFeedbackImportRequest,
+    request: Request,
 ) -> ApiResponse[ClassifierFeedbackImportData]:
     """確認済み feedback の質問/Profile 対応を training data に追加する。"""
+    for item in req.items:
+        if item.profile_id:
+            _assert_profile_access(request, item.profile_id)
     return ApiResponse(data=nl2sql_service.import_classifier_feedback_examples(req))
 
 
@@ -1228,8 +1313,10 @@ def import_classifier_training_data_from_feedback(
 def update_classifier_training_example(
     example_id: str,
     req: ClassifierTrainingExampleUpdateRequest,
+    request: Request,
 ) -> ApiResponse[ClassifierTrainingExample]:
     try:
+        _assert_profile_access(request, req.profile_id)
         data = nl2sql_service.update_classifier_training_example(example_id, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Training data が見つかりません。") from exc
@@ -1254,11 +1341,14 @@ def delete_classifier_training_example(
 
 @router.post("/classifier/training-data/import", response_model=ApiResponse[ClassifierImportData])
 async def import_classifier_training_data(
+    request: Request,
     file: Annotated[UploadFile, File()],
     replace: Annotated[bool, Form()] = False,
     profile_id: Annotated[str | None, Form()] = None,
 ) -> ApiResponse[ClassifierImportData]:
     """CATEGORY/TEXT の .xlsx training data テンプレートを取り込む。"""
+    if profile_id:
+        _assert_profile_access(request, profile_id)
     content = await file.read()
     try:
         return ApiResponse(
@@ -1329,22 +1419,40 @@ def predict_classifier(
 
 
 @router.post("/similar-history", response_model=ApiResponse[SimilarHistoryData])
-def similar_history(req: SimilarHistoryRequest) -> ApiResponse[SimilarHistoryData]:
+def similar_history(
+    req: SimilarHistoryRequest, request: Request
+) -> ApiResponse[SimilarHistoryData]:
     """質問に近い履歴を few-shot / feedback 学習候補として返す。"""
+    if req.profile_id:
+        _assert_profile_access(request, req.profile_id)
     return ApiResponse(data=nl2sql_service.similar_history(req))
 
 
 @router.post("/recommend-profile", response_model=ApiResponse[ProfileRecommendationData])
 def recommend_profile(
     req: ProfileRecommendationRequest,
+    request: Request,
 ) -> ApiResponse[ProfileRecommendationData]:
     """質問から profile / schema 範囲と query rewrite を推薦する。"""
-    return ApiResponse(data=nl2sql_service.recommend_profile(req))
+    if req.current_profile_id:
+        _assert_profile_access(request, req.current_profile_id)
+    try:
+        return ApiResponse(
+            data=nl2sql_service.recommend_profile(
+                req,
+                allowed_profile_ids=_allowed_profile_ids_for_request(request),
+            )
+        )
+    except ValueError as exc:
+        if "権限" in str(exc):
+            raise _profile_access_denied() from exc
+        raise
 
 
 @router.post("/rewrite", response_model=ApiResponse[RewriteData])
-def rewrite(req: RewriteRequest) -> ApiResponse[RewriteData]:
+def rewrite(req: RewriteRequest, request: Request) -> ApiResponse[RewriteData]:
     """用語・schema・追加指示を使って質問を書き換える。"""
+    _assert_profile_access(request, req.profile_id, default_profile=True)
     return ApiResponse(data=nl2sql_service.rewrite(req))
 
 
@@ -1366,9 +1474,12 @@ def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
     response_model=ApiResponse[QualityEvaluationCapabilities],
 )
 def quality_evaluation_capabilities(
+    request: Request,
     profile_id: Annotated[str | None, Query()] = None,
 ) -> ApiResponse[QualityEvaluationCapabilities]:
     """実行 engine / Judge の readiness と Excel 制限を返す。"""
+    if profile_id:
+        _assert_profile_access(request, profile_id)
     return ApiResponse(data=quality_evaluation_service.capabilities(profile_id=profile_id))
 
 
@@ -1399,6 +1510,7 @@ async def create_quality_evaluation(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[QualityEvaluationJobSummary]:
     """Excel 入力を検証し、永続品質評価 job を投入する。"""
+    _assert_profile_access(request, profile_id)
     maximum = get_settings().nl2sql_quality_evaluation_max_file_bytes
     content = await file.read(maximum + 1)
     principal = getattr(request.state, "principal", None)
@@ -1463,6 +1575,34 @@ def quality_evaluation_results_xlsx(job_id: str) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/quality-evaluations/{job_id}/cancel",
+    response_model=ApiResponse[QualityEvaluationJobSummary],
+)
+def cancel_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+    """待機中または実行中の品質評価 job を中止する。"""
+    try:
+        return ApiResponse(data=quality_evaluation_service.cancel_job(job_id))
+    except QualityEvaluationJobStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/quality-evaluations/{job_id}",
+    response_model=ApiResponse[QualityEvaluationJobSummary],
+)
+def delete_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+    """完了済みの品質評価 job と結果明細を削除する。"""
+    try:
+        return ApiResponse(data=quality_evaluation_service.delete_job(job_id))
+    except QualityEvaluationJobStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get(

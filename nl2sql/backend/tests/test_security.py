@@ -18,7 +18,7 @@ from fastapi import HTTPException, Request, Response
 from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
 from app.features.nl2sql import router as nl2sql_router
-from app.features.nl2sql.models import HistoryItem, Nl2SqlEngine
+from app.features.nl2sql.models import HistoryItem, Nl2SqlEngine, Nl2SqlProfile
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.main import app
@@ -233,6 +233,20 @@ class _MissingSecuritySchemaStore:
         raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
 
 
+class _MissingRoleProfilesStore(InMemorySecurityStore):
+    def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
+        _ = include_archived
+        raise RuntimeError(
+            'ORA-00942: table or view "ADMIN"."NL2SQL_APP_ROLE_PROFILES" does not exist'
+        )
+
+    def get_role(self, role_id: str) -> RoleRecord | None:
+        _ = role_id
+        raise RuntimeError(
+            'ORA-00942: table or view "ADMIN"."NL2SQL_APP_ROLE_PROFILES" does not exist'
+        )
+
+
 class _RecordingCursor:
     def __init__(self, fetchone_rows: list[tuple[int]] | None = None) -> None:
         self.executed: list[tuple[str, dict[str, object]]] = []
@@ -293,6 +307,7 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
             "is_system_admin": True,
             "permissions": sorted(ALL_PERMISSION_CODES),
             "data_entitlements": [],
+            "allowed_profile_ids": [],
             "debug_mode": True,
             "password_change_allowed": False,
         }
@@ -553,6 +568,20 @@ def test_table_user_login_reports_503_when_auth_table_is_missing() -> None:
     assert "認証テーブル" in error.value.public_message
 
 
+def test_missing_role_profiles_table_reports_security_migration_required() -> None:
+    service = SecurityService(cast(SecurityStore, _MissingRoleProfilesStore()), _settings())
+
+    with pytest.raises(SecurityApiError) as list_error:
+        service.list_roles(include_archived=True)
+    with pytest.raises(SecurityApiError) as get_error:
+        service.get_role("role-id")
+
+    for error in (list_error.value, get_error.value):
+        assert error.status_code == 409
+        assert "app_security_migrate" in error.public_message
+        assert "--skip-bootstrap" in error.public_message
+
+
 def test_password_policy_requires_all_character_classes_without_expiry() -> None:
     with pytest.raises(PasswordPolicyError):
         validate_password("onlylowercase", login_user_id="user", min_length=12, max_length=128)
@@ -601,6 +630,21 @@ def test_deepsec_entitlement_migration_uses_compressed_table_safe_column_type() 
     assert "TARGET_TYPE VARCHAR2(32)" in base_sql
     assert "SCOPE_FILTERS VARCHAR2(4000)" in base_sql
     assert "'FILTERS'" in base_sql
+
+
+def test_role_profile_access_migration_backfills_active_profile_read_roles() -> None:
+    migration_path = (
+        Path(__file__).resolve().parents[1] / "migrations" / "016_app_role_profiles.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE NL2SQL_APP_ROLE_PROFILES" in sql
+    assert "PRIMARY KEY (ROLE_ID, PROFILE_ID)" in sql
+    assert "NL2SQL_APP_ROLE_PERMISSIONS" in sql
+    assert "nl2sql.profiles.read" in sql
+    assert "r.ARCHIVED = 0" in sql
+    assert "p.ARCHIVED = 0" in sql
+    assert "r.ROLE_CODE <> 'SYSTEM_ADMIN'" in sql
 
 
 def test_dashboard_permission_is_retired_for_appearance_settings() -> None:
@@ -1089,6 +1133,7 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         description="",
         permissions={"search.view"},
         entitlements=[("HR.EMPLOYEES", "SALES", "SELECT")],
+        allowed_profile_ids={"sales-profile"},
         actor=actor,
     )
     role_b = service.create_role(
@@ -1097,6 +1142,7 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         description="",
         permissions={"search.execute"},
         entitlements=[("FIN.INVOICES", "APPROVED", "SELECT")],
+        allowed_profile_ids={"finance-profile"},
         actor=actor,
     )
     user, password = service.create_user(
@@ -1118,6 +1164,92 @@ def test_multiple_roles_union_permissions_and_data_entitlements() -> None:
         ("SALES", "SELECT"),
         ("APPROVED", "SELECT"),
     }
+    assert principal.allowed_profile_ids == {"sales-profile", "finance-profile"}
+
+
+def test_role_profile_access_is_exposed_on_role_and_current_user_data() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="PROFILE_SCOPED_QUERY",
+        display_name="業務 profile 制限",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"finance", "sales"},
+        actor=actor,
+    )
+    user, password = service.create_user(
+        login_user_id="profile.scoped",
+        display_name="業務 profile 制限ユーザー",
+        role_ids=[role.role_id],
+        temporary_password="ProfileScopedPass!123",
+        actor=actor,
+    )
+
+    principal, _, _ = service.login(user.login_user_id, password)
+
+    assert RoleData.from_record(role).allowed_profile_ids == ["finance", "sales"]
+    assert CurrentUserData.from_principal(principal).allowed_profile_ids == [
+        "finance",
+        "sales",
+    ]
+
+
+def test_non_system_admin_cannot_change_role_profile_access() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role_manager = service.create_role(
+        role_code="ROLE_MANAGER",
+        display_name="ロール管理",
+        description="",
+        permissions={"menu.security_roles"},
+        entitlements=[],
+        actor=actor,
+    )
+    target = service.create_role(
+        role_code="PROFILE_TARGET",
+        display_name="業務 profile 対象",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=actor,
+    )
+    manager_user, password = service.create_user(
+        login_user_id="role.manager",
+        display_name="ロール管理者",
+        role_ids=[role_manager.role_id],
+        temporary_password="RoleManagerPass!123",
+        actor=actor,
+    )
+    manager, _, _ = service.login(manager_user.login_user_id, password)
+
+    with pytest.raises(SecurityApiError) as clear_error:
+        service.update_role(
+            target.role_id,
+            expected_version=target.version,
+            display_name=target.display_name,
+            description=target.description,
+            permissions=set(target.permissions),
+            entitlements=[],
+            allowed_profile_ids=set(),
+            actor=manager,
+        )
+    assert clear_error.value.status_code == 403
+
+    unchanged = service.update_role(
+        target.role_id,
+        expected_version=target.version,
+        display_name="業務 profile 対象更新",
+        description=target.description,
+        permissions=set(target.permissions),
+        entitlements=[],
+        allowed_profile_ids=None,
+        actor=manager,
+    )
+
+    assert unchanged.allowed_profile_ids == {"default"}
 
 
 def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
@@ -1453,6 +1585,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("GET", "/security/permissions") == frozenset(
         {"menu.security_roles"}
     )
+    assert permission_for_route("GET", "/security/profile-access/profiles") == frozenset(
+        {"menu.security_roles"}
+    )
 
 
 def test_security_audit_permission_and_api_are_removed() -> None:
@@ -1471,12 +1606,20 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
 ) -> None:
     service = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    admin_user = service.store.get_user(admin.user_uuid)
+    assert admin_user is not None
+    service.store.set_password(
+        admin_user.user_uuid,
+        hash_password("BootstrapPass!123"),
+        force_change=False,
+    )
     query_role = service.create_role(
         role_code="QUERY_ONLY",
         display_name="SQL 生成のみ",
         description="",
         permissions={"menu.query"},
         entitlements=[],
+        allowed_profile_ids={"default"},
         actor=admin,
     )
     reverse_role = service.create_role(
@@ -1485,6 +1628,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
         description="",
         permissions={"menu.sql_to_question"},
         entitlements=[],
+        allowed_profile_ids={"default"},
         actor=admin,
     )
     profile_manager_role = service.create_role(
@@ -1493,6 +1637,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
         description="",
         permissions={"menu.profiles"},
         entitlements=[],
+        allowed_profile_ids={"default"},
         actor=admin,
     )
     _create_active_user(
@@ -1578,6 +1723,158 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
             full_payload = full_profile.json()["data"]
             assert "few_shot_examples" in full_payload
             assert "select_ai_config" in full_payload
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    admin_user = service.store.get_user(admin.user_uuid)
+    assert admin_user is not None
+    service.store.set_password(
+        admin_user.user_uuid,
+        hash_password("BootstrapPass!123"),
+        force_change=False,
+    )
+    query_role = service.create_role(
+        role_code="QUERY_DEFAULT_PROFILE",
+        display_name="標準 profile SQL 生成",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=admin,
+    )
+    profile_manager_role = service.create_role(
+        role_code="PROFILE_DEFAULT_MANAGER",
+        display_name="標準 profile 管理",
+        description="",
+        permissions={"menu.profiles"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=admin,
+    )
+    blocked_role = service.create_role(
+        role_code="QUERY_NO_PROFILE",
+        display_name="profile 未付与 SQL 生成",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="query.default.profile",
+        display_name="標準 profile SQL 生成",
+        role_ids=[query_role.role_id],
+        password="QueryDefaultPass!123",
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="profile.default.manager",
+        display_name="標準 profile 管理",
+        role_ids=[profile_manager_role.role_id],
+        password="ProfileDefaultPass!123",
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="query.no.profile",
+        display_name="profile 未付与 SQL 生成",
+        role_ids=[blocked_role.role_id],
+        password="QueryNoProfilePass!123",
+    )
+
+    feature_service = Nl2SqlService(store=MemoryNl2SqlStore())
+    feature_service.create_profile(
+        Nl2SqlProfile(
+            id="finance",
+            name="財務プロファイル",
+            category="会計",
+            description="財務部門向け",
+        )
+    )
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", feature_service)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            current, csrf = await _login_api(
+                client,
+                "query.default.profile",
+                "QueryDefaultPass!123",
+            )
+            assert current["allowed_profile_ids"] == ["default"]
+            profile_search = await client.get("/api/nl2sql/profiles/search")
+            assert profile_search.status_code == 200
+            assert [item["id"] for item in profile_search.json()["data"]["items"]] == ["default"]
+            allowed_etag = profile_search.headers["ETag"]
+            default_usage = await client.get("/api/nl2sql/profiles/default/usage-context")
+            assert default_usage.status_code == 200
+            finance_usage = await client.get("/api/nl2sql/profiles/finance/usage-context")
+            assert finance_usage.status_code == 403
+            preview = await client.post(
+                "/api/nl2sql/preview",
+                headers={"X-CSRF-Token": csrf},
+                json={"question": "社員一覧", "profile_id": "default"},
+            )
+            assert preview.status_code != 403
+            denied_preview = await client.post(
+                "/api/nl2sql/preview",
+                headers={"X-CSRF-Token": csrf},
+                json={"question": "売上一覧", "profile_id": "finance"},
+            )
+            assert denied_preview.status_code == 403
+            denied_rewrite = await client.post(
+                "/api/nl2sql/rewrite",
+                headers={"X-CSRF-Token": csrf},
+                json={"question": "売上一覧", "profile_id": "finance"},
+            )
+            assert denied_rewrite.status_code == 403
+            denied_evaluation = await client.get(
+                "/api/nl2sql/quality-evaluations/capabilities?profile_id=finance"
+            )
+            assert denied_evaluation.status_code == 403
+
+            await _login_api(client, "profile.default.manager", "ProfileDefaultPass!123")
+            assert (await client.get("/api/nl2sql/profiles/default")).status_code == 200
+            assert (await client.get("/api/nl2sql/profiles/finance")).status_code == 403
+
+            _, csrf = await _login_api(client, "query.no.profile", "QueryNoProfilePass!123")
+            empty_search = await client.get("/api/nl2sql/profiles/search")
+            assert empty_search.status_code == 200
+            assert empty_search.json()["data"]["items"] == []
+            assert empty_search.headers["ETag"] != allowed_etag
+            blocked_default_usage = await client.get(
+                "/api/nl2sql/profiles/default/usage-context"
+            )
+            assert blocked_default_usage.status_code == 403
+            denied_default_preview = await client.post(
+                "/api/nl2sql/preview",
+                headers={"X-CSRF-Token": csrf},
+                json={"question": "社員一覧"},
+            )
+            assert denied_default_preview.status_code == 403
+
+            await _login_api(client, "ADMIN", "BootstrapPass!123")
+            admin_search = await client.get("/api/nl2sql/profiles/search")
+            assert admin_search.status_code == 200
+            assert {item["id"] for item in admin_search.json()["data"]["items"]} >= {
+                "default",
+                "finance",
+            }
+            admin_finance_usage = await client.get(
+                "/api/nl2sql/profiles/finance/usage-context"
+            )
+            assert admin_finance_usage.status_code == 200
 
     try:
         asyncio.run(exercise())
@@ -1794,6 +2091,23 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert "migration=005" in output
     assert "migration=009" in output
     assert "migration=012" in output
+    assert "migration=016" in output
+
+
+def test_security_migration_user_uuid_rename_ignores_missing_constraint() -> None:
+    """014 can be re-run after constraint renames have already been applied."""
+
+    source = (
+        Path(__file__).resolve().parents[1] / "app" / "cli" / "app_security_migrate.py"
+    ).read_text(encoding="utf-8")
+    block = re.search(
+        r"user_uuid_rename_results = oracle_statement_executor\.execute\((?P<body>.*?)\n\s*\)",
+        source,
+        flags=re.S,
+    )
+
+    assert block is not None
+    assert "ORA-23292" in block.group("body")
 
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(

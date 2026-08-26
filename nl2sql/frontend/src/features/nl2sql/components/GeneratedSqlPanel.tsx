@@ -1,18 +1,26 @@
-import { useState, type SyntheticEvent } from "react";
-import { ChevronDown, Copy, FileText, Play, Sparkles } from "lucide-react";
+import { lazy, Suspense, useMemo, useState, type SyntheticEvent } from "react";
+import { ChevronDown, Copy, FileText, Network, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { t } from "@/lib/i18n";
+import { useProfileOntologyView } from "../incrementalQueries";
 import { engineLabel } from "../labels";
-import { profileRecordDisplayLabel } from "../profileDisplay";
+import {
+  groundSqlSemanticGraphOnOntologyGraph,
+  isSqlSemanticGraph,
+  type SqlOntologyGroundingResult,
+} from "../ontology/sqlGrounding";
+import type { SqlSemanticGraph } from "../ontology/types";
 import type {
   GeneratedSqlPanelData,
   Nl2SqlInterpretationArtifact,
   Nl2SqlShowPromptArtifact,
 } from "../types";
+
+const LazyOntologyGraphCanvas = lazy(() => import("../ontology/OntologyGraphCanvas"));
 
 const QUESTION_SLOT_LABELS = [
   "対象テーブル",
@@ -29,8 +37,6 @@ const QUESTION_SLOT_LABELS = [
   "並び替え（項目と昇順／降順）",
   "表示件数（上位N件）",
 ];
-const TARGET_TABLE_LABELS = ["対象テーブル", "対象テーブル（複数可）"];
-const SELECT_ITEM_LABELS = ["抽出項目"];
 const FILTER_LABELS = ["抽出条件", "条件", "WHERE条件", "WHERE 条件", "検索条件"];
 const QUESTION_SLOT_PATTERN = /^\s*([^：:\n]{1,80})\s*[：:]\s*(.*)$/u;
 
@@ -79,58 +85,209 @@ function questionSlotValue(slots: Record<string, string>, labels: string[]) {
   return undefined;
 }
 
-function TextValue({ value }: { value: string }) {
-  return <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{value}</span>;
+function GroundingStatusBadge({ result }: { result: SqlOntologyGroundingResult }) {
+  if (result.status === "matched") {
+    return <StatusBadge variant="success" label={t("nl2sql.interpretation.graphStatus.matched")} />;
+  }
+  if (result.status === "partial") {
+    return <StatusBadge variant="warning" label={t("nl2sql.interpretation.graphStatus.partial")} />;
+  }
+  if (result.status === "unmatched") {
+    return <StatusBadge variant="warning" label={t("nl2sql.interpretation.graphStatus.unmatched")} />;
+  }
+  return <StatusBadge variant="neutral" label={t("nl2sql.interpretation.graphStatus.unavailable")} />;
 }
 
-function CompactList({ items }: { items: string[] }) {
-  const values = items.filter(Boolean);
-  if (values.length === 0) return <span className="text-muted">-</span>;
+function GroundingMatchRows({
+  title,
+  values,
+}: {
+  title: string;
+  values: Array<{ sql: string; ontologyLabels: string[] }>;
+}) {
   return (
-    <span className="flex flex-wrap gap-1.5">
-      {values.slice(0, 8).map((item) => (
-        <span
-          key={item}
-          className="max-w-full rounded-md bg-muted/30 px-2 py-1 font-mono text-xs text-foreground [overflow-wrap:anywhere]"
-        >
-          {item}
-        </span>
+    <div className="grid gap-1">
+      <p className="text-xs font-semibold text-muted">{title}</p>
+      {values.length === 0 ? (
+        <p className="text-xs leading-5 text-muted">-</p>
+      ) : (
+        <ul className="grid gap-1 text-xs leading-5">
+          {values.slice(0, 5).map((value) => (
+            <li key={`${title}:${value.sql}`} className="min-w-0 [overflow-wrap:anywhere]">
+              <span className="font-mono text-foreground">{value.sql}</span>
+              <span className="text-muted"> → {value.ontologyLabels.join("、") || "-"}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function UnmatchedList({ values }: { values: string[] }) {
+  if (values.length === 0) return null;
+  return (
+    <ul className="mt-1 grid gap-1 text-xs leading-5 text-warning">
+      {values.slice(0, 6).map((value) => (
+        <li key={value} className="min-w-0 font-mono [overflow-wrap:anywhere]">
+          {value}
+        </li>
       ))}
-      {values.length > 8 ? (
-        <span className="rounded-md bg-muted/30 px-2 py-1 text-xs text-muted">
-          {t("nl2sql.interpretation.more", { count: values.length - 8 })}
-        </span>
-      ) : null}
-    </span>
+    </ul>
+  );
+}
+
+function SqlOntologyGroundingPanel({
+  sqlGraph,
+  profileId,
+}: {
+  sqlGraph: SqlSemanticGraph | null;
+  profileId: string;
+}) {
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const ontologyQuery = useProfileOntologyView(sqlGraph && profileId ? profileId : "");
+  const ontologyGraph = ontologyQuery.data?.ontology_graph ?? null;
+  const grounding = useMemo(
+    () => groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph),
+    [ontologyGraph, sqlGraph]
+  );
+  const unmatchedValues = [
+    ...grounding.unmatchedTables,
+    ...grounding.unmatchedColumns,
+    ...grounding.unmatchedJoins,
+  ];
+
+  if (!sqlGraph) return null;
+
+  return (
+    <section
+      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      aria-labelledby="nl2sql-sql-grounding-title"
+      data-testid="nl2sql-sql-grounding-panel"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Network size={16} className="shrink-0 text-foreground" aria-hidden="true" />
+          <h4 id="nl2sql-sql-grounding-title" className="text-sm font-semibold text-foreground">
+            {t("nl2sql.interpretation.graphTitle")}
+          </h4>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <GroundingStatusBadge result={grounding} />
+          <StatusBadge
+            variant="neutral"
+            label={t("nl2sql.interpretation.graphMatchedCount", {
+              count:
+                grounding.matchedTables.length +
+                grounding.matchedColumns.length +
+                grounding.matchedJoins.length,
+            })}
+          />
+        </div>
+      </div>
+
+      {!profileId ? (
+        <Banner severity="info">{t("nl2sql.interpretation.graphNoProfile")}</Banner>
+      ) : !ontologyGraph && (ontologyQuery.isLoading || ontologyQuery.isFetching) ? (
+        <div
+          className="grid h-80 animate-pulse place-items-center rounded-md border border-border bg-background text-sm text-muted"
+          data-testid="nl2sql-sql-grounding-loading"
+        >
+          {t("nl2sql.interpretation.graphLoading")}
+        </div>
+      ) : ontologyQuery.isError ? (
+        <Banner severity="warning">{t("nl2sql.interpretation.graphLoadFailed")}</Banner>
+      ) : !ontologyGraph || ontologyGraph.nodes.length === 0 ? (
+        <Banner severity="info">{t("nl2sql.interpretation.graphEmpty")}</Banner>
+      ) : (
+        <>
+          {grounding.status === "unmatched" ? (
+            <Banner severity="warning">{t("nl2sql.interpretation.graphNoMatch")}</Banner>
+          ) : unmatchedValues.length > 0 ? (
+            <Banner severity="warning" title={t("nl2sql.interpretation.graphPartialTitle")}>
+              {t("nl2sql.interpretation.graphPartial")}
+              <UnmatchedList values={unmatchedValues} />
+            </Banner>
+          ) : null}
+          <div className="min-w-0 overflow-hidden" data-testid="nl2sql-sql-grounding-graph">
+            <Suspense
+              fallback={
+                <div className="grid h-80 place-items-center rounded-md border border-border bg-background text-sm text-muted">
+                  {t("nl2sql.interpretation.graphLoading")}
+                </div>
+              }
+            >
+              <LazyOntologyGraphCanvas
+                graph={ontologyGraph}
+                selectedNodeId={selectedNodeId}
+                selectedEdgeId={selectedEdgeId}
+                onSelectNode={setSelectedNodeId}
+                onSelectEdge={setSelectedEdgeId}
+                highlightNodeIds={grounding.highlightNodeIds}
+                highlightEdgeIds={grounding.highlightEdgeIds}
+                defaultViewMode="grounding"
+                readOnly
+              />
+            </Suspense>
+          </div>
+          <div
+            className="grid gap-3 rounded-md border border-border bg-background p-3 sm:grid-cols-3"
+            aria-label={t("nl2sql.interpretation.graphListAria")}
+            data-testid="nl2sql-sql-grounding-list"
+          >
+            <GroundingMatchRows
+              title={t("nl2sql.interpretation.graphMatchedTables")}
+              values={grounding.matchedTables}
+            />
+            <GroundingMatchRows
+              title={t("nl2sql.interpretation.graphMatchedColumns")}
+              values={grounding.matchedColumns}
+            />
+            <GroundingMatchRows
+              title={t("nl2sql.interpretation.graphMatchedJoins")}
+              values={grounding.matchedJoins}
+            />
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
 function InterpretationArtifactPanel({
   artifact,
+  profileId,
 }: {
   artifact?: Nl2SqlInterpretationArtifact | null;
+  profileId?: string;
 }) {
+  const sqlGraph = isSqlSemanticGraph(artifact?.sql.semantic_graph)
+    ? artifact.sql.semantic_graph
+    : null;
+  const effectiveProfileId = profileId || artifact?.question.profile_id || "";
+
   if (!artifact) return null;
   if (!artifact.available) {
     return (
-      <Banner severity="info" title={t("nl2sql.interpretation.title")}>
+      <Banner severity="info" title={t("nl2sql.interpretation.graphTitle")}>
         {artifact.warnings.join(" ") || t("nl2sql.interpretation.unavailable")}
       </Banner>
     );
   }
   const template = parseQuestionTemplate(artifact.question.original_question);
-  const targetTable = questionSlotValue(template.slots, TARGET_TABLE_LABELS);
-  const selectItems = questionSlotValue(template.slots, SELECT_ITEM_LABELS);
   const inputFilter = questionSlotValue(template.slots, FILTER_LABELS);
   const inputFilterSlotExists = inputFilter !== undefined;
   const inputFilterEmpty = template.hasTemplate && inputFilterSlotExists && !inputFilter.trim();
   const sqlFilters = artifact.sql.filters.filter(Boolean);
   const hasFilterMismatch = inputFilterEmpty && sqlFilters.length > 0;
 
+  if (!hasFilterMismatch && !sqlGraph) return null;
+
   return (
-    <section
-      className="grid gap-3 rounded-md border border-border bg-background p-3"
-      aria-labelledby="nl2sql-interpretation-title"
+    <div
+      className="grid gap-3"
+      aria-label={t("nl2sql.interpretation.graphTitle")}
       data-testid="nl2sql-interpretation-panel"
     >
       {hasFilterMismatch && (
@@ -138,94 +295,8 @@ function InterpretationArtifactPanel({
           {t("nl2sql.interpretation.emptyFilterMismatch")}
         </Banner>
       )}
-      <div className="flex min-w-0 items-center gap-2">
-        <Sparkles size={16} className="shrink-0 text-foreground" aria-hidden="true" />
-        <h3 id="nl2sql-interpretation-title" className="text-sm font-semibold text-foreground">
-          {t("nl2sql.interpretation.title")}
-        </h3>
-      </div>
-      <div className="grid gap-3 lg:grid-cols-2">
-        <dl className="grid content-start gap-2 rounded-md border border-border bg-card p-3 text-xs">
-          <div>
-            <dt className="font-semibold text-foreground">{t("nl2sql.interpretation.inputTitle")}</dt>
-            <dd className="mt-1 text-muted">
-              {template.hasTemplate
-                ? t("nl2sql.interpretation.templateDetected")
-                : t("nl2sql.interpretation.noTemplate")}
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.inputTargetTable")}</dt>
-            <dd className="mt-1 leading-5 text-foreground">
-              <TextValue value={targetTable || "-"} />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.inputSelectItems")}</dt>
-            <dd className="mt-1 leading-5 text-foreground">
-              <TextValue
-                value={
-                  selectItems
-                    || (template.hasTemplate ? t("nl2sql.interpretation.emptySlot") : "-")
-                }
-              />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.inputFilter")}</dt>
-            <dd className="mt-1 leading-5 text-foreground">
-              <TextValue
-                value={
-                  inputFilterEmpty
-                    ? t("nl2sql.interpretation.emptyFilter")
-                    : inputFilter || "-"
-                }
-              />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.profile")}</dt>
-            <dd className="mt-1 leading-5 text-foreground">
-              {profileRecordDisplayLabel(artifact.question)}
-            </dd>
-          </div>
-        </dl>
-        <dl className="grid content-start gap-2 rounded-md border border-border bg-card p-3 text-xs">
-          <div>
-            <dt className="font-semibold text-foreground">{t("nl2sql.interpretation.sqlTitle")}</dt>
-            <dd className="mt-1 text-muted">{artifact.sql.source || "sql_semantics"}</dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.sqlSummary")}</dt>
-            <dd className="mt-1 leading-5 text-foreground">{artifact.sql.summary || "-"}</dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.targetObjects")}</dt>
-            <dd className="mt-1">
-              <CompactList items={artifact.sql.tables.length ? artifact.sql.tables : artifact.question.target_objects} />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.sqlColumns")}</dt>
-            <dd className="mt-1">
-              <CompactList items={artifact.sql.columns} />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.sqlFilters")}</dt>
-            <dd className="mt-1">
-              <CompactList items={sqlFilters} />
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-muted">{t("nl2sql.interpretation.aggregations")}</dt>
-            <dd className="mt-1">
-              <CompactList items={artifact.sql.aggregations} />
-            </dd>
-          </div>
-        </dl>
-      </div>
-    </section>
+      <SqlOntologyGroundingPanel sqlGraph={sqlGraph} profileId={effectiveProfileId} />
+    </div>
   );
 }
 
@@ -286,10 +357,12 @@ function ShowPromptArtifactPanel({
  */
 export function GeneratedSqlSummary({
   result,
+  profileId = "",
   executeLoading = false,
   onExecute,
 }: {
   result: GeneratedSqlPanelData;
+  profileId?: string;
   executeLoading?: boolean;
   onExecute?: () => void;
 }) {
@@ -363,7 +436,7 @@ export function GeneratedSqlSummary({
         </div>
       )}
       <p className="text-sm leading-6 text-foreground">{result.explanation}</p>
-      <InterpretationArtifactPanel artifact={result.interpretation} />
+      <InterpretationArtifactPanel artifact={result.interpretation} profileId={profileId} />
       <ShowPromptArtifactPanel artifact={result.show_prompt} />
     </div>
   );

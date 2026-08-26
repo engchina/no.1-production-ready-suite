@@ -16,6 +16,7 @@ class QualityEvaluationStatus(StrEnum):
     COMPLETED = "completed"
     COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class QualityEvaluationVerdict(StrEnum):
@@ -112,6 +113,7 @@ class QualityEvaluationJobRecord(BaseModel):
     current_case_id: str = ""
     current_engine: Nl2SqlEngine | None = None
     current_repetition: int = 0
+    current_attempt_started_at: str | None = None
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
     actor_user_uuid: str = ""
     input_filename: str = ""
@@ -119,6 +121,7 @@ class QualityEvaluationJobRecord(BaseModel):
     heartbeat_at: str | None = None
     lease_expires_at: str | None = None
     attempt_no: int = 0
+    attempt_timeout_seconds: float = Field(default=300.0, ge=1.0)
     error_message: str = ""
     created_at: str
     started_at: str | None = None
@@ -142,8 +145,13 @@ class QualityEvaluationJobSummary(BaseModel):
     current_case_id: str = ""
     current_engine: Nl2SqlEngine | None = None
     current_repetition: int = 0
+    current_attempt_started_at: str | None = None
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
     error_message: str = ""
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    attempt_no: int = 0
+    attempt_timeout_seconds: float = 300.0
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -181,6 +189,7 @@ class QualityEvaluationLimits(BaseModel):
     max_attempts: int
     min_repeat_count: int = 1
     max_repeat_count: int = 10
+    attempt_timeout_seconds: float = 300.0
 
 
 class QualityEvaluationCapabilities(BaseModel):
@@ -206,8 +215,13 @@ def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
         current_case_id=job.current_case_id,
         current_engine=job.current_engine,
         current_repetition=job.current_repetition,
+        current_attempt_started_at=job.current_attempt_started_at,
         engine_summaries=job.engine_summaries,
         error_message=job.error_message,
+        heartbeat_at=job.heartbeat_at,
+        lease_expires_at=job.lease_expires_at,
+        attempt_no=job.attempt_no,
+        attempt_timeout_seconds=job.attempt_timeout_seconds,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,

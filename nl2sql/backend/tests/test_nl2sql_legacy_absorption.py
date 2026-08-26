@@ -45,7 +45,7 @@ class FakeEnterpriseAiClient:
     def __init__(self, *responses: str | Exception, configured: bool = True) -> None:
         self.responses = list(responses)
         self.configured = configured
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, Any]] = []
 
     def is_configured(self) -> bool:
         return self.configured
@@ -53,7 +53,15 @@ class FakeEnterpriseAiClient:
     def model_id(self) -> str:
         return "fake-enterprise-ai"
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         if not self.responses:
             return ""
@@ -80,15 +88,26 @@ class FakeOracleGenerator:
     def __init__(self) -> None:
         self.questions: list[str] = []
 
-    def generate_select_ai_sql(self, *, profile_name: str, question: str) -> str:
-        del profile_name
+    def generate_select_ai_sql(
+        self,
+        *,
+        profile_name: str,
+        question: str,
+        call_timeout_seconds: float | None = None,
+    ) -> str:
+        del profile_name, call_timeout_seconds
         self.questions.append(question)
         return "SELECT * FROM INVOICES"
 
     def run_select_ai_agent_team(
-        self, *, team_name: str, question: str, tool_name: str
+        self,
+        *,
+        team_name: str,
+        question: str,
+        tool_name: str,
+        call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
-        del team_name, tool_name
+        del team_name, tool_name, call_timeout_seconds
         self.questions.append(question)
         return "SELECT * FROM INVOICES", "conversation-1"
 

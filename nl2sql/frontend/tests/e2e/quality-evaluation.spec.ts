@@ -56,6 +56,7 @@ const capabilities = {
     max_attempts: 1000,
     min_repeat_count: 1,
     max_repeat_count: 10,
+    attempt_timeout_seconds: 300,
   },
 };
 
@@ -89,13 +90,47 @@ const summary = [
 const longEvaluationQuestion =
   '対象テーブル："部署情報を管理するテーブル" 抽出項目："DEPARTMENT_ID", "DEPARTMENT_NAME", "LOCATION", "CREATED_AT" 抽出条件：未入金の請求金額を確認し、VERY_LONG_UNBROKEN_EVALUATION_QUERY_IDENTIFIER_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ を含めて取得してください';
 
-function job(status: "pending" | "running" | "completed_with_errors" | "failed") {
-  const terminal = status === "completed_with_errors" || status === "failed";
+type MockQualityEvaluationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled";
+
+function job(
+  status: MockQualityEvaluationStatus,
+  overrides: Partial<{
+    job_id: string;
+    profile_name: string;
+    profile_category: string;
+    created_at: string;
+    updated_at: string;
+    finished_at: string | null;
+    current_attempt_started_at: string | null;
+    heartbeat_at: string | null;
+    lease_expires_at: string | null;
+    attempt_no: number;
+    attempt_timeout_seconds: number;
+  }> = {}
+) {
+  const terminal =
+    status === "completed" ||
+    status === "completed_with_errors" ||
+    status === "failed" ||
+    status === "cancelled";
+  const createdAt = overrides.created_at ?? "2026-07-22T08:00:00Z";
+  const finishedAt =
+    overrides.finished_at === undefined
+      ? terminal
+        ? "2026-07-22T08:00:04Z"
+        : null
+      : overrides.finished_at;
   return {
-    job_id: "job-001",
+    job_id: overrides.job_id ?? "job-001",
     profile_id: "default",
-    profile_name: "標準プロファイル",
-    profile_category: "品質評価",
+    profile_name: overrides.profile_name ?? "標準プロファイル",
+    profile_category: overrides.profile_category ?? "品質評価",
     engines: ["select_ai", "enterprise_ai_direct"],
     repeat_count: 2,
     case_count: 1,
@@ -107,12 +142,26 @@ function job(status: "pending" | "running" | "completed_with_errors" | "failed")
     current_case_id: status === "running" ? "CASE-001" : "",
     current_engine: status === "running" ? "select_ai" : null,
     current_repetition: status === "running" ? 2 : 0,
-    engine_summaries: terminal && status !== "failed" ? summary : [],
-    error_message: status === "failed" ? "worker の初期化に失敗しました。" : "",
-    created_at: "2026-07-22T08:00:00Z",
+    current_attempt_started_at:
+      overrides.current_attempt_started_at ??
+      (status === "running" ? "2026-07-22T08:00:01Z" : null),
+    engine_summaries: terminal && status !== "failed" && status !== "cancelled" ? summary : [],
+    error_message:
+      status === "failed"
+        ? "worker の初期化に失敗しました。"
+        : status === "cancelled"
+          ? "利用者の操作で品質評価 job を中止しました。"
+          : "",
+    heartbeat_at:
+      overrides.heartbeat_at ?? (status === "running" ? "2026-07-22T08:00:02Z" : null),
+    lease_expires_at:
+      overrides.lease_expires_at ?? (status === "running" ? "2099-07-22T08:05:31Z" : null),
+    attempt_no: overrides.attempt_no ?? (status === "running" ? 1 : 0),
+    attempt_timeout_seconds: overrides.attempt_timeout_seconds ?? 300,
+    created_at: createdAt,
     started_at: "2026-07-22T08:00:01Z",
-    finished_at: terminal ? "2026-07-22T08:00:04Z" : null,
-    updated_at: "2026-07-22T08:00:04Z",
+    finished_at: finishedAt,
+    updated_at: overrides.updated_at ?? finishedAt ?? createdAt,
   };
 }
 
@@ -144,9 +193,9 @@ const results = [
       verdict: "correct",
       confidence: 0.96,
       summary: "質問と期待 SQL の意味に一致します。",
-      differences: [],
-      risks: [],
-      correction_suggestion: "",
+      differences: ["期待 SQL と生成 SQL は同じ未入金条件を参照しています。"],
+      risks: ["行数制限を追加すると応答時間が安定します。"],
+      correction_suggestion: "必要に応じて FETCH FIRST 100 ROWS ONLY を追加してください。",
     },
     generation_error: "",
     judge_error: "",
@@ -182,16 +231,50 @@ const results = [
   },
 ];
 
+function repeatedResults(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const source = results[index % results.length]!;
+    return {
+      ...source,
+      result_id: `result-${index + 1}`,
+      case_no: index + 1,
+      case_id: `CASE-${String(index + 1).padStart(3, "0")}`,
+      excel_row: index + 2,
+      repetition_no: (index % 2) + 1,
+      created_at: `2026-07-22T08:${String(index).padStart(2, "0")}:03Z`,
+    };
+  });
+}
+
+function repeatedJobs(count: number) {
+  return Array.from({ length: count }, (_, index) =>
+    job(index % 2 === 0 ? "completed" : "completed_with_errors", {
+      job_id: `job-${String(index + 1).padStart(3, "0")}`,
+      created_at: `2026-07-22T08:${String(index).padStart(2, "0")}:00Z`,
+    })
+  );
+}
+
 async function mockQualityApi(
   page: Page,
   options: {
     judgeAvailable?: boolean;
-    fixedStatus?: "completed_with_errors" | "failed";
+    fixedStatus?: "completed" | "completed_with_errors" | "failed";
     engines?: typeof capabilities.engines;
+    resultItems?: typeof results;
+    currentJob?: ReturnType<typeof job>;
+    recentJobs?: ReturnType<typeof job>[];
+    recentStatusSequence?: MockQualityEvaluationStatus[];
+    startValidationErrors?: string[];
   } = {}
 ) {
   let jobReads = 0;
+  let recentReads = 0;
   let submittedBody = "";
+  let recentJobs = options.recentJobs ? [...options.recentJobs] : null;
+  const deletedJobIds: string[] = [];
+  const cancelledJobIds: string[] = [];
+  const cancelledJobs = new Map<string, ReturnType<typeof job>>();
   await page.route("**/api/nl2sql/profiles**", (route) =>
     envelope(route, {
       items: [
@@ -266,25 +349,101 @@ async function mockQualityApi(
         body: Buffer.from("result workbook"),
       });
     }
+    if (request.method() === "DELETE" && path.startsWith(`${basePath}/`)) {
+      const jobId = decodeURIComponent(path.slice(basePath.length + 1));
+      const target = recentJobs?.find((item) => item.job_id === jobId);
+      if (!target) {
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "指定された品質評価 job が見つかりません。" }),
+        });
+      }
+      deletedJobIds.push(jobId);
+      recentJobs = recentJobs?.filter((item) => item.job_id !== jobId) ?? null;
+      return envelope(route, target);
+    }
+    if (request.method() === "POST" && path.startsWith(`${basePath}/`) && path.endsWith("/cancel")) {
+      const encodedId = path.slice(basePath.length + 1, -"/cancel".length);
+      const jobId = decodeURIComponent(encodedId);
+      const target =
+        cancelledJobs.get(jobId) ??
+        options.currentJob ??
+        recentJobs?.find((item) => item.job_id === jobId) ??
+        job("running", { job_id: jobId });
+      const cancelled = {
+        ...target,
+        status: "cancelled" as const,
+        current_case_id: "",
+        current_engine: null,
+        current_repetition: 0,
+        current_attempt_started_at: null,
+        heartbeat_at: "2026-07-22T08:06:01Z",
+        lease_expires_at: null,
+        finished_at: "2026-07-22T08:06:01Z",
+        updated_at: "2026-07-22T08:06:01Z",
+        error_message: "利用者の操作で品質評価 job を中止しました。",
+      };
+      if (!cancelledJobIds.includes(jobId)) cancelledJobIds.push(jobId);
+      cancelledJobs.set(jobId, cancelled);
+      recentJobs =
+        recentJobs?.map((item) => (item.job_id === jobId ? cancelled : item)) ?? null;
+      return envelope(route, cancelled);
+    }
     if (path.endsWith("/results")) {
-      return envelope(route, { items: results, next_cursor: null, total: results.length });
+      const items = options.resultItems ?? results;
+      return envelope(route, { items, next_cursor: null, total: items.length });
     }
     if (path === basePath && request.method() === "POST") {
       submittedBody = request.postData() ?? "";
+      if (options.startValidationErrors?.length) {
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: {
+              code: "QUALITY_EVALUATION_VALIDATION_ERROR",
+              errors: options.startValidationErrors,
+            },
+          }),
+        });
+      }
       return envelope(route, job("pending"), 202);
     }
     if (path === basePath) {
+      if (recentJobs) {
+        return envelope(route, {
+          items: recentJobs,
+          next_cursor: null,
+          total: recentJobs.length,
+        });
+      }
+      if (options.recentStatusSequence?.length) {
+        const status =
+          options.recentStatusSequence[
+            Math.min(recentReads, options.recentStatusSequence.length - 1)
+          ]!;
+        recentReads += 1;
+        return envelope(route, { items: [job(status)], next_cursor: null, total: 1 });
+      }
       const recent = options.fixedStatus ? job(options.fixedStatus) : job("completed_with_errors");
       return envelope(route, { items: [recent], next_cursor: null, total: 1 });
     }
     if (path.endsWith("/job-001")) {
+      const cancelled = cancelledJobs.get("job-001");
+      if (cancelled) return envelope(route, cancelled);
+      if (options.currentJob) return envelope(route, options.currentJob);
       if (options.fixedStatus) return envelope(route, job(options.fixedStatus));
       jobReads += 1;
       return envelope(route, job(jobReads < 2 ? "running" : "completed_with_errors"));
     }
     return route.fallback();
   });
-  return { submittedBody: () => submittedBody };
+  return {
+    submittedBody: () => submittedBody,
+    deletedJobIds: () => deletedJobIds,
+    cancelledJobIds: () => cancelledJobIds,
+  };
 }
 
 test("desktop executes two engines twice, restores the job URL and downloads Excel", async ({
@@ -402,6 +561,26 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await expect(
     page.getByText("質問と期待 SQL の意味に一致します。").filter({ visible: true }).first()
   ).toBeVisible();
+  const analysisToggle = page
+    .getByTestId("quality-evaluation-analysis-toggle")
+    .filter({ visible: true })
+    .first();
+  await analysisToggle.click();
+  const tableBox = await visibleBox(page.getByTestId("quality-evaluation-results-table"));
+  const analysisCellBox = await visibleBox(analysisToggle.locator("xpath=ancestor::td[1]"));
+  const analysisToggleBox = await visibleBox(analysisToggle);
+  const analysisBox = await visibleBox(
+    page.getByTestId("quality-evaluation-analysis-detail").filter({ visible: true }).first()
+  );
+  expect(analysisToggleBox.y - analysisCellBox.y).toBeGreaterThanOrEqual(6);
+  expect(analysisBox.width).toBeGreaterThan(tableBox.width * 0.85);
+  expect(analysisBox.x).toBeLessThanOrEqual(tableBox.x + 24);
+  expect(analysisBox.x + analysisBox.width).toBeGreaterThanOrEqual(
+    tableBox.x + tableBox.width - 40
+  );
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+  ).toBe(true);
   expect(state.submittedBody()).toContain("select_ai");
   expect(state.submittedBody()).toContain("enterprise_ai_direct");
   expect(state.submittedBody()).toContain("repeat_count");
@@ -412,6 +591,292 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   expect(download.suggestedFilename()).toBe(
     "nl2sql_quality_evaluation_20260722_job-001.xlsx"
   );
+});
+
+test("desktop constrains result details and recent jobs to internal scroll regions", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop scroll regions");
+  await mockQualityApi(page, {
+    fixedStatus: "completed_with_errors",
+    resultItems: repeatedResults(12),
+    recentJobs: repeatedJobs(5),
+  });
+  await page.goto("/evaluation?job=job-001");
+
+  const resultRegion = page.getByTestId("quality-evaluation-results-table");
+  await expect(resultRegion).toHaveAttribute("role", "region");
+  await expect(resultRegion).toHaveAttribute(
+    "aria-label",
+    "結果明細一覧。必要に応じて縦方向または横方向にスクロールできます。"
+  );
+  await expect(resultRegion.locator("tbody tr").first()).toBeVisible();
+  const resultMetrics = await resultRegion.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+    const computed = window.getComputedStyle(node);
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    );
+    const header = node.querySelector("thead");
+    if (!header) throw new Error("result table header is missing");
+    const regionRect = node.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    return {
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      scrollTop: node.scrollTop,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowX: computed.overflowX,
+      overflowY: computed.overflowY,
+      expectedMaxHeight: rootFontSize * 30.5,
+      headerOffset: Math.abs(headerRect.top - regionRect.top),
+      headerPosition: window.getComputedStyle(header).position,
+    };
+  });
+  expect(resultMetrics.maxHeight).toBeGreaterThanOrEqual(
+    resultMetrics.expectedMaxHeight - 2
+  );
+  expect(resultMetrics.maxHeight).toBeLessThanOrEqual(resultMetrics.expectedMaxHeight + 2);
+  expect(resultMetrics.scrollHeight).toBeGreaterThan(resultMetrics.clientHeight);
+  expect(resultMetrics.scrollTop).toBeGreaterThan(0);
+  expect(resultMetrics.overflowX).toBe("auto");
+  expect(resultMetrics.overflowY).toBe("auto");
+  expect(resultMetrics.headerPosition).toBe("sticky");
+  expect(resultMetrics.headerOffset).toBeLessThanOrEqual(1);
+
+  const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
+  await expect(recentRegion).toHaveAttribute("role", "region");
+  await expect(recentRegion).toHaveAttribute(
+    "aria-label",
+    "最近の評価 job 一覧。必要に応じて縦方向にスクロールできます。"
+  );
+  await expect(recentRegion.locator("article")).toHaveCount(5);
+  const recentMetrics = await recentRegion.evaluate((node) => {
+    const computed = window.getComputedStyle(node);
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    );
+    return {
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowY: computed.overflowY,
+      expectedMaxHeight: rootFontSize * 17.5,
+    };
+  });
+  expect(recentMetrics.maxHeight).toBeGreaterThanOrEqual(
+    recentMetrics.expectedMaxHeight - 2
+  );
+  expect(recentMetrics.maxHeight).toBeLessThanOrEqual(recentMetrics.expectedMaxHeight + 2);
+  expect(recentMetrics.scrollHeight).toBeGreaterThan(recentMetrics.clientHeight);
+  expect(recentMetrics.overflowY).toBe("auto");
+
+  await recentRegion.focus();
+  await expect(recentRegion).toBeFocused();
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => recentRegion.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+});
+
+test("recent active quality evaluation jobs keep polling until terminal", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop polling");
+  await mockQualityApi(page, { recentStatusSequence: ["pending", "completed"] });
+  await page.goto("/evaluation");
+
+  const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
+  await expect(recentRegion.getByText("待機中")).toBeVisible();
+  await expect(recentRegion.getByText("完了")).toBeVisible({ timeout: 6_000 });
+});
+
+test("desktop shows stale attempt diagnostics and cancels a running job", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop stale cancel flow");
+  const staleJob = job("running", {
+    job_id: "job-001",
+    profile_name: "Agent停滞",
+    current_attempt_started_at: "2026-07-22T08:00:00Z",
+    heartbeat_at: "2026-07-22T08:00:02Z",
+    lease_expires_at: "2026-07-22T08:05:30Z",
+    attempt_timeout_seconds: 300,
+  });
+  const state = await mockQualityApi(page, {
+    currentJob: staleJob,
+    recentJobs: [staleJob],
+  });
+  await page.goto("/evaluation?job=job-001");
+
+  await expect(page.getByText("試行 timeout を検知しました")).toBeVisible();
+  await expect(page.getByText("現在の試行が 300 秒を超過しています。")).toBeVisible();
+  await expect(page.getByTestId("quality-evaluation-job-diagnostics")).toContainText("300秒");
+  await page
+    .getByRole("button", { name: "中止" })
+    .first()
+    .click();
+  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を中止しますか" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "job を中止" }).click();
+
+  await expect.poll(() => state.cancelledJobIds()).toEqual(["job-001"]);
+  await expect(page.getByText("品質評価 job を中止しました。", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("利用者の操作で品質評価 job を中止しました。", { exact: true }).first()
+  ).toBeVisible();
+  await expect(page.getByText("中止").first()).toBeVisible();
+});
+
+test("desktop shows delete beside view and cancels without calling the API", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop delete action layout");
+  const state = await mockQualityApi(page, {
+    recentJobs: [
+      job("completed", {
+        job_id: "delete-me",
+        profile_name: "削除対象",
+        created_at: "2026-07-22T08:01:00Z",
+      }),
+      job("running", {
+        job_id: "running-job",
+        profile_name: "実行中対象",
+        created_at: "2026-07-22T08:00:00Z",
+      }),
+    ],
+  });
+  await page.goto("/evaluation");
+
+  const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
+  const completedRow = recentRegion.locator("article").filter({ hasText: "削除対象" });
+  const runningRow = recentRegion.locator("article").filter({ hasText: "実行中対象" });
+  const viewButton = completedRow.getByRole("button", { name: "結果を表示" });
+  const deleteButton = completedRow.getByRole("button", { name: /削除対象.*削除/ });
+  const viewBox = await visibleBox(viewButton);
+  const deleteBox = await visibleBox(deleteButton);
+  expect(deleteBox.x).toBeGreaterThanOrEqual(viewBox.x + viewBox.width - 1);
+  await expect(
+    runningRow.getByRole("button", {
+      name: "実行中または待機中の job は完了後に削除できます。",
+    })
+  ).toBeDisabled();
+  await expect(runningRow.getByRole("button", { name: /実行中対象.*中止/ })).toBeVisible();
+
+  await deleteButton.click();
+  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を削除しますか" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("削除対象");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+
+  await expect(dialog).toBeHidden();
+  expect(state.deletedJobIds()).toEqual([]);
+  await expect(completedRow).toHaveCount(1);
+});
+
+test("desktop confirms delete, removes the current job URL and clears the page state", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop delete confirmation");
+  const state = await mockQualityApi(page, {
+    fixedStatus: "completed",
+    recentJobs: [
+      job("completed", {
+        job_id: "job-001",
+        profile_name: "現在 job",
+        created_at: "2026-07-22T08:02:00Z",
+      }),
+    ],
+  });
+  await page.goto("/evaluation?job=job-001");
+
+  const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
+  const currentRow = recentRegion.locator("article").filter({ hasText: "現在 job" });
+  await currentRow.getByRole("button", { name: /現在 job.*削除/ }).click();
+  const dialog = page.getByRole("alertdialog", { name: "品質評価 job を削除しますか" });
+  await dialog.getByRole("button", { name: "削除" }).click();
+
+  await expect.poll(() => state.deletedJobIds()).toEqual(["job-001"]);
+  await expect(page.getByText("品質評価 job を削除しました。")).toBeVisible();
+  await expect(page).not.toHaveURL(/\?job=/);
+  await expect(currentRow).toHaveCount(0);
+  await expect(page.getByText("評価 job はまだありません")).toBeVisible();
+  await expect(page.getByText("結果明細はまだありません")).toBeVisible();
+});
+
+test("mobile recent job delete actions do not create horizontal overflow", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-375", "mobile delete actions");
+  await mockQualityApi(page, {
+    recentJobs: [
+      job("completed", {
+        job_id: "mobile-delete",
+        profile_name: "モバイル削除",
+      }),
+      job("pending", {
+        job_id: "mobile-pending",
+        profile_name: "モバイル待機",
+      }),
+    ],
+  });
+  await page.goto("/evaluation");
+
+  const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
+  const completedRow = recentRegion.locator("article").filter({ hasText: "モバイル削除" });
+  const pendingRow = recentRegion.locator("article").filter({ hasText: "モバイル待機" });
+  const rowBox = await visibleBox(completedRow);
+  const viewBox = await visibleBox(completedRow.getByRole("button", { name: "結果を表示" }));
+  const deleteBox = await visibleBox(
+    completedRow.getByRole("button", { name: /モバイル削除.*削除/ })
+  );
+  expect(viewBox.x).toBeGreaterThanOrEqual(rowBox.x - 1);
+  expect(deleteBox.x + deleteBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+  await expect(
+    pendingRow.getByRole("button", {
+      name: "実行中または待機中の job は完了後に削除できます。",
+    })
+  ).toBeDisabled();
+  const pendingRowBox = await visibleBox(pendingRow);
+  const cancelBox = await visibleBox(pendingRow.getByRole("button", { name: /モバイル待機.*中止/ }));
+  expect(cancelBox.x).toBeGreaterThanOrEqual(pendingRowBox.x - 1);
+  expect(cancelBox.x + cancelBox.width).toBeLessThanOrEqual(
+    pendingRowBox.x + pendingRowBox.width + 1
+  );
+  const noHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth
+  );
+  expect(noHorizontalOverflow).toBe(true);
+});
+
+test("start validation errors stay in the action footer", async ({ page }) => {
+  const validationError = "行 3: ケースID「CASE-001」が重複しています。";
+  await mockQualityApi(page, { startValidationErrors: [validationError] });
+  await page.goto("/evaluation");
+
+  await page.getByRole("checkbox").nth(0).check();
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [
+    {
+      name: "quality-cases.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock xlsx",
+    },
+  ]);
+  await page.getByRole("button", { name: "評価を開始" }).click();
+
+  const actionFooter = page.getByTestId("quality-evaluation-action-footer");
+  const actionError = actionFooter.getByRole("alert").filter({ hasText: validationError });
+  await expect(actionError).toBeVisible();
+  await expect(actionError).not.toContainText("QUALITY_EVALUATION_VALIDATION_ERROR");
+  const footerBox = await visibleBox(actionFooter);
+  const errorBox = await visibleBox(actionError);
+  expect(errorBox.y).toBeGreaterThanOrEqual(footerBox.y);
+  await expect(
+    page.locator("main > [role='alert']").filter({ hasText: validationError })
+  ).toHaveCount(0);
+  await expect(page).not.toHaveURL(/\?job=/);
+  const noHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth
+  );
+  expect(noHorizontalOverflow).toBe(true);
 });
 
 test("unavailable engines remain disabled when capabilities mark them unavailable", async ({
@@ -461,6 +926,54 @@ test("mobile restores completed results as cards without page overflow", async (
   await expect(
     page.getByText("OCI Enterprise AI timeout").filter({ visible: true }).first()
   ).toBeVisible();
+  await page.getByTestId("quality-evaluation-analysis-toggle").filter({ visible: true }).first().click();
+  await expect(
+    page.getByTestId("quality-evaluation-analysis-detail").filter({ visible: true }).first()
+  ).toBeVisible();
+  const noHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth
+  );
+  expect(noHorizontalOverflow).toBe(true);
+});
+
+test("mobile constrains result cards to an internal vertical scroll region", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-375", "mobile scroll region");
+  await mockQualityApi(page, {
+    fixedStatus: "completed_with_errors",
+    resultItems: repeatedResults(8),
+  });
+  await page.goto("/evaluation?job=job-001");
+
+  await expect(page.getByTestId("quality-evaluation-results-table")).toBeHidden();
+  const cardRegion = page.getByTestId("quality-evaluation-results-cards-scroll-region");
+  await expect(cardRegion).toHaveAttribute("role", "region");
+  await expect(cardRegion).toHaveAttribute(
+    "aria-label",
+    "結果明細一覧。必要に応じて縦方向または横方向にスクロールできます。"
+  );
+  await expect(cardRegion.locator("article")).toHaveCount(8);
+  const cardMetrics = await cardRegion.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+    const computed = window.getComputedStyle(node);
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    );
+    return {
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      scrollTop: node.scrollTop,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowY: computed.overflowY,
+      expectedMaxHeight: rootFontSize * 37.5,
+    };
+  });
+  expect(cardMetrics.maxHeight).toBeGreaterThanOrEqual(cardMetrics.expectedMaxHeight - 2);
+  expect(cardMetrics.maxHeight).toBeLessThanOrEqual(cardMetrics.expectedMaxHeight + 2);
+  expect(cardMetrics.scrollHeight).toBeGreaterThan(cardMetrics.clientHeight);
+  expect(cardMetrics.scrollTop).toBeGreaterThan(0);
+  expect(cardMetrics.overflowY).toBe("auto");
   const noHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth <= window.innerWidth
   );

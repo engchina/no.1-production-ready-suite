@@ -1385,6 +1385,7 @@ function ExecutableNl2SqlWorkbench() {
 
         <OperationStatusStrip
           job={job}
+          profileId={profileId}
           startedAtMs={jobStartedAt}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
           importingSample={importingSample}

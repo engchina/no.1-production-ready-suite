@@ -38,6 +38,20 @@ class SecurityConflict(SecurityStoreError):
     pass
 
 
+class SecurityMigrationRequired(SecurityStoreError):
+    """security migration が必要な DB object に到達した。"""
+
+    def __init__(self, object_name: str) -> None:
+        self.object_name = object_name
+        super().__init__(f"{object_name} security migration is required.")
+
+
+def _raise_missing_security_migration_if_needed(exc: Exception, object_name: str) -> None:
+    message = str(exc).upper()
+    if "ORA-00942" in message and object_name.upper() in message:
+        raise SecurityMigrationRequired(object_name) from exc
+
+
 class SecurityStore(Protocol):
     def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool: ...
     def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None: ...
@@ -732,6 +746,15 @@ class OracleSecurityStore:
             {"role_id": role_id},
         )
         permissions = {str(item[0]) for item in cursor.fetchall()}
+        try:
+            cursor.execute(
+                "SELECT PROFILE_ID FROM NL2SQL_APP_ROLE_PROFILES WHERE ROLE_ID = :role_id",
+                {"role_id": role_id},
+            )
+        except Exception as exc:
+            _raise_missing_security_migration_if_needed(exc, "NL2SQL_APP_ROLE_PROFILES")
+            raise
+        allowed_profile_ids = {str(item[0]) for item in cursor.fetchall()}
         cursor.execute(
             """
             SELECT ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
@@ -776,6 +799,7 @@ class OracleSecurityStore:
             version=int(row[6]),
             permissions=permissions,
             entitlements=entitlements,
+            allowed_profile_ids=allowed_profile_ids,
         )
 
     @staticmethod
@@ -1083,6 +1107,20 @@ class OracleSecurityStore:
                 "VALUES (:role_id, :code)",
                 {"role_id": role.role_id, "code": permission},
             )
+        try:
+            cursor.execute(
+                "DELETE FROM NL2SQL_APP_ROLE_PROFILES WHERE ROLE_ID = :role_id",
+                {"role_id": role.role_id},
+            )
+            for profile_id in sorted(role.allowed_profile_ids):
+                cursor.execute(
+                    "INSERT INTO NL2SQL_APP_ROLE_PROFILES (ROLE_ID, PROFILE_ID) "
+                    "VALUES (:role_id, :profile_id)",
+                    {"role_id": role.role_id, "profile_id": profile_id},
+                )
+        except Exception as exc:
+            _raise_missing_security_migration_if_needed(exc, "NL2SQL_APP_ROLE_PROFILES")
+            raise
         cursor.execute(
             "DELETE FROM NL2SQL_APP_DATA_ENTITLEMENTS WHERE ROLE_ID = :role_id",
             {"role_id": role.role_id},

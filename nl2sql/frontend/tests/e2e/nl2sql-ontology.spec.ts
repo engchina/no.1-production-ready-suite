@@ -756,7 +756,11 @@ test("検索を実行すると公開済み Ontology context を使って結果�
 
   await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "3" })).toBeVisible();
-  await expect(page.getByTestId("nl2sql-interpretation-panel")).toContainText("受注件数を集計します。");
+  await expect(page.getByTestId("nl2sql-interpretation-panel")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-sql-grounding-panel")).toBeVisible();
+  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
+  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
+  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-query.png"), fullPage: true });
   expect(payloads.job).toMatchObject({
     question: "受注件数を表示",

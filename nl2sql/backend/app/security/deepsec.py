@@ -947,7 +947,7 @@ class DeepSecService:
         _ = actor
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
-        role = self.security.store.get_role(role_id)
+        role = self.security.get_role(role_id)
         if role is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if role.is_built_in:
@@ -1045,7 +1045,7 @@ class DeepSecService:
             )
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
-        role = self.security.store.get_role(role_id)
+        role = self.security.get_role(role_id)
         if role is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if role.is_built_in:
@@ -1555,7 +1555,7 @@ class DeepSecService:
 
     def _managed_real_entitlements(self) -> list[DataEntitlementRecord]:
         entitlements: list[DataEntitlementRecord] = []
-        for role in self.security.store.list_roles(include_archived=True):
+        for role in self.security.list_roles(include_archived=True):
             entitlements.extend(
                 entitlement
                 for entitlement in role.entitlements

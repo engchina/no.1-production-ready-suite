@@ -337,6 +337,9 @@ export interface QuestionIntentGraph {
 
 export interface SqlSemanticItem {
   id?: string;
+  scope_id?: string;
+  catalog?: string;
+  owner?: string;
   expression?: string;
   expression_sql?: string;
   query_sql?: string;
@@ -348,6 +351,10 @@ export interface SqlSemanticItem {
   table?: string | null;
   column?: string | null;
   lineage?: string[];
+  referenced_columns?: string[];
+  function_name?: string;
+  clause?: string;
+  is_cte?: boolean;
 }
 
 export interface SqlSemanticJoin extends SqlSemanticItem {

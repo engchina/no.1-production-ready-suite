@@ -64,6 +64,14 @@ function nl2sqlQuestionInput(scope: Page | Locator) {
   return scope.locator("#nl2sql-question-input");
 }
 
+async function openNl2SqlExecutionOptions(page: Page) {
+  const disclosure = page.getByRole("button", { name: /実行オプション/ });
+  if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
+    await disclosure.click();
+  }
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+}
+
 function directSqlInput(scope: Page | Locator) {
   return scope.locator("#direct-sql-input");
 }
@@ -4288,6 +4296,7 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
+  await openNl2SqlExecutionOptions(page);
   await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
@@ -4413,6 +4422,7 @@ test("空の抽出条件では rewrite warning を表示し、条件を増やさ
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
+  await openNl2SqlExecutionOptions(page);
   await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
@@ -4423,16 +4433,393 @@ test("空の抽出条件では rewrite warning を表示し、条件を増やさ
   expect(String(submittedJobPayload?.question ?? "")).not.toContain("管理部門");
   const interpretation = page.getByTestId("nl2sql-interpretation-panel");
   await expect(interpretation.getByText("入力と SQL が一致していません")).toBeVisible();
-  await expect(interpretation.getByText("条件なし（空欄）")).toBeVisible();
-  await expect(interpretation.getByText("生成された条件")).toBeVisible();
-  await expect(interpretation.getByText(generatedWhere)).toBeVisible();
+  await expect(interpretation.getByText("入力の抽出条件は空欄ですが")).toBeVisible();
+  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
+  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
+  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(page.getByText("生成に使用される質問")).toBeVisible();
   await expect(page.getByText(warning)).toBeVisible();
-  await expect(interpretation.getByText("条件なし（空欄）")).toBeVisible();
-  await expect(interpretation.getByText(generatedWhere)).toBeVisible();
+  await expect(interpretation.getByText("入力と SQL が一致していません")).toBeVisible();
+  await expect(interpretation.getByText("入力の抽出条件は空欄ですが")).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認できる", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const questionText = "部署ごとの従業員氏名を表示";
+  const generatedSql =
+    'SELECT "d"."DEPARTMENT_NAME" AS "部署名", "e"."EMPLOYEE_NAME" AS "従業員氏名" FROM "ADMIN"."DEPARTMENT" "d" JOIN "ADMIN"."EMPLOYEE" "e" ON "e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"';
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-department",
+        owner: "ADMIN",
+        name: "DEPARTMENT",
+        alias: "d",
+        qualified_name: "ADMIN.DEPARTMENT",
+        source_sql: '"ADMIN"."DEPARTMENT" "d"',
+      },
+      {
+        id: "table-employee",
+        owner: "ADMIN",
+        name: "EMPLOYEE",
+        alias: "e",
+        qualified_name: "ADMIN.EMPLOYEE",
+        source_sql: '"ADMIN"."EMPLOYEE" "e"',
+      },
+    ],
+    columns: [
+      {
+        id: "column-department-name",
+        table: "d",
+        name: "DEPARTMENT_NAME",
+        expression_sql: '"d"."DEPARTMENT_NAME"',
+      },
+      {
+        id: "column-employee-name",
+        table: "e",
+        name: "EMPLOYEE_NAME",
+        expression_sql: '"e"."EMPLOYEE_NAME"',
+      },
+      {
+        id: "column-employee-department-id",
+        table: "e",
+        name: "DEPARTMENT_ID",
+        expression_sql: '"e"."DEPARTMENT_ID"',
+      },
+      {
+        id: "column-department-id",
+        table: "d",
+        name: "DEPARTMENT_ID",
+        expression_sql: '"d"."DEPARTMENT_ID"',
+      },
+    ],
+    joins: [
+      {
+        id: "join-department-employee",
+        left_source: '"ADMIN"."DEPARTMENT" "d"',
+        right_source: '"ADMIN"."EMPLOYEE" "e"',
+        join_type: "inner",
+        condition_sql: '"e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+      },
+    ],
+    projections: [
+      {
+        id: "projection-dept",
+        output_name: "部署名",
+        expression_sql: '"d"."DEPARTMENT_NAME" AS "部署名"',
+        referenced_columns: ["d.DEPARTMENT_NAME"],
+      },
+      {
+        id: "projection-employee",
+        output_name: "従業員氏名",
+        expression_sql: '"e"."EMPLOYEE_NAME" AS "従業員氏名"',
+        referenced_columns: ["e.EMPLOYEE_NAME"],
+      },
+    ],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    parse_warnings: [],
+  };
+  const ontologyGraph = {
+    revision: {
+      id: "revision-admin-hr",
+      version: 1,
+      status: "published",
+      schema_fingerprint: "hr-schema",
+      etag: "revision-admin-hr-etag",
+    },
+    nodes: [
+      {
+        id: "department-business",
+        kind: "business_entity",
+        business_name_ja: "部署",
+        technical_name: "department",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "department-table",
+              owner: "ADMIN",
+              object_name: "DEPARTMENT",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      {
+        id: "employee-business",
+        kind: "business_entity",
+        business_name_ja: "従業員",
+        technical_name: "employee",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "employee-table",
+              owner: "ADMIN",
+              object_name: "EMPLOYEE",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      {
+        id: "department-table",
+        kind: "table",
+        technical_name: "ADMIN.DEPARTMENT",
+        business_name_ja: "部署情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT" },
+      },
+      {
+        id: "employee-table",
+        kind: "table",
+        technical_name: "ADMIN.EMPLOYEE",
+        business_name_ja: "従業員情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "EMPLOYEE" },
+      },
+      {
+        id: "department-name",
+        kind: "property",
+        technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
+        business_name_ja: "部署名",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_NAME" },
+      },
+      {
+        id: "employee-name",
+        kind: "property",
+        technical_name: "ADMIN.EMPLOYEE.EMPLOYEE_NAME",
+        business_name_ja: "従業員氏名",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "EMPLOYEE_NAME" },
+      },
+      {
+        id: "department-id",
+        kind: "column",
+        technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_ID",
+        business_name_ja: "部署ID",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+      },
+      {
+        id: "employee-department-id",
+        kind: "column",
+        technical_name: "ADMIN.EMPLOYEE.DEPARTMENT_ID",
+        business_name_ja: "従業員部署ID",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+      },
+    ],
+    edges: [
+      {
+        id: "department-business-map",
+        kind: "physical_mapping",
+        source_node_id: "department-business",
+        target_node_id: "department-table",
+        relationship_name_ja: "物理マッピング",
+        review_status: "approved",
+      },
+      {
+        id: "employee-business-map",
+        kind: "physical_mapping",
+        source_node_id: "employee-business",
+        target_node_id: "employee-table",
+        relationship_name_ja: "物理マッピング",
+        review_status: "approved",
+      },
+      {
+        id: "department-name-column",
+        kind: "column",
+        source_node_id: "department-table",
+        target_node_id: "department-name",
+        relationship_name_ja: "列",
+        review_status: "approved",
+      },
+      {
+        id: "employee-name-column",
+        kind: "column",
+        source_node_id: "employee-table",
+        target_node_id: "employee-name",
+        relationship_name_ja: "列",
+        review_status: "approved",
+      },
+      {
+        id: "department-employee-join",
+        kind: "foreign_key",
+        source_node_id: "department-table",
+        target_node_id: "employee-table",
+        relationship_name_ja: "部署と従業員の Join",
+        review_status: "approved",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+      },
+    ],
+  };
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "job-ontology-grounding-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-ontology-grounding-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-ontology-grounding-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-ontology-grounding-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "部署と従業員を結合して氏名を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ["ADMIN.DEPARTMENT", "ADMIN.EMPLOYEE"],
+          referenced_columns: [
+            "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
+            "ADMIN.EMPLOYEE.EMPLOYEE_NAME",
+            "ADMIN.EMPLOYEE.DEPARTMENT_ID",
+            "ADMIN.DEPARTMENT.DEPARTMENT_ID",
+          ],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["部署名", "従業員氏名"],
+          rows: [{ 部署名: "開発部", 従業員氏名: "山田太郎" }],
+          total: 1,
+        },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ["ADMIN.DEPARTMENT", "ADMIN.EMPLOYEE"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.DEPARTMENT と ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.DEPARTMENT", "ADMIN.EMPLOYEE"],
+            columns: ["ADMIN.DEPARTMENT.DEPARTMENT_NAME", "ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
+            joins: ['"e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"'],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/ontology-view", (route) =>
+    fulfillJson(route, {
+      profile_ontology_view: {
+        id: "profile-view-admin-hr",
+        profile_id: "default",
+        ontology_revision_id: "revision-admin-hr",
+        node_ids: ontologyGraph.nodes.map((node) => node.id),
+        edge_ids: ontologyGraph.edges.map((edge) => edge.id),
+      },
+      ontology_graph: ontologyGraph,
+      materialized: true,
+      stale: false,
+      warnings_ja: [],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("全て接地");
+  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
+  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
+  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
+  await expect(page.getByTestId("ontology-node-card-department-table")).toContainText("部署情報");
+  await expect(page.getByTestId("ontology-node-card-employee-table")).toContainText("従業員情報");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("ADMIN.DEPARTMENT");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("部署と従業員の Join");
+
+  const graphSearch = panel.getByTestId("ontology-graph-search");
+  await graphSearch.focus();
+  await expect(graphSearch).toBeFocused();
+  const zoomIn = panel.getByLabel("グラフを拡大");
+  await zoomIn.focus();
+  await expect(zoomIn).toBeFocused();
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("全て接地")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sql-ontology-grounding.png"), fullPage: true });
 });
 
 test("schema catalog が空のとき、ジョブ失敗からサンプルデータ投入で復旧できる", async ({ page }) => {

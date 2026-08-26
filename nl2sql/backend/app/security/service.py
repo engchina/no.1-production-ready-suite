@@ -48,6 +48,7 @@ from .store import (
     InMemorySecurityStore,
     OracleSecurityStore,
     SecurityConflict,
+    SecurityMigrationRequired,
     SecurityNotFound,
     SecurityStore,
 )
@@ -89,10 +90,16 @@ _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
         "NL2SQL_APP_ROLES",
         "NL2SQL_APP_USER_ROLES",
         "NL2SQL_APP_ROLE_PERMISSIONS",
+        "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
         "NL2SQL_AUTH_SESSIONS",
         "NL2SQL_DEEPSEC_MIGRATIONS",
     }
+)
+_SECURITY_MIGRATION_REQUIRED_MESSAGE = (
+    "アプリケーション認証/RBAC の schema migration が未適用です。"
+    "`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` "
+    "を実行してから再試行してください。"
 )
 
 _CONFIGURED_SYSTEM_ADMIN_USER_UUID = "00000000-0000-0000-0000-000000000002"
@@ -111,6 +118,8 @@ _APP_ADMIN_PASSWORD_PATTERN = re.compile(
 
 
 def _looks_like_missing_security_schema(exc: Exception) -> bool:
+    if isinstance(exc, SecurityMigrationRequired):
+        return True
     message = str(exc).upper()
     return "ORA-00942" in message and any(
         object_name in message for object_name in _SECURITY_SCHEMA_OBJECT_NAMES
@@ -242,7 +251,11 @@ class SecurityService:
             last_seen_at=now,
         )
         self.store.create_session(session)
-        principal = self._principal_for(user, session)
+        try:
+            principal = self._principal_for(user, session)
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
         return principal, token, csrf_token
 
     def authenticate_session(self, token: str) -> Principal:
@@ -274,7 +287,11 @@ class SecurityService:
             idle_expires_at=idle_expires,
         )
         session.idle_expires_at = idle_expires
-        return self._principal_for(user, session)
+        try:
+            return self._principal_for(user, session)
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
 
     def verify_csrf(self, principal: Principal, cookie_token: str, header_token: str) -> None:
         if (
@@ -380,9 +397,9 @@ class SecurityService:
             raise SecurityApiError(404, "ユーザーが見つかりません。")
         self._assert_actor_can_manage_user(actor, current)
         normalized_role_ids = list(dict.fromkeys(role_ids))
-        current_roles = [self.store.get_role(role_id) for role_id in current.role_ids]
+        current_roles = [self.get_role(role_id) for role_id in current.role_ids]
         is_admin = any(role and role.role_code == SYSTEM_ADMIN_ROLE_CODE for role in current_roles)
-        next_roles = [self.store.get_role(role_id) for role_id in normalized_role_ids]
+        next_roles = [self.get_role(role_id) for role_id in normalized_role_ids]
         remains_admin = any(
             role and role.role_code == SYSTEM_ADMIN_ROLE_CODE for role in next_roles
         )
@@ -453,7 +470,18 @@ class SecurityService:
         return updated
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
-        return self.store.list_roles(include_archived=include_archived)
+        try:
+            return self.store.list_roles(include_archived=include_archived)
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
+
+    def get_role(self, role_id: str) -> RoleRecord | None:
+        try:
+            return self.store.get_role(role_id)
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
 
     def list_roles_for_actor(
         self, actor: Principal, *, include_archived: bool = False
@@ -462,12 +490,12 @@ class SecurityService:
             return self.list_roles(include_archived=include_archived)
         return [
             role
-            for role in self.store.list_roles(include_archived=False)
+            for role in self.list_roles(include_archived=False)
             if self._actor_can_assign_role(actor, role)
         ]
 
     def get_role_for_actor(self, role_id: str, actor: Principal) -> RoleRecord | None:
-        role = self.store.get_role(role_id)
+        role = self.get_role(role_id)
         if role is None:
             return None
         if actor.has_permission("menu.security_roles"):
@@ -484,10 +512,13 @@ class SecurityService:
         description: str,
         permissions: set[str],
         entitlements: list[DataEntitlementDraft],
+        allowed_profile_ids: set[str] | None = None,
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
+        if allowed_profile_ids:
+            self._assert_actor_can_manage_profile_access(actor)
         role = self._build_role(
             role_id=str(uuid4()),
             role_code=role_code,
@@ -495,6 +526,7 @@ class SecurityService:
             description=description,
             permissions=permissions,
             entitlements=entitlements,
+            allowed_profile_ids=allowed_profile_ids or set(),
             version=1,
         )
         try:
@@ -512,15 +544,23 @@ class SecurityService:
         description: str,
         permissions: set[str],
         entitlements: list[DataEntitlementDraft],
+        allowed_profile_ids: set[str] | None = None,
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
-        current = self.store.get_role(role_id)
+        current = self.get_role(role_id)
         if current is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if current.is_built_in:
             raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。")
+        requested_profile_ids = (
+            allowed_profile_ids
+            if allowed_profile_ids is not None
+            else set(current.allowed_profile_ids)
+        )
+        if requested_profile_ids != current.allowed_profile_ids:
+            self._assert_actor_can_manage_profile_access(actor)
         role = self._build_role(
             role_id=role_id,
             role_code=current.role_code,
@@ -528,6 +568,7 @@ class SecurityService:
             description=description,
             permissions=permissions,
             entitlements=entitlements,
+            allowed_profile_ids=requested_profile_ids,
             version=current.version,
         )
         try:
@@ -546,7 +587,7 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
-        current = self.store.get_role(role_id)
+        current = self.get_role(role_id)
         if current is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if current.is_built_in:
@@ -568,6 +609,7 @@ class SecurityService:
             version=current.version,
             permissions=set(current.permissions),
             entitlements=data_records,
+            allowed_profile_ids=set(current.allowed_profile_ids),
         )
         try:
             updated = self.store.update_role(role, expected_version=expected_version)
@@ -584,7 +626,7 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
-        role = self.store.get_role(role_id)
+        role = self.get_role(role_id)
         if role is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if role.is_built_in:
@@ -604,7 +646,7 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
-        role = self.store.get_role(role_id)
+        role = self.get_role(role_id)
         if role is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if role.is_built_in:
@@ -808,6 +850,7 @@ class SecurityService:
             role_codes=[SYSTEM_ADMIN_ROLE_CODE],
             permissions=set(ALL_PERMISSION_CODES),
             data_entitlements=[],
+            allowed_profile_ids=set(),
             session_id=session_id,
             csrf_token_hash=csrf_token_hash,
             password_change_allowed=True,
@@ -821,13 +864,15 @@ class SecurityService:
         )
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
-        roles = [self.store.get_role(role_id) for role_id in user.role_ids]
+        roles = [self.get_role(role_id) for role_id in user.role_ids]
         active_roles = [role for role in roles if role is not None and not role.archived]
         permissions = expand_permissions(
             {permission for role in active_roles for permission in role.permissions}
         )
         entitlements: dict[tuple[str, str, str], DataEntitlementRecord] = {}
+        allowed_profile_ids: set[str] = set()
         for role in active_roles:
+            allowed_profile_ids.update(role.allowed_profile_ids)
             for entitlement in role.entitlements:
                 key = (
                     entitlement.entitlement_id or entitlement.resource_code,
@@ -844,6 +889,7 @@ class SecurityService:
             role_codes=sorted(role.role_code for role in active_roles),
             permissions=permissions,
             data_entitlements=list(entitlements.values()),
+            allowed_profile_ids=allowed_profile_ids,
             session_id=session.session_id,
             csrf_token_hash=session.csrf_token_hash,
         )
@@ -857,6 +903,7 @@ class SecurityService:
         description: str,
         permissions: set[str],
         entitlements: list[DataEntitlementDraft],
+        allowed_profile_ids: set[str],
         version: int,
     ) -> RoleRecord:
         unknown = unknown_permission_codes(permissions)
@@ -874,7 +921,18 @@ class SecurityService:
             version=version,
             permissions=normalized,
             entitlements=data_records,
+            allowed_profile_ids={item.strip() for item in allowed_profile_ids if item.strip()},
         )
+
+    @staticmethod
+    def _assert_actor_can_manage_profile_access(
+        actor: Principal,
+    ) -> None:
+        if not actor.is_system_admin:
+            raise SecurityApiError(
+                403,
+                "業務プロファイル利用権限を変更できるのは SYSTEM_ADMIN のみです。",
+            )
 
     @staticmethod
     def _data_entitlement_policy_signature(
@@ -993,7 +1051,7 @@ class SecurityService:
     ) -> None:
         existing_role_id_set = set(existing_role_ids)
         for role_id in role_ids:
-            role = self.store.get_role(role_id)
+            role = self.get_role(role_id)
             if role is None or role.archived:
                 if role_id in existing_role_id_set:
                     continue
@@ -1005,7 +1063,7 @@ class SecurityService:
         if actor.is_system_admin:
             return
         for role_id in user.role_ids:
-            role = self.store.get_role(role_id)
+            role = self.get_role(role_id)
             if (
                 role is not None
                 and not role.archived
@@ -1033,6 +1091,11 @@ class SecurityService:
             )
         except PasswordPolicyError as exc:
             raise SecurityApiError(400, str(exc)) from exc
+
+    @staticmethod
+    def _raise_security_migration_if_needed(exc: Exception) -> None:
+        if _looks_like_missing_security_schema(exc):
+            raise SecurityApiError(409, _SECURITY_MIGRATION_REQUIRED_MESSAGE) from exc
 
     @staticmethod
     def _store_error(exc: Exception) -> SecurityApiError:

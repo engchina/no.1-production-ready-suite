@@ -1,4 +1,9 @@
-import type { QualityEvaluationEngine, QualityEvaluationEngineCapability, QualityEvaluationStatus } from "./types.ts";
+import type {
+  QualityEvaluationEngine,
+  QualityEvaluationEngineCapability,
+  QualityEvaluationJobSummary,
+  QualityEvaluationStatus,
+} from "./types.ts";
 
 export type QualityEvaluationValidationCode =
   | "profile_required"
@@ -56,4 +61,39 @@ export function qualityEvaluationAttemptCount(
 
 export function qualityEvaluationPollingInterval(status?: QualityEvaluationStatus) {
   return status === "pending" || status === "running" ? 1_500 : false;
+}
+
+function timestampMillis(value?: string | null): number | null {
+  if (!value) return null;
+  const millis = Date.parse(value);
+  return Number.isNaN(millis) ? null : millis;
+}
+
+export function qualityEvaluationLastHeartbeatMs(
+  job: Pick<QualityEvaluationJobSummary, "heartbeat_at">
+) {
+  return timestampMillis(job.heartbeat_at);
+}
+
+export function qualityEvaluationLeaseExpired(
+  job: Pick<QualityEvaluationJobSummary, "status" | "lease_expires_at">,
+  nowMs = Date.now()
+) {
+  if (job.status !== "running") return false;
+  const leaseExpiresAt = timestampMillis(job.lease_expires_at);
+  return leaseExpiresAt === null || leaseExpiresAt <= nowMs;
+}
+
+export function qualityEvaluationAttemptTimedOut(
+  job: Pick<
+    QualityEvaluationJobSummary,
+    "status" | "current_attempt_started_at" | "attempt_timeout_seconds"
+  >,
+  nowMs = Date.now()
+) {
+  if (job.status !== "running") return false;
+  const startedAt = timestampMillis(job.current_attempt_started_at);
+  if (startedAt === null) return false;
+  const timeoutSeconds = Math.max(1, Number(job.attempt_timeout_seconds || 0));
+  return startedAt + timeoutSeconds * 1000 <= nowMs;
 }

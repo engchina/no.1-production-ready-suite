@@ -29,6 +29,10 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "
 import { t } from "@/lib/i18n";
 import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
+import { useAuth } from "@/features/security/AuthProvider";
+import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
+import { securityApi } from "@/features/security/api";
+import type { ProfileAccessProfile } from "@/features/security/types";
 import { ExecutionConfirmationField } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
@@ -942,6 +946,7 @@ function SchemaGroupedSelectionPanel({
 
 function ProfileEditor({
   selectedProfile,
+  profileAccessProfile,
   form,
   tableObjects,
   viewObjects,
@@ -987,6 +992,7 @@ function ProfileEditor({
   onRetryOracleSync,
 }: {
   selectedProfile: Nl2SqlProfile | null;
+  profileAccessProfile: ProfileAccessProfile | null;
   form: ProfileFormState;
   tableObjects: SchemaTable[];
   viewObjects: SchemaTable[];
@@ -1146,6 +1152,24 @@ function ProfileEditor({
           )}
         </div>
       </section>
+
+      {selectedProfile && profileAccessProfile ? (
+        <section className="grid gap-2 rounded-md border border-border bg-background p-3">
+          <h3 className="text-sm font-semibold text-foreground">{t("profiles.access.title")}</h3>
+          <p className="text-sm text-muted">{t("profiles.access.hint")}</p>
+          {profileAccessProfile.allowed_role_ids.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {profileAccessProfile.allowed_role_ids.map((roleId) => (
+                <StatusBadge key={roleId} variant="neutral" label={roleId} />
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+              {t("profiles.access.none")}
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <section data-testid="profile-allowed-object-list" className="grid gap-3">
         <div>
@@ -1428,6 +1452,7 @@ export function ProfileManagementPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
+  const auth = useAuth();
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
   const [profileSearch, setProfileSearch] = useState("");
   const [objectFilter, setObjectFilter] = useState("");
@@ -1478,6 +1503,14 @@ export function ProfileManagementPage() {
     queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
     staleTime: 5_000,
   });
+  const canViewProfileAccess = auth.hasPermission(MENU_PERMISSIONS.securityRoles);
+  const profileAccessProfilesQuery = useQuery({
+    queryKey: ["security", "profile-access", "profiles"],
+    queryFn: () => securityApi.profileAccessProfiles(),
+    enabled: canViewProfileAccess,
+    staleTime: 10_000,
+    retry: false,
+  });
   const oracleSyncJobQuery = useQuery({
     queryKey: ["nl2sql", "oracle-sync-job", oracleSyncJobId],
     queryFn: () => apiGet<ProfileSyncJobData>(`/api/nl2sql/oracle-sync-jobs/${oracleSyncJobId}`),
@@ -1493,6 +1526,8 @@ export function ProfileManagementPage() {
   );
   const profilesLoaded = !profilesQuery.isPending;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
+  const selectedProfileAccessProfile =
+    profileAccessProfilesQuery.data?.find((profile) => profile.id === selectedProfile?.id) ?? null;
   const oracleSyncJob = oracleSyncJobQuery.data ?? null;
 
   const tableObjects = useMemo(
@@ -2010,6 +2045,7 @@ export function ProfileManagementPage() {
   const editor = (
     <ProfileEditor
       selectedProfile={selectedProfile}
+      profileAccessProfile={selectedProfileAccessProfile}
       form={form}
       tableObjects={filteredTableObjects}
       viewObjects={filteredViewObjects}

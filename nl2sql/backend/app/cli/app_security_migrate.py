@@ -14,6 +14,7 @@ LEGACY_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
     ("RAG_APP_ROLES", "NL2SQL_APP_ROLES"),
     ("RAG_APP_USER_ROLES", "NL2SQL_APP_USER_ROLES"),
     ("RAG_APP_ROLE_PERMISSIONS", "NL2SQL_APP_ROLE_PERMISSIONS"),
+    ("RAG_APP_ROLE_PROFILES", "NL2SQL_APP_ROLE_PROFILES"),
     ("RAG_APP_DATA_ENTITLEMENTS", "NL2SQL_APP_DATA_ENTITLEMENTS"),
     ("RAG_AUTH_SESSIONS", "NL2SQL_AUTH_SESSIONS"),
     ("RAG_DEEPSEC_MIGRATIONS", "NL2SQL_DEEPSEC_MIGRATIONS"),
@@ -90,6 +91,8 @@ def apply_security_migrations() -> tuple[int, ...]:
     user_uuid_statements = split_ddl(user_uuid_migration.read_text(encoding="utf-8"))
     user_uuid_rename_statements = user_uuid_statements[:7]
     user_uuid_data_statements = user_uuid_statements[7:]
+    role_profiles_migration = migration_dir / "016_app_role_profiles.sql"
+    role_profiles_statements = split_ddl(role_profiles_migration.read_text(encoding="utf-8"))
 
     with get_oracle_pool_manager().control_connection() as connection:
         _assert_no_namespace_conflicts(connection)
@@ -117,7 +120,15 @@ def apply_security_migrations() -> tuple[int, ...]:
             atomic=False,
             include_sql=False,
             ignored_error_codes=frozenset(
-                {"ORA-00904", "ORA-00942", "ORA-00955", "ORA-00957", "ORA-01418", "ORA-02443"}
+                {
+                    "ORA-00904",
+                    "ORA-00942",
+                    "ORA-00955",
+                    "ORA-00957",
+                    "ORA-01418",
+                    "ORA-02443",
+                    "ORA-23292",
+                }
             ),
         )
         _with_migration_label("014-rename", user_uuid_rename_results)
@@ -182,6 +193,14 @@ def apply_security_migrations() -> tuple[int, ...]:
             ignored_error_codes=frozenset({"ORA-00904", "ORA-00942"}),
         )
         _with_migration_label("014-data", user_uuid_data_results)
+        role_profiles_results = oracle_statement_executor.execute(
+            connection,
+            role_profiles_statements,
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=frozenset({"ORA-00001", "ORA-00942", "ORA-00955"}),
+        )
+        _with_migration_label("016", role_profiles_results)
     errors = [
         result
         for result in (
@@ -195,6 +214,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             *deepsec_scope_filters_results,
             *login_user_id_data_results,
             *user_uuid_data_results,
+            *role_profiles_results,
         )
         if result["status"] == "error"
     ]
@@ -216,6 +236,7 @@ def apply_security_migrations() -> tuple[int, ...]:
         len(deepsec_scope_filters_statements),
         len(login_user_id_statements),
         len(user_uuid_statements),
+        len(role_profiles_statements),
     )
 
 
@@ -251,6 +272,8 @@ def main() -> int:
     login_user_id_statements = split_ddl(login_user_id_migration.read_text(encoding="utf-8"))
     user_uuid_migration = migration_dir / "014_user_uuid_rename.sql"
     user_uuid_statements = split_ddl(user_uuid_migration.read_text(encoding="utf-8"))
+    role_profiles_migration = migration_dir / "016_app_role_profiles.sql"
+    role_profiles_statements = split_ddl(role_profiles_migration.read_text(encoding="utf-8"))
     if not args.apply:
         print(
             f"migration=005 statements={len(namespace_statements)} mode=preview "
@@ -260,7 +283,8 @@ def main() -> int:
             f"migration=011 statements={len(deepsec_target_width_statements)} "
             f"migration=012 statements={len(deepsec_scope_filters_statements)} "
             f"migration=013 statements={len(login_user_id_statements)} "
-            f"migration=014 statements={len(user_uuid_statements)}"
+            f"migration=014 statements={len(user_uuid_statements)} "
+            f"migration=016 statements={len(role_profiles_statements)}"
         )
         return 0
 
@@ -279,6 +303,7 @@ def main() -> int:
         f"migration=012 statements={len(deepsec_scope_filters_statements)} "
         f"migration=013 statements={len(login_user_id_statements)} "
         f"migration=014 statements={len(user_uuid_statements)} "
+        f"migration=016 statements={len(role_profiles_statements)} "
         f"bootstrap_created={str(bootstrapped).lower()}"
     )
     return 0

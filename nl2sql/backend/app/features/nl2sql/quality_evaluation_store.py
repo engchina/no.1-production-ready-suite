@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from .oracle_lob import configure_clob_fetch_as_text
 from .quality_evaluation_models import (
     QualityEvaluationJobRecord,
     QualityEvaluationResult,
@@ -16,7 +17,7 @@ from .quality_evaluation_models import (
 )
 
 
-def _canonical_json(value: dict[str, Any]) -> str:
+def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
@@ -24,7 +25,12 @@ def _read_lob(value: Any) -> str:
     if value is None:
         return ""
     reader = getattr(value, "read", None)
-    return str(reader() if callable(reader) else value)
+    raw = reader() if callable(reader) else value
+    if isinstance(raw, (Mapping, list, tuple)):
+        return _canonical_json(raw)
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8")
+    return str(raw or "")
 
 
 class QualityEvaluationRepository(Protocol):
@@ -37,6 +43,8 @@ class QualityEvaluationRepository(Protocol):
     def list_jobs(
         self, *, offset: int, limit: int
     ) -> tuple[list[QualityEvaluationJobRecord], int]: ...
+
+    def delete_job(self, job_id: str) -> QualityEvaluationJobRecord | None: ...
 
     def claim_job(
         self, *, worker_id: str, lease_seconds: float, job_id: str | None = None
@@ -80,6 +88,18 @@ class MemoryQualityEvaluationRepository:
             )
             return [item.model_copy(deep=True) for item in jobs[offset : offset + limit]], len(jobs)
 
+    def delete_job(self, job_id: str) -> QualityEvaluationJobRecord | None:
+        with self._lock:
+            job = self._jobs.pop(job_id, None)
+            if job is None:
+                return None
+            self._results = {
+                key: result
+                for key, result in self._results.items()
+                if key[0] != job_id
+            }
+            return job.model_copy(deep=True)
+
     def claim_job(
         self, *, worker_id: str, lease_seconds: float, job_id: str | None = None
     ) -> QualityEvaluationJobRecord | None:
@@ -92,7 +112,7 @@ class MemoryQualityEvaluationRepository:
                 if job_id and current.job_id != job_id:
                     continue
                 expired = not current.lease_expires_at or datetime.fromisoformat(
-                    current.lease_expires_at
+                    current.lease_expires_at.replace("Z", "+00:00")
                 ) <= now
                 if current.status != QualityEvaluationStatus.PENDING and not (
                     current.status == QualityEvaluationStatus.RUNNING and expired
@@ -186,18 +206,20 @@ class OracleQualityEvaluationRepository:
 
     def get_job(self, job_id: str) -> QualityEvaluationJobRecord | None:
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(
                 "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id",
                 {"job_id": job_id},
             )
             row = cursor.fetchone()
-        raw = _read_lob(row[0]) if row else ""
+            raw = _read_lob(row[0]) if row else ""
         return QualityEvaluationJobRecord.model_validate_json(raw) if raw else None
 
     def list_jobs(
         self, *, offset: int, limit: int
     ) -> tuple[list[QualityEvaluationJobRecord], int]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute("SELECT COUNT(*) FROM NL2SQL_EVALUATION_JOBS")
             total = int(cursor.fetchone()[0])
             cursor.execute(
@@ -207,11 +229,32 @@ class OracleQualityEvaluationRepository:
                 {"offset": offset, "limit": limit},
             )
             rows = cursor.fetchall()
-        jobs = [
-            QualityEvaluationJobRecord.model_validate_json(_read_lob(row[0]))
-            for row in rows
-        ]
+            raw_jobs = [_read_lob(row[0]) for row in rows]
+        jobs = [QualityEvaluationJobRecord.model_validate_json(raw) for raw in raw_jobs]
         return jobs, total
+
+    def delete_job(self, job_id: str) -> QualityEvaluationJobRecord | None:
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
+            try:
+                cursor.execute(
+                    "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id",
+                    {"job_id": job_id},
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    connection.commit()
+                    return None
+                current = QualityEvaluationJobRecord.model_validate_json(_read_lob(row[0]))
+                cursor.execute(
+                    "DELETE FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id",
+                    {"job_id": job_id},
+                )
+                connection.commit()
+                return current
+            except Exception:
+                connection.rollback()
+                raise
 
     def claim_job(
         self, *, worker_id: str, lease_seconds: float, job_id: str | None = None
@@ -232,6 +275,7 @@ class OracleQualityEvaluationRepository:
             + " ORDER BY CREATED_AT, JOB_ID FETCH FIRST 1 ROWS ONLY FOR UPDATE SKIP LOCKED"
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             try:
                 cursor.execute(sql, select_binds)
                 row = cursor.fetchone()
@@ -323,6 +367,7 @@ class OracleQualityEvaluationRepository:
         self, *, job_id: str, offset: int, limit: int
     ) -> tuple[list[QualityEvaluationResult], int]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(
                 "SELECT COUNT(*) FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id",
                 {"job_id": job_id},
@@ -335,17 +380,18 @@ class OracleQualityEvaluationRepository:
                 {"job_id": job_id, "offset": offset, "limit": limit},
             )
             rows = cursor.fetchall()
-        results = [
-            QualityEvaluationResult.model_validate_json(_read_lob(row[0])) for row in rows
-        ]
+            raw_results = [_read_lob(row[0]) for row in rows]
+        results = [QualityEvaluationResult.model_validate_json(raw) for raw in raw_results]
         return results, total
 
     def all_results(self, job_id: str) -> list[QualityEvaluationResult]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(
                 "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "
                 "ORDER BY CASE_NO, ENGINE, REPETITION_NO",
                 {"job_id": job_id},
             )
             rows = cursor.fetchall()
-        return [QualityEvaluationResult.model_validate_json(_read_lob(row[0])) for row in rows]
+            raw_results = [_read_lob(row[0]) for row in rows]
+        return [QualityEvaluationResult.model_validate_json(raw) for raw in raw_results]

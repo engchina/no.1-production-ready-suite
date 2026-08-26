@@ -91,6 +91,7 @@ export interface CurrentUser {
   is_system_admin: boolean;
   permissions: string[];
   data_entitlements: DataEntitlement[];
+  allowed_profile_ids: string[];
   debug_mode: boolean;
   password_change_allowed: boolean;
 }
@@ -126,6 +127,16 @@ export interface SecurityRole {
   version: number;
   permissions: string[];
   data_entitlements: DataEntitlement[];
+  allowed_profile_ids: string[];
+}
+
+export interface ProfileAccessProfile {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  archived: boolean;
+  allowed_role_ids: string[];
 }
 
 export interface DeepSecRoleEntitlements {

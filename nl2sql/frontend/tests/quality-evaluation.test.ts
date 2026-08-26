@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   qualityEvaluationAttemptCount,
+  qualityEvaluationAttemptTimedOut,
+  qualityEvaluationLeaseExpired,
   qualityEvaluationPollingInterval,
   toggleQualityEvaluationEngine,
   validateQualityEvaluationInput,
@@ -73,4 +75,45 @@ test("polling continues only for pending and running jobs", () => {
   assert.equal(qualityEvaluationPollingInterval("running"), 1_500);
   assert.equal(qualityEvaluationPollingInterval("completed_with_errors"), false);
   assert.equal(qualityEvaluationPollingInterval("failed"), false);
+  assert.equal(qualityEvaluationPollingInterval("cancelled"), false);
+});
+
+test("stale helpers detect expired quality evaluation attempt and lease", () => {
+  const now = Date.parse("2026-07-22T08:06:00Z");
+  assert.equal(
+    qualityEvaluationAttemptTimedOut(
+      {
+        status: "running",
+        current_attempt_started_at: "2026-07-22T08:00:00Z",
+        attempt_timeout_seconds: 300,
+      },
+      now
+    ),
+    true
+  );
+  assert.equal(
+    qualityEvaluationAttemptTimedOut(
+      {
+        status: "running",
+        current_attempt_started_at: "2026-07-22T08:02:00Z",
+        attempt_timeout_seconds: 300,
+      },
+      now
+    ),
+    false
+  );
+  assert.equal(
+    qualityEvaluationLeaseExpired(
+      { status: "running", lease_expires_at: "2026-07-22T08:05:30Z" },
+      now
+    ),
+    true
+  );
+  assert.equal(
+    qualityEvaluationLeaseExpired(
+      { status: "cancelled", lease_expires_at: "2026-07-22T08:05:30Z" },
+      now
+    ),
+    false
+  );
 });
