@@ -453,7 +453,7 @@ def test_admin_mutation_submits_schema_job_only_for_schema_changes(
     assert ddl.executed is True
     assert ddl.schema_refresh_job_id == "refresh-job-1"
     assert submitted == 1
-    assert submitted_targets == [[("ADMIN", "ORDERS_ARCHIVE", "present")]]
+    assert submitted_targets == [[("APP", "ORDERS_ARCHIVE", "present")]]
 
 
 def test_admin_plsql_success_requires_manual_schema_refresh() -> None:
@@ -1573,8 +1573,8 @@ def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None
         )
     )
 
-    assert result.sql.index('ALTER TABLE "ADMIN"."A_TABLE"') < result.sql.index(
-        'ALTER TABLE "ADMIN"."B_TABLE"'
+    assert result.sql.index('ALTER TABLE "APP"."A_TABLE"') < result.sql.index(
+        'ALTER TABLE "APP"."B_TABLE"'
     )
     assert "O''Brien" in result.sql
     assert "ADD IF NOT EXISTS UI_Display" in result.sql
@@ -1669,7 +1669,7 @@ def test_drop_view_confirmation_and_requires_oracle() -> None:
     missing = service.drop_db_admin_view(DbAdminDropViewRequest(view_name="V_EMP_DEPT"))
     assert missing.executed is False
     assert missing.statements[0].status == "confirmation_required"
-    assert 'DROP VIEW "ADMIN"."V_EMP_DEPT"' in missing.statements[0].sql
+    assert 'DROP VIEW "APP"."V_EMP_DEPT"' in missing.statements[0].sql
 
     requires_oracle = service.drop_db_admin_view(
         DbAdminDropViewRequest(view_name="V_EMP_DEPT", confirmation="V_EMP_DEPT")
@@ -1684,7 +1684,7 @@ def test_truncate_table_requires_target_confirmation_and_oracle() -> None:
     assert missing.executed is False
     assert missing.statements[0].status == "confirmation_required"
     assert missing.statements[0].statement_type == "TRUNCATE"
-    assert 'TRUNCATE TABLE "ADMIN"."INVOICES"' in missing.statements[0].sql
+    assert 'TRUNCATE TABLE "APP"."INVOICES"' in missing.statements[0].sql
 
     admin_execute = service.truncate_db_admin_table(
         DbAdminTruncateTableRequest(table_name="INVOICES", confirmation="ADMIN_EXECUTE")
@@ -1698,7 +1698,7 @@ def test_truncate_table_requires_target_confirmation_and_oracle() -> None:
     )
     assert requires_oracle.executed is False
     assert requires_oracle.statements[0].status == "requires_oracle"
-    assert requires_oracle.statements[0].sql == 'TRUNCATE TABLE "ADMIN"."INVOICES"'
+    assert requires_oracle.statements[0].sql == 'TRUNCATE TABLE "APP"."INVOICES"'
 
 
 def test_db_admin_direct_object_operations_block_nl2sql_namespace() -> None:
@@ -1803,7 +1803,7 @@ def test_truncate_table_executes_quoted_statement_in_oracle_runtime() -> None:
 
     assert result.executed is True
     assert result.committed is True
-    assert adapter.calls == [(['TRUNCATE TABLE "ADMIN"."INVOICES"'], False)]
+    assert adapter.calls == [(['TRUNCATE TABLE "APP"."INVOICES"'], False)]
 
 
 def test_truncate_table_blocks_catalog_views_and_invalid_names() -> None:
@@ -1837,7 +1837,7 @@ def test_truncate_table_blocks_catalog_views_and_invalid_names() -> None:
     )
     assert oracle_view.executed is False
     assert oracle_view.statements[0].status == "blocked"
-    assert adapter.object_type_calls == ["ADMIN.V_EMP_DEPT"]
+    assert adapter.object_type_calls == ["APP.V_EMP_DEPT"]
     assert adapter.calls == []
 
     with pytest.raises(ValueError):
@@ -1851,7 +1851,7 @@ def test_preview_data_builds_guarded_select() -> None:
 
     plain = service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name="INVOICES"))
     assert plain.runtime == "deterministic"
-    assert plain.sql == 'SELECT * FROM "ADMIN"."INVOICES" FETCH FIRST 100 ROWS ONLY'
+    assert plain.sql == 'SELECT * FROM "APP"."INVOICES" FETCH FIRST 100 ROWS ONLY'
     assert plain.results.columns
 
     filtered = service.preview_db_admin_data(
@@ -2439,12 +2439,12 @@ def test_preview_data_exports_xlsx() -> None:
 
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    assert filename == "admin_invoices_preview.xlsx"
+    assert filename == "app_invoices_preview.xlsx"
     assert workbook.sheetnames == ["data", "query"]
     assert workbook["data"].max_row >= 1
     assert (
         workbook["query"]["A2"].value
-        == 'SELECT * FROM "ADMIN"."INVOICES" WHERE STATUS = \'A\' FETCH FIRST 10 ROWS ONLY'
+        == 'SELECT * FROM "APP"."INVOICES" WHERE STATUS = \'A\' FETCH FIRST 10 ROWS ONLY'
     )
 
 
@@ -2708,7 +2708,7 @@ def test_view_export_xlsx_contains_column_information_only() -> None:
     ]
     assert [sheet.cell(row=2, column=index).value for index in range(1, 7)] == [
         "EMPLOYEE_NAME",
-        "-",
+        "EMPLOYEE_NAME",
         "社員名",
         "VARCHAR2(120)",
         "NO",
@@ -3074,7 +3074,7 @@ def test_import_tabular_create_submits_targeted_schema_job(
     assert result.executed is True
     assert result.schema_refresh_job_id == "targeted-import-refresh"
     assert result.schema_refresh_required is False
-    assert submitted_targets == [[("ADMIN", "IMPORTED_ORDERS", "present")]]
+    assert submitted_targets == [[("APP", "IMPORTED_ORDERS", "present")]]
     assert adapter.calls[0]["table_name"] == "IMPORTED_ORDERS"
 
 

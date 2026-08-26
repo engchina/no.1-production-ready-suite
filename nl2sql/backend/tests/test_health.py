@@ -1876,7 +1876,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
 
         delete_resp = await client.delete(f"/api/nl2sql/profiles/{profile_id}")
         assert delete_resp.status_code == 200
-        assert delete_resp.json()["data"]["id"] == profile_id
+        assert delete_resp.json()["data"]["profile"]["id"] == profile_id
         deleted_list_resp = await client.get(
             "/api/nl2sql/profiles", params={"include_archived": "true"}
         )
@@ -2112,7 +2112,7 @@ async def test_reverse_comments_and_diagnostics() -> None:
             "/api/nl2sql/reverse", json={"sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE"}
         )
         assert reverse_resp.status_code == 200
-        assert reverse_resp.json()["data"]["referenced_tables"] == ["EMPLOYEE"]
+        assert reverse_resp.json()["data"]["referenced_tables"] == ["APP.EMPLOYEE"]
 
         comments_resp = await client.post("/api/nl2sql/comments/suggest")
         assert comments_resp.status_code == 200
@@ -2141,11 +2141,11 @@ async def test_reverse_comments_and_diagnostics() -> None:
         assert apply_data["statements"][0]["status"] == "confirmation_required"
         assert (
             apply_data["statements"][0]["sql"]
-            == "COMMENT ON TABLE \"EMPLOYEE\" IS '社員情報''s 確認';"
+            == "COMMENT ON TABLE \"APP\".\"EMPLOYEE\" IS '社員情報''s 確認';"
         )
         assert (
             apply_data["statements"][1]["sql"]
-            == 'COMMENT ON COLUMN "EMPLOYEE"."EMPLOYEE_NAME" IS \'社員名\';'
+            == 'COMMENT ON COLUMN "APP"."EMPLOYEE"."EMPLOYEE_NAME" IS \'社員名\';'
         )
 
         execute_apply_resp = await client.post(
@@ -3343,26 +3343,18 @@ def test_service_run_agent_team_uses_runtime_team_name() -> None:
     )
 
 
-def test_oracle_adapter_generate_synthetic_data_falls_back_to_procedure_signature() -> None:
+def test_oracle_adapter_generate_synthetic_data_blocks_nl2sql_system_namespace() -> None:
     fake_db = _FakeOracleDb()
     fake_db.synthetic_function_signature_failures = 2
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
-    meta = adapter.generate_synthetic_data(
-        table_name="NL2SQL_SMOKE_TABLE",
-        row_count=1,
-        profile_name="NL2SQL_SMOKE_PROFILE",
-    )
-
-    assert meta["mode"] == "procedure"
-    assert "operation_id" not in meta
-    assert fake_db.synthetic_procedure_calls == 1
-    assert any(
-        params
-        and params.get("profile_name") == "NL2SQL_SMOKE_PROFILE"
-        and params.get("object_name") == "NL2SQL_SMOKE_TABLE"
-        for params in fake_db.executed_params
-    )
+    with pytest.raises(OracleAdapterError, match="システムテーブル管理"):
+        adapter.generate_synthetic_data(
+            table_name="NL2SQL_SMOKE_TABLE",
+            row_count=1,
+            profile_name="NL2SQL_SMOKE_PROFILE",
+        )
+    assert fake_db.synthetic_procedure_calls == 0
 
 
 def test_service_refresh_agent_cleans_previous_versioned_team() -> None:
