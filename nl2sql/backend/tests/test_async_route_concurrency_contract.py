@@ -78,7 +78,8 @@ class Violation:
 
 
 def _router_files() -> Iterable[Path]:
-    yield from sorted(APP_DIR.rglob("router.py"))
+    # ontology_router.py 等の別名 router も契約対象にする(router.py 完全一致だと漏れる)
+    yield from sorted(APP_DIR.rglob("*router*.py"))
 
 
 def _is_route_handler(function: ast.AsyncFunctionDef) -> bool:

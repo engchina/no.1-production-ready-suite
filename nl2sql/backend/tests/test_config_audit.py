@@ -57,8 +57,7 @@ def test_audit_rejects_deepsec_with_thick_driver(tmp_path: Path) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ORACLE_DEEPSEC_ENABLED=true\n"
-        "ORACLE_DRIVER_MODE=thick\n",
+        "ORACLE_DEEPSEC_ENABLED=true\n" "ORACLE_DRIVER_MODE=thick\n",
         encoding="utf-8",
     )
     env_file.chmod(0o600)

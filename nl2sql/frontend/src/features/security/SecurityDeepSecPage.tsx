@@ -1,9 +1,9 @@
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { Button } from "@/components/ui/button";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Database,
   KeyRound,
@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Search,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -24,11 +23,12 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
-  StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
 import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -56,6 +56,7 @@ import type {
   DataEntitlementScopeOperator,
   DataEntitlementScopeValueSource,
   DataEntitlementScopeValueType,
+  DeepSecDataEntitlementPreview,
   DeepSecPlan,
   DeepSecRoleEntitlements,
   DeepSecStatus,
@@ -79,6 +80,11 @@ const SCOPE_OPERATORS_BY_VALUE_TYPE: Record<DataEntitlementScopeValueType, DataE
 };
 type DeepSecView = "data-user" | "foundation" | "data-permissions";
 type DataEntitlementDraft = DataEntitlement & { client_key: string };
+type ScrollPositionSnapshot = {
+  element: HTMLElement;
+  top: number;
+  left: number;
+};
 
 const INPUT_CLASS =
   "h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
@@ -413,13 +419,13 @@ function DeepSecTargetObjectPicker({
   total,
   nextCursor,
   search,
-  owner,
+  ownerPrefix,
   loading,
   loadingMore,
   error,
   disabled,
   onSearchChange,
-  onOwnerChange,
+  onOwnerPrefixChange,
   onSelect,
   onLoadMore,
 }: {
@@ -430,13 +436,13 @@ function DeepSecTargetObjectPicker({
   total: number | null;
   nextCursor: string | null;
   search: string;
-  owner: string;
+  ownerPrefix: string;
   loading: boolean;
   loadingMore: boolean;
   error: string;
   disabled: boolean;
   onSearchChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
+  onOwnerPrefixChange: (value: string) => void;
   onSelect: (value: string) => void;
   onLoadMore: () => void;
 }) {
@@ -456,35 +462,17 @@ function DeepSecTargetObjectPicker({
         role="group"
         aria-labelledby={titleId}
       >
-        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(8rem,13rem)]">
-          <label className="grid gap-1">
-            <span>{t("security.deepsec.entitlements.objectSearch")}</span>
-            <span className="relative block">
-              <Search
-                size={15}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
-                aria-hidden
-              />
-              <input
-                className={cn(COMPACT_INPUT_CLASS, "pl-8")}
-                value={search}
-                disabled={disabled}
-                placeholder={t("security.deepsec.entitlements.objectSearchPlaceholder")}
-                onChange={(event) => onSearchChange(event.target.value)}
-              />
-            </span>
-          </label>
-          <label className="grid gap-1">
-            <span>{t("security.deepsec.entitlements.objectOwner")}</span>
-            <input
-              className={COMPACT_INPUT_CLASS}
-              value={owner}
-              disabled={disabled}
-              placeholder={t("security.deepsec.entitlements.objectOwnerPlaceholder")}
-              onChange={(event) => onOwnerChange(event.target.value.toUpperCase())}
-            />
-          </label>
-        </div>
+        <DbObjectSearchOwnerFields
+          searchLabel={t("dbAdmin.search.label")}
+          searchPlaceholder={t("dbAdmin.search.placeholder")}
+          searchValue={search}
+          onSearchChange={onSearchChange}
+          ownerLabel={t("dbAdmin.owner.label")}
+          ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
+          ownerValue={ownerPrefix}
+          onOwnerChange={onOwnerPrefixChange}
+          disabled={disabled}
+        />
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <span className="min-w-0 break-all font-mono text-[11px] text-muted">
             {selectedObject || value
@@ -507,6 +495,7 @@ function DeepSecTargetObjectPicker({
           className="grid max-h-52 gap-1 overflow-auto rounded-md border border-border bg-card/30 p-1"
           role="listbox"
           aria-labelledby={titleId}
+          data-entitlement-scroll-container
           data-testid={`security-deepsec-object-picker-list-${index}`}
         >
           {loading && objects.length === 0 ? (
@@ -656,13 +645,13 @@ function DeepSecPlanSteps({
         </CardHeader>
         <CardContent className="space-y-4">
           {step.error_message ? <Banner severity="danger">{step.error_message}</Banner> : null}
-          <details className="group min-w-0 rounded-md border border-border bg-background">
+          <details className="group/disclosure min-w-0 rounded-md border border-border bg-background">
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
               <span>{t("security.deepsec.sqlDetails")}</span>
-              <ChevronDown
+              <DisclosureChevron
+                expanded="group"
                 size={16}
-                className="shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
-                aria-hidden
+                className="text-muted"
               />
             </summary>
             <div className="space-y-4 border-t border-border p-3">
@@ -675,7 +664,7 @@ function DeepSecPlanSteps({
                 {step.sql.map((sql, index) => (
                   <pre
                     key={`${step.step_no}-${index}`}
-                    className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-slate-950 p-3 text-xs leading-5 text-slate-100"
+                    className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 text-code-fg text-xs leading-5"
                     tabIndex={0}
                     aria-label={`${step.title} SQL ${index + 1}`}
                   >
@@ -705,11 +694,12 @@ export function SecurityDeepSecPage() {
   const [selectedEntitlementRoleId, setSelectedEntitlementRoleId] = useState<string | null>(null);
   const [entitlementDraftRows, setEntitlementDraftRows] = useState<DataEntitlementDraft[]>([]);
   const [selectedEntitlementDraftKey, setSelectedEntitlementDraftKey] = useState<string | null>(null);
-  const [entitlementPreviewRows, setEntitlementPreviewRows] = useState<DataEntitlement[]>([]);
+  const [entitlementPreview, setEntitlementPreview] =
+    useState<DeepSecDataEntitlementPreview | null>(null);
   const [entitlementSqlPreviewOpen, setEntitlementSqlPreviewOpen] = useState(false);
   const [entitlementSearch, setEntitlementSearch] = useState("");
   const [targetObjectSearch, setTargetObjectSearch] = useState("");
-  const [targetObjectOwner, setTargetObjectOwner] = useState("");
+  const [targetObjectOwnerPrefix, setTargetObjectOwnerPrefix] = useState("");
   const [targetObjects, setTargetObjects] = useState<DeepSecTargetObject[]>([]);
   const [targetObjectNextCursor, setTargetObjectNextCursor] = useState<string | null>(null);
   const [targetObjectTotal, setTargetObjectTotal] = useState<number | null>(null);
@@ -748,6 +738,7 @@ export function SecurityDeepSecPage() {
   const targetObjectsLoadSequence = useRef(0);
   const entitlementDraftKeySequence = useRef(0);
   const entitlementEditorScrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingEntitlementScrollPositionsRef = useRef<ScrollPositionSnapshot[]>([]);
   const targetObjectFilterMounted = useRef(false);
   const { abortAll: abortStatusRequests, run: runStatusRequest } = useRequestScope();
   const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
@@ -807,14 +798,11 @@ export function SecurityDeepSecPage() {
     JSON.stringify(normalizedEntitlementDraftRows) !== JSON.stringify(savedEntitlementRows);
   const entitlementApplyConfirmed =
     entitlementApplyConfirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
-  const selectedRolePreviewRows =
-    entitlementPreviewRows.length > 0
-      ? entitlementPreviewRows
-      : selectedEntitlementRole?.data_entitlements ?? [];
-  const selectedRolePreviewSql =
-    selectedRolePreviewRows.flatMap((item) => item.sql ?? []);
-  const selectedRolePreviewChecksum =
-    selectedRolePreviewRows.find((item) => item.checksum)?.checksum ?? "";
+  const selectedRolePreviewRows = entitlementPreview?.data_entitlements ?? [];
+  const selectedRoleCleanupSql = entitlementPreview?.cleanup_sql ?? [];
+  const selectedRolePreviewSqlCount =
+    selectedRoleCleanupSql.length +
+    selectedRolePreviewRows.reduce((count, item) => count + (item.sql?.length ?? 0), 0);
   const selectedDraftTargetKeys = useMemo(
     () => Array.from(new Set(entitlementDraftRows.map(entitlementTargetKey).filter(Boolean))),
     [entitlementDraftRows]
@@ -829,6 +817,26 @@ export function SecurityDeepSecPage() {
     : -1;
   const selectedEntitlementDraft =
     selectedEntitlementDraftIndex >= 0 ? entitlementDraftRows[selectedEntitlementDraftIndex] : null;
+  useLayoutEffect(() => {
+    const snapshots = pendingEntitlementScrollPositionsRef.current;
+    if (snapshots.length === 0) return;
+    pendingEntitlementScrollPositionsRef.current = [];
+
+    const restore = () => {
+      for (const snapshot of snapshots) {
+        if (!snapshot.element.isConnected) continue;
+        snapshot.element.scrollTo({
+          top: snapshot.top,
+          left: snapshot.left,
+          behavior: "auto",
+        });
+      }
+    };
+
+    restore();
+    const frame = window.requestAnimationFrame(restore);
+    return () => window.cancelAnimationFrame(frame);
+  }, [entitlementDraftRows]);
   useEffect(() => {
     if (!visibleSelectedEntitlementDraftKey || typeof window === "undefined") return;
     const frame = window.requestAnimationFrame(() => {
@@ -963,7 +971,7 @@ export function SecurityDeepSecPage() {
         const page = await securityApi.deepSecTargetObjects({
           signal,
           q: targetObjectSearch,
-          owner: targetObjectOwner,
+          ownerPrefix: targetObjectOwnerPrefix,
           cursor,
           limit: TARGET_OBJECT_PAGE_SIZE,
         });
@@ -1052,13 +1060,13 @@ export function SecurityDeepSecPage() {
       void loadTargetObjects();
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [targetObjectSearch, targetObjectOwner]);
+  }, [targetObjectSearch, targetObjectOwnerPrefix]);
 
   useEffect(() => {
     const nextDraftRows = entitlementDraft(selectedEntitlementRole);
     setEntitlementDraftRows(nextDraftRows);
     setSelectedEntitlementDraftKey(nextDraftRows[0]?.client_key ?? null);
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementSqlPreviewOpen(false);
     setEntitlementFormError("");
     setEntitlementApplyConfirmation("");
@@ -1211,7 +1219,7 @@ export function SecurityDeepSecPage() {
     const nextDraft = blankEntitlementDraft(
       `new:${selectedEntitlementRole?.role_id ?? "role"}:${entitlementDraftKeySequence.current}`
     );
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementSqlPreviewOpen(false);
     setEntitlementDraftRows((current) => [...current, nextDraft]);
     setSelectedEntitlementDraftKey(nextDraft.client_key);
@@ -1219,7 +1227,7 @@ export function SecurityDeepSecPage() {
   };
 
   const patchEntitlement = (index: number, patch: Partial<DataEntitlement>) => {
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementSqlPreviewOpen(false);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
@@ -1259,7 +1267,7 @@ export function SecurityDeepSecPage() {
   };
 
   const toggleEntitlementColumn = (index: number, columnName: string, checked: boolean) => {
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) => {
         if (itemIndex !== index) return item;
@@ -1283,8 +1291,33 @@ export function SecurityDeepSecPage() {
     });
   };
 
+  const setEntitlementColumnsPreservingScroll = (index: number, columnNames: string[]) => {
+    const editor = entitlementEditorScrollRef.current;
+    if (editor) {
+      const main = editor.closest<HTMLElement>("main");
+      const internalContainers = Array.from(
+        editor.querySelectorAll<HTMLElement>("[data-entitlement-scroll-container]")
+      );
+      const seen = new Set<HTMLElement>();
+      pendingEntitlementScrollPositionsRef.current = [main, editor, ...internalContainers]
+        .filter((element): element is HTMLElement => {
+          if (!element || seen.has(element)) return false;
+          seen.add(element);
+          return true;
+        })
+        .map((element) => {
+          return {
+            element,
+            top: element.scrollTop,
+            left: element.scrollLeft,
+          };
+        });
+    }
+    setEntitlementColumns(index, columnNames);
+  };
+
   const addScopeFilter = (index: number, columns: DeepSecTargetColumn[]) => {
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) =>
         itemIndex === index
@@ -1299,7 +1332,7 @@ export function SecurityDeepSecPage() {
   };
 
   const removeScopeFilter = (index: number, filterIndex: number) => {
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) =>
         itemIndex === index
@@ -1320,7 +1353,7 @@ export function SecurityDeepSecPage() {
     filterIndex: number,
     patch: Partial<DataEntitlementScopeFilter>
   ) => {
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) =>
         itemIndex === index
@@ -1376,7 +1409,7 @@ export function SecurityDeepSecPage() {
   const removeEntitlement = (index: number) => {
     const nextRows = entitlementDraftRows.filter((_, itemIndex) => itemIndex !== index);
     const removedKey = entitlementDraftRows[index]?.client_key ?? null;
-    setEntitlementPreviewRows([]);
+    setEntitlementPreview(null);
     setEntitlementSqlPreviewOpen(false);
     setEntitlementDraftRows(nextRows);
     setSelectedEntitlementDraftKey((current) => {
@@ -1460,10 +1493,12 @@ export function SecurityDeepSecPage() {
     setActionError("");
     try {
       const preview = await securityApi.previewDeepSecDataEntitlements(
-        selectedEntitlementRole.role_id,
-        normalizedEntitlementDraftRows
+        {
+          ...selectedEntitlementRole,
+          data_entitlements: normalizedEntitlementDraftRows,
+        }
       );
-      setEntitlementPreviewRows(preview.data_entitlements);
+      setEntitlementPreview(preview);
       setEntitlementSqlPreviewOpen(true);
       setEntitlementDraftRows((current) =>
         preview.data_entitlements.map((item, index) => {
@@ -1498,29 +1533,24 @@ export function SecurityDeepSecPage() {
     setEntitlementFormError("");
     setActionError("");
     try {
-      const updated = await securityApi.updateDeepSecDataEntitlements({
-        ...selectedEntitlementRole,
-        data_entitlements: normalizedEntitlementDraftRows,
-      });
+      const result = await securityApi.applyDeepSecDataEntitlements(
+        {
+          ...selectedEntitlementRole,
+          data_entitlements: normalizedEntitlementDraftRows,
+        },
+        entitlementApplyConfirmation.trim()
+      );
+      const updated = result.role;
       setEntitlementRoles((rows) =>
         rows.map((role) => (role.role_id === updated.role_id ? updated : role))
       );
-      const ids = updated.data_entitlements
-        .map((item) => item.entitlement_id)
-        .filter((id): id is string => Boolean(id));
-      await securityApi.applyDeepSecDataEntitlements(
-        updated.role_id,
-        entitlementApplyConfirmation.trim(),
-        ids
-      );
       setEntitlementApplyConfirmation("");
-      setEntitlementPreviewRows([]);
+      setEntitlementPreview(null);
       setVerification(null);
       toast.success(t("security.deepsec.entitlements.appliedToast"));
       await load();
     } catch (cause) {
       setEntitlementFormError(cause instanceof Error ? cause.message : t("security.common.saveError"));
-      await loadEntitlements();
     } finally {
       setEntitlementApplying(false);
     }
@@ -1936,7 +1966,7 @@ export function SecurityDeepSecPage() {
                       </div>
                     ) : (
                       <div
-                        className="grid h-[64rem] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden md:h-[calc(100dvh-4rem)] md:min-h-[42rem] md:max-h-[52rem]"
+                        className="grid min-w-0 gap-3"
                         data-testid="security-deepsec-entitlement-form"
                         data-selected-entitlement-rule={selectedEntitlementDraft?.client_key}
                       >
@@ -1998,23 +2028,27 @@ export function SecurityDeepSecPage() {
                             </div>
                           </div>
                         </div>
-                        {entitlementDraftRows.length === 0 ? (
-                          <div
-                            className="grid content-center rounded-md border border-dashed border-border p-4 text-center"
-                            data-testid="security-deepsec-entitlement-rules-empty"
-                          >
-                            <h4 className="text-sm font-semibold">
-                              {t("security.deepsec.entitlements.emptyRulesTitle")}
-                            </h4>
-                            <p className="mt-1 text-sm text-muted">
-                              {t("security.deepsec.entitlements.emptyRulesHint")}
-                            </p>
-                          </div>
-                        ) : (
-                          <div
-                            className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden 2xl:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)] 2xl:grid-rows-1"
-                            data-testid="security-deepsec-entitlement-workspace"
-                          >
+                        <div
+                          className="h-[36rem] min-h-0 md:h-[32rem]"
+                          data-testid="security-deepsec-entitlement-workspace-frame"
+                        >
+                          {entitlementDraftRows.length === 0 ? (
+                            <div
+                              className="grid h-full content-center rounded-md border border-dashed border-border p-4 text-center"
+                              data-testid="security-deepsec-entitlement-rules-empty"
+                            >
+                              <h4 className="text-sm font-semibold">
+                                {t("security.deepsec.entitlements.emptyRulesTitle")}
+                              </h4>
+                              <p className="mt-1 text-sm text-muted">
+                                {t("security.deepsec.entitlements.emptyRulesHint")}
+                              </p>
+                            </div>
+                          ) : (
+                            <div
+                              className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden 2xl:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)] 2xl:grid-rows-1"
+                              data-testid="security-deepsec-entitlement-workspace"
+                            >
                             <div
                               className="grid max-h-36 min-h-0 content-start gap-2 overflow-y-auto pr-1 2xl:max-h-none"
                               aria-label={t("security.deepsec.entitlements.ruleList")}
@@ -2081,17 +2115,17 @@ export function SecurityDeepSecPage() {
                                   const selectedColumns = new Set(
                                     (entitlement.column_names ?? []).map((column) => column.toUpperCase())
                                   );
-                                const availableColumnNames =
-                                  detail?.columns.map((column) => column.column_name.toUpperCase()) ?? [];
-                                const selectedAvailableColumnCount = availableColumnNames.filter(
-                                  (columnName) => selectedColumns.has(columnName)
-                                ).length;
-                                const statusBadge = entitlementApplyStatus(entitlement);
-                                const supportedScopeColumns =
-                                  detail?.columns.filter(isSupportedScopeColumn) ?? [];
-                                const scopeFilters = entitlement.scope_filters ?? [];
-                                const ruleTitle =
-                                  targetKey || t("security.deepsec.entitlements.ruleTitle");
+                                  const availableColumnNames =
+                                    detail?.columns.map((column) => column.column_name.toUpperCase()) ?? [];
+                                  const selectedAvailableColumnCount = availableColumnNames.filter(
+                                    (columnName) => selectedColumns.has(columnName)
+                                  ).length;
+                                  const statusBadge = entitlementApplyStatus(entitlement);
+                                  const supportedScopeColumns =
+                                    detail?.columns.filter(isSupportedScopeColumn) ?? [];
+                                  const scopeFilters = entitlement.scope_filters ?? [];
+                                  const ruleTitle =
+                                    targetKey || t("security.deepsec.entitlements.ruleTitle");
                                 return (
                                   <section
                                     className="min-w-0 rounded-md border border-border bg-background"
@@ -2130,13 +2164,13 @@ export function SecurityDeepSecPage() {
                                         total={targetObjectTotal}
                                         nextCursor={targetObjectNextCursor}
                                         search={targetObjectSearch}
-                                        owner={targetObjectOwner}
+                                        ownerPrefix={targetObjectOwnerPrefix}
                                         loading={targetObjectsLoading}
                                         loadingMore={targetObjectsLoadingMore}
                                         error={targetObjectLoadError}
                                         disabled={entitlementReadOnly}
                                         onSearchChange={setTargetObjectSearch}
-                                        onOwnerChange={setTargetObjectOwner}
+                                        onOwnerPrefixChange={setTargetObjectOwnerPrefix}
                                         onSelect={(value) => updateEntitlementTarget(index, value)}
                                         onLoadMore={() =>
                                           void loadTargetObjects({
@@ -2149,7 +2183,7 @@ export function SecurityDeepSecPage() {
                                         <FieldLegend className="text-xs font-medium" required>
                                           {t("security.deepsec.entitlements.columns")}
                                         </FieldLegend>
-                                        <div className="mt-1 flex min-w-0 justify-end">
+                                        <div className="mt-1 flex min-w-0 justify-start">
                                           <BulkSelectionActions
                                             selectLabel={t("common.selection.selectAll")}
                                             clearLabel={t("common.selection.clearAll")}
@@ -2168,8 +2202,15 @@ export function SecurityDeepSecPage() {
                                               selectedAvailableColumnCount === 0
                                             }
                                             dataTestId={`security-deepsec-entitlement-column-selection-actions-${index}`}
-                                            onSelectAll={() => setEntitlementColumns(index, availableColumnNames)}
-                                            onClearAll={() => setEntitlementColumns(index, [])}
+                                            onSelectAll={() =>
+                                              setEntitlementColumnsPreservingScroll(
+                                                index,
+                                                availableColumnNames
+                                              )
+                                            }
+                                            onClearAll={() =>
+                                              setEntitlementColumnsPreservingScroll(index, [])
+                                            }
                                           />
                                         </div>
                                         {loadingDetail ? (
@@ -2183,6 +2224,7 @@ export function SecurityDeepSecPage() {
                                         ) : detail?.columns.length ? (
                                           <div
                                             className="mt-1 grid max-h-48 gap-2 overflow-auto rounded-md border border-border bg-background p-2 sm:grid-cols-2 xl:grid-cols-3"
+                                            data-entitlement-scroll-container
                                             data-testid={`security-deepsec-entitlement-columns-grid-${index}`}
                                           >
                                             {detail.columns.map((column) => (
@@ -2606,8 +2648,9 @@ export function SecurityDeepSecPage() {
                                 </div>
                               )}
                             </div>
-                          </div>
-                        )}
+                            </div>
+                          )}
+                        </div>
                         <div
                           className="grid min-h-0 gap-3 border-t border-border bg-card/60 pt-3"
                           data-testid="security-deepsec-entitlement-action-region"
@@ -2615,21 +2658,21 @@ export function SecurityDeepSecPage() {
                           {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
                           <details
                             open={entitlementSqlPreviewOpen}
-                            className="group min-w-0 rounded-md border border-border bg-background"
+                            className="group/disclosure max-h-[min(28rem,45dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-background"
                             data-testid="security-deepsec-sql-preview"
                           >
                             <summary
-                              className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
+                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-background px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
                               onClick={(event) => {
                                 event.preventDefault();
                                 setEntitlementSqlPreviewOpen((current) => !current);
                               }}
                             >
                               <span>{t("security.deepsec.entitlements.sqlPreview")}</span>
-                              <ChevronDown
+                              <DisclosureChevron
+                                expanded="group"
                                 size={16}
-                                className="shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
-                                aria-hidden
+                                className="text-muted"
                               />
                             </summary>
                             <div className="space-y-3 border-t border-border p-3">
@@ -2651,7 +2694,8 @@ export function SecurityDeepSecPage() {
                                       entitlementReadOnly ||
                                       entitlementPreviewing ||
                                       entitlementApplying ||
-                                      normalizedEntitlementDraftRows.length === 0
+                                      (normalizedEntitlementDraftRows.length === 0 &&
+                                        savedEntitlementRows.length === 0)
                                     }
                                     data-testid="security-deepsec-sql-preview-generate"
                                     onClick={() => void handlePreviewEntitlements()}
@@ -2661,27 +2705,87 @@ export function SecurityDeepSecPage() {
                                   </Button>
                                 </div>
                               </div>
-                              {selectedRolePreviewChecksum ? (
-                                <div className="space-y-1">
-                                  <p className="text-xs font-medium text-muted">
-                                    {t("security.deepsec.checksum")}
+                              {entitlementPreview ? (
+                                <div className="grid min-w-0 gap-4">
+                                  <p className="text-sm leading-6 text-muted" role="status">
+                                    {t("security.deepsec.entitlements.sqlScopeSummary", {
+                                      role: selectedEntitlementRole.display_name,
+                                      grantCount: selectedRolePreviewRows.length,
+                                      cleanupCount: selectedRoleCleanupSql.length,
+                                      sqlCount: selectedRolePreviewSqlCount,
+                                    })}
                                   </p>
-                                  <code className="block break-all rounded-md bg-card p-2 text-[11px]">
-                                    {selectedRolePreviewChecksum}
-                                  </code>
-                                </div>
-                              ) : null}
-                              {selectedRolePreviewSql.length ? (
-                                <div className="grid gap-3">
-                                  {selectedRolePreviewSql.map((sql, index) => (
-                                    <pre
-                                      key={`${selectedEntitlementRole.role_id}-sql-${index}`}
-                                      className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-slate-950 p-3 text-xs leading-5 text-slate-100"
-                                      tabIndex={0}
-                                    >
-                                      {sql}
-                                    </pre>
-                                  ))}
+                                  <div className="space-y-1">
+                                    <p className="text-xs font-medium text-muted">
+                                      {t("security.deepsec.checksum")}
+                                    </p>
+                                    <code className="block break-all rounded-md bg-card p-2 text-[11px]">
+                                      {entitlementPreview.checksum}
+                                    </code>
+                                  </div>
+                                  {selectedRoleCleanupSql.length ? (
+                                    <section className="grid min-w-0 gap-2" aria-labelledby="deepsec-cleanup-sql-title">
+                                      <h5 id="deepsec-cleanup-sql-title" className="text-sm font-semibold text-danger">
+                                        {t("security.deepsec.entitlements.sqlCleanupTitle")}
+                                      </h5>
+                                      {selectedRoleCleanupSql.map((sql, index) => (
+                                        <pre
+                                          key={`${selectedEntitlementRole.role_id}-cleanup-${index}`}
+                                          className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-danger/30 bg-code p-3 text-code-fg text-xs leading-5"
+                                          tabIndex={0}
+                                          aria-label={t("security.deepsec.entitlements.sqlCleanupAria", {
+                                            index: index + 1,
+                                          })}
+                                        >
+                                          {sql}
+                                        </pre>
+                                      ))}
+                                    </section>
+                                  ) : null}
+                                  {selectedRolePreviewRows.length ? (
+                                    <section className="grid min-w-0 gap-3" aria-labelledby="deepsec-apply-sql-title">
+                                      <h5 id="deepsec-apply-sql-title" className="text-sm font-semibold">
+                                        {t("security.deepsec.entitlements.sqlApplyTitle")}
+                                      </h5>
+                                      {selectedRolePreviewRows.map((item) => {
+                                        const target = entitlementTargetKey(item);
+                                        const dataGrant =
+                                          item.data_grant_name ||
+                                          t("security.deepsec.entitlements.notGenerated");
+                                        return (
+                                          <article
+                                            key={item.entitlement_id ?? `${target}-${dataGrant}`}
+                                            className="grid min-w-0 gap-2 rounded-md border border-border p-3"
+                                          >
+                                            <h6 className="min-w-0 break-words text-xs font-semibold">
+                                              {t("security.deepsec.entitlements.sqlGrantHeading", {
+                                                target,
+                                                dataGrant,
+                                              })}
+                                            </h6>
+                                            {(item.sql ?? []).map((sql, index) => (
+                                              <pre
+                                                key={`${item.entitlement_id ?? dataGrant}-sql-${index}`}
+                                                className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 text-code-fg text-xs leading-5"
+                                                tabIndex={0}
+                                                aria-label={t("security.deepsec.entitlements.sqlGrantAria", {
+                                                  target,
+                                                  index: index + 1,
+                                                })}
+                                              >
+                                                {sql}
+                                              </pre>
+                                            ))}
+                                          </article>
+                                        );
+                                      })}
+                                    </section>
+                                  ) : null}
+                                  {selectedRolePreviewSqlCount === 0 ? (
+                                    <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                      {t("security.deepsec.entitlements.sqlNoChanges")}
+                                    </p>
+                                  ) : null}
                                 </div>
                               ) : (
                                 <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
@@ -2771,17 +2875,26 @@ export function SecurityDeepSecPage() {
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {verification ? (
-                    <>
+                    <div
+                      role="region"
+                      aria-label={t("security.deepsec.resultListAriaLabel")}
+                      tabIndex={0}
+                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                      data-testid="security-deepsec-verification-results"
+                    >
                       {verification.checks.map((check) => (
-                        <div key={check.key} className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
+                        <div
+                          key={check.key}
+                          className="flex min-h-[4.25rem] items-start gap-2 rounded-md border border-border p-3 text-sm"
+                        >
                           <CheckCircle2 size={16} className={check.passed ? "text-success" : "text-warning"} aria-hidden />
-                          <div>
+                          <div className="min-w-0">
                             <p className="font-mono text-xs font-medium">{check.key}</p>
-                            <p className="mt-1 text-muted">{check.detail}</p>
+                            <p className="mt-1 break-words text-muted">{check.detail}</p>
                           </div>
                         </div>
                       ))}
-                    </>
+                    </div>
                   ) : (
                     <p className="rounded-md border border-dashed border-border p-3 text-sm leading-6 text-muted">
                       {t("security.deepsec.resultPending")}

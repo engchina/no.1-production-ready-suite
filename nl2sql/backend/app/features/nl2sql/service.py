@@ -625,6 +625,28 @@ _SCHEMA_EMPTY_MESSAGE = (
     "Schema catalog が空です。Oracle schema を refresh するか、"
     "Data Tools から sample data を明示的に import してください。"
 )
+SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY"
+JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
+# プロセス内 job/history の保持上限(terminal な古いものから捨てる)。
+# incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
+_JOB_RETENTION_LIMIT = 200
+_HISTORY_RETENTION_LIMIT = 1000
+
+
+class JobCancelledError(RuntimeError):
+    """利用者要求による job の協調キャンセル(stage 境界で検出)。"""
+
+    def __init__(self) -> None:
+        super().__init__("利用者の要求によりジョブをキャンセルしました。")
+
+
+class SchemaCatalogEmptyError(ValueError):
+    """schema catalog 未整備で SQL 生成できない状態。error_code で機械判定させる。"""
+
+    def __init__(self, message: str = _SCHEMA_EMPTY_MESSAGE) -> None:
+        super().__init__(message)
+
+
 _PROFILE_SCHEMA_SCOPE_EMPTY_MESSAGE = (
     "業務 Profile の許可表が schema catalog に見つかりません。"
     "DB 構造を再取得するか、業務 Profile の許可表を確認してください。"
@@ -1875,13 +1897,31 @@ def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
 
 
+_FETCH_FIRST_TAIL_RE = re.compile(r"\s+fetch\s+first\s+(\d+)\s+rows\s+only\s*;?\s*$", re.IGNORECASE)
+_LIMIT_TAIL_RE = re.compile(r"\s+limit\s+(\d+)\s*;?\s*$", re.IGNORECASE)
+
+
+def _existing_row_limit(sql: str) -> int | None:
+    for pattern in (_FETCH_FIRST_TAIL_RE, _LIMIT_TAIL_RE):
+        match = pattern.search(sql)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def enforce_row_limit(sql: str, row_limit: int | None) -> str:
-    """Oracle 向けに row limit を明示する。すでに FETCH FIRST があれば置換する。"""
+    """Oracle 向けに row limit を明示する。
+
+    生成 SQL 末尾に既存の FETCH FIRST/LIMIT があれば min(既存値, 要求値) を適用する
+    (「上位 3 件」の意図は保全し、過大値だけ安全上限へ丸める)。
+    サブクエリ内の FETCH FIRST は対象外(末尾のみ判定)。
+    """
     normalized = sql.strip().rstrip(";")
     if not row_limit:
         return normalized
-    normalized = _strip_row_limit(normalized)
-    return f"{normalized} FETCH FIRST {row_limit} ROWS ONLY"
+    existing = _existing_row_limit(normalized)
+    effective = min(existing, row_limit) if existing else row_limit
+    return f"{_strip_row_limit(normalized)} FETCH FIRST {effective} ROWS ONLY"
 
 
 _JOB_RESULT_PERSISTENCE_WARNING = (
@@ -1924,9 +1964,12 @@ class StoredJob:
     elapsed_ms: int | None = None
     result: Nl2SqlResult | None = None
     error_message: str | None = None
+    error_code: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = field(default_factory=list)
+    # 協調キャンセル要求。worker が stage 境界で検出して JobCancelledError を送出する。
+    cancel_requested: bool = False
 
 
 _NL2SQL_JOB_STAGES = (
@@ -2101,6 +2144,8 @@ class Nl2SqlService:
             )
         }
         self._jobs: dict[str, StoredJob] = {}
+        # job 毎の worker スレッドが同時に走る数の上限(Oracle セッション枯渇防止)。
+        self._job_concurrency = threading.BoundedSemaphore(settings.nl2sql_job_max_concurrency)
         self._history: list[HistoryItem] = []
         self._feedback: dict[str, FeedbackRating] = {}
         self._feedback_indexed_ids: set[str] = set()
@@ -2964,6 +3009,8 @@ class Nl2SqlService:
         owner: str,
         object_type: str,
         profile_id: str | None,
+        owner_prefix: str = "",
+        query_scope: str = "all",
         row_state: str = "",
         include_counts: bool = True,
     ) -> SchemaObjectPage:
@@ -2994,6 +3041,8 @@ class Nl2SqlService:
                     limit=limit,
                     query=query,
                     owner=owner,
+                    owner_prefix=owner_prefix,
+                    query_scope=query_scope,
                     object_type=object_type,
                     allowed_names=allowed_names,
                     row_state=row_state,
@@ -3007,6 +3056,8 @@ class Nl2SqlService:
                     limit=limit,
                     query=query,
                     owner=owner,
+                    owner_prefix=owner_prefix,
+                    query_scope=query_scope,
                     object_type=object_type,
                     allowed_names=allowed_names,
                     row_state=row_state,
@@ -3167,6 +3218,22 @@ class Nl2SqlService:
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_refresh_job_load",
+                exc=exc,
+                operation_error_code="schema_refresh_job_query_failed",
+            )
+        if job is not None:
+            self._wake_schema_refresh_job_if_needed(job)
+        return job
+
+    def get_active_schema_refresh_job(self) -> SchemaRefreshJob | None:
+        """画面移動・再読込後に追跡を再開する実行中 job を返す。"""
+
+        repository = self._refresh_job_repository
+        try:
+            job = repository.find_active_refresh_job()
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="schema_refresh_active_job_load",
                 exc=exc,
                 operation_error_code="schema_refresh_job_query_failed",
             )
@@ -4902,6 +4969,7 @@ class Nl2SqlService:
         )
         with self._lock:
             self._jobs[job_id] = job
+            self._prune_terminal_jobs_locked()
         self._persist_job(job_id)
         response = JobCreateData(
             job_id=job_id,
@@ -4909,9 +4977,85 @@ class Nl2SqlService:
             created_at=job.created_at,
             steps=[step.model_copy() for step in job.steps],
         )
-        thread = threading.Thread(target=self._run_job_safely, args=(job_id,), daemon=True)
+        thread = threading.Thread(target=self._run_job_bounded, args=(job_id,), daemon=True)
         thread.start()
         return response
+
+    @staticmethod
+    def _assert_job_actor_access(
+        job: StoredJob,
+        *,
+        actor_user_uuid: str,
+        actor_can_manage: bool,
+    ) -> None:
+        """job の行レベルアクセスを検証する。
+
+        管理権限なし・認証済み actor のとき、job の actor と一致しなければ拒否する。
+        actor 不明の job(認証無効期間に作成・旧 snapshot 復元)は所有者を特定
+        できないため同様に拒否する(旧実装はこのケースを素通ししていた)。
+        """
+        if actor_can_manage or not actor_user_uuid:
+            return
+        if job.actor_user_uuid != actor_user_uuid:
+            raise PermissionError(job.job_id)
+
+    def _run_job_bounded(self, job_id: str) -> None:
+        """同時実行数を settings.nl2sql_job_max_concurrency に制限して実行する。"""
+        with self._job_concurrency:
+            self._run_job_safely(job_id)
+
+    def _prune_history_locked(self) -> None:
+        """プロセス内 history の保持上限(古い順に破棄)。DB 側の履歴が正本。"""
+        overflow = len(self._history) - _HISTORY_RETENTION_LIMIT
+        if overflow > 0:
+            del self._history[:overflow]
+
+    def _prune_terminal_jobs_locked(self) -> None:
+        """保持上限を超えた terminal job を古い順に捨てる(実行中は残す)。"""
+        overflow = len(self._jobs) - _JOB_RETENTION_LIMIT
+        if overflow <= 0:
+            return
+        terminal = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.status in {JobStatus.DONE, JobStatus.ERROR}
+        ]
+        for job_id in terminal[:overflow]:
+            del self._jobs[job_id]
+
+    def _raise_if_job_cancelled(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None and job.cancel_requested:
+                raise JobCancelledError()
+
+    def request_job_cancel(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str = "",
+        actor_can_manage: bool = False,
+    ) -> JobData | None:
+        """実行中 job の協調キャンセルを要求する(stage 境界で停止)。
+
+        terminal な job には no-op。アクセス制御は get_job と同一。
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            self._assert_job_actor_access(
+                job,
+                actor_user_uuid=actor_user_uuid,
+                actor_can_manage=actor_can_manage,
+            )
+            if job.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+                job.cancel_requested = True
+        return self.get_job(
+            job_id,
+            actor_user_uuid=actor_user_uuid,
+            actor_can_manage=actor_can_manage,
+        )
 
     def get_job(
         self,
@@ -4937,13 +5081,11 @@ class Nl2SqlService:
                     self._jobs[job_id] = job
         if job is None:
             return None
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and job.actor_user_uuid
-            and job.actor_user_uuid != actor_user_uuid
-        ):
-            raise PermissionError(job_id)
+        self._assert_job_actor_access(
+            job,
+            actor_user_uuid=actor_user_uuid,
+            actor_can_manage=actor_can_manage,
+        )
         with self._lock:
             return JobData(
                 job_id=job.job_id,
@@ -4954,6 +5096,7 @@ class Nl2SqlService:
                 elapsed_ms=job.elapsed_ms,
                 result=job.result,
                 error_message=job.error_message,
+                error_code=job.error_code,
                 warning_message=job.warning_message,
                 timing=job.timing,
                 steps=job.steps,
@@ -5387,6 +5530,7 @@ class Nl2SqlService:
                 ontology_trace_summary=dict(ontology_trace_summary),
             )
             self._history.append(item)
+            self._prune_history_locked()
         self._persist_entities([("history", item.id, item.model_dump(mode="json"))])
         return item.model_copy(deep=True)
 
@@ -7111,17 +7255,16 @@ class Nl2SqlService:
             context = self._rewrite_context(
                 profile=profile,
                 use_glossary=request.use_glossary,
-                use_schema=request.use_schema,
                 extra_prompt=request.extra_prompt,
             )
             rewritten = self._enterprise_ai_client.generate(
                 prompt=request.question,
                 context=context,
                 system_prompt=(
-                    "あなたは日本語の NL2SQL 入力を業務語彙と Oracle schema に合わせて"
+                    "あなたは日本語の NL2SQL 入力を業務語彙に合わせて"
                     "検索意図が保たれるように書き換えるアシスタントです。"
                     "SQL は生成せず、書き換え後の自然言語質問だけを返してください。"
-                    "表名・列名・コメント・schema 説明から抽出条件や値を推測して"
+                    "表名・列名・コメントなどから抽出条件や値を推測して"
                     "追加してはいけません。"
                     "入力に「抽出条件:」または「抽出条件：」が空欄で含まれる場合は、"
                     "その空欄を保持し、WHERE 条件を作らせる表現を追加しないでください。"
@@ -7300,9 +7443,7 @@ class Nl2SqlService:
             label = (
                 table.logical_name.strip()
                 if table and table.logical_name.strip()
-                else table.comment.strip()
-                if table and table.comment.strip()
-                else fallback_label
+                else table.comment.strip() if table and table.comment.strip() else fallback_label
             )
             label = self._apply_reverse_glossary(
                 label,
@@ -7352,9 +7493,7 @@ class Nl2SqlService:
             label = (
                 column.logical_name.strip()
                 if column and column.logical_name.strip()
-                else column.comment.strip()
-                if column and column.comment.strip()
-                else fallback_label
+                else column.comment.strip() if column and column.comment.strip() else fallback_label
             )
             label = self._apply_reverse_glossary(
                 label,
@@ -9578,6 +9717,8 @@ class Nl2SqlService:
         object_type: str,
         row_state: str,
         owner: str = "",
+        owner_prefix: str = "",
+        query_scope: str = "all",
         include_counts: bool = True,
     ) -> DbAdminObjectPage:
         """管理画面用 read model。全量 Catalog/CLOB を経由しない。"""
@@ -9594,6 +9735,8 @@ class Nl2SqlService:
             limit=limit,
             query=query,
             owner=owner,
+            owner_prefix=owner_prefix,
+            query_scope=query_scope,
             object_type=schema_type,
             profile_id=None,
             row_state=row_state,
@@ -9865,9 +10008,7 @@ class Nl2SqlService:
         select_execution_context = (
             "deepsec_data_plane"
             if select_vpd_context_enforced
-            else "oracle_data_plane"
-            if self._use_oracle_runtime()
-            else "deterministic"
+            else "oracle_data_plane" if self._use_oracle_runtime() else "deterministic"
         )
         statements = _split_sql_statements(request.sql)
         if not statements:
@@ -12965,7 +13106,6 @@ class Nl2SqlService:
         *,
         profile: Nl2SqlProfile,
         use_glossary: bool,
-        use_schema: bool,
         extra_prompt: str,
     ) -> str:
         lines = [f"profile: {profile.name}"]
@@ -12983,14 +13123,6 @@ class Nl2SqlService:
         if additional_instructions:
             lines.append("additional_instructions:")
             lines.append(additional_instructions)
-        if use_schema:
-            allowed = {name.upper() for name in self.profile_allowed_object_names(profile)}
-            lines.append("schema:")
-            for table in self._catalog.tables:
-                if allowed and table.table_name not in allowed:
-                    continue
-                columns = ", ".join(column.column_name for column in table.columns[:20])
-                lines.append(f"- {table.table_name} ({table.logical_name}): {columns}")
         if extra_prompt.strip():
             lines.append("extra_instruction:")
             lines.append(extra_prompt.strip())
@@ -13220,9 +13352,13 @@ class Nl2SqlService:
         if len(parts) > 1:
             candidates.extend(parts)
         seen: set[str] = set()
-        return [
-            candidate for candidate in candidates if not (candidate in seen or seen.add(candidate))
-        ]
+        unique_candidates: list[str] = []
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            unique_candidates.append(candidate)
+        return unique_candidates
 
     def _resolve_similar_history_target_object(self, value: str) -> set[str]:
         cleaned = unicodedata.normalize("NFKC", str(value or "")).strip()
@@ -13443,12 +13579,19 @@ class Nl2SqlService:
             with self._lock:
                 job = self._jobs[job_id]
                 job.status = JobStatus.ERROR
-                job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
+                if isinstance(exc, JobCancelledError):
+                    job.error_message = str(exc)
+                    job.error_code = JOB_CANCELLED_ERROR_CODE
+                else:
+                    job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
+                    job.error_code = (
+                        SCHEMA_CATALOG_EMPTY_ERROR_CODE
+                        if isinstance(exc, SchemaCatalogEmptyError)
+                        else None
+                    )
                 job.finished_at = _utc_now()
                 failure_index = _job_failure_step_index(job.steps)
-                failure_stage = (
-                    job.steps[failure_index].stage if failure_index is not None else ""
-                )
+                failure_stage = job.steps[failure_index].stage if failure_index is not None else ""
                 if failure_index is not None:
                     job.steps[failure_index] = job.steps[failure_index].model_copy(
                         update={"status": JobStepStatus.ERROR}
@@ -13680,6 +13823,7 @@ class Nl2SqlService:
         stage_timings: list[StageTiming] = []
         profile = self.get_profile(request.profile_id)
 
+        self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         rewritten = self._rewrite_question_preserving_empty_filter(request.question, profile)
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
@@ -13700,6 +13844,7 @@ class Nl2SqlService:
             running_stage="generate_sql",
         )
 
+        self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         generated = self._generate_with_fallback(
             question=rewritten,
@@ -13719,6 +13864,7 @@ class Nl2SqlService:
             running_stage="safety_check",
         )
 
+        self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         analysis = self.analyze_sql(
             generated.generated_sql,
@@ -13739,6 +13885,7 @@ class Nl2SqlService:
             running_stage="execute_sql" if analysis.safety.is_safe else None,
         )
 
+        self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         if analysis.safety.is_safe:
             safety, executable, results = self.execute_sql(
@@ -13762,6 +13909,7 @@ class Nl2SqlService:
             running_stage="format_results",
         )
 
+        self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         timing = TimingEnvelope(
             created_at=job.created_at,
@@ -13881,6 +14029,7 @@ class Nl2SqlService:
                 actor_user_uuid=job.actor_user_uuid,
             )
             self._history.append(history_item)
+            self._prune_history_locked()
         try:
             self._persist_entities(
                 [
@@ -13924,7 +14073,7 @@ class Nl2SqlService:
             and not self._use_oracle_runtime()
             and not self._catalog.tables
         ):
-            raise ValueError(_SCHEMA_EMPTY_MESSAGE)
+            raise SchemaCatalogEmptyError(_SCHEMA_EMPTY_MESSAGE)
         candidates = (
             [
                 Nl2SqlEngine.SELECT_AI_AGENT,
@@ -13971,8 +14120,9 @@ class Nl2SqlService:
         allow_deterministic_fallback: bool = True,
         runtime_timeout_seconds: float | None = None,
     ) -> GeneratedSql:
-        # テスト/デモ用の明示的 failure trigger。実 adapter では不要。
-        if f"{engine.value}_fail" in question.lower():
+        # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
+        # 本番(oracle runtime)ではユーザ入力に反応させない。
+        if not self._use_oracle_runtime() and f"{engine.value}_fail" in question.lower():
             raise RuntimeError("明示的な fallback テスト要求")
         is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
         effective_question = (
@@ -14196,30 +14346,36 @@ class Nl2SqlService:
         return {
             Nl2SqlEngine.SELECT_AI: (
                 select_ai_ready,
-                ""
-                if select_ai_ready
-                else (
-                    profile_error
-                    or select_ai_blocking_reason
-                    or "Oracle Select AI の接続・credential・profile が未構成です。"
+                (
+                    ""
+                    if select_ai_ready
+                    else (
+                        profile_error
+                        or select_ai_blocking_reason
+                        or "Oracle Select AI の接続・credential・profile が未構成です。"
+                    )
                 ),
             ),
             Nl2SqlEngine.SELECT_AI_AGENT: (
                 agent_ready,
-                ""
-                if agent_ready
-                else (
-                    profile_error
-                    or select_ai_blocking_reason
-                    or agent_blocking_reason
-                    or "Oracle Select AI Agent の接続・credential・team が未構成です。"
+                (
+                    ""
+                    if agent_ready
+                    else (
+                        profile_error
+                        or select_ai_blocking_reason
+                        or agent_blocking_reason
+                        or "Oracle Select AI Agent の接続・credential・team が未構成です。"
+                    )
                 ),
             ),
             Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (
                 direct_ready,
-                ""
-                if direct_ready
-                else profile_error or "OCI Enterprise AI Direct が構成されていません。",
+                (
+                    ""
+                    if direct_ready
+                    else profile_error or "OCI Enterprise AI Direct が構成されていません。"
+                ),
             ),
         }
 
@@ -14788,9 +14944,18 @@ class Nl2SqlService:
             enforce_table_scope=requested.enforce_table_scope,
         )
 
-    def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int | None:
-        del profile_id
-        return requested
+    def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int:
+        """request 明示 > profile 既定 > グローバル既定の順で row limit を解決する。
+
+        None のまま返すと execute_select が無制限 fetchall になるため、必ず正の値へ落とす。
+        """
+        if requested:
+            return requested
+        try:
+            profile_default = self.get_profile(profile_id).default_row_limit
+        except ValueError:
+            profile_default = None
+        return profile_default or get_settings().nl2sql_default_row_limit
 
     def _generation_schema_catalog(
         self,
@@ -14803,7 +14968,7 @@ class Nl2SqlService:
         if repository is None:
             catalog = self.get_catalog()
             if not catalog.tables:
-                raise ValueError(_SCHEMA_EMPTY_MESSAGE)
+                raise SchemaCatalogEmptyError(_SCHEMA_EMPTY_MESSAGE)
             return catalog
 
         target_names = self._dedupe_object_names(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal, NamedTuple
 
 from fastapi import (
     APIRouter,
@@ -151,6 +151,7 @@ from .models import (
     validate_profile_identifier,
 )
 from .oracle_adapter import OracleAdapterError, TabularImportValidationError
+from .profile_access import assert_profile_access, profile_access_denied
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
     QualityEvaluationJobPage,
@@ -163,7 +164,9 @@ from .quality_evaluation_service import (
     quality_evaluation_service,
 )
 from .service import (
+    _SCHEMA_EMPTY_MESSAGE,
     ProfileOracleCleanupFailed,
+    SchemaCatalogEmptyError,
     nl2sql_service,
 )
 from .service import (
@@ -182,22 +185,28 @@ def _principal_from_request(request: Request) -> Principal | None:
     return principal if isinstance(principal, Principal) else None
 
 
-def _actor_access_args(request: Request, *, manage_permission: str) -> dict[str, str | bool]:
+class ActorAccess(NamedTuple):
+    """job/feedback の行レベルアクセス判定に使う actor 情報。"""
+
+    actor_user_uuid: str
+    actor_can_manage: bool
+
+
+def _actor_access_args(request: Request, *, manage_permission: str) -> ActorAccess:
     principal = _principal_from_request(request)
     if principal is None:
-        return {"actor_user_uuid": "", "actor_can_manage": True}
-    return {
-        "actor_user_uuid": principal.user_uuid,
-        "actor_can_manage": principal.is_system_admin
-        or principal.has_permission(manage_permission),
-    }
+        # 意図的な fail-open: APP_AUTH_ENABLED=false のとき principal は存在せず、
+        # テナント概念が無いため全 actor 制約を外す(管理者相当)。認証有効時は
+        # authorize_api_request が principal を必ず設定するので、この分岐には入らない。
+        return ActorAccess(actor_user_uuid="", actor_can_manage=True)
+    return ActorAccess(
+        actor_user_uuid=principal.user_uuid,
+        actor_can_manage=principal.is_system_admin or principal.has_permission(manage_permission),
+    )
 
 
 def _profile_access_denied() -> HTTPException:
-    return HTTPException(
-        status_code=403,
-        detail="この業務プロファイルを利用する権限がありません。",
-    )
+    return profile_access_denied()
 
 
 def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
@@ -221,13 +230,7 @@ def _assert_profile_access(
     *,
     default_profile: bool = False,
 ) -> None:
-    principal = _principal_from_request(request)
-    if principal is None or principal.is_system_admin:
-        return
-    resolved = (profile_id or ("default" if default_profile else "")).strip()
-    if resolved and resolved in principal.allowed_profile_ids:
-        return
-    raise _profile_access_denied()
+    assert_profile_access(request, profile_id, default_profile=default_profile)
 
 
 persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
@@ -267,6 +270,9 @@ def preview(req: PreviewRequest, request: Request) -> ApiResponse[PreviewData]:
     _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
         return ApiResponse(data=nl2sql_service.preview(req))
+    except SchemaCatalogEmptyError:
+        # main.py の専用 handler が error_code=SCHEMA_CATALOG_EMPTY を付与する。
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -287,11 +293,15 @@ def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
             allowed=allowed,
             row_limit=req.row_limit,
         )
+    except SchemaCatalogEmptyError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OracleAdapterError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not safety.is_safe:
+        if safety.blocked_reason == _SCHEMA_EMPTY_MESSAGE:
+            raise SchemaCatalogEmptyError(safety.blocked_reason)
         raise HTTPException(status_code=400, detail=safety.blocked_reason)
     return ApiResponse(data=results)
 
@@ -318,14 +328,40 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
 def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
     """NL2SQL 検索 job の状態・結果を返す。"""
     try:
+        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
         job = nl2sql_service.get_job(
             job_id,
-            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+            actor_user_uuid=access.actor_user_uuid,
+            actor_can_manage=access.actor_can_manage,
         )
     except PermissionError as exc:
         raise HTTPException(
             status_code=403,
             detail="他のユーザーのジョブを参照する権限がありません。",
+        ) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
+    return ApiResponse(data=job)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[JobData])
+def cancel_job(job_id: str, request: Request) -> ApiResponse[JobData]:
+    """実行中の NL2SQL 検索 job の協調キャンセルを要求する。
+
+    worker は stage 境界で検出して停止する(実行中 stage の途中では止まらない)。
+    terminal な job には no-op で現在の状態を返す。
+    """
+    try:
+        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        job = nl2sql_service.request_job_cancel(
+            job_id,
+            actor_user_uuid=access.actor_user_uuid,
+            actor_can_manage=access.actor_can_manage,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="他のユーザーのジョブを操作する権限がありません。",
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
@@ -530,6 +566,7 @@ def delete_profile(
 
         for cleanup in (
             ontology_build_service.cancel_profile_jobs,
+            ontology_build_service.purge_profile_source_documents,
             profile_sync_service.cancel_for_profile,
             ontology_runtime.delete_profile_state,
         ):
@@ -1091,11 +1128,13 @@ def history(request: Request) -> ApiResponse[HistoryData]:
 def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
     """検索結果 feedback を保存する。"""
     try:
+        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
         data = nl2sql_service.save_feedback(
             req.history_id,
             req.rating,
             req.comment,
-            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+            actor_user_uuid=access.actor_user_uuid,
+            actor_can_manage=access.actor_can_manage,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
@@ -1150,9 +1189,11 @@ def list_feedback(
 def clear_feedback(history_id: str, request: Request) -> ApiResponse[FeedbackClearData]:
     """SQL 履歴を残したままアプリ内 feedback だけを解除する。"""
     try:
+        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
         data = nl2sql_service.clear_feedback(
             history_id,
-            **_actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION),
+            actor_user_uuid=access.actor_user_uuid,
+            actor_can_manage=access.actor_can_manage,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
@@ -1692,6 +1733,8 @@ def db_admin_objects(
     limit: int = 50,
     q: str = "",
     owner: str = "",
+    owner_prefix: str = "",
+    query_scope: Literal["all", "name_comment"] = "all",
     type: str = "all",  # noqa: A002 - public query parameter name
     row_state: str = "all",
     include_counts: bool = True,
@@ -1704,11 +1747,15 @@ def db_admin_objects(
         raise HTTPException(status_code=422, detail="type が不正です。")
     if row_state not in {"all", "with_rows", "empty_rows", "unknown_rows"}:
         raise HTTPException(status_code=422, detail="row_state が不正です。")
+    if query_scope not in {"all", "name_comment"}:
+        raise HTTPException(status_code=422, detail="query_scope が不正です。")
     page = nl2sql_service.list_db_admin_objects_page(
         cursor=cursor,
         limit=limit,
         query=q,
         owner=owner,
+        owner_prefix=owner_prefix,
+        query_scope=query_scope,
         object_type=type,
         row_state=row_state,
         include_counts=include_counts,

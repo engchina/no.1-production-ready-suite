@@ -24,10 +24,10 @@ export const ja = {
   "common.action.downloadFailed": "ファイルをダウンロードできませんでした。ブラウザのダウンロード設定を確認して再試行してください。",
   "common.selection.selectAll": "すべて選択",
   "common.selection.selectVisible": "表示中をすべて選択",
-  "common.selection.clearAll": "すべて解除",
-  "common.selection.clearVisible": "表示中の選択を解除",
+  "common.selection.clearAll": "選択をすべて解除",
+  "common.selection.clearVisible": "表示中の選択をすべて解除",
   "common.selection.selectGroup": "{name} をすべて選択",
-  "common.selection.clearGroup": "{name} の選択を解除",
+  "common.selection.clearGroup": "{name} の選択をすべて解除",
   "common.degraded.title": "データベースに接続できません",
   "common.degraded.fallback":
     "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
@@ -64,6 +64,11 @@ export const ja = {
   "common.retry": "再試行",
   "common.required": "必須",
   "common.requiredFieldsNote": "は必須入力項目です。",
+  "settings.testResult.elapsed": "所要時間",
+  "settings.testResult.checkedAt": "確認時刻",
+  "settings.testResult.troubleshooting": "確認ポイント",
+  "settings.testResult.rawError": "実際のエラー詳細",
+  "settings.testResult.errorType": "エラー種別",
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
@@ -865,6 +870,8 @@ export const ja = {
   "settings.oci.configTest.success": "成功",
   "settings.oci.configTest.failed": "要確認",
   "settings.oci.configTest.error": "OCI config の保存または確認に失敗しました。",
+  "settings.oci.configTest.apiError":
+    "{message} バックエンドの起動状態と OCI 認証ファイルを確認して再試行してください。",
   "settings.oci.configTest.missingField": "不足項目: {field}",
   "settings.oci.configTest.missingKey": "秘密鍵ファイルが見つかりません。",
   "settings.oci.env.title": ".env プレビュー",
@@ -1183,6 +1190,10 @@ export const ja = {
     "保存時に backend/.env へ反映される Oracle 26ai 接続設定です。secret は伏せ字で表示します。",
   "settings.database.test.meta":
     "所要時間: {elapsed} ms / 確認時刻: {checkedAt}",
+  "settings.database.test.apiError":
+    "{message} バックエンドとデータベースの起動状態を確認して再試行してください。",
+  "settings.database.test.apiFailed":
+    "DB 接続テスト API の呼び出しに失敗しました。バックエンドとデータベースの起動状態を確認して再試行してください。",
   "settings.database.hint":
     "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
   "settings.database.validation.required": "値を入力してください。",
@@ -1478,9 +1489,9 @@ export const ja = {
   "knowledgeBasePicker.filterPlaceholder": "知識ベース名で絞り込み",
   "knowledgeBasePicker.filterAria": "知識ベースを名前で絞り込む",
   "knowledgeBasePicker.filterClear": "絞り込みを解除",
-  "knowledgeBasePicker.selectAll": "全選択",
+  "knowledgeBasePicker.selectAll": "すべて選択",
   "knowledgeBasePicker.selectAllVisible": "表示中をすべて選択",
-  "knowledgeBasePicker.clear": "クリア",
+  "knowledgeBasePicker.clear": "選択をすべて解除",
   "knowledgeBasePicker.count": "{shown} / {total} 件",
   "knowledgeBasePicker.documentCount": "{count} 文書",
   "knowledgeBasePicker.noMatch": "「{query}」に一致する知識ベースがありません。",

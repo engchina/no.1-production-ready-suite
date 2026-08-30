@@ -97,9 +97,7 @@ def filter_user_visible_catalog(catalog: SchemaCatalog) -> SchemaCatalog:
             dependency.referenced_name,
         )
     ]
-    if len(tables) == len(catalog.tables) and len(dependencies) == len(
-        catalog.view_dependencies
-    ):
+    if len(tables) == len(catalog.tables) and len(dependencies) == len(catalog.view_dependencies):
         return catalog
     return catalog.model_copy(
         deep=True,
@@ -111,24 +109,17 @@ def filter_user_visible_object_page(page: SchemaObjectPage) -> SchemaObjectPage:
     """自定义 repository 的异常响应也不会泄露系统对象。"""
 
     items = [
-        item
-        for item in page.items
-        if is_user_visible_schema_object(item.owner, item.object_name)
+        item for item in page.items if is_user_visible_schema_object(item.owner, item.object_name)
     ]
     hidden_items = [item for item in page.items if item not in items]
     hidden_tables = sum(
-        item.object_type.upper() not in {"VIEW", "MATERIALIZED VIEW"}
-        for item in hidden_items
+        item.object_type.upper() not in {"VIEW", "MATERIALIZED VIEW"} for item in hidden_items
     )
     hidden_views = len(hidden_items) - hidden_tables
     return page.model_copy(
         update={
             "items": items,
-            "total": (
-                max(0, page.total - len(hidden_items))
-                if page.total is not None
-                else None
-            ),
+            "total": (max(0, page.total - len(hidden_items)) if page.total is not None else None),
             "table_count": max(0, page.table_count - hidden_tables),
             "view_count": max(0, page.view_count - hidden_views),
         }

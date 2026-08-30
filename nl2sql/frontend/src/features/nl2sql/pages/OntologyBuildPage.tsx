@@ -1,29 +1,30 @@
 import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, RefreshCw, Target } from "lucide-react";
+import { RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
   Banner,
   EmptyState,
-  toast,
 } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
   nl2sqlIncrementalKeys,
   useProfileDetail,
   useProfileOntologyView,
   useProfileSummaries,
-  useSchemaRefreshJob,
-  useStartSchemaRefresh,
 } from "../incrementalQueries";
 import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
 import { profileDisplayLabel } from "../profileDisplay";
@@ -46,14 +47,14 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
  */
 export function OntologyBuildPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [refreshJobId, setRefreshJobId] = useState("");
   const [pageError, setPageError] = useState("");
   const [publishedMarkdownState, setPublishedMarkdownState] = useState<{
     profileId: string;
     hasPublished: boolean;
   }>({ profileId: "", hasPublished: false });
-  const completedSchemaRefreshJob = useRef("");
   const queryClient = useQueryClient();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
+  const handledSchemaRefreshJob = useRef("");
 
   const profilesQuery = useProfileSummaries("");
   const activeProfiles = useMemo(
@@ -83,15 +84,7 @@ export function OntologyBuildPage() {
     publishedMarkdownState.profileId === selectedProfileId &&
     publishedMarkdownState.hasPublished;
   const visibleOntologyWarnings = hasPublishedOntology ? ontologyWarnings : [];
-  const startSchemaRefresh = useStartSchemaRefresh();
-  const schemaRefreshJobQuery = useSchemaRefreshJob(refreshJobId);
-  const schemaRefreshStatus = schemaRefreshJobQuery.isError
-    ? "error"
-    : (schemaRefreshJobQuery.data?.status ?? "");
-  const refreshing =
-    startSchemaRefresh.isPending ||
-    schemaRefreshStatus === "pending" ||
-    schemaRefreshStatus === "running";
+  const refreshing = sharedSchemaRefresh.isRefreshing;
 
   useEffect(() => {
     if (!searchParams.has("tab")) return;
@@ -122,43 +115,27 @@ export function OntologyBuildPage() {
   const refreshSchema = async () => {
     setPageError("");
     try {
-      const job = await startSchemaRefresh.mutateAsync();
-      if (job.status === "done") {
-        await Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
-        toast.success(t("common.action.schemaRefreshed"));
-      } else {
-        completedSchemaRefreshJob.current = "";
-        setRefreshJobId(job.job_id);
-      }
+      await sharedSchemaRefresh.start();
     } catch (err) {
       setPageError(err instanceof Error ? err.message : t("profiles.error.load"));
     }
   };
 
   useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (job) {
-      const reportKey = `${job.job_id}:${job.status}`;
-      if (completedSchemaRefreshJob.current === reportKey) return;
-      if (job.status === "done") {
-        completedSchemaRefreshJob.current = reportKey;
-        void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
-        toast.success(t("common.action.schemaRefreshed"));
-      } else if (job.status === "error") {
-        completedSchemaRefreshJob.current = reportKey;
-        setPageError(t("profiles.schemaRefresh.error"));
-      }
-      return;
+    const job = sharedSchemaRefresh.completedJob;
+    if (!job) return;
+    const reportKey = `${job.job_id || "legacy"}:${job.status}`;
+    if (handledSchemaRefreshJob.current === reportKey) return;
+    handledSchemaRefreshJob.current = reportKey;
+    if (job.status === "done") {
+      void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
+    } else if (job.status === "error") {
+      setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
     }
-    if (schemaRefreshJobQuery.isError && refreshJobId) {
-      const reportKey = `${refreshJobId}:query-error`;
-      if (completedSchemaRefreshJob.current === reportKey) return;
-      completedSchemaRefreshJob.current = reportKey;
-      setPageError(t("profiles.schemaRefresh.error"));
-    }
-  }, [refreshJobId, schemaRefreshJobQuery.data, schemaRefreshJobQuery.isError]);
+  }, [profilesQuery, refreshOntologyView, sharedSchemaRefresh.completedJob, sharedSchemaRefresh.error]);
 
   const selectProfile = (id: string) => {
+    setPageError(""); // 前 profile のスキーマ更新エラーを持ち越さない
     const next = new URLSearchParams();
     if (id) next.set("profile", id);
     setSearchParams(next, { replace: true });
@@ -199,19 +176,15 @@ export function OntologyBuildPage() {
   }, [ontologyViewQuery, profileDetailQuery]);
   return (
     <>
-      <PageHeader title={t("nav.ontologyBuild")} subtitle={t("ontologyBuild.subtitle")} />
+      <PageHeader
+        title={t("nav.ontologyBuild")}
+        subtitle={t("ontologyBuild.subtitle")}
+        status={<SchemaRefreshHeaderStatus testId="ontology-build-schema-refresh-status" />}
+      />
       <main className="grid min-w-0 gap-4 p-4 lg:p-8">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
         {refreshing ? (
-          <ProcessingIndicator
-            active
-            label={t("common.processing.schemaRefreshing")}
-            operationKey={refreshJobId || "ontology-build-schema-refresh"}
-            placement="workspace"
-            className="rounded-md border border-border bg-background px-3 py-2"
-            testId="ontology-build-schema-refresh-processing"
-            activityIcon="none"
-          />
+          <SchemaRefreshProcessing testId="ontology-build-schema-refresh-processing" />
         ) : null}
 
         <DbObjectManagementPanelShell
@@ -267,15 +240,10 @@ export function OntologyBuildPage() {
                 </Button>
               ) : null}
               {profileLoadMoreError ? (
-                <div
-                  className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:col-span-2"
-                  role="alert"
-                >
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="flex min-w-0 items-start gap-2">
-                      <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-                      <span className="min-w-0 [overflow-wrap:anywhere]">{profileLoadMoreError}</span>
-                    </span>
+                <div className="sm:col-span-2">
+                  <Banner
+                    severity="danger"
+                    action={
                     <Button
                       type="button"
                       variant="secondary"
@@ -287,7 +255,10 @@ export function OntologyBuildPage() {
                       <RefreshCw size={15} aria-hidden="true" />
                       <span>{t("common.retry")}</span>
                     </Button>
-                  </div>
+                    }
+                  >
+                    {profileLoadMoreError}
+                  </Banner>
                 </div>
               ) : null}
             </div>
@@ -320,6 +291,7 @@ export function OntologyBuildPage() {
             />
             <OntologyQueryPlayground
               graph={ontologyGraph}
+              profileId={selectedProfileId}
               warningsJa={visibleOntologyWarnings}
               onRefreshSchema={refreshSchema}
               refreshingSchema={refreshing}

@@ -1,28 +1,43 @@
 {
   "data": {
     "status": "partial",
-    "schema_head": 6,
+    "schema_head": 17,
     "applied_versions": [
       0,
       1,
       2,
-      3
+      3,
+      5,
+      6,
+      7
     ],
     "pending_versions": [
-      5,
-      6
+      8,
+      9,
+      15,
+      17
     ],
-    "expected_object_count": 49,
-    "existing_object_count": 45,
-    "expected_table_count": 18,
-    "existing_table_count": 17,
+    "expected_object_count": 51,
+    "existing_object_count": 50,
+    "expected_table_count": 27,
+    "existing_table_count": 26,
     "missing_objects": [
       {
-        "name": "NL2SQL_SYSTEM_TABLE_OPS",
+        "name": "NL2SQL_EVALUATION_JOBS",
         "object_type": "TABLE"
       }
     ],
     "tables": [],
+    "objects": [
+      {
+        "name": "NL2SQL_EVALUATION_JOBS",
+        "object_type": "TABLE",
+        "exists": false,
+        "estimated_rows": null,
+        "created_at": null,
+        "last_analyzed_at": null
+      }
+    ],
     "operation_state": {
       "status": "failed",
       "operation_kind": "initialize",
@@ -37,4 +52,3 @@
   ],
   "warning_messages": []
 }
-

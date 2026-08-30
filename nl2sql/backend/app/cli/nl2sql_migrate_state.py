@@ -121,10 +121,7 @@ def _migration_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "profiles": len(profiles),
         "schema_objects": len(catalog.tables),
         "schema_columns": sum(len(table.columns) for table in catalog.tables),
-        **{
-            collection: len(snapshot.get(collection, []))
-            for collection in _COLLECTION_IDENTITIES
-        },
+        **{collection: len(snapshot.get(collection, [])) for collection in _COLLECTION_IDENTITIES},
     }
 
 
@@ -208,9 +205,7 @@ def validate_migrated_snapshot(
         expected_payload = expected.model_dump(
             mode="json", exclude={"version", "etag", "updated_at"}
         )
-        actual_payload = actual.model_dump(
-            mode="json", exclude={"version", "etag", "updated_at"}
-        )
+        actual_payload = actual.model_dump(mode="json", exclude={"version", "etag", "updated_at"})
         if _canonical_json(expected_payload) != _canonical_json(actual_payload):
             mismatches.append(f"profile:{expected.id}:checksum")
 
@@ -220,8 +215,7 @@ def validate_migrated_snapshot(
     if expected_catalog.tables:
         actual_keys = set(repository.schema_manifest())
         expected_keys = {
-            (table.owner.upper(), table.table_name.upper())
-            for table in expected_catalog.tables
+            (table.owner.upper(), table.table_name.upper()) for table in expected_catalog.tables
         }
         if actual_keys != expected_keys:
             mismatches.append("schema:object_ids")
@@ -312,9 +306,7 @@ def replay_migration_outbox(
             connection.commit()
         replayed += 1
     with adapter.connection() as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT COUNT(*) FROM NL2SQL_MIGRATION_OUTBOX WHERE PROCESSED_AT IS NULL"
-        )
+        cursor.execute("SELECT COUNT(*) FROM NL2SQL_MIGRATION_OUTBOX WHERE PROCESSED_AT IS NULL")
         row = cursor.fetchone()
     lag = int(row[0] or 0) if row else 0
     record_outbox_lag(lag)
@@ -357,9 +349,7 @@ def main() -> int:
             snapshot = legacy.load_snapshot() or {}
             print(_canonical_json(_migration_summary(snapshot)))  # noqa: T201
         else:
-            repository = OracleIncrementalNl2SqlRepository(
-                connection_factory=adapter.connection
-            )
+            repository = OracleIncrementalNl2SqlRepository(connection_factory=adapter.connection)
             ok, detail = repository.check()
             if not ok:
                 raise RuntimeError(detail)

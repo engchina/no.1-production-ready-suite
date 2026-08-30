@@ -30,6 +30,9 @@ export const systemAdminMe = {
 /** 通常の E2E は Oracle snapshot が利用可能な状態から開始する。 */
 export async function mockDatabaseGateReady(page: Page) {
   await page.route("**/api/auth/me", (route) => fulfill(route, systemAdminMe));
+  await page.route("**/api/schema/refresh-jobs/active", (route) =>
+    fulfill(route, { active_job: null })
+  );
   await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "ok", check: "ok", detail: null })

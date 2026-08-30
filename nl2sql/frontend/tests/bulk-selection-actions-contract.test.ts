@@ -14,6 +14,7 @@ const migratedPages = [
   "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
   "../src/features/nl2sql/pages/EvaluationPage.tsx",
   "../src/features/security/SecurityRolesPage.tsx",
+  "../src/features/security/SecurityDeepSecPage.tsx",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 
 test("BulkSelectionActions uses shared Button variants for select and clear", () => {
@@ -21,6 +22,7 @@ test("BulkSelectionActions uses shared Button variants for select and clear", ()
   assert.match(source, /variant="secondary"/u);
   assert.match(source, /variant="ghost"/u);
   assert.match(source, /size = "sm"/u);
+  assert.match(source, /justify-start/u);
   assert.match(source, /disabled=\{busy \|\| selectDisabled\}/u);
   assert.match(source, /disabled=\{busy \|\| clearDisabled\}/u);
 });
@@ -37,5 +39,9 @@ test("BulkSelectionActions exposes distinct aria labels and stable test ids", ()
 test("bulk selection surfaces use the shared component", () => {
   for (const page of migratedPages) {
     assert.match(page, /BulkSelectionActions/u);
+    assert.doesNotMatch(
+      page,
+      /<BulkSelectionActions[^>]*className="[^"]*(?:ml-auto|justify-end)/su
+    );
   }
 });

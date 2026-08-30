@@ -415,6 +415,20 @@ async function mockApi(page: Page) {
     const path = url.pathname;
     // 共通 helper の認証 mock を優先し、catch-all で CurrentUser を空 object にしない。
     if (path === "/api/auth/me") return route.fallback();
+    // profile-access 一覧(配列)は共通 helper の mock([])へ委譲する。
+    if (path === "/api/security/profile-access/profiles") return route.fallback();
+    if (path === "/api/nl2sql/rewrite") {
+      // rewrite 既定 ON。catch-all の空 object を返すと比較カードが欠損 payload になるため echo する。
+      const body = request.postDataJSON() as { question?: string };
+      const original = String(body?.question ?? "");
+      return fulfill(route, {
+        original_question: original,
+        rewritten_question: original,
+        source: "deterministic",
+        model: "",
+        warnings: [],
+      });
+    }
     if (path === "/api/ready/database") {
       return fulfill(route, { status: "ok", check: "ok", detail: null });
     }
@@ -712,12 +726,13 @@ async function mockApi(page: Page) {
       });
     }
     if (path.endsWith("/ontology-markdown") && request.method() === "GET") {
+      // draft が空だと editor でなく空状態 placeholder が出るため、編集入口検証用に本文を持たせる。
       return fulfill(route, {
-        draft_markdown: "",
+        draft_markdown: "# Ontology Draft\n\n- APP.DEPARTMENT: 部門\n",
         published_markdown: "",
         draft_revision: null,
         published_revision: null,
-        draft_etag: "",
+        draft_etag: "draft-etag-1",
         published_at: null,
       });
     }

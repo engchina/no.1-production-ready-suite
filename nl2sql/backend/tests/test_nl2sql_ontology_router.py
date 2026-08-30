@@ -1665,8 +1665,7 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     assert by_type["ontology_llm_markdown"]["content"] == confirmed_markdown
     assert by_type["ontology_markdown_published"]["content"] == confirmed_markdown
     assert (
-        api.published_markdown_for_revision(revision.id, profile_id="sales")
-        == confirmed_markdown
+        api.published_markdown_for_revision(revision.id, profile_id="sales") == confirmed_markdown
     )
 
 
@@ -1835,3 +1834,59 @@ def test_atomic_revision_switch_failure_restores_in_memory_active_revision(
     _view, active = api.profile_view("sales")
     assert active.revision.id == published.revision.id
     assert api.ontology_revision(draft.revision.id).revision.status.value == "draft"
+
+
+def test_create_session_does_not_hold_global_lock_during_llm_call(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """LLM 解釈(Enterprise AI HTTP)中はグローバルロックを保持しない
+    (snapshot → 呼び出し → 再検証・書き戻し)。ハングした LLM 呼び出しが
+    他の ontology エンドポイントを塞がないことの契約。"""
+
+    api, _store, _legacy = runtime
+    draft = api.current_ontology()
+    api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+
+    llm_started = threading.Event()
+    llm_release = threading.Event()
+
+    class _BlockingClient:
+        def is_configured(self) -> bool:
+            return True
+
+        def model_id(self) -> str:
+            return "blocking-fake"
+
+        def generate(self, **_kwargs: object) -> str:
+            llm_started.set()
+            assert llm_release.wait(timeout=10)
+            return "{}"
+
+    api.legacy_service._enterprise_ai_client = _BlockingClient()  # noqa: SLF001
+
+    session_done = threading.Event()
+
+    def create() -> None:
+        api.create_session(QuerySessionApiCreate(question="受注件数を表示", profile_id="sales"))
+        session_done.set()
+
+    worker = threading.Thread(target=create, daemon=True)
+    worker.start()
+    try:
+        assert llm_started.wait(timeout=5), "LLM 呼び出しに到達しなかった"
+        # LLM がブロックしている間も、ロックを要する別 API が完了すること
+        other_done = threading.Event()
+
+        def read_revisions() -> None:
+            api.list_ontology_revisions()
+            other_done.set()
+
+        reader = threading.Thread(target=read_revisions, daemon=True)
+        reader.start()
+        assert other_done.wait(timeout=2), "LLM 呼び出し中に他の ontology API がブロックされた"
+    finally:
+        llm_release.set()
+    assert session_done.wait(timeout=10)

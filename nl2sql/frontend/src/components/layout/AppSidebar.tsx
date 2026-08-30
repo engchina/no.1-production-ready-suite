@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Bug, KeyRound, LogOut, UserRound, type LucideIcon } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
@@ -13,7 +13,7 @@ import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useUiStore } from "@/lib/ui-store";
 import { useAuth } from "@/features/security/AuthProvider";
-import { NAV_SECTIONS } from "./nav-config";
+import { NAV_SECTIONS, resolveCollapsedSections } from "./nav-config";
 
 /**
  * NL2SQL コンソールのサイドナビ。共有 UI パッケージの <Sidebar> に
@@ -25,9 +25,16 @@ export function AppSidebar() {
   const auth = useAuth();
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
-  const collapsedSections = useUiStore((state) => state.collapsedSections);
-  const toggleSection = useUiStore((state) => state.toggleSection);
+  const savedCollapsedSections = useUiStore((state) => state.collapsedSections);
   const setSectionCollapsed = useUiStore((state) => state.setSectionCollapsed);
+  const collapsedSections = useMemo(
+    () => resolveCollapsedSections(savedCollapsedSections),
+    [savedCollapsedSections]
+  );
+  const toggleSection = useCallback(
+    (key: string) => setSectionCollapsed(key, !collapsedSections[key]),
+    [collapsedSections, setSectionCollapsed]
+  );
   const handleLogout = () => void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
   const passwordChangeActive =
     pathname === APP_ROUTES.passwordChange || pathname.startsWith(`${APP_ROUTES.passwordChange}/`);

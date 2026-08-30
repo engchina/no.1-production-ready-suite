@@ -45,8 +45,7 @@ def _created_objects() -> dict[str, set[str]]:
         "SEQUENCE": set(),
     }
     pattern = re.compile(
-        r"CREATE\s+(?:UNIQUE\s+|VECTOR\s+)?"
-        r"(TABLE|INDEX|SEQUENCE)\s+([A-Z0-9_]+)",
+        r"CREATE\s+(?:UNIQUE\s+|VECTOR\s+)?" r"(TABLE|INDEX|SEQUENCE)\s+([A-Z0-9_]+)",
         flags=re.IGNORECASE,
     )
     for migration in MIGRATIONS:
@@ -80,6 +79,7 @@ def _status_payload(status: str, *, existing: int | None = None) -> dict[str, An
         "existing_table_count": len(MANAGED_TABLES) if status == "ready" else 0,
         "missing_objects": [],
         "tables": [],
+        "objects": [],
         "operation_state": _ready_operation_state(),
     }
 
@@ -90,6 +90,10 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
+    assert len(MANAGED_TABLES) == 27
+    assert len(MANAGED_INDEXES) == 23
+    assert len(MANAGED_SEQUENCES) == 1
+    assert len(MANAGED_OBJECTS) == 51
     assert [migration.version for migration in MIGRATIONS] == [
         0,
         1,
@@ -112,6 +116,52 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert "USER_BUSINESS_SENTINEL" not in MANAGED_TABLES
 
 
+def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+    created_at = datetime(2026, 8, 29, tzinfo=UTC)
+    existing_objects = {
+        (MANAGED_TABLES[0], "TABLE"): created_at,
+        (MANAGED_INDEXES[0], "INDEX"): created_at,
+    }
+    table_metadata = [
+        {
+            "name": MANAGED_TABLES[0],
+            "exists": True,
+            "estimated_rows": 12,
+            "created_at": created_at.isoformat(),
+            "last_analyzed_at": "2026-08-29T01:00:00+00:00",
+        }
+    ]
+
+    metadata = manager._build_object_metadata(existing_objects, table_metadata)
+
+    assert [(item["name"], item["object_type"]) for item in metadata] == list(MANAGED_OBJECTS)
+    assert sum(item["object_type"] == "TABLE" for item in metadata) == 27
+    assert sum(item["object_type"] == "INDEX" for item in metadata) == 23
+    assert sum(item["object_type"] == "SEQUENCE" for item in metadata) == 1
+    assert metadata[0] == {
+        "name": MANAGED_TABLES[0],
+        "object_type": "TABLE",
+        "exists": True,
+        "estimated_rows": 12,
+        "created_at": created_at.isoformat(),
+        "last_analyzed_at": "2026-08-29T01:00:00+00:00",
+    }
+    first_index = metadata[len(MANAGED_TABLES)]
+    assert first_index["name"] == MANAGED_INDEXES[0]
+    assert first_index["exists"] is True
+    assert first_index["estimated_rows"] is None
+    assert first_index["last_analyzed_at"] is None
+    assert metadata[-1] == {
+        "name": MANAGED_SEQUENCES[0],
+        "object_type": "SEQUENCE",
+        "exists": False,
+        "estimated_rows": None,
+        "created_at": None,
+        "last_analyzed_at": None,
+    }
+
+
 def test_manifest_checksums_are_actual_sha256_values() -> None:
     for migration in MIGRATIONS:
         assert migration.path.is_file()
@@ -124,8 +174,7 @@ def test_system_schema_status_has_four_deterministic_states() -> None:
     one_domain_table = next(
         item
         for item in expected
-        if item[1] == "TABLE"
-        and item[0] not in {CONTROL_TABLE, "NL2SQL_SCHEMA_MIGRATIONS"}
+        if item[1] == "TABLE" and item[0] not in {CONTROL_TABLE, "NL2SQL_SCHEMA_MIGRATIONS"}
     )
 
     assert classify_system_schema_status(set(), {}) == "missing"
@@ -404,8 +453,7 @@ def _partial_status(
             ]
         ),
         "missing_objects": [
-            {"name": name, "object_type": object_type}
-            for name, object_type in missing_objects
+            {"name": name, "object_type": object_type} for name, object_type in missing_objects
         ],
     }
 
@@ -440,9 +488,7 @@ def test_selective_plan_replays_only_owner_of_one_missing_object() -> None:
 def test_selective_plan_replays_only_checksum_mismatch() -> None:
     manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
     status = _partial_status(
-        applied_versions=[
-            migration.version for migration in MIGRATIONS if migration.version != 5
-        ],
+        applied_versions=[migration.version for migration in MIGRATIONS if migration.version != 5],
         pending_versions=[5],
         missing_objects=[],
     )
@@ -477,9 +523,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
-    assert result["applied_versions"] == [
-        migration.version for migration in MIGRATIONS
-    ]
+    assert result["applied_versions"] == [migration.version for migration in MIGRATIONS]
 
 
 class _RecordingCursor:
@@ -623,10 +667,7 @@ def test_foreign_key_dictionary_validation_checks_enforcement_state() -> None:
     manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
     expected = MANAGED_FOREIGN_KEYS[1]
 
-    assert (
-        manager._foreign_key_state(_ForeignKeyDictionaryConnection(), expected)
-        == "matching"
-    )
+    assert manager._foreign_key_state(_ForeignKeyDictionaryConnection(), expected) == "matching"
     assert (
         manager._foreign_key_state(
             _ForeignKeyDictionaryConnection(status="DISABLED"),
@@ -778,9 +819,9 @@ def test_system_tables_api_contract_and_strict_permission(
     assert permission_for_route("GET", "/settings/database/system-tables") == frozenset(
         {"menu.settings_system_tables"}
     )
-    assert permission_for_route(
-        "POST", "/settings/database/system-tables/initialize"
-    ) == frozenset({"menu.settings_system_tables"})
+    assert permission_for_route("POST", "/settings/database/system-tables/initialize") == frozenset(
+        {"menu.settings_system_tables"}
+    )
 
 
 def test_system_tables_api_exposes_retryable_ora_00054_contract(
@@ -797,9 +838,7 @@ def test_system_tables_api_exposes_retryable_ora_00054_contract(
     assert response.headers["Retry-After"] == "5"
     assert json.loads(bytes(response.body)) == {
         "data": None,
-        "error_messages": [
-            "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。"
-        ],
+        "error_messages": ["Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。"],
         "warning_messages": [],
         "error_code": "ORA-00054",
     }
@@ -895,9 +934,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
             "method": "POST",
             "path": "/api/settings/database/system-tables/initialize",
             "headers": headers,
-            "route": SimpleNamespace(
-                path="/api/settings/database/system-tables/initialize"
-            ),
+            "route": SimpleNamespace(path="/api/settings/database/system-tables/initialize"),
         }
         return Request(scope)
 
@@ -917,9 +954,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
         await anext(security_dependencies.authorize_api_request(request(csrf=True)))
     assert no_execute.value.status_code == 403
 
-    executor_service = FakeSecurityService(
-        principal({"menu.settings_system_tables"})
-    )
+    executor_service = FakeSecurityService(principal({"menu.settings_system_tables"}))
     monkeypatch.setattr(
         security_dependencies,
         "get_security_service",

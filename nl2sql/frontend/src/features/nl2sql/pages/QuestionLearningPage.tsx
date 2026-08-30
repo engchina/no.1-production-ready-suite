@@ -27,11 +27,11 @@ import {
   FormStatus,
   Pagination,
   SelectField,
-  StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { StatusBadge } from "@/components/ui/status-badge";
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";

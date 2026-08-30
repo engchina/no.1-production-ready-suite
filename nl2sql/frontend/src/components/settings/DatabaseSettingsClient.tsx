@@ -31,6 +31,10 @@ import { SelectField, type SelectFieldOption } from "@/components/ui/select-fiel
 import { Skeleton } from "@/components/ui/skeleton";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+} from "@/components/settings/SettingsTestResultPanel";
+import {
   ApiError,
   type AdbInfoData,
   type DatabaseConnectionSecurity,
@@ -201,6 +205,7 @@ export function DatabaseSettingsClient() {
 
   function runTest(settings: DatabaseSettingsData) {
     if (!validateForm(settings, false)) return;
+    test.reset();
     test.mutate(payloadFromForm(form, settings));
   }
 
@@ -438,7 +443,7 @@ export function DatabaseSettingsClient() {
                 {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
               </div>
 
-              {testResult ? <ConnectionTestResultPanel result={testResult} /> : null}
+              <DatabaseTestResultPanel result={testResult} error={test.error} />
 
               <p className="text-xs leading-relaxed text-muted">{t("settings.database.hint")}</p>
             </CardContent>
@@ -1194,54 +1199,48 @@ function SecretClearCheckbox({
   );
 }
 
-function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestResult }) {
-  const success = result.status === "success";
-  const skipped = result.status === "skipped";
-  const Icon = success ? CheckCircle2 : skipped ? AlertCircle : XCircle;
+function DatabaseTestResultPanel({
+  result,
+  error,
+}: {
+  result?: DatabaseConnectionTestResult;
+  error: Error | null;
+}) {
+  if (!result && !error) return null;
+
+  if (error) {
+    const message =
+      error instanceof ApiError
+        ? t("settings.database.test.apiError", { message: error.message })
+        : t("settings.database.test.apiFailed");
+    return (
+      <SettingsTestResultPanel
+        tone="danger"
+        message={message}
+        testId="settings-database-test-result"
+      />
+    );
+  }
+
+  if (!result) return null;
+  const tone =
+    result.status === "success"
+      ? "success"
+      : result.status === "skipped"
+        ? "warning"
+        : "danger";
 
   return (
-    <div
-      role={success || skipped ? "status" : "alert"}
-      className={cn(
-        "flex flex-col gap-2 rounded-md border px-4 py-3 text-sm",
-        success && "border-success/30 bg-success-bg/50 text-foreground",
-        skipped && "border-warning/30 bg-warning-bg/60 text-foreground",
-        !success && !skipped && "border-danger/30 bg-danger-bg/50 text-foreground"
-      )}
-    >
-      <div className="flex items-start gap-2">
-        <Icon
-          size={18}
-          className={cn(
-            "mt-0.5 shrink-0",
-            success && "text-success",
-            skipped && "text-warning",
-            !success && !skipped && "text-danger"
-          )}
-          aria-hidden
-        />
-        <div>
-          <p className="font-medium">{result.message}</p>
-          <p className="mt-1 text-xs text-muted">
-            {t("settings.database.test.meta", {
-              elapsed: result.elapsed_ms,
-              checkedAt: formatDateTime(result.checked_at),
-            })}
-            {result.error_type ? ` / ${result.error_type}` : ""}
-          </p>
-          {result.troubleshooting.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-xs leading-relaxed text-muted">
-              {result.troubleshooting.map((tip) => (
-                <li key={tip} className="flex gap-1.5">
-                  <span aria-hidden="true">-</span>
-                  <span>{tip}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <SettingsTestResultPanel
+      tone={tone}
+      message={result.message}
+      elapsedMs={result.elapsed_ms}
+      checkedAt={formatDateTime(result.checked_at)}
+      details={toSettingsTestResultDetails(result.details)}
+      troubleshooting={result.troubleshooting}
+      errorType={result.error_type}
+      testId="settings-database-test-result"
+    />
   );
 }
 

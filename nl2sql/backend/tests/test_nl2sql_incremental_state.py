@@ -160,9 +160,11 @@ class _ScriptedOracleCursor:
 
     def _materialize(self, row: tuple[Any, ...]) -> tuple[Any, ...]:
         return tuple(
-            _ConnectionBoundLob(self._connection, value.value)
-            if isinstance(value, _LobPayload)
-            else value
+            (
+                _ConnectionBoundLob(self._connection, value.value)
+                if isinstance(value, _LobPayload)
+                else value
+            )
             for value in row
         )
 
@@ -377,7 +379,8 @@ def test_enterprise_ai_direct_uses_incremental_schema_when_legacy_catalog_is_emp
 
     assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
     assert preview.sql == "SELECT ID FROM APP.ORDERS"
-    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
+    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY"
     assert fake_client.calls
     context = fake_client.calls[0]["context"]
     assert "table APP.ORDERS" in context
@@ -620,7 +623,9 @@ def test_enterprise_ai_direct_deterministic_fallback_uses_incremental_schema_sna
     )
     service = _incremental_service(repository)
     service._catalog = SchemaCatalog(refreshed_at="legacy-empty", tables=[])  # noqa: SLF001
-    service._enterprise_ai_client = _FakeEnterpriseAiClient("説明だけで SQL はありません。")  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient(
+        "説明だけで SQL はありません。"
+    )  # noqa: SLF001
 
     preview = service.preview(
         PreviewRequest(
@@ -631,7 +636,8 @@ def test_enterprise_ai_direct_deterministic_fallback_uses_incremental_schema_sna
     )
 
     assert preview.sql == "SELECT ID FROM APP.ORDERS"
-    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
+    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY"
     assert "enterprise_ai_direct:" in preview.fallback_reason
 
 
@@ -904,7 +910,7 @@ def test_incremental_repository_accepts_oracle_native_json_values() -> None:
 
 def test_oracle_state_document_payload_uses_clob_bind(
     monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+) -> None:
     clob_type = object()
     monkeypatch.setitem(sys.modules, "oracledb", SimpleNamespace(DB_TYPE_CLOB=clob_type))
     repository, connections = _oracle_repository([[], []])
@@ -1051,7 +1057,8 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch.setattr(service, "_run_job_safely", lambda _job_id: None)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     similar_response = nl2sql_router.similar_history(
-        SimilarHistoryRequest(question="部署名を検索", profile_id="default", limit=3)
+        SimilarHistoryRequest(question="部署名を検索", profile_id="default", limit=3),
+        SimpleNamespace(state=SimpleNamespace(principal=None)),
     )
     persistence_after_similar = service.persistence_status()
     job_response = nl2sql_router.create_job(
@@ -1282,22 +1289,26 @@ def test_profile_api_supports_summary_detail_etag_and_conflict(
     service = _incremental_service(repository)
     monkeypatch.setattr(profile_router, "nl2sql_service", service)
 
+    anon_request = SimpleNamespace(state=SimpleNamespace(principal=None))
     page_response = Response()
     page = profile_router.search_profiles(
+        anon_request,
         page_response,
         limit=10,
         q="0007",
     )
     page_not_modified = profile_router.search_profiles(
+        anon_request,
         Response(),
         limit=10,
         q="0007",
         if_none_match=page_response.headers["etag"],
     )
     detail_response = Response()
-    detail = profile_router.get_profile_detail(stored.id, detail_response)
+    detail = profile_router.get_profile_detail(stored.id, anon_request, detail_response)
     not_modified = profile_router.get_profile_detail(
         stored.id,
+        anon_request,
         Response(),
         if_none_match=detail_response.headers["etag"],
     )
@@ -1306,12 +1317,14 @@ def test_profile_api_supports_summary_detail_etag_and_conflict(
         profile_router.update_profile(
             stored.id,
             ProfilePatchRequest(name="updated"),
+            anon_request,
             Response(),
         )
     with pytest.raises(HTTPException) as conflict:
         profile_router.update_profile(
             stored.id,
             ProfilePatchRequest(name="updated"),
+            anon_request,
             Response(),
             if_match='"stale"',
         )
@@ -1506,6 +1519,131 @@ def test_db_admin_objects_page_filters_by_owner() -> None:
     assert [item.qualified_name for item in page.items] == ["ADMIN.ORDERS"]
 
 
+def test_db_admin_objects_page_filters_by_owner_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Response
+
+    from app.features.nl2sql import router as nl2sql_router
+
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.apply_schema_refresh(
+        catalog=SchemaCatalog(
+            refreshed_at="now",
+            tables=[
+                _table("AAI_FILES").model_copy(update={"owner": "OML_USER"}),
+                _table("EVENTS").model_copy(update={"owner": "OML_APP"}),
+                _table("ORDERS").model_copy(update={"owner": "APP"}),
+            ],
+        ),
+        manifest={
+            ("OML_USER", "AAI_FILES"): "v1",
+            ("OML_APP", "EVENTS"): "v1",
+            ("APP", "ORDERS"): "v1",
+        },
+        changed_keys={
+            ("OML_USER", "AAI_FILES"),
+            ("OML_APP", "EVENTS"),
+            ("APP", "ORDERS"),
+        },
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    result = nl2sql_router.db_admin_objects(
+        response=Response(),
+        limit=10,
+        q="",
+        type="all",
+        row_state="all",
+        owner_prefix="oml_",
+    )
+
+    assert not isinstance(result, Response)
+    assert result.data is not None
+    assert [item.qualified_name for item in result.data.items] == [
+        "OML_APP.EVENTS",
+        "OML_USER.AAI_FILES",
+    ]
+
+
+def test_db_admin_objects_name_comment_scope_excludes_owner_logical_name_and_columns() -> None:
+    billing_orders = _table("BILLING_ORDERS")
+    billing_comment = _table("ARCHIVE", comment="BILLING report")
+    owner_only = _table("CUSTOMERS").model_copy(update={"owner": "BILLING"})
+    logical_name_only = _table("INVOICES").model_copy(update={"logical_name": "BILLING"})
+    column_only = _table("PAYMENTS").model_copy(
+        update={
+            "columns": [
+                SchemaColumn(
+                    column_name="BILLING_CODE",
+                    logical_name="BILLING",
+                    data_type="VARCHAR2",
+                    nullable=True,
+                )
+            ]
+        }
+    )
+    tables = [
+        billing_orders,
+        billing_comment,
+        owner_only,
+        logical_name_only,
+        column_only,
+    ]
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    manifest = {(table.owner.upper(), table.table_name.upper()): "v1" for table in tables}
+    repository.apply_schema_refresh(
+        catalog=SchemaCatalog(refreshed_at="now", tables=tables),
+        manifest=manifest,
+        changed_keys=set(manifest),
+        deleted_keys=set(),
+    )
+    service = _incremental_service(repository)
+
+    scoped = service.list_db_admin_objects_page(
+        cursor=None,
+        limit=10,
+        query="billing",
+        query_scope="name_comment",
+        object_type="all",
+        row_state="all",
+    )
+    compatible_default = service.list_db_admin_objects_page(
+        cursor=None,
+        limit=10,
+        query="billing",
+        object_type="all",
+        row_state="all",
+    )
+
+    assert {item.qualified_name for item in scoped.items} == {
+        "APP.ARCHIVE",
+        "APP.BILLING_ORDERS",
+    }
+    assert {item.qualified_name for item in compatible_default.items} == {
+        "APP.ARCHIVE",
+        "APP.BILLING_ORDERS",
+        "APP.INVOICES",
+        "APP.PAYMENTS",
+        "BILLING.CUSTOMERS",
+    }
+
+
+def test_db_admin_objects_rejects_invalid_query_scope() -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    with pytest.raises(HTTPException) as error:
+        nl2sql_router.db_admin_objects(
+            response=Response(),
+            query_scope="owner",  # type: ignore[arg-type]
+        )
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "query_scope が不正です。"
+
+
 def test_connection_failure_opens_circuit_and_next_probe_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1634,6 +1772,28 @@ def test_schema_refresh_submission_coalesces_active_job_without_running_inline(
     assert first.job_id == second.job_id
     assert first.status == SchemaRefreshJobStatus.PENDING
     assert called == 0
+
+
+def test_active_schema_refresh_job_returns_only_pending_or_running_job() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+
+    assert service.get_active_schema_refresh_job() is None
+
+    submitted = service.start_schema_refresh_job(dispatch=False)
+    active = service.get_active_schema_refresh_job()
+    assert active is not None
+    assert active.job_id == submitted.job_id
+
+    repository.save_refresh_job(
+        submitted.model_copy(
+            update={
+                "status": SchemaRefreshJobStatus.DONE,
+                "finished_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    )
+    assert service.get_active_schema_refresh_job() is None
 
 
 def test_schema_refresh_submission_wakes_coalesced_pending_job(
@@ -2193,6 +2353,86 @@ def test_oracle_schema_object_search_can_skip_counts() -> None:
     assert page.catalog_version == 0
     assert len(connections[0].executed) == 1
     assert "COUNT(*)" not in connections[0].executed[0][0]
+
+
+def test_oracle_schema_object_search_uses_literal_owner_prefix() -> None:
+    repository, connections = _oracle_repository(
+        [
+            [
+                (
+                    "OML_USER",
+                    "AAI_FILES",
+                    "TABLE",
+                    "AAI_FILES",
+                    "",
+                    5,
+                    3,
+                    "2026-07-22T00:00:00+00:00",
+                )
+            ],
+        ],
+    )
+
+    page = repository.search_schema_objects(
+        cursor=None,
+        limit=10,
+        query="",
+        owner="",
+        owner_prefix="oml_",
+        object_type="TABLE",
+        allowed_names=None,
+        row_state="all",
+        include_counts=False,
+    )
+
+    assert [(item.owner, item.object_name) for item in page.items] == [("OML_USER", "AAI_FILES")]
+    sql, binds = connections[0].executed[0]
+    assert "SUBSTR(UPPER(o.OWNER_NAME), 1, LENGTH(:owner_prefix))" in sql
+    assert "OWNER_NAME LIKE :owner_prefix" not in sql
+    assert binds == {"limit": 11, "owner_prefix": "OML_", "object_type": "TABLE"}
+
+
+def test_oracle_schema_object_search_name_comment_scope_uses_only_object_fields() -> None:
+    repository, connections = _oracle_repository(
+        [
+            [
+                (
+                    "APP",
+                    "BILLING_ORDERS",
+                    "TABLE",
+                    "請求",
+                    "Billing report",
+                    5,
+                    3,
+                    "2026-07-22T00:00:00+00:00",
+                )
+            ],
+        ],
+    )
+
+    page = repository.search_schema_objects(
+        cursor=None,
+        limit=10,
+        query="billing",
+        query_scope="name_comment",
+        owner="",
+        object_type="TABLE",
+        allowed_names=None,
+        row_state="all",
+        include_counts=False,
+    )
+
+    assert [item.object_name for item in page.items] == ["BILLING_ORDERS"]
+    sql, binds = connections[0].executed[0]
+    assert "UPPER(o.OBJECT_NAME) LIKE :query OR UPPER(o.COMMENTS) LIKE :query" in sql
+    assert "UPPER(o.OWNER_NAME) LIKE :query" not in sql
+    assert "UPPER(o.LOGICAL_NAME) LIKE :query" not in sql
+    assert "NL2SQL_SCHEMA_COLUMNS c" not in sql
+    assert binds == {
+        "limit": 11,
+        "object_type": "TABLE",
+        "query": "%BILLING%",
+    }
 
 
 def test_legacy_snapshot_migration_validates_aggregate_ids_and_payloads() -> None:

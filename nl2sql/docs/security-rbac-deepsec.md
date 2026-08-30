@@ -71,6 +71,19 @@ password 変更画面から変更でき、変更結果は `backend/.env` の `AP
 作成したユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に
 `SYSTEM_ADMIN` が残っている場合も migration では自動撤去せず、管理者が必要に応じて手動で解除する。
 
+## ユーザー・ロールの物理削除
+
+削除 API は現在表示中の version を `If-Match: "<version>"` で受け取り、前提条件を同一
+トランザクション内で再確認する。ユーザーは無効化済みで、ログイン中の操作者自身でも初期
+システム管理者でもない場合に限り、セッション、ロール割り当て、ユーザー本体を物理削除する。
+履歴や実行ジョブに保存済みの `actor_user_uuid` は監査識別子として保持する。
+
+カスタムロールは、割り当てユーザーがなく、アーカイブ済みで、保存済み Data Grant policy が空の
+場合に限り物理削除する。Data Grant が残る場合は、ロールを復元し、Deep Data Security の
+`データ権限` で空の Data Grant をプレビュー・適用して Oracle 側の managed grant を清掃した後、
+再度アーカイブして削除する。ロール削除 API 自体は Oracle DDL を実行せず、機能権限と業務
+プロファイル関連を削除してからロール本体を削除する。組み込みロールは削除できない。
+
 旧版で作成された 8 個の `RAG_*` security table が存在する場合、migration 005 がデータを保持したまま
 `NL2SQL_*` へ table、constraint、index を rename し、entitlement resource code も移行する。新規環境は
 migration 004 から `NL2SQL_*` object を直接作成する。005 に残る旧 prefix は移行元を識別するためだけの

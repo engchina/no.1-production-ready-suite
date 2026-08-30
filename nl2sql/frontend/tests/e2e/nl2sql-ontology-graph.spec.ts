@@ -561,8 +561,18 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1440, height: 900 });
   }
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "production-ready-nl2sql.ui",
+      JSON.stringify({
+        state: { sidebarCollapsed: false, collapsedSections: {}, theme: "dark" },
+        version: 0,
+      })
+    );
+  });
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
+  await expect(page.locator("html")).toHaveClass(/dark/);
 
   const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
   await playground.scrollIntoViewIfNeeded();
@@ -581,7 +591,8 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
   await expect(playground.getByTestId("ontology-graph-lane-attribute")).toContainText("属性・指標");
-  await expect(playground.getByTestId("ontology-graph-lane-detail")).toContainText("物理列・列挙値");
+  // 詳細(列・列挙値)ノードが畳まれている間は空レーンのラベルを出さない
+  await expect(playground.getByTestId("ontology-graph-lane-detail")).toHaveCount(0);
   await expectGraphSearchFieldLayout(page, playground);
   await expectNoHorizontalScroll(page);
 
@@ -589,11 +600,29 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   const customer = playground.locator(".react-flow__node", { hasText: "顧客" }).first();
   await expect(customer).toBeVisible();
   await expect(customer).toContainText("APP.CUSTOMERS");
+  await expect(playground.getByTestId("ontology-node-card-e1")).toHaveCSS(
+    "background-color",
+    "rgb(23, 58, 94)"
+  );
+  await expect(playground.getByTestId("ontology-node-card-e1")).toHaveCSS(
+    "color",
+    "rgb(239, 243, 247)"
+  );
+  await expect(playground.getByTestId("ontology-node-card-m1")).toHaveCSS(
+    "background-color",
+    "rgb(54, 42, 89)"
+  );
 
   // 既定では列・列挙値ノード(2 件)は畳まれる
   await expect(playground.locator(".react-flow__node")).toHaveCount(3);
   await playground.getByTestId("ontology-graph-details-toggle").check();
   await expect(playground.locator(".react-flow__node")).toHaveCount(5);
+  // 展開すると詳細レーンのラベルが現れる
+  await expect(playground.getByTestId("ontology-graph-lane-detail")).toContainText("物理列・列挙値");
+  await expect(playground.getByTestId("ontology-node-card-c1")).toHaveCSS(
+    "background-color",
+    "rgb(36, 43, 53)"
+  );
   await playground.getByTestId("ontology-graph-details-toggle").uncheck();
 
   // 検索は一致ノードを強調し、非一致を減光する(opacity)
@@ -607,7 +636,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(orderCard).toHaveCSS("opacity", "1");
 
   await playground.screenshot({
-    path: testInfo.outputPath("ontology-graph-canvas.png"),
+    path: testInfo.outputPath(`ontology-graph-dark-${testInfo.project.name}.png`),
   });
 });
 
@@ -784,4 +813,47 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
   await expect(playground.locator(".react-flow__node", { hasText: "顧客" })).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "注文" })).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+test("業務概念→物理表の対応エッジは縦ハンドルで自己ループしない + FK はカーディナリティ常時表示", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: employeeOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  // maps_to(業務概念→物理表)エッジは縦方向ハンドル(下→上)で接続される
+  const mappingEdge = playground.locator(
+    '.react-flow__edge[data-testid="rf__edge-employee-maps-to"]'
+  );
+  // 縦優勢ルーティング → smoothstep エッジとして描画される(SVG <g> は visibility 判定不可)
+  await expect(mappingEdge).toHaveClass(/react-flow__edge-smoothstep/);
+  const path = playground.locator(
+    '[data-testid="rf__edge-employee-maps-to"] path.react-flow__edge-path'
+  );
+  const d = await path.getAttribute("d");
+  // 始点と終点の座標: 縦接続なら y 差が x 差より大きい
+  const points = [...(d ?? "").matchAll(/(-?\d+(?:\.\d+)?)[, ](-?\d+(?:\.\d+)?)/g)];
+  expect(points.length).toBeGreaterThanOrEqual(2);
+  const [startX, startY] = points[0]!.slice(1).map(Number);
+  const [endX, endY] = points[points.length - 1]!.slice(1).map(Number);
+  expect(Math.abs(endY - startY)).toBeGreaterThan(Math.abs(endX - startX));
+});
+
+test("FK エッジは hover なしでカーディナリティ短縮ラベルを常時表示する", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  // many_to_one の FK は hover なしで "N:1" を表示する(ラベルはエッジ SVG 内の text)
+  await expect(
+    playground.locator('[data-testid="rf__edge-employee-department-fk"]')
+  ).toContainText("N:1");
+  // maps_to(対応)エッジは点線で FK と区別される
+  const mappingPath = playground.locator(
+    '[data-testid="rf__edge-employee-maps-to"] path.react-flow__edge-path'
+  );
+  await expect(mappingPath).toHaveAttribute("style", /dasharray/i);
 });

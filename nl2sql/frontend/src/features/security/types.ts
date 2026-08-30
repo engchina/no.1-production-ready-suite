@@ -109,6 +109,12 @@ export interface SecurityUser {
   is_bootstrap_admin: boolean;
 }
 
+export interface SecurityUserDeleteResult {
+  deleted: boolean;
+  user_uuid: string;
+  login_user_id: string;
+}
+
 export interface AssignedRole {
   role_id: string;
   role_code: string;
@@ -128,6 +134,12 @@ export interface SecurityRole {
   permissions: string[];
   data_entitlements: DataEntitlement[];
   allowed_profile_ids: string[];
+}
+
+export interface SecurityRoleDeleteResult {
+  deleted: boolean;
+  role_id: string;
+  role_code: string;
 }
 
 export interface ProfileAccessProfile {
@@ -152,7 +164,18 @@ export interface DeepSecRoleEntitlements {
 
 export interface DeepSecDataEntitlementPreview {
   role_id: string;
+  version: number;
   data_entitlements: DataEntitlement[];
+  cleanup_sql: string[];
+  checksum: string;
+}
+
+export interface DeepSecDataEntitlementApplyResult {
+  role: DeepSecRoleEntitlements;
+  status: string;
+  checksum: string;
+  cleanup_count: number;
+  applied_count: number;
 }
 
 export interface PermissionDefinition {

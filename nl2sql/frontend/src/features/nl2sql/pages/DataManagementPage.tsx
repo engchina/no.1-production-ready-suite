@@ -4,19 +4,22 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, RefreshCw, Table2, Trash2, Upload } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
+
+import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import { INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
@@ -50,12 +53,16 @@ import {
   type DbObjectPickerItem,
 } from "../components/DbObjectManagementShared";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
 import {
   nl2sqlIncrementalKeys,
   useDbAdminObjects,
   useSchemaRefreshJob,
   useSelectAiDbProfileRefreshJob,
-  useStartSchemaRefresh,
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage, type DbAdminObjectCounts } from "../dbAdminObjectCounts";
@@ -112,7 +119,7 @@ export function DataManagementPage() {
   const [activeView, setActiveView] = useState<ActiveView>("preview");
   const [previewObject, setPreviewObject] = useState("");
   const [previewObjectSearch, setPreviewObjectSearch] = useState("");
-  const [previewObjectOwnerFilter, setPreviewObjectOwnerFilter] = useState("all");
+  const [previewObjectOwnerPrefix, setPreviewObjectOwnerPrefix] = useState("");
   const [previewObjectKindFilter, setPreviewObjectKindFilter] = useState<PreviewObjectKindFilter>("all");
   const [previewObjectSort, setPreviewObjectSort] = useState<DbObjectPickerSortState>(DEFAULT_OBJECT_PICKER_SORT);
   const [preview, setPreview] = useState<DbAdminDataPreviewData | null>(null);
@@ -161,6 +168,7 @@ export function DataManagementPage() {
   const previewObjectManualSelection = useRef(false);
   const csvTableManualSelection = useRef(false);
   const debouncedObjectSearch = useDebouncedValue(previewObjectSearch, 250);
+  const debouncedObjectOwnerPrefix = useDebouncedValue(previewObjectOwnerPrefix, 250);
   const debouncedCsvTableSearch = useDebouncedValue(csvTableSearch, 250);
   const baseObjectsQuery = useDbAdminObjects("", "all", "all");
   const csvTablesQuery = useDbAdminObjects(debouncedCsvTableSearch, "table", "all");
@@ -168,9 +176,10 @@ export function DataManagementPage() {
     debouncedObjectSearch,
     previewObjectKindFilter,
     "all",
-    previewObjectOwnerFilter === "all" ? "" : previewObjectOwnerFilter
+    debouncedObjectOwnerPrefix,
+    "name_comment"
   );
-  const startSchemaRefresh = useStartSchemaRefresh();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
   const schemaJobQuery = useSchemaRefreshJob(schemaJobId);
   const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
@@ -209,18 +218,6 @@ export function DataManagementPage() {
   );
   const firstCsvTablePage = csvTablesQuery.data?.pages[0];
   const csvTableCount = dbAdminObjectCountsFromPage(firstCsvTablePage, csvTableItems).totalCount;
-  const previewOwnerOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          baseObjectPages
-            .flatMap((page) => page.items)
-            .map((item) => item.owner.trim())
-            .filter(Boolean)
-        )
-      ).sort((left, right) => left.localeCompare(right, "ja")),
-    [baseObjectPages]
-  );
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
     return previewObjectItems.map((item) => ({
@@ -238,10 +235,10 @@ export function DataManagementPage() {
       filterPreviewObjects(
         previewObjects,
         previewObjectSearch,
-        previewObjectOwnerFilter,
+        previewObjectOwnerPrefix,
         previewObjectKindFilter
       ),
-    [previewObjects, previewObjectKindFilter, previewObjectOwnerFilter, previewObjectSearch]
+    [previewObjects, previewObjectKindFilter, previewObjectOwnerPrefix, previewObjectSearch]
   );
   const previewObjectPickerItems = useMemo(
     () =>
@@ -351,7 +348,6 @@ export function DataManagementPage() {
       completedSchemaJob.current = `${job.job_id}:${job.status}`;
       setSchemaJobError("");
       setSchemaJobNeedsFull(false);
-      toast.success(t("dataMgmt.schemaJob.done"));
       void baseObjectsQuery.refetch();
       void csvTablesQuery.refetch();
       void previewObjectsQuery.refetch();
@@ -416,7 +412,7 @@ export function DataManagementPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
       setDbProfileRefreshError(message);
-      toast.error(message);
+      toastError(message);
     }
   };
 
@@ -425,9 +421,8 @@ export function DataManagementPage() {
     setSchemaJobNeedsFull(false);
     completedSchemaJob.current = "";
     try {
-      const job = await startSchemaRefresh.mutateAsync();
+      const job = await sharedSchemaRefresh.start();
       setSchemaJobId(job.job_id);
-      toast.success(t("dataMgmt.schemaJob.accepted"));
       if (!job.job_id && job.status === "done") await refreshObjects();
     } catch (error) {
       setSchemaJobError(apiErrorMessage(error, "dataMgmt.schemaJob.submitError"));
@@ -444,6 +439,7 @@ export function DataManagementPage() {
       setSchemaJobError("");
       setSchemaJobNeedsFull(false);
       setSchemaJobId(result.schema_refresh_job_id);
+      sharedSchemaRefresh.track(result.schema_refresh_job_id);
       return;
     }
     if (result.schema_refresh_required) {
@@ -723,13 +719,10 @@ export function DataManagementPage() {
       ? objectListLoadMoreErrorMessage(csvTablesQuery.error)
       : "";
   const firstObjectPage = baseObjectPages[0];
-  const schemaJob = schemaJobQuery.data ?? null;
   const visibleSchemaJobError = schemaJobQuery.error
     ? apiErrorMessage(schemaJobQuery.error, "dataMgmt.schemaJob.error")
-    : schemaJobError;
-  const schemaRefreshing =
-    !schemaJobQuery.error &&
-    (startSchemaRefresh.isPending || schemaJob?.status === "pending" || schemaJob?.status === "running");
+    : schemaJobError || sharedSchemaRefresh.error;
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const objectRefreshing =
     ((baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
       (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
@@ -752,14 +745,7 @@ export function DataManagementPage() {
               })
             : undefined
         }
-        status={
-          schemaJob && schemaJob.status !== "done" ? (
-            <PageHeaderStatusBadge
-              variant={schemaJob.status === "error" ? "danger" : "info"}
-              label={schemaJobLabel(schemaJob)}
-            />
-          ) : undefined
-        }
+        status={<SchemaRefreshHeaderStatus testId="data-management-schema-refresh-status" />}
         actions={[
           {
             id: "refresh-data",
@@ -810,15 +796,13 @@ export function DataManagementPage() {
             ) : null
           }
         />
-        {objectRefreshing || schemaRefreshing ? (
+        {schemaRefreshing ? (
+          <SchemaRefreshProcessing testId="data-management-workspace-processing" />
+        ) : objectRefreshing ? (
           <ProcessingIndicator
             active
-            label={
-              schemaRefreshing
-                ? schemaJobProcessingLabel(schemaJob, t("common.processing.schemaRefreshing"))
-                : t("common.processing.refreshing")
-            }
-            operationKey={schemaRefreshing ? schemaJobId || "schema-refresh" : "object-refresh"}
+            label={t("common.processing.refreshing")}
+            operationKey="object-refresh"
             placement="workspace"
             className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
             testId="data-management-workspace-processing"
@@ -854,8 +838,7 @@ export function DataManagementPage() {
               previewObjectPickerItems={previewObjectPickerItems}
               previewObject={previewObject}
               previewObjectSearch={previewObjectSearch}
-              previewObjectOwnerFilter={previewObjectOwnerFilter}
-              previewOwnerOptions={previewOwnerOptions}
+              previewObjectOwnerPrefix={previewObjectOwnerPrefix}
               previewObjectKindFilter={previewObjectKindFilter}
               previewObjectSort={previewObjectSort}
               loadingObjectName={previewLoadingObject}
@@ -865,7 +848,7 @@ export function DataManagementPage() {
               loadingNextPage={previewObjectsQuery.isFetchingNextPage}
               loadMoreError={previewObjectLoadMoreError}
               onPreviewObjectSearchChange={setPreviewObjectSearch}
-              onPreviewObjectOwnerFilterChange={setPreviewObjectOwnerFilter}
+              onPreviewObjectOwnerPrefixChange={setPreviewObjectOwnerPrefix}
               onPreviewObjectKindFilterChange={setPreviewObjectKindFilter}
               onPreviewObjectSortChange={(key) =>
                 setPreviewObjectSort((current) => nextObjectPickerSort(current, key))
@@ -1069,8 +1052,7 @@ function PreviewControlsPanel({
   previewObjectPickerItems,
   previewObject,
   previewObjectSearch,
-  previewObjectOwnerFilter,
-  previewOwnerOptions,
+  previewObjectOwnerPrefix,
   previewObjectKindFilter,
   previewObjectSort,
   loadingObjectName,
@@ -1080,7 +1062,7 @@ function PreviewControlsPanel({
   loadingNextPage,
   loadMoreError,
   onPreviewObjectSearchChange,
-  onPreviewObjectOwnerFilterChange,
+  onPreviewObjectOwnerPrefixChange,
   onPreviewObjectKindFilterChange,
   onPreviewObjectSortChange,
   onShowPreview,
@@ -1092,8 +1074,7 @@ function PreviewControlsPanel({
   previewObjectPickerItems: DbObjectPickerItem[];
   previewObject: string;
   previewObjectSearch: string;
-  previewObjectOwnerFilter: string;
-  previewOwnerOptions: string[];
+  previewObjectOwnerPrefix: string;
   previewObjectKindFilter: PreviewObjectKindFilter;
   previewObjectSort: DbObjectPickerSortState;
   loadingObjectName: string;
@@ -1103,7 +1084,7 @@ function PreviewControlsPanel({
   loadingNextPage: boolean;
   loadMoreError: string;
   onPreviewObjectSearchChange: (value: string) => void;
-  onPreviewObjectOwnerFilterChange: (value: string) => void;
+  onPreviewObjectOwnerPrefixChange: (value: string) => void;
   onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
   onPreviewObjectSortChange: (key: DbObjectPickerSortKey) => void;
   onShowPreview: (objectName: string) => void;
@@ -1113,7 +1094,7 @@ function PreviewControlsPanel({
 }) {
   const hasActiveFilter =
     Boolean(previewObjectSearch.trim()) ||
-    previewObjectOwnerFilter !== "all" ||
+    Boolean(previewObjectOwnerPrefix.trim()) ||
     previewObjectKindFilter !== "all";
 
   return (
@@ -1135,27 +1116,18 @@ function PreviewControlsPanel({
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
         <div className="grid gap-2">
           <DbObjectSelectorToolbar
-            searchLabel={t("dataMgmt.preview.search")}
-            searchPlaceholder={t("dataMgmt.preview.searchPlaceholder")}
+            searchLabel={t("dbAdmin.search.label")}
+            searchPlaceholder={t("dbAdmin.search.placeholder")}
             searchValue={previewObjectSearch}
             onSearchChange={onPreviewObjectSearchChange}
             dataTestId="data-preview-object-toolbar"
+            ownerPrefixField={{
+              label: t("dbAdmin.owner.label"),
+              placeholder: t("dbAdmin.ownerPrefix.placeholder"),
+              value: previewObjectOwnerPrefix,
+              onChange: onPreviewObjectOwnerPrefixChange,
+            }}
           >
-            <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
-              <span>{t("dataMgmt.preview.ownerFilter")}</span>
-              <select
-                value={previewObjectOwnerFilter}
-                onChange={(event) => onPreviewObjectOwnerFilterChange(event.currentTarget.value)}
-                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-              >
-                <option value="all">{t("dataMgmt.preview.ownerFilterAll")}</option>
-                {previewOwnerOptions.map((owner) => (
-                  <option key={owner} value={owner}>
-                    {owner}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
               <span>{t("dataMgmt.preview.kindFilter")}</span>
               <select
@@ -1228,19 +1200,16 @@ function PreviewControlsPanel({
 function filterPreviewObjects(
   objects: PreviewObject[],
   search: string,
-  ownerFilter: string,
+  ownerPrefix: string,
   kindFilter: PreviewObjectKindFilter
 ) {
   const q = search.trim().toLowerCase();
-  const ownerKey = ownerFilter.trim().toUpperCase();
+  const ownerPrefixKey = ownerPrefix.trim().toUpperCase();
   return objects.filter((item) => {
-    if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
+    if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
     if (kindFilter !== "all" && item.kind !== kindFilter) return false;
     if (!q) return true;
-    return [item.qualifiedName, item.name, item.comment, item.owner, previewObjectKindLabel(item.kind)]
-      .join(" ")
-      .toLowerCase()
-      .includes(q);
+    return [item.name, item.comment].join(" ").toLowerCase().includes(q);
   });
 }
 
@@ -1285,18 +1254,6 @@ function syntheticDataOperationMessage(result: SyntheticDataOperationData) {
   return result.message?.trim() || t("dataTools.error.syntheticData");
 }
 
-function schemaJobLabel(job: SchemaRefreshJob | null) {
-  if (!job) return "";
-  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
-  const progress = job.total_objects
-    ? ` ${formatNumber(job.processed_objects ?? 0)}/${formatNumber(job.total_objects)}`
-    : "";
-  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
-    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
-    progress,
-  });
-}
-
 function schemaJobRequiresFull(job: SchemaRefreshJob | null) {
   if (!job) return false;
   return (
@@ -1320,10 +1277,6 @@ function schemaJobErrorMessage(job: SchemaRefreshJob) {
   return job.error_code
     ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
     : t("dataMgmt.schemaJob.error");
-}
-
-function schemaJobProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
-  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
 }
 
 function isSelectAiDbProfileRefreshWarning(warning: string) {
@@ -2170,49 +2123,44 @@ function DbProfileRefreshNotice({
   onRefresh: () => void;
 }) {
   return (
-    <div
-      role={error ? "alert" : "status"}
-      aria-live={error ? "assertive" : "polite"}
-      className="grid min-w-0 gap-3 rounded-md border border-warning/30 bg-warning-bg p-3 text-sm text-warning"
-      data-testid="data-synthetic-db-profile-refresh-notice"
-    >
-      <div className="min-w-0 space-y-1">
-        <div className="font-semibold text-foreground">
-          {t("dataTools.syntheticData.dbProfileRefreshRequiredTitle")}
-        </div>
-        <p className="leading-6">
+    <div data-testid="data-synthetic-db-profile-refresh-notice">
+      <Banner
+        severity={error ? "danger" : "warning"}
+        title={t("dataTools.syntheticData.dbProfileRefreshRequiredTitle")}
+        action={
+          <div
+            className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
+            aria-label={t("dataTools.syntheticData.dbProfileRefreshActions")}
+          >
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loading}
+              disabled={loading}
+              onClick={onRefresh}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("profiles.action.dbProfileRefresh")}</span>
+            </Button>
+            <Link
+              to={APP_ROUTES.profiles}
+              className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
+            >
+              <span>{t("dataTools.syntheticData.openProfileManagement")}</span>
+              <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+          </div>
+        }
+      >
+        <p className="leading-6 text-foreground/90">
           {t("dataTools.syntheticData.dbProfileRefreshRequiredHint")}
         </p>
         {error ? (
-          <p className="leading-6 text-danger">
-            {error}
-          </p>
+          <p className="mt-1 leading-6 text-danger">{error}</p>
         ) : null}
-      </div>
-      <div
-        className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
-        aria-label={t("dataTools.syntheticData.dbProfileRefreshActions")}
-      >
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          className="w-full sm:w-auto"
-          loading={loading}
-          disabled={loading}
-          onClick={onRefresh}
-        >
-          <RefreshCw size={15} aria-hidden="true" />
-          <span>{t("profiles.action.dbProfileRefresh")}</span>
-        </Button>
-        <Link
-          to={APP_ROUTES.profiles}
-          className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
-        >
-          <span>{t("dataTools.syntheticData.openProfileManagement")}</span>
-          <ArrowRight size={15} aria-hidden="true" />
-        </Link>
-      </div>
+      </Banner>
     </div>
   );
 }

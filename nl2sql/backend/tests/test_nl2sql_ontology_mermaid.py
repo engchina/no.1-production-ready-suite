@@ -32,10 +32,7 @@ from app.features.nl2sql.ontology_models import (
 
 def _assert_no_inline_entity_comments(rendered: str) -> None:
     assert "{ %%" not in rendered
-    assert not any(
-        line.strip().startswith('"') and "%%" in line
-        for line in rendered.splitlines()
-    )
+    assert not any(line.strip().startswith('"') and "%%" in line for line in rendered.splitlines())
 
 
 def _column(name: str, logical_name: str, data_type: str = "NUMBER") -> SchemaColumn:
@@ -117,13 +114,9 @@ def _business_entity(ontology: SchemaOntology, status: OntologyReviewStatus) -> 
     )
 
 
-def _business_relationship(
-    ontology: SchemaOntology, status: OntologyReviewStatus
-) -> OntologyEdge:
+def _business_relationship(ontology: SchemaOntology, status: OntologyReviewStatus) -> OntologyEdge:
     orders = next(node for node in ontology.nodes if node.technical_name == "SALES.ORDERS")
-    summary = next(
-        node for node in ontology.nodes if node.technical_name == "SALES.ORDER_SUMMARY"
-    )
+    summary = next(node for node in ontology.nodes if node.technical_name == "SALES.ORDER_SUMMARY")
     return OntologyEdge(
         id="business_relationship:orders-summary",
         revision_id=ontology.revision.id,
@@ -134,9 +127,7 @@ def _business_relationship(
         cardinality=RelationshipCardinality.ONE_TO_MANY,
         join_conditions=[
             JoinCondition(
-                left=PhysicalColumnRef(
-                    owner="SALES", object_name="ORDERS", column_name="ORDER_ID"
-                ),
+                left=PhysicalColumnRef(owner="SALES", object_name="ORDERS", column_name="ORDER_ID"),
                 right=PhysicalColumnRef(
                     owner="SALES", object_name="ORDER_SUMMARY", column_name="ORDER_ID"
                 ),

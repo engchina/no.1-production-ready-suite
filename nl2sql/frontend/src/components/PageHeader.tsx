@@ -8,12 +8,12 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, type LucideIcon } from "lucide-react";
-
-import { StatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
+import { type LucideIcon } from "lucide-react";
 
 import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -220,11 +220,7 @@ export function PageActionBar({
               onClick={() => setMenuOpen((current) => !current)}
             >
               <span>{t("common.actions.more")}</span>
-              <ChevronDown
-                size={15}
-                className={cn("transition-transform", menuOpen && "rotate-180")}
-                aria-hidden="true"
-              />
+              <DisclosureChevron expanded={menuOpen} size={15} />
             </Button>
           </>
         ) : (
@@ -272,10 +268,13 @@ export function PageActionBar({
 export function PageHeaderStatusBadge({
   variant,
   label,
+  announcementLabel = label,
   testId,
 }: {
   variant: StatusVariant;
   label: string;
+  /** 頻繁に変わる件数を除外し、screen reader へ通知する安定した状態文言。 */
+  announcementLabel?: string;
   testId?: string;
 }) {
   return (
@@ -286,7 +285,10 @@ export function PageHeaderStatusBadge({
       data-page-header-status="true"
       data-testid={testId}
     >
-      <StatusBadge variant={variant} label={label} />
+      <span aria-hidden="true">
+        <StatusBadge variant={variant} label={label} />
+      </span>
+      <span className="sr-only">{announcementLabel}</span>
     </span>
   );
 }

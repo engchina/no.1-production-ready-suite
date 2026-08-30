@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertCircle,
   ArrowDownUp,
   ArrowLeft,
-  Bot,
   FileJson,
   Plus,
   RefreshCw,
@@ -15,7 +13,8 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { FieldError } from "@/components/ui/field-error";
+import { EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
@@ -25,8 +24,10 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel } from "@/components/ui/required-field";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -41,7 +42,12 @@ import {
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
 } from "../components/DbObjectManagementShared";
-import { engineLabel } from "../labels";
+import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
+import { ProfileSaveProgress } from "../components/ProfileSaveProgress";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   nl2sqlIncrementalKeys,
   getSchemaObjectSnapshot,
@@ -49,9 +55,7 @@ import {
   useProfileSummaries,
   useSchemaCatalogHead,
   useSchemaObjects,
-  useSchemaRefreshJob,
   useSelectAiDbProfileRefreshJob,
-  useStartSchemaRefresh,
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { isUserVisibleObjectName } from "../objectVisibility";
@@ -63,7 +67,6 @@ import {
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import type {
-  AssetRefreshData,
   Nl2SqlProfile,
   ProfileDeleteData,
   ProfileSummary,
@@ -689,12 +692,7 @@ function SelectAiConfigFields({
 }
 
 function RequiredFieldError({ id, children }: { id: string; children: string }) {
-  return (
-    <p id={id} role="alert" className="flex items-center gap-1.5 text-xs font-normal text-danger">
-      <AlertCircle size={14} aria-hidden="true" />
-      <span>{children}</span>
-    </p>
-  );
+  return <FieldError id={id} message={children} />;
 }
 
 function SchemaObjectOption({
@@ -878,18 +876,22 @@ function SchemaGroupedSelectionPanel({
                 className="rounded-md border border-border bg-background"
                 aria-label={t("profiles.objects.schemaGroup", { owner })}
               >
-                <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border bg-muted/15 px-2.5 py-1.5">
-                  <span className="rounded border border-border bg-card px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
-                    {owner}
-                  </span>
-                  <span className="text-xs text-muted">
-                    {t("profiles.objects.schemaCount", {
-                      selected: selectedCount,
-                      total,
-                    })}
-                  </span>
+                <div className="grid min-h-11 gap-2 border-b border-border bg-muted/15 px-2.5 py-1.5">
+                  <div
+                    className="flex min-w-0 flex-wrap items-center gap-2"
+                    data-testid={`${dataTestId}-${owner.toLowerCase()}-schema-heading`}
+                  >
+                    <span className="rounded border border-border bg-card px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                      {owner}
+                    </span>
+                    <span className="text-xs text-muted">
+                      {t("profiles.objects.schemaCount", {
+                        selected: selectedCount,
+                        total,
+                      })}
+                    </span>
+                  </div>
                   <BulkSelectionActions
-                    className="ml-auto justify-end"
                     selectLabel={t("profiles.objects.selectSchemaAction")}
                     clearLabel={t("profiles.objects.clearSchema")}
                     selectAriaLabel={t("common.selection.selectGroup", { name: owner })}
@@ -968,7 +970,6 @@ function ProfileEditor({
   requiredErrors,
   oracleConfirmation,
   rebuildAgentAssets,
-  assetRefreshResults,
   oracleSyncJob,
   oracleSyncSubmissionError,
   retryingOracleSync,
@@ -1014,7 +1015,6 @@ function ProfileEditor({
   requiredErrors: ProfileRequiredErrors;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
-  assetRefreshResults: AssetRefreshData[];
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
   retryingOracleSync: boolean;
@@ -1276,7 +1276,7 @@ function ProfileEditor({
       />
 
       <ProfileSaveResultRegion
-        assetRefreshResults={assetRefreshResults}
+        rebuildAgentAssets={rebuildAgentAssets}
         oracleSyncJob={oracleSyncJob}
         oracleSyncSubmissionError={oracleSyncSubmissionError}
         retryingOracleSync={retryingOracleSync}
@@ -1287,138 +1287,30 @@ function ProfileEditor({
 }
 
 function ProfileSaveResultRegion({
-  assetRefreshResults,
+  rebuildAgentAssets,
   oracleSyncJob,
   oracleSyncSubmissionError,
   retryingOracleSync,
   onRetryOracleSync,
 }: {
-  assetRefreshResults: AssetRefreshData[];
+  rebuildAgentAssets: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
   retryingOracleSync: boolean;
   onRetryOracleSync: () => void;
 }) {
-  if (!oracleSyncJob && !oracleSyncSubmissionError && assetRefreshResults.length === 0) {
+  if (!oracleSyncJob && !oracleSyncSubmissionError) {
     return null;
   }
   return (
-    <section className="grid gap-3" data-testid="profile-save-result-region">
-      <OracleSyncStatusPanel
+    <section className="min-w-0" data-testid="profile-save-result-region">
+      <ProfileSaveProgress
         job={oracleSyncJob}
         submissionError={oracleSyncSubmissionError}
+        rebuildAgentAssets={rebuildAgentAssets}
         retrying={retryingOracleSync}
         onRetry={onRetryOracleSync}
       />
-      {assetRefreshResults.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2" aria-label={t("profiles.oracle.assets.lastRefresh")}>
-          {assetRefreshResults.map((result) => (
-            <AssetStatusPanel key={result.engine} result={result} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function AssetStatusPanel({ result }: { result: AssetRefreshData }) {
-  return (
-    <section
-      className="grid gap-3 rounded-md border border-border bg-background p-3"
-      data-testid={`profile-asset-status-${result.engine}`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2">
-          <Bot size={17} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
-          <div className="min-w-0">
-            <p className="font-semibold text-foreground">{engineLabel(result.engine)}</p>
-            <p className="mt-1 text-xs text-muted">
-              {result.refreshed_at ? new Date(result.refreshed_at).toLocaleString("ja-JP") : "-"}
-            </p>
-          </div>
-        </div>
-        <StatusBadge variant={result.refreshed ? "success" : "warning"} label={result.status} />
-      </div>
-      <dl className="grid gap-2 text-sm">
-        {Object.entries(result.asset_names).map(([name, value]) => (
-          <div key={name} className="grid min-w-0 gap-1 rounded-md bg-card p-2">
-            <dt className="text-xs font-medium uppercase text-muted">{name}</dt>
-            <dd className="break-all font-mono text-xs text-foreground">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      {result.warning && (
-        <p className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
-          {result.warning}
-        </p>
-      )}
-    </section>
-  );
-}
-
-function OracleSyncStatusPanel({
-  job,
-  submissionError,
-  retrying,
-  onRetry,
-}: {
-  job: ProfileSyncJobData | null;
-  submissionError: string;
-  retrying: boolean;
-  onRetry: () => void;
-}) {
-  if (!job && !submissionError) return null;
-  const failed = job?.status === "failed" || Boolean(submissionError);
-  const statusVariant =
-    job?.status === "succeeded"
-      ? "success"
-      : failed
-        ? "danger"
-        : job?.status === "cancelled"
-          ? "warning"
-          : "info";
-  const message = submissionError || job?.error_message_ja || "";
-  const failureMessage = message
-    ? `${t("profiles.oracle.sync.failed")} ${message}`
-    : t("profiles.oracle.sync.failed");
-  return (
-    <section
-      className="grid gap-2 rounded-md border border-border bg-background p-3"
-      aria-live="polite"
-      aria-atomic="true"
-      data-testid="profile-oracle-sync-status"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge
-          variant={statusVariant}
-          label={t(`profiles.oracle.sync.status.${job?.status ?? "failed"}`)}
-        />
-        {job ? (
-          <span className="text-sm text-muted">
-            {t(`profiles.oracle.sync.phase.${job.phase}`)}
-          </span>
-        ) : null}
-      </div>
-      {failed ? (
-        <PageNotice
-          notice={{
-            tone: "danger",
-            message: failureMessage,
-          }}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={retrying}
-              onClick={onRetry}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
-              <span>{t("profiles.oracle.sync.retry")}</span>
-            </Button>
-          }
-        />
-      ) : null}
     </section>
   );
 }
@@ -1456,15 +1348,14 @@ export function ProfileManagementPage() {
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
   const [profileSearch, setProfileSearch] = useState("");
   const [objectFilter, setObjectFilter] = useState("");
-  const [refreshJobId, setRefreshJobId] = useState("");
   const [profileSort, setProfileSort] = useState<ProfileListSortState>({
     key: "name",
     direction: "asc",
   });
   const [oracleConfirmation, setOracleConfirmation] = useState("");
   const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
-  const [assetRefreshResults, setAssetRefreshResults] = useState<AssetRefreshData[]>([]);
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
+  const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
   const reportedOracleSyncJobId = useRef("");
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
@@ -1486,12 +1377,8 @@ export function ProfileManagementPage() {
   const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
   const schemaOwnersQuery = useSchemaOwners();
   const schemaHeadQuery = useSchemaCatalogHead();
-  const startSchemaRefresh = useStartSchemaRefresh();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
-  const schemaRefreshJobQuery = useSchemaRefreshJob(refreshJobId);
-  const schemaRefreshStatus = schemaRefreshJobQuery.isError
-    ? "error"
-    : (schemaRefreshJobQuery.data?.status ?? "");
   const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
   const dbProfileRefreshJob = dbProfileRefreshJobQuery.data ?? null;
   const dbProfileRefreshStatus = dbProfileRefreshJobQuery.isError
@@ -1526,8 +1413,12 @@ export function ProfileManagementPage() {
   );
   const profilesLoaded = !profilesQuery.isPending;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
+  // API 応答が想定外の形でも一覧画面全体を落とさない(配列以外は空扱い)。
+  const profileAccessProfiles = Array.isArray(profileAccessProfilesQuery.data)
+    ? profileAccessProfilesQuery.data
+    : [];
   const selectedProfileAccessProfile =
-    profileAccessProfilesQuery.data?.find((profile) => profile.id === selectedProfile?.id) ?? null;
+    profileAccessProfiles.find((profile) => profile.id === selectedProfile?.id) ?? null;
   const oracleSyncJob = oracleSyncJobQuery.data ?? null;
 
   const tableObjects = useMemo(
@@ -1592,6 +1483,7 @@ export function ProfileManagementPage() {
   const selectProfile = (profile: ProfileSummary) => {
     setMessage("");
     setOracleSyncJobId("");
+    setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: profile.id });
@@ -1621,10 +1513,9 @@ export function ProfileManagementPage() {
 
   const runSchemaRefresh = async () => {
     try {
-      const job = await startSchemaRefresh.mutateAsync();
-      setRefreshJobId(job.job_id);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("profiles.schemaRefresh.error"));
+      await sharedSchemaRefresh.start();
+    } catch {
+      // 共通 Coordinator が失敗状態と Toast を一度だけ管理する。
     }
   };
 
@@ -1640,7 +1531,7 @@ export function ProfileManagementPage() {
         err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
       setDbProfileRefreshError(message);
       setDbProfileRefreshNeedsFull(true);
-      toast.error(message);
+      toastError(message);
     }
   };
 
@@ -1666,21 +1557,6 @@ export function ProfileManagementPage() {
   );
 
   useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    if (job.status === "done") {
-      toast.success(
-        t("profiles.schemaRefresh.done", {
-          changed: job.changed_objects,
-          version: job.catalog_version,
-        })
-      );
-    } else if (job.status === "error") {
-      toast.error(t("profiles.schemaRefresh.error"));
-    }
-  }, [schemaRefreshJobQuery.data?.status]);
-
-  useEffect(() => {
     const job = dbProfileRefreshJobQuery.data;
     if (!job) return;
     if (job.status === "done") {
@@ -1697,7 +1573,7 @@ export function ProfileManagementPage() {
       const message = dbProfileRefreshRequiredMessage(job.error_code, job.error_message);
       setDbProfileRefreshError(message);
       setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
-      toast.error(message);
+      toastError(message);
     }
   }, [dbProfileRefreshJobQuery.data?.status, queryClient]);
 
@@ -1717,7 +1593,6 @@ export function ProfileManagementPage() {
     if (!editTargetKey) return;
     setForm(selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm());
     setOracleConfirmation("");
-    setAssetRefreshResults([]);
     setNameError(null);
     setRequiredErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1729,19 +1604,13 @@ export function ProfileManagementPage() {
     if (reportedOracleSyncJobId.current === job.job_id) return;
     reportedOracleSyncJobId.current = job.job_id;
     if (job.status === "succeeded") {
-      if (job.agent_result) {
-        setAssetRefreshResults((current) => [
-          job.agent_result as AssetRefreshData,
-          ...current.filter((item) => item.engine !== job.agent_result?.engine),
-        ]);
-      }
       const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
       if (!trackingRefresh) {
         void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
       }
       toast.success(t("profiles.oracle.sync.succeeded"));
     } else if (job.status === "failed") {
-      toast.error(t("profiles.oracle.sync.failed"));
+      toastError(t("profiles.oracle.sync.failed"));
     }
   }, [oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal]);
 
@@ -1815,6 +1684,7 @@ export function ProfileManagementPage() {
   const startNew = () => {
     setMessage("");
     setOracleSyncJobId("");
+    setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: "new" });
@@ -1872,7 +1742,7 @@ export function ProfileManagementPage() {
         };
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("profiles.error.load"));
+      toastError(error instanceof Error ? error.message : t("profiles.error.load"));
     }
   };
 
@@ -1886,6 +1756,9 @@ export function ProfileManagementPage() {
     }
     setNameError(null);
     setRequiredErrors({});
+    setOracleSyncJobId("");
+    setOracleSyncSubmissionError("");
+    reportedOracleSyncJobId.current = "";
     setLoading("save");
     let saved: Nl2SqlProfile;
     try {
@@ -1903,13 +1776,14 @@ export function ProfileManagementPage() {
       });
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
       setForm(profileToForm(normalizeProfile(saved)));
+      setOracleSyncProfileId(saved.id);
       setRequiredErrors({});
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
       }
       toast.success(t("profiles.message.saved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
+      toastError(err instanceof Error ? err.message : t("profiles.error.save"));
       setLoading("");
       return;
     }
@@ -1931,19 +1805,20 @@ export function ProfileManagementPage() {
       );
       reportedOracleSyncJobId.current = "";
       setOracleSyncJobId(job.job_id);
+      setOracleSyncProfileId(job.profile_id);
       queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
     } catch (err) {
       setOracleSyncSubmissionError(
         err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
       );
-      toast.error(t("profiles.oracle.sync.savedButFailed"));
+      toastError(t("profiles.oracle.sync.savedButFailed"));
     } finally {
       setLoading("");
     }
   };
 
   const retryOracleSync = async () => {
-    const profileId = oracleSyncJob?.profile_id || selectedProfile?.id;
+    const profileId = oracleSyncJob?.profile_id || oracleSyncProfileId || selectedProfile?.id;
     if (!profileId) return;
     setLoading("retry-oracle-sync");
     try {
@@ -1963,6 +1838,7 @@ export function ProfileManagementPage() {
       setOracleSyncSubmissionError("");
       reportedOracleSyncJobId.current = "";
       setOracleSyncJobId(job.job_id);
+      setOracleSyncProfileId(job.profile_id);
       queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
     } catch (err) {
       setOracleSyncSubmissionError(
@@ -2021,7 +1897,7 @@ export function ProfileManagementPage() {
         err instanceof ApiError && err.status === 502
           ? t("profiles.error.deleteOracleCleanup")
           : t("profiles.error.delete");
-      toast.error(err instanceof Error && err.message ? err.message : fallback);
+      toastError(err instanceof Error && err.message ? err.message : fallback);
     } finally {
       setLoading("");
     }
@@ -2067,7 +1943,6 @@ export function ProfileManagementPage() {
       requiredErrors={requiredErrors}
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
-      assetRefreshResults={assetRefreshResults}
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
       retryingOracleSync={loading === "retry-oracle-sync"}
@@ -2097,26 +1972,22 @@ export function ProfileManagementPage() {
       onRetryOracleSync={() => void retryOracleSync()}
     />
   );
-  const schemaRefreshing =
-    schemaRefreshStatus === "pending" || schemaRefreshStatus === "running";
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const profileListRefreshing = profilesQuery.isFetching && !profilesQuery.isFetchingNextPage;
-  const profileWorkspaceProcessing =
-    loading === "load" || profileListRefreshing || schemaRefreshing || dbProfileRefreshing ? (
+  const profileWorkspaceProcessing = schemaRefreshing ? (
+      <SchemaRefreshProcessing testId="profile-management-workspace-processing" />
+    ) : loading === "load" || profileListRefreshing || dbProfileRefreshing ? (
       <ProcessingIndicator
         active
         label={
           dbProfileRefreshing
             ? dbProfileRefreshProcessingLabel(dbProfileRefreshJob)
-            : schemaRefreshing
-              ? t("common.processing.schemaRefreshing")
-              : t("common.processing.refreshing")
+            : t("common.processing.refreshing")
         }
         operationKey={
           dbProfileRefreshing
             ? dbProfileRefreshJobId || "db-profile-refresh"
-            : schemaRefreshing
-              ? refreshJobId || "schema-refresh"
-              : "profile-refresh"
+            : "profile-refresh"
         }
         placement="workspace"
         className="rounded-md border border-border bg-background px-3 py-2"
@@ -2129,12 +2000,11 @@ export function ProfileManagementPage() {
     (profiles.length > 0 || loading === "load" || schemaRefreshing || dbProfileRefreshing);
   const headerDbProfileRefreshStatus =
     dbProfileRefreshing || dbProfileRefreshStatus === "error" ? dbProfileRefreshStatus : "";
-  const headerSchemaRefreshStatus =
-    schemaRefreshing || schemaRefreshStatus === "error" ? schemaRefreshStatus : "";
-  const headerRefreshStatus = headerDbProfileRefreshStatus || headerSchemaRefreshStatus;
-  const headerRefreshIsDbProfile = Boolean(headerDbProfileRefreshStatus);
+  const headerRefreshStatus = headerDbProfileRefreshStatus;
   const workspaceNotice = dbProfileRefreshError
     ? { tone: "danger" as const, message: dbProfileRefreshError }
+    : sharedSchemaRefresh.error
+      ? { tone: "danger" as const, message: sharedSchemaRefresh.error }
     : message
       ? { tone: "danger" as const, message: `${message} ${t("profiles.error.retryHint")}` }
       : null;
@@ -2163,14 +2033,12 @@ export function ProfileManagementPage() {
         title={t("nav.profiles")}
         subtitle={t("profiles.subtitle")}
         status={
-          activeView === "list" && headerRefreshStatus ? (
+          activeView === "list" && (schemaRefreshing || sharedSchemaRefresh.error) ? (
+            <SchemaRefreshHeaderStatus testId="profile-management-schema-refresh-status" />
+          ) : activeView === "list" && headerRefreshStatus ? (
             <PageHeaderStatusBadge
               variant={headerRefreshStatus === "error" ? "danger" : "info"}
-              label={
-                headerRefreshIsDbProfile
-                  ? t(`profiles.dbProfileRefresh.status.${headerRefreshStatus}`)
-                  : t(`profiles.schemaRefresh.status.${headerRefreshStatus}`)
-              }
+              label={t(`profiles.dbProfileRefresh.status.${headerRefreshStatus}`)}
             />
           ) : undefined
         }
@@ -2198,8 +2066,8 @@ export function ProfileManagementPage() {
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
                   onClick: runSchemaRefresh,
-                  loading: schemaRefreshing || startSchemaRefresh.isPending,
-                  disabled: schemaRefreshing || startSchemaRefresh.isPending,
+                  loading: schemaRefreshing,
+                  disabled: schemaRefreshing,
                 },
                 {
                   id: "db-profile-refresh",

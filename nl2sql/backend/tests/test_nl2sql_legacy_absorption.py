@@ -323,14 +323,22 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
     assert confirmation_required.statements[0].status == "confirmation_required"
 
 
-def test_sql_execute_row_limit_accepts_zero_and_unbounded_values() -> None:
+def test_sql_execute_row_limit_is_bounded_1_to_5000() -> None:
     assert ExecuteRequest(sql="SELECT * FROM INVOICES").row_limit == 100
-    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
-    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
-    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
-    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=1).row_limit == 1
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5000).row_limit == 5000
+    # 0(無制限 fetch)は許可しない。無制限は db-admin 専用。
+    with pytest.raises(ValidationError):
+        ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0)
+    with pytest.raises(ValidationError):
+        ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001)
     with pytest.raises(ValidationError):
         ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
+
+
+def test_db_admin_execute_row_limit_keeps_zero_as_unbounded() -> None:
+    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
+    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
     with pytest.raises(ValidationError):
         DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
 
@@ -430,7 +438,7 @@ def test_select_ai_profile_mutation_requires_confirmation() -> None:
         )
     )
     assert synthetic.executed is False
-    assert synthetic.object_list == ["INVOICES", "CUSTOMERS"]
+    assert synthetic.object_list == ["APP.INVOICES", "APP.CUSTOMERS"]
     assert synthetic.row_count == 5
 
 
@@ -460,7 +468,7 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
         )
     )
 
-    assert created.allowed_views == ["ADMIN.V_INVOICE_SUMMARY"]
+    assert created.allowed_views == ["APP.V_INVOICE_SUMMARY"]
     assert created.select_ai_config.profile_name == "FINANCE_SELECT_AI"
     assert created.select_ai_config.embedding_model == "cohere.embed-v4.0"
     assert created.select_ai_config.role == "財務 SQL アシスタント"
@@ -478,7 +486,7 @@ def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
         ),
     )
 
-    assert updated.allowed_views == ["ADMIN.V_CUSTOMER_BALANCE"]
+    assert updated.allowed_views == ["APP.V_CUSTOMER_BALANCE"]
     assert updated.select_ai_config.profile_name == "FINANCE_SELECT_AI_V2"
     assert updated.select_ai_config.max_tokens == 32000
 
@@ -706,7 +714,7 @@ def test_annotations_and_synthetic_data_require_confirmation_without_oracle() ->
         SyntheticDataGenerateRequest(table_name="EMPLOYEE", row_count=5)
     )
     assert synthetic.status == "confirmation_required"
-    assert synthetic.table_name == "EMPLOYEE"
+    assert synthetic.table_name == "APP.EMPLOYEE"
     assert synthetic.row_count == 5
 
 
@@ -809,12 +817,12 @@ def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
 
     assert synthetic.status == "executed"
     assert synthetic.executed
-    assert synthetic.table_name == "INVOICES"
-    assert synthetic.object_list == ["INVOICES"]
+    assert synthetic.table_name == "APP.INVOICES"
+    assert synthetic.object_list == ["APP.INVOICES"]
     assert "operation_id" not in synthetic.engine_meta
     assert calls == [
         {
-            "table_name": "INVOICES",
+            "table_name": "APP.INVOICES",
             "object_list": [],
             "row_count": 2,
             "profile_name": "NL2SQL_PROFILE",
@@ -1318,7 +1326,7 @@ def test_comment_llm_generation_uses_enterprise_ai_and_falls_back_on_bad_json() 
     generated = service.suggest_comments(CommentSuggestionRequest(use_llm=True, max_items=2))
 
     assert generated.source == "oci_enterprise_ai"
-    assert generated.suggestions[0].object_name == "EMPLOYEE"
+    assert generated.suggestions[0].object_name == "APP.EMPLOYEE"
     assert generated.suggestions[0].suggested_comment == "社員情報のヘッダ"
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
@@ -1335,9 +1343,8 @@ def test_comment_llm_generation_uses_enterprise_ai_and_falls_back_on_bad_json() 
 
 def test_rewrite_uses_enterprise_ai_and_falls_back_on_generation_error() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
-        "請求金額を税込金額として一覧したい"
-    )
+    fake = FakeEnterpriseAiClient("請求金額を税込金額として一覧したい")
+    cast(Any, service)._enterprise_ai_client = fake
 
     rewritten = service.rewrite(
         RewriteRequest(question="請求金額を一覧で見たい", profile_id="default")
@@ -1346,6 +1353,9 @@ def test_rewrite_uses_enterprise_ai_and_falls_back_on_generation_error() -> None
     assert rewritten.source == "oci_enterprise_ai"
     assert rewritten.model == "fake-enterprise-ai"
     assert rewritten.rewritten_question == "請求金額を税込金額として一覧したい"
+    assert "schema:" not in fake.calls[0]["context"]
+    assert RewriteRequest(question="売上を確認").use_glossary is True
+    assert "use_schema" not in RewriteRequest.model_json_schema()["properties"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
         EnterpriseAiDirectError("boom")

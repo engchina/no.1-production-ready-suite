@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  AlertCircle,
-  CheckCircle2,
   Cpu,
   Database,
   Eye,
@@ -28,6 +26,10 @@ import { SelectField, type SelectFieldOption } from "@/components/ui/select-fiel
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
+import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+} from "@/components/settings/SettingsTestResultPanel";
 import {
   ApiError,
   type EnterpriseAiConfiguredModel,
@@ -237,6 +239,7 @@ export function ModelSettingsClient() {
   ) => {
     if (!draft) return;
     setErrorText("");
+    setTestResults((current) => ({ ...current, [key]: undefined }));
     setTestingKey(key);
     try {
       const result = await testMutation.mutateAsync({ ...target, settings: draft });
@@ -776,72 +779,17 @@ function ModelTestResultPanel({
   className?: string;
 }) {
   if (!result) return null;
-  const isSuccess = result.status === "success";
-  const Icon = isSuccess ? CheckCircle2 : AlertCircle;
-  const detailEntries = Object.entries(result.details);
-
   return (
-    <div
-      role={isSuccess ? "status" : "alert"}
-      className={cn(
-        "rounded-md border px-3 py-2.5 text-sm",
-        isSuccess ? "border-success/30 bg-success-bg" : "border-danger/30 bg-danger-bg",
-        className
-      )}
-    >
-      <div className="flex items-start gap-2.5">
-        <Icon
-          size={16}
-          className={cn("mt-0.5 shrink-0", isSuccess ? "text-success" : "text-danger")}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1 space-y-2">
-          <div>
-            <p className="font-medium text-foreground">{result.message}</p>
-            <p className="mt-0.5 text-xs text-muted">
-              {t("settings.model.test.elapsed")}: {result.elapsed_ms} ms
-            </p>
-          </div>
-          {detailEntries.length > 0 ? (
-            <dl className="grid gap-1 text-xs text-muted sm:grid-cols-2">
-              {detailEntries.map(([key, value]) => (
-                <div key={key} className="min-w-0">
-                  <dt className="font-medium text-foreground">{key}</dt>
-                  <dd className="break-words">{String(value)}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-          {!isSuccess && result.troubleshooting.length > 0 ? (
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-foreground">
-                {t("settings.model.test.troubleshooting")}
-              </p>
-              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-foreground/90">
-                {result.troubleshooting.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {!isSuccess ? (
-            <details className="text-xs text-foreground">
-              <summary className="cursor-pointer font-semibold">
-                {t("settings.model.test.rawError")}
-              </summary>
-              {result.error_type ? (
-                <p className="mt-1 text-muted">
-                  {t("settings.model.test.errorType")}: {result.error_type}
-                </p>
-              ) : null}
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 text-[11px] leading-relaxed text-foreground">
-                {result.raw_error || t("settings.model.test.noDetails")}
-              </pre>
-            </details>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <SettingsTestResultPanel
+      tone={result.status === "success" ? "success" : "danger"}
+      message={result.message}
+      elapsedMs={result.elapsed_ms}
+      details={toSettingsTestResultDetails(result.details)}
+      troubleshooting={result.troubleshooting}
+      errorType={result.error_type}
+      rawError={result.raw_error}
+      className={className}
+    />
   );
 }
 

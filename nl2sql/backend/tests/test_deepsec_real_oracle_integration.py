@@ -45,8 +45,7 @@ from app.settings import get_settings, reset_settings_cache
 
 pytestmark = pytest.mark.skipif(
     os.getenv("NL2SQL_RUN_DEEPSEC_INTEGRATION") != "1"
-    or os.getenv("NL2SQL_DEEPSEC_INTEGRATION_CONFIRM")
-    != "I_UNDERSTAND_DEEPSEC_DB_MUTATION",
+    or os.getenv("NL2SQL_DEEPSEC_INTEGRATION_CONFIRM") != "I_UNDERSTAND_DEEPSEC_DB_MUTATION",
     reason=(
         "実 Oracle DeepSec integration は "
         "NL2SQL_RUN_DEEPSEC_INTEGRATION=1 と "
@@ -244,17 +243,14 @@ def _preflight(real_service: Any, report: IterationReport) -> None:
             pytest.fail(
                 "migration 010 未適用です。先に "
                 "`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` "
-                "を実行してください。missing columns="
-                + ",".join(missing_columns)
+                "を実行してください。missing columns=" + ",".join(missing_columns)
             )
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT DATA_LENGTH
               FROM USER_TAB_COLUMNS
              WHERE TABLE_NAME = 'NL2SQL_APP_DATA_ENTITLEMENTS'
                AND COLUMN_NAME = 'TARGET_TYPE'
-            """
-        )
+            """)
         target_type_length = int(cursor.fetchone()[0])
         if target_type_length < len("MATERIALIZED VIEW"):
             pytest.fail(
@@ -360,32 +356,38 @@ def _assert_foundation_db_objects(real_service: Any, report: IterationReport) ->
             assert int(_query_one(cursor, sql, params)) > 0
             report.check(f"db object {name}")
 
-        assert int(
-            _query_one(
-                cursor,
-                """
+        assert (
+            int(
+                _query_one(
+                    cursor,
+                    """
                 SELECT COUNT(*) FROM DBA_DATA_ROLE_GRANTS
                  WHERE DATA_ROLE = :db_role
                    AND ROLE_TYPE = 'DATABASE ROLE'
                    AND GRANTEE = :data_role
                    AND GRANTEE_TYPE = 'DATA ROLE'
                 """,
-                {"data_role": DEEPSEC_DATA_ROLE, "db_role": DEEPSEC_DB_ROLE},
+                    {"data_role": DEEPSEC_DATA_ROLE, "db_role": DEEPSEC_DB_ROLE},
+                )
             )
-        ) > 0
-        assert int(
-            _query_one(
-                cursor,
-                """
+            > 0
+        )
+        assert (
+            int(
+                _query_one(
+                    cursor,
+                    """
                 SELECT COUNT(*) FROM DBA_DATA_ROLE_GRANTS
                  WHERE DATA_ROLE = :data_role
                    AND ROLE_TYPE = 'DATA ROLE'
                    AND GRANTEE = :data_user
                    AND GRANTEE_TYPE = 'END USER'
                 """,
-                {"data_user": data_user, "data_role": DEEPSEC_DATA_ROLE},
+                    {"data_user": data_user, "data_role": DEEPSEC_DATA_ROLE},
+                )
             )
-        ) > 0
+            > 0
+        )
         report.check("data role grant chain")
 
 
@@ -607,8 +609,9 @@ def _save_and_apply_entitlements(
 
     real_service.apply_data_entitlements(
         saved.role_id,
+        expected_version=saved.version,
         confirmation=DEEPSEC_APPLY_CONFIRMATION,
-        entitlement_ids=[item.entitlement_id for item in saved.entitlements],
+        entitlements=saved.entitlements,
         actor=actor,
     )
     applied = real_service.security.store.get_role(saved.role_id)
@@ -828,8 +831,11 @@ def _restore_snapshot(
                 continue
             restored_service.apply_data_entitlements(
                 role_id,
+                expected_version=role.version,
                 confirmation=DEEPSEC_APPLY_CONFIRMATION,
-                entitlement_ids=entitlement_ids,
+                entitlements=[
+                    item for item in role.entitlements if item.entitlement_id in entitlement_ids
+                ],
                 actor=actor,
             )
         report.restore_step("applied entitlements", "reapplied", str(len(by_role)))

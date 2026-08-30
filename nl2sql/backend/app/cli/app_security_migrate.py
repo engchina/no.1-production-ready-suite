@@ -153,9 +153,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             deepsec_entitlements_statements,
             atomic=False,
             include_sql=False,
-            ignored_error_codes=frozenset(
-                {"ORA-00957", "ORA-01430", "ORA-02264", "ORA-02293"}
-            ),
+            ignored_error_codes=frozenset({"ORA-00957", "ORA-01430", "ORA-02264", "ORA-02293"}),
         )
         _with_migration_label("010", deepsec_entitlements_results)
         deepsec_target_width_results = oracle_statement_executor.execute(
@@ -170,9 +168,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             deepsec_scope_filters_statements,
             atomic=False,
             include_sql=False,
-            ignored_error_codes=frozenset(
-                {"ORA-00957", "ORA-01430", "ORA-02264", "ORA-02443"}
-            ),
+            ignored_error_codes=frozenset({"ORA-00957", "ORA-01430", "ORA-02264", "ORA-02443"}),
         )
         _with_migration_label("012", deepsec_scope_filters_results)
         login_user_id_data_results = oracle_statement_executor.execute(
@@ -180,9 +176,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             login_user_id_data_statements,
             atomic=False,
             include_sql=False,
-            ignored_error_codes=frozenset(
-                {"ORA-00904", "ORA-00942", "ORA-00955", "ORA-01418"}
-            ),
+            ignored_error_codes=frozenset({"ORA-00904", "ORA-00942", "ORA-00955", "ORA-01418"}),
         )
         _with_migration_label("013-data", login_user_id_data_results)
         user_uuid_data_results = oracle_statement_executor.execute(

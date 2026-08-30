@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.clients.oracle_runtime import OraclePoolManager
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
@@ -15,7 +16,6 @@ from app.security.deepsec import (
     DEEPSEC_RESET_CONFIRMATION,
     PASSWORD_PLACEHOLDER,
     DeepSecService,
-    OracleManagedDataGrant,
     build_data_entitlement_statements,
     build_v001_plan,
     build_v001_reset_statements,
@@ -27,6 +27,7 @@ from app.security.domain import (
     RoleRecord,
     scope_filters_scope_code,
 )
+from app.security.schemas import DeepSecDataEntitlementApplyRequest
 from app.security.service import SecurityApiError, SecurityService
 from app.security.store import InMemorySecurityStore
 from app.settings import Settings
@@ -79,6 +80,26 @@ def _principal() -> Principal:
 def _data_grant_checksum_for_test(statements: tuple[str, ...]) -> str:
     payload = "\n-- statement --\n".join(statement.strip() for statement in statements)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def test_data_entitlement_apply_request_requires_full_snapshot() -> None:
+    payload = DeepSecDataEntitlementApplyRequest.model_validate(
+        {
+            "version": 1,
+            "confirmation": DEEPSEC_APPLY_CONFIRMATION,
+            "data_entitlements": [],
+        }
+    )
+
+    assert payload.data_entitlements == []
+    with pytest.raises(ValidationError):
+        DeepSecDataEntitlementApplyRequest.model_validate(
+            {
+                "version": 1,
+                "confirmation": DEEPSEC_APPLY_CONFIRMATION,
+                "entitlement_ids": ["entitlement-sales"],
+            }
+        )
 
 
 def _mark_deepsec_steps_applied(store: InMemorySecurityStore, settings: Settings) -> None:
@@ -528,8 +549,7 @@ def test_data_entitlement_sql_builds_login_user_id_scope_filter() -> None:
     sql = "\n".join(statements)
 
     assert (
-        "HR.ORDERS.APP_OWNER_USER_ID = "
-        "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')"
+        "HR.ORDERS.APP_OWNER_USER_ID = " "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')"
     ) in sql
     assert "HR.ORDERS.APP_OWNER_USER_ID = 'ignored'" not in sql
 
@@ -568,9 +588,7 @@ def test_data_entitlement_sql_builds_number_login_user_id_scope_filter() -> None
 
     assert "HR.ORDERS.APP_OWNER_USER_ID = CASE WHEN REGEXP_LIKE(" in sql
     assert "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID'), '^[0-9]+$')" in sql
-    assert (
-        "THEN TO_NUMBER(SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')) END"
-    ) in sql
+    assert ("THEN TO_NUMBER(SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')) END") in sql
     assert "NULLIF" not in sql
     assert "HR.ORDERS.APP_OWNER_USER_ID = ignored" not in sql
 
@@ -900,8 +918,9 @@ def test_data_entitlement_apply_rejects_predicate_over_4000_before_oracle(
     with pytest.raises(SecurityApiError, match="4000"):
         service.apply_data_entitlements(
             long_role_id,
+            expected_version=1,
             confirmation=DEEPSEC_APPLY_CONFIRMATION,
-            entitlement_ids=["entitlement-long"],
+            entitlements=store.roles[long_role_id].entitlements,
             actor=_principal(),
         )
 
@@ -1000,7 +1019,7 @@ def test_data_entitlement_apply_requires_confirmation_before_oracle(
     store = InMemorySecurityStore()
     security = SecurityService(store, settings)
     security.bootstrap()
-    _insert_real_entitlement_role(store)
+    role = _insert_real_entitlement_role(store)
     service = DeepSecService(settings, security, OraclePoolManager(settings))
     executed: list[bool] = []
 
@@ -1017,8 +1036,9 @@ def test_data_entitlement_apply_requires_confirmation_before_oracle(
     with pytest.raises(SecurityApiError, match="confirmation=ADMIN_EXECUTE"):
         service.apply_data_entitlements(
             "role-sales",
+            expected_version=role.version,
             confirmation=confirmation,
-            entitlement_ids=["entitlement-sales"],
+            entitlements=role.entitlements,
             actor=_principal(),
         )
 
@@ -1033,7 +1053,7 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
     store = InMemorySecurityStore()
     security = SecurityService(store, settings)
     security.bootstrap()
-    _insert_real_entitlement_role(store)
+    role = _insert_real_entitlement_role(store)
     executed: list[str] = []
     monkeypatch.setattr(DeepSecService, "_validate_data_entitlement", lambda *_args: None)
     monkeypatch.setattr(
@@ -1053,8 +1073,9 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
 
     result = service.apply_data_entitlements(
         "role-sales",
+        expected_version=role.version,
         confirmation=DEEPSEC_APPLY_CONFIRMATION,
-        entitlement_ids=["entitlement-sales"],
+        entitlements=role.entitlements,
         actor=_principal(),
     )
 
@@ -1102,13 +1123,14 @@ def test_data_entitlement_apply_allows_empty_policy_sync_without_sql(
 
     result = service.apply_data_entitlements(
         "role-sales",
+        expected_version=1,
         confirmation=DEEPSEC_APPLY_CONFIRMATION,
-        entitlement_ids=[],
+        entitlements=[],
         actor=_principal(),
     )
 
     assert result["status"] == "APPLIED"
-    assert result["entitlement_ids"] == []
+    assert result["applied_count"] == 0
     assert result["cleanup_count"] == 0
     assert executed == []
 
@@ -1120,17 +1142,7 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
     store = InMemorySecurityStore()
     security = SecurityService(store, settings)
     security.bootstrap()
-    store.roles["role-sales"] = RoleRecord(
-        role_id="role-sales",
-        role_code="SALES_ANALYST",
-        display_name="営業分析",
-        description="営業テーブルを参照するロール",
-        is_built_in=False,
-        archived=False,
-        version=1,
-        permissions=set(),
-        entitlements=[],
-    )
+    role = _insert_real_entitlement_role(store, data_grant_name="NL2SQL_DG_OLD")
     executed: list[str] = []
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
@@ -1145,24 +1157,20 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
     manager = OraclePoolManager(settings)
     monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
     service = DeepSecService(settings, security, manager)
-    monkeypatch.setattr(
-        service,
-        "_managed_oracle_data_grants",
-        lambda _cursor: [OracleManagedDataGrant("NL2SQL_DG_OLD", "HR", "EMPLOYEES")],
-    )
-
     result = service.apply_data_entitlements(
         "role-sales",
+        expected_version=role.version,
         confirmation=DEEPSEC_APPLY_CONFIRMATION,
-        entitlement_ids=[],
+        entitlements=[],
         actor=_principal(),
     )
 
     assert result["status"] == "APPLIED"
-    assert result["entitlement_ids"] == []
+    assert result["applied_count"] == 0
     assert result["cleanup_count"] == 2
     assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
     assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
+    assert store.get_role("role-sales").entitlements == []
 
 
 def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_target(
@@ -1172,8 +1180,12 @@ def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_ta
     store = InMemorySecurityStore()
     security = SecurityService(store, settings)
     security.bootstrap()
-    role = _insert_real_entitlement_role(store, data_grant_name="NL2SQL_DG_NEW")
-    role.entitlements[0] = replace(role.entitlements[0], entitlement_id="entitlement-new")
+    role = _insert_real_entitlement_role(store, data_grant_name="NL2SQL_DG_OLD")
+    replacement = replace(
+        role.entitlements[0],
+        entitlement_id="entitlement-new",
+        data_grant_name="",
+    )
     executed: list[str] = []
     monkeypatch.setattr(DeepSecService, "_validate_data_entitlement", lambda *_args: None)
     monkeypatch.setattr(
@@ -1189,27 +1201,225 @@ def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_ta
     manager = OraclePoolManager(settings)
     monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
     service = DeepSecService(settings, security, manager)
-    monkeypatch.setattr(
-        service,
-        "_managed_oracle_data_grants",
-        lambda _cursor: [OracleManagedDataGrant("NL2SQL_DG_OLD", "HR", "EMPLOYEES")],
-    )
-
     result = service.apply_data_entitlements(
         "role-sales",
+        expected_version=role.version,
         confirmation=DEEPSEC_APPLY_CONFIRMATION,
-        entitlement_ids=["entitlement-new"],
+        entitlements=[replacement],
         actor=_principal(),
     )
 
     assert result["status"] == "APPLIED"
-    assert result["entitlement_ids"] == ["entitlement-new"]
+    assert result["applied_count"] == 1
     assert result["cleanup_count"] == 1
     assert executed[0] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
     assert executed[1] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
-    assert executed[2] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_NEW"
-    assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_NEW" in executed[3]
+    assert "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_" in executed[2]
+    assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in executed[3]
     assert executed[4] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+
+
+def test_data_entitlement_preview_and_apply_cover_all_role_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(data_user_password="")
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role = _insert_real_entitlement_role(store)
+    second = replace(
+        role.entitlements[0],
+        entitlement_id="entitlement-orders",
+        resource_code="HR.ORDERS",
+        target_object="ORDERS",
+        scope_code="*",
+        scope_mode="ALL",
+        scope_column="",
+        data_grant_name="",
+    )
+    desired = [role.entitlements[0], second]
+    executed: list[str] = []
+    monkeypatch.setattr(DeepSecService, "_validate_data_entitlement", lambda *_args: None)
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda _conn, statements, **_kwargs: (
+            executed.extend(list(statements))
+            or [
+                {"status": "success", "index": index}
+                for index, _statement in enumerate(statements, start=1)
+            ]
+        ),
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    preview = service.preview_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=desired,
+        actor=_principal(),
+    )
+
+    assert len(preview["data_entitlements"]) == 2
+    assert preview["cleanup_sql"] == []
+    assert all(item["sql"] for item in preview["data_entitlements"])
+    assert len(preview["checksum"]) == 64
+
+    result = service.apply_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        confirmation=DEEPSEC_APPLY_CONFIRMATION,
+        entitlements=desired,
+        actor=_principal(),
+    )
+
+    stored = store.get_role(role.role_id)
+    assert result["applied_count"] == 2
+    assert result["checksum"] == preview["checksum"]
+    assert stored is not None
+    assert stored.version == 2
+    assert [item.apply_status for item in stored.entitlements] == ["APPLIED", "APPLIED"]
+    assert "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE" in executed
+    assert "GRANT SELECT ON HR.ORDERS TO NL2SQL_APP_DB_ROLE" in executed
+
+
+def test_data_entitlement_preview_includes_role_scoped_deletion_without_other_role_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role = _insert_real_entitlement_role(store, data_grant_name="NL2SQL_DG_SALES")
+    store.roles["role-audit"] = RoleRecord(
+        role_id="role-audit",
+        role_code="AUDIT_VIEWER",
+        display_name="監査閲覧",
+        description="同じ対象を利用する別ロール",
+        is_built_in=False,
+        archived=False,
+        version=1,
+        permissions=set(),
+        entitlements=[
+            replace(
+                role.entitlements[0],
+                entitlement_id="entitlement-audit",
+                role_id="role-audit",
+                data_grant_name="NL2SQL_DG_AUDIT",
+            )
+        ],
+    )
+    monkeypatch.setattr(DeepSecService, "_validate_data_entitlement", lambda *_args: None)
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda _conn, statements, **_kwargs: (
+            executed.extend(list(statements))
+            or [
+                {"status": "success", "index": index}
+                for index, _statement in enumerate(statements, start=1)
+            ]
+        ),
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    preview = service.preview_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[],
+        actor=_principal(),
+    )
+
+    assert preview["data_entitlements"] == []
+    assert preview["cleanup_sql"] == ["DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_SALES"]
+    assert "NL2SQL_DG_AUDIT" not in "\n".join(preview["cleanup_sql"])
+    stored = store.get_role(role.role_id)
+    assert stored is not None
+    assert stored.entitlements[0].data_grant_name == "NL2SQL_DG_SALES"
+
+    result = service.apply_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        confirmation=DEEPSEC_APPLY_CONFIRMATION,
+        entitlements=[],
+        actor=_principal(),
+    )
+
+    assert result["cleanup_count"] == 1
+    assert executed == ["DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_SALES"]
+    selected_after = store.get_role(role.role_id)
+    other_after = store.get_role("role-audit")
+    assert selected_after is not None
+    assert selected_after.entitlements == []
+    assert other_after is not None
+    assert other_after.entitlements[0].data_grant_name == "NL2SQL_DG_AUDIT"
+
+
+def test_data_entitlement_apply_rejects_stale_version_before_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role = _insert_real_entitlement_role(store)
+    executed: list[bool] = []
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda *_args, **_kwargs: executed.append(True),
+    )
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    with pytest.raises(SecurityApiError, match="別の操作"):
+        service.apply_data_entitlements(
+            role.role_id,
+            expected_version=role.version + 1,
+            confirmation=DEEPSEC_APPLY_CONFIRMATION,
+            entitlements=role.entitlements,
+            actor=_principal(),
+        )
+
+    assert executed == []
+    stored = store.get_role(role.role_id)
+    assert stored is not None
+    assert stored.version == role.version
+
+
+def test_data_entitlement_apply_failure_preserves_previous_role_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(data_user_password="")
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role = _insert_real_entitlement_role(store, data_grant_name="NL2SQL_DG_SALES")
+    desired = [replace(role.entitlements[0], column_names=["EMPLOYEE_ID"])]
+    monkeypatch.setattr(DeepSecService, "_validate_data_entitlement", lambda *_args: None)
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda *_args, **_kwargs: [{"status": "error", "index": 1, "error_message": "ORA-20000"}],
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError, match="ORA-20000"):
+        service.apply_data_entitlements(
+            role.role_id,
+            expected_version=role.version,
+            confirmation=DEEPSEC_APPLY_CONFIRMATION,
+            entitlements=desired,
+            actor=_principal(),
+        )
+
+    stored = store.get_role(role.role_id)
+    assert stored is not None
+    assert stored.version == role.version
+    assert stored.entitlements[0].column_names == ["EMPLOYEE_ID", "DISPLAY_NAME"]
+    assert stored.entitlements[0].data_grant_name == "NL2SQL_DG_SALES"
 
 
 def test_data_entitlement_preview_generates_sql_without_store_or_oracle_execution(
@@ -1259,6 +1469,7 @@ def test_data_entitlement_preview_generates_sql_without_store_or_oracle_executio
 
     result = service.preview_data_entitlements(
         "role-sales",
+        expected_version=1,
         entitlements=[entitlement],
         actor=_principal(),
     )
@@ -1310,6 +1521,7 @@ def test_data_entitlement_preview_id_keeps_saved_apply_sql_stable(
 
     preview = service.preview_data_entitlements(
         "role-sales",
+        expected_version=1,
         entitlements=[draft],
         actor=_principal(),
     )["data_entitlements"][0]
@@ -1373,6 +1585,7 @@ def test_data_entitlement_preview_rejects_invalid_columns() -> None:
     with pytest.raises(SecurityApiError, match="対象 object に存在しない列"):
         service.preview_data_entitlements(
             "role-sales",
+            expected_version=1,
             entitlements=[
                 DataEntitlementRecord(
                     entitlement_id="",

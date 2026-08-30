@@ -10,7 +10,7 @@ import json
 import re
 import secrets
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -56,11 +56,41 @@ from .store import (
 DataEntitlementDraft = tuple[str, str, str] | DataEntitlementRecord
 
 
+_SECURITY_ERROR_CODES = {
+    400: "SECURITY_REQUEST_INVALID",
+    401: "SECURITY_AUTHENTICATION_REQUIRED",
+    403: "SECURITY_PERMISSION_DENIED",
+    404: "SECURITY_RESOURCE_NOT_FOUND",
+    409: "SECURITY_STATE_CONFLICT",
+    429: "SECURITY_RATE_LIMITED",
+    500: "SECURITY_OPERATION_FAILED",
+    503: "SECURITY_SERVICE_UNAVAILABLE",
+}
+
+_SECURITY_CONFLICT_TITLES = {
+    "SECURITY_USER_LOGIN_ID_CONFLICT": "ユーザーを作成できません",
+    "SECURITY_ROLE_CODE_CONFLICT": "ロールを作成できません",
+}
+
+
 class SecurityApiError(RuntimeError):
-    def __init__(self, status_code: int, public_message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        public_message: str,
+        *,
+        code: str | None = None,
+        title: str | None = None,
+        retryable: bool = False,
+        field_errors: Sequence[Mapping[str, str]] = (),
+    ) -> None:
         super().__init__(public_message)
         self.status_code = status_code
         self.public_message = public_message
+        self.code = code or _SECURITY_ERROR_CODES.get(status_code, "SECURITY_API_ERROR")
+        self.title = title
+        self.retryable = retryable
+        self.field_errors = tuple(dict(item) for item in field_errors)
 
 
 class LoginFailed(SecurityApiError):
@@ -434,6 +464,43 @@ class SecurityService:
             self.store.revoke_user_sessions(user_uuid)
         return updated
 
+    def delete_user(
+        self,
+        user_uuid: str,
+        *,
+        expected_version: int,
+        actor: Principal,
+        request_id: str = "",
+        client_ip: str = "",
+    ) -> UserRecord:
+        current = self.store.get_user(user_uuid)
+        if current is None:
+            raise SecurityApiError(404, "ユーザーが見つかりません。")
+        self._assert_actor_can_manage_user(actor, current)
+        if actor.user_uuid == user_uuid:
+            raise SecurityApiError(
+                409,
+                "ログイン中のユーザー自身は削除できません。別の管理者で操作してください。",
+                code="SECURITY_USER_DELETE_SELF_FORBIDDEN",
+            )
+        if current.is_bootstrap_admin:
+            raise SecurityApiError(
+                409,
+                "初期システム管理者は削除できません。",
+                code="SECURITY_USER_DELETE_PROTECTED",
+            )
+        if current.status != "DISABLED":
+            raise SecurityApiError(
+                409,
+                "ユーザーを先に無効化してから削除してください。",
+                code="SECURITY_USER_DELETE_REQUIRES_DISABLED",
+            )
+        try:
+            self.store.delete_user(user_uuid, expected_version=expected_version)
+        except (SecurityConflict, SecurityNotFound) as exc:
+            raise self._store_error(exc) from exc
+        return current
+
     def reset_password(
         self,
         user_uuid: str,
@@ -532,7 +599,7 @@ class SecurityService:
         try:
             created = self.store.create_role(role)
         except SecurityConflict as exc:
-            raise SecurityApiError(409, str(exc)) from exc
+            raise self._store_error(exc) from exc
         return created
 
     def update_role(
@@ -617,6 +684,45 @@ class SecurityService:
             raise self._store_error(exc) from exc
         return updated
 
+    def commit_role_data_entitlement_sync(
+        self,
+        role_id: str,
+        *,
+        expected_version: int,
+        entitlements: list[DataEntitlementRecord],
+        actor: Principal,
+    ) -> RoleRecord:
+        """Oracle 同期成功後のロール全体 Data Grant snapshot を確定する。"""
+        _ = actor
+        current = self.get_role(role_id)
+        if current is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if current.is_built_in:
+            raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。")
+        if current.archived:
+            raise SecurityApiError(409, "アーカイブ済みロールは変更できません。")
+        if current.version != expected_version:
+            raise SecurityApiError(
+                409,
+                "ロールが別の操作で更新されています。表示を更新して再試行してください。",
+            )
+        role = RoleRecord(
+            role_id=current.role_id,
+            role_code=current.role_code,
+            display_name=current.display_name,
+            description=current.description,
+            is_built_in=current.is_built_in,
+            archived=current.archived,
+            version=current.version,
+            permissions=set(current.permissions),
+            entitlements=list(entitlements),
+            allowed_profile_ids=set(current.allowed_profile_ids),
+        )
+        try:
+            return self.store.update_role(role, expected_version=expected_version)
+        except (SecurityConflict, SecurityNotFound) as exc:
+            raise self._store_error(exc) from exc
+
     def archive_role(
         self,
         role_id: str,
@@ -658,6 +764,43 @@ class SecurityService:
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
         return restored
+
+    def delete_role(
+        self,
+        role_id: str,
+        *,
+        expected_version: int,
+        actor: Principal,
+        request_id: str = "",
+        client_ip: str = "",
+    ) -> RoleRecord:
+        role = self.get_role(role_id)
+        if role is None:
+            raise SecurityApiError(404, "ロールが見つかりません。")
+        if role.is_built_in:
+            raise SecurityApiError(
+                409,
+                "組み込み SYSTEM_ADMIN ロールは削除できません。",
+                code="SECURITY_ROLE_DELETE_PROTECTED",
+            )
+        if not role.archived:
+            raise SecurityApiError(
+                409,
+                "ロールを先にアーカイブしてから削除してください。",
+                code="SECURITY_ROLE_DELETE_REQUIRES_ARCHIVED",
+            )
+        if role.entitlements:
+            raise SecurityApiError(
+                409,
+                "このロールにはデータ権限が残っています。"
+                "Deep Data Security で空の Data Grant を適用してから削除してください。",
+                code="SECURITY_ROLE_DELETE_ENTITLEMENTS_PRESENT",
+            )
+        try:
+            self.store.delete_role(role_id, expected_version=expected_version)
+        except (SecurityConflict, SecurityNotFound) as exc:
+            raise self._store_error(exc) from exc
+        return role
 
     def _matches_configured_system_admin_login_user_id(self, login_user_id: str) -> bool:
         configured_login_user_id, _ = self._ensure_configured_system_admin_ready()
@@ -743,9 +886,7 @@ class SecurityService:
     def _configured_system_admin_token_key(self) -> bytes:
         configured_login_user_id, configured_password = self._ensure_configured_system_admin_ready()
         configured_secret = (
-            f"{self.settings.service_name}:"
-            f"{configured_login_user_id}:"
-            f"{configured_password}"
+            f"{self.settings.service_name}:" f"{configured_login_user_id}:" f"{configured_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 
@@ -955,7 +1096,7 @@ class SecurityService:
     def _data_entitlement_records(
         cls,
         role_id: str,
-        entitlements: list[DataEntitlementDraft],
+        entitlements: Sequence[DataEntitlementDraft],
         *,
         current_entitlements: list[DataEntitlementRecord] | None = None,
     ) -> list[DataEntitlementRecord]:
@@ -1101,6 +1242,25 @@ class SecurityService:
     def _store_error(exc: Exception) -> SecurityApiError:
         if isinstance(exc, SecurityNotFound):
             return SecurityApiError(404, str(exc))
+        if isinstance(exc, SecurityConflict):
+            field_errors = (
+                (
+                    {
+                        "pointer": exc.pointer,
+                        "code": exc.field_code,
+                        "message": str(exc),
+                    },
+                )
+                if exc.pointer
+                else ()
+            )
+            return SecurityApiError(
+                409,
+                str(exc),
+                code=exc.code,
+                title=_SECURITY_CONFLICT_TITLES.get(exc.code),
+                field_errors=field_errors,
+            )
         return SecurityApiError(409, str(exc))
 
 

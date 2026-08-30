@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Header, Query, Request, Response
 from pr_backend_core import ApiResponse
 
 from app.api.concurrency import run_sync_io
@@ -16,6 +18,7 @@ from .schemas import (
     CurrentUserData,
     DeepSecApplyRequest,
     DeepSecConfigUpdate,
+    DeepSecDataEntitlementApplyData,
     DeepSecDataEntitlementApplyRequest,
     DeepSecDataEntitlementPreviewData,
     DeepSecDataEntitlementPreviewRequest,
@@ -31,11 +34,13 @@ from .schemas import (
     RoleArchiveRequest,
     RoleCreateRequest,
     RoleData,
+    RoleDeleteData,
     RoleRestoreRequest,
     RoleUpdateRequest,
     UserCreateData,
     UserCreateRequest,
     UserData,
+    UserDeleteData,
     UserUpdateRequest,
     VersionRequest,
 )
@@ -71,6 +76,34 @@ def _roles_by_id() -> dict[str, RoleRecord]:
 
 def _user_data(user: UserRecord) -> UserData:
     return UserData.from_record(user, roles_by_id=_roles_by_id())
+
+
+def _expected_version(if_match: str | None) -> int:
+    from .service import SecurityApiError
+
+    if if_match is None or not if_match.strip():
+        raise SecurityApiError(
+            428,
+            "削除には If-Match header で現在のバージョンを指定してください。"
+            "表示を更新して再試行してください。",
+            code="SECURITY_VERSION_REQUIRED",
+        )
+    normalized = if_match.strip()
+    if normalized.startswith("W/"):
+        raise SecurityApiError(
+            400,
+            "If-Match header には weak ETag ではなく現在の数値バージョンを指定してください。",
+            code="SECURITY_VERSION_INVALID",
+        )
+    if normalized.startswith('"') and normalized.endswith('"'):
+        normalized = normalized[1:-1]
+    if not normalized.isdecimal() or int(normalized) < 1:
+        raise SecurityApiError(
+            400,
+            "If-Match header には現在の数値バージョンを指定してください。",
+            code="SECURITY_VERSION_INVALID",
+        )
+    return int(normalized)
 
 
 @router.post("/auth/login", response_model=ApiResponse[CurrentUserData])
@@ -212,6 +245,29 @@ def update_user(
     return ApiResponse(data=_user_data(user))
 
 
+@router.delete("/security/users/{user_uuid}", response_model=ApiResponse[UserDeleteData])
+def delete_user(
+    user_uuid: str,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> ApiResponse[UserDeleteData]:
+    actor = current_principal(request)
+    request_id, client_ip = request_context(request)
+    deleted = get_security_service().delete_user(
+        user_uuid,
+        expected_version=_expected_version(if_match),
+        actor=actor,
+        request_id=request_id,
+        client_ip=client_ip,
+    )
+    return ApiResponse(
+        data=UserDeleteData(
+            user_uuid=deleted.user_uuid,
+            login_user_id=deleted.login_user_id,
+        )
+    )
+
+
 @router.post(
     "/security/users/{user_uuid}/reset-password", response_model=ApiResponse[PasswordResetData]
 )
@@ -316,9 +372,7 @@ def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[Rol
             for item in payload.data_entitlements
         ],
         allowed_profile_ids=(
-            set(payload.allowed_profile_ids)
-            if payload.allowed_profile_ids is not None
-            else None
+            set(payload.allowed_profile_ids) if payload.allowed_profile_ids is not None else None
         ),
         actor=actor,
         request_id=request_id,
@@ -362,9 +416,7 @@ def update_role(
             for item in payload.data_entitlements
         ],
         allowed_profile_ids=(
-            set(payload.allowed_profile_ids)
-            if payload.allowed_profile_ids is not None
-            else None
+            set(payload.allowed_profile_ids) if payload.allowed_profile_ids is not None else None
         ),
         actor=actor,
         request_id=request_id,
@@ -445,6 +497,29 @@ def restore_role(
     return ApiResponse(data=RoleData.from_record(role))
 
 
+@router.delete("/security/roles/{role_id}", response_model=ApiResponse[RoleDeleteData])
+def delete_role(
+    role_id: str,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> ApiResponse[RoleDeleteData]:
+    actor = current_principal(request)
+    request_id, client_ip = request_context(request)
+    deleted = get_security_service().delete_role(
+        role_id,
+        expected_version=_expected_version(if_match),
+        actor=actor,
+        request_id=request_id,
+        client_ip=client_ip,
+    )
+    return ApiResponse(
+        data=RoleDeleteData(
+            role_id=deleted.role_id,
+            role_code=deleted.role_code,
+        )
+    )
+
+
 @router.get("/security/permissions", response_model=ApiResponse[list[PermissionData]])
 def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
@@ -494,6 +569,7 @@ def preview_deepsec_data_entitlements(
     return ApiResponse(
         data=get_deepsec_service().preview_data_entitlements(
             role_id,
+            expected_version=payload.version,
             entitlements=[item.to_record(role_id) for item in payload.data_entitlements],
             actor=current_principal(request),
         )
@@ -502,7 +578,7 @@ def preview_deepsec_data_entitlements(
 
 @router.post(
     "/security/deepsec/data-entitlements/{role_id}/apply",
-    response_model=ApiResponse[dict[str, object]],
+    response_model=ApiResponse[DeepSecDataEntitlementApplyData],
 )
 def apply_deepsec_data_entitlements(
     role_id: str,
@@ -512,8 +588,9 @@ def apply_deepsec_data_entitlements(
     return ApiResponse(
         data=get_deepsec_service().apply_data_entitlements(
             role_id,
+            expected_version=payload.version,
             confirmation=payload.confirmation,
-            entitlement_ids=payload.entitlement_ids,
+            entitlements=[item.to_record(role_id) for item in payload.data_entitlements],
             actor=current_principal(request),
         )
     )

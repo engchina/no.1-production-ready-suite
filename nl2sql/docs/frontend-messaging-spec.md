@@ -16,6 +16,8 @@
 3. **色だけで意味を伝えない**(`color-not-only`)。トーンごとに**必ずアイコン**を併置する。
 4. **文言はすべて i18n 経由**(`src/lib/i18n.ts` の `t()`)。コンポーネントや各チャネル API に日本語文字列を直書きしない(`ApiError.message` 等のサーバ由来文字列は可)。
 5. **メッセージは「原因 + 次の行動」**(`error-clarity` / `error-recovery`)。「失敗しました」だけで終えない。
+6. **同じ失敗の「原因 + 次の行動」は 1 つの標準チャネルだけを正本にする。** 多項目フォームの
+   「エラー概要 + FieldError」は例外として認めるが、同じ文を FieldError と FormStatus/Toast に重複表示しない。
 
 ---
 
@@ -29,6 +31,17 @@
 | 4 | **Banner(Alert)** | ページ/セクション常設 | 永続 or 手動閉じ | 非ブロッキング | 「接続未設定」「縮退モード」「保存前の警告」等の状況提示 |
 | 5 | **ConfirmDialog** | 確認ダイアログ | 応答まで | **ブロッキング** | 削除・上書き・不可逆操作の確認ゲート |
 | 6 | **State views** | 領域状態 | データ取得まで | 領域占有 | 読込(Skeleton)/空(Empty)/エラー(Error+再試行) |
+
+### エラー影響範囲による唯一の選択表
+
+| 影響範囲 | 標準チャネル | 配置・保持規則 |
+|---|---|---|
+| 単一入力欄 | `FieldError` | 入力直下。`aria-invalid` / `aria-describedby` を関連付け、送信後は最初の欄へフォーカスする。 |
+| 利用者が直前に実行した保存・作成・実行 | `FormStatus` / `ActionResultRegion` | ボタン群または結果領域の直近。再試行または関連入力の変更まで保持する。 |
+| ページ・機能が継続して利用不能 | `Banner` / `PageNotice` | ページまたは最小の影響範囲の先頭。復旧 action を添える。 |
+| データ領域の取得失敗 | `ErrorState` | 当該領域だけを占有し、再試行を提供する。全ページ障害へ昇格しない。 |
+| 固定の承載面がない非同期失敗 | danger Toast | 最後の手段。固定面と併用せず、利用者が閉じるまで保持する。 |
+| Job・step・CSV 行 | 状態/結果データ | Badge・stepper・表は状態を示す。具体的な理由は上記の標準メッセージ面 1 つにだけ出す。 |
 
 ### 決定フロー
 
@@ -57,6 +70,7 @@
 **重要な禁止事項**
 - 破壊的操作の結果通知に Toast を使うのは可。ただし**確認自体は ConfirmDialog**で行う(Toast に確認を載せない)。
 - フィールドエラーを Toast やページ上部のみで出さない(`error-placement`: 該当欄の直下に出す)。
+- `problem.field_errors` がすべて入力欄へ結び付いた場合、同じ `problem.detail` を FormStatus に再掲しない。
 - `window.alert` / `window.confirm` / `console.error` をユーザー向け通知に使わない。
 
 ---
@@ -75,6 +89,8 @@
 ルール:
 - アイコンは `size={16}`(本文内)/ `size={24}`(State views) を基準、`aria-hidden` を付ける(意味はテキストで担保)。
 - `danger` は `role="alert"`(即時読み上げ)、他は `role="status"`(`aria-live="polite"`)。
+- Job/Workflow の大きな状態パネル全体へ `role="alert"` を付けない。新たに発生したエラー要約を
+  `Banner severity="danger"` 等の最小 live region で 1 回だけ通知する。
 - 破壊的アクションのボタンは `danger` トーンで**主アクションから視覚的に分離**する(`destructive-emphasis`)。
 
 ---
@@ -85,7 +101,8 @@
 
 - **配置**: NL2SQL では画面右下にスタック。`z-index` は `1000`(§6 参照)。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
 - **a11y**: コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない(`toast-accessibility`)。`danger` は `role="alert"`。
-- **自動消滅**: 既定 4 秒(`toast-dismiss`: 3–5s)。`danger` と action 付きは手動 + 8 秒に延長可。閉じる × ボタン必須。
+- **自動消滅**: success/info/warning は既定 4 秒(`toast-dismiss`: 3–5s)。`danger` は
+  `src/lib/toast.ts` の `toastError()` を通し、既定 `duration: 0`（利用者が閉じるまで保持）とする。閉じる × ボタン必須。
 - **アニメーション**: enter 200ms ease-out / exit 130ms ease-in(`exit-faster-than-enter`)。`prefers-reduced-motion` で無効化。
 - **Undo**: 削除・一括操作の成功 Toast には可能なら「元に戻す」action を付ける(`undo-support`)。
 - **API(実装規約)**:
@@ -95,7 +112,7 @@
 toast.success(message, opts?)
 toast.info(message, opts?)
 toast.warning(message, opts?)
-toast.error(message, opts?)      // = danger トーン
+toastError(message, opts?)      // = danger トーン。固定面がない場合のみ、既定で自動消滅しない
 // opts: { description?: string; action?: { label; onClick }; duration?: number }
 ```
 
@@ -108,6 +125,9 @@ toast.error(message, opts?)      // = danger トーン
 - **a11y**: `<input aria-invalid aria-describedby={errorId}>` ↔ `<p id={errorId} role="alert">`。送信失敗時は**最初の不正欄に自動フォーカス**(`focus-management`)。
 - 既存実装(`src/components/ui/select-field.tsx`)のパターンを正とし、共通 `<FieldError id message />` に集約する。
 - 複数エラー時はフォーム上部に**サマリ + 各欄へのアンカー**を併設してよい(`error-summary`)。ただし欄直下表示は必須。
+- サーバー検証は `problem.field_errors[].pointer` の JSON Pointer を、画面が宣言する
+  `pointer → control/field` map で結び付ける。日本語 `detail` の部分一致や正規表現で欄を推測してはならない。
+- 関連入力を変更したときはその欄のサーバーエラーだけを消す。他欄のエラーは保持し、再送信時はサーバーで再検証する。
 
 ### 3.3 FormStatus
 
@@ -117,6 +137,12 @@ toast.error(message, opts?)      // = danger トーン
   `PageNotice` / Banner へ送らない。
 - ページ初期読込、接続未設定、権限不足、対象データなしなど、特定ボタンではなくページ/セクション全体の
   状態を説明するものは従来どおり Banner / State views を使う。
+- 一時パスワード、recovery code など**一度しか表示できない資格情報**は、発行操作の直近に置く。
+  複数項目を伴う結果は `ActionResultRegion`、ユーザー管理の一時パスワードのように既存フォーム項目へ
+  対応する単一値は**明文の読み取り専用入力欄 + コピー action**で簡潔に表示する。Toast やページ先頭
+  Banner へ資格情報を載せず、別対象への移動・一覧へ戻る操作まで保持し、コピー失敗時の復旧方法を欄直下に表示する。
+- 一度しか表示できない資格情報は component のローカル state だけに保持し、URL、Query/Zustand store、
+  local/session storage、ログへ保存しない。`aria-live` は発行完了だけを通知し、資格情報そのものを自動読み上げしない。
 - TanStack Query の `mutation.isSuccess` / `isError` と連動させる。`isError` の文言は `error instanceof ApiError ? error.message : t("...loadError")` を基本形にする。
 - 成功表示は数秒後にフェードしてよいが、エラーは次操作まで残す。
 
@@ -244,6 +270,38 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 - 同じ結果を Toast と Banner/FormStatus に二重表示しない。成功の瞬間は Toast、継続する警告・復旧可能な失敗は固定面を正本とする。
 - clipboard / download / file import は Promise/HTTP の success と failure の両方を必ず扱う。
 
+### 4.3 API problem 契約（漸進互換）
+
+失敗応答は既存 envelope の `error_messages` / `error_code` を維持し、機械判定用 `problem` を追加する。
+移行期間は `application/json` のままとし、`error_messages[0]` と `problem.detail` は一致させる。
+
+```json
+{
+  "data": null,
+  "error_messages": ["入力内容に誤りがあります。該当項目を確認してください。"],
+  "warning_messages": [],
+  "error_code": "REQUEST_VALIDATION_FAILED",
+  "problem": {
+    "type": "urn:nl2sql:problem:request-validation-failed",
+    "title": "入力内容を確認してください",
+    "status": 422,
+    "detail": "入力内容に誤りがあります。該当項目を確認してください。",
+    "code": "REQUEST_VALIDATION_FAILED",
+    "request_id": "...",
+    "retryable": false,
+    "field_errors": [
+      { "pointer": "/login_user_id", "code": "already_exists", "message": "別のIDを入力してください。" }
+    ]
+  }
+}
+```
+
+- FastAPI 422、認証/権限、競合、429、503、未処理 500 は `backend/app/api/problems.py` の factory で生成する。
+- 前端の `ApiError` は `problem` / `fieldErrors` / `requestId` / `retryable` を保持し、新旧 envelope の両方を読む。
+- 分岐は `problem.code` または HTTP status だけで行う。説明用の `detail` / `message` を解析してロジックを決めない。
+- 401/403/500 と Oracle 例外は安全な日本語概要、安定 code、request ID だけを返す。raw exception、SQL、資格情報は
+  構造化ログだけへ記録し、画面や API `error_details` へ返さない。
+
 ---
 
 ## 5. アクセシビリティ チェックリスト(各チャネル共通・必須)
@@ -359,6 +417,11 @@ src/components/providers.tsx         <ConfirmProvider> + <Toaster/> を配線済
   - `<Banner>` 化: ログインエラー、文書抽出の警告、評価の閾値失敗/検証/実行エラー。
   - `<FieldError>` 化: `SelectField` 本体および OCI/アップロード保存先の各フィールドエラー(`aria-describedby` 連携を維持)。
   - `<FormStatus>` 化: コピー失敗などのアクション結果。
+- ✅ `problem` 契約と JSON Pointer field binding を導入。ユーザーID/ロールコード競合は FieldError へ結び付け、
+  入力変更時の局所クリア、最初のエラーへのフォーカス、FormStatus との重複抑止を実装。
+- ✅ 業務 TSX の直接 `role="alert"` を撤廃。Job/Workflow はパネル全体を live region にせず、標準 Banner の
+  エラー要約だけを通知する。設定診断は標準 Banner + Badge に統合し、raw backend/Oracle error を表示しない。
+- ✅ `tests/messaging-source-contract.test.ts` で直接 alert と手書き danger surface の増加を検知する。
 - ⏳ 今後の新規画面・機能は本 spec の 6 チャネルに従う。以下は **意図的に対象外**(spec の例外):
   - **状態可視化**(`StatusBadge` / `StatusPill` / `FlowStepper` のステップ表示)— 通知ではなくデータ表示。
   - **OCI 構成テストの結果パネル**(タイトル + 詳細リスト + モードチップの複合)— 専用パネルとして維持。

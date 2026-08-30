@@ -11,7 +11,6 @@ import {
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
 import { PageHeader } from "@/components/PageHeader";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import type { OperationTimestamp } from "@/lib/operationTiming";
@@ -24,9 +23,13 @@ import {
 } from "../components/DbAdminShared";
 import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
 import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
   nl2sqlIncrementalKeys,
   useSchemaRefreshJob,
-  useStartSchemaRefresh,
 } from "../incrementalQueries";
 import type { DbAdminExecuteData, SchemaRefreshJob } from "../types";
 
@@ -100,10 +103,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
     : t("dataMgmt.schemaJob.error");
 }
 
-function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
-  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
-}
-
 /** 管理者向け SQL 実行ページ。更新系 SQL は確認語・RBAC・監査を必須とする。 */
 export function AdminSqlPage() {
   const queryClient = useQueryClient();
@@ -120,19 +119,14 @@ export function AdminSqlPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const completedSchemaRefreshJob = useRef("");
-  const startSchemaRefresh = useStartSchemaRefresh();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
-  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
-  const schemaRefreshing =
-    !schemaRefreshJobQuery.error &&
-    (startSchemaRefresh.isPending ||
-      schemaRefreshJob?.status === "pending" ||
-      schemaRefreshJob?.status === "running");
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const visibleSchemaRefreshError = schemaRefreshJobQuery.error
     ? schemaRefreshJobQuery.error instanceof Error
       ? schemaRefreshJobQuery.error.message
       : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError;
+    : schemaRefreshError || sharedSchemaRefresh.error;
   const trimmedSql = sqlText.trim();
   const requiresConfirmation = Boolean(trimmedSql) && !isSingleSelectSql(trimmedSql);
   const confirmed = confirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
@@ -161,6 +155,7 @@ export function AdminSqlPage() {
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(data.schema_refresh_job_id);
+      sharedSchemaRefresh.track(data.schema_refresh_job_id);
       return true;
     }
     if (data.schema_refresh_required) {
@@ -174,7 +169,7 @@ export function AdminSqlPage() {
   const refreshSchema = async () => {
     completedSchemaRefreshJob.current = "";
     try {
-      const job = await startSchemaRefresh.mutateAsync();
+      const job = await sharedSchemaRefresh.start();
       setSchemaRefreshJobId(job.job_id);
       if (!job.job_id && job.status === "done") {
         setSchemaRefreshError("");
@@ -312,7 +307,11 @@ export function AdminSqlPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.adminSql")} subtitle={t("nl2sql.adminSqlRunner.description")} />
+      <PageHeader
+        title={t("nav.adminSql")}
+        subtitle={t("nl2sql.adminSqlRunner.description")}
+        status={<SchemaRefreshHeaderStatus testId="admin-sql-schema-refresh-status" />}
+      />
       <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-admin-sql">
         <PageNotice
           notice={
@@ -326,8 +325,8 @@ export function AdminSqlPage() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                loading={schemaRefreshing || startSchemaRefresh.isPending}
-                disabled={schemaRefreshing || startSchemaRefresh.isPending}
+                loading={schemaRefreshing}
+                disabled={schemaRefreshing}
                 onClick={() => void refreshSchema()}
               >
                 <RefreshCw size={15} aria-hidden="true" />
@@ -416,15 +415,7 @@ export function AdminSqlPage() {
             ) : null}
           </ActionResultRegion>
           {schemaRefreshing ? (
-            <ProcessingIndicator
-              active
-              label={schemaRefreshProcessingLabel(schemaRefreshJob, t("common.processing.schemaRefreshing"))}
-              operationKey={schemaRefreshJobId || "admin-sql-schema-refresh"}
-              placement="workspace"
-              className="rounded-md border border-border bg-background px-3 py-2"
-              testId="admin-sql-schema-refresh-processing"
-              activityIcon="none"
-            />
+            <SchemaRefreshProcessing testId="admin-sql-schema-refresh-processing" />
           ) : null}
         </section>
       </main>

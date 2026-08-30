@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useCallback,
   useEffect,
@@ -19,7 +20,9 @@ import {
   X,
 } from "lucide-react";
 
-import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, toast } from "@engchina/production-ready-ui";
+
+import { StatusBadge } from "@/components/ui/status-badge";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { ContentActionBar } from "@/components/ContentActionBar";
@@ -28,6 +31,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
 import { formatDateTime } from "@/lib/format";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
@@ -54,6 +58,7 @@ import {
   getOntologyPublishJob,
   listOntologyBuildJobs,
   publishOntologyRevision,
+  retryOntologyBuildJob,
   saveOntologyMarkdownDraft,
   startOntologyBuild,
 } from "./api";
@@ -152,6 +157,17 @@ function markdownStateHasDraft(
 }
 
 function buildJobMarkdownSignalMessages(job: OntologyBuildJob): string[] {
+  // 新 backend は機械可読コード MARKDOWN_DRAFT_UPDATED を付与する。
+  // 文言正規表現は旧 job(コード無し)向けの互換フォールバック。
+  const codedSignals = [
+    ...job.steps.filter((step) => step.code === "MARKDOWN_DRAFT_UPDATED").map(
+      (step) => step.detail_ja ?? ""
+    ),
+    ...(job.events ?? [])
+      .filter((event) => event.code === "MARKDOWN_DRAFT_UPDATED")
+      .map((event) => event.message_ja),
+  ].filter(Boolean);
+  if (codedSignals.length > 0) return codedSignals;
   return [
     ...job.steps.map((step) => step.detail_ja ?? ""),
     ...(job.events ?? []).map((event) => event.message_ja),
@@ -244,7 +260,13 @@ function groupBuildEvents(job: OntologyBuildJob): Map<number, BuildEventAssignme
   for (const [index, event] of (job.events ?? []).entries()) {
     if (shouldSuppressBuildEvent(event)) continue;
     const eventMs = parseTimeMs(event.at);
+    // 新 backend はイベントに帰属ステップ(event.step)を付与する。
+    // 文言/時刻ベースの推定は旧 job(step 無し)向けの互換フォールバック。
+    const codedStepIndex = event.step
+      ? job.steps.findIndex((step) => step.name === event.step)
+      : -1;
     const stepIndex =
+      (codedStepIndex >= 0 ? codedStepIndex : null) ??
       stepIndexForEventMessage(job.steps, event.message_ja) ??
       stepIndexForEventTime(job, eventMs);
     if (stepIndex === null) continue;
@@ -304,6 +326,7 @@ function BuildEventRows({ events }: { events: BuildEventAssignment[] }) {
 
 function buildStatusVariant(status: OntologyBuildJob["status"]) {
   if (status === "succeeded") return "success" as const;
+  if (status === "succeeded_with_warnings") return "warning" as const;
   if (status === "failed") return "danger" as const;
   if (status === "cancelled") return "warning" as const;
   return "pending" as const;
@@ -311,6 +334,7 @@ function buildStatusVariant(status: OntologyBuildJob["status"]) {
 
 function buildProgressTone(status: OntologyBuildJob["status"]): WorkflowProgressTone {
   if (status === "succeeded") return "success";
+  if (status === "succeeded_with_warnings") return "success";
   if (status === "failed") return "danger";
   if (status === "cancelled") return "neutral";
   return "active";
@@ -318,6 +342,8 @@ function buildProgressTone(status: OntologyBuildJob["status"]): WorkflowProgress
 
 function buildProgressMessage(status: OntologyBuildJob["status"]) {
   if (status === "succeeded") return t("profiles.ontologyBuild.progress.done");
+  if (status === "succeeded_with_warnings")
+    return t("profiles.ontologyBuild.progress.doneWithWarnings");
   if (status === "failed") return t("profiles.ontologyBuild.progress.failed");
   if (status === "cancelled") return t("profiles.ontologyBuild.progress.cancelled");
   if (status === "running") return t("profiles.ontologyBuild.progress.running");
@@ -337,7 +363,7 @@ function effectiveBuildStepStatus(
   stepStatus: OntologyBuildStep["status"]
 ): OntologyBuildStep["status"] {
   if (stepStatus !== "running" && stepStatus !== "pending") return stepStatus;
-  if (jobStatus === "succeeded") return "succeeded";
+  if (jobStatus === "succeeded" || jobStatus === "succeeded_with_warnings") return "succeeded";
   if (jobStatus === "failed") return "failed";
   if (jobStatus === "cancelled") return "skipped";
   return stepStatus;
@@ -391,17 +417,30 @@ export function OntologyBuildSection({
   const buildMarkdownRefreshSignatureRef = useRef("");
   const pollInFlightRef = useRef(false);
   const pollFailureCountRef = useRef(0);
+  const publishPollInFlightRef = useRef(false);
   // 終端(完了/失敗)通知を job ごとに一度だけ出す
   const terminalHandledRef = useRef<string | null>(null);
+  const publishTerminalHandledRef = useRef<string | null>(null);
 
   const jobRunning = job !== null && (job.status === "queued" || job.status === "running");
   const publishRunning =
     publishJob !== null &&
     ["queued", "materializing", "validating"].includes(publishJob.status);
   const jobId = job?.id ?? null;
+  const publishJobId = publishJob?.id ?? null;
+  // 新 backend は機械可読 error_code(SCHEMA_SCOPE_*)を返す。文言一致は旧 job 互換。
   const schemaScopeFailure =
     job?.status === "failed" &&
-    (job.error_message_ja?.includes("profile の対象オブジェクトを DB schema catalog に解決できません") ||
+    (job.error_code === "SCHEMA_SCOPE_UNRESOLVED" ||
+      job.steps.some(
+        (step) =>
+          step.name === "schema_context" &&
+          step.status === "failed" &&
+          (step.code === "SCHEMA_SCOPE_EMPTY" || step.code === "SCHEMA_SCOPE_AMBIGUOUS")
+      ) ||
+      job.error_message_ja?.includes(
+        "profile の対象オブジェクトを DB schema catalog に解決できません"
+      ) ||
       job.steps.some(
         (step) =>
           step.name === "schema_context" &&
@@ -428,11 +467,14 @@ export function OntologyBuildSection({
         version: String(publishedRevision.version),
       })
     : t("profiles.ontologyBuild.markdownPublishedMissing");
-  const publishedAtMeta = publishedAt
-    ? t("profiles.ontologyBuild.markdownPublishedAt", {
-        date: formatDateTime(publishedAt),
-      })
-    : "";
+  // 公開済み Markdown が無い(revision だけ公開済み)場合は公開日時を出さない。
+  // 「公開済み Markdown はまだありません」と日時が並ぶ矛盾表示を防ぐ。
+  const publishedAtMeta =
+    publishedAt && publishedMarkdown.trim()
+      ? t("profiles.ontologyBuild.markdownPublishedAt", {
+          date: formatDateTime(publishedAt),
+        })
+      : "";
 
   const markdownTabs = useMemo(
     () => [
@@ -660,6 +702,7 @@ export function OntologyBuildSection({
             setJob(latest);
           } else if (
             latest.status === "succeeded" ||
+            latest.status === "succeeded_with_warnings" ||
             latest.status === "failed" ||
             latest.status === "cancelled"
           ) {
@@ -698,6 +741,7 @@ export function OntologyBuildSection({
           setJob(next);
           const terminal =
             next.status === "succeeded" ||
+            next.status === "succeeded_with_warnings" ||
             next.status === "failed" ||
             next.status === "cancelled";
           const draftRefreshSignature = buildJobDraftRefreshSignature(next);
@@ -716,6 +760,8 @@ export function OntologyBuildSection({
             void refreshMarkdown(profileId, { reason: "build" });
             if (next.status === "succeeded") {
               toast.success(t("profiles.ontologyBuild.jobSucceeded"));
+            } else if (next.status === "succeeded_with_warnings") {
+              showNotice("warning", t("profiles.ontologyBuild.jobSucceededWithWarnings"));
             } else if (next.status === "cancelled") {
               showNotice("info", t("profiles.ontologyBuild.cancelled"));
             }
@@ -753,23 +799,30 @@ export function OntologyBuildSection({
     };
   }, [applyBuildJobMarkdownOutput, jobRunning, jobId, profileId, refreshMarkdown, showNotice]);
 
+  // publish job ポーリング(1s)。build 側と同じく in-flight ガードで GET を重ねず、
+  // 依存は publishJobId(文字列)なので毎秒の setPublishJob で interval は再生成されない。
   useEffect(() => {
-    if (!publishRunning || !publishJob) return;
+    if (!publishRunning || !publishJobId) return;
     let cancelled = false;
     let currentController: AbortController | null = null;
     const timer = window.setInterval(() => {
+      if (publishPollInFlightRef.current) return; // 応答遅延時に GET を重ねない
       currentController = new AbortController();
-      void getOntologyPublishJob(publishJob.id, { signal: currentController.signal })
+      publishPollInFlightRef.current = true;
+      getOntologyPublishJob(publishJobId, { signal: currentController.signal })
         .then((next) => {
-          if (cancelled) return;
+          if (cancelled) return; // 古い応答で新しい状態を上書きしない
           setPublishJob(next);
+          const terminal = next.status === "succeeded" || next.status === "failed";
+          if (!terminal || publishTerminalHandledRef.current === publishJobId) return;
+          publishTerminalHandledRef.current = publishJobId;
           if (next.status === "succeeded") {
             if (profileIdRef.current) {
               void refreshMarkdown(profileIdRef.current, { reason: "background" });
             }
             toast.success(t("profiles.ontologyBuild.published"));
             void onPublished?.();
-          } else if (next.status === "failed") {
+          } else {
             showNotice(
               "danger",
               next.error_message_ja || t("profiles.ontologyBuild.error.publish")
@@ -778,16 +831,15 @@ export function OntologyBuildSection({
         })
         .catch((err) => {
           if (cancelled || isAbortError(err)) return;
-          if (!cancelled) {
-            showNotice(
-              "danger",
-              err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish")
-            );
-            setPublishJob(null);
-          }
+          showNotice(
+            "danger",
+            err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish")
+          );
+          setPublishJob(null);
         })
         .finally(() => {
           currentController = null;
+          publishPollInFlightRef.current = false;
         });
     }, POLL_INTERVAL_MS);
     return () => {
@@ -795,7 +847,7 @@ export function OntologyBuildSection({
       window.clearInterval(timer);
       currentController?.abort();
     };
-  }, [onPublished, publishJob, publishRunning, refreshMarkdown, showNotice]);
+  }, [onPublished, publishJobId, publishRunning, refreshMarkdown, showNotice]);
 
   if (!profileId) {
     return (
@@ -848,6 +900,29 @@ export function OntologyBuildSection({
           : err instanceof Error
             ? err.message
             : t("profiles.ontologyBuild.error.start")
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  /** failed/cancelled job を保存済み入力から再実行する(既存 retry API を利用)。 */
+  const retryBuild = async () => {
+    const targetJobId = jobId;
+    if (!targetJobId || busy) return;
+    setBusy("retry");
+    try {
+      const next = await retryOntologyBuildJob(targetJobId);
+      // 新 job としてポーリング・終端通知・Draft 再取得の状態をリセットする
+      terminalHandledRef.current = null;
+      buildMarkdownRefreshSignatureRef.current = "";
+      pollFailureCountRef.current = 0;
+      setJob(next);
+      clearNotice();
+    } catch (err) {
+      showNotice(
+        "danger",
+        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.retry")
       );
     } finally {
       setBusy("");
@@ -954,7 +1029,7 @@ export function OntologyBuildSection({
       await navigator.clipboard.writeText(activeMarkdown);
       toast.success(t("common.action.copied"));
     } catch {
-      toast.error(t("common.action.copyFailed"));
+      toastError(t("common.action.copyFailed"));
     }
   };
 
@@ -1110,7 +1185,7 @@ export function OntologyBuildSection({
           stepsAriaLabel={t("profiles.ontologyBuild.progress.stepsLabel")}
           testId="ontology-build-steps"
           dataJobStatus={job.status}
-          role={job.status === "failed" ? "alert" : jobRunning ? "status" : undefined}
+          role={jobRunning ? "status" : undefined}
           collapsible={{
             collapsed: progressCollapsed,
             onCollapsedChange: setProgressCollapsed,
@@ -1223,7 +1298,26 @@ export function OntologyBuildSection({
                   </Banner>
                 ) : null}
                 {unscopedBuildError ? (
-                  <Banner severity="danger">{unscopedBuildError}</Banner>
+                  <Banner
+                    severity="danger"
+                    action={
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        loading={busy === "retry"}
+                        disabled={busy !== "" && busy !== "retry"}
+                        onClick={() => void retryBuild()}
+                        data-testid="ontology-build-retry"
+                      >
+                        <RefreshCw size={15} aria-hidden="true" />
+                        <span>{t("profiles.ontologyBuild.retryAction")}</span>
+                      </Button>
+                    }
+                  >
+                    {unscopedBuildError}
+                  </Banner>
                 ) : null}
                 {markdownDraftStale ? (
                   <Banner severity="warning">
@@ -1233,10 +1327,13 @@ export function OntologyBuildSection({
                 {job.warnings_ja.length > 0 ? (
                   <details
                     open={job.status === "failed"}
-                    className="rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
+                    className="group/disclosure rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
                   >
-                    <summary className="cursor-pointer font-semibold">
-                      {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                      <span>
+                        {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
+                      </span>
+                      <DisclosureChevron expanded="group" size={15} />
                     </summary>
                     <ul className="mt-2 grid gap-1 pl-4">
                       {job.warnings_ja.map((warning) => (
@@ -1381,26 +1478,40 @@ export function OntologyBuildSection({
             aria-labelledby="ontology-markdown-tab-draft"
             className="grid min-w-0 gap-2"
           >
-            <label className="sr-only" htmlFor="ontology-markdown-draft-editor">
-              {t("profiles.ontologyBuild.markdownTabAria.draft")}
-            </label>
-            <textarea
-              id="ontology-markdown-draft-editor"
-              data-testid="ontology-markdown-draft-editor"
-              className={markdownTextareaClass}
-              value={draftMarkdown}
-              rows={18}
-              spellCheck={false}
-              placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
-              disabled={!hasDraftRevision || busy === "save-draft"}
-              onChange={(event) => {
-                const nextDraftMarkdown = event.currentTarget.value;
-                draftMarkdownRef.current = nextDraftMarkdown;
-                draftDirtyRef.current = true;
-                setDraftMarkdown(nextDraftMarkdown);
-                setDraftDirty(true);
-              }}
-            />
+            {!hasDraftRevision && !draftMarkdown.trim() ? (
+              // Draft 未生成時は巨大なコードエディタ枠を出さず、簡潔な空状態にする
+              <div
+                data-testid="ontology-markdown-draft-empty"
+                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-muted/20 px-4 py-6"
+              >
+                <p className="text-sm leading-6 text-muted">
+                  {t("profiles.ontologyBuild.markdownDraftPlaceholder")}
+                </p>
+              </div>
+            ) : (
+              <>
+                <label className="sr-only" htmlFor="ontology-markdown-draft-editor">
+                  {t("profiles.ontologyBuild.markdownTabAria.draft")}
+                </label>
+                <textarea
+                  id="ontology-markdown-draft-editor"
+                  data-testid="ontology-markdown-draft-editor"
+                  className={markdownTextareaClass}
+                  value={draftMarkdown}
+                  rows={18}
+                  spellCheck={false}
+                  placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
+                  disabled={!hasDraftRevision || busy === "save-draft"}
+                  onChange={(event) => {
+                    const nextDraftMarkdown = event.currentTarget.value;
+                    draftMarkdownRef.current = nextDraftMarkdown;
+                    draftDirtyRef.current = true;
+                    setDraftMarkdown(nextDraftMarkdown);
+                    setDraftDirty(true);
+                  }}
+                />
+              </>
+            )}
           </div>
         ) : (
           <div
@@ -1409,21 +1520,28 @@ export function OntologyBuildSection({
             aria-labelledby="ontology-markdown-tab-published"
             className="grid min-w-0 gap-2"
           >
-            <div
-              data-testid="ontology-markdown-published-viewer"
-              aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
-              className="max-h-[32rem] min-h-[22rem] max-w-full overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg"
-            >
-              {publishedMarkdown.trim() ? (
+            {publishedMarkdown.trim() ? (
+              <div
+                data-testid="ontology-markdown-published-viewer"
+                aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
+                className="max-h-[32rem] min-h-[22rem] max-w-full overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg"
+              >
                 <pre className="whitespace-pre-wrap break-words">
                   <code>{publishedMarkdown}</code>
                 </pre>
-              ) : (
-                <p className="text-muted">
+              </div>
+            ) : (
+              // 公開前は巨大なコードビューア枠を出さず、簡潔な空状態にする
+              <div
+                data-testid="ontology-markdown-published-viewer"
+                aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
+                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-muted/20 px-4 py-6"
+              >
+                <p className="text-sm leading-6 text-muted">
                   {t("profiles.ontologyBuild.markdownPublishedEmpty")}
                 </p>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 

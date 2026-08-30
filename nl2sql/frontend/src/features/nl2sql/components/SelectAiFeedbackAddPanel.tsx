@@ -7,11 +7,11 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
 
 import { FormStatus } from "@/components/ui/form-status";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
@@ -134,28 +134,48 @@ export function SelectAiFeedbackAddPanel({
             message={message}
             className="mr-auto"
           />
-          <Button
-            type="button"
-            variant={history?.feedback_rating === "good" ? "primary" : "secondary"}
-            size="sm"
-            loading={savingRating === "good"}
-            disabled={savingRating !== null}
-            onClick={() => void submit("good")}
+          {/* 評価トグル: primary は画面の主 CTA 専用のため(button spec §0.2)、
+              選択状態は枠線 + aria-pressed で表現する。 */}
+          <div
+            role="group"
+            aria-label={t("nl2sql.selectAiFeedbackAdd.rating")}
+            className="flex flex-wrap items-center gap-3"
           >
-            <ThumbsUp size={15} aria-hidden="true" />
-            <span>{t("nl2sql.feedback.good")}</span>
-          </Button>
-          <Button
-            type="button"
-            variant={history?.feedback_rating === "bad" ? "primary" : "secondary"}
-            size="sm"
-            loading={savingRating === "bad"}
-            disabled={savingRating !== null}
-            onClick={() => void submit("bad")}
-          >
-            <ThumbsDown size={15} aria-hidden="true" />
-            <span>{t("nl2sql.feedback.bad")}</span>
-          </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className={
+                history?.feedback_rating === "good"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary"
+                  : ""
+              }
+              aria-pressed={history?.feedback_rating === "good"}
+              loading={savingRating === "good"}
+              disabled={savingRating !== null}
+              onClick={() => void submit("good")}
+            >
+              <ThumbsUp size={15} aria-hidden="true" />
+              <span>{t("nl2sql.feedback.good")}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className={
+                history?.feedback_rating === "bad"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary"
+                  : ""
+              }
+              aria-pressed={history?.feedback_rating === "bad"}
+              loading={savingRating === "bad"}
+              disabled={savingRating !== null}
+              onClick={() => void submit("bad")}
+            >
+              <ThumbsDown size={15} aria-hidden="true" />
+              <span>{t("nl2sql.feedback.bad")}</span>
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

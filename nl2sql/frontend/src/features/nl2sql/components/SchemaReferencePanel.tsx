@@ -1,11 +1,14 @@
-import { AlertCircle, ChevronDown, ChevronRight, Plus, RefreshCw, Search, Table2 } from "lucide-react";
+import { Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Skeleton, StatusBadge } from "@engchina/production-ready-ui";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { Banner, Skeleton } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
+import { TimedLoadingState } from "@/components/ProcessingState";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
+import { SchemaRefreshProcessing } from "./SchemaRefreshFeedback";
 import {
   buildSchemaInsertText,
   buildSchemaSqlIdentifierText,
@@ -196,38 +199,31 @@ export function SchemaReferencePanel({
         </TimedLoadingState>
       )}
       {!loading && refreshing ? (
-        <ProcessingIndicator
-          active
-          label={t("common.processing.schemaRefreshing")}
-          operationKey="schema-reference-refresh"
+        <SchemaRefreshProcessing
           placement="panel"
           className="rounded-md border border-border bg-card px-3 py-2"
           testId="schema-reference-refreshing"
-          activityIcon="none"
         />
       ) : null}
 
       {!loading && detailLoadError ? (
-        <div
-          className="grid gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-          role="alert"
-          data-testid="nl2sql-schema-detail-error"
-        >
-          <span className="flex min-w-0 items-start gap-2">
-            <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 [overflow-wrap:anywhere]">{detailLoadError}</span>
-          </span>
-          {onDismissDetailLoadError ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={disabled}
-              onClick={onDismissDetailLoadError}
-            >
-              {t("common.dismiss")}
-            </Button>
-          ) : null}
+        <div data-testid="nl2sql-schema-detail-error">
+          <Banner
+            severity="danger"
+            action={onDismissDetailLoadError ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={disabled}
+                onClick={onDismissDetailLoadError}
+              >
+                {t("common.dismiss")}
+              </Button>
+            ) : undefined}
+          >
+            {detailLoadError}
+          </Banner>
         </div>
       ) : null}
 
@@ -284,15 +280,9 @@ export function SchemaReferencePanel({
           </Button>
         )}
         {loadMoreError && (
-          <div
-            className="grid gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-            role="alert"
-          >
-            <span className="flex min-w-0 items-start gap-2">
-              <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 [overflow-wrap:anywhere]">{loadMoreError}</span>
-            </span>
-            {onRetryLoadMore && (
+          <Banner
+            severity="danger"
+            action={onRetryLoadMore ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -304,8 +294,10 @@ export function SchemaReferencePanel({
                 <RefreshCw size={15} aria-hidden="true" />
                 <span>{t("common.retry")}</span>
               </Button>
-            )}
-          </div>
+            ) : undefined}
+          >
+            {loadMoreError}
+          </Banner>
         )}
       </div>
       )}
@@ -344,11 +336,7 @@ function SchemaTableItem({
           aria-label={t("nl2sql.schema.toggleTable", { name: table.logical_name })}
           onClick={() => onToggleExpanded(schemaTableQualifiedName(table))}
         >
-          {expanded ? (
-            <ChevronDown size={15} aria-hidden="true" />
-          ) : (
-            <ChevronRight size={15} aria-hidden="true" />
-          )}
+          <DisclosureChevron expanded={expanded} size={15} />
         </button>
         <button
           type="button"

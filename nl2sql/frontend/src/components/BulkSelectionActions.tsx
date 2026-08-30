@@ -36,7 +36,7 @@ export function BulkSelectionActions({
     <div
       role="group"
       aria-busy={busy || undefined}
-      className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}
+      className={cn("flex min-w-0 flex-wrap items-center justify-start gap-2", className)}
       data-testid={dataTestId}
     >
       <Button

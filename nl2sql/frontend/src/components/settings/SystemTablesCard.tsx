@@ -1,9 +1,11 @@
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
-import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, toast } from "@engchina/production-ready-ui";
 
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +15,8 @@ import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import {
   ApiError,
+  type SystemObjectMetadata,
+  type SystemObjectType,
   type SystemTableSchemaStatus,
   type SystemTablesOperationData,
   type SystemTablesStatusData,
@@ -51,6 +55,17 @@ function previousFailureDetail(errorCode: string | null): string {
   return t("settings.database.systemTables.previousFailureDetail", {
     code: errorCode ?? "-",
   });
+}
+
+function systemObjects(data: SystemTablesStatusData): SystemObjectMetadata[] {
+  if (data.objects) return data.objects;
+  return data.tables.map((table) => ({ ...table, object_type: "TABLE" }));
+}
+
+function objectTypeLabel(objectType: SystemObjectType): string {
+  return t(
+    `settings.database.systemTables.table.objectType.${objectType.toLowerCase()}`
+  );
 }
 
 /** Versioned NL2SQL system table の状態と明示 DDL 操作。 */
@@ -160,10 +175,15 @@ export function SystemTablesCard() {
 
         {data ? (
           <>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryItem
+                label={t("settings.database.systemTables.summary.tables")}
+                value={`${formatNumber(data.existing_table_count)} / ${formatNumber(data.expected_table_count)}`}
+              />
               <SummaryItem
                 label={t("settings.database.systemTables.summary.objects")}
                 value={`${formatNumber(data.existing_object_count)} / ${formatNumber(data.expected_object_count)}`}
+                description={t("settings.database.systemTables.summary.objectsHint")}
               />
               <SummaryItem
                 label={t("settings.database.systemTables.summary.head")}
@@ -288,11 +308,22 @@ export function SystemTablesCard() {
   );
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+function SummaryItem({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+}) {
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3">
       <p className="text-xs text-muted">{label}</p>
       <p className="mt-1 font-mono text-sm font-semibold text-foreground">{value}</p>
+      {description ? (
+        <p className="mt-1 text-xs leading-relaxed text-muted">{description}</p>
+      ) : null}
     </div>
   );
 }
@@ -312,10 +343,18 @@ function SystemTablesSkeleton() {
 }
 
 function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
+  const objects = systemObjects(data);
+
   return (
-    <details className="min-w-0 rounded-md border border-border">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-        {t("settings.database.systemTables.details.title")}
+    <details className="group/disclosure min-w-0 rounded-md border border-border">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        <span>
+          {t("settings.database.systemTables.details.title", {
+            existing: data.existing_object_count,
+            expected: data.expected_object_count,
+          })}
+        </span>
+        <DisclosureChevron expanded="group" size={16} className="text-muted" />
       </summary>
       <div className="min-w-0 border-t border-border p-4">
         <p className="mb-3 text-xs leading-relaxed text-muted">
@@ -327,14 +366,18 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
         <div
           role="region"
           tabIndex={0}
-          aria-label={t("settings.database.systemTables.table.scrollLabel")}
+          aria-label={t("settings.database.systemTables.table.scrollLabel", {
+            existing: data.existing_object_count,
+            expected: data.expected_object_count,
+          })}
           data-testid="system-tables-scroll-region"
           className={`rounded-sm ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         >
-          <table className="min-w-[720px] w-full border-collapse text-left text-sm">
+          <table className="min-w-[840px] w-full border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 bg-background">
               <tr className="h-10 border-b border-border text-xs text-muted">
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.name")}</th>
+                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.type")}</th>
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.status")}</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium">{t("settings.database.systemTables.table.rows")}</th>
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.created")}</th>
@@ -342,18 +385,29 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
               </tr>
             </thead>
             <tbody>
-              {data.tables.map((table) => (
-                <tr key={table.name} className={`${INFORMATION_TABLE_ROW_CLASS} border-b border-border last:border-b-0`}>
-                  <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-foreground">{table.name}</th>
+              {objects.map((object) => (
+                <tr key={`${object.object_type}:${object.name}`} className={`${INFORMATION_TABLE_ROW_CLASS} border-b border-border last:border-b-0`}>
+                  <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-foreground">{object.name}</th>
+                  <td className="whitespace-nowrap px-3 py-2 text-foreground">{objectTypeLabel(object.object_type)}</td>
                   <td className="px-3 py-2">
                     <StatusBadge
-                      variant={table.exists ? "success" : "neutral"}
-                      label={t(table.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
+                      variant={object.exists ? "success" : "neutral"}
+                      label={t(object.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-foreground">{table.estimated_rows == null ? "—" : formatNumber(table.estimated_rows)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">{formatDateTime(table.created_at)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">{formatDateTime(table.last_analyzed_at)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-foreground">
+                    {object.object_type !== "TABLE"
+                      ? t("settings.database.systemTables.table.notApplicable")
+                      : object.estimated_rows == null
+                        ? "—"
+                        : formatNumber(object.estimated_rows)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-muted">{formatDateTime(object.created_at)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-muted">
+                    {object.object_type === "TABLE"
+                      ? formatDateTime(object.last_analyzed_at)
+                      : t("settings.database.systemTables.table.notApplicable")}
+                  </td>
                 </tr>
               ))}
             </tbody>

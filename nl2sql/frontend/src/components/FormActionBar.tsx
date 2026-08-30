@@ -7,10 +7,12 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, type LucideIcon } from "lucide-react";
+import { type LucideIcon } from "lucide-react";
 
 import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import type { EntityAction } from "@/components/ObjectActionsCore";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +35,20 @@ export interface FormActionBarProps {
   status?: ReactNode;
   ariaLabel: string;
   testId?: string;
+}
+
+/** 一覧・詳細と同じ EntityAction をフォーム操作へ投影する。 */
+export function entityActionToFormAction(action: EntityAction): FormActionDescriptor {
+  return {
+    id: action.id,
+    label: action.label,
+    icon: action.icon,
+    onClick: action.onSelect,
+    loading: action.loading,
+    disabled: action.disabled,
+    ariaLabel: action.ariaLabel,
+    testId: action.testId,
+  };
 }
 
 function actionEnabled(action: FormActionDescriptor) {
@@ -237,11 +253,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
         onClick={() => setOpen((current) => !current)}
       >
         <span>{t("common.actions.more")}</span>
-        <ChevronDown
-          size={16}
-          className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")}
-          aria-hidden="true"
-        />
+        <DisclosureChevron expanded={open} size={16} />
       </Button>
       {open ? (
         <FloatingActionMenu

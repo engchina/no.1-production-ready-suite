@@ -1,19 +1,21 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown,
-  ChevronUp,
   Info,
   MessageSquareText,
   Network,
   RefreshCw,
   Route,
   Search,
+  ServerCog,
   Table2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
-import { Banner, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { Banner, EmptyState } from "@engchina/production-ready-ui";
+
+import { StatusBadge } from "@/components/ui/status-badge";
 
 import { t } from "@/lib/i18n";
 import {
@@ -27,9 +29,16 @@ import {
   type OntologyErKeyRole,
 } from "./erDetails";
 import { ontologyNodeDisplay } from "./nodeDisplay";
-import { answerOntologyQuestion, type PlaygroundResult } from "./queryPlayground";
+import { searchOntologyContext } from "./api";
 import {
-  ontologyRelationshipRows,
+  answerOntologyQuestion,
+  browseRelationshipRows,
+  groundedRelationshipRows,
+  type PlaygroundResult,
+} from "./queryPlayground";
+import { normalizeGroundingText } from "./groundingMatcher";
+import {
+  type OntologyContextSearchResult,
   type OntologyGraph,
   type OntologyNode,
   type OntologyRelationshipRow,
@@ -41,6 +50,8 @@ const LazyOntologyGraphCanvas = lazy(() => import("./OntologyGraphCanvas"));
 
 export interface OntologyQueryPlaygroundProps {
   graph: OntologyGraph | null;
+  /** サーバ検索(実際の SQL 生成と同じ ontology-context 検索)に使う profile。 */
+  profileId?: string;
   warningsJa?: string[];
   onRefreshSchema?: () => void | Promise<void>;
   refreshingSchema?: boolean;
@@ -51,6 +62,7 @@ const STAGE_LABEL_KEYS = {
   list_all: "ontologyPlayground.stage.listAll",
   relationship: "ontologyPlayground.stage.relationship",
   property: "ontologyPlayground.stage.property",
+  aggregate: "ontologyPlayground.stage.aggregate",
   no_match: "ontologyPlayground.stage.noMatch",
 } as const;
 
@@ -92,20 +104,199 @@ function stageLabel(result: PlaygroundResult): string {
   return t(STAGE_LABEL_KEYS[result.stage]);
 }
 
-function compactRelationshipRows(
-  graph: OntologyGraph,
-  result: PlaygroundResult | null
-): OntologyRelationshipRow[] {
-  const rows = ontologyRelationshipRows(graph);
-  if (!result) return rows;
-  const highlightNodes = new Set(result.highlightNodeIds);
-  const highlightEdges = new Set(result.highlightEdgeIds);
-  const focused = rows.filter(
-    (row) =>
-      highlightEdges.has(row.edge_id) ||
-      (highlightNodes.has(row.source_node_id) && highlightNodes.has(row.target_node_id))
+type ServerSearchState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "success"; result: OntologyContextSearchResult };
+
+/** 質問文(正規化後)の一致スパンを下線表示する。 */
+function QuestionMatchedSpans({
+  question,
+  result,
+}: {
+  question: string;
+  result: PlaygroundResult;
+}) {
+  const normalized = useMemo(() => normalizeGroundingText(question), [question]);
+  const spans = useMemo(() => {
+    const raw = result.candidates
+      .filter((candidate) => candidate.span && candidate.score >= 0.65)
+      .map((candidate) => candidate.span!)
+      .sort((a, b) => a.start - b.start || b.end - a.end);
+    const merged: Array<{ start: number; end: number }> = [];
+    for (const span of raw) {
+      const last = merged[merged.length - 1];
+      if (last && span.start < last.end) {
+        last.end = Math.max(last.end, span.end);
+      } else {
+        merged.push({ ...span });
+      }
+    }
+    return merged;
+  }, [result]);
+  if (!normalized || spans.length === 0) return null;
+  const parts: Array<{ text: string; matched: boolean }> = [];
+  let cursor = 0;
+  for (const span of spans) {
+    if (span.start > cursor) parts.push({ text: normalized.slice(cursor, span.start), matched: false });
+    parts.push({ text: normalized.slice(span.start, span.end), matched: true });
+    cursor = span.end;
+  }
+  if (cursor < normalized.length) parts.push({ text: normalized.slice(cursor), matched: false });
+  return (
+    <p className="text-sm leading-6 text-muted" data-testid="ontology-playground-matched-spans">
+      {parts.map((part, index) =>
+        part.matched ? (
+          <mark
+            key={index}
+            className="rounded bg-primary/15 px-0.5 font-medium text-foreground underline decoration-primary decoration-2 underline-offset-2"
+          >
+            {part.text}
+          </mark>
+        ) : (
+          <span key={index}>{part.text}</span>
+        )
+      )}
+    </p>
   );
-  return focused.length > 0 ? focused : rows;
+}
+
+
+
+interface GroundingComparison {
+  both: string[];
+  clientOnly: string[];
+  serverOnly: string[];
+}
+
+/**
+ * サーバ検索(SQL 生成と同じ ontology-context 検索)の結果パネル。
+ * 即時判定との一致/不一致を 3 バケットのチップで示し、不一致時は
+ * エイリアス追加などの改善アクションへ誘導する。
+ */
+function ServerSearchResultPanel({
+  result,
+  comparison,
+  graph,
+  onSelectNode,
+}: {
+  result: OntologyContextSearchResult;
+  comparison: GroundingComparison | null;
+  graph: OntologyGraph | null;
+  onSelectNode: (nodeId: string) => void;
+}) {
+  const graphNodeIds = useMemo(
+    () => new Set((graph?.nodes ?? []).map((node) => node.id)),
+    [graph]
+  );
+  return (
+    <section
+      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      aria-label={t("ontologyPlayground.serverSearch.title")}
+      data-testid="ontology-playground-server-result"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <ServerCog size={16} className="text-primary" aria-hidden="true" />
+          {t("ontologyPlayground.serverSearch.title")}
+        </h3>
+        <StatusBadge
+          variant="neutral"
+          label={t("ontologyPlayground.serverSearch.hitCount", {
+            count: result.hits.length,
+          })}
+        />
+      </div>
+      {comparison ? (
+        <div className="grid gap-2" data-testid="ontology-playground-grounding-comparison">
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge
+              variant="success"
+              label={t("ontologyPlayground.serverSearch.compareBoth", {
+                count: comparison.both.length,
+              })}
+            />
+            <StatusBadge
+              variant="warning"
+              label={t("ontologyPlayground.serverSearch.compareClientOnly", {
+                count: comparison.clientOnly.length,
+              })}
+            />
+            <StatusBadge
+              variant="info"
+              label={t("ontologyPlayground.serverSearch.compareServerOnly", {
+                count: comparison.serverOnly.length,
+              })}
+            />
+          </div>
+          {comparison.serverOnly.length > 0 ? (
+            <p className="text-xs leading-5 text-muted">
+              {t("ontologyPlayground.serverSearch.compareHint")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {result.hits.length === 0 ? (
+        <Banner severity="info">{t("ontologyPlayground.serverSearch.empty")}</Banner>
+      ) : (
+        <ol className="grid gap-1.5" data-testid="ontology-playground-server-hits">
+          {result.hits.map((hit, index) => {
+            const display = ontologyNodeDisplay(hit.node);
+            const scorePercent = Math.round(hit.score * 100);
+            const inGraph = graphNodeIds.has(hit.node.id);
+            return (
+              <li key={hit.node.id}>
+                <button
+                  type="button"
+                  className="grid w-full cursor-pointer gap-1 rounded-md border border-border bg-background px-3 py-2 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none disabled:cursor-default"
+                  onClick={() => inGraph && onSelectNode(hit.node.id)}
+                  disabled={!inGraph}
+                  data-testid={`ontology-server-hit-${hit.node.id}`}
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold tabular-nums text-muted">
+                      {index + 1}.
+                    </span>
+                    <span className="min-w-0 flex-1 break-words text-sm font-medium text-foreground">
+                      {hit.node.business_name_ja}
+                    </span>
+                    <span className="text-xs text-muted">{display.kindLabel}</span>
+                    {hit.inference_source !== "asserted" ? (
+                      <StatusBadge
+                        variant="info"
+                        label={t("ontologyPlayground.serverSearch.inferred")}
+                      />
+                    ) : null}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted/20"
+                      aria-hidden="true"
+                    >
+                      <span
+                        className="block h-full rounded-full bg-primary"
+                        style={{ width: `${scorePercent}%` }}
+                      />
+                    </span>
+                    <span className="text-xs tabular-nums text-muted">
+                      {t("ontologyPlayground.serverSearch.score")} {scorePercent}%
+                    </span>
+                  </span>
+                  {hit.matched_terms.length > 0 ? (
+                    <span className="text-xs leading-5 text-muted">
+                      {t("ontologyPlayground.serverSearch.matchedTerms")}:{" "}
+                      {hit.matched_terms.join("、")}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 function RelationshipCard({
@@ -466,6 +657,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
  */
 export function OntologyQueryPlayground({
   graph,
+  profileId = "",
   warningsJa = [],
   onRefreshSchema,
   refreshingSchema = false,
@@ -476,6 +668,9 @@ export function OntologyQueryPlayground({
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [graphViewMode, setGraphViewMode] = useState<OntologyGraphViewMode>("all");
   const [mobileGraphOpen, setMobileGraphOpen] = useState(false);
+  const [serverSearch, setServerSearch] = useState<ServerSearchState>({ status: "idle" });
+  // 古いサーバ検索応答が新しい状態を上書きしないための世代カウンタ
+  const serverSearchSeqRef = useRef(0);
 
   const hasGraph = Boolean(graph && graph.nodes.length > 0);
   const graphStats = graph
@@ -492,6 +687,8 @@ export function OntologyQueryPlayground({
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setGraphViewMode("all");
+    serverSearchSeqRef.current += 1;
+    setServerSearch({ status: "idle" });
   };
 
   const handleQuestionChange = (value: string) => {
@@ -510,20 +707,92 @@ export function OntologyQueryPlayground({
     setGraphViewMode("grounding");
     setSelectedNodeId(nextResult.highlightNodeIds[0] ?? null);
     setSelectedEdgeId(nextResult.highlightEdgeIds[0] ?? null);
+    // 質問が変わったら前のサーバ検索結果は無効
+    serverSearchSeqRef.current += 1;
+    setServerSearch({ status: "idle" });
   };
+
+  const canServerSearch = Boolean(profileId && graphRevisionId && question.trim());
+  const runServerSearch = async () => {
+    const normalizedQuestion = question.trim();
+    if (!graph || !canServerSearch || !normalizedQuestion) return;
+    // 即時判定を未実行ならまず実行して比較の土台を揃える
+    if (!result) runQuestion();
+    const seq = ++serverSearchSeqRef.current;
+    setServerSearch({ status: "loading" });
+    try {
+      const searchResult = await searchOntologyContext(profileId, {
+        question: normalizedQuestion,
+        ontologyRevisionId: graphRevisionId,
+      });
+      if (serverSearchSeqRef.current !== seq) return;
+      setServerSearch({ status: "success", result: searchResult });
+      setGraphViewMode("grounding");
+    } catch (err) {
+      if (serverSearchSeqRef.current !== seq) return;
+      setServerSearch({
+        status: "error",
+        message:
+          err instanceof Error && err.message
+            ? err.message
+            : t("ontologyPlayground.serverSearch.error"),
+      });
+    }
+  };
+
   const hasResettableGroundingState = Boolean(
-    question.length > 0 || result || selectedNodeId || selectedEdgeId || graphViewMode !== "all"
+    question.length > 0 ||
+      result ||
+      selectedNodeId ||
+      selectedEdgeId ||
+      graphViewMode !== "all" ||
+      serverSearch.status !== "idle"
   );
 
-  const highlightNodeIds = useMemo(() => result?.highlightNodeIds ?? [], [result]);
-  const highlightEdgeIds = useMemo(() => result?.highlightEdgeIds ?? [], [result]);
+  const serverHitNodeIds = useMemo(
+    () =>
+      serverSearch.status === "success"
+        ? serverSearch.result.hits.map((hit) => hit.node.id)
+        : [],
+    [serverSearch]
+  );
+  const serverEdgeIds = useMemo(
+    () =>
+      serverSearch.status === "success"
+        ? serverSearch.result.edges.map((edge) => edge.id)
+        : [],
+    [serverSearch]
+  );
+  // グラフの強調は即時判定とサーバ検索の合成(比較チップでどちら由来かを示す)
+  const highlightNodeIds = useMemo(
+    () => [...new Set([...(result?.highlightNodeIds ?? []), ...serverHitNodeIds])],
+    [result, serverHitNodeIds]
+  );
+  const highlightEdgeIds = useMemo(
+    () => [...new Set([...(result?.highlightEdgeIds ?? []), ...serverEdgeIds])],
+    [result, serverEdgeIds]
+  );
+  const groundingComparison = useMemo(() => {
+    if (!result || serverSearch.status !== "success") return null;
+    const clientIds = new Set(result.highlightNodeIds);
+    const serverIds = new Set(serverHitNodeIds);
+    return {
+      both: [...clientIds].filter((id) => serverIds.has(id)),
+      clientOnly: [...clientIds].filter((id) => !serverIds.has(id)),
+      serverOnly: [...serverIds].filter((id) => !clientIds.has(id)),
+    };
+  }, [result, serverSearch, serverHitNodeIds]);
   const selectedNode = useMemo(
     () => graph?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [graph, selectedNodeId]
   );
-  const focusedRelationshipRows = useMemo(
-    () => (graph ? compactRelationshipRows(graph, result) : []),
+  const groundedRows = useMemo(
+    () => (graph ? groundedRelationshipRows(graph, result) : []),
     [graph, result]
+  );
+  const browseRows = useMemo(
+    () => (graph ? browseRelationshipRows(graph, groundedRows) : []),
+    [graph, groundedRows]
   );
   const erDetails = useMemo(
     () => (graph ? deriveOntologyErDetails(graph, selectedNodeId) : null),
@@ -613,7 +882,7 @@ export function OntologyQueryPlayground({
             >
               {t("ontologyPlayground.questionLabel")}
             </label>
-            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
               <input
                 id="ontology-playground-question"
                 type="text"
@@ -633,6 +902,20 @@ export function OntologyQueryPlayground({
               >
                 <Search size={15} aria-hidden="true" />
                 <span>{t("ontologyPlayground.run")}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="lg"
+                className="h-11 min-h-[44px] w-full whitespace-nowrap sm:w-auto"
+                disabled={!canServerSearch || serverSearch.status === "loading"}
+                loading={serverSearch.status === "loading"}
+                onClick={() => void runServerSearch()}
+                title={t("ontologyPlayground.serverSearch.hint")}
+                data-testid="ontology-playground-server-search"
+              >
+                <ServerCog size={15} aria-hidden="true" />
+                <span>{t("ontologyPlayground.serverSearch.run")}</span>
               </Button>
               <ClearActionButton
                 className="w-full sm:w-auto"
@@ -665,12 +948,24 @@ export function OntologyQueryPlayground({
                 {t(STAGE_LABEL_KEYS[result.stage])}
               </p>
               <p className="text-sm leading-6 text-foreground">{result.explanationJa}</p>
+              <QuestionMatchedSpans question={question} result={result} />
               {result.suggestionsJa.length > 0 ? (
                 <p className="text-sm text-muted">
                   {t("ontologyPlayground.suggestions")}: {result.suggestionsJa.join("、")}
                 </p>
               ) : null}
             </div>
+          ) : null}
+          {serverSearch.status === "error" ? (
+            <Banner severity="danger">{serverSearch.message}</Banner>
+          ) : null}
+          {serverSearch.status === "success" ? (
+            <ServerSearchResultPanel
+              result={serverSearch.result}
+              comparison={groundingComparison}
+              graph={graph}
+              onSelectNode={setSelectedNodeId}
+            />
           ) : null}
           {graph ? (
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:items-start">
@@ -687,11 +982,7 @@ export function OntologyQueryPlayground({
                     aria-expanded={mobileGraphOpen}
                     aria-controls="ontology-playground-graph-region"
                   >
-                    {mobileGraphOpen ? (
-                      <ChevronUp size={15} aria-hidden="true" />
-                    ) : (
-                      <ChevronDown size={15} aria-hidden="true" />
-                    )}
+                    <DisclosureChevron expanded={mobileGraphOpen} size={15} />
                     <span>
                       {mobileGraphOpen
                         ? t("ontologyPlayground.graphCollapse")
@@ -732,7 +1023,7 @@ export function OntologyQueryPlayground({
                 aria-label={t("ontologyPlayground.inspector.title")}
                 data-testid="ontology-playground-inspector"
               >
-                <OntologyGroundingPathPanel graph={graph} result={result} rows={focusedRelationshipRows} />
+                <OntologyGroundingPathPanel graph={graph} result={result} rows={groundedRows} />
                 <OntologyNodeDetailsPanel
                   graph={graph}
                   node={selectedNode}
@@ -740,7 +1031,7 @@ export function OntologyQueryPlayground({
                 />
                 {erDetails ? <OntologyErDetailsPanel details={erDetails} /> : null}
                 <OntologyRelationshipListPanel
-                  rows={focusedRelationshipRows}
+                  rows={browseRows}
                   selectedEdgeId={selectedEdgeId}
                   onSelectEdge={setSelectedEdgeId}
                 />

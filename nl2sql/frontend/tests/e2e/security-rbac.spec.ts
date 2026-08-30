@@ -1,9 +1,51 @@
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+  type TestInfo,
+} from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
+}
+
+function problemEnvelope({
+  status,
+  code,
+  title,
+  detail,
+  requestId,
+  retryable = false,
+  fieldErrors = [],
+}: {
+  status: number;
+  code: string;
+  title: string;
+  detail: string;
+  requestId: string;
+  retryable?: boolean;
+  fieldErrors?: Array<{ pointer: string; code: string; message: string }>;
+}) {
+  return {
+    data: null,
+    error_messages: [detail],
+    warning_messages: [],
+    error_code: code,
+    problem: {
+      type: `urn:nl2sql:problem:${code.toLowerCase().replaceAll("_", "-")}`,
+      title,
+      status,
+      detail,
+      code,
+      request_id: requestId,
+      retryable,
+      field_errors: fieldErrors,
+    },
+  };
 }
 
 async function fulfill(route: Route, data: unknown, status = 200) {
@@ -49,6 +91,85 @@ async function expectNoElementHorizontalOverflow(locator: Locator) {
     .toBeTruthy();
 }
 
+function expectedInformationRows(testInfo: TestInfo) {
+  return testInfo.project.name === "mobile-375" ? 5 : 8;
+}
+
+async function expectBoundedSecurityTableScroll(
+  scrollRegion: Locator,
+  visibleRowLimit: number
+) {
+  const metrics = await scrollRegion.evaluate((node, expectedRows) => {
+    const regionRect = node.getBoundingClientRect();
+    const header = node.querySelector("thead");
+    const rows = Array.from(node.querySelectorAll("tbody tr"));
+    if (!header) throw new Error("security table header is missing");
+    const headerRect = header.getBoundingClientRect();
+    const computed = window.getComputedStyle(node);
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    );
+    const visibleRows = rows.filter((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top >= headerRect.bottom - 1 && rect.bottom <= regionRect.bottom + 1;
+    });
+    return {
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowX: computed.overflowX,
+      overflowY: computed.overflowY,
+      headerPosition: window.getComputedStyle(header).position,
+      visibleRowCount: visibleRows.length,
+      rootFontSize,
+      expectedRows,
+    };
+  }, visibleRowLimit);
+
+  const expectedMaxHeight = metrics.rootFontSize * (2.5 + 3.5 * metrics.expectedRows);
+  expect(metrics.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
+  expect(metrics.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  expect(metrics.visibleRowCount).toBe(visibleRowLimit);
+  expect(metrics.headerPosition).toBe("sticky");
+  expect(metrics.overflowX).toBe("auto");
+  expect(metrics.overflowY).toBe("auto");
+
+  await scrollRegion.evaluate((node) => node.scrollTo({ top: 0, left: 0 }));
+  await scrollRegion.focus();
+  await expect(scrollRegion).toBeFocused();
+  await scrollRegion.press("PageDown");
+  await expect.poll(() => scrollRegion.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+
+  await scrollRegion.evaluate((node) => node.scrollTo({ top: node.scrollHeight }));
+  const bottomState = await scrollRegion.evaluate((node) => {
+    const regionRect = node.getBoundingClientRect();
+    const header = node.querySelector("thead");
+    const lastRow = node.querySelector("tbody tr:last-child");
+    if (!header || !lastRow) throw new Error("security table rows are missing");
+    const headerRect = header.getBoundingClientRect();
+    const lastRowRect = lastRow.getBoundingClientRect();
+    return {
+      headerOffset: Math.abs(headerRect.top - regionRect.top),
+      lastRowVisible:
+        lastRowRect.top >= headerRect.bottom - 1 &&
+        lastRowRect.bottom <= regionRect.bottom + 1,
+    };
+  });
+  expect(bottomState.headerOffset).toBeLessThanOrEqual(1);
+  expect(bottomState.lastRowVisible).toBe(true);
+}
+
+async function expectEqualFilterWidths(search: Locator, owner: Locator) {
+  await expect
+    .poll(async () => {
+      const [searchBox, ownerBox] = await Promise.all([search.boundingBox(), owner.boundingBox()]);
+      if (!searchBox || !ownerBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(searchBox.width - ownerBox.width);
+    })
+    .toBeLessThanOrEqual(2);
+}
+
 async function waitForAnimationFrames(page: Page) {
   await page.evaluate(
     () =>
@@ -85,6 +206,35 @@ async function expectMainScrollPreservedAfterClick(page: Page, locator: Locator)
   await expectMainScrollPreserved(page, async () => {
     await locator.click();
   });
+}
+
+async function expectScrollPositionsPreserved(
+  page: Page,
+  containers: Locator[],
+  action: () => Promise<void>
+) {
+  const before = await Promise.all(
+    containers.map((container) =>
+      container.evaluate((node) => ({ top: node.scrollTop, left: node.scrollLeft }))
+    )
+  );
+  await action();
+  await waitForAnimationFrames(page);
+  await expect
+    .poll(async () => {
+      const after = await Promise.all(
+        containers.map((container) =>
+          container.evaluate((node) => ({ top: node.scrollTop, left: node.scrollLeft }))
+        )
+      );
+      return Math.max(
+        ...after.flatMap((position, index) => [
+          Math.abs(position.top - before[index].top),
+          Math.abs(position.left - before[index].left),
+        ])
+      );
+    })
+    .toBeLessThanOrEqual(2);
 }
 
 async function setElementScrollTop(locator: Locator, top: number) {
@@ -228,6 +378,114 @@ const systemRole = {
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+});
+
+test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行で固定表頭の内部スクロールになる", async ({
+  page,
+}, testInfo) => {
+  await mockDatabaseGateReady(page);
+  const visibleRowLimit = expectedInformationRows(testInfo);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-viewer",
+    role_code: "SECURITY_VIEWER",
+    display_name: "セキュリティ閲覧",
+    description: "表示のみ",
+    is_built_in: false,
+    permissions: ["menu.security_users", "menu.security_roles"],
+  };
+  const users = Array.from({ length: visibleRowLimit + 1 }, (_, index) => {
+    const sequence = String(index + 1).padStart(2, "0");
+    return {
+      user_uuid: `scroll-user-${sequence}`,
+      login_user_id: `scroll.user.${sequence}`,
+      display_name: `スクロールユーザー ${sequence}`,
+      status: "ACTIVE",
+      force_password_change: false,
+      locked_until: null,
+      version: 1,
+      role_ids: [viewerRole.role_id],
+      is_bootstrap_admin: false,
+    };
+  });
+  const roles = Array.from({ length: visibleRowLimit + 1 }, (_, index) => {
+    const sequence = String(index + 1).padStart(2, "0");
+    return {
+      ...viewerRole,
+      role_id: `scroll-role-${sequence}`,
+      role_code: `SCROLL_ROLE_${sequence}`,
+      display_name: `スクロールロール ${sequence}`,
+      version: index + 1,
+    };
+  });
+
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole, viewerRole])
+  );
+  await page.route("**/api/security/users", (route) => fulfill(route, users));
+
+  await page.goto("/settings/security/users");
+  const userScrollRegion = page.getByTestId("security-users-scroll-region");
+  await expect(userScrollRegion).toHaveAttribute("role", "region");
+  await expect(userScrollRegion).toHaveAttribute(
+    "aria-label",
+    "ユーザー一覧。必要に応じて縦方向または横方向にスクロールできます。"
+  );
+  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+
+  const lastUser = users.at(-1)!;
+  await page.getByTestId("security-users-search").fill(lastUser.display_name);
+  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(1);
+  await expect
+    .poll(() =>
+      userScrollRegion.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)
+    )
+    .toBeTruthy();
+  await page.getByTestId("security-users-search").fill("");
+  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+  await expectBoundedSecurityTableScroll(userScrollRegion, visibleRowLimit);
+
+  const lastUserRow = userScrollRegion.locator("tbody tr").last();
+  await lastUserRow.locator("td").nth(1).click();
+  await expect(lastUserRow).toHaveAttribute("data-selected", "true");
+  await expect(
+    page.getByRole("heading", { name: lastUser.display_name, exact: true })
+  ).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
+
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, roles)
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+
+  await page.goto("/settings/security/roles");
+  const roleScrollRegion = page.getByTestId("security-roles-scroll-region");
+  await expect(roleScrollRegion).toHaveAttribute("role", "region");
+  await expect(roleScrollRegion).toHaveAttribute(
+    "aria-label",
+    "ロール一覧。必要に応じて縦方向または横方向にスクロールできます。"
+  );
+  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+
+  const lastRole = roles.at(-1)!;
+  await page.getByTestId("security-roles-search").fill(lastRole.display_name);
+  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(1);
+  await expect
+    .poll(() =>
+      roleScrollRegion.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)
+    )
+    .toBeTruthy();
+  await page.getByTestId("security-roles-search").fill("");
+  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+  await expectBoundedSecurityTableScroll(roleScrollRegion, visibleRowLimit);
+
+  const lastRoleRow = roleScrollRegion.locator("tbody tr").last();
+  await lastRoleRow.locator("td").nth(1).click();
+  await expect(lastRoleRow).toHaveAttribute("data-selected", "true");
+  await expect(
+    page.getByRole("heading", { name: lastRole.display_name, exact: true })
+  ).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
 });
 
 const deepSecTargetObject = {
@@ -424,7 +682,21 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await page.route("**/api/auth/login", async (route) => {
     loginAttempts += 1;
     if (loginAttempts === 1) {
-      await fulfill(route, "ログインユーザーIDまたはパスワードを確認してください。", 401);
+      // 実バックエンドと同じく request id 付きの 401 を返す(ログイン画面では非表示にする)
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        headers: { "X-Request-ID": "login-failed-request" },
+        body: JSON.stringify(
+          problemEnvelope({
+            status: 401,
+            code: "SECURITY_LOGIN_FAILED",
+            title: "ログインできません",
+            detail: "ログインユーザーIDまたはパスワードを確認してください。",
+            requestId: "login-failed-request",
+          })
+        ),
+      });
       return;
     }
     await fulfill(route, { ...systemAdminMe, force_password_change: true, password_change_allowed: true });
@@ -435,7 +707,10 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await page.getByLabel("ログインユーザーID").fill("SYSTEM");
   await page.getByLabel("パスワード").fill("WrongPass!123");
   await page.getByRole("button", { name: "ログイン" }).click();
-  await expect(page.getByText("ログインユーザーIDまたはパスワードを確認してください。", { exact: true })).toBeVisible();
+  const loginError = page.getByText("ログインユーザーIDまたはパスワードを確認してください。", { exact: true });
+  await expect(loginError).toBeVisible();
+  await expect(loginError).not.toContainText("リクエストID");
+  await expect(loginError).not.toContainText("login-failed-request");
 
   await page.getByLabel("パスワード").fill("BootstrapPass!123");
   await page.getByRole("button", { name: "ログイン" }).click();
@@ -749,6 +1024,18 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
 test("SQL 生成だけのユーザーは結果接地で ontology 管理 API の 403 に遷移しない", async ({ page }) => {
   test.slow();
   await mockDatabaseGateReady(page);
+  await page.route("**/api/nl2sql/rewrite", (route) => {
+    // rewrite 既定 ON。未モックだと submit が最初の rewrite で失敗する。
+    const body = route.request().postDataJSON() as { question?: string };
+    const original = String(body?.question ?? "");
+    return fulfill(route, {
+      original_question: original,
+      rewritten_question: original,
+      source: "deterministic",
+      model: "",
+      warnings: [],
+    });
+  });
   const limited = {
     ...systemAdminMe,
     user_uuid: "query-only-ontology-result",
@@ -1090,6 +1377,18 @@ test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボ�
 test("SQL 生成だけのユーザーは空 schema 失敗時にサンプルデータ投入ボタンを表示しない", async ({ page }) => {
   test.slow();
   await mockDatabaseGateReady(page);
+  await page.route("**/api/nl2sql/rewrite", (route) => {
+    // rewrite 既定 ON。未モックだと submit が最初の rewrite で失敗する。
+    const body = route.request().postDataJSON() as { question?: string };
+    const original = String(body?.question ?? "");
+    return fulfill(route, {
+      original_question: original,
+      rewritten_question: original,
+      source: "deterministic",
+      model: "",
+      warnings: [],
+    });
+  });
   const limited = {
     ...systemAdminMe,
     user_uuid: "query-only-sample-readonly",
@@ -1226,10 +1525,36 @@ test("SQL 生成だけのユーザーは空 schema 失敗時にサンプルデ�
 test("管理者がユーザーを作成して単一ロールを割り当て、一時パスワードを一度だけ確認する", async ({ page, context }) => {
   await mockDatabaseGateReady(page);
   await context.addCookies([{ name: "nl2sql_csrf", value: "csrf-token", url: "http://127.0.0.1:3101" }]);
+  await page.addInitScript(() => {
+    const state = globalThis as typeof globalThis & {
+      __copiedOneTimePassword?: string;
+      __copyOneTimePasswordShouldFail?: boolean;
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          if (state.__copyOneTimePasswordShouldFail) {
+            throw new Error("clipboard denied");
+          }
+          state.__copiedOneTimePassword = value;
+        },
+      },
+    });
+  });
   let csrfObserved = false;
   let createRequestCount = 0;
-  let createdPayloadRoleIds: string[] | null = null;
-  let createdPayloadLoginUserId = "";
+  let successfulCreateCount = 0;
+  let failNextCreate = false;
+  let holdNextCreate = false;
+  let heldCreate = Promise.resolve();
+  let releaseHeldCreate: () => void = () => undefined;
+  const createdPayloads: Array<{ loginUserId: string; roleIds: string[] }> = [];
+  const generatedPasswords = [
+    "RandomStrong!Pass123-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuvwxyz",
+    "SecondStrong!Pass456-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuvwxyz",
+    "ThirdStrong!Pass789-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuvwxyz",
+  ];
   let users = [
     {
       user_uuid: "admin-user",
@@ -1276,10 +1601,35 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
       display_name: string;
       role_ids: string[];
     };
-    createdPayloadLoginUserId = payload.login_user_id;
-    createdPayloadRoleIds = payload.role_ids;
+    createdPayloads.push({
+      loginUserId: payload.login_user_id,
+      roleIds: payload.role_ids,
+    });
+    if (holdNextCreate) {
+      holdNextCreate = false;
+      await heldCreate;
+    }
+    if (failNextCreate) {
+      failNextCreate = false;
+      const response = problemEnvelope({
+        status: 503,
+        code: "SECURITY_SERVICE_UNAVAILABLE",
+        title: "サービスを一時的に利用できません",
+        detail: "ユーザーを作成できません。時間をおいて再試行してください。",
+        requestId: "inline-password-create-failed",
+        retryable: true,
+      });
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        headers: { "X-Request-ID": response.problem.request_id },
+        body: JSON.stringify(response),
+      });
+      return;
+    }
+    successfulCreateCount += 1;
     const user = {
-      user_uuid: "new-user",
+      user_uuid: `new-user-${successfulCreateCount}`,
       login_user_id: payload.login_user_id,
       display_name: payload.display_name,
       status: "ACTIVE",
@@ -1290,7 +1640,10 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
       is_bootstrap_admin: false,
     };
     users = [...users, user];
-    await fulfill(route, { user, temporary_password: "RandomStrong!Pass123" });
+    await fulfill(route, {
+      user,
+      temporary_password: generatedPasswords[successfulCreateCount - 1],
+    });
   });
 
   await page.goto("/settings/security/users");
@@ -1316,14 +1669,686 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(runnerRadio).toBeChecked();
   await expect(viewerRadio).not.toBeChecked();
   await viewerRadio.check();
-  await page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true }).click();
+  heldCreate = new Promise<void>((resolve) => {
+    releaseHeldCreate = resolve;
+  });
+  holdNextCreate = true;
+  await createButton.click();
+  await expect(createButton).toBeDisabled();
+  await page.keyboard.press("Enter");
+  expect(createRequestCount).toBe(1);
+  releaseHeldCreate();
 
-  await expect(page.getByText("一時パスワードは今回だけ表示されます。安全な方法で利用者へ伝えてください。", { exact: true })).toBeVisible();
-  await expect(page.getByText("RandomStrong!Pass123", { exact: true })).toBeVisible();
+  const loginInput = page.getByLabel("ログインユーザーID");
+  const displayNameInput = page.getByLabel("表示名");
+  const temporaryPasswordInput = page.getByLabel("一時パスワード", { exact: true });
+  const copyButton = page.getByRole("button", { name: "一時パスワードをコピー" });
+  await expect(page.locator("#security-users-panel-create")).toHaveCount(0);
+  await expect(page.locator("#security-users-panel-edit")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ユーザーを編集" })).toBeVisible();
+  await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
+  await expect(loginInput).toHaveValue("001");
+  await expect(loginInput).toBeDisabled();
+  await expect(loginInput).toHaveClass(/disabled:bg-muted\/20/u);
+  await expect(displayNameInput).toHaveValue("短いログインユーザーIDユーザー");
+  await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[0]);
+  await expect(temporaryPasswordInput).toHaveAttribute("readonly", "");
+  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-muted\/20/u);
+  await expect(viewerRadio).toBeChecked();
+  await expect(runnerRadio).not.toBeChecked();
+  await expect(createButton).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByText("変更を保存しました。", { exact: true }).last()).toBeVisible();
+
+  await copyButton.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { __copiedOneTimePassword?: string })
+            .__copiedOneTimePassword
+      )
+    )
+    .toBe(generatedPasswords[0]);
+  await expect(page.getByText("コピーしました", { exact: true }).last()).toBeVisible();
+
+  await page.evaluate(() => {
+    (
+      globalThis as typeof globalThis & { __copyOneTimePasswordShouldFail?: boolean }
+    ).__copyOneTimePasswordShouldFail = true;
+  });
+  await copyButton.click();
+  await expect(page.getByTestId("security-user-temporary-password-error")).toContainText(
+    "ブラウザのクリップボード権限を確認するか、表示内容を手動で選択してください。"
+  );
+
+  await page.evaluate(() => {
+    (
+      globalThis as typeof globalThis & { __copyOneTimePasswordShouldFail?: boolean }
+    ).__copyOneTimePasswordShouldFail = false;
+  });
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
+  await loginInput.fill("002");
+  await displayNameInput.fill("連続作成ユーザー");
+  await viewerRadio.check();
+  await createButton.click();
+  await expect(page.locator("#security-users-panel-edit")).toBeVisible();
+  await expect(loginInput).toHaveValue("002");
+  await expect(displayNameInput).toHaveValue("連続作成ユーザー");
+  await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[1]);
+
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
+  await loginInput.fill("003");
+  await displayNameInput.fill("再試行ユーザー");
+  await viewerRadio.check();
+  failNextCreate = true;
+  await createButton.click();
+  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+    "ユーザーを作成できません。時間をおいて再試行してください。"
+  );
+  await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
+  await expect(page.getByTestId("security-user-temporary-password")).toHaveValue("");
+  await expect(loginInput).toHaveValue("003");
+  await expect(displayNameInput).toHaveValue("再試行ユーザー");
+
+  await createButton.click();
+  await expect(page.locator("#security-users-panel-edit")).toBeVisible();
+  await expect(loginInput).toHaveValue("003");
+  await expect(displayNameInput).toHaveValue("再試行ユーザー");
+  await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[2]);
+  await expect(temporaryPasswordInput).not.toHaveValue(generatedPasswords[1]);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+  await expectNoElementHorizontalOverflow(page.locator("#security-users-panel-edit"));
+  await expect(copyButton).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   expect(csrfObserved).toBe(true);
-  expect(createdPayloadLoginUserId).toBe("001");
+  expect(createRequestCount).toBe(4);
+  expect(successfulCreateCount).toBe(3);
+  expect(createdPayloads[0]).toEqual({
+    loginUserId: "001",
+    roleIds: ["role-viewer"],
+  });
+  expect(createdPayloads.at(-1)).toEqual({
+    loginUserId: "003",
+    roleIds: ["role-viewer"],
+  });
   expect(users.some((user) => user.login_user_id === "001")).toBe(true);
-  expect(createdPayloadRoleIds).toEqual(["role-viewer"]);
+  expect(users.some((user) => user.login_user_id === "003")).toBe(true);
+});
+
+test("ユーザー作成の problem field error は入力直下だけに表示し、局所クリアと request ID を保つ", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-viewer",
+    role_code: "QUERY_VIEWER",
+    display_name: "検索閲覧",
+    is_built_in: false,
+    permissions: ["menu.query"],
+  };
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [viewerRole])
+  );
+  let submitCount = 0;
+  await page.route("**/api/security/users", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfill(route, []);
+      return;
+    }
+    submitCount += 1;
+    const response =
+      submitCount === 1
+        ? problemEnvelope({
+            status: 409,
+            code: "SECURITY_USER_LOGIN_ID_CONFLICT",
+            title: "ユーザーを作成できません",
+            detail: "このログインユーザーIDは既に使用されています。別のIDを入力してください。",
+            requestId: "user-conflict-request",
+            fieldErrors: [
+              {
+                pointer: "/login_user_id",
+                code: "already_exists",
+                message: "別のログインユーザーIDを入力してください。",
+              },
+            ],
+          })
+        : submitCount === 2
+          ? problemEnvelope({
+              status: 422,
+              code: "REQUEST_VALIDATION_FAILED",
+              title: "入力内容を確認してください",
+              detail: "入力内容に誤りがあります。該当項目を確認してください。",
+              requestId: "user-validation-request",
+              fieldErrors: [
+                { pointer: "/login_user_id", code: "invalid", message: "IDを確認してください。" },
+                { pointer: "/display_name", code: "invalid", message: "表示名を確認してください。" },
+              ],
+            })
+          : problemEnvelope({
+              status: 503,
+              code: "SECURITY_SERVICE_UNAVAILABLE",
+              title: "サービスを一時的に利用できません",
+              detail: "ユーザーを作成できません。時間をおいて再試行してください。",
+              requestId: "user-service-request",
+              retryable: true,
+            });
+    await route.fulfill({
+      status: response.problem.status,
+      contentType: "application/json",
+      headers: { "X-Request-ID": response.problem.request_id },
+      body: JSON.stringify(response),
+    });
+  });
+
+  await page.goto("/settings/security/users");
+  await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
+  const loginInput = page.getByLabel("ログインユーザーID");
+  const displayNameInput = page.getByLabel("表示名");
+  await loginInput.fill("duplicate.user");
+  await displayNameInput.fill("重複ユーザー");
+  await page.getByRole("radio", { name: /検索閲覧/ }).check();
+  const submit = page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true });
+  await submit.click();
+
+  const conflictMessage = "このログインユーザーIDは既に使用されています。別のIDを入力してください。";
+  await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(1);
+  await expect(loginInput).toHaveAttribute("aria-invalid", "true");
+  await expect(loginInput).toHaveAttribute("aria-describedby", "security-user-login-user-id-error");
+  await expect(loginInput).toBeFocused();
+  await expect(page.getByTestId("security-users-form-actions").getByText(conflictMessage, { exact: true })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+  await expectNoElementHorizontalOverflow(page.locator("#security-users-panel-create"));
+  await loginInput.fill("available.user");
+  await expect(loginInput).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(0);
+
+  await submit.click();
+  await expect(loginInput).toBeFocused();
+  await expect(page.getByText("IDを確認してください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("表示名を確認してください。", { exact: true })).toBeVisible();
+  await displayNameInput.fill("利用可能な表示名");
+  await expect(page.getByText("表示名を確認してください。", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("IDを確認してください。", { exact: true })).toBeVisible();
+  await loginInput.fill("final.user");
+  await expect(page.getByText("IDを確認してください。", { exact: true })).toHaveCount(0);
+
+  await submit.click();
+  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+    "ユーザーを作成できません。時間をおいて再試行してください。"
+  );
+  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+    "リクエストID: user-service-request"
+  );
+  expect(submitCount).toBe(3);
+});
+
+test("ユーザー一覧と詳細のパスワードリセット結果を編集フォームに表示する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-viewer",
+    role_code: "QUERY_VIEWER",
+    display_name: "検索閲覧",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  const users = [
+    {
+      user_uuid: "admin-user",
+      login_user_id: "SYSTEM",
+      display_name: "システム管理者",
+      status: "ACTIVE",
+      force_password_change: false,
+      locked_until: null,
+      version: 1,
+      role_ids: ["role-system"],
+      is_bootstrap_admin: true,
+    },
+    {
+      user_uuid: "sales-user",
+      login_user_id: "sales.user",
+      display_name: "営業ユーザー",
+      status: "ACTIVE",
+      force_password_change: true,
+      locked_until: null,
+      version: 1,
+      role_ids: ["role-viewer"],
+      is_bootstrap_admin: false,
+    },
+  ];
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole, viewerRole])
+  );
+  await page.route("**/api/security/users", (route) => fulfill(route, users));
+  let resetRequestCount = 0;
+  await page.route("**/api/security/users/sales-user/reset-password", async (route) => {
+    resetRequestCount += 1;
+    await fulfill(route, {
+      user: { ...users[1], force_password_change: true },
+      temporary_password: `ListResetStrong!Pass-${resetRequestCount}`,
+    });
+  });
+
+  await page.goto("/settings/security/users");
+  const grid = page.getByTestId("security-users-grid");
+  const adminRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
+  const adminRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
+  await adminRowAction.click();
+  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(adminRowAction).toBeFocused();
+
+  await adminRow.locator("td").first().click();
+  const detailActions = page.getByTestId("security-users-detail-actions");
+  await expect(page.getByRole("heading", { name: "システム管理者", exact: true })).toBeVisible();
+  await expect(detailActions.getByRole("button", { name: "編集" })).toBeVisible();
+  await expect(
+    detailActions.getByRole("button", { name: "パスワードをリセット" })
+  ).toHaveCount(0);
+  await expect(detailActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
+
+  const salesRow = grid.locator("tbody tr").filter({ hasText: "営業ユーザー" });
+  const salesRowAction = page.getByTestId("security-users-row-actions-sales-user-trigger");
+  await salesRowAction.click();
+  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await page
+    .getByRole("alertdialog", { name: "パスワードをリセット" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(page.locator("#security-users-panel-edit")).toBeVisible();
+  await expect(page.getByLabel("ログインユーザーID")).toHaveValue("sales.user");
+  await expect(page.getByLabel("ログインユーザーID")).toBeDisabled();
+  await expect(page.getByLabel("一時パスワード", { exact: true })).toHaveValue(
+    "ListResetStrong!Pass-1"
+  );
+  await expect(page.getByLabel("一時パスワード", { exact: true })).toHaveAttribute(
+    "readonly",
+    ""
+  );
+  await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await salesRow.locator("td").first().click();
+  const salesDetailActions = page.getByTestId("security-users-detail-actions");
+  await expect(salesDetailActions.getByRole("button", { name: "編集" })).toBeVisible();
+  await expect(salesDetailActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
+  await expect(salesDetailActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await salesDetailActions.getByRole("button", { name: "パスワードをリセット" }).click();
+  await page
+    .getByRole("alertdialog", { name: "パスワードをリセット" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(page.locator("#security-users-panel-edit")).toBeVisible();
+  await expect(page.getByLabel("一時パスワード", { exact: true })).toHaveValue(
+    "ListResetStrong!Pass-2"
+  );
+  expect(resetRequestCount).toBe(2);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoElementHorizontalOverflow(page.locator("#security-users-panel-edit"));
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("ユーザー編集はパスワードリセットと無効化・有効化をフォーム操作に統合する", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.addInitScript(() => {
+    const state = globalThis as typeof globalThis & { __copiedEditPassword?: string };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          state.__copiedEditPassword = value;
+        },
+      },
+    });
+  });
+
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-viewer",
+    role_code: "QUERY_VIEWER",
+    display_name: "検索閲覧",
+    is_built_in: false,
+    permissions: ["menu.query"],
+    data_entitlements: [],
+  };
+  let user = {
+    user_uuid: "sales-user",
+    login_user_id: "sales.user",
+    display_name: "営業ユーザー",
+    status: "ACTIVE" as "ACTIVE" | "DISABLED",
+    force_password_change: false,
+    locked_until: null,
+    version: 1,
+    role_ids: ["role-viewer"],
+    is_bootstrap_admin: false,
+  };
+  let resetRequestCount = 0;
+  let resetPayload: unknown = null;
+  let failNextReset = false;
+  let updateRequestCount = 0;
+  const disableVersions: number[] = [];
+  const enableVersions: number[] = [];
+  let failNextDisable = false;
+
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole, viewerRole])
+  );
+  await page.route("**/api/security/users", (route) => fulfill(route, [user]));
+  await page.route("**/api/security/users/sales-user", async (route) => {
+    updateRequestCount += 1;
+    await fulfill(route, user);
+  });
+  await page.route("**/api/security/users/sales-user/*", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/reset-password")) {
+      resetRequestCount += 1;
+      resetPayload = route.request().postDataJSON();
+      if (failNextReset) {
+        failNextReset = false;
+        await fulfill(
+          route,
+          "一時パスワードを再発行できませんでした。接続状態と権限を確認して再試行してください。",
+          503
+        );
+        return;
+      }
+      user = { ...user, force_password_change: true };
+      await fulfill(route, {
+        user,
+        temporary_password: "EditResetStrong!Pass-1",
+      });
+      return;
+    }
+    const payload = route.request().postDataJSON() as { version: number };
+    if (pathname.endsWith("/disable")) {
+      disableVersions.push(payload.version);
+      if (failNextDisable) {
+        failNextDisable = false;
+        await fulfill(route, "最後のシステム管理者は無効化または権限解除できません。", 409);
+        return;
+      }
+      user = { ...user, status: "DISABLED", version: user.version + 1 };
+      await fulfill(route, user);
+      return;
+    }
+    if (pathname.endsWith("/enable")) {
+      enableVersions.push(payload.version);
+      user = { ...user, status: "ACTIVE", version: user.version + 1 };
+      await fulfill(route, user);
+      return;
+    }
+    await fulfill(route, "未対応のユーザー操作です。", 404);
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/settings/security/users");
+  await page.getByTestId("security-users-row-actions-sales-user-trigger").click();
+  await page.getByRole("menuitem", { name: "編集" }).click();
+
+  const editPanel = page.locator("#security-users-panel-edit");
+  const editActions = page.getByRole("group", { name: "ユーザー編集操作" });
+  const displayName = page.getByLabel("表示名");
+  const temporaryPassword = page.getByLabel("一時パスワード", { exact: true });
+  const copyTemporaryPassword = page.getByRole("button", {
+    name: "一時パスワードをコピー",
+  });
+  const assignedRole = page.getByLabel("検索閲覧");
+  await expect(editPanel).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await expect(temporaryPassword).toHaveValue("");
+  await expect(temporaryPassword).toHaveAttribute("readonly", "");
+  await expect(temporaryPassword).toHaveClass(/read-only:bg-muted\/20/u);
+  await expect(copyTemporaryPassword).toBeDisabled();
+  await displayName.fill("未保存の営業ユーザー");
+
+  await editActions.getByRole("button", { name: "パスワードをリセット" }).click();
+  await page
+    .getByRole("alertdialog", { name: "パスワードをリセット" })
+    .getByRole("button", { name: "キャンセル" })
+    .click();
+  expect(resetRequestCount).toBe(0);
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+
+  await editActions.getByRole("button", { name: "パスワードをリセット" }).click();
+  await page
+    .getByRole("alertdialog", { name: "パスワードをリセット" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(page.getByTestId("security-users-edit-reset-password-region")).toHaveCount(0);
+  await expect(temporaryPassword).toHaveValue("EditResetStrong!Pass-1");
+  await expect(page.getByText("パスワードをリセットしました。", { exact: true }).last()).toBeVisible();
+  expect(resetPayload).toEqual({ temporary_password: null });
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+  await expect(copyTemporaryPassword).toBeEnabled();
+  await copyTemporaryPassword.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { __copiedEditPassword?: string })
+            .__copiedEditPassword
+      )
+    )
+    .toBe("EditResetStrong!Pass-1");
+
+  failNextReset = true;
+  await editActions.getByRole("button", { name: "パスワードをリセット" }).click();
+  await page
+    .getByRole("alertdialog", { name: "パスワードをリセット" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(page.getByTestId("security-user-temporary-password-error")).toContainText(
+    "接続状態と権限を確認して再試行してください。"
+  );
+  await expect(temporaryPassword).toHaveValue("EditResetStrong!Pass-1");
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+  await expect(page.locator("main > [role='alert']")).toHaveCount(0);
+
+  const moreButton = editActions.getByRole("button", { name: "その他の操作" });
+  await moreButton.focus();
+  await page.keyboard.press("Enter");
+  const disableItem = page.getByRole("menuitem", { name: "無効化" });
+  await expect(disableItem).toBeFocused();
+  await expect(disableItem).toHaveAttribute("data-form-action-tone", "danger");
+  await page.keyboard.press("Escape");
+  await expect(moreButton).toBeFocused();
+
+  await moreButton.click();
+  await page.getByRole("menuitem", { name: "無効化" }).click();
+  await page
+    .getByRole("alertdialog", { name: "無効化" })
+    .getByRole("button", { name: "キャンセル" })
+    .click();
+  expect(disableVersions).toEqual([]);
+
+  await moreButton.click();
+  await page.getByRole("menuitem", { name: "無効化" }).click();
+  await page
+    .getByRole("alertdialog", { name: "無効化" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(editActions.getByRole("button", { name: "有効化" })).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+  await expect(
+    editActions.getByRole("button", { name: "パスワードをリセット" })
+  ).toHaveCount(0);
+  await expect(displayName).toBeDisabled();
+  await expect(temporaryPassword).toBeDisabled();
+  await expect(copyTemporaryPassword).toBeDisabled();
+  await expect(page.getByRole("radio")).toHaveCount(2);
+  await expect(assignedRole).toBeVisible();
+  await expect(assignedRole).toBeChecked();
+  await expect(assignedRole).toBeDisabled();
+  await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await page.getByRole("button", { name: "一覧に戻る" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(editActions.getByRole("button", { name: "有効化" })).toBeFocused();
+  await editPanel.locator("form").evaluate((form) =>
+    (form as HTMLFormElement).requestSubmit()
+  );
+  expect(updateRequestCount).toBe(0);
+  expect(resetRequestCount).toBe(2);
+  await editActions.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+  await expect(page.getByText("ユーザーを無効化しました。既存セッションは失効しました。", { exact: true }).last()).toBeVisible();
+  expect(disableVersions).toEqual([1]);
+
+  await editActions.getByRole("button", { name: "有効化" }).click();
+  await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "有効化" })).toHaveCount(0);
+  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(
+    editActions.getByRole("button", { name: "パスワードをリセット" })
+  ).toBeVisible();
+  await expect(displayName).toBeEnabled();
+  await expect(temporaryPassword).toBeEnabled();
+  await expect(temporaryPassword).toHaveAttribute("readonly", "");
+  await expect(copyTemporaryPassword).toBeEnabled();
+  await expect(assignedRole).toBeEnabled();
+  await expect(assignedRole).toBeChecked();
+  await expect(page.getByText("ユーザーを有効化しました。次回ログインから利用できます。", { exact: true }).last()).toBeVisible();
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+  expect(enableVersions).toEqual([2]);
+
+  failNextDisable = true;
+  await editActions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "無効化" }).click();
+  await page
+    .getByRole("alertdialog", { name: "無効化" })
+    .getByRole("button", { name: "実行" })
+    .click();
+  await expect(editActions).toContainText("最後のシステム管理者は無効化または権限解除できません。");
+  await expect(displayName).toHaveValue("未保存の営業ユーザー");
+  expect(disableVersions).toEqual([1, 3]);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(editActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("無効ユーザーの削除は確認・フォーカス復帰・選択移動を保つ", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-delete-viewer",
+    role_code: "DELETE_VIEWER",
+    display_name: "削除確認ロール",
+    is_built_in: false,
+    permissions: ["menu.query"],
+  };
+  const activeUser = {
+    user_uuid: "active-delete-user",
+    login_user_id: "active.user",
+    display_name: "有効ユーザー",
+    status: "ACTIVE",
+    force_password_change: false,
+    locked_until: null,
+    version: 4,
+    role_ids: [viewerRole.role_id],
+    assigned_roles: [],
+    is_bootstrap_admin: false,
+  };
+  const disabledUser = {
+    ...activeUser,
+    user_uuid: "disabled-delete-user",
+    login_user_id: "disabled.user",
+    display_name: "削除対象ユーザー",
+    status: "DISABLED",
+    version: 7,
+  };
+  let users = [activeUser, disabledUser];
+  let deleteCount = 0;
+  let observedIfMatch = "";
+
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [viewerRole])
+  );
+  await page.route("**/api/security/users", (route) => fulfill(route, users));
+  await page.route("**/api/security/users/disabled-delete-user", async (route) => {
+    deleteCount += 1;
+    observedIfMatch = route.request().headers()["if-match"] ?? "";
+    users = users.filter((user) => user.user_uuid !== disabledUser.user_uuid);
+    await fulfill(route, {
+      deleted: true,
+      user_uuid: disabledUser.user_uuid,
+      login_user_id: disabledUser.login_user_id,
+    });
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/settings/security/users");
+
+  const activeTrigger = page.getByTestId(
+    "security-users-row-actions-active-delete-user-trigger"
+  );
+  await activeTrigger.click();
+  await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  const deleteTrigger = page.getByTestId(
+    "security-users-row-actions-disabled-delete-user-trigger"
+  );
+  await deleteTrigger.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("End");
+  const deleteMenuItem = page.getByRole("menuitem", { name: "削除" });
+  await expect(deleteMenuItem).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
+  await expect(deleteDialog).toContainText(
+    "「削除対象ユーザー」（ログインユーザーID: disabled.user）を完全に削除します。"
+  );
+  await expect(deleteDialog).toContainText("割り当てロール、既存セッションは削除され");
+  await page.mouse.click(4, 4);
+  await expect(deleteDialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(deleteDialog).toHaveCount(0);
+  await expect(deleteTrigger).toBeFocused();
+  expect(deleteCount).toBe(0);
+
+  await deleteTrigger.click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await deleteDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(deleteTrigger).toBeFocused();
+  expect(deleteCount).toBe(0);
+
+  await deleteTrigger.click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
+
+  await expect(page.getByText("削除対象ユーザー", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "有効ユーザー" })).toBeVisible();
+  await expect(page.getByText("削除対象ユーザー を完全に削除しました。", { exact: true }).last()).toBeVisible();
+  expect(observedIfMatch).toBe('"7"');
+  expect(deleteCount).toBe(1);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
 });
 
 test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", async ({ page }) => {
@@ -1386,24 +2411,50 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await adminUserRowAction.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
   await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
   await page.keyboard.press("End");
   await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(adminUserRowAction).toBeFocused();
   await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
-  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
+  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
   await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "その他の操作" })).toBeVisible();
   await salesUserRow.locator("td").nth(1).click();
   await expect(salesUserRow).toHaveAttribute("data-selected", "true");
   await expect(page.locator("dl").getByText("ロック中", { exact: true })).toBeVisible();
   await expect(page.getByText("ロック期限", { exact: true })).toHaveCount(0);
-  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "その他の操作" }).click();
-  await expect(page.getByRole("menuitem", { name: "ロック解除" })).toBeVisible();
+  const salesUserDetailActions = page.getByTestId("security-users-detail-actions");
+  const salesUserRowAction = page.getByTestId("security-users-row-actions-sales-user-trigger");
+  await salesUserRowAction.click();
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(
+    salesUserDetailActions.getByRole("button", { name: "パスワードをリセット" })
+  ).toHaveCount(0);
+  await expect(salesUserDetailActions.getByRole("button", { name: "ロック解除" })).toBeVisible();
+  await salesUserDetailActions.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "有効化" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await salesUserDetailActions.getByRole("button", { name: "編集" }).click();
+  const disabledUserEditActions = page.getByRole("group", { name: "ユーザー編集操作" });
+  await expect(
+    disabledUserEditActions.getByRole("button", { name: "保存", exact: true })
+  ).toHaveCount(0);
+  await expect(
+    disabledUserEditActions.getByRole("button", { name: "パスワードをリセット" })
+  ).toHaveCount(0);
+  await expect(disabledUserEditActions.getByRole("button", { name: "有効化" })).toBeVisible();
+  await expect(page.getByLabel("表示名")).toBeDisabled();
+  await expect(page.getByLabel("一時パスワード", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一時パスワードをコピー" })).toBeDisabled();
+  await expect(page.getByRole("radio")).toHaveCount(2);
+  await expect(page.getByLabel("検索閲覧")).toBeVisible();
+  await expect(page.getByLabel("検索閲覧")).toBeChecked();
+  await expect(page.getByLabel("検索閲覧")).toBeDisabled();
   await expect(page.getByLabel("システム管理者")).toBeDisabled();
   await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
@@ -1425,7 +2476,13 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
-  await expect(page.getByTestId("security-users-row-actions-admin-user-trigger")).toBeVisible();
+  const mobileAdminUserRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
+  await expect(mobileAdminUserRowAction).toBeVisible();
+  await mobileAdminUserRowAction.click();
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
+  await expectNoPageHorizontalScroll(page);
 });
 
 test("ユーザー管理はアーカイブ済み割り当てロールを無効として表示し、新規選択肢には出さない", async ({ page }) => {
@@ -1477,7 +2534,8 @@ test("ユーザー管理はアーカイブ済み割り当てロールを無効�
   ).toBeVisible();
 
   const inactiveRoleBadge = page.getByText("データ管理者（アーカイブ済み・無効）", { exact: true }).last();
-  await expect(inactiveRoleBadge).toHaveClass(/bg-slate-100/);
+  // ロールバッジは共有 StatusBadge(token 化)へ移行。variant で判定する。
+  await expect(inactiveRoleBadge).toHaveAttribute("data-status-variant", "neutral");
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   await expect(page.getByRole("radio", { name: /検索閲覧/ })).toBeVisible();
   await expect(page.getByRole("radio", { name: /データ管理者/ })).toHaveCount(0);
@@ -1534,7 +2592,10 @@ test("ユーザー管理は復元済みロールを通常表示し、割り当�
       exact: true,
     })
   ).toHaveCount(0);
-  await expect(page.getByText("データ管理者", { exact: true }).last()).toHaveClass(/bg-sky-100/);
+  await expect(page.getByText("データ管理者", { exact: true }).last()).toHaveAttribute(
+    "data-status-variant",
+    "info"
+  );
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   await expect(page.getByRole("radio", { name: /データ管理者/ })).toBeVisible();
 });
@@ -1625,14 +2686,27 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(page.getByRole("checkbox", { name: /外観/ })).toBeVisible();
   const permissionBulkActions = page.getByTestId("security-roles-permission-selection-actions");
   await expect(permissionBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
-  await expect(permissionBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
+  await expect(permissionBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeDisabled();
   await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(page.getByRole("checkbox", { name: /外観/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).toBeChecked();
   const securityGroupBulkActions = page.getByTestId("security-roles-セキュリティ管理-permission-selection-actions");
-  await expect(securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択を解除" })).toBeEnabled();
-  await securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択を解除" }).click();
+  const securityGroupHeading = securityGroupBulkActions
+    .locator("..")
+    .getByRole("heading", { name: "セキュリティ管理" });
+  await expect
+    .poll(async () => {
+      const [actionsBox, headingBox] = await Promise.all([
+        securityGroupBulkActions.boundingBox(),
+        securityGroupHeading.boundingBox(),
+      ]);
+      if (!actionsBox || !headingBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - headingBox.x);
+    })
+    .toBeLessThanOrEqual(1);
+  await expect(securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択をすべて解除" })).toBeEnabled();
+  await securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択をすべて解除" }).click();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).not.toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
@@ -1651,6 +2725,90 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
   await expect(page.getByTestId("security-roles-row-actions-role-system-trigger")).toBeVisible();
+});
+
+test("ロールコード競合はコード欄へ結び付き、403 は安全なページ通知と request ID で示す", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole])
+  );
+  let submitCount = 0;
+  await page.route("**/api/security/roles", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfill(route, [systemRole]);
+      return;
+    }
+    submitCount += 1;
+    const response =
+      submitCount === 1
+        ? problemEnvelope({
+          status: 409,
+          code: "SECURITY_ROLE_CODE_CONFLICT",
+          title: "ロールを作成できません",
+          detail: "このロールコードは既に使用されています。別のコードを入力してください。",
+          requestId: "role-conflict-request",
+          fieldErrors: [
+            {
+              pointer: "/role_code",
+              code: "already_exists",
+              message: "別のロールコードを入力してください。",
+            },
+          ],
+          })
+        : submitCount === 2
+          ? problemEnvelope({
+              status: 500,
+              code: "INTERNAL_SERVER_ERROR",
+              title: "サーバー内部でエラーが発生しました",
+              detail: "サーバー内部でエラーが発生しました。時間をおいて再試行してください。",
+              requestId: "role-internal-request",
+            })
+          : problemEnvelope({
+              status: 403,
+              code: "SECURITY_PERMISSION_DENIED",
+              title: "この操作を実行する権限がありません",
+              detail: "ロールを作成する権限がありません。システム管理者に確認してください。",
+              requestId: "role-forbidden-request",
+            });
+    await route.fulfill({
+      status: response.problem.status,
+      contentType: "application/json",
+      headers: { "X-Request-ID": response.problem.request_id },
+      body: JSON.stringify(response),
+    });
+  });
+
+  await page.goto("/settings/security/roles");
+  await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
+  const roleCode = page.getByLabel("ロールコード");
+  await roleCode.fill("DUPLICATE_ROLE");
+  await page.getByLabel("ロール名").fill("重複ロール");
+  const actionBar = page.getByRole("group", { name: "ロール編集操作" });
+  await actionBar.getByRole("button", { name: "新規作成" }).click();
+
+  const conflictMessage = "このロールコードは既に使用されています。別のコードを入力してください。";
+  await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(1);
+  await expect(roleCode).toHaveAttribute("aria-invalid", "true");
+  await expect(roleCode).toHaveAttribute("aria-describedby", "security-role-code-error");
+  await expect(roleCode).toBeFocused();
+  await expect(actionBar.getByText(conflictMessage, { exact: true })).toHaveCount(0);
+
+  await roleCode.fill("AVAILABLE_ROLE");
+  await expect(roleCode).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(0);
+  await actionBar.getByRole("button", { name: "新規作成" }).click();
+  await expect(actionBar).toContainText("サーバー内部でエラーが発生しました。時間をおいて再試行してください。");
+  await expect(actionBar).toContainText("リクエストID: role-internal-request");
+  await expect(actionBar).not.toContainText("ORA-");
+  await page.getByLabel("ロール名").fill("再試行ロール");
+  await actionBar.getByRole("button", { name: "新規作成" }).click();
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("必要なロールが付与されているか、システム管理者に確認してください。");
+  await expect(page.getByRole("status")).toContainText("リクエストID: role-forbidden-request");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
+  expect(submitCount).toBe(3);
 });
 
 test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を設定できる", async ({ page }) => {
@@ -1674,6 +2832,14 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
         archived: false,
         allowed_role_ids: [],
       },
+      ...Array.from({ length: 18 }, (_, index) => ({
+        id: `verification-${String(index + 1).padStart(2, "0")}`,
+        name: `検証プロファイル ${String(index + 1).padStart(2, "0")}`,
+        category: "検証",
+        description: "スクロール領域の表示確認用プロファイル",
+        archived: false,
+        allowed_role_ids: [],
+      })),
     ])
   );
   const permissionRows = [
@@ -1729,19 +2895,95 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
   await expect(page.getByText("1 件", { exact: true })).toBeVisible();
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   const profileSearch = page.getByTestId("security-roles-profile-access-search");
+  const profileAccessList = page.getByTestId("security-roles-profile-access-list");
+  const readProfileAccessScrollState = () =>
+    profileAccessList.evaluate((node) => {
+      const computed = window.getComputedStyle(node);
+      return {
+        clientHeight: node.clientHeight,
+        maxHeight: Number.parseFloat(computed.maxHeight),
+        overflowX: computed.overflowX,
+        overflowY: computed.overflowY,
+        rootFontSize: Number.parseFloat(
+          window.getComputedStyle(document.documentElement).fontSize
+        ),
+        scrollHeight: node.scrollHeight,
+      };
+    });
   await expect(profileSearch).toBeVisible();
+  await expect(profileAccessList).toHaveAttribute("role", "region");
+  await expect(profileAccessList).toHaveAccessibleName("使用可能な業務プロファイル");
+  await expect(profileAccessList).toHaveAttribute("tabindex", "0");
+  const desktopScrollState = await readProfileAccessScrollState();
+  expect(desktopScrollState.maxHeight).toBeCloseTo(
+    28 * desktopScrollState.rootFontSize,
+    0
+  );
+  expect(desktopScrollState.clientHeight).toBeLessThanOrEqual(
+    Math.ceil(desktopScrollState.maxHeight)
+  );
+  expect(desktopScrollState.scrollHeight).toBeGreaterThan(desktopScrollState.clientHeight);
+  expect(desktopScrollState.overflowX).toBe("hidden");
+  expect(desktopScrollState.overflowY).toBe("auto");
+  await profileAccessList.focus();
+  await expect(profileAccessList).toBeFocused();
+  await profileAccessList.press("End");
+  await expect
+    .poll(() => profileAccessList.evaluate((node) => node.scrollTop))
+    .toBeGreaterThan(0);
   await profileSearch.focus();
   await expect(profileSearch).toBeFocused();
   await profileSearch.fill("財務");
   await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /標準プロファイル/ })).toHaveCount(0);
+  const filteredScrollState = await readProfileAccessScrollState();
+  expect(filteredScrollState.clientHeight).toBeLessThan(filteredScrollState.maxHeight);
+  expect(filteredScrollState.scrollHeight).toBeLessThanOrEqual(
+    filteredScrollState.clientHeight + 1
+  );
 
   const profileBulkActions = page.getByTestId("security-roles-profile-access-selection-actions");
+  await expect
+    .poll(async () => {
+      const [actionsBox, listBox] = await Promise.all([
+        profileBulkActions.boundingBox(),
+        profileAccessList.boundingBox(),
+      ]);
+      if (!actionsBox || !listBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - listBox.x);
+    })
+    .toBeLessThanOrEqual(1);
   await profileBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
+  await profileBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
+  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).not.toBeChecked();
+  await page.getByRole("checkbox", { name: /財務プロファイル/ }).check();
+  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
+  await profileSearch.fill("");
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
+  const mobileScrollState = await readProfileAccessScrollState();
+  expect(mobileScrollState.maxHeight).toBeCloseTo(
+    17.5 * mobileScrollState.rootFontSize,
+    0
+  );
+  expect(mobileScrollState.clientHeight).toBeLessThanOrEqual(
+    Math.ceil(mobileScrollState.maxHeight)
+  );
+  expect(mobileScrollState.scrollHeight).toBeGreaterThan(mobileScrollState.clientHeight);
+  expect(mobileScrollState.overflowX).toBe("hidden");
+  expect(mobileScrollState.overflowY).toBe("auto");
   await expect(profileSearch).toBeVisible();
+  await expect
+    .poll(async () => {
+      const [actionsBox, listBox] = await Promise.all([
+        profileBulkActions.boundingBox(),
+        profileAccessList.boundingBox(),
+      ]);
+      if (!actionsBox || !listBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - listBox.x);
+    })
+    .toBeLessThanOrEqual(1);
   await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" }).click();
 
   await expect
@@ -1928,6 +3170,27 @@ test("ロール管理の compact header menu は短い viewport 内に収まる"
 
 test("ロール・権限管理はアーカイブ済みロールの権限が無効であることを明示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
+  await page.unroute("**/api/security/profile-access/profiles**");
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, [
+      {
+        id: "default",
+        name: "標準プロファイル",
+        category: "共通",
+        description: "標準の業務プロファイル",
+        archived: false,
+        allowed_role_ids: ["role-archived-data"],
+      },
+      {
+        id: "finance",
+        name: "財務プロファイル",
+        category: "会計",
+        description: "財務部門向け",
+        archived: false,
+        allowed_role_ids: [],
+      },
+    ])
+  );
   const permissionRows = [
     {
       code: "menu.query",
@@ -1962,9 +3225,15 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
     archived: true,
     permissions: ["menu.query", "menu.direct_sql"],
     data_entitlements: [],
+    allowed_profile_ids: ["default"],
   };
   let roles: unknown[] = [systemRole, activeRole, archivedRole];
+  let updateRoleRequestCount = 0;
   await page.route("**/api/security/roles?include_archived=true", (route) => fulfill(route, roles));
+  await page.route("**/api/security/roles/role-archived-data", async (route) => {
+    updateRoleRequestCount += 1;
+    await fulfill(route, archivedRole);
+  });
   await page.route("**/api/security/roles/role-active-data/archive", async (route) => {
     const updated = { ...activeRole, archived: true, version: activeRole.version + 1 };
     roles = [systemRole, updated, archivedRole];
@@ -1998,7 +3267,51 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toBeVisible();
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  const archivedEditPanel = page.locator("#security-roles-panel-edit");
   const archivedEditActions = page.getByRole("group", { name: "ロール編集操作" });
+  const roleName = page.getByLabel("ロール名");
+  const roleDescription = page.getByLabel("説明");
+  const queryPermission = page.getByRole("checkbox", { name: /SQL 生成/u });
+  const directSqlPermission = page.getByRole("checkbox", { name: /SELECT SQL を実行/u });
+  const defaultProfile = page.getByRole("checkbox", { name: /標準プロファイル/u });
+  const financeProfile = page.getByRole("checkbox", { name: /財務プロファイル/u });
+  const profileSearch = page.getByLabel("業務プロファイルを検索");
+  await expect(roleName).toBeDisabled();
+  await expect(roleDescription).toBeDisabled();
+  await expect(queryPermission).toBeVisible();
+  await expect(queryPermission).toBeChecked();
+  await expect(queryPermission).toBeDisabled();
+  await expect(directSqlPermission).toBeVisible();
+  await expect(directSqlPermission).toBeChecked();
+  await expect(directSqlPermission).toBeDisabled();
+  await expect(defaultProfile).toBeVisible();
+  await expect(defaultProfile).toBeChecked();
+  await expect(defaultProfile).toBeDisabled();
+  await expect(financeProfile).toBeVisible();
+  await expect(financeProfile).not.toBeChecked();
+  await expect(financeProfile).toBeDisabled();
+  await expect(profileSearch).toBeVisible();
+  await expect(profileSearch).toBeDisabled();
+  await expect(
+    page
+      .getByTestId("security-roles-permission-selection-actions")
+      .getByRole("button", { name: "すべて選択" })
+  ).toBeDisabled();
+  await expect(
+    page
+      .getByTestId("security-roles-profile-access-selection-actions")
+      .getByRole("button", { name: "すべて選択" })
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "一覧に戻る" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("security-roles-profile-access-list")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeFocused();
+  await archivedEditPanel.locator("form").evaluate((form) =>
+    (form as HTMLFormElement).requestSubmit()
+  );
+  expect(updateRoleRequestCount).toBe(0);
+  await expect(archivedEditActions.getByRole("button", { name: "保存" })).toHaveCount(0);
   await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeVisible();
   await archivedEditActions.getByRole("button", { name: "復元" }).click();
   const restoreDialog = page.getByRole("alertdialog");
@@ -2021,6 +3334,18 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
     )
   ).toHaveCount(0);
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toHaveCount(0);
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(roleName).toBeEnabled();
+  await expect(roleDescription).toBeEnabled();
+  await expect(queryPermission).toBeEnabled();
+  await expect(queryPermission).toBeChecked();
+  await expect(defaultProfile).toBeEnabled();
+  await expect(defaultProfile).toBeChecked();
+  await expect(financeProfile).toBeEnabled();
+  await expect(profileSearch).toBeEnabled();
+  await expect(page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" })).toBeVisible();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expectNoPageHorizontalScroll(page);
 
   const activeRow = grid.locator("tbody tr").filter({ hasText: "データユーザー" });
   await activeRow.locator("td").first().click();
@@ -2040,6 +3365,100 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
       { exact: true }
     )
   ).toBeVisible();
+});
+
+test("アーカイブ済みカスタムロールの削除は409を保持し再試行できる", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const activeRole = {
+    ...systemRole,
+    role_id: "role-active-delete",
+    role_code: "ACTIVE_DELETE",
+    display_name: "有効カスタムロール",
+    is_built_in: false,
+  };
+  const archivedRole = {
+    ...activeRole,
+    role_id: "role-archived-delete",
+    role_code: "ARCHIVED_DELETE",
+    display_name: "削除対象ロール",
+    archived: true,
+    version: 9,
+  };
+  let roles = [systemRole, activeRole, archivedRole];
+  let deleteCount = 0;
+  const observedIfMatch: string[] = [];
+
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, roles)
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+  await page.route("**/api/security/roles/role-archived-delete", async (route) => {
+    deleteCount += 1;
+    observedIfMatch.push(route.request().headers()["if-match"] ?? "");
+    if (deleteCount === 1) {
+      const response = problemEnvelope({
+        status: 409,
+        code: "SECURITY_ROLE_DELETE_ENTITLEMENTS_PRESENT",
+        title: "現在の状態では削除できません",
+        detail:
+          "このロールにはデータ権限が残っています。Deep Data Security で空の Data Grant を適用してから削除してください。",
+        requestId: "role-delete-conflict",
+      });
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify(response),
+      });
+      return;
+    }
+    roles = roles.filter((role) => role.role_id !== archivedRole.role_id);
+    await fulfill(route, {
+      deleted: true,
+      role_id: archivedRole.role_id,
+      role_code: archivedRole.role_code,
+    });
+  });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/settings/security/roles");
+
+  await page.getByTestId("security-roles-row-actions-role-active-delete-trigger").click();
+  await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  const archivedTrigger = page.getByTestId(
+    "security-roles-row-actions-role-archived-delete-trigger"
+  );
+  await archivedTrigger.click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
+  await expect(deleteDialog).toContainText(
+    "「削除対象ロール」（ロールコード: ARCHIVED_DELETE）を完全に削除します。"
+  );
+  await expect(deleteDialog).toContainText("機能権限と業務プロファイルの関連は削除され");
+  await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
+
+  await expect(page.getByText("削除対象ロール", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("main", { name: "メイン領域" })).toContainText(
+    "Deep Data Security で空の Data Grant を適用してから削除してください。"
+  );
+
+  await page
+    .getByTestId("security-roles-detail-actions")
+    .getByRole("button", { name: "編集" })
+    .click();
+  const editActions = page.getByRole("group", { name: "ロール編集操作" });
+  await editActions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
+
+  await expect(page.getByText("削除対象ロール", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("削除対象ロール を完全に削除しました。", { exact: true }).last()).toBeVisible();
+  expect(observedIfMatch).toEqual(['"9"', '"9"']);
+  expect(deleteCount).toBe(2);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoPageHorizontalScroll(page);
 });
 
 test("ロール・権限管理はオントロジー提案取得が遅延しても読み込み完了する", async ({ page }) => {
@@ -2207,7 +3626,7 @@ test("DeepSec は3つの管理タブで認証・基盤構成・データ権限�
   await page.keyboard.press("Home");
   await expect(dataUserTab).toBeFocused();
   await expect(dataUserTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("構成済み", { exact: true })).toBeVisible();
+  await expect(page.getByText("構成済み", { exact: true }).first()).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -2234,7 +3653,7 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await mockDeepSecDataEntitlements(page);
 
   await page.goto("/settings/security/deepsec");
-  await expect(page.getByText("構成状態を確認中", { exact: true })).toBeVisible();
+  await expect(page.getByText("構成状態を確認中", { exact: true }).first()).toBeVisible();
   await page.getByRole("tab", { name: "基盤構成" }).click();
   await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
   await expect(page.locator("pre:visible")).toHaveCount(0);
@@ -2252,7 +3671,7 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await expectNoElementHorizontalOverflow(verifyButton);
 
   releaseStatus();
-  await expect(page.getByText("未構成", { exact: true })).toBeVisible();
+  await expect(page.getByText("未構成", { exact: true }).first()).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -2266,7 +3685,7 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
 
   await page.goto("/settings/security/deepsec");
 
-  await expect(page.getByText("状態取得失敗", { exact: true })).toBeVisible();
+  await expect(page.getByText("状態取得失敗", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "再読込" })).toBeVisible();
   await expect(page.getByText("構成状態を取得できませんでした。", { exact: false })).toBeVisible();
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
@@ -2339,7 +3758,7 @@ for (const driverMode of ["thin", "thick"] as const) {
       .getByRole("status")
       .filter({ hasText: "Deep Data Security が無効です。" });
     await expect(disabledBanner).toBeVisible();
-    await expect(page.getByText("未構成", { exact: true })).toBeVisible();
+    await expect(page.getByText("未構成", { exact: true }).first()).toBeVisible();
     await page.getByRole("tab", { name: "基盤構成" }).click();
     await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。", { exact: true })).toBeVisible();
     const applySection = page.getByTestId("security-deepsec-foundation-apply-section");
@@ -2447,24 +3866,29 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     data_entitlements: [],
   }));
   let entitlementRoles: unknown[] = [systemRole, queryRole, archivedRole, ...extraRoles];
-  let savedPayload: {
+  type DataEntitlementPayload = {
+    entitlement_id?: string;
+    resource_code: string;
+    scope_code: string;
+    capability: string;
+    target_owner: string;
+    target_object: string;
+    target_type: string;
+    column_names: string[];
+    scope_mode: string;
+    scope_column: string;
+    scope_filters: Array<Record<string, unknown>>;
+  };
+  let previewPayload: {
     version: number;
-    data_entitlements: Array<{
-      entitlement_id?: string;
-      resource_code: string;
-      scope_code: string;
-      capability: string;
-      target_owner: string;
-      target_object: string;
-      target_type: string;
-      column_names: string[];
-      scope_mode: string;
-      scope_column: string;
-      scope_filters: Array<Record<string, unknown>>;
-    }>;
+    data_entitlements: DataEntitlementPayload[];
   } | null = null;
-  let previewPayload: { data_entitlements: Array<Record<string, unknown>> } | null = null;
-  const applyPayloads: Array<{ confirmation: string; entitlement_ids: string[] }> = [];
+  const applyPayloads: Array<{
+    version: number;
+    confirmation: string;
+    data_entitlements: DataEntitlementPayload[];
+  }> = [];
+  let failNextApply = false;
   await page.route("**/api/security/deepsec/status", (route) =>
     fulfill(route, {
       configured: true,
@@ -2485,6 +3909,15 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     object_type: "TABLE",
     comment: "受注",
   };
+  const scrollableSalesObjects = [
+    salesObject,
+    ...Array.from({ length: 6 }, (_, index) => ({
+      ...salesObject,
+      name: `ORDER_HISTORY_${index + 1}`,
+      qualified_name: `SALES.ORDER_HISTORY_${index + 1}`,
+      comment: `受注履歴${index + 1}`,
+    })),
+  ];
   const salesObjectDetail = {
     ...salesObject,
     columns: [
@@ -2512,6 +3945,14 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
         comment: "",
         sample_values: [],
       },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        column_name: `AUDIT_COLUMN_${String(index + 1).padStart(2, "0")}`,
+        logical_name: `監査列${index + 1}`,
+        data_type: "VARCHAR2(64)",
+        nullable: true,
+        comment: "",
+        sample_values: [],
+      })),
     ],
   };
   const expectedScopeFilters = [
@@ -2537,35 +3978,37 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   const objectRequests: Array<{
     limit: string | null;
     cursor: string | null;
-    owner: string | null;
+    ownerPrefix: string | null;
+    queryScope: string | null;
     q: string | null;
   }> = [];
   await page.route("**/api/nl2sql/db-admin/objects**", async (route) => {
     const url = new URL(route.request().url());
     const cursor = url.searchParams.get("cursor");
-    const owner = url.searchParams.get("owner");
+    const ownerPrefix = url.searchParams.get("owner_prefix");
     const q = url.searchParams.get("q");
     objectRequests.push({
       limit: url.searchParams.get("limit"),
       cursor,
-      owner,
+      ownerPrefix,
+      queryScope: url.searchParams.get("query_scope"),
       q,
     });
     const items =
-      owner === "SALES" || q === "ORDERS"
-        ? [salesObject]
+      ownerPrefix === "SAL" || q === "ORDERS"
+        ? scrollableSalesObjects
         : cursor === "deepsec-page-2"
-          ? [salesObject]
+          ? scrollableSalesObjects
           : [deepSecTargetObject];
     await fulfill(route, {
       runtime: "oracle",
-      owner: owner ?? "",
+      owner: ownerPrefix ?? "",
       items,
-      total: 2,
-      table_count: 2,
+      total: scrollableSalesObjects.length + 1,
+      table_count: scrollableSalesObjects.length + 1,
       view_count: 0,
       counts_included: false,
-      next_cursor: owner || q || cursor ? null : "deepsec-page-2",
+      next_cursor: ownerPrefix || q || cursor ? null : "deepsec-page-2",
       refreshed_at: "2026-07-19T00:00:00Z",
       catalog_version: 1,
       warnings: [],
@@ -2582,11 +4025,19 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   );
   await page.route("**/api/security/deepsec/data-entitlements/role-query/preview", async (route) => {
     const payload = route.request().postDataJSON() as {
-      data_entitlements: Array<Record<string, unknown>>;
+      version: number;
+      data_entitlements: DataEntitlementPayload[];
     };
     previewPayload = payload;
+    const cleanupSql = payload.data_entitlements.length
+      ? []
+      : [
+          "SET USE DATA GRANTS ONLY ON SALES.ORDERS DISABLED",
+          "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_PREVIEW",
+        ];
     await fulfill(route, {
       role_id: "role-query",
+      version: payload.version,
       data_entitlements: payload.data_entitlements.map((item) => ({
         entitlement_id: item.entitlement_id ?? "preview-0",
         data_grant_name: "NL2SQL_DG_PREVIEW",
@@ -2598,54 +4049,51 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
         checksum: "f".repeat(64),
         ...item,
       })),
+      cleanup_sql: cleanupSql,
+      checksum: "a".repeat(64),
     });
-  });
-  await page.route("**/api/security/deepsec/data-entitlements/role-query", async (route) => {
-    savedPayload = route.request().postDataJSON();
-    const updated = {
-      ...queryRole,
-      version: 4,
-      data_entitlements:
-        savedPayload?.data_entitlements.map((item, index) => ({
-          entitlement_id: item.entitlement_id ?? `saved-${index}`,
-          data_grant_name: item.entitlement_id ? "NL2SQL_DG_PREVIEW" : "NL2SQL_DG_SAVED",
-          sql_checksum: "",
-          apply_status: "PENDING",
-          apply_error_message: "",
-          applied_at: null,
-          sql: [`GRANT SELECT ON ${item.resource_code} TO NL2SQL_APP_DB_ROLE`],
-          checksum: "e".repeat(64),
-          ...item,
-        })) ?? [],
-    };
-    entitlementRoles = [systemRole, updated, archivedRole];
-    await fulfill(route, updated);
   });
   await page.route("**/api/security/deepsec/data-entitlements/role-query/apply", async (route) => {
     const payload = route.request().postDataJSON() as {
+      version: number;
       confirmation: string;
-      entitlement_ids: string[];
+      data_entitlements: DataEntitlementPayload[];
     };
     applyPayloads.push(payload);
+    if (failNextApply) {
+      failNextApply = false;
+      await fulfill(route, "Oracle で Data Grant の適用に失敗しました。", 500);
+      return;
+    }
     const currentRole = entitlementRoles.find(
       (role) => (role as { role_id?: string }).role_id === "role-query"
     ) as Record<string, unknown> & { data_entitlements: Array<Record<string, unknown>> };
+    const updated = {
+      ...currentRole,
+      version: payload.version + 1,
+      data_entitlements: payload.data_entitlements.map((item, index) => ({
+        entitlement_id: item.entitlement_id ?? `saved-${index}`,
+        data_grant_name: item.entitlement_id ? "NL2SQL_DG_PREVIEW" : "NL2SQL_DG_SAVED",
+        sql_checksum: "e".repeat(64),
+        apply_status: "APPLIED",
+        apply_error_message: "",
+        applied_at: "2026-08-28T00:00:00Z",
+        sql: [],
+        checksum: "e".repeat(64),
+        ...item,
+      })),
+    };
     entitlementRoles = [
       systemRole,
-      {
-        ...currentRole,
-        data_entitlements: currentRole.data_entitlements.map((item) => ({
-          ...item,
-          apply_status: "APPLIED",
-          apply_error_message: "",
-        })),
-      },
+      updated,
       archivedRole,
     ];
     await fulfill(route, {
-      role_id: "role-query",
+      role: updated,
       status: "APPLIED",
-      entitlement_ids: payload.entitlement_ids,
+      checksum: "b".repeat(64),
+      cleanup_count: 0,
+      applied_count: updated.data_entitlements.length,
     });
   });
 
@@ -2665,7 +4113,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect.poll(() => objectRequests[0]).toMatchObject({
     limit: "50",
     cursor: null,
-    owner: null,
+    ownerPrefix: null,
+    queryScope: "name_comment",
   });
   const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
   await expect(page.getByTestId("security-deepsec-entitlement-role-role-query")).toHaveAttribute(
@@ -2707,9 +4156,21 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     .toBeTruthy();
   await loadMoreButton.click();
   await expect.poll(() => objectRequests.some((request) => request.cursor === "deepsec-page-2")).toBeTruthy();
-  await objectPicker.getByLabel("schema").fill("SALES");
-  await expect.poll(() => objectRequests.some((request) => request.owner === "SALES")).toBeTruthy();
-  await objectPicker.getByLabel("検索").fill("ORDERS");
+  const objectSearch = objectPicker.getByRole("searchbox", { name: "検索" });
+  const objectOwner = objectPicker.getByRole("searchbox", { name: "所有者" });
+  await expect(objectSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
+  await expect(objectOwner).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
+  await expectEqualFilterWidths(objectSearch, objectOwner);
+  await objectSearch.focus();
+  await page.keyboard.press("Tab");
+  await expect(objectOwner).toBeFocused();
+  await objectOwner.fill("sal");
+  await expect(objectOwner).toHaveValue("SAL");
+  await expect
+    .poll(() => objectRequests.some((request) => request.ownerPrefix === "SAL"))
+    .toBeTruthy();
+  await expect(objectPicker.getByRole("option", { name: /SALES\.ORDERS/ })).toBeVisible();
+  await objectSearch.fill("ORDERS");
   await expect.poll(() => objectRequests.some((request) => request.q === "ORDERS")).toBeTruthy();
   await objectPicker.getByRole("option", { name: /SALES\.ORDERS/ }).click();
   await expect(entitlementForm.getByText("CUSTOMER_NAME", { exact: true })).toBeVisible();
@@ -2718,6 +4179,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   const columnsLegend = columnsFieldset.locator("legend");
   const columnActions = firstRule.getByTestId("security-deepsec-entitlement-column-selection-actions-0");
   const columnsGrid = firstRule.getByTestId("security-deepsec-entitlement-columns-grid-0");
+  const objectPickerList = objectPicker.getByTestId("security-deepsec-object-picker-list-0");
+  const main = page.getByRole("main", { name: "メイン領域" });
   const selectAllColumnsButton = columnActions.getByTestId(
     "security-deepsec-entitlement-column-selection-actions-0-select"
   );
@@ -2730,18 +4193,50 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(columnsGrid).toBeVisible();
   await expect(selectAllColumnsButton).toBeEnabled();
   await expect(clearAllColumnsButton).toBeDisabled();
-  await selectAllColumnsButton.click();
+  await setElementScrollTop(firstRule, 64);
+  await selectAllColumnsButton.scrollIntoViewIfNeeded();
+  if ((await main.evaluate((node) => node.scrollTop)) === 0) {
+    await setMainScrollTop(page, 32);
+  }
+  await selectAllColumnsButton.scrollIntoViewIfNeeded();
+  await setElementScrollTop(objectPickerList, 72);
+  await setElementScrollTop(columnsGrid, 72);
+  await expect
+    .poll(() =>
+      Promise.all(
+        [main, firstRule, objectPickerList, columnsGrid].map((container) =>
+          container.evaluate((node) => node.scrollTop)
+        )
+      ).then((positions) => positions.every((position) => position > 0))
+    )
+    .toBeTruthy();
+  const preservedScrollContainers = [main, firstRule, objectPickerList, columnsGrid];
+  await expectScrollPositionsPreserved(page, preservedScrollContainers, () =>
+    selectAllColumnsButton.click()
+  );
   await expect(selectAllColumnsButton).toBeDisabled();
   await expect(clearAllColumnsButton).toBeEnabled();
   await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).toBeChecked();
   await expect(firstRule.getByRole("checkbox", { name: /CUSTOMER_NAME/ })).toBeChecked();
   await expect(firstRule.getByRole("checkbox", { name: /REGION_CODE/ })).toBeChecked();
-  await clearAllColumnsButton.click();
+  await expectScrollPositionsPreserved(page, preservedScrollContainers, () =>
+    clearAllColumnsButton.click()
+  );
   await expect(selectAllColumnsButton).toBeEnabled();
   await expect(clearAllColumnsButton).toBeDisabled();
   await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).not.toBeChecked();
   await expect(firstRule.getByRole("checkbox", { name: /CUSTOMER_NAME/ })).not.toBeChecked();
   await expect(firstRule.getByRole("checkbox", { name: /REGION_CODE/ })).not.toBeChecked();
+  await selectAllColumnsButton.focus();
+  await expectScrollPositionsPreserved(page, preservedScrollContainers, () =>
+    selectAllColumnsButton.press("Enter")
+  );
+  await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).toBeChecked();
+  await clearAllColumnsButton.focus();
+  await expectScrollPositionsPreserved(page, preservedScrollContainers, () =>
+    clearAllColumnsButton.press("Space")
+  );
+  await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).not.toBeChecked();
   await expect(objectPicker.locator("#deepsec-entitlement-resource-0 [aria-hidden='true']")).toHaveText("*");
   await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
@@ -2787,6 +4282,11 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
             columnActionsBox &&
             columnActionsBox.y >= columnsLegendBox.y + columnsLegendBox.height + 3
         ),
+        columnActionsStartWithGrid: Boolean(
+          columnActionsBox &&
+            columnsGridBox &&
+            Math.abs(columnActionsBox.x - columnsGridBox.x) <= 1
+        ),
         columnsGridBelowActions: Boolean(
           columnActionsBox &&
             columnsGridBox &&
@@ -2805,6 +4305,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     .toEqual({
       columnsBelowTarget: true,
       columnActionsBelowLegend: true,
+      columnActionsStartWithGrid: true,
       columnsGridBelowActions: true,
       scopeBelowColumns: true,
       scopeStartsWithTarget: true,
@@ -2906,7 +4407,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   ).toBeVisible();
   await entitlementForm.getByRole("checkbox", { name: /CUSTOMER_NAME/ }).check();
   await entitlementForm.getByRole("checkbox", { name: /REGION_CODE/ }).check();
-  await entitlementForm.getByText("SQL プレビュー", { exact: true }).click();
+  await entitlementForm.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   const sqlPreview = entitlementForm.getByTestId("security-deepsec-sql-preview");
   const sqlPreviewButton = entitlementForm.getByTestId("security-deepsec-sql-preview-generate");
   await expect(sqlPreviewButton).toBeVisible();
@@ -2929,6 +4430,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await sqlPreviewButton.click();
 
   await expect.poll(() => previewPayload).toEqual({
+    version: 3,
     data_entitlements: [
       {
         resource_code: "SALES.ORDERS",
@@ -2944,7 +4446,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       },
     ],
   });
-  expect(savedPayload).toBeNull();
+  expect(applyPayloads).toHaveLength(0);
   await expect(page.getByText("SQL プレビューを生成しました。", { exact: true })).toBeVisible();
   await expect(entitlementForm.getByText("GRANT SELECT ON SALES.ORDERS TO NL2SQL_APP_DB_ROLE")).toBeVisible();
   await expect(entitlementForm.getByRole("button", { name: "ポリシーを保存" })).toHaveCount(0);
@@ -2954,8 +4456,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
   await expect(applyField.getByRole("button", { name: "Data Grant を適用" })).toBeEnabled();
   await applyField.getByRole("button", { name: "Data Grant を適用" }).click();
-  await expect.poll(() => savedPayload).toEqual({
+  await expect.poll(() => applyPayloads.at(-1)).toEqual({
     version: 3,
+    confirmation: "ADMIN_EXECUTE",
     data_entitlements: [
       {
         entitlement_id: "preview-0",
@@ -2972,24 +4475,25 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       },
     ],
   });
-  await expect
-    .poll(() => applyPayloads.at(-1))
-    .toEqual({ confirmation: "ADMIN_EXECUTE", entitlement_ids: ["preview-0"] });
   await expect(page.getByText("Data Grant を適用しました。", { exact: true }).last()).toBeVisible();
 
   await entitlementForm.getByRole("button", { name: "データ権限を削除" }).click();
   await expect(entitlementForm.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
-  savedPayload = null;
+  await entitlementForm.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await expect(sqlPreviewButton).toBeEnabled();
+  await sqlPreviewButton.click();
+  await expect.poll(() => previewPayload).toEqual({ version: 4, data_entitlements: [] });
+  await expect(
+    entitlementForm.getByText("DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_PREVIEW")
+  ).toBeVisible();
   await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
   await expect(applyField.getByRole("button", { name: "Data Grant を適用" })).toBeEnabled();
   await applyField.getByRole("button", { name: "Data Grant を適用" }).click();
-  await expect.poll(() => savedPayload).toEqual({
+  await expect.poll(() => applyPayloads.at(-1)).toEqual({
     version: 4,
+    confirmation: "ADMIN_EXECUTE",
     data_entitlements: [],
   });
-  await expect
-    .poll(() => applyPayloads.at(-1))
-    .toEqual({ confirmation: "ADMIN_EXECUTE", entitlement_ids: [] });
   await expect(page.getByText("Data Grant を適用しました。", { exact: true }).last()).toBeVisible();
 
   await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
@@ -2998,11 +4502,20 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(replacementRule.getByText("Data Grant", { exact: true })).toBeVisible();
   await replacementPicker.getByRole("option", { name: /SALES\.ORDERS/ }).click();
   await replacementRule.getByRole("checkbox", { name: /ORDER_ID/ }).check();
-  savedPayload = null;
   await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  failNextApply = true;
   await applyField.getByRole("button", { name: "Data Grant を適用" }).click();
-  await expect.poll(() => savedPayload).toEqual({
-    version: 4,
+  await expect(
+    entitlementForm.getByText("Oracle で Data Grant の適用に失敗しました。", { exact: true })
+  ).toBeVisible();
+  await expect(replacementRule.getByRole("checkbox", { name: /ORDER_ID/ })).toBeChecked();
+  await expect(applyField.getByRole("textbox", { name: "実行確認語" })).toHaveValue(
+    "ADMIN_EXECUTE"
+  );
+  await applyField.getByRole("button", { name: "Data Grant を適用" }).click();
+  await expect.poll(() => applyPayloads.at(-1)).toEqual({
+    version: 5,
+    confirmation: "ADMIN_EXECUTE",
     data_entitlements: [
       {
         resource_code: "SALES.ORDERS",
@@ -3018,9 +4531,6 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       },
     ],
   });
-  await expect
-    .poll(() => applyPayloads.at(-1))
-    .toEqual({ confirmation: "ADMIN_EXECUTE", entitlement_ids: ["saved-0"] });
   await expect(page.getByText("Data Grant を適用しました。", { exact: true }).last()).toBeVisible();
 
   await page.getByTestId("security-deepsec-entitlement-role-role-archived").click();
@@ -3035,7 +4545,10 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expectNoPageHorizontalScroll(page);
 });
 
-test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維持する", async ({ page }) => {
+test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維持する", async ({ page }, testInfo) => {
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({ width: 1600, height: 948 });
+  }
   await mockDatabaseGateReady(page);
   const dataRole = {
     role_id: "role-data",
@@ -3113,6 +4626,10 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
       },
     ],
   };
+  let roleWidePreviewPayload: {
+    version: number;
+    data_entitlements: Array<Record<string, unknown>>;
+  } | null = null;
   await page.route("**/api/nl2sql/db-admin/objects**", (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     fulfill(route, {
@@ -3148,6 +4665,28 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   await page.route("**/api/security/deepsec/data-entitlements", (route) =>
     fulfill(route, [dataRole, auditRole])
   );
+  await page.route("**/api/security/deepsec/data-entitlements/role-data/preview", async (route) => {
+    roleWidePreviewPayload = route.request().postDataJSON() as {
+      version: number;
+      data_entitlements: Array<Record<string, unknown>>;
+    };
+    await fulfill(route, {
+      role_id: dataRole.role_id,
+      version: dataRole.version,
+      data_entitlements: dataRole.data_entitlements.map((item) => ({
+        ...item,
+        sql: [
+          `-- ${item.data_grant_name}`,
+          `GRANT SELECT ON ${item.resource_code} TO NL2SQL_APP_DB_ROLE`,
+          `DROP DATA GRANT IF EXISTS APP_OWNER.${item.data_grant_name}`,
+          `SET USE DATA GRANTS ONLY ON ${item.resource_code} ENABLED`,
+        ],
+        checksum: item.checksum,
+      })),
+      cleanup_sql: [],
+      checksum: "d".repeat(64),
+    });
+  });
 
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限" }).click();
@@ -3172,6 +4711,48 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   await expect(dataRoleCard).toHaveAttribute("aria-pressed", "true");
   await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0")).toBeVisible();
   await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-1")).toBeVisible();
+  const secondSavedRuleTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-1");
+  await secondSavedRuleTab.click();
+  await expect(secondSavedRuleTab).toHaveAttribute("aria-pressed", "true");
+  const workspaceFrame = entitlementForm.getByTestId(
+    "security-deepsec-entitlement-workspace-frame"
+  );
+  const sqlPreview = entitlementForm.getByTestId("security-deepsec-sql-preview");
+  const workspaceHeightBeforePreview = Math.round(
+    await workspaceFrame.evaluate((node) => node.getBoundingClientRect().height)
+  );
+  await sqlPreview.locator("summary").focus();
+  await sqlPreview.locator("summary").press("Enter");
+  await expect(sqlPreview).toHaveAttribute("open", "");
+  await expect
+    .poll(() =>
+      workspaceFrame.evaluate((node) => Math.round(node.getBoundingClientRect().height))
+    )
+    .toBe(workspaceHeightBeforePreview);
+  await entitlementForm.getByTestId("security-deepsec-sql-preview-generate").click();
+  await expect.poll(() => roleWidePreviewPayload).toMatchObject({
+    version: 1,
+    data_entitlements: [
+      { entitlement_id: "entitlement-existing-1" },
+      { entitlement_id: "entitlement-existing-2" },
+    ],
+  });
+  await expect(entitlementForm.getByText("-- NL2SQL_DG_EMPLOYEES_READ")).toBeVisible();
+  await expect(entitlementForm.getByText("-- NL2SQL_DG_EMPLOYEES_PROFILE")).toBeVisible();
+  await expect
+    .poll(() =>
+      workspaceFrame.evaluate((node) => Math.round(node.getBoundingClientRect().height))
+    )
+    .toBe(workspaceHeightBeforePreview);
+  await expect
+    .poll(() =>
+      sqlPreview.evaluate((node) => ({
+        scrolls: node.scrollHeight > node.clientHeight + 1,
+        overflowY: window.getComputedStyle(node).overflowY,
+      }))
+    )
+    .toEqual({ scrolls: true, overflowY: "auto" });
+  await entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0").click();
   await setElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-0"), 96);
   await setMainScrollTop(page, 0);
   await expectMainScrollPreservedAfterClick(page, addGrantButton);
@@ -3187,6 +4768,37 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   await expect(secondRuleTab).toHaveAttribute("aria-pressed", "false");
   await expect(thirdRuleTab).toHaveAttribute("aria-pressed", "true");
   await expectElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2"), 0);
+  if (testInfo.project.name === "desktop") {
+    await expect
+      .poll(() =>
+        entitlementForm.evaluate((node) => {
+          const workspace = node.querySelector(
+            '[data-testid="security-deepsec-entitlement-workspace"]'
+          );
+          const editor = node.querySelector('[data-testid="security-deepsec-entitlement-rule-2"]');
+          const workspaceBox = workspace?.getBoundingClientRect();
+          const editorBox = editor?.getBoundingClientRect();
+          return {
+            workspaceHeightIsExpected: Boolean(
+              workspaceBox && workspaceBox.height >= 447 && workspaceBox.height <= 449
+            ),
+            editorMatchesWorkspace: Boolean(
+              workspaceBox && editorBox && Math.abs(workspaceBox.height - editorBox.height) <= 1
+            ),
+            editorScrollable: Boolean(
+              editor &&
+                window.getComputedStyle(editor).overflowY === "auto" &&
+                editor.scrollHeight > editor.clientHeight
+            ),
+          };
+        })
+      )
+      .toEqual({
+        workspaceHeightIsExpected: true,
+        editorMatchesWorkspace: true,
+        editorScrollable: true,
+      });
+  }
   await expect(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2").getByTestId("security-deepsec-object-picker-2")).toBeVisible();
   await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-2");
   const thirdObjectPicker = entitlementForm
@@ -3237,14 +4849,32 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
       })
     )
     .toEqual({
-      formOverflow: "hidden",
+      formOverflow: "visible",
       listOverflowY: "auto",
       actionsInsideForm: true,
     });
   await expectNoElementHorizontalOverflow(entitlementForm);
   await expectNoPageHorizontalScroll(page);
 
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect
+      .poll(async () =>
+        Math.round(await workspaceFrame.evaluate((node) => node.getBoundingClientRect().height))
+      )
+      .toBe(448);
+    await expectNoPageHorizontalScroll(page);
+    await expectNoElementHorizontalOverflow(entitlementForm);
+    await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-0");
+    await expectElementCenterUnobscured(applyButton);
+  }
+
   await page.setViewportSize({ width: 375, height: 812 });
+  await expect
+    .poll(async () =>
+      Math.round(await workspaceFrame.evaluate((node) => node.getBoundingClientRect().height))
+    )
+    .toBe(504);
   await expectNoPageHorizontalScroll(page);
   await expectNoElementHorizontalOverflow(entitlementForm);
   await expectDeepSecDataGrantRegionsDoNotOverlap(page, "security-deepsec-entitlement-rule-0");
@@ -3382,6 +5012,27 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
       checks: [
         { key: "no_context", passed: true, detail: "context 未設定の取得行数: 0" },
         { key: "limited_subject", passed: true, detail: "sensitive_masked=true" },
+        { key: "foundation", passed: true, detail: "Deep Data Security の基盤構成は適用済みです。" },
+        {
+          key: "predicate_table_grants",
+          passed: true,
+          detail: "Data Grant predicate 用 app table SELECT grants are applied.",
+        },
+        {
+          key: "vpd_policy:department",
+          passed: true,
+          detail: "ADMIN.DEPARTMENT: enabled VPD/RLS policies are not present.",
+        },
+        {
+          key: "data_grant:department",
+          passed: true,
+          detail: "NL2SQL_DG_DEPARTMENT -> ADMIN.DEPARTMENT: rows=4, data_role_rows=4",
+        },
+        {
+          key: "data_grant:employee",
+          passed: true,
+          detail: "NL2SQL_DG_EMPLOYEE -> ADMIN.EMPLOYEE: rows=6, data_role_rows=6",
+        },
       ],
     })
   );
@@ -3441,6 +5092,44 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   await expect(verificationCard.getByText("no_context", { exact: true })).toBeVisible();
   await expect(verificationCard.getByText("sensitive_masked=true", { exact: true })).toBeVisible();
   await expect(verificationCard.getByText(/2026\/07\/19/u)).toHaveCount(0);
+  const verificationResults = verificationCard.getByTestId(
+    "security-deepsec-verification-results"
+  );
+  await expect(verificationResults).toHaveAttribute("role", "region");
+  await expect(verificationResults).toHaveAttribute(
+    "aria-label",
+    "Data Grant 検証結果。必要に応じて縦方向にスクロールできます。"
+  );
+  await expect(verificationResults).toHaveAttribute("tabindex", "0");
+  const verificationScrollState = await verificationResults.evaluate((node) => {
+    const computed = window.getComputedStyle(node);
+    return {
+      clientHeight: node.clientHeight,
+      maxHeight: Number.parseFloat(computed.maxHeight),
+      overflowY: computed.overflowY,
+      rootFontSize: Number.parseFloat(
+        window.getComputedStyle(document.documentElement).fontSize
+      ),
+      scrollHeight: node.scrollHeight,
+    };
+  });
+  expect(verificationScrollState.maxHeight).toBeCloseTo(
+    23.25 * verificationScrollState.rootFontSize,
+    0
+  );
+  expect(verificationScrollState.clientHeight).toBeLessThanOrEqual(
+    Math.ceil(verificationScrollState.maxHeight)
+  );
+  expect(verificationScrollState.scrollHeight).toBeGreaterThan(
+    verificationScrollState.clientHeight
+  );
+  expect(verificationScrollState.overflowY).toBe("auto");
+  await verificationResults.focus();
+  await expect(verificationResults).toBeFocused();
+  await verificationResults.press("End");
+  await expect
+    .poll(() => verificationResults.evaluate((node) => node.scrollTop))
+    .toBeGreaterThan(0);
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth

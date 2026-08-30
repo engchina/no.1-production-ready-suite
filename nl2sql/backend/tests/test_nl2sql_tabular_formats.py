@@ -6,9 +6,11 @@ import importlib
 import io
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.features.nl2sql.models import DbAdminCsvUploadRequest, DbAdminImportTabularRequest
 from app.features.nl2sql.ontology_build import parse_qa_workbook
@@ -274,7 +276,10 @@ async def test_corrupt_classifier_workbook_returns_japanese_400(
             return b"not-a-workbook"
 
     with pytest.raises(HTTPException) as exc_info:
-        await nl2sql_router.import_classifier_training_data(Upload())
+        await nl2sql_router.import_classifier_training_data(
+            cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None))),
+            Upload(),
+        )
 
     assert exc_info.value.status_code == 400
     assert "破損、暗号化" in str(exc_info.value.detail)

@@ -67,9 +67,13 @@ function ExecutableDirectSqlPage() {
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const rowLimit = parseSqlRowLimit(rowLimitInput);
-  const rowLimitError =
-    rowLimit === null ? t("queryResults.rowLimit.error") : "";
+  // /api/nl2sql/execute は 1..5000 のみ受理する(0=無制限は db-admin 専用)。
+  const parsedRowLimit = parseSqlRowLimit(rowLimitInput);
+  const rowLimit =
+    parsedRowLimit !== null && parsedRowLimit >= 1 && parsedRowLimit <= 5000
+      ? parsedRowLimit
+      : null;
+  const rowLimitError = rowLimit === null ? t("queryResults.rowLimit.errorBounded") : "";
   const canExecute = Boolean(sqlText.trim()) && !loading && rowLimit !== null;
 
   const execute = async () => {
@@ -163,6 +167,9 @@ function ExecutableDirectSqlPage() {
               disabled={loading}
               error={rowLimitError}
               className="sm:w-48"
+              min={1}
+              max={5000}
+              helper={t("queryResults.rowLimit.helperBounded")}
             />
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button

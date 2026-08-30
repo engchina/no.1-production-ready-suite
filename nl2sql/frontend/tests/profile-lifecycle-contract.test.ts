@@ -6,6 +6,14 @@ const profilePage = readFileSync(
   new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
   "utf8",
 );
+const profileSaveProgress = readFileSync(
+  new URL("../src/features/nl2sql/components/ProfileSaveProgress.tsx", import.meta.url),
+  "utf8",
+);
+const profileSyncPresentation = readFileSync(
+  new URL("../src/features/nl2sql/profileSyncPresentation.ts", import.meta.url),
+  "utf8",
+);
 const ontologyPage = readFileSync(
   new URL("../src/features/nl2sql/pages/OntologyBuildPage.tsx", import.meta.url),
   "utf8",
@@ -40,7 +48,14 @@ test("profile save queues Oracle sync without touching Ontology or detail refres
 
 test("profile Oracle sync exposes progress, failure recovery and retry", () => {
   assert.match(profilePage, /refetchInterval/u);
-  assert.match(profilePage, /aria-live="polite"/u);
+  assert.match(profilePage, /<ProfileSaveProgress/u);
+  assert.match(profileSaveProgress, /<WorkflowProgressStrip/u);
+  assert.match(profileSaveProgress, /role=\{presentation\.active \? "status" : undefined\}/u);
+  assert.match(profileSaveProgress, /severity="danger"/u);
+  assert.match(profileSaveProgress, /testId: `profile-save-step-\$\{step\.id\}`/u);
+  assert.match(profileSyncPresentation, /submission_failed/u);
+  assert.match(profileSyncPresentation, /job\.oracle_result/u);
+  assert.match(profileSyncPresentation, /job\.agent_result/u);
   assert.match(profilePage, /\/oracle-sync-jobs\/\$\{oracleSyncJob\.job_id\}\/retry/u);
   assert.match(messages, /業務 Profile は保存されましたが、Oracle 反映に失敗しました/u);
   assert.doesNotMatch(profilePage, /function OracleMutationResult/u);

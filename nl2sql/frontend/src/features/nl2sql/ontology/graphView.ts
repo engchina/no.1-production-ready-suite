@@ -1,6 +1,62 @@
-import type { OntologyGraph } from "./types";
+import type { OntologyCardinality, OntologyGraph } from "./types";
 
 export type OntologyGraphViewMode = "grounding" | "all" | "physical_er";
+
+/** 業務⇄物理の「対応」を表すエッジ(点線で描く。FK join の実線と区別する)。 */
+const MAPPING_EDGE_KINDS = new Set(["maps_to", "physical_mapping"]);
+
+export function isOntologyMappingEdge(edge: OntologyGraph["edges"][number]): boolean {
+  return MAPPING_EDGE_KINDS.has((edge.kind ?? "").trim().toLocaleLowerCase());
+}
+
+/** join を持つ関係エッジ(カーディナリティを常時表示する対象)。 */
+export function isOntologyJoinEdge(edge: OntologyGraph["edges"][number]): boolean {
+  const kind = (edge.kind ?? "").trim().toLocaleLowerCase();
+  return kind === "foreign_key" || (edge.join_conditions ?? []).length > 0;
+}
+
+/** ER 図流の常時表示用カーディナリティ短縮ラベル(unknown/未設定は空)。 */
+export function cardinalityShortLabel(cardinality: OntologyCardinality | undefined): string {
+  switch (cardinality) {
+    case "one_to_one":
+      return "1:1";
+    case "one_to_many":
+      return "1:N";
+    case "many_to_one":
+      return "N:1";
+    case "many_to_many":
+      return "N:N";
+    default:
+      return "";
+  }
+}
+
+export interface OntologyEdgeHandleSelection {
+  sourceHandle: string;
+  targetHandle: string;
+  orientation: "horizontal" | "vertical";
+}
+
+/**
+ * ノード中心の相対位置からエッジの接続ハンドルを選ぶ。
+ * 縦優勢(レーン間: 業務概念→物理表 等)は上下ハンドル、横優勢は左右ハンドルを使い、
+ * 固定 Left/Right だけのときに起きる自己ループ状の曲線を防ぐ。
+ */
+export function selectOntologyEdgeHandles(
+  source: { x: number; y: number },
+  target: { x: number; y: number }
+): OntologyEdgeHandleSelection {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  if (Math.abs(dy) > Math.abs(dx)) {
+    return dy >= 0
+      ? { sourceHandle: "s-bottom", targetHandle: "t-top", orientation: "vertical" }
+      : { sourceHandle: "s-top", targetHandle: "t-bottom", orientation: "vertical" };
+  }
+  return dx >= 0
+    ? { sourceHandle: "s-right", targetHandle: "t-left", orientation: "horizontal" }
+    : { sourceHandle: "s-left", targetHandle: "t-right", orientation: "horizontal" };
+}
 
 const DETAIL_NODE_KINDS = new Set(["column", "enum_value"]);
 const PHYSICAL_ER_NODE_KINDS = new Set(["schema", "table", "view", "column", "enum_value"]);
@@ -27,7 +83,8 @@ function filterGraphByNodeIds(graph: OntologyGraph, nodeIds: Set<string>): Ontol
   };
 }
 
-function isGroundingContextEdge(edge: OntologyGraph["edges"][number]): boolean {
+/** 物理マッピング/包含(表→列 等)を表すエッジか。属性→親エンティティの逆引きにも使う。 */
+export function isGroundingContextEdge(edge: OntologyGraph["edges"][number]): boolean {
   const kind = (edge.kind ?? "").trim().toLocaleLowerCase();
   if (GROUNDING_CONTEXT_EDGE_KINDS.has(kind)) return true;
   if ((edge.join_conditions ?? []).length > 0) return true;

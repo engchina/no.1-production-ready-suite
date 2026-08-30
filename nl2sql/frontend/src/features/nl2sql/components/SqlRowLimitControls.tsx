@@ -1,8 +1,7 @@
 import { useId } from "react";
 
-import { StatusBadge } from "@engchina/production-ready-ui";
-
 import { FieldError } from "@/components/ui/field-error";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
 
@@ -22,12 +21,19 @@ export function RowLimitField({
   disabled = false,
   error = "",
   className = "",
+  min = 0,
+  max,
+  helper = t("queryResults.rowLimit.helper"),
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   error?: string;
   className?: string;
+  /** 許容最小値。0 = 無制限を許す画面(db-admin)は既定のまま、/execute 系は 1 を渡す。 */
+  min?: number;
+  max?: number;
+  helper?: string;
 }) {
   const id = useId();
   const helperId = `${id}-helper`;
@@ -40,7 +46,8 @@ export function RowLimitField({
       <input
         id={id}
         type="number"
-        min={0}
+        min={min}
+        max={max}
         step={1}
         inputMode="numeric"
         value={value}
@@ -51,7 +58,7 @@ export function RowLimitField({
         className="h-10 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40"
       />
       <p id={helperId} className="text-xs leading-5 text-muted">
-        {t("queryResults.rowLimit.helper")}
+        {helper}
       </p>
       <FieldError id={errorId} message={error} />
     </label>

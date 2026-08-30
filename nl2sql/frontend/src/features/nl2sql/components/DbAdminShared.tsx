@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useEffect,
   useId,
@@ -8,9 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ChevronDown,
   Code2,
-  CircleAlert,
   Download,
   Play,
   Search,
@@ -28,12 +27,12 @@ import {
   DataTable,
   EmptyState,
   Pagination,
-  StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import {
   ExecutionActivityPanel,
@@ -44,6 +43,7 @@ import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
@@ -130,7 +130,7 @@ export function WorkSection({
 
   return (
     <details
-      className={`group rounded-md border ${toneClass}`}
+      className={`group/disclosure rounded-md border ${toneClass}`}
       data-testid={dataTestId}
       open={open}
       onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
@@ -142,10 +142,10 @@ export function WorkSection({
           <span className="block font-semibold">{title}</span>
           <span className="mt-1 block text-sm font-normal text-muted">{description}</span>
         </span>
-        <ChevronDown
+        <DisclosureChevron
+          expanded="group"
           size={16}
-          className={`shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none ${summaryIconClass}`}
-          aria-hidden="true"
+          className={summaryIconClass}
         />
       </summary>
       <div className="border-t border-current/10 bg-card p-3">{children}</div>
@@ -598,55 +598,61 @@ export function DbAdminErrorNotice({
     sourceError instanceof ApiError ? sourceError.errorCode : undefined
   );
   if (!message) return null;
-  const hasRawDetail = Boolean(error.rawMessage) && (error.rawMessage !== error.summary || Boolean(error.code));
-  const hasDetail = Boolean(error.helpUrl || hasRawDetail);
+  const requestId = sourceError instanceof ApiError ? sourceError.requestId : undefined;
+  const hasDetail = Boolean(error.helpUrl || error.code || requestId);
   return (
-    <div className="mt-3 grid gap-3 rounded-md border border-danger/30 bg-danger-bg p-3 text-danger" role="alert">
-      <div className="grid gap-1">
-        <div className="flex items-center gap-2 text-xs font-semibold text-danger">
-          <CircleAlert size={18} aria-hidden="true" />
-          <p>{t("dbAdmin.result.error.summary")}</p>
-        </div>
-        <p className="break-words text-sm font-semibold">{error.summary}</p>
-      </div>
-      <div className="grid gap-1">
-        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.cause")}</p>
-        <p className="text-sm leading-6">{error.cause}</p>
-      </div>
-      <div className="grid gap-1">
-        <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.nextAction")}</p>
-        <ul className="grid gap-1 text-sm leading-6">
-          {error.actions.map((action) => (
-            <li key={action} className="flex gap-2">
-              <span aria-hidden="true">-</span>
-              <span>{action}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      {hasDetail && (
-        <details className="rounded-md border border-danger/30 bg-card/70">
-          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-danger/40">
-            {t("dbAdmin.result.error.detail")}
-          </summary>
-          <div className="grid gap-2 border-t border-danger/20 p-3">
-            {error.helpUrl && (
-              <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
-                {t("dbAdmin.result.error.help")}
-              </a>
-            )}
-            {hasRawDetail && (
-              <code className="block break-words text-sm leading-6 text-danger">{error.rawMessage}</code>
-            )}
-          </div>
-        </details>
-      )}
-      {onReturnToList && error.code === "ORA-00955" && (
+    <Banner
+      severity="danger"
+      title={t("dbAdmin.result.error.summary")}
+      className="mt-3"
+      action={onReturnToList && error.code === "ORA-00955" ? (
         <Button type="button" variant="secondary" size="sm" onClick={onReturnToList}>
-          一覧へ戻る
+          {t("common.backToList")}
         </Button>
-      )}
-    </div>
+      ) : undefined}
+    >
+      <div className="grid gap-3">
+        <div className="grid gap-1">
+          <p className="break-words text-sm font-semibold text-foreground">{error.summary}</p>
+        </div>
+        <div className="grid gap-1">
+          <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.cause")}</p>
+          <p className="text-sm leading-6 text-foreground/90">{error.cause}</p>
+        </div>
+        <div className="grid gap-1">
+          <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.nextAction")}</p>
+          <ul className="grid gap-1 text-sm leading-6 text-foreground/90">
+            {error.actions.map((action) => (
+              <li key={action} className="flex gap-2">
+                <span aria-hidden="true">-</span>
+                <span>{action}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        {hasDetail ? (
+          <details className="group/disclosure rounded-md border border-border bg-card/70">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+              <span>{t("dbAdmin.result.error.detail")}</span>
+              <DisclosureChevron expanded="group" size={15} className="text-muted" />
+            </summary>
+            <div className="grid gap-2 border-t border-border p-3">
+              {error.code ? <StatusBadge variant="danger" label={error.code} /> : null}
+              {requestId ? (
+                <p className="break-all text-xs text-muted">
+                  {t("common.requestId")}: <code>{requestId}</code>
+                </p>
+              ) : null}
+              {error.helpUrl ? (
+                <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
+                  {t("dbAdmin.result.error.help")}
+                </a>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </Banner>
   );
 }
 
@@ -1169,7 +1175,7 @@ export function ObjectDetailPanel({
       await navigator.clipboard.writeText(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
-      toast.error(t("common.action.copyFailed"));
+      toastError(t("common.action.copyFailed"));
     }
   };
 
@@ -1232,10 +1238,13 @@ export function ObjectDetailPanel({
           </table>
         </div>
       </div>
-      <details className="rounded-md border border-border bg-background">
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-foreground marker:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
-          {t("dbAdmin.detail.ddl")}
-          <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
+      <details className="group/disclosure rounded-md border border-border bg-background">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            {t("dbAdmin.detail.ddl")}
+            <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
+          </span>
+          <DisclosureChevron expanded="group" size={15} className="text-muted" />
         </summary>
         <div className="grid gap-2 border-t border-border bg-card p-3">
           <ContentActionBar ariaLabel={t("dbAdmin.detail.ddl")}>
@@ -1252,7 +1261,7 @@ export function ObjectDetailPanel({
                   downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
                   toast.success(t("common.action.downloaded"));
                 } catch {
-                  toast.error(t("common.action.downloadFailed"));
+                  toastError(t("common.action.downloadFailed"));
                 }
               }}
             >

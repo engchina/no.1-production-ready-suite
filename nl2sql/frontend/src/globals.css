@@ -10,37 +10,112 @@
 @source "../node_modules/@engchina/production-ready-ui/dist";
 
 /*
- * ダークテーマは VS Code Dark+ と同じ中立グレー基調で統一する。
- * メインはエディター、サイドナビはワークベンチ、カードはパネルに対応させ、
- * 純黒を使わずに画面の階層と十分なコントラストを保つ。
+ * NL2SQL 固有の semantic token。共有 UI の light theme はそのまま継承し、
+ * dark theme だけ冷調 blue-gray の表面・文字・操作色へ差し替える。
  */
+:root {
+  --border-subtle: var(--border);
+  --control-border: var(--border);
+  --disabled: #9ca3af;
+  --disabled-bg: #f3f4f6;
+  --primary-fill: var(--primary);
+  --primary-fill-foreground: var(--primary-foreground);
+  --success-fill: var(--success);
+  --danger-fill: var(--danger);
+}
+
 .dark {
-  --background: #1e1e1e;
-  --foreground: #cccccc;
-  --card: #252526;
-  --border: #3c3c3c;
-  --primary: #3794ff;
-  --primary-foreground: #ffffff;
-  --muted: #9d9d9d;
-  --sidebar: #181818;
-  --sidebar-foreground: #cccccc;
-  --sidebar-active: #3794ff;
-  --success: #89d185;
-  --success-bg: #263d2a;
-  --warning: #cca700;
-  --warning-bg: #413a1d;
-  --danger: #f14c4c;
-  --danger-bg: #4a2424;
-  --info: #3794ff;
-  --info-bg: #1f3a5f;
-  --ring: #3794ff;
-  --graph-entity: #264f78;
-  --graph-metric: #4b3f72;
-  --graph-sql: #3c3c3c;
-  --graph-term: #245b52;
-  --graph-default: #2d2d30;
-  --graph-fg: #cccccc;
-  --graph-line: #6a6a6a;
+  /* base / elevated surface */
+  --background: #101318;
+  --foreground: #f2f4f7;
+  --card: #181c23;
+  --border: #343b46;
+  --border-subtle: #343b46;
+  --control-border: #5d6878;
+  --muted: #b2bac5;
+  --disabled: #747f8e;
+  --disabled-bg: #252b34;
+  --surface-muted-5: #1c2027;
+  --surface-muted-15: #21252b;
+  --surface-muted-20: #25292f;
+  --surface-muted-30: #2e3238;
+  --surface-muted-40: #373a41;
+
+  /* interactive: accent foreground と solid action を分離 */
+  --primary: #69adff;
+  --primary-foreground: #08121f;
+  --primary-fill: #286abd;
+  --primary-fill-foreground: #ffffff;
+  --ring: #7cbbff;
+
+  /* navigation */
+  --sidebar: #0b0e13;
+  --sidebar-foreground: #dce2e8;
+  --sidebar-active: #286abd;
+
+  /* semantic feedback */
+  --success: #65d7a5;
+  --success-bg: #12382d;
+  --success-fill: #187a55;
+  --warning: #f4c95d;
+  --warning-bg: #3a2e13;
+  --danger: #ff7b86;
+  --danger-bg: #411e25;
+  --danger-fill: #bd3844;
+  --info: #73b2ff;
+  --info-bg: #152d4a;
+
+  /* ontology graph: 型チャネルと状態チャネルを分離 */
+  --graph-entity: #173a5e;
+  --graph-metric: #362a59;
+  --graph-sql: #27323f;
+  --graph-term: #17473f;
+  --graph-default: #242b35;
+  --graph-fg: #eff3f7;
+  --graph-line: #667386;
+}
+
+/*
+ * 共有 token では `muted` が次級文字色と surface utility の双方に使われる。
+ * dark で半透明 bg-muted をそのまま合成すると面が明るくなり過ぎるため、既存 utility を
+ * 冷調 tonal surface へ再マップする（light theme は共有実装のまま）。
+ */
+.dark .bg-muted\/5 {
+  background-color: var(--surface-muted-5);
+}
+
+.dark .bg-muted\/15 {
+  background-color: var(--surface-muted-15);
+}
+
+.dark .bg-muted\/20 {
+  background-color: var(--surface-muted-20);
+}
+
+.dark .bg-muted\/30 {
+  background-color: var(--surface-muted-30);
+}
+
+.dark .bg-muted\/40 {
+  background-color: var(--surface-muted-40);
+}
+
+.dark .hover\:bg-muted\/20:hover {
+  background-color: var(--surface-muted-20);
+}
+
+.dark .hover\:bg-muted\/30:hover {
+  background-color: var(--surface-muted-30);
+}
+
+@theme inline {
+  --color-control-border: var(--control-border);
+  --color-disabled: var(--disabled);
+  --color-disabled-bg: var(--disabled-bg);
+  --color-primary-fill: var(--primary-fill);
+  --color-primary-fill-foreground: var(--primary-fill-foreground);
+  --color-success-fill: var(--success-fill);
+  --color-danger-fill: var(--danger-fill);
 }
 
 /*
@@ -55,12 +130,66 @@
 }
 
 .dark .sidebar-debug-status {
-  border-color: #fbbf24;
-  background: #451a03;
-  color: #fde68a;
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/*
+ * 共有 Sidebar のセクション disclosure は展開時の下向きを維持し、
+ * NL2SQL 側の統一規約に合わせて折りたたみ時だけ左向きへ補正する。
+ */
+.sidebar-shell
+  button[aria-controls^="nav-section-"][aria-expanded="false"]
+  > svg {
+  rotate: 90deg;
 }
 
 @layer base {
+  /*
+   * border-border を使う既存 field へ strong control border を局所注入する。
+   * --border の上書きなので border-primary / border-danger 等の状態 utility は維持される。
+   */
+  .dark
+    :where(
+      input:not([type]),
+      input[type="date"],
+      input[type="datetime-local"],
+      input[type="email"],
+      input[type="number"],
+      input[type="password"],
+      input[type="search"],
+      input[type="tel"],
+      input[type="text"],
+      input[type="time"],
+      input[type="url"],
+      select,
+      textarea,
+      [role="combobox"]
+    ) {
+    --border: var(--control-border);
+  }
+
+  .dark
+    :where(
+      input:not([type]),
+      input[type="date"],
+      input[type="datetime-local"],
+      input[type="email"],
+      input[type="number"],
+      input[type="password"],
+      input[type="search"],
+      input[type="tel"],
+      input[type="text"],
+      input[type="time"],
+      input[type="url"],
+      select,
+      textarea,
+      [role="combobox"]
+    ):disabled {
+    --border: var(--border-subtle);
+  }
+
   pre {
     min-width: 0;
     max-width: 100%;

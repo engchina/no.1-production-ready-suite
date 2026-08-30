@@ -406,6 +406,12 @@ class SchemaRefreshJob(BaseModel):
     error_code: str = ""
 
 
+class SchemaRefreshActiveJobData(BaseModel):
+    """画面復帰時に再接続する実行中 schema refresh job。"""
+
+    active_job: SchemaRefreshJob | None = None
+
+
 class ProfileUpsertRequest(BaseModel):
     """Profile 作成/更新 request."""
 
@@ -1006,7 +1012,8 @@ class ExecuteRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    row_limit: int | None = Field(default=100, ge=0)
+    # Preview/JobCreate と同じ 1..5000。0(無制限)は db-admin 専用(DbAdminExecuteRequest)。
+    row_limit: int | None = Field(default=100, ge=1, le=5000)
 
 
 class JobCreateRequest(BaseModel):
@@ -1048,6 +1055,8 @@ class JobData(BaseModel):
     elapsed_ms: int | None = None
     result: Nl2SqlResult | None = None
     error_message: str | None = None
+    # 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示文言は error_message が正本。
+    error_code: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
@@ -1486,7 +1495,6 @@ class RewriteRequest(BaseModel):
     question: str = Field(min_length=1)
     profile_id: str | None = None
     use_glossary: bool = True
-    use_schema: bool = True
     extra_prompt: str = ""
 
 

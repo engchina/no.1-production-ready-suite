@@ -145,6 +145,4 @@ def observe_schema_refresh() -> Iterator[dict[str, str]]:
     try:
         yield state
     finally:
-        SCHEMA_REFRESH_SECONDS.labels(status=state["status"]).observe(
-            time.monotonic() - started
-        )
+        SCHEMA_REFRESH_SECONDS.labels(status=state["status"]).observe(time.monotonic() - started)

@@ -75,13 +75,14 @@ test("interactive schema fallbacks are restricted to compatibility statuses", ()
   assert.doesNotMatch(i18nSource, /8秒以内/u);
 });
 
-test("data management refresh uses the paged read model and durable schema job", () => {
+test("data management refresh uses the paged read model and shared durable schema job", () => {
   const source = readFileSync(
     new URL("../src/features/nl2sql/pages/DataManagementPage.tsx", import.meta.url),
     "utf8",
   );
   assert.match(source, /useDbAdminObjects\(/u);
-  assert.match(source, /useStartSchemaRefresh\(\)/u);
+  assert.match(source, /useSchemaRefreshCoordinator\(\)/u);
+  assert.match(source, /sharedSchemaRefresh\.start\(\)/u);
   assert.doesNotMatch(source, /\/api\/schema\/catalog["']/u);
   assert.doesNotMatch(source, /\/api\/schema\/refresh["']/u);
   assert.doesNotMatch(source, /Promise\.all\(\[\s*refreshSchema/u);

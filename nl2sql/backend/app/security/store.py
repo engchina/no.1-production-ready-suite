@@ -35,7 +35,20 @@ class SecurityNotFound(SecurityStoreError):
 
 
 class SecurityConflict(SecurityStoreError):
-    pass
+    """競合の機械判定情報を store から service へ安全に伝える。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "SECURITY_STATE_CONFLICT",
+        pointer: str | None = None,
+        field_code: str = "conflict",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.pointer = pointer
+        self.field_code = field_code
 
 
 class SecurityMigrationRequired(SecurityStoreError):
@@ -67,6 +80,7 @@ class SecurityStore(Protocol):
         status: str,
         role_ids: list[str],
     ) -> UserRecord: ...
+    def delete_user(self, user_uuid: str, *, expected_version: int) -> None: ...
     def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None: ...
     def record_login_failure(
         self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
@@ -78,6 +92,7 @@ class SecurityStore(Protocol):
     def update_role(self, role: RoleRecord, *, expected_version: int) -> RoleRecord: ...
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
     def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
+    def delete_role(self, role_id: str, *, expected_version: int) -> None: ...
     def count_active_system_admins(self) -> int: ...
     def create_session(self, session: SessionRecord) -> None: ...
     def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None: ...
@@ -194,7 +209,12 @@ class InMemorySecurityStore:
                 item.login_user_id.casefold() == user.login_user_id.casefold()
                 for item in self.users.values()
             ):
-                raise SecurityConflict("同じログインユーザーIDのユーザーが既に存在します。")
+                raise SecurityConflict(
+                    "このログインユーザーIDは既に使用されています。別のIDを入力してください。",
+                    code="SECURITY_USER_LOGIN_ID_CONFLICT",
+                    pointer="/login_user_id",
+                    field_code="already_exists",
+                )
             self._validate_role_ids(user.role_ids)
             self.users[user.user_uuid] = copy.deepcopy(user)
             return copy.deepcopy(user)
@@ -241,6 +261,30 @@ class InMemorySecurityStore:
             user.locked_until = None
             user.version += 1
 
+    def delete_user(self, user_uuid: str, *, expected_version: int) -> None:
+        with self._lock:
+            user = self.users.get(user_uuid)
+            if user is None:
+                raise SecurityNotFound("ユーザーが見つかりません。")
+            if user.version != expected_version:
+                raise SecurityConflict("ユーザーが別の操作で更新されています。")
+            if user.status != "DISABLED":
+                raise SecurityConflict(
+                    "ユーザーを先に無効化してから削除してください。",
+                    code="SECURITY_USER_DELETE_REQUIRES_DISABLED",
+                )
+            if user.is_bootstrap_admin:
+                raise SecurityConflict(
+                    "初期システム管理者は削除できません。",
+                    code="SECURITY_USER_DELETE_PROTECTED",
+                )
+            self.sessions = {
+                session_id: session
+                for session_id, session in self.sessions.items()
+                if session.user_uuid != user_uuid
+            }
+            del self.users[user_uuid]
+
     def record_login_failure(
         self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
     ) -> None:
@@ -269,7 +313,12 @@ class InMemorySecurityStore:
     def create_role(self, role: RoleRecord) -> RoleRecord:
         with self._lock:
             if any(item.role_code == role.role_code for item in self.roles.values()):
-                raise SecurityConflict("同じロールコードが既に存在します。")
+                raise SecurityConflict(
+                    "このロールコードは既に使用されています。別のコードを入力してください。",
+                    code="SECURITY_ROLE_CODE_CONFLICT",
+                    pointer="/role_code",
+                    field_code="already_exists",
+                )
             self.roles[role.role_id] = copy.deepcopy(role)
             return copy.deepcopy(role)
 
@@ -299,6 +348,36 @@ class InMemorySecurityStore:
             raise SecurityConflict("ロールはアーカイブされていません。")
         role.archived = False
         return self.update_role(role, expected_version=expected_version)
+
+    def delete_role(self, role_id: str, *, expected_version: int) -> None:
+        with self._lock:
+            role = self.roles.get(role_id)
+            if role is None:
+                raise SecurityNotFound("ロールが見つかりません。")
+            if role.version != expected_version:
+                raise SecurityConflict("ロールが別の操作で更新されています。")
+            if role.is_built_in:
+                raise SecurityConflict(
+                    "組み込み SYSTEM_ADMIN ロールは削除できません。",
+                    code="SECURITY_ROLE_DELETE_PROTECTED",
+                )
+            if not role.archived:
+                raise SecurityConflict(
+                    "ロールを先にアーカイブしてから削除してください。",
+                    code="SECURITY_ROLE_DELETE_REQUIRES_ARCHIVED",
+                )
+            if any(role_id in user.role_ids for user in self.users.values()):
+                raise SecurityConflict(
+                    "このロールはユーザーに割り当てられています。割り当てを解除してから削除してください。",
+                    code="SECURITY_ROLE_DELETE_ASSIGNED",
+                )
+            if role.entitlements:
+                raise SecurityConflict(
+                    "このロールにはデータ権限が残っています。"
+                    "Deep Data Security で空の Data Grant を適用してから削除してください。",
+                    code="SECURITY_ROLE_DELETE_ENTITLEMENTS_PRESENT",
+                )
+            del self.roles[role_id]
 
     def count_active_system_admins(self) -> int:
         with self._lock:
@@ -578,7 +657,10 @@ class OracleSecurityStore:
         except Exception as exc:
             if "ORA-00001" in str(exc):
                 raise SecurityConflict(
-                    "同じログインユーザーIDのユーザーが既に存在します。"
+                    "このログインユーザーIDは既に使用されています。別のIDを入力してください。",
+                    code="SECURITY_USER_LOGIN_ID_CONFLICT",
+                    pointer="/login_user_id",
+                    field_code="already_exists",
                 ) from exc
             raise
         return self.get_user(user.user_uuid) or user
@@ -657,6 +739,63 @@ class OracleSecurityStore:
         if updated is None:
             raise SecurityNotFound("ユーザーが見つかりません。")
         return updated
+
+    def delete_user(self, user_uuid: str, *, expected_version: int) -> None:
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT STATUS, VERSION_NO
+                  FROM NL2SQL_APP_USERS
+                 WHERE USER_UUID = :user_uuid
+                   FOR UPDATE
+                """,
+                {"user_uuid": user_uuid},
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise SecurityNotFound("ユーザーが見つかりません。")
+            if int(current[1]) != expected_version:
+                raise SecurityConflict("ユーザーが別の操作で更新されています。")
+            if str(current[0]) != "DISABLED":
+                raise SecurityConflict(
+                    "ユーザーを先に無効化してから削除してください。",
+                    code="SECURITY_USER_DELETE_REQUIRES_DISABLED",
+                )
+            cursor.execute("""
+                SELECT MIN(USER_UUID) KEEP (DENSE_RANK FIRST ORDER BY CREATED_AT, USER_UUID)
+                  FROM NL2SQL_APP_USERS
+                """)
+            bootstrap_user_uuid = cursor.fetchone()[0]
+            if bootstrap_user_uuid is not None and str(bootstrap_user_uuid) == user_uuid:
+                raise SecurityConflict(
+                    "初期システム管理者は削除できません。",
+                    code="SECURITY_USER_DELETE_PROTECTED",
+                )
+            cursor.execute(
+                "DELETE FROM NL2SQL_AUTH_SESSIONS WHERE USER_UUID = :user_uuid",
+                {"user_uuid": user_uuid},
+            )
+            cursor.execute(
+                "DELETE FROM NL2SQL_APP_USER_ROLES WHERE USER_UUID = :user_uuid",
+                {"user_uuid": user_uuid},
+            )
+            cursor.execute(
+                """
+                DELETE FROM NL2SQL_APP_USERS
+                 WHERE USER_UUID = :user_uuid
+                   AND VERSION_NO = :expected_version
+                   AND STATUS = 'DISABLED'
+                """,
+                {"user_uuid": user_uuid, "expected_version": expected_version},
+            )
+            if cursor.rowcount == 0:
+                self._raise_not_found_or_conflict(
+                    cursor,
+                    "NL2SQL_APP_USERS",
+                    "USER_UUID",
+                    user_uuid,
+                )
+            conn.commit()
 
     def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None:
         with self.connection() as conn, conn.cursor() as cursor:
@@ -841,7 +980,12 @@ class OracleSecurityStore:
                 conn.commit()
         except Exception as exc:
             if "ORA-00001" in str(exc):
-                raise SecurityConflict("同じロールコードが既に存在します。") from exc
+                raise SecurityConflict(
+                    "このロールコードは既に使用されています。別のコードを入力してください。",
+                    code="SECURITY_ROLE_CODE_CONFLICT",
+                    pointer="/role_code",
+                    field_code="already_exists",
+                ) from exc
             raise
         return self.get_role(role.role_id) or role
 
@@ -912,6 +1056,82 @@ class OracleSecurityStore:
         if role is None:
             raise SecurityNotFound("ロールが見つかりません。")
         return role
+
+    def delete_role(self, role_id: str, *, expected_version: int) -> None:
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT IS_BUILT_IN, ARCHIVED, VERSION_NO
+                  FROM NL2SQL_APP_ROLES
+                 WHERE ROLE_ID = :role_id
+                   FOR UPDATE
+                """,
+                {"role_id": role_id},
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise SecurityNotFound("ロールが見つかりません。")
+            if int(current[2]) != expected_version:
+                raise SecurityConflict("ロールが別の操作で更新されています。")
+            if bool(current[0]):
+                raise SecurityConflict(
+                    "組み込み SYSTEM_ADMIN ロールは削除できません。",
+                    code="SECURITY_ROLE_DELETE_PROTECTED",
+                )
+            if not bool(current[1]):
+                raise SecurityConflict(
+                    "ロールを先にアーカイブしてから削除してください。",
+                    code="SECURITY_ROLE_DELETE_REQUIRES_ARCHIVED",
+                )
+            cursor.execute(
+                "SELECT COUNT(*) FROM NL2SQL_APP_USER_ROLES WHERE ROLE_ID = :role_id",
+                {"role_id": role_id},
+            )
+            if int(cursor.fetchone()[0]) > 0:
+                raise SecurityConflict(
+                    "このロールはユーザーに割り当てられています。割り当てを解除してから削除してください。",
+                    code="SECURITY_ROLE_DELETE_ASSIGNED",
+                )
+            cursor.execute(
+                "SELECT COUNT(*) FROM NL2SQL_APP_DATA_ENTITLEMENTS WHERE ROLE_ID = :role_id",
+                {"role_id": role_id},
+            )
+            if int(cursor.fetchone()[0]) > 0:
+                raise SecurityConflict(
+                    "このロールにはデータ権限が残っています。"
+                    "Deep Data Security で空の Data Grant を適用してから削除してください。",
+                    code="SECURITY_ROLE_DELETE_ENTITLEMENTS_PRESENT",
+                )
+            cursor.execute(
+                "DELETE FROM NL2SQL_APP_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id",
+                {"role_id": role_id},
+            )
+            try:
+                cursor.execute(
+                    "DELETE FROM NL2SQL_APP_ROLE_PROFILES WHERE ROLE_ID = :role_id",
+                    {"role_id": role_id},
+                )
+            except Exception as exc:
+                _raise_missing_security_migration_if_needed(exc, "NL2SQL_APP_ROLE_PROFILES")
+                raise
+            cursor.execute(
+                """
+                DELETE FROM NL2SQL_APP_ROLES
+                 WHERE ROLE_ID = :role_id
+                   AND VERSION_NO = :expected_version
+                   AND IS_BUILT_IN = 0
+                   AND ARCHIVED = 1
+                """,
+                {"role_id": role_id, "expected_version": expected_version},
+            )
+            if cursor.rowcount == 0:
+                self._raise_not_found_or_conflict(
+                    cursor,
+                    "NL2SQL_APP_ROLES",
+                    "ROLE_ID",
+                    role_id,
+                )
+            conn.commit()
 
     def count_active_system_admins(self) -> int:
         with self.connection() as conn, conn.cursor() as cursor:

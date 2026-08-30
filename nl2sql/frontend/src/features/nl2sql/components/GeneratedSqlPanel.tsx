@@ -1,12 +1,16 @@
 import { lazy, Suspense, useMemo, useState, type SyntheticEvent } from "react";
-import { ChevronDown, Copy, FileText, Network, Play } from "lucide-react";
+import { Copy, FileText, Network, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Banner, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { Banner, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import { engineLabel } from "../labels";
+import { QUESTION_FILTER_LABELS, QUESTION_SLOT_LABELS } from "../questionTemplates";
 import {
   groundSqlSemanticGraphOnOntologyGraph,
   isSqlSemanticGraph,
@@ -21,22 +25,7 @@ import type {
 
 const LazyOntologyGraphCanvas = lazy(() => import("../ontology/OntologyGraphCanvas"));
 
-const QUESTION_SLOT_LABELS = [
-  "対象テーブル",
-  "対象テーブル（複数可）",
-  "テーブル間の関連",
-  "抽出項目",
-  "抽出条件",
-  "条件",
-  "WHERE条件",
-  "WHERE 条件",
-  "検索条件",
-  "集計内容（件数・合計・平均など）",
-  "集計単位（グループ化）",
-  "並び替え（項目と昇順／降順）",
-  "表示件数（上位N件）",
-];
-const FILTER_LABELS = ["抽出条件", "条件", "WHERE条件", "WHERE 条件", "検索条件"];
+const FILTER_LABELS = QUESTION_FILTER_LABELS;
 const QUESTION_SLOT_PATTERN = /^\s*([^：:\n]{1,80})\s*[：:]\s*(.*)$/u;
 
 function normalizeQuestionSlotLabel(value: string) {
@@ -219,7 +208,6 @@ function SqlOntologyGroundingPanel({
                 highlightNodeIds={grounding.highlightNodeIds}
                 highlightEdgeIds={grounding.highlightEdgeIds}
                 defaultViewMode="grounding"
-                readOnly
               />
             </Suspense>
           </div>
@@ -312,8 +300,6 @@ function ShowPromptArtifactPanel({
     );
   }
 
-  const promptState = promptOpen ? "expanded" : "collapsed";
-
   const handlePromptToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
     setPromptOpen(event.currentTarget.open);
   };
@@ -329,17 +315,20 @@ function ShowPromptArtifactPanel({
           <FileText size={16} className="shrink-0" aria-hidden="true" />
           <span>{t("nl2sql.showPrompt.title")}</span>
         </span>
-        <ChevronDown
+        <DisclosureChevron
+          expanded={promptOpen}
           size={16}
-          className={`shrink-0 text-muted transition-transform duration-200 motion-reduce:transition-none ${
-            promptOpen ? "rotate-180" : ""
-          }`}
-          data-state={promptState}
+          className="text-muted"
           data-testid="nl2sql-show-prompt-chevron"
-          aria-hidden="true"
         />
       </summary>
-      <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg">
+      {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
+      <pre
+        tabIndex={0}
+        role="region"
+        aria-label={t("nl2sql.showPrompt.title")}
+        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
         <code>{artifact.prompt}</code>
       </pre>
     </details>
@@ -369,7 +358,7 @@ export function GeneratedSqlSummary({
       await navigator.clipboard.writeText(displayedSql);
       toast.success(t("common.action.copied"));
     } catch {
-      toast.error(t("common.action.copyFailed"));
+      toastError(t("common.action.copyFailed"));
     }
   };
 
@@ -419,7 +408,13 @@ export function GeneratedSqlSummary({
           <span>{t("nl2sql.sql.copy")}</span>
         </Button>
       </ContentActionBar>
-      <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg">
+      {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
+      <pre
+        tabIndex={0}
+        role="region"
+        aria-label={t("nl2sql.sql.region")}
+        className="max-h-72 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
         <code>{displayedSql}</code>
       </pre>
       {result.fallback_reason && (

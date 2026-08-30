@@ -24,6 +24,14 @@ const dbObjectSharedSource = readFileSync(
   new URL("../src/features/nl2sql/components/DbObjectManagementShared.tsx", import.meta.url),
   "utf8"
 );
+const dbObjectFilterFieldsSource = readFileSync(
+  new URL("../src/components/DbObjectFilterFields.tsx", import.meta.url),
+  "utf8"
+);
+const incrementalQueriesSource = readFileSync(
+  new URL("../src/features/nl2sql/incrementalQueries.ts", import.meta.url),
+  "utf8"
+);
 
 test("データ管理プレビューは未取得行数を統計未取得として表示する", () => {
   assert.equal(t("dataMgmt.preview.rowUnknown"), "統計未取得");
@@ -33,33 +41,80 @@ test("データ管理プレビューは未取得行数を統計未取得とし�
   );
 });
 
-test("データ管理プレビューは所有者フィルタと種別フィルタを表示し、行数フィルタを出さない", () => {
-  assert.match(dataManagementSource, /t\("dataMgmt\.preview\.ownerFilter"\)/u);
+test("データ管理プレビューは所有者前方一致入力と種別フィルタを表示し、行数フィルタを出さない", () => {
+  assert.match(dataManagementSource, /ownerPrefixField=\{\{/u);
+  assert.match(dataManagementSource, /t\("dbAdmin\.owner\.label"\)/u);
+  assert.match(dataManagementSource, /t\("dbAdmin\.search\.label"\)/u);
+  assert.match(dataManagementSource, /t\("dbAdmin\.search\.placeholder"\)/u);
   assert.match(dataManagementSource, /t\("dataMgmt\.preview\.kindFilter"\)/u);
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.rowFilter"\)/u);
 });
 
-test("テーブル・ビュー管理は所有者フィルタを表示し、行数フィルタを出さない", () => {
-  assert.equal(t("tableMgmt.toolbar.filter"), "所有者フィルタ");
-  assert.equal(t("viewMgmt.toolbar.filter"), "所有者フィルタ");
-  assert.match(tableManagementSource, /useSchemaOwners/u);
-  assert.match(viewManagementSource, /useSchemaOwners/u);
-  assert.match(tableManagementSource, /useDbAdminObjects\(debouncedTableSearch, "table", "all", tableOwnerQuery\)/u);
-  assert.match(viewManagementSource, /useDbAdminObjects\(debouncedViewSearch, "view", "all", viewOwnerQuery\)/u);
-  assert.match(dbObjectSharedSource, /ownerOptions: string\[\]/u);
+test("対象6画面の検索・所有者文言と44px入力を共通化する", () => {
+  assert.equal(t("dbAdmin.search.label"), "検索");
+  assert.equal(t("dbAdmin.search.placeholder"), "名前・コメントを入力");
+  assert.equal(t("dbAdmin.owner.label"), "所有者");
+  assert.equal(t("dbAdmin.ownerPrefix.placeholder"), "所有者の先頭を入力（例：ADM）");
+  assert.match(dbObjectFilterFieldsSource, /export function DbManagementSearchField/u);
+  assert.match(dbObjectFilterFieldsSource, /export function DbOwnerPrefixFilterField/u);
+  assert.match(dbObjectFilterFieldsSource, /export function DbObjectSearchOwnerFields/u);
+  assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
+  assert.match(dbObjectFilterFieldsSource, /min-h-11/u);
+  assert.match(dbObjectFilterFieldsSource, /disabled:cursor-not-allowed/u);
+  assert.match(dbObjectFilterFieldsSource, /focus:ring-2/u);
+  assert.match(dbObjectFilterFieldsSource, /event\.currentTarget\.value\.toUpperCase\(\)/u);
+  assert.match(dbObjectSharedSource, /from "@\/components\/DbObjectFilterFields"/u);
+  assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields/u);
+  assert.doesNotMatch(dbObjectSharedSource, /md:grid-cols-\[minmax\(0,1fr\)_13rem\]/u);
+});
+
+test("テーブル・ビュー管理は所有者前方一致入力と名前・コメント検索を使う", () => {
+  assert.doesNotMatch(tableManagementSource, /useSchemaOwners/u);
+  assert.doesNotMatch(viewManagementSource, /useSchemaOwners/u);
+  assert.match(tableManagementSource, /debouncedTableOwnerPrefix/u);
+  assert.match(viewManagementSource, /debouncedViewOwnerPrefix/u);
+  assert.match(tableManagementSource, /useDbAdminObjects\([\s\S]{0,120}debouncedTableOwnerPrefix/u);
+  assert.match(viewManagementSource, /useDbAdminObjects\([\s\S]{0,120}debouncedViewOwnerPrefix/u);
+  assert.match(dbObjectSharedSource, /ownerPrefix: DbObjectOwnerPrefix/u);
+  assert.doesNotMatch(dbObjectSharedSource, /ownerOptions/u);
+  assert.doesNotMatch(dbObjectSharedSource, /ownerFilterAll/u);
+  assert.doesNotMatch(dbObjectSharedSource, /ownerFilter: string/u);
+  assert.match(tableManagementSource, /debouncedTableOwnerPrefix,\s*"name_comment"/u);
+  assert.match(viewManagementSource, /debouncedViewOwnerPrefix,\s*"name_comment"/u);
+  assert.match(
+    incrementalQueriesSource,
+    /params\.set\("owner_prefix", ownerPrefix\.trim\(\)\)/u
+  );
+  assert.match(
+    incrementalQueriesSource,
+    /params\.set\("query_scope", queryScope\)/u
+  );
+  assert.doesNotMatch(
+    incrementalQueriesSource,
+    /params\.set\("owner", ownerPrefix\.trim\(\)\)/u
+  );
   assert.doesNotMatch(dbObjectSharedSource, /value="with_rows"/u);
   assert.doesNotMatch(dbObjectSharedSource, /value="empty_rows"/u);
 });
 
-test("コメント・アノテーション管理は所有者フィルタを種類フィルタの前に表示する", () => {
-  assert.equal(t("metadataSql.targets.ownerFilter"), "所有者フィルタ");
-  const ownerFilterIndex = metadataSqlManagementSource.indexOf('t("metadataSql.targets.ownerFilter")');
+test("コメント・アノテーション管理は共通所有者入力を種類フィルタの前に表示する", () => {
+  const ownerFilterIndex = metadataSqlManagementSource.indexOf('t("dbAdmin.owner.label")');
   const typeFilterIndex = metadataSqlManagementSource.indexOf('t("metadataSql.targets.typeFilter")');
   assert.notEqual(ownerFilterIndex, -1);
   assert.notEqual(typeFilterIndex, -1);
   assert.ok(ownerFilterIndex < typeFilterIndex);
-  assert.match(metadataSqlManagementSource, /targetOwnerFilter/u);
-  assert.match(metadataSqlManagementSource, /useDbAdminObjects\(debouncedTargetSearch, targetFilter, "all", targetOwnerQuery\)/u);
+  assert.match(metadataSqlManagementSource, /ownerPrefixField=\{\{/u);
+  assert.match(metadataSqlManagementSource, /targetOwnerPrefix/u);
+  assert.match(
+    metadataSqlManagementSource,
+    /useDbAdminObjects\([\s\S]{0,140}debouncedTargetOwnerPrefix/u,
+  );
+  assert.match(metadataSqlManagementSource, /debouncedTargetOwnerPrefix,\s*"name_comment"/u);
+});
+
+test("データプレビューと COMMENT/ANNOTATION は name_comment scope を送る", () => {
+  assert.match(dataManagementSource, /debouncedObjectOwnerPrefix,\s*"name_comment"/u);
+  assert.match(metadataSqlManagementSource, /debouncedTargetOwnerPrefix,\s*"name_comment"/u);
 });
 
 test("データ管理プレビューは表示件数を10件固定にし、詳細条件入力を出さない", () => {

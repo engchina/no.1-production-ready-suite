@@ -1,16 +1,18 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { ChevronDown, MoreHorizontal } from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 
 import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { splitObjectActions, visibleEntityActions, type EntityAction } from "./ObjectActionsCore";
@@ -40,14 +42,12 @@ function useActionMenu() {
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [open]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
-    window.requestAnimationFrame(() => {
-      const firstEnabled = menuRef.current?.querySelector<HTMLButtonElement>(
-        '[role="menuitem"]:not(:disabled)'
-      );
-      firstEnabled?.focus({ preventScroll: true });
-    });
+    const firstEnabled = menuRef.current?.querySelector<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)'
+    );
+    firstEnabled?.focus({ preventScroll: true });
   }, [open]);
 
   const close = (restoreFocus = false) => {
@@ -260,11 +260,7 @@ export function ObjectActionBar({
             onClick={() => setOpen((current) => !current)}
           >
             <span>{t("common.actions.more")}</span>
-            <ChevronDown
-              size={15}
-              className={cn("transition-transform", open && "rotate-180")}
-              aria-hidden="true"
-            />
+            <DisclosureChevron expanded={open} size={15} />
           </Button>
           {open ? (
             <FloatingActionMenu

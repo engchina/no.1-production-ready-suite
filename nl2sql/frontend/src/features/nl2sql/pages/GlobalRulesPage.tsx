@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import {
   EmptyState,
   Pagination,
-  StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { StatusBadge } from "@/components/ui/status-badge";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";

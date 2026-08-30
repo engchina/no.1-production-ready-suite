@@ -1,5 +1,17 @@
 import type { AllowedObjects, SchemaColumn, SchemaTable } from "./types";
 
+export const SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY";
+
+// 漸進互換の文言フォールバック。backend の error_code 全経路展開が完了したら撤去する
+// (messaging spec §3.2: 文言の部分一致に依存しない)。
+const SCHEMA_EMPTY_ERROR_FRAGMENT = "Schema catalog が空です";
+
+/** schema 未整備エラーか。error_code(problem.code)を正とし、文言一致は移行期の保険。 */
+export function isSchemaEmptyError(error: { message: string; code?: string }): boolean {
+  if (error.code) return error.code === SCHEMA_CATALOG_EMPTY_ERROR_CODE;
+  return error.message.includes(SCHEMA_EMPTY_ERROR_FRAGMENT);
+}
+
 export interface SchemaSelection {
   tableNames: string[];
   columns: Record<string, string[]>;

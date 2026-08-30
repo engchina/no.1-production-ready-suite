@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, StatusBadge } from "@engchina/production-ready-ui";
+import { EmptyState } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
@@ -10,6 +10,7 @@ import { PageNotice } from "@/components/page-notice";
 import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel } from "@/components/ui/required-field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";

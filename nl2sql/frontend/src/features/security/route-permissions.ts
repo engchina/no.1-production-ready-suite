@@ -31,3 +31,13 @@ export function firstAllowedRoute(hasPermission: (permission: string) => boolean
     APP_ROUTES.forbidden
   );
 }
+
+/**
+ * ログイン後などの既定入口。SQL 生成を利用できない場合は root に戻し、
+ * root route が firstAllowedRoute で利用可能な画面へ振り分ける。
+ */
+export function defaultEntryRoute(hasPermission: (permission: string) => boolean): string {
+  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.query])
+    ? APP_ROUTES.query
+    : APP_ROUTES.home;
+}

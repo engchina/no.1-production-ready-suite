@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import hashlib
 import importlib
@@ -186,8 +187,7 @@ def validate_source_path(filename: str, path: Path) -> None:
                 "ONTOLOGY_SOURCE_MIME_MISMATCH", "拡張子と Office ファイル内容が一致しません。"
             )
     if suffix in {".txt", ".md", ".csv"} and (
-        b"\x00" in prefix
-        or prefix.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
+        b"\x00" in prefix or prefix.startswith((XLS_OLE_SIGNATURE, b"PK\x03\x04", b"%PDF-"))
     ):
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_BINARY_TEXT",
@@ -266,6 +266,10 @@ class OntologySourceStorage:
                 filename,
                 target,
             )
+            # OCI へ移した後のローカルコピーは残さない(最大 200MiB×5/build のディスクリーク防止)
+            target.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                target.parent.rmdir()
         return OntologySourceDocument(
             id=source_id,
             profile_id=profile_id,
@@ -287,6 +291,23 @@ class OntologySourceStorage:
             )
             return bytes(response.data.content)
         return Path(document.storage_uri).read_bytes()
+
+    def delete(self, document: OntologySourceDocument) -> None:
+        """アップロード実体を削除する(Profile 削除時の cleanup 用)。失敗は握り潰さない。"""
+
+        if document.storage_uri.startswith("oci://"):
+            _, _, remainder = document.storage_uri.partition("oci://")
+            bucket, _, object_name = remainder.partition("/")
+            self._object_storage_client().delete_object(
+                self.settings.object_storage_namespace,
+                bucket,
+                object_name,
+            )
+            return
+        target = Path(document.storage_uri)
+        target.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            target.parent.rmdir()
 
     def _put_object(
         self, profile_storage_key: str, source_id: str, filename: str, target: Path
@@ -387,9 +408,7 @@ def _extract_workbook(filename: str, content: bytes) -> ExtractedOntologySource:
     try:
         workbook_sheets = read_workbook_sheets(filename, content)
     except TabularFileReadError as exc:
-        raise OntologySourceError(
-            "ONTOLOGY_SOURCE_EXCEL_INVALID", str(exc)
-        ) from exc
+        raise OntologySourceError("ONTOLOGY_SOURCE_EXCEL_INVALID", str(exc)) from exc
     chunks: list[ExtractedSourceChunk] = []
     qa_pairs: list[QaPair] = []
     for sheet in workbook_sheets:
@@ -463,6 +482,7 @@ def _extract_pdf(
         ) from exc
     chunks: list[ExtractedSourceChunk] = []
     warnings: list[str] = []
+    skipped_pages: list[str] = []
     pdfium_document: Any | None = None
     for index, page in enumerate(reader.pages, start=1):
         text = normalize_source_text(page.extract_text() or "")
@@ -477,15 +497,26 @@ def _extract_pdf(
                 image_buffer = io.BytesIO()
                 image.save(image_buffer, format="JPEG", quality=90)
                 text = normalize_source_text(vlm_page_runner(image_buffer.getvalue(), index))
-            except Exception as exc:
-                raise OntologySourceError(
-                    "ONTOLOGY_SOURCE_PDF_OCR_FAILED",
-                    f"PDF page:{index} の VLM OCR に失敗しました: {exc}",
-                ) from exc
+            except Exception:
+                # 1 ページの OCR 失敗で資料全体を失敗させない(警告してスキップ)
+                warnings.append(
+                    f"PDF page:{index} の VLM OCR に失敗したためスキップしました。"
+                )
+                skipped_pages.append(f"page:{index}")
+                continue
         if not text:
-            raise OntologySourceError(
-                "ONTOLOGY_SOURCE_PDF_TEXT_MISSING",
-                f"PDF page:{index} はテキストを抽出できませんでした。OCR 設定を確認してください。",
+            # テキスト無しページ(画像のみ等)は警告してスキップ。全ページ空のときだけ失敗
+            warnings.append(
+                f"PDF page:{index} はテキストを抽出できないためスキップしました。"
             )
+            skipped_pages.append(f"page:{index}")
+            continue
         chunks.append(ExtractedSourceChunk(text, OntologyEvidenceLocatorKind.PAGE, f"page:{index}"))
+    if not chunks:
+        skipped_detail = f"({', '.join(skipped_pages)})" if skipped_pages else ""
+        raise OntologySourceError(
+            "ONTOLOGY_SOURCE_PDF_TEXT_MISSING",
+            f"PDF のどのページ{skipped_detail}からもテキストを抽出できませんでした。"
+            "OCR 設定を確認してください。",
+        )
     return ExtractedOntologySource(chunks=chunks, qa_pairs=[], warnings_ja=warnings)

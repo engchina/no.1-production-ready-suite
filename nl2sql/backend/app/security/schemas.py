@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from .domain import (
     LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE,
@@ -202,10 +202,10 @@ class DataEntitlementInput(BaseModel):
 
     @field_validator("target_owner", "target_object", "scope_column")
     @classmethod
-    def normalize_optional_identifier(cls, value: str, info) -> str:
+    def normalize_optional_identifier(cls, value: str, info: ValidationInfo) -> str:
         if not value.strip():
             return ""
-        return _normalize_oracle_identifier(value, info.field_name)
+        return _normalize_oracle_identifier(value, info.field_name or "identifier")
 
     @field_validator("target_type")
     @classmethod
@@ -447,23 +447,38 @@ class RoleData(BaseModel):
         )
 
 
+class RoleDeleteData(BaseModel):
+    deleted: bool = True
+    role_id: str
+    role_code: str
+
+
 class DeepSecDataEntitlementUpdateRequest(BaseModel):
     version: int = Field(ge=1)
     data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
 
 
 class DeepSecDataEntitlementPreviewRequest(BaseModel):
-    data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    data_entitlements: list[DataEntitlementInput]
 
 
 class DeepSecDataEntitlementPreviewData(BaseModel):
     role_id: str
+    version: int
     data_entitlements: list[DataEntitlementData]
+    cleanup_sql: list[str] = Field(default_factory=list)
+    checksum: str
 
 
 class DeepSecDataEntitlementApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
     confirmation: str = Field(default="", max_length=128)
-    entitlement_ids: list[str] = Field(default_factory=list)
+    data_entitlements: list[DataEntitlementInput]
 
 
 class DeepSecRoleEntitlementsData(BaseModel):
@@ -488,6 +503,14 @@ class DeepSecRoleEntitlementsData(BaseModel):
             version=role.version,
             data_entitlements=[DataEntitlementData.from_record(item) for item in role.entitlements],
         )
+
+
+class DeepSecDataEntitlementApplyData(BaseModel):
+    role: DeepSecRoleEntitlementsData
+    status: str
+    checksum: str
+    cleanup_count: int = Field(ge=0)
+    applied_count: int = Field(ge=0)
 
 
 class AssignedRoleData(BaseModel):
@@ -562,6 +585,12 @@ class UserData(BaseModel):
 class UserCreateData(BaseModel):
     user: UserData
     temporary_password: str
+
+
+class UserDeleteData(BaseModel):
+    deleted: bool = True
+    user_uuid: str
+    login_user_id: str
 
 
 class PasswordResetData(BaseModel):

@@ -2,21 +2,19 @@
 
 import {
   AlertTriangle,
-  CheckCircle2,
   Cloud,
   KeyRound,
   RefreshCw,
   Save,
   ShieldCheck,
-  XCircle,
 } from "lucide-react";
-import {
-  useEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
+import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+} from "@/components/settings/SettingsTestResultPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -191,7 +189,9 @@ export function OciSettingsClient() {
       setConfigTestState({
         phase: "error",
         message:
-          error instanceof ApiError ? error.message : t("settings.oci.configTest.error"),
+          error instanceof ApiError
+            ? t("settings.oci.configTest.apiError", { message: error.message })
+            : t("settings.oci.configTest.error"),
       });
     }
   }
@@ -561,39 +561,21 @@ function SectionActions({
 }
 
 function ConfigTestContent({ state }: { state: ConfigTestState }) {
-  if (state.phase === "idle") return null;
-
-  if (state.phase === "loading") {
-    return (
-      <div
-        className="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted"
-        role="status"
-      >
-        {t("settings.oci.configTest.checking")}
-      </div>
-    );
-  }
+  if (state.phase === "idle" || state.phase === "loading") return null;
 
   if (state.phase === "error") {
     return (
-      <div
-        className="space-y-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-3"
-        role="alert"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-foreground">
-            {t("settings.oci.configTest.title")}
-          </span>
-          <StatusPill kind="danger">{t("settings.oci.configTest.failed")}</StatusPill>
-        </div>
-        <p className="text-sm text-foreground">{state.message}</p>
-      </div>
+      <SettingsTestResultPanel
+        tone="danger"
+        message={state.message}
+        testId="settings-oci-test-result"
+      />
     );
   }
 
   const result = state.data;
   const failed = result.status === "failed";
-  const detailItems = [
+  const troubleshooting = [
     ...result.missing_fields.map((field) =>
       t("settings.oci.configTest.missingField", { field })
     ),
@@ -602,43 +584,22 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
   ].filter(Boolean);
 
   return (
-    <div
-      className={cn(
-        "space-y-2 rounded-md border px-3 py-3",
-        failed
-          ? "border-warning/40 bg-warning-bg"
-          : "border-success/30 bg-success-bg"
-      )}
-      role={failed ? "alert" : "status"}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-foreground">
-          {t("settings.oci.configTest.title")}
-        </span>
-        <StatusPill kind={failed ? "warning" : "success"}>
-          {failed ? t("settings.oci.configTest.failed") : t("settings.oci.configTest.success")}
-        </StatusPill>
-      </div>
-      <p className="text-sm text-foreground">{result.message}</p>
-      {detailItems.length > 0 ? (
-        <ul className="space-y-1 text-xs leading-relaxed text-foreground">
-          {detailItems.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
-        {result.oci_directory_mode ? (
-          <span className="tnum">.oci {result.oci_directory_mode}</span>
-        ) : null}
-        {result.config_file_mode ? (
-          <span className="tnum">config {result.config_file_mode}</span>
-        ) : null}
-        {result.key_file_mode ? (
-          <span className="tnum">key {result.key_file_mode}</span>
-        ) : null}
-      </div>
-    </div>
+    <SettingsTestResultPanel
+      tone={failed ? "danger" : "success"}
+      message={result.message}
+      elapsedMs={result.elapsed_ms}
+      details={toSettingsTestResultDetails({
+        profile: result.profile,
+        config_file_exists: result.config_file_exists,
+        key_file_exists: result.key_file_exists,
+        oci_directory_mode: result.oci_directory_mode,
+        config_file_mode: result.config_file_mode,
+        key_file_mode: result.key_file_mode,
+        error_type: result.error_type,
+      })}
+      troubleshooting={troubleshooting}
+      testId="settings-oci-test-result"
+    />
   );
 }
 
@@ -963,32 +924,6 @@ function TextField({
 
 function RequiredBadge() {
   return <RequiredIndicator label={t("settings.oci.required")} />;
-}
-
-function StatusPill({
-  kind,
-  children,
-}: {
-  kind: "success" | "warning" | "danger" | "neutral";
-  children: ReactNode;
-}) {
-  const Icon =
-    kind === "success" ? CheckCircle2 : kind === "danger" ? XCircle : AlertTriangle;
-
-  return (
-    <span
-      className={cn(
-        "inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
-        kind === "success" && "border-success/30 bg-success-bg text-success",
-        kind === "warning" && "border-warning/30 bg-warning-bg text-warning",
-        kind === "danger" && "border-danger/30 bg-danger-bg text-danger",
-        kind === "neutral" && "border-border bg-background text-muted"
-      )}
-    >
-      <Icon size={13} aria-hidden />
-      {children}
-    </span>
-  );
 }
 
 function errorText(code?: OciValidationCode): string | undefined {

@@ -397,12 +397,15 @@ def materialize_local_owl2rl(asserted_turtle: str) -> str:
     DeductiveClosure(OWLRL_Semantics).expand(graph)
     canonical = to_canonical_graph(graph)
     # N-Triples は Turtle の部分集合。canonical BNode と行 sort で artifact hash を安定化する。
-    return "\n".join(
-        sorted(
-            f"{subject.n3()} {predicate.n3()} {object_.n3()} ."
-            for subject, predicate, object_ in canonical
+    return (
+        "\n".join(
+            sorted(
+                f"{subject.n3()} {predicate.n3()} {object_.n3()} ."
+                for subject, predicate, object_ in canonical
+            )
         )
-    ) + "\n"
+        + "\n"
+    )
 
 
 def validate_shacl_core(

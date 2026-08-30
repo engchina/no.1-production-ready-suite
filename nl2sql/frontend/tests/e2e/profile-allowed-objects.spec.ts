@@ -645,6 +645,11 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   });
   await mockProfileApi(page);
   await page.route("**/api/schema/refresh-jobs**", async (route) => {
+    // coordinator の active-job discovery はポーリング回数に数えない(即 done 化を防ぐ)。
+    if (route.request().url().includes("/refresh-jobs/active")) {
+      await fulfillJson(route, { active_job: null });
+      return;
+    }
     if (route.request().method() === "POST") {
       schemaRefreshSubmissions += 1;
       await fulfillJson(route, {
@@ -730,7 +735,10 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
 
   if (isCompactHeader) {
     const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
+    const moreChevron = moreButton.locator('svg[data-state]');
     await expect(actions.getByRole("button")).toHaveText(["新規作成", "その他の操作"]);
+    await expect(moreChevron).toHaveAttribute("data-state", "collapsed");
+    await expect(moreChevron).toHaveClass(/rotate-90/);
     await createButton.focus();
     await page.keyboard.press("Tab");
     await expect(moreButton).toBeFocused();
@@ -738,6 +746,8 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
 
     const menu = page.getByRole("menu");
     await expect(moreButton).toHaveAttribute("aria-expanded", "true");
+    await expect(moreChevron).toHaveAttribute("data-state", "expanded");
+    await expect(moreChevron).toHaveClass(/rotate-0/);
     await expect(menu.getByRole("menuitem")).toHaveText([
       "表示を更新",
       "DB 構造を再取得",
@@ -747,6 +757,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await page.keyboard.press("Escape");
     await expect(moreButton).toBeFocused();
     await expect(moreButton).toHaveAttribute("aria-expanded", "false");
+    await expect(moreChevron).toHaveAttribute("data-state", "collapsed");
 
     const requestsBeforeRefresh = profileSearchRequests;
     await moreButton.click();
@@ -757,11 +768,11 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await moreButton.click();
     await menu.getByRole("menuitem", { name: "DB 構造を再取得" }).click();
     await expect.poll(() => schemaRefreshSubmissions).toBe(1);
-    await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toBeVisible();
+    await expect(page.getByText(/DB 構造(再取得|差分同期): /).first()).toBeVisible();
     await moreButton.click();
     await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeDisabled();
     await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
-    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/DB 構造(再取得|差分同期): 完了/)).toHaveCount(0);
     await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeEnabled();
 
     await menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" }).click();
@@ -834,10 +845,10 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
 
     await schemaRefreshButton.click();
     await expect.poll(() => schemaRefreshSubmissions).toBe(1);
-    await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toBeVisible();
+    await expect(page.getByText(/DB 構造(再取得|差分同期): /).first()).toBeVisible();
     await expect(schemaRefreshButton).toBeDisabled();
     await expect.poll(() => schemaRefreshPolls).toBeGreaterThanOrEqual(2);
-    await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/DB 構造(再取得|差分同期): 完了/)).toHaveCount(0);
     await expect(schemaRefreshButton).toBeEnabled();
 
     await dbProfileRefreshButton.click();
@@ -940,15 +951,37 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(tableList.getByText("表論理名_01", { exact: true })).toBeVisible();
   await expect(viewList.getByText("ビュー論理名_02", { exact: true })).toBeVisible();
   const appTableBulkActions = tableList.getByTestId("profile-allowed-table-list-app-schema-bulk-actions");
+  const appTableSchemaHeading = tableList.getByTestId("profile-allowed-table-list-app-schema-heading");
+  await expect
+    .poll(async () => {
+      const [actionsBox, headingBox] = await Promise.all([
+        appTableBulkActions.boundingBox(),
+        appTableSchemaHeading.boundingBox(),
+      ]);
+      if (!actionsBox || !headingBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - headingBox.x);
+    })
+    .toBeLessThanOrEqual(1);
   await expect(appTableBulkActions.getByRole("button", { name: "APP をすべて選択" })).toBeEnabled();
-  await expect(appTableBulkActions.getByRole("button", { name: "APP の選択を解除" })).toBeEnabled();
-  await expect(appTableBulkActions.getByText("全選択", { exact: true })).toBeVisible();
-  await expect(appTableBulkActions.getByText("全解除", { exact: true })).toBeVisible();
+  await expect(appTableBulkActions.getByRole("button", { name: "APP の選択をすべて解除" })).toBeEnabled();
+  await expect(appTableBulkActions.getByText("すべて選択", { exact: true })).toBeVisible();
+  await expect(appTableBulkActions.getByText("選択をすべて解除", { exact: true })).toBeVisible();
   const appViewBulkActions = viewList.getByTestId("profile-allowed-view-list-app-schema-bulk-actions");
+  const appViewSchemaHeading = viewList.getByTestId("profile-allowed-view-list-app-schema-heading");
+  await expect
+    .poll(async () => {
+      const [actionsBox, headingBox] = await Promise.all([
+        appViewBulkActions.boundingBox(),
+        appViewSchemaHeading.boundingBox(),
+      ]);
+      if (!actionsBox || !headingBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - headingBox.x);
+    })
+    .toBeLessThanOrEqual(1);
   await expect(appViewBulkActions.getByRole("button", { name: "APP をすべて選択" })).toBeEnabled();
-  await expect(appViewBulkActions.getByRole("button", { name: "APP の選択を解除" })).toBeEnabled();
-  await expect(appViewBulkActions.getByText("全選択", { exact: true })).toBeVisible();
-  await expect(appViewBulkActions.getByText("全解除", { exact: true })).toBeVisible();
+  await expect(appViewBulkActions.getByRole("button", { name: "APP の選択をすべて解除" })).toBeEnabled();
+  await expect(appViewBulkActions.getByText("すべて選択", { exact: true })).toBeVisible();
+  await expect(appViewBulkActions.getByText("選択をすべて解除", { exact: true })).toBeVisible();
 
   const objectSection = page.getByTestId("profile-allowed-object-list");
   const objectSearchToolbar = page.getByTestId("profile-object-search-toolbar");
@@ -1026,7 +1059,16 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
   // 業務 Profile 保存後はすぐに解除され、Oracle 反映は polling で完了を受け取る。
-  await expect(page.getByTestId("profile-oracle-sync-status")).toContainText("Oracle 反映: 完了");
+  const saveProgress = page.getByTestId("profile-save-progress");
+  await expect(saveProgress).toHaveAttribute("data-job-status", "succeeded");
+  await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
+    "data-step-status",
+    "done"
+  );
+  await expect(page.getByTestId("profile-save-step-rebuild_agent_assets")).toHaveAttribute(
+    "data-step-status",
+    "skipped"
+  );
   await expect(page.getByTestId("profile-oracle-result")).toHaveCount(0);
   const payload = savedPayload as {
     name: string;
@@ -1133,11 +1175,19 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   await save.click();
   await expect(save).toBeEnabled();
 
-  const status = page.getByTestId("profile-oracle-sync-status");
+  const status = page.getByTestId("profile-save-progress");
   await expect(status).toContainText(
     "業務 Profile は保存されましたが、Oracle 反映に失敗しました。"
   );
   await expect(status).toContainText("Oracle 呼出しが 120 秒でタイムアウトしました。");
+  await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
+    "data-step-status",
+    "done"
+  );
+  await expect(page.getByTestId("profile-save-step-sync_oracle_profile")).toHaveAttribute(
+    "data-step-status",
+    "error"
+  );
   expect(ontologyRequests).toBe(0);
 
   const retry = status.getByRole("button", { name: "Oracle 反映を再試行" });
@@ -1145,7 +1195,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   await expect(retry).toBeFocused();
   await page.keyboard.press("Enter");
 
-  await expect(status).toContainText("Oracle 反映: 完了");
+  await expect(status).toHaveAttribute("data-job-status", "succeeded");
   expect(retryCalls).toBe(1);
   expect(ontologyRequests).toBe(0);
 });
@@ -1204,11 +1254,11 @@ test("異なる schema の同名表を別々に選択できる", async ({ page }
   await expect(tableList.getByLabel("SH.ORDERS")).not.toBeChecked();
 
   const shBulkActions = tableList.getByTestId("profile-allowed-table-list-sh-schema-bulk-actions");
-  await expect(shBulkActions.getByRole("button", { name: "SH の選択を解除" })).toBeDisabled();
+  await expect(shBulkActions.getByRole("button", { name: "SH の選択をすべて解除" })).toBeDisabled();
   await shBulkActions.getByRole("button", { name: "SH をすべて選択" }).click();
   await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
-  await expect(shBulkActions.getByRole("button", { name: "SH の選択を解除" })).toBeEnabled();
-  await shBulkActions.getByRole("button", { name: "SH の選択を解除" }).click();
+  await expect(shBulkActions.getByRole("button", { name: "SH の選択をすべて解除" })).toBeEnabled();
+  await shBulkActions.getByRole("button", { name: "SH の選択をすべて解除" }).click();
   await expect(tableList.getByLabel("SH.ORDERS")).not.toBeChecked();
   await shBulkActions.getByRole("button", { name: "SH をすべて選択" }).click();
   await expect(tableList.getByLabel("SH.ORDERS")).toBeChecked();
@@ -1595,6 +1645,11 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
     });
   });
   await page.route("**/api/schema/refresh-jobs**", async (route) => {
+    // coordinator の active-job discovery はポーリング回数に数えない(即 done 化を防ぐ)。
+    if (route.request().url().includes("/refresh-jobs/active")) {
+      await fulfillJson(route, { active_job: null });
+      return;
+    }
     if (route.request().method() === "POST") {
       await fulfillJson(route, {
         job_id: "schema-refresh-1",
@@ -1660,7 +1715,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
   await expect(schemaRefreshProcessing).toHaveCount(0);
   await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
-  await expect(page.getByText("スキーマ更新: 完了", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/DB 構造(再取得|差分同期): 完了/)).toHaveCount(0);
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();

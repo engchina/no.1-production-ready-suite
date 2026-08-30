@@ -46,6 +46,7 @@ export function useConfirm(): ConfirmFn {
 interface DialogState {
   options: ConfirmOptions;
   resolve: (value: boolean) => void;
+  returnFocus: HTMLElement | null;
 }
 
 /**
@@ -63,7 +64,15 @@ export function ConfirmProvider({
 
   const confirm = useCallback<ConfirmFn>((options) => {
     return new Promise<boolean>((resolve) => {
-      setState({ options, resolve });
+      const activeElement =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeMenu = activeElement?.closest<HTMLElement>('[role="menu"]');
+      const menuTrigger = activeMenu?.id
+        ? Array.from(document.querySelectorAll<HTMLElement>("[aria-controls]")).find(
+            (element) => element.getAttribute("aria-controls") === activeMenu.id
+          ) ?? null
+        : null;
+      setState({ options, resolve, returnFocus: menuTrigger ?? activeElement });
     });
   }, []);
 
@@ -80,6 +89,7 @@ export function ConfirmProvider({
       {state ? (
         <ConfirmDialog
           options={state.options}
+          returnFocus={state.returnFocus}
           labels={labels}
           onCancel={() => settle(false)}
           onConfirm={() => settle(true)}
@@ -91,11 +101,13 @@ export function ConfirmProvider({
 
 function ConfirmDialog({
   options,
+  returnFocus,
   labels,
   onCancel,
   onConfirm,
 }: {
   options: ConfirmOptions;
+  returnFocus: HTMLElement | null;
   labels: ConfirmDefaultLabels;
   onCancel: () => void;
   onConfirm: () => void;
@@ -105,14 +117,13 @@ function ConfirmDialog({
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocused = useRef<Element | null>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(returnFocus);
   const Icon = toneIcon[tone];
 
   useEffect(() => {
-    previouslyFocused.current = document.activeElement;
     confirmRef.current?.focus({ preventScroll: true });
     return () => {
-      if (previouslyFocused.current instanceof HTMLElement) {
+      if (previouslyFocused.current) {
         previouslyFocused.current.focus({ preventScroll: true });
       }
     };

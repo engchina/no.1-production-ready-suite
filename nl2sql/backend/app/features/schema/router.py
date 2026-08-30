@@ -11,6 +11,7 @@ from app.features.nl2sql.models import (
     SchemaObjectDetail,
     SchemaObjectPage,
     SchemaOwnersData,
+    SchemaRefreshActiveJobData,
     SchemaRefreshJob,
 )
 from app.features.nl2sql.service import nl2sql_service
@@ -99,9 +100,7 @@ def search_objects(
     return ApiResponse(data=page)
 
 
-@router.get(
-    "/objects/{owner}/{object_name}", response_model=ApiResponse[SchemaObjectDetail]
-)
+@router.get("/objects/{owner}/{object_name}", response_model=ApiResponse[SchemaObjectDetail])
 def object_detail(
     owner: str,
     object_name: str,
@@ -128,6 +127,18 @@ def object_detail(
 def start_refresh_job() -> ApiResponse[SchemaRefreshJob]:
     """Schema refresh を永続 job として投入し即時に返す。"""
     return ApiResponse(data=nl2sql_service.start_schema_refresh_job())
+
+
+@router.get(
+    "/refresh-jobs/active",
+    response_model=ApiResponse[SchemaRefreshActiveJobData],
+)
+def active_refresh_job() -> ApiResponse[SchemaRefreshActiveJobData]:
+    """画面移動・再読込後も追跡できる実行中 job を返す。"""
+
+    return ApiResponse(
+        data=SchemaRefreshActiveJobData(active_job=nl2sql_service.get_active_schema_refresh_job())
+    )
 
 
 @router.get("/refresh-jobs/{job_id}", response_model=ApiResponse[SchemaRefreshJob])

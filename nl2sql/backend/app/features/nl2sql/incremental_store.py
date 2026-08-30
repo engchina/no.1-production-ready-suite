@@ -271,6 +271,8 @@ class IncrementalNl2SqlRepository(Protocol):
         limit: int,
         query: str,
         owner: str,
+        owner_prefix: str = "",
+        query_scope: str = "all",
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
@@ -535,6 +537,8 @@ class MemoryIncrementalNl2SqlRepository:
         limit: int,
         query: str,
         owner: str,
+        owner_prefix: str = "",
+        query_scope: str = "all",
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
@@ -542,7 +546,9 @@ class MemoryIncrementalNl2SqlRepository:
     ) -> SchemaObjectPage:
         after = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
+        query_scope_key = query_scope.lower().strip()
         owner_key = owner.upper().strip()
+        owner_prefix_key = owner_prefix.upper().strip()
         type_key = object_type.upper().strip()
         row_state_key = row_state.lower().strip()
         with self._lock:
@@ -551,13 +557,11 @@ class MemoryIncrementalNl2SqlRepository:
                 for table in self._catalog.tables
                 if is_user_visible_schema_object(table.owner, table.table_name)
                 and (not owner_key or table.owner.upper() == owner_key)
+                and (not owner_prefix_key or table.owner.upper().startswith(owner_prefix_key))
                 and (
                     not type_key
                     or table.table_type.upper() == type_key
-                    or (
-                        type_key == "VIEW"
-                        and table.table_type.upper() == "MATERIALIZED VIEW"
-                    )
+                    or (type_key == "VIEW" and table.table_type.upper() == "MATERIALIZED VIEW")
                 )
                 and (
                     not row_state_key
@@ -575,7 +579,9 @@ class MemoryIncrementalNl2SqlRepository:
                     not query_key
                     or query_key
                     in " ".join(
-                        [
+                        [table.table_name, table.comment]
+                        if query_scope_key == "name_comment"
+                        else [
                             table.owner,
                             table.table_name,
                             table.logical_name,
@@ -589,19 +595,14 @@ class MemoryIncrementalNl2SqlRepository:
             tables.sort(key=lambda item: (item.owner.upper(), item.table_name.upper()))
             total = len(tables) if include_counts else None
             table_count = (
-                sum(
-                    item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"}
-                    for item in tables
-                )
+                sum(item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"} for item in tables)
                 if include_counts
                 else 0
             )
             view_count = (total - table_count) if total is not None else 0
             if after:
                 tables = [
-                    item
-                    for item in tables
-                    if (item.owner.upper(), item.table_name.upper()) > after
+                    item for item in tables if (item.owner.upper(), item.table_name.upper()) > after
                 ]
             selected = tables[: limit + 1]
             has_more = len(selected) > limit
@@ -703,8 +704,7 @@ class MemoryIncrementalNl2SqlRepository:
             active = [
                 item
                 for item in self._refresh_jobs.values()
-                if item.status
-                in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
+                if item.status in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
             ]
             if active:
                 current = min(active, key=lambda item: (item.created_at, item.job_id))
@@ -826,10 +826,7 @@ class MemoryIncrementalNl2SqlRepository:
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
                 and (not query_key or query_key in _canonical_json(value).casefold())
-                and all(
-                    str(value.get(key) or "") == expected
-                    for key, expected in filters.items()
-                )
+                and all(str(value.get(key) or "") == expected for key, expected in filters.items())
             ]
             values.sort(
                 key=lambda item: (
@@ -870,9 +867,7 @@ class MemoryIncrementalNl2SqlRepository:
             comment=table.comment,
             row_count=table.row_count,
             column_count=len(table.columns),
-            last_ddl_at=self._manifest.get(
-                (table.owner.upper(), table.table_name.upper()), ""
-            ),
+            last_ddl_at=self._manifest.get((table.owner.upper(), table.table_name.upper()), ""),
         )
 
 
@@ -1072,8 +1067,7 @@ class OracleIncrementalNl2SqlRepository:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
                 cursor.execute(
-                    "SELECT ETAG FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id "
-                    "FOR UPDATE",
+                    "SELECT ETAG FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id " "FOR UPDATE",
                     {"profile_id": profile_id},
                 )
                 current = cursor.fetchone()
@@ -1154,24 +1148,18 @@ class OracleIncrementalNl2SqlRepository:
                 "ORDER BY OWNER_NAME, VIEW_NAME, REFERENCED_OWNER, REFERENCED_NAME"
             )
             dependency_rows = cursor.fetchall()
-            column_rows = [
-                (*row[:7], _read_lob(row[7]) if row[7] else "") for row in column_rows
-            ]
+            column_rows = [(*row[:7], _read_lob(row[7]) if row[7] else "") for row in column_rows]
             constraint_rows = [
-                (*row[:3], _read_lob(row[3]) if row[3] else "")
-                for row in constraint_rows
+                (*row[:3], _read_lob(row[3]) if row[3] else "") for row in constraint_rows
             ]
-        schema_clob_bytes = sum(
-            len(row[7].encode("utf-8")) for row in column_rows if row[7]
-        ) + sum(len(row[3].encode("utf-8")) for row in constraint_rows if row[3])
+        schema_clob_bytes = sum(len(row[7].encode("utf-8")) for row in column_rows if row[7]) + sum(
+            len(row[3].encode("utf-8")) for row in constraint_rows if row[3]
+        )
         record_repository(
             "schema_catalog_load",
             statements=4,
             rows=(
-                len(object_rows)
-                + len(column_rows)
-                + len(constraint_rows)
-                + len(dependency_rows)
+                len(object_rows) + len(column_rows) + len(constraint_rows) + len(dependency_rows)
             ),
             clob_collection="schema",
             clob_bytes=schema_clob_bytes,
@@ -1234,6 +1222,8 @@ class OracleIncrementalNl2SqlRepository:
         limit: int,
         query: str,
         owner: str,
+        owner_prefix: str = "",
+        query_scope: str = "all",
         object_type: str,
         allowed_names: set[str] | None,
         row_state: str = "",
@@ -1251,6 +1241,9 @@ class OracleIncrementalNl2SqlRepository:
         if owner.strip():
             where.append("o.OWNER_NAME = :owner")
             binds["owner"] = owner.strip().upper()
+        if owner_prefix.strip():
+            where.append("SUBSTR(UPPER(o.OWNER_NAME), 1, LENGTH(:owner_prefix)) = :owner_prefix")
+            binds["owner_prefix"] = owner_prefix.strip().upper()
         if object_type.strip():
             normalized_type = object_type.strip().upper()
             if normalized_type == "VIEW":
@@ -1259,15 +1252,18 @@ class OracleIncrementalNl2SqlRepository:
                 where.append("o.OBJECT_TYPE = :object_type")
                 binds["object_type"] = normalized_type
         if query.strip():
-            where.append(
-                "(UPPER(o.OWNER_NAME) LIKE :query OR "
-                "UPPER(o.OWNER_NAME || '.' || o.OBJECT_NAME) LIKE :query OR "
-                "UPPER(o.OBJECT_NAME) LIKE :query OR UPPER(o.LOGICAL_NAME) LIKE :query "
-                "OR UPPER(o.COMMENTS) LIKE :query OR EXISTS (SELECT 1 "
-                "FROM NL2SQL_SCHEMA_COLUMNS c WHERE c.OWNER_NAME = o.OWNER_NAME "
-                "AND c.OBJECT_NAME = o.OBJECT_NAME AND "
-                "(UPPER(c.COLUMN_NAME) LIKE :query OR UPPER(c.LOGICAL_NAME) LIKE :query)))"
-            )
+            if query_scope.lower().strip() == "name_comment":
+                where.append("(UPPER(o.OBJECT_NAME) LIKE :query OR UPPER(o.COMMENTS) LIKE :query)")
+            else:
+                where.append(
+                    "(UPPER(o.OWNER_NAME) LIKE :query OR "
+                    "UPPER(o.OWNER_NAME || '.' || o.OBJECT_NAME) LIKE :query OR "
+                    "UPPER(o.OBJECT_NAME) LIKE :query OR UPPER(o.LOGICAL_NAME) LIKE :query "
+                    "OR UPPER(o.COMMENTS) LIKE :query OR EXISTS (SELECT 1 "
+                    "FROM NL2SQL_SCHEMA_COLUMNS c WHERE c.OWNER_NAME = o.OWNER_NAME "
+                    "AND c.OBJECT_NAME = o.OBJECT_NAME AND "
+                    "(UPPER(c.COLUMN_NAME) LIKE :query OR UPPER(c.LOGICAL_NAME) LIKE :query)))"
+                )
             binds["query"] = f"%{query.strip().upper()}%"
         normalized_row_state = row_state.strip().lower()
         if normalized_row_state == "with_rows":
@@ -1552,9 +1548,7 @@ class OracleIncrementalNl2SqlRepository:
         payload = _canonical_json(job.model_dump(mode="json"))
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
-                cursor.execute(
-                    "LOCK TABLE NL2SQL_SCHEMA_REFRESH_JOBS IN EXCLUSIVE MODE"
-                )
+                cursor.execute("LOCK TABLE NL2SQL_SCHEMA_REFRESH_JOBS IN EXCLUSIVE MODE")
                 cursor.execute(
                     "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS "
                     "WHERE STATUS IN ('pending', 'running') "
@@ -1572,9 +1566,7 @@ class OracleIncrementalNl2SqlRepository:
                             {
                                 "job_id": coalesced.job_id,
                                 "status": coalesced.status.value,
-                                "payload": _canonical_json(
-                                    coalesced.model_dump(mode="json")
-                                ),
+                                "payload": _canonical_json(coalesced.model_dump(mode="json")),
                             },
                         )
                     connection.commit()
@@ -1606,9 +1598,7 @@ class OracleIncrementalNl2SqlRepository:
         job_id: str | None = None,
     ) -> SchemaRefreshJob | None:
         now = datetime.now(UTC)
-        lease_expires_at = datetime.fromtimestamp(
-            now.timestamp() + max(30.0, lease_seconds), UTC
-        )
+        lease_expires_at = datetime.fromtimestamp(now.timestamp() + max(30.0, lease_seconds), UTC)
         predicate = (
             "(STATUS = 'pending' OR (STATUS = 'running' AND "
             "(LEASE_EXPIRES_AT IS NULL OR LEASE_EXPIRES_AT <= SYSTIMESTAMP)))"
@@ -1873,16 +1863,13 @@ class OracleIncrementalNl2SqlRepository:
                 binds,
             )
             dependency_rows = cursor.fetchall()
-            column_rows = [
-                (*row[:5], _read_lob(row[5]) if row[5] else "") for row in column_rows
-            ]
+            column_rows = [(*row[:5], _read_lob(row[5]) if row[5] else "") for row in column_rows]
             constraint_rows = [
-                (row[0], _read_lob(row[1]) if row[1] else "")
-                for row in constraint_rows
+                (row[0], _read_lob(row[1]) if row[1] else "") for row in constraint_rows
             ]
-        detail_clob_bytes = sum(
-            len(row[5].encode("utf-8")) for row in column_rows if row[5]
-        ) + sum(len(row[1].encode("utf-8")) for row in constraint_rows if row[1])
+        detail_clob_bytes = sum(len(row[5].encode("utf-8")) for row in column_rows if row[5]) + sum(
+            len(row[1].encode("utf-8")) for row in constraint_rows if row[1]
+        )
         record_repository(
             "schema_detail",
             statements=4,
@@ -1910,8 +1897,7 @@ class OracleIncrementalNl2SqlRepository:
             ],
             constraints=[str(row[0] or "") for row in constraint_rows],
             constraint_details=[
-                SchemaConstraintDetail.model_validate(json.loads(row[1]))
-                for row in constraint_rows
+                SchemaConstraintDetail.model_validate(json.loads(row[1])) for row in constraint_rows
             ],
         )
         dependencies = [

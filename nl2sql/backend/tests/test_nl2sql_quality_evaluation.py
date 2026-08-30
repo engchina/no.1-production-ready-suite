@@ -77,12 +77,17 @@ def _evaluation_job(
     lease_expires_at: str | None = None,
 ) -> QualityEvaluationJobRecord:
     now = created_at or datetime.now(UTC)
-    finished_at = now.isoformat() if status in {
-        QualityEvaluationStatus.COMPLETED,
-        QualityEvaluationStatus.COMPLETED_WITH_ERRORS,
-        QualityEvaluationStatus.FAILED,
-        QualityEvaluationStatus.CANCELLED,
-    } else None
+    finished_at = (
+        now.isoformat()
+        if status
+        in {
+            QualityEvaluationStatus.COMPLETED,
+            QualityEvaluationStatus.COMPLETED_WITH_ERRORS,
+            QualityEvaluationStatus.FAILED,
+            QualityEvaluationStatus.CANCELLED,
+        }
+        else None
+    )
     return QualityEvaluationJobRecord(
         job_id=job_id,
         profile_id="default",
@@ -223,9 +228,11 @@ class _QualityEvaluationOracleCursor:
 
     def _materialize_row(self, row: tuple[object, ...]) -> tuple[object, ...]:
         return tuple(
-            _ConnectionBoundLob(self._connection, value.value)
-            if isinstance(value, _LobPayload)
-            else value
+            (
+                _ConnectionBoundLob(self._connection, value.value)
+                if isinstance(value, _LobPayload)
+                else value
+            )
             for value in row
         )
 
@@ -389,20 +396,26 @@ def test_submit_accepts_repeat_boundaries_and_rejects_unavailable_engine(
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
     workbook = _xlsx([["A", "質問", "SELECT 1 FROM dual"]])
     service = _service(engine_runner=lambda *_args: "SELECT 1 FROM dual", judge_runner=_judge)
-    assert service.submit(
-        profile_id="default",
-        engines=[Nl2SqlEngine.SELECT_AI],
-        repeat_count=1,
-        content=workbook,
-        filename="cases.xlsx",
-    ).total_attempts == 1
-    assert service.submit(
-        profile_id="default",
-        engines=[Nl2SqlEngine.SELECT_AI],
-        repeat_count=10,
-        content=workbook,
-        filename="cases.xlsx",
-    ).total_attempts == 10
+    assert (
+        service.submit(
+            profile_id="default",
+            engines=[Nl2SqlEngine.SELECT_AI],
+            repeat_count=1,
+            content=workbook,
+            filename="cases.xlsx",
+        ).total_attempts
+        == 1
+    )
+    assert (
+        service.submit(
+            profile_id="default",
+            engines=[Nl2SqlEngine.SELECT_AI],
+            repeat_count=10,
+            content=workbook,
+            filename="cases.xlsx",
+        ).total_attempts
+        == 10
+    )
 
     unavailable = _service(
         engine_runner=lambda *_args: "SELECT 1 FROM dual",
@@ -461,9 +474,7 @@ def test_quality_evaluation_get_wakes_expired_running_job_only_inprocess(
             lease_expires_at=(now + timedelta(minutes=5)).isoformat(),
         )
     )
-    repository.save_job(
-        _evaluation_job("completed", status=QualityEvaluationStatus.COMPLETED)
-    )
+    repository.save_job(_evaluation_job("completed", status=QualityEvaluationStatus.COMPLETED))
     service = QualityEvaluationService(
         Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
     )
@@ -524,9 +535,7 @@ def test_quality_evaluation_list_wakes_visible_orphan_jobs_inprocess(
 
 def test_quality_evaluation_delete_terminal_job_removes_job_and_results() -> None:
     repository = MemoryQualityEvaluationRepository()
-    repository.save_job(
-        _evaluation_job("completed-job", status=QualityEvaluationStatus.COMPLETED)
-    )
+    repository.save_job(_evaluation_job("completed-job", status=QualityEvaluationStatus.COMPLETED))
     repository.save_result(_evaluation_result("completed-job"))
     service = QualityEvaluationService(
         Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
@@ -745,9 +754,7 @@ def test_quality_evaluation_readiness_blocks_known_unsynced_current_profile(
         status="error",
         profile_name=profile_name,
         engine_meta={
-            "profile_scope_states": {
-                profile_name.upper(): {"refreshed": False, "status": "error"}
-            }
+            "profile_scope_states": {profile_name.upper(): {"refreshed": False, "status": "error"}}
         },
     )
 
@@ -1125,8 +1132,7 @@ def test_oracle_repository_delete_job_uses_job_delete_and_transaction() -> None:
     assert connection.rollbacks == 0
     executed_sql = [sql for cursor in connection.cursors for sql, _binds in cursor.executed]
     assert any(
-        "DELETE FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id" in sql
-        for sql in executed_sql
+        "DELETE FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id" in sql for sql in executed_sql
     )
 
 
@@ -1230,13 +1236,16 @@ def test_result_and_job_pagination_use_opaque_cursors(
     assert len(service.list_jobs(cursor=jobs_page.next_cursor, limit=1).items) == 1
     assert len(results_page.items) == 1
     assert results_page.next_cursor
-    assert len(
-        service.list_results(
-            job_id=first.job_id,
-            cursor=results_page.next_cursor,
-            limit=1,
-        ).items
-    ) == 1
+    assert (
+        len(
+            service.list_results(
+                job_id=first.job_id,
+                cursor=results_page.next_cursor,
+                limit=1,
+            ).items
+        )
+        == 1
+    )
 
 
 def test_openapi_exposes_new_quality_flow_and_removes_legacy_evaluation_routes() -> None:

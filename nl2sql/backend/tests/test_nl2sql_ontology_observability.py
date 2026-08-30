@@ -29,6 +29,5 @@ def test_record_source_extraction_still_buckets_unknown_formats() -> None:
     record_source_extraction(file_format=".tsv", status="extracted")
 
     assert (
-        _source_extraction_sample(file_format="unknown", status="extracted")
-        == unknown_before + 1
+        _source_extraction_sample(file_format="unknown", status="extracted") == unknown_before + 1
     )

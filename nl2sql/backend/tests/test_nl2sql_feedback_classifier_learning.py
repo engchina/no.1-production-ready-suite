@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -14,8 +15,8 @@ from app.features.nl2sql.models import (
     ClassifierFeedbackSelection,
     ClassifierTrainingExampleUpdateRequest,
     ClassifierTrainRequest,
-    FeedbackRequest,
     FeedbackRating,
+    FeedbackRequest,
     HistoryItem,
     Nl2SqlEngine,
     Nl2SqlProfile,
@@ -336,21 +337,25 @@ def test_feedback_and_training_candidate_api_contract(
     item = _history("history-api", "API から請求金額を確認したい")
     _append_history(service, item)
 
+    anon_request = SimpleNamespace(state=SimpleNamespace(principal=None))
     with pytest.raises(HTTPException) as missing:
         nl2sql_router.feedback(
-            FeedbackRequest(history_id="missing", rating=FeedbackRating.GOOD, comment="")
+            FeedbackRequest(history_id="missing", rating=FeedbackRating.GOOD, comment=""),
+            anon_request,
         )
     saved = nl2sql_router.feedback(
-        FeedbackRequest(history_id=item.id, rating=FeedbackRating.GOOD, comment="確認済み")
+        FeedbackRequest(history_id=item.id, rating=FeedbackRating.GOOD, comment="確認済み"),
+        anon_request,
     )
     feedback = nl2sql_router.list_feedback(
-        rating="good", profile_id="default", q="請求"
+        anon_request, rating="good", profile_id="default", q="請求"
     )
-    candidates = nl2sql_router.classifier_training_candidates()
+    candidates = nl2sql_router.classifier_training_candidates(anon_request)
     imported = nl2sql_router.import_classifier_training_data_from_feedback(
         ClassifierFeedbackImportRequest(
             items=[ClassifierFeedbackSelection(history_id=item.id, profile_id="default")]
-        )
+        ),
+        anon_request,
     )
     example_id = imported.data.results[0].training_example_id
     updated = nl2sql_router.update_classifier_training_example(
@@ -358,13 +363,14 @@ def test_feedback_and_training_candidate_api_contract(
         ClassifierTrainingExampleUpdateRequest(
             text="API から請求合計を確認したい", profile_id="default"
         ),
+        anon_request,
     )
     deleted = nl2sql_router.delete_classifier_training_example(example_id)
     with pytest.raises(HTTPException) as delete_missing:
         nl2sql_router.delete_classifier_training_example(example_id)
-    cleared = nl2sql_router.clear_feedback(item.id)
+    cleared = nl2sql_router.clear_feedback(item.id, anon_request)
     with pytest.raises(HTTPException) as clear_missing:
-        nl2sql_router.clear_feedback("missing")
+        nl2sql_router.clear_feedback("missing", anon_request)
 
     assert missing.value.status_code == 404
     assert saved.data.history_id == item.id

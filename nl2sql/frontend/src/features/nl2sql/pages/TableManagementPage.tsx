@@ -2,20 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, toast } from "@engchina/production-ready-ui";
 
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
-import { apiFetch, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
-import { useRequestScope } from "@/lib/useRequestScope";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   ExecutionConfirmationField,
@@ -36,7 +35,7 @@ import {
   dbObjectSortValue,
   parseDbAdminObjectTarget,
   type DbObjectDetailTab,
-  type DbObjectOwnerFilter,
+  type DbObjectOwnerPrefix,
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
@@ -49,8 +48,12 @@ import type {
 import {
   useDbAdminObjects,
   useSchemaRefreshJob,
-  waitForSchemaRefreshJob,
 } from "../incrementalQueries";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
@@ -114,8 +117,6 @@ function ImportWizard({
   confirmation,
   loading,
   error,
-  schemaRefreshJob,
-  schemaRefreshing,
   schemaRefreshError,
   schemaRefreshNeedsFull,
   onTableChange,
@@ -136,8 +137,6 @@ function ImportWizard({
   confirmation: string;
   loading: boolean;
   error: unknown;
-  schemaRefreshJob: SchemaRefreshJob | null;
-  schemaRefreshing: boolean;
   schemaRefreshError: string;
   schemaRefreshNeedsFull: boolean;
   onTableChange: (value: string) => void;
@@ -264,43 +263,23 @@ function ImportWizard({
           }
         />
         {result && <ImportResultPanel result={result} />}
-        {schemaRefreshing && (
-          <ProcessingIndicator
-            active
-            label={schemaRefreshProcessingLabel(schemaRefreshJob, t("common.processing.schemaRefreshing"))}
-            operationKey={schemaRefreshJob?.job_id ?? "table-import-schema-refresh"}
-            placement="job"
-            className="rounded-md border border-border bg-background px-3 py-2"
-            testId="table-import-schema-refresh-processing"
-          />
-        )}
+        <SchemaRefreshProcessing placement="job" testId="table-import-schema-refresh-processing" />
         {schemaRefreshError && (
-          <div
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger"
-            role="alert"
-          >
-            <span>{schemaRefreshError}</span>
-            {schemaRefreshNeedsFull && (
+          <Banner
+            severity="danger"
+            action={schemaRefreshNeedsFull ? (
               <Button type="button" variant="secondary" size="sm" onClick={onSchemaRefresh}>
                 <RefreshCw size={15} aria-hidden="true" />
                 <span>{t("common.action.schemaRefresh")}</span>
               </Button>
-            )}
-          </div>
+            ) : undefined}
+          >
+            {schemaRefreshError}
+          </Banner>
         )}
       </fieldset>
     </div>
   );
-}
-
-function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
-  if (!job) return "";
-  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
-  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
-  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
-    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
-    progress,
-  });
 }
 
 function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
@@ -328,10 +307,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
     : t("dataMgmt.schemaJob.error");
 }
 
-function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
-  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
-}
-
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
@@ -354,7 +329,7 @@ export function TableManagementPage() {
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [tableSearch, setTableSearch] = useState("");
-  const [tableOwnerFilter, setTableOwnerFilter] = useState<DbObjectOwnerFilter>("all");
+  const [tableOwnerPrefix, setTableOwnerPrefix] = useState<DbObjectOwnerPrefix>("");
   const [tableSort, setTableSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
@@ -374,49 +349,29 @@ export function TableManagementPage() {
   const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
-  const loadSequence = useRef(0);
   const completedSchemaRefreshJob = useRef("");
   const completedImportSchemaRefreshJob = useRef("");
-  const { abortAll, run: runScopedRequest } = useRequestScope();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const debouncedTableSearch = useDebouncedValue(tableSearch, 250);
-  const tableOwnerQuery = tableOwnerFilter === "all" ? "" : tableOwnerFilter;
-  const tableObjectsQuery = useDbAdminObjects(debouncedTableSearch, "table", "all", tableOwnerQuery);
-  const schemaOwnersQuery = useSchemaOwners();
+  const debouncedTableOwnerPrefix = useDebouncedValue(tableOwnerPrefix, 250);
+  const tableObjectsQuery = useDbAdminObjects(
+    debouncedTableSearch,
+    "table",
+    "all",
+    debouncedTableOwnerPrefix,
+    "name_comment"
+  );
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
-  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
-  const schemaRefreshing =
-    !schemaRefreshJobQuery.error &&
-    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
-  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
-    ? schemaRefreshJobQuery.error instanceof Error
-      ? schemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError;
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
   const importSchemaRefreshJobQuery = useSchemaRefreshJob(importSchemaRefreshJobId);
-  const importSchemaRefreshJob = importSchemaRefreshJobQuery.data ?? null;
-  const importSchemaRefreshing =
-    !importSchemaRefreshJobQuery.error &&
-    (importSchemaRefreshJob?.status === "pending" || importSchemaRefreshJob?.status === "running");
-  const visibleImportSchemaRefreshError = importSchemaRefreshJobQuery.error
-    ? importSchemaRefreshJobQuery.error instanceof Error
-      ? importSchemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : importSchemaRefreshError;
+  const visibleImportSchemaRefreshError = importSchemaRefreshError || sharedSchemaRefresh.error;
   const tableItems = useMemo(
     () => (tableObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
     [tableObjectsQuery.data]
   );
   const firstTablePage = tableObjectsQuery.data?.pages[0];
   const totalTableCount = dbAdminObjectCountsFromPage(firstTablePage, tableItems).totalCount;
-  const tableOwnerOptions = useMemo(
-    () =>
-      (schemaOwnersQuery.data?.owners ?? [])
-        .filter((item) => item.table_count > 0)
-        .map((item) => item.owner.trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right, "ja")),
-    [schemaOwnersQuery.data],
-  );
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/tables",
     loadErrorMessage: t("tableMgmt.error.detail"),
@@ -483,61 +438,26 @@ export function TableManagementPage() {
     }
   };
 
-  const refreshSchema = async (announce = false) => {
-    const sequence = loadSequence.current + 1;
-    loadSequence.current = sequence;
+  const refreshSchema = async () => {
     setLoading("schema-refresh");
     setMessage("");
     setSchemaRefreshError("");
     setSchemaRefreshNeedsFull(false);
     try {
-      await runScopedRequest(async (signal) => {
-        // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-        // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-          signal,
-          timeoutMs: API_TIMEOUT_MS.jobControl,
-        });
-        if (job.job_id) {
-          completedSchemaRefreshJob.current = "";
-          setSchemaRefreshJobId(job.job_id);
-          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
-            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
-          });
-          if (completedJob.status === "done") {
-            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
-          }
-        }
-        if (signal.aborted || sequence !== loadSequence.current) return;
-      });
-      if (sequence !== loadSequence.current) return;
-      const result = await tableObjectsQuery.refetch();
-      if (result.error) throw result.error;
-      if (announce && sequence === loadSequence.current) {
-        toast.success(t("common.action.schemaRefreshed"));
-      }
+      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+      const job = await sharedSchemaRefresh.start();
+      if (job.job_id) trackSchemaRefreshJob(job.job_id);
     } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
       setMessage(
-        isTimeoutError(err)
-          ? t("dataMgmt.schemaJob.timeout")
-          : err instanceof Error
-            ? err.message
-            : t("tableMgmt.error.load")
+        err instanceof Error
+          ? err.message
+          : t("dataMgmt.schemaJob.submitError")
       );
     } finally {
-      if (sequence === loadSequence.current) setLoading("");
+      setLoading("");
     }
   };
-
-  useEffect(() => {
-    return () => {
-      loadSequence.current += 1;
-      abortAll();
-    };
-  }, []);
 
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
@@ -548,30 +468,14 @@ export function TableManagementPage() {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
-      toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
       const needsFull = schemaRefreshRequiresFull(job);
       setSchemaRefreshNeedsFull(needsFull);
       setSchemaRefreshError(schemaRefreshErrorMessage(job));
-      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [schemaRefreshJobQuery.data]);
-
-  useEffect(() => {
-    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
-    const reportKey = `${schemaRefreshJobId}:query-error`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    completedSchemaRefreshJob.current = reportKey;
-    const error =
-      schemaRefreshJobQuery.error instanceof Error
-        ? schemaRefreshJobQuery.error.message
-        : t("dataMgmt.schemaJob.error");
-    setSchemaRefreshError(error);
-    setSchemaRefreshNeedsFull(false);
-    toast.error(t("dataMgmt.schemaJob.error"));
-  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
   useEffect(() => {
     const job = importSchemaRefreshJobQuery.data;
@@ -582,32 +486,17 @@ export function TableManagementPage() {
       completedImportSchemaRefreshJob.current = reportKey;
       setImportSchemaRefreshError("");
       setImportSchemaRefreshNeedsFull(false);
-      toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedImportSchemaRefreshJob.current = reportKey;
       const needsFull = schemaRefreshRequiresFull(job);
       setImportSchemaRefreshNeedsFull(needsFull);
       setImportSchemaRefreshError(schemaRefreshErrorMessage(job));
-      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [importSchemaRefreshJobQuery.data]);
 
-  useEffect(() => {
-    if (!importSchemaRefreshJobQuery.error || !importSchemaRefreshJobId) return;
-    const reportKey = `${importSchemaRefreshJobId}:query-error`;
-    if (completedImportSchemaRefreshJob.current === reportKey) return;
-    completedImportSchemaRefreshJob.current = reportKey;
-    const error =
-      importSchemaRefreshJobQuery.error instanceof Error
-        ? importSchemaRefreshJobQuery.error.message
-        : t("dataMgmt.schemaJob.error");
-    setImportSchemaRefreshError(error);
-    setImportSchemaRefreshNeedsFull(false);
-    toast.error(t("dataMgmt.schemaJob.error"));
-  }, [importSchemaRefreshJobId, importSchemaRefreshJobQuery.error]);
-
   const trackSchemaRefreshJob = (jobId: string) => {
+    sharedSchemaRefresh.track(jobId);
     if (activeView === "import") {
       completedImportSchemaRefreshJob.current = "";
       setImportSchemaRefreshError("");
@@ -643,16 +532,14 @@ export function TableManagementPage() {
 
   const filteredTables = useMemo(() => {
     const q = tableSearch.trim().toLowerCase();
-    const ownerKey = tableOwnerFilter.trim().toUpperCase();
+    const ownerPrefixKey = tableOwnerPrefix.trim().toUpperCase();
     return tableItems
       .filter((item) => {
-        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
+        if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
         if (!q) return true;
         return (
-          dbAdminObjectQualifiedName(item).toLowerCase().includes(q) ||
           item.name.toLowerCase().includes(q) ||
-          item.comment.toLowerCase().includes(q) ||
-          item.owner.toLowerCase().includes(q)
+          item.comment.toLowerCase().includes(q)
         );
       })
       .sort((left, right) => {
@@ -661,7 +548,7 @@ export function TableManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return tableSort.direction === "asc" ? result : -result;
       });
-  }, [tableItems, tableOwnerFilter, tableSearch, tableSort]);
+  }, [tableItems, tableOwnerPrefix, tableSearch, tableSort]);
 
   useEffect(() => {
     if (activeView !== "list") return;
@@ -748,7 +635,7 @@ export function TableManagementPage() {
       setImportStep("execute");
       if (result.executed) {
         if (result.schema_refresh_job_id) {
-          setImportSchemaRefreshJobId(result.schema_refresh_job_id);
+          trackSchemaRefreshJob(result.schema_refresh_job_id);
           setImportSchemaRefreshNeedsFull(false);
         } else if (result.schema_refresh_required) {
           setImportSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
@@ -850,8 +737,6 @@ export function TableManagementPage() {
         confirmation={importConfirmation}
         loading={loading === "import-tabular"}
         error={importError}
-        schemaRefreshJob={importSchemaRefreshJob}
-        schemaRefreshing={importSchemaRefreshing}
         schemaRefreshError={visibleImportSchemaRefreshError}
         schemaRefreshNeedsFull={importSchemaRefreshNeedsFull}
         onTableChange={(value) => {
@@ -886,7 +771,7 @@ export function TableManagementPage() {
         onSchemaRefresh={() => {
           setImportSchemaRefreshError("");
           setImportSchemaRefreshNeedsFull(false);
-          void refreshSchema(true);
+          void refreshSchema();
         }}
       />
     ) : null;
@@ -901,14 +786,7 @@ export function TableManagementPage() {
             ? t("common.schemaRefreshedAt", { date: formatDateTime(firstTablePage.refreshed_at) })
             : undefined
         }
-        status={
-          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
-            <PageHeaderStatusBadge
-              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
-              label={schemaRefreshJobLabel(schemaRefreshJob)}
-            />
-          ) : undefined
-        }
+        status={<SchemaRefreshHeaderStatus testId="table-schema-refresh-status" />}
         actionsAriaLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
         actions={
@@ -941,9 +819,9 @@ export function TableManagementPage() {
                   kind: "utility",
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  loading: loading === "schema-refresh" || schemaRefreshing,
-                  disabled: loading === "schema-refresh" || schemaRefreshing,
-                  onClick: () => void refreshSchema(true),
+                  loading: sharedSchemaRefresh.isStarting,
+                  disabled: schemaRefreshing,
+                  onClick: () => void refreshSchema(),
                 },
               ]
             : []
@@ -956,7 +834,7 @@ export function TableManagementPage() {
               ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` }
               : visibleSchemaRefreshError
                 ? { tone: "danger", message: visibleSchemaRefreshError }
-              : null
+                : null
           }
           action={
             <Button
@@ -964,14 +842,14 @@ export function TableManagementPage() {
               variant="secondary"
               size="sm"
               onClick={
-                schemaRefreshNeedsFull
-                  ? () => void refreshSchema(true)
+                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
+                  ? () => void refreshSchema()
                   : () => void refreshObjects()
               }
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>
-                {schemaRefreshNeedsFull
+                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
                   : t("tableMgmt.action.refresh")}
               </span>
@@ -988,21 +866,14 @@ export function TableManagementPage() {
               splitId="table-management-list"
               preferredWidePane="right"
               processing={
-                tableObjectsQuery.data &&
-                ((tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage) ||
-                  loading === "schema-refresh" ||
-                  schemaRefreshing) ? (
+                schemaRefreshing ? (
+                  <SchemaRefreshProcessing testId="table-management-workspace-processing" />
+                ) : tableObjectsQuery.data &&
+                  tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage ? (
                   <ProcessingIndicator
                     active
-                    label={
-                      loading === "schema-refresh" || schemaRefreshing
-                        ? schemaRefreshProcessingLabel(
-                            schemaRefreshJob,
-                            t("tableMgmt.workspace.schemaRefreshing"),
-                          )
-                        : t("tableMgmt.workspace.refreshing")
-                    }
-                    operationKey={schemaRefreshing ? schemaRefreshJobId : loading}
+                    label={t("tableMgmt.workspace.refreshing")}
+                    operationKey="table-list-refresh"
                     placement="workspace"
                     className="rounded-md border border-border bg-background px-3 py-2"
                     testId="table-management-workspace-processing"
@@ -1024,8 +895,7 @@ export function TableManagementPage() {
                   : ""
               }
               search={tableSearch}
-              ownerFilter={tableOwnerFilter}
-              ownerOptions={tableOwnerOptions}
+              ownerPrefix={tableOwnerPrefix}
               sort={tableSort}
               totalCount={totalTableCount}
               hasNextPage={Boolean(tableObjectsQuery.hasNextPage)}
@@ -1044,8 +914,6 @@ export function TableManagementPage() {
                 emptyHint: t("tableMgmt.list.emptyHint"),
                 noResultsTitle: t("tableMgmt.list.noResultsTitle"),
                 noResultsHint: t("tableMgmt.list.noResultsHint"),
-                ownerFilter: t("tableMgmt.toolbar.filter"),
-                ownerFilterAll: t("tableMgmt.toolbar.filterAll"),
                 objectName: t("tableMgmt.grid.tableName"),
                 rows: t("tableMgmt.grid.rows"),
                 owner: t("tableMgmt.grid.owner"),
@@ -1055,7 +923,7 @@ export function TableManagementPage() {
                 showObject: (name) => t("tableMgmt.grid.showTable", { name }),
               }}
               onSearchChange={setTableSearch}
-              onOwnerFilterChange={setTableOwnerFilter}
+              onOwnerPrefixChange={setTableOwnerPrefix}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
               onDrop={openDropDialog}

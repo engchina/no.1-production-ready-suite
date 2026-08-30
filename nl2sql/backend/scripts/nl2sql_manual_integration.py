@@ -1387,9 +1387,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check-supporting-features",
         action="store_true",
-        help=(
-            "Run non-mutating checks for comment suggestions and feedback index status."
-        ),
+        help=("Run non-mutating checks for comment suggestions and feedback index status."),
     )
     parser.add_argument(
         "--check-legacy-absorption",

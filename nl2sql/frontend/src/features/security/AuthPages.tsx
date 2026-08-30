@@ -14,11 +14,12 @@ import {
 
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { securityApi } from "./api";
 import { currentUserHasPermission } from "./menu-permissions";
-import { firstAllowedRoute } from "./route-permissions";
+import { defaultEntryRoute } from "./route-permissions";
 import { useAuth } from "./AuthProvider";
 
 const INPUT_CLASS =
@@ -43,6 +44,16 @@ function AuthSurface({ children }: { children: ReactNode }) {
   );
 }
 
+function loginErrorMessage(cause: unknown): string {
+  if (cause instanceof ApiError) {
+    return cause.baseMessages[0] || t("auth.login.error");
+  }
+  if (cause instanceof Error) {
+    return cause.message || t("auth.login.error");
+  }
+  return t("auth.login.error");
+}
+
 export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
@@ -53,7 +64,7 @@ export function LoginPage() {
   const [error, setError] = useState("");
 
   if (auth.status === "authenticated") {
-    return <Navigate to={auth.user?.force_password_change ? APP_ROUTES.passwordChange : firstAllowedRoute(auth.hasPermission)} replace />;
+    return <Navigate to={auth.user?.force_password_change ? APP_ROUTES.passwordChange : defaultEntryRoute(auth.hasPermission)} replace />;
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -71,11 +82,12 @@ export function LoginPage() {
       navigate(
         current.force_password_change
           ? APP_ROUTES.passwordChange
-          : requested || firstAllowedRoute(canAccess),
+          : requested || defaultEntryRoute(canAccess),
         { replace: true }
       );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("auth.login.error"));
+      // 認証失敗は利用者の入力ミスなので、調査用のリクエスト ID は表示しない
+      setError(loginErrorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -152,10 +164,10 @@ export function PasswordChangePage() {
 
   if (auth.status === "unauthenticated") return <Navigate to={APP_ROUTES.login} replace />;
   if (auth.user?.debug_mode) {
-    return <Navigate to={firstAllowedRoute(auth.hasPermission)} replace />;
+    return <Navigate to={defaultEntryRoute(auth.hasPermission)} replace />;
   }
 
-  const fallbackRoute = firstAllowedRoute(auth.hasPermission);
+  const fallbackRoute = defaultEntryRoute(auth.hasPermission);
   const canChangePassword = auth.user?.password_change_allowed !== false;
   const handleBack = () => {
     if (window.history.length > 1 && location.key !== "default") {
@@ -292,6 +304,8 @@ export function PasswordChangePage() {
 export function ForbiddenPage() {
   const auth = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const requestId = (location.state as { requestId?: unknown } | null)?.requestId;
   return (
     <AuthSurface>
       <Card>
@@ -299,8 +313,15 @@ export function ForbiddenPage() {
           <CardTitle>{t("auth.forbidden.title")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <Banner severity="warning">{t("auth.forbidden.description")}</Banner>
-          <Button className="w-full" onClick={() => navigate(firstAllowedRoute(auth.hasPermission), { replace: true })}>
+          <Banner severity="warning">
+            <p>{t("auth.forbidden.description")}</p>
+            {typeof requestId === "string" && requestId ? (
+              <p className="mt-1 break-all text-xs text-muted">
+                {t("common.requestId")}: <code>{requestId}</code>
+              </p>
+            ) : null}
+          </Banner>
+          <Button className="w-full" onClick={() => navigate(defaultEntryRoute(auth.hasPermission), { replace: true })}>
             {t("auth.forbidden.back")}
           </Button>
         </CardContent>

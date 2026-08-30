@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
 from pydantic import ValidationError
 
 from app.features.nl2sql import ontology_router, profile_sync
@@ -14,6 +17,11 @@ from app.features.nl2sql.models import Nl2SqlEngine, ProfilePatchRequest, Profil
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.features.nl2sql.service import Nl2SqlService, ProfileOracleCleanupFailed
 from app.features.nl2sql.store import MemoryNl2SqlStore
+
+
+def _anon_request() -> Request:
+    """認証無効(principal なし)相当の request。router の RBAC 引数へ渡す。"""
+    return cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
 
 
 class _FakeOracleCleanupAdapter:
@@ -67,6 +75,7 @@ def test_profile_patch_ignores_separate_select_ai_profile_name(
         ProfilePatchRequest(
             select_ai_config={"profile_name": "OTHER_PROFILE", "region": "ap-osaka-1"}
         ),
+        _anon_request(),
         Response(),
     ).data
 
@@ -97,15 +106,16 @@ def test_profile_create_update_and_restore_never_materialize_ontology_view(
     updated = nl2sql_router.update_profile(
         created.id,
         ProfileUpsertRequest(name="invoice_profile_v2", allowed_tables=["APP.INVOICES"]),
+        _anon_request(),
         Response(),
     ).data
     assert updated is not None
     assert updated.name == "INVOICE_PROFILE_V2"
     assert updated.select_ai_config.profile_name == "INVOICE_PROFILE_V2"
-    archived = nl2sql_router.archive_profile(created.id).data
+    archived = nl2sql_router.archive_profile(created.id, _anon_request()).data
     assert archived is not None
     assert archived.archived is True
-    restored = nl2sql_router.restore_profile(created.id).data
+    restored = nl2sql_router.restore_profile(created.id, _anon_request()).data
     assert restored is not None
     assert restored.archived is False
 
@@ -132,7 +142,7 @@ def test_default_profile_delete_uses_shared_physical_delete_and_cleanup(
         lambda profile_id: cleanup_calls.append(("runtime", profile_id)),
     )
 
-    deleted = nl2sql_router.delete_profile("default").data
+    deleted = nl2sql_router.delete_profile("default", _anon_request()).data
 
     assert deleted is not None
     assert deleted.profile.id == "default"
@@ -174,11 +184,11 @@ def test_default_profile_delete_honors_incremental_preconditions_and_not_found(
     service.get_profile("default")
 
     with pytest.raises(HTTPException) as missing_precondition:
-        nl2sql_router.delete_profile("default")
+        nl2sql_router.delete_profile("default", _anon_request())
     assert missing_precondition.value.status_code == 428
 
     with pytest.raises(HTTPException) as conflict:
-        nl2sql_router.delete_profile("default", if_match='"stale"')
+        nl2sql_router.delete_profile("default", _anon_request(), if_match='"stale"')
     assert conflict.value.status_code == 409
     assert conflict.value.headers is not None
     current_etag = conflict.value.headers["ETag"]
@@ -186,13 +196,14 @@ def test_default_profile_delete_honors_incremental_preconditions_and_not_found(
 
     deleted = nl2sql_router.delete_profile(
         "default",
+        _anon_request(),
         if_match=current_etag,
     ).data
     assert deleted is not None
     assert deleted.profile.id == "default"
 
     with pytest.raises(HTTPException) as missing:
-        nl2sql_router.delete_profile("default", if_match=current_etag)
+        nl2sql_router.delete_profile("default", _anon_request(), if_match=current_etag)
     assert missing.value.status_code == 404
 
 
@@ -260,7 +271,7 @@ def test_profile_delete_oracle_cleanup_failure_returns_502(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
     with pytest.raises(HTTPException) as exc:
-        nl2sql_router.delete_profile("default")
+        nl2sql_router.delete_profile("default", _anon_request())
 
     assert exc.value.status_code == 502
     assert "業務 profile は削除していません" in str(exc.value.detail)

@@ -154,6 +154,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
       config_file_mode: "600",
       key_file_mode: "600",
       message: "OCI config を確認しました。",
+      elapsed_ms: 7,
       checked_at: "2026-06-21T10:00:00.000Z",
       error_type: null,
     })
@@ -183,20 +184,32 @@ async function mockNl2sqlSettingsApi(page: Page) {
     fulfillJson(route, uploadStorage)
   );
   await page.route("**/api/settings/model", (route) => fulfillJson(route, modelSettings));
-  await page.route("**/api/settings/model/test", (route) =>
-    fulfillJson(route, {
+  await page.route("**/api/settings/model/test", (route) => {
+    const request = route.request().postDataJSON() as {
+      target_type: "enterprise_text" | "enterprise_vision" | "embedding" | "rerank";
+      model_id: string;
+    };
+    const details =
+      request.target_type === "embedding"
+        ? { vector_dim: 1536, input_count: 1 }
+        : request.target_type === "rerank"
+          ? { ranked_count: 1, top_score: 0.78962326 }
+          : request.target_type === "enterprise_vision"
+            ? { surface: "vision", response_chars: 1 }
+            : { surface: "text", response_chars: 5 };
+    return fulfillJson(route, {
       status: "success",
-      target_type: "enterprise_text",
-      model_id: "enterprise-nl2sql-llm",
-      message: "enterprise-nl2sql-llm の設定を確認しました。",
+      target_type: request.target_type,
+      model_id: request.model_id,
+      message: `${request.model_id} の設定を確認しました。`,
       troubleshooting: [],
       raw_error: null,
       error_type: null,
       elapsed_ms: 12,
       checked_at: "2026-06-21T10:00:00.000Z",
-      details: { network_call: false },
-    })
-  );
+      details,
+    });
+  });
 
   await page.route("**/api/settings/database", (route) =>
     fulfillJson(route, databaseSettings)
@@ -632,10 +645,173 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "DB接続テスト" }).click();
   await expect(page.getByText("入力値の形式のみ確認します。")).toBeVisible();
+  await expect(page.getByTestId("settings-database-test-result")).toHaveAttribute(
+    "data-tone",
+    "warning"
+  );
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("システム設定のテスト成功結果を共通パネルで表示する", async ({ page }, testInfo) => {
+  await page.goto("/settings/oci");
+  const ociTestButton = page.getByRole("button", { name: /接続テスト/ });
+  await ociTestButton.focus();
+  await expect(ociTestButton).toBeFocused();
+  await ociTestButton.press("Enter");
+
+  const ociResult = page.getByTestId("settings-oci-test-result");
+  await expect(ociResult.getByRole("status")).toBeVisible();
+  await expect(ociResult).toHaveAttribute("data-tone", "success");
+  await expect(ociResult).toContainText("OCI config を確認しました。");
+  await expect(ociResult).toContainText("所要時間: 7 ms");
+  await expect(ociResult).toContainText("config_file_mode");
+  await expectNoHorizontalOverflow(page);
+  await page.locator("#oci-user-ocid").fill("ocid1.user.oc1..changed");
+  await expect(ociResult).toHaveCount(0);
+
+  await page.goto("/settings/model");
+  await page
+    .getByRole("button", { name: "enterprise-nl2sql-vlm をテスト", exact: true })
+    .click();
+  const enterpriseResult = page
+    .getByText("enterprise-nl2sql-vlm の設定を確認しました。", { exact: true })
+    .locator("xpath=ancestor::*[@data-settings-test-result][1]");
+  await expect(enterpriseResult).toHaveAttribute("data-tone", "success");
+  await expect(enterpriseResult).toContainText("surface");
+  await expect(enterpriseResult).toContainText("vision");
+
+  await page
+    .getByRole("button", { name: "cohere.embed-v4.0 をテスト", exact: true })
+    .click();
+  const embeddingResult = page
+    .getByText("cohere.embed-v4.0 の設定を確認しました。", { exact: true })
+    .locator("xpath=ancestor::*[@data-settings-test-result][1]");
+  await expect(embeddingResult).toContainText("vector_dim");
+  await expect(embeddingResult).toContainText("1536");
+
+  await page
+    .getByRole("button", { name: "cohere.rerank-v4.0-fast をテスト", exact: true })
+    .click();
+  const rerankResult = page
+    .getByText("cohere.rerank-v4.0-fast の設定を確認しました。", { exact: true })
+    .locator("xpath=ancestor::*[@data-settings-test-result][1]");
+  await expect(rerankResult).toContainText("top_score");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath("settings-model-test-result-success.png"),
+    fullPage: true,
+  });
+  await page.getByRole("textbox", { name: "モデル ID 2" }).fill("enterprise-nl2sql-vlm-v2");
+  await expect(enterpriseResult).toHaveCount(0);
+
+  await page.unroute("**/api/settings/database/test");
+  await page.route("**/api/settings/database/test", (route) =>
+    fulfillJson(route, {
+      status: "success",
+      readiness: "ok",
+      message: "Oracle 26ai への接続に成功しました。",
+      elapsed_ms: 9,
+      troubleshooting: [],
+      details: { network_call: true },
+      checked_at: "2026-06-21T10:00:00.000Z",
+      error_type: null,
+    })
+  );
+  await page.goto("/settings/database");
+  await page.getByRole("button", { name: "DB接続テスト" }).click();
+  const databaseResult = page.getByTestId("settings-database-test-result");
+  await expect(databaseResult.getByRole("status")).toBeVisible();
+  await expect(databaseResult).toHaveAttribute("data-tone", "success");
+  await expect(databaseResult).toContainText("Oracle 26ai への接続に成功しました。");
+  await expect(databaseResult).toContainText("所要時間: 9 ms");
+  await expect(databaseResult).toContainText("確認時刻:");
+  await expect(databaseResult).toContainText("network_call");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath("settings-test-result-success.png"),
+    fullPage: true,
+  });
+  await page.locator("#oracle-user").fill("NL2SQL_APP_CHANGED");
+  await expect(databaseResult).toHaveCount(0);
+});
+
+test("システム設定の失敗と API エラーを共通 danger パネルで表示する", async ({ page }) => {
+  await page.unroute("**/api/settings/oci/config/test");
+  await page.route("**/api/settings/oci/config/test", (route) =>
+    fulfillJson(route, {
+      status: "failed",
+      profile: "DEFAULT",
+      config_file: "~/.oci/config",
+      key_file: "~/.oci/oci_api_key.pem",
+      config_file_exists: true,
+      key_file_exists: false,
+      missing_fields: ["fingerprint"],
+      permission_issues: ["OCI config ファイルは 0600 にしてください。"],
+      oci_directory_mode: "0700",
+      config_file_mode: "0644",
+      key_file_mode: null,
+      message: "OCI 認証ファイルを確認してください。",
+      elapsed_ms: 4,
+      checked_at: "2026-06-21T10:00:00.000Z",
+      error_type: "InvalidOciConfig",
+    })
+  );
+  await page.goto("/settings/oci");
+  await page.getByRole("button", { name: /接続テスト/ }).click();
+  const ociResult = page.getByTestId("settings-oci-test-result");
+  await expect(ociResult.getByRole("alert")).toBeVisible();
+  await expect(ociResult).toHaveAttribute("data-tone", "danger");
+  await expect(ociResult).toContainText("確認ポイント");
+  await expect(ociResult).toContainText("不足項目: fingerprint");
+  await expectNoHorizontalOverflow(page);
+
+  await page.unroute("**/api/settings/model/test");
+  await page.route("**/api/settings/model/test", (route) =>
+    fulfillJson(route, {
+      status: "failed",
+      target_type: "embedding",
+      model_id: "cohere.embed-v4.0",
+      message: "Embedding モデルのテストに失敗しました。",
+      troubleshooting: ["OCI Generative AI の設定を確認してください。"],
+      raw_error: "gateway timeout",
+      error_type: "TimeoutError",
+      elapsed_ms: 30000,
+      checked_at: "2026-06-21T10:00:00.000Z",
+      details: {},
+    })
+  );
+  await page.goto("/settings/model");
+  await page
+    .getByRole("button", { name: "cohere.embed-v4.0 をテスト", exact: true })
+    .click();
+  const modelResult = page
+    .getByText("Embedding モデルのテストに失敗しました。", { exact: true })
+    .locator("xpath=ancestor::*[@data-settings-test-result][1]");
+  await expect(modelResult.getByRole("alert")).toBeVisible();
+  await expect(modelResult).toContainText("確認ポイント");
+  await expect(modelResult).toContainText("TimeoutError");
+  await expect(modelResult).not.toContainText("gateway timeout");
+  await expectNoHorizontalOverflow(page);
+
+  await page.unroute("**/api/settings/database/test");
+  await page.route("**/api/settings/database/test", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "DB 接続サービスに到達できません。" }),
+    })
+  );
+  await page.goto("/settings/database");
+  await page.getByRole("button", { name: "DB接続テスト" }).click();
+  const databaseResult = page.getByTestId("settings-database-test-result");
+  await expect(databaseResult.getByRole("alert")).toBeVisible();
+  await expect(databaseResult).toHaveAttribute("data-tone", "danger");
+  await expect(databaseResult).toContainText("DB 接続サービスに到達できません。");
+  await expect(databaseResult).toContainText("再試行してください。");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -891,6 +1067,11 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   await page.getByRole("button", { name: "DB接続テスト" }).click();
   await expect(page.getByText("接続設定を確認してください。")).toBeVisible();
   await expect(page.getByText("所要時間: 3 ms")).toBeVisible();
+  await expect(page.getByTestId("settings-database-test-result")).toHaveAttribute(
+    "data-tone",
+    "danger"
+  );
+  await expect(page.getByTestId("settings-database-test-result")).toContainText("network_call");
   await expectNoOperationsMemoOrReadiness(page);
   await expectNoHorizontalOverflow(page);
 });
@@ -1377,6 +1558,11 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
     page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--background").trim());
   const sidebarBgVar = () =>
     page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--sidebar").trim());
+  const tokenVar = (name: string) =>
+    page.evaluate(
+      (tokenName) => getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim(),
+      name
+    );
 
   // 既定はライト。
   await expect(html).not.toHaveClass(/dark/);
@@ -1385,14 +1571,31 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   const toggle = page.getByTestId("appearance-theme-toggle");
   await toggle.getByRole("button", { name: "ダーク" }).click();
   await expect(html).toHaveClass(/dark/);
-  // VS Code Dark+ の editor / sidebar に合わせ、純黒は使わない。
-  expect(await bgVar()).toBe("#1e1e1e");
-  expect(await sidebarBgVar()).toBe("#181818");
+  // 冷調 blue-gray の semantic token。純黒・大面積の純白は使わない。
+  expect(await bgVar()).toBe("#101318");
+  expect(await sidebarBgVar()).toBe("#0b0e13");
+  expect(await tokenVar("--foreground")).toBe("#f2f4f7");
+  expect(await tokenVar("--muted")).toBe("#b2bac5");
+  expect(await tokenVar("--control-border")).toBe("#5d6878");
+  expect(await tokenVar("--primary-fill")).toBe("#286abd");
   await expect(toggle.getByRole("button", { name: "ダーク" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "外観" })).toHaveCSS(
+    "color",
+    "rgb(242, 244, 247)"
+  );
 
   // 再読込しても永続化される。
   await page.reload();
   await expect(page.locator("html")).toHaveClass(/dark/);
+
+  // 自動テーマは実行中の OS 設定変更にも追従する。
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "自動（OS 設定）" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  expect(await bgVar()).toBe("#101318");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+  expect(await bgVar()).toBe("#f7f8fa");
 
   await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "ライト" }).click();
   await expect(page.locator("html")).not.toHaveClass(/dark/);

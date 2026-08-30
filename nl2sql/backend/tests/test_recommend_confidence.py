@@ -156,9 +156,7 @@ def test_few_shot_partial_overlap_contributes_to_deterministic_score() -> None:
     assert recommendation.recommended_profile_id == "payment"
     assert recommendation.confidence > 0.0
     payment = next(
-        candidate
-        for candidate in recommendation.candidates
-        if candidate.profile_id == "payment"
+        candidate for candidate in recommendation.candidates if candidate.profile_id == "payment"
     )
     assert payment.score == 1.0
     assert {"入金", "未入"} & set(payment.matched_terms)

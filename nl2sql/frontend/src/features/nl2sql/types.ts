@@ -238,6 +238,10 @@ export interface SchemaRefreshJob {
   error_code: string;
 }
 
+export interface SchemaRefreshActiveJobData {
+  active_job: SchemaRefreshJob | null;
+}
+
 export interface ProfileUpsertPayload {
   name: string;
   category?: string;
@@ -551,6 +555,8 @@ export interface JobData {
   elapsed_ms?: number | null;
   result?: Nl2SqlResult | null;
   error_message?: string | null;
+  /** 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示は error_message が正本。 */
+  error_code?: string | null;
   warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];

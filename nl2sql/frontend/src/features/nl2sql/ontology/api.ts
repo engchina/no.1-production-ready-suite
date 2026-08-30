@@ -1,6 +1,7 @@
 import type {
   GraphPatch,
   OntologyBuildJob,
+  OntologyContextSearchResult,
   OntologyGraph,
   OntologyImprovementProposalRequest,
   OntologyMarkdownDraftPatch,
@@ -311,6 +312,47 @@ export function cancelOntologyBuildJob(
     undefined,
     options
   ).then((data) => data.job);
+}
+
+export function retryOntologyBuildJob(
+  jobId: string,
+  options?: RequestOptions
+): Promise<OntologyBuildJob> {
+  return request<{ job: OntologyBuildJob }>(
+    `/api/nl2sql/ontology-build/${encodeURIComponent(jobId)}/retry`,
+    "POST",
+    undefined,
+    options
+  ).then((data) => data.job);
+}
+
+export interface OntologyContextSearchParams {
+  question: string;
+  ontologyRevisionId: string;
+  topK?: number;
+  maxHops?: number;
+}
+
+/**
+ * SQL 生成が実際に使うサーバ側 ontology-context 検索(語彙+埋め込み+OWL2RL 推論展開)。
+ * 接地確認のサーバ検索 tier から呼ぶ(公開済み revision が前提)。
+ */
+export function searchOntologyContext(
+  profileId: string,
+  params: OntologyContextSearchParams,
+  options?: RequestOptions
+): Promise<OntologyContextSearchResult> {
+  return request<OntologyContextSearchResult>(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-context/search`,
+    "POST",
+    {
+      question: params.question,
+      ontology_revision_id: params.ontologyRevisionId,
+      top_k: params.topK ?? 8,
+      max_hops: params.maxHops ?? 2,
+    },
+    options
+  );
 }
 
 export function getOntologyMarkdownState(

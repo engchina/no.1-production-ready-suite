@@ -621,6 +621,10 @@ class OntologyStore(Protocol):
         self, document: Mapping[str, Any] | Any, *, expected_etag: str | None = None
     ) -> dict[str, Any]: ...
 
+    def get_artifact(self, artifact_id: str) -> dict[str, Any] | None: ...
+
+    def list_artifacts(self, session_id: str) -> list[dict[str, Any]]: ...
+
 
 class _ConvenienceMethods:
     """Domain-specific wrappers over the small generic storage contract."""
@@ -934,8 +938,7 @@ class InMemoryOntologyStore(_ConvenienceMethods):
             for key, prepared in prepared_documents:
                 self._documents[collection][key] = prepared
             return [
-                deserialize_json(canonical_json(prepared))
-                for _key, prepared in prepared_documents
+                deserialize_json(canonical_json(prepared)) for _key, prepared in prepared_documents
             ]
 
     def delete_documents(
@@ -1063,8 +1066,7 @@ class OracleOntologyStore(_ConvenienceMethods):
             cursor.execute(sql, binds)
             rows = cursor.fetchall()
         return [
-            _decode_row(row, has_embedding=spec.has_embedding and include_embedding)
-            for row in rows
+            _decode_row(row, has_embedding=spec.has_embedding and include_embedding) for row in rows
         ]
 
     def save_document(
@@ -1112,8 +1114,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         with self._connection() as connection, connection.cursor() as cursor:
             try:
                 if documents and all(
-                    expected_etag is None
-                    for document, expected_etag in documents
+                    expected_etag is None for document, expected_etag in documents
                 ):
                     for document, _expected_etag in documents:
                         normalized = deserialize_json(canonical_json(document))

@@ -214,3 +214,33 @@ async def test_streaming_upload_keeps_untrusted_profile_id_inside_storage_root(
     stored = Path(document.storage_uri).resolve()
     assert stored.is_relative_to(tmp_path.resolve())
     assert stored.read_text() == "受注"
+
+
+def test_pdf_page_level_failures_skip_with_warning_and_all_empty_raises() -> None:
+    """1 ページの抽出失敗は警告+スキップで縮退し、全ページ空のときだけ失敗する。"""
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_blank_page(width=100, height=100)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    content = buffer.getvalue()
+
+    # page:1 は VLM 失敗、page:2 は VLM 成功 → 資料全体は成功し警告 1 件
+    def flaky_runner(_image: bytes, page: int) -> str:
+        if page == 1:
+            raise RuntimeError("VLM timeout")
+        return f"{page} ページ目の受注帳票"
+
+    extracted = extract_ontology_source(
+        _source("scan2.pdf", content), content, vlm_page_runner=flaky_runner
+    )
+    assert [chunk.locator for chunk in extracted.chunks] == ["page:2"]
+    assert any("page:1" in warning for warning in extracted.warnings_ja)
+
+    # VLM なしの空 PDF は全ページ空 → 失敗(スキップしたページ一覧付き)
+    with pytest.raises(OntologySourceError) as exc_info:
+        extract_ontology_source(_source("scan3.pdf", content), content)
+    assert exc_info.value.code == "ONTOLOGY_SOURCE_PDF_TEXT_MISSING"
+    assert "page:1" in exc_info.value.message_ja
+    assert "OCR 設定" in exc_info.value.message_ja

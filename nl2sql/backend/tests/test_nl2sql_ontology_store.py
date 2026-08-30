@@ -505,6 +505,4 @@ def test_oracle_store_does_not_run_ddl_until_ensure_schema_is_called() -> None:
     assert database.factory_calls == 1
     assert database.commits == 0
     assert database.rollbacks == 0
-    assert database.executed == [
-        "SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0"
-    ]
+    assert database.executed == ["SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0"]

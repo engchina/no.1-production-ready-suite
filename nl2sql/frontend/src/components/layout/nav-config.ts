@@ -45,12 +45,15 @@ export interface NavSection {
   titleKey: I18nKey;
   items: NavItem[];
   collapsible?: boolean;
+  /** 保存値がない場合に、このセクションを初期状態で折りたたむか。 */
+  initiallyCollapsed?: boolean;
 }
 
 /** NL2SQL コンソールのサイドナビ構成（共有 Sidebar が消費する）。 */
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.use",
+    initiallyCollapsed: false,
     items: [
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles, permission: MENU_PERMISSIONS.query },
       {
@@ -65,6 +68,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.prepare",
+    initiallyCollapsed: true,
     items: [
       {
         href: APP_ROUTES.adminSql,
@@ -84,6 +88,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.improve",
+    initiallyCollapsed: true,
     items: [
       { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: UserCog, permission: MENU_PERMISSIONS.profiles },
       { href: APP_ROUTES.ontologyBuild, labelKey: "nav.ontologyBuild", icon: Network, permission: MENU_PERMISSIONS.ontologyBuild },
@@ -94,6 +99,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.security",
+    initiallyCollapsed: true,
     items: [
       { href: APP_ROUTES.securityUsers, labelKey: "nav.securityUsers", icon: Users, permission: MENU_PERMISSIONS.securityUsers },
       { href: APP_ROUTES.securityRoles, labelKey: "nav.securityRoles", icon: Shield, permission: MENU_PERMISSIONS.securityRoles },
@@ -102,6 +108,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.settings",
+    initiallyCollapsed: true,
     items: [
       {
         href: APP_ROUTES.settingsOci,
@@ -136,3 +143,16 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
 ];
+
+/**
+ * 保存済みの開閉状態をナビ構成の初期値へ重ねる。
+ * 明示保存された false（展開）も維持し、新設セクションだけ構成値へ安全に追従させる。
+ */
+export function resolveCollapsedSections(
+  savedSections: Record<string, boolean>
+): Record<string, boolean> {
+  const defaults = Object.fromEntries(
+    NAV_SECTIONS.map((section) => [section.titleKey, section.initiallyCollapsed ?? false])
+  );
+  return { ...defaults, ...savedSections };
+}

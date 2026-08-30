@@ -31,9 +31,7 @@ def main() -> int:
                 recreate=bool(args.recreate),
                 confirmation=args.confirmation,
             )
-            reset_system_schema_runtime(
-                schema_epoch=int(result["operation_state"]["schema_epoch"])
-            )
+            reset_system_schema_runtime(schema_epoch=int(result["operation_state"]["schema_epoch"]))
     except SystemSchemaError as exc:
         print(  # noqa: T201
             _stable_json(

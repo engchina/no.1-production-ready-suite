@@ -159,9 +159,7 @@ class OracleJsonNl2SqlStore:
         with self._connection_factory() as conn, conn.cursor() as cursor:
             # Runtime/request path では DDL を実行しない。旧 snapshot table も versioned
             # migration で準備済みであることを bounded scalar query だけで確認する。
-            cursor.execute(
-                f"SELECT 1 FROM {self._table_name} WHERE 1 = 0"  # nosec B608
-            )
+            cursor.execute(f"SELECT 1 FROM {self._table_name} WHERE 1 = 0")  # nosec B608
             self._initialized = True
 
     def _validate_table_name(self, table_name: str) -> str:

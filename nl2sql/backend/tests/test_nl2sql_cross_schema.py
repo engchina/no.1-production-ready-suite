@@ -69,9 +69,7 @@ def test_empty_owner_allowlist_discovers_non_maintained_visible_scope() -> None:
 
 
 def test_explicit_owner_allowlist_is_an_upper_bound() -> None:
-    settings = get_settings().model_copy(
-        update={"nl2sql_schema_owner_allowlist": ["SH", "SSB"]}
-    )
+    settings = get_settings().model_copy(update={"nl2sql_schema_owner_allowlist": ["SH", "SSB"]})
     adapter = OracleNl2SqlAdapter(settings)
 
     owner_filter, binds = adapter._schema_owner_filter("c.owner")  # noqa: SLF001
@@ -162,9 +160,7 @@ def test_legacy_bare_name_uses_unique_external_match_and_blocks_ambiguous_match(
         current_owner="APP",
     )
     with pytest.raises(ValueError, match="複数 schema"):
-        ambiguous.create_profile(
-            Nl2SqlProfile(id="orders", name="受注", allowed_tables=["ORDERS"])
-        )
+        ambiguous.create_profile(Nl2SqlProfile(id="orders", name="受注", allowed_tables=["ORDERS"]))
 
 
 def test_owner_aware_semantic_scope_rejects_unqualified_external_table() -> None:
@@ -223,7 +219,9 @@ def test_sample_import_catalog_state_keeps_other_owner_duplicates() -> None:
 
     service._apply_sample_import_to_catalog(SampleDataStep.ALL)  # noqa: SLF001
 
-    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
+    remaining = {
+        (table.owner, table.table_name) for table in service._catalog.tables
+    }  # noqa: SLF001
     assert ("SH", "DEPARTMENT") in remaining
     assert ("APP", "DEPARTMENT") in remaining
     assert service.sample_data_info().imported_objects == SAMPLE_OBJECTS
@@ -234,7 +232,9 @@ def test_sample_delete_removes_current_owner_only() -> None:
 
     service._remove_sample_from_state()  # noqa: SLF001 - regression for owner scoped deletion
 
-    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
+    remaining = {
+        (table.owner, table.table_name) for table in service._catalog.tables
+    }  # noqa: SLF001
     assert not {("APP", name) for name in SAMPLE_OBJECTS} & remaining
     assert {("SH", name) for name in SAMPLE_OBJECTS} <= remaining
     assert service.sample_data_info().imported_objects == []

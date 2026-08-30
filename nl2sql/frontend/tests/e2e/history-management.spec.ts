@@ -346,12 +346,16 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
   await expectDenseLayoutContained(page);
   await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
   await expectQuestionWeightBelow(page.getByTestId("history-detail-question"), 600);
-  await expect(page.getByRole("button", { name: "全文表示" })).toBeVisible();
-  await page.getByRole("button", { name: "全文表示" }).click();
-  await expect(page.getByRole("button", { name: "閉じる" })).toBeVisible();
+  const expandQuestionButton = page.getByRole("button", { name: "全文表示" });
+  await expect(expandQuestionButton).toBeVisible();
+  await expect(expandQuestionButton.locator('svg[data-state]')).toHaveAttribute("data-state", "collapsed");
+  await expandQuestionButton.click();
+  const collapseQuestionButton = page.getByRole("button", { name: "閉じる" });
+  await expect(collapseQuestionButton).toBeVisible();
+  await expect(collapseQuestionButton.locator('svg[data-state]')).toHaveAttribute("data-state", "expanded");
   await expect(page.getByTestId("history-detail-question")).toContainText("VERY_LONG_UNBROKEN_IDENTIFIER");
   await expectDenseLayoutContained(page);
-  await page.getByRole("button", { name: "閉じる" }).click();
+  await collapseQuestionButton.click();
   await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
 
   const pane = page.getByTestId("fixed-split-pane-history-management-list");
@@ -397,6 +401,11 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.evaluate(() => document.documentElement.classList.add("dark"));
+  const darkModeChevron = page
+    .getByRole("button", { name: "全文表示" })
+    .locator('svg[data-state="collapsed"]');
+  await expect(darkModeChevron).toBeVisible();
+  await expect.poll(() => darkModeChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
   await expectDenseLayoutContained(page);
 });
 

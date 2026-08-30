@@ -79,9 +79,7 @@ class MemoryQualityEvaluationRepository:
             job = self._jobs.get(job_id)
             return job.model_copy(deep=True) if job else None
 
-    def list_jobs(
-        self, *, offset: int, limit: int
-    ) -> tuple[list[QualityEvaluationJobRecord], int]:
+    def list_jobs(self, *, offset: int, limit: int) -> tuple[list[QualityEvaluationJobRecord], int]:
         with self._lock:
             jobs = sorted(
                 self._jobs.values(), key=lambda item: (item.created_at, item.job_id), reverse=True
@@ -94,9 +92,7 @@ class MemoryQualityEvaluationRepository:
             if job is None:
                 return None
             self._results = {
-                key: result
-                for key, result in self._results.items()
-                if key[0] != job_id
+                key: result for key, result in self._results.items() if key[0] != job_id
             }
             return job.model_copy(deep=True)
 
@@ -111,9 +107,11 @@ class MemoryQualityEvaluationRepository:
             for current in candidates:
                 if job_id and current.job_id != job_id:
                     continue
-                expired = not current.lease_expires_at or datetime.fromisoformat(
-                    current.lease_expires_at.replace("Z", "+00:00")
-                ) <= now
+                expired = (
+                    not current.lease_expires_at
+                    or datetime.fromisoformat(current.lease_expires_at.replace("Z", "+00:00"))
+                    <= now
+                )
                 if current.status != QualityEvaluationStatus.PENDING and not (
                     current.status == QualityEvaluationStatus.RUNNING and expired
                 ):
@@ -144,9 +142,7 @@ class MemoryQualityEvaluationRepository:
             self._results[key] = result.model_copy(deep=True)
             return True
 
-    def has_result(
-        self, *, job_id: str, case_no: int, engine: str, repetition_no: int
-    ) -> bool:
+    def has_result(self, *, job_id: str, case_no: int, engine: str, repetition_no: int) -> bool:
         with self._lock:
             return (job_id, case_no, engine, repetition_no) in self._results
 
@@ -169,9 +165,7 @@ class MemoryQualityEvaluationRepository:
 class OracleQualityEvaluationRepository:
     mode = "oracle"
 
-    def __init__(
-        self, *, connection_factory: Callable[[], AbstractContextManager[Any]]
-    ) -> None:
+    def __init__(self, *, connection_factory: Callable[[], AbstractContextManager[Any]]) -> None:
         self._connection_factory = connection_factory
 
     def save_job(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
@@ -215,9 +209,7 @@ class OracleQualityEvaluationRepository:
             raw = _read_lob(row[0]) if row else ""
         return QualityEvaluationJobRecord.model_validate_json(raw) if raw else None
 
-    def list_jobs(
-        self, *, offset: int, limit: int
-    ) -> tuple[list[QualityEvaluationJobRecord], int]:
+    def list_jobs(self, *, offset: int, limit: int) -> tuple[list[QualityEvaluationJobRecord], int]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
             cursor.execute("SELECT COUNT(*) FROM NL2SQL_EVALUATION_JOBS")
@@ -346,9 +338,7 @@ class OracleQualityEvaluationRepository:
                     return False
                 raise
 
-    def has_result(
-        self, *, job_id: str, case_no: int, engine: str, repetition_no: int
-    ) -> bool:
+    def has_result(self, *, job_id: str, case_no: int, engine: str, repetition_no: int) -> bool:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT 1 FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "

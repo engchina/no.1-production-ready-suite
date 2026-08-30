@@ -2144,6 +2144,7 @@ def _ensure_private_directory(path: Path) -> None:
 
 def _test_oci_config(settings: Settings) -> OciConfigTestResult:
     """保存済み OCI config の構造、秘密鍵の存在、権限を確認する。"""
+    started = time.perf_counter()
     config_file = _oci_config_file(settings)
     config_path = Path(config_file).expanduser()
     profile = _safe_oci_profile_name(_oci_profile(settings))
@@ -2164,6 +2165,7 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
             oci_directory_mode=_mode_string(config_path.parent),
             config_file_mode=_mode_string(config_path),
             key_file_mode=_mode_string(key_path),
+            elapsed_ms=_elapsed_ms(started),
         )
 
     parsed_values = {
@@ -2220,6 +2222,7 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
         config_file_mode=_mode_string(config_path),
         key_file_mode=_mode_string(key_path),
         message=message,
+        elapsed_ms=_elapsed_ms(started),
         error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
     )
 

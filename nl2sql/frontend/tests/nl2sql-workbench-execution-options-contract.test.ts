@@ -31,6 +31,10 @@ test("NL2SQL workbench keeps one execution action and removes preview/session bu
 test("execution options default to showing interpretation and show prompt artifacts", () => {
   assert.match(
     workbenchSource,
+    /const \[rewriteUseGlossary, setRewriteUseGlossary\] = useState\(true\);/
+  );
+  assert.match(
+    workbenchSource,
     /const \[useOntologyContext, setUseOntologyContext\] = useState\(true\);/
   );
   assert.match(
@@ -50,9 +54,10 @@ test("execution options default to showing interpretation and show prompt artifa
   assert.match(workbenchSource, /include_show_prompt: includeShowPrompt/);
 });
 
-test("execution options panel keeps Query Rewrite checkboxes and Select AI showprompt scope", () => {
+test("execution options panel keeps glossary rewrite and removes schema rewrite", () => {
   assert.match(optionsPanelSource, /nl2sql\.rewrite\.useGlossary/);
-  assert.match(optionsPanelSource, /nl2sql\.rewrite\.useSchema/);
+  assert.doesNotMatch(optionsPanelSource, /nl2sql\.rewrite\.useSchema/);
+  assert.doesNotMatch(workbenchSource, /use_schema|rewriteUseSchema/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.useOntology/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeInterpretation/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeShowPrompt/);

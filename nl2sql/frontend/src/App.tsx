@@ -20,11 +20,16 @@ import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
+import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 import { useAuth } from "@/features/security/AuthProvider";
-import { ROUTE_PERMISSIONS, firstAllowedRoute } from "@/features/security/route-permissions";
+import {
+  ROUTE_PERMISSIONS,
+  defaultEntryRoute,
+  firstAllowedRoute,
+} from "@/features/security/route-permissions";
 
 const LoginPage = lazy(() =>
   import("@/features/security/AuthPages").then((module) => ({ default: module.LoginPage }))
@@ -189,7 +194,13 @@ const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.pat
 export function App() {
   const navigate = useNavigate();
   useEffect(() => {
-    const handleForbidden = () => navigate(APP_ROUTES.forbidden, { replace: true });
+    const handleForbidden = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestId?: string }>).detail;
+      navigate(APP_ROUTES.forbidden, {
+        replace: true,
+        state: { requestId: detail?.requestId },
+      });
+    };
     window.addEventListener("app-auth-forbidden", handleForbidden);
     return () => window.removeEventListener("app-auth-forbidden", handleForbidden);
   }, [navigate]);
@@ -271,9 +282,12 @@ function AuthenticatedApplication() {
   return (
     <AppLayout>
       <DatabaseGate>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <KeepAlivePages />
-          <Routes>
+        <SchemaRefreshCoordinator
+          discoveryEnabled={auth.hasPermission("nl2sql.schema.read")}
+        >
+          <Suspense fallback={<RouteLoadingFallback />}>
+            <KeepAlivePages />
+            <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
             <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
             <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
@@ -322,9 +336,10 @@ function AuthenticatedApplication() {
               element={<Navigate to={`${APP_ROUTES.profiles}#profile-select-ai`} replace />}
             />
             <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
-            <Route path="*" element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
-          </Routes>
-        </Suspense>
+            <Route path="*" element={<Navigate to={defaultEntryRoute(auth.hasPermission)} replace />} />
+            </Routes>
+          </Suspense>
+        </SchemaRefreshCoordinator>
       </DatabaseGate>
     </AppLayout>
   );

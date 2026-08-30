@@ -147,9 +147,7 @@ class ProfileSyncService:
         if existing is None:
             return None
         if existing.get("request_hash") != request_hash:
-            raise ValueError(
-                "同じ Idempotency-Key が別の Oracle Profile 同期に使用されています。"
-            )
+            raise ValueError("同じ Idempotency-Key が別の Oracle Profile 同期に使用されています。")
         return self.get(str(existing.get("resource_id") or ""))
 
     def get(self, job_id: str) -> ProfileSyncJobData | None:

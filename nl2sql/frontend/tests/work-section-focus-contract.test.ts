@@ -35,9 +35,9 @@ test("WorkSection summary は mouse focus ring ではなく focus-visible を使
 });
 
 test("WorkSection は既存折りたたみ UI と同じ chevron 表現を使う", () => {
-  assert.match(workSection, /ChevronDown/u);
-  assert.match(workSection, /group-open:rotate-180/u);
-  assert.match(workSection, /motion-reduce:transition-none/u);
+  assert.match(workSection, /DisclosureChevron/u);
+  assert.match(workSection, /expanded="group"/u);
+  assert.match(workSection, /group\/disclosure/u);
   assert.match(workSection, /\[&::-webkit-details-marker\]:hidden/u);
 });
 

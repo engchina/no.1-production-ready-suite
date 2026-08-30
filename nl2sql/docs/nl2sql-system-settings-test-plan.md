@@ -151,9 +151,9 @@
 
 | ID | 機能 | 手順 | 期待結果 | テストデータ |
 | --- | --- | --- | --- | --- |
-| ST-001 | ready 状態 | ページを開く | status `ready`、schema head、object count、migration versions が表示される | `mock-responses/system-tables-ready.json` |
+| ST-001 | ready 状態 | ページを開く | status `ready`、table count `27 / 27`、object count `51 / 51`、migration versions が表示され、詳細に TABLE / INDEX / SEQUENCE の全51件が表示される | `mock-responses/system-tables-ready.json` |
 | ST-002 | missing 状態 | missing response を返す | 初期化 CTA が primary 表示される | `mock-responses/system-tables-missing.json` |
-| ST-003 | partial / outdated 状態 | 一部 object 不足または version 遅れを返す | 詳細 table で missing / outdated 対象が分かる | `mock-responses/system-tables-partial.json`、`mock-responses/system-tables-outdated.json` |
+| ST-003 | partial / outdated 状態 | 一部 object 不足または version 遅れを返す | 管理オブジェクト詳細で不足した table / index / sequence、または不一致 version が分かる | `mock-responses/system-tables-partial.json`、`mock-responses/system-tables-outdated.json` |
 | ST-004 | 初期化 | `recreate=false` で初期化を実行 | operation_state が running になり、poll 後 ready になる | `api/system-tables-initialize.request.json` |
 | ST-005 | 再作成確認 | confirmation 未入力または誤入力で再作成 | API が呼ばれず、正確な確認文字列が求められる | - |
 | ST-006 | 再作成成功 | `RECREATE_NL2SQL_SYSTEM_TABLES` を入力して実行 | `recreate=true` payload、完了後 ready | `api/system-tables-recreate.request.json` |

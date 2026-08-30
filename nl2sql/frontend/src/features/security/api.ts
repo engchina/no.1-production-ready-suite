@@ -1,8 +1,9 @@
-import { apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 import type {
   CurrentUser,
   DataEntitlement,
+  DeepSecDataEntitlementApplyResult,
   DeepSecDataEntitlementPreview,
   DeepSecPlan,
   DeepSecRoleEntitlements,
@@ -15,7 +16,9 @@ import type {
   PermissionDefinition,
   ProfileAccessProfile,
   SecurityRole,
+  SecurityRoleDeleteResult,
   SecurityUser,
+  SecurityUserDeleteResult,
 } from "./types";
 
 export interface UserDraft {
@@ -66,7 +69,7 @@ function dataEntitlementPayload(role: Pick<DeepSecRoleEntitlements, "data_entitl
 
 export interface DeepSecTargetObjectsQuery extends ApiRequestOptions {
   q?: string;
-  owner?: string;
+  ownerPrefix?: string;
   cursor?: string | null;
   limit?: number;
 }
@@ -91,6 +94,10 @@ export const securityApi = {
       display_name: user.display_name,
       status: user.status,
       role_ids: user.role_ids,
+    }),
+  deleteUser: (user: SecurityUser) =>
+    apiDelete<SecurityUserDeleteResult>(`/api/security/users/${user.user_uuid}`, {
+      "If-Match": `"${user.version}"`,
     }),
   resetPassword: (userUuid: string, temporaryPassword?: string) =>
     apiPost<{ user: SecurityUser; temporary_password: string }>(
@@ -127,6 +134,10 @@ export const securityApi = {
     apiPost<SecurityRole>(`/api/security/roles/${role.role_id}/restore`, {
       version: role.version,
     }),
+  deleteRole: (role: SecurityRole) =>
+    apiDelete<SecurityRoleDeleteResult>(`/api/security/roles/${role.role_id}`, {
+      "If-Match": `"${role.version}"`,
+    }),
   permissions: (options: ApiRequestOptions = {}) =>
     apiGet<PermissionDefinition[]>("/api/security/permissions", options),
   profileAccessProfiles: (options: ApiRequestOptions = {}) =>
@@ -139,7 +150,7 @@ export const securityApi = {
     apiGet<DeepSecRoleEntitlements[]>("/api/security/deepsec/data-entitlements", options),
   deepSecTargetObjects: ({
     q = "",
-    owner = "",
+    ownerPrefix = "",
     cursor = null,
     limit = 50,
     ...options
@@ -149,9 +160,10 @@ export const securityApi = {
       type: "all",
       row_state: "all",
       include_counts: "false",
+      query_scope: "name_comment",
     });
     if (q.trim()) params.set("q", q.trim());
-    if (owner.trim()) params.set("owner", owner.trim());
+    if (ownerPrefix.trim()) params.set("owner_prefix", ownerPrefix.trim());
     if (cursor) params.set("cursor", cursor);
     return apiGet<DeepSecTargetObjectPage>(
       `/api/nl2sql/db-admin/objects?${params.toString()}`,
@@ -177,25 +189,25 @@ export const securityApi = {
       }
     ),
   previewDeepSecDataEntitlements: (
-    roleId: string,
-    dataEntitlements: DataEntitlement[]
+    role: Pick<DeepSecRoleEntitlements, "role_id" | "version" | "data_entitlements">
   ) =>
     apiPost<DeepSecDataEntitlementPreview>(
-      `/api/security/deepsec/data-entitlements/${roleId}/preview`,
+      `/api/security/deepsec/data-entitlements/${role.role_id}/preview`,
       {
-        data_entitlements: dataEntitlementPayload({ data_entitlements: dataEntitlements }),
+        version: role.version,
+        data_entitlements: dataEntitlementPayload(role),
       }
     ),
   applyDeepSecDataEntitlements: (
-    roleId: string,
-    confirmation: string,
-    entitlementIds: string[] = []
+    role: Pick<DeepSecRoleEntitlements, "role_id" | "version" | "data_entitlements">,
+    confirmation: string
   ) =>
-    apiPost<{ role_id: string; status: string; entitlement_ids: string[] }>(
-      `/api/security/deepsec/data-entitlements/${roleId}/apply`,
+    apiPost<DeepSecDataEntitlementApplyResult>(
+      `/api/security/deepsec/data-entitlements/${role.role_id}/apply`,
       {
+        version: role.version,
         confirmation,
-        entitlement_ids: entitlementIds,
+        data_entitlements: dataEntitlementPayload(role),
       }
     ),
   updateDeepSecConfig: (dataUserPassword: string) =>

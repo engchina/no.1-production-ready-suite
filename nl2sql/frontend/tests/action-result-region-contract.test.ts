@@ -50,11 +50,13 @@ test("app button variants restore safe Japanese text line height", () => {
   assert.match(buttonSource, /BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5"/u);
   assert.match(
     buttonSource,
-    /cn\(sharedButtonVariants\(options\), BUTTON_TEXT_LAYOUT_CLASSNAME\)/u
+    /sharedButtonVariants\(options\)[\s\S]*BUTTON_TEXT_LAYOUT_CLASSNAME[\s\S]*semanticVariantClass\(options\?\.variant\)/u
   );
   assert.match(
     buttonSource,
-    /className=\{cn\(BUTTON_TEXT_LAYOUT_CLASSNAME, className\)\}/u
+    /className=\{cn\([\s\S]*BUTTON_TEXT_LAYOUT_CLASSNAME[\s\S]*semanticVariantClass\(variant\)[\s\S]*className/u
   );
+  assert.match(buttonSource, /bg-primary-fill text-primary-fill-foreground/u);
+  assert.match(buttonSource, /bg-danger-fill text-white/u);
   assert.doesNotMatch(buttonSource, /\bleading-none\b/u);
 });

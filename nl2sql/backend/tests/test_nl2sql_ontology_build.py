@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -257,6 +258,7 @@ def _wait_for_job(service: OntologyBuildService, job_id: str) -> Any:
         job = service.get(job_id)
         if job is not None and job.status in {
             OntologyBuildStatus.SUCCEEDED,
+            OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS,
             OntologyBuildStatus.FAILED,
         }:
             return job
@@ -343,10 +345,7 @@ def test_parse_qa_workbook_xlsx_and_csv() -> None:
 def test_parse_qa_workbook_keeps_more_than_two_hundred_valid_rows() -> None:
     rows = [
         "QUESTION,SQL",
-        *[
-            f"質問 {index},SELECT {index} AS VALUE FROM APP.ORDERS"
-            for index in range(205)
-        ],
+        *[f"質問 {index},SELECT {index} AS VALUE FROM APP.ORDERS" for index in range(205)],
     ]
     pairs, warnings = parse_qa_workbook("qa.csv", "\n".join(rows).encode())
 
@@ -608,6 +607,9 @@ def test_build_job_batches_all_source_chunks_without_omission(
     client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     legacy._enterprise_ai_client = client
     monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 6_500)
+    # このテストは「全 chunk が漏れなく 1 回処理される」ことの契約。gleaning の追加パスは
+    # 同じ context を再送するため chunk 数の勘定から除外する
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", 0)
 
     contents: dict[str, bytes] = {}
     source_documents: list[OntologySourceDocument] = []
@@ -636,9 +638,7 @@ def test_build_job_batches_all_source_chunks_without_omission(
     finished = _wait_for_job(service, queued.id)
 
     assert finished.status == OntologyBuildStatus.SUCCEEDED
-    text_contexts = [
-        context for context in client.contexts if "business_text_chunks" in context
-    ]
+    text_contexts = [context for context in client.contexts if "business_text_chunks" in context]
     assert len(text_contexts) > 1
     assert all(
         ontology_build_module._llm_call_chars(client.calls[index], context)
@@ -687,11 +687,7 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     assert finished.status == OntologyBuildStatus.SUCCEEDED
     qa_contexts = [context for context in client.contexts if '"qa_pairs"' in context]
     assert len(qa_contexts) > 1
-    sent_pairs = [
-        pair
-        for context in qa_contexts
-        for pair in json.loads(context)["qa_pairs"]
-    ]
+    sent_pairs = [pair for context in qa_contexts for pair in json.loads(context)["qa_pairs"]]
     assert len(sent_pairs) == 205
     assert sent_pairs[-1]["question"] == "顧客別売上 204"
     assert any("Q/A batch" in event.message_ja for event in finished.events)
@@ -1045,9 +1041,7 @@ def test_build_job_fails_gracefully_when_markdown_draft_save_times_out(
 
     assert finished.status == OntologyBuildStatus.FAILED
     registration = next(
-        step
-        for step in finished.steps
-        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+        step for step in finished.steps if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
     )
     assert registration.status == OntologyBuildStepStatus.FAILED
     assert registration.detail_ja == "Markdown Draft の保存に失敗しました。"
@@ -1080,9 +1074,7 @@ def test_build_job_fails_gracefully_when_final_status_save_times_out(
 
     assert finished.status == OntologyBuildStatus.FAILED
     registration = next(
-        step
-        for step in finished.steps
-        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+        step for step in finished.steps if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
     )
     assert registration.status == OntologyBuildStepStatus.FAILED
     assert registration.detail_ja == "構築 job の完了状態の保存に失敗しました。"
@@ -1146,9 +1138,7 @@ def test_get_build_job_normalizes_succeeded_markdown_job_with_running_final_step
     assert raw_document is not None
     raw_job = OntologyBuildJob.model_validate(raw_document["payload"])
     raw_registration = next(
-        step
-        for step in raw_job.steps
-        if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
+        step for step in raw_job.steps if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
     )
     assert raw_registration.status == OntologyBuildStepStatus.RUNNING
 
@@ -1796,3 +1786,377 @@ def test_start_persists_business_text_and_source_document_refs(
         "rules.md",
         "qa_cases.csv",
     }
+
+
+# --- Phase 3: 部分成功・再試行・構造化コード・出力予算・provenance ---------------------------
+
+
+class _SelectiveFailClient(_FakeEnterpriseAiClient):
+    """特定の目印を含む呼び出しだけ壊れた応答を返す fake client。"""
+
+    def __init__(self, payload: str, *, fail_when: str) -> None:
+        super().__init__(payload)
+        self.fail_when = fail_when
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append(prompt)
+        self.contexts.append(context)
+        if self.fail_when in prompt or self.fail_when in context:
+            return "これは JSON ではありません"
+        return self.payload
+
+
+class _BudgetRecordingClient(_FakeEnterpriseAiClient):
+    """max_output_tokens 対応の fake client(受け取った予算を記録する)。"""
+
+    def __init__(self, payload: str) -> None:
+        super().__init__(payload)
+        self.budgets: list[int | None] = []
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        self.calls.append(prompt)
+        self.budgets.append(max_output_tokens)
+        return self.payload
+
+
+def test_partial_batch_failure_completes_with_warnings(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """1 batch の失敗で全成果を破棄しない(部分成功 = succeeded_with_warnings)。"""
+
+    runtime, _store, legacy = harness
+    # qa_pairs を含む呼び出しだけ失敗し、schema_naming は成功する
+    legacy._enterprise_ai_client = _SelectiveFailClient(_FENCED_PAYLOAD, fail_when="qa_pairs")
+    service = OntologyBuildService(runtime)
+    job = service.start(
+        "sales",
+        qa_pairs=[QaPair(question="顧客別の売上は?", sql=_QA_SQL)],
+        run_text_extraction=False,
+    )
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+    assert finished.draft_revision_id
+    assert any("qa_extraction" in warning for warning in finished.warnings_ja)
+    qa_step = next(
+        step for step in finished.steps if step.name == OntologyBuildStepName.QA_EXTRACTION
+    )
+    assert qa_step.code == "BATCH_EXTRACTION_FAILED"
+    naming_step = next(
+        step for step in finished.steps if step.name == OntologyBuildStepName.SCHEMA_NAMING
+    )
+    assert naming_step.status == OntologyBuildStepStatus.SUCCEEDED
+
+
+def test_batch_split_recovers_good_half(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """壊れた行を含む batch は二分割し、正常な半分の成果を保存する。"""
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _SelectiveFailClient(_FENCED_PAYLOAD, fail_when="毒入り質問")
+    service = OntologyBuildService(runtime)
+    job = service.start(
+        "sales",
+        qa_pairs=[
+            QaPair(question="顧客別の売上は?", sql=_QA_SQL),
+            QaPair(question="毒入り質問", sql=_QA_SQL),
+        ],
+        run_schema_naming=False,
+        run_text_extraction=False,
+    )
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+    assert finished.draft_revision_id
+    assert any(event.code == "EXTRACTION_SPLIT" for event in finished.events)
+    assert any("qa_extraction" in warning for warning in finished.warnings_ja)
+
+
+def test_all_batches_failed_marks_job_failed_with_code(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient("これは JSON ではありません")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    assert finished.error_code == "LLM_EXTRACTION_FAILED"
+
+
+def test_schema_scope_failure_sets_error_codes(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    from app.features.nl2sql.ontology_build import OntologyBuildSchemaContext
+
+    monkeypatch.setattr(
+        runtime,
+        "prepare_build_schema_context",
+        lambda _profile_id: OntologyBuildSchemaContext(
+            schema_context="",
+            object_count=0,
+            column_count=0,
+            schema_fingerprint="fp",
+        ),
+    )
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="テスト", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    assert finished.error_code == "SCHEMA_SCOPE_UNRESOLVED"
+    schema_step = next(
+        step for step in finished.steps if step.name == OntologyBuildStepName.SCHEMA_CONTEXT
+    )
+    assert schema_step.code == "SCHEMA_SCOPE_EMPTY"
+
+
+def test_extraction_budget_passed_to_supporting_client(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """max_output_tokens 対応クライアントには抽出用の出力予算を渡す。"""
+
+    runtime, _store, legacy = harness
+    client = _BudgetRecordingClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = client
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    from app.settings import get_settings
+
+    expected = int(get_settings().nl2sql_ontology_extraction_max_output_tokens)
+    assert client.budgets
+    assert all(budget == expected for budget in client.budgets)
+
+
+def test_build_draft_preserves_inferred_provenance(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """AI 構築由来の provenance(INFERRED + ontology_build:<job_id>)を draft 作成で保持する。"""
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=True)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    draft = runtime.ontology_revision(finished.draft_revision_id)
+    business_nodes = [
+        node
+        for node in draft.nodes
+        if node.kind == OntologyNodeKind.BUSINESS_ENTITY and node.business_name_ja == "受注"
+    ]
+    assert business_nodes, "AI 構築由来の業務エンティティが draft に存在すること"
+    provenance = business_nodes[0].provenance
+    assert provenance.source_kind == OntologySourceKind.INFERRED
+    assert provenance.source_id == f"ontology_build:{finished.id}"
+
+
+def test_purge_profile_source_documents_removes_rows_and_blobs(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    tmp_path: Path,
+) -> None:
+    """Profile 削除時の cleanup で source_documents 行とローカル実体を残さない。"""
+
+    runtime, store, _legacy = harness
+    blob = tmp_path / "sources" / "doc" / "rules.md"
+    blob.parent.mkdir(parents=True)
+    blob.write_text("# 業務ルール", encoding="utf-8")
+    document = OntologySourceDocument(
+        id="ontology_source_purge",
+        profile_id="sales",
+        filename="rules.md",
+        media_type="text/markdown",
+        size_bytes=blob.stat().st_size,
+        sha256="0" * 64,
+        storage_uri=str(blob),
+    )
+    store.save_document(
+        "source_documents",
+        {
+            "source_document_id": document.id,
+            "profile_id": document.profile_id,
+            "status": document.status.value,
+            "sha256": document.sha256,
+            "payload": document.model_dump(mode="json"),
+        },
+    )
+    service = OntologyBuildService(runtime)
+
+    removed = service.purge_profile_source_documents("sales")
+
+    assert removed == 1
+    assert not blob.exists()
+    assert store.list_documents("source_documents", {"profile_id": "sales"}) == []
+
+
+# --- Best-practice 適用: gleaning・部分成功(資料)・バッチ本文上限 ---------------------------
+
+
+class _GleaningAwareClient(_FakeEnterpriseAiClient):
+    """通常呼び出しと gleaning(追加パス)呼び出しで別の応答を返す fake client。"""
+
+    def __init__(self, payload: str, gleaning_payload: str) -> None:
+        super().__init__(payload)
+        self.gleaning_payload = gleaning_payload
+        self.gleaning_calls = 0
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append(prompt)
+        self.contexts.append(context)
+        if "追加パス" in prompt:
+            self.gleaning_calls += 1
+            return self.gleaning_payload
+        return self.payload
+
+
+_GLEANING_ADDITION = json.dumps(
+    {
+        "entities": [],
+        "relationships": [],
+        "metrics": [
+            {
+                "metric_name_ja": "受注件数",
+                "expression_sql": "COUNT(APP.ORDERS.ORDER_ID)",
+                "aggregation": "count",
+                "base_columns": ["APP.ORDERS.ORDER_ID"],
+                "unit": "件",
+                "description_ja": "受注の件数",
+                "evidence_ja": "追加パスで回収",
+                "confidence": 0.7,
+            }
+        ],
+        "synonyms": [],
+        "warnings_ja": [],
+    },
+    ensure_ascii=False,
+)
+
+
+def test_gleaning_pass_recovers_missed_candidates(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, legacy = harness
+    client = _GleaningAwareClient(_FENCED_PAYLOAD, _GLEANING_ADDITION)
+    legacy._enterprise_ai_client = client
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert client.gleaning_calls >= 1
+    assert any(event.code == "EXTRACTION_GLEANING" for event in finished.events)
+    # 追加パスで回収した指標が Markdown Draft に含まれる
+    assert "受注件数" in (finished.markdown_output or "")
+
+
+def test_gleaning_failure_keeps_primary_extraction(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, legacy = harness
+    client = _GleaningAwareClient(_FENCED_PAYLOAD, "これは JSON ではありません")
+    legacy._enterprise_ai_client = client
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    # gleaning の失敗は本体の抽出結果に影響しない
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert finished.draft_revision_id
+
+
+def test_merge_build_extractions_dedupes_by_stable_keys() -> None:
+    from app.features.nl2sql.ontology_build import merge_build_extractions, parse_extraction
+
+    base = parse_extraction(_FENCED_PAYLOAD)
+    duplicated, added_dup = merge_build_extractions(base, base)
+    assert added_dup == 0
+    assert len(duplicated.entities) == len(base.entities)
+
+    merged, added = merge_build_extractions(base, parse_extraction(_GLEANING_ADDITION))
+    assert added == 1
+    assert any(metric.metric_name_ja == "受注件数" for metric in merged.metrics)
+
+
+def test_partial_source_failure_continues_with_warnings(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """1 資料の抽出失敗はジョブを止めず、残り資料で succeeded_with_warnings になる。"""
+
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    good = "受注は顧客に紐づく。".encode()
+    broken = b"not-a-workbook"
+    good_source = _source_document("ontology_source_good", "rules.md", good)
+    broken_source = _source_document(
+        "ontology_source_broken",
+        "broken.xlsx",
+        broken,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_FakeOntologySourceStorage(
+            {"ontology_source_good": good, "ontology_source_broken": broken}
+        ),  # type: ignore[arg-type]
+    )
+    job = service.start(
+        "sales",
+        run_schema_naming=False,
+        run_qa_extraction=False,
+        source_documents=[good_source, broken_source],
+    )
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+    assert finished.draft_revision_id
+    source_step = next(
+        step for step in finished.steps if step.name == OntologyBuildStepName.SOURCE_EXTRACTION
+    )
+    assert source_step.code == "SOURCE_PARTIAL_FAILED"
+    assert any("broken.xlsx" in warning for warning in finished.warnings_ja)
+    broken_progress = next(
+        item for item in finished.sources if item.filename == "broken.xlsx"
+    )
+    assert broken_progress.status == OntologySourceStatus.FAILED
+
+
+def test_batch_max_chars_limits_content_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql.ontology_build import _batch_text_units, _BuildTextUnit
+    from app.features.nl2sql.ontology_models import OntologyEvidenceLocatorKind
+
+    monkeypatch.setattr(
+        get_settings(), "nl2sql_ontology_extraction_batch_max_chars", 1000
+    )
+    schema_payload = {"objects": []}
+    units = [
+        _BuildTextUnit(
+            source_document=None,
+            source_label="doc",
+            locator_kind=OntologyEvidenceLocatorKind.LINE,
+            locator=f"line:{index}",
+            text="受注データの説明 " * 50,  # 約 450 字/чанк
+        )
+        for index in range(1, 7)
+    ]
+    batches = _batch_text_units(schema_payload, units, "抽出してください。")
+    assert len(batches) >= 3  # 1000 字上限なら 2 chunk/batch 程度に分かれる
+    for batch in batches:
+        assert sum(len(unit.text) for unit in batch) <= 1000

@@ -1,4 +1,4 @@
-import { Bot, DatabaseZap, Sparkles } from "lucide-react";
+import { Bot, Check, DatabaseZap, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -45,13 +45,17 @@ export function EngineSelector({
         {ENGINE_OPTIONS.map((option) => {
           const selected = option.value === value;
           return (
+            /* 排他選択の segmented control。primary は画面の主 CTA(検索実行)専用なので
+               (button spec §0.2/§6)、選択状態は枠線 + チェックアイコンで表現する。 */
             <Button
               key={option.value}
               type="button"
-              variant={selected ? "primary" : "secondary"}
+              variant="secondary"
               size="md"
               disabled={disabled}
-              className="h-auto min-h-16 justify-start gap-3 whitespace-normal text-left"
+              className={`h-auto min-h-16 justify-start gap-3 whitespace-normal text-left ${
+                selected ? "border-primary bg-primary/10 ring-1 ring-primary" : ""
+              }`}
               aria-pressed={selected}
               onClick={() => onChange(option.value)}
             >
@@ -60,6 +64,7 @@ export function EngineSelector({
                 <span className="text-sm font-semibold">{option.label}</span>
                 <span className="text-xs font-normal opacity-80">{option.description}</span>
               </span>
+              {selected ? <Check size={16} aria-hidden="true" className="ml-auto shrink-0" /> : null}
             </Button>
           );
         })}

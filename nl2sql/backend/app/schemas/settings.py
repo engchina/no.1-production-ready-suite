@@ -305,6 +305,17 @@ class SystemTableMetadata(BaseModel):
     last_analyzed_at: str | None = None
 
 
+class SystemObjectMetadata(BaseModel):
+    """必須の table / index / sequence を統一表示する metadata。"""
+
+    name: str
+    object_type: Literal["TABLE", "INDEX", "SEQUENCE"]
+    exists: bool
+    estimated_rows: int | None = None
+    created_at: str | None = None
+    last_analyzed_at: str | None = None
+
+
 class SystemTableOperationState(BaseModel):
     """複数 replica が共有する schema operation lease 状態。"""
 
@@ -329,6 +340,7 @@ class SystemTablesStatusData(BaseModel):
     existing_table_count: int
     missing_objects: list[SystemTableMissingObject]
     tables: list[SystemTableMetadata]
+    objects: list[SystemObjectMetadata]
     operation_state: SystemTableOperationState
 
 
@@ -485,6 +497,7 @@ class OciConfigTestResult(BaseModel):
     config_file_mode: str | None = None
     key_file_mode: str | None = None
     message: str
+    elapsed_ms: int = Field(ge=0)
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_type: str | None = None
 

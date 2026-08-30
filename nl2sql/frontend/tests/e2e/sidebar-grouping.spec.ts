@@ -1,23 +1,27 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { CurrentUser } from "../../src/features/security/types";
 
-async function mockApi(page: Page) {
+const SYSTEM_ADMIN_USER: CurrentUser = {
+  user_uuid: "admin",
+  login_user_id: "SYSTEM",
+  display_name: "システム管理者",
+  status: "ACTIVE",
+  force_password_change: false,
+  role_codes: ["SYSTEM_ADMIN"],
+  is_system_admin: true,
+  permissions: [],
+  data_entitlements: [],
+  allowed_profile_ids: [],
+  debug_mode: false,
+  password_change_allowed: true,
+};
+
+async function mockApi(page: Page, currentUser: CurrentUser = SYSTEM_ADMIN_USER) {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const data =
       path === "/api/auth/me"
-        ? {
-            user_uuid: "admin",
-            login_user_id: "SYSTEM",
-            display_name: "システム管理者",
-            status: "ACTIVE",
-            force_password_change: false,
-            role_codes: ["SYSTEM_ADMIN"],
-            is_system_admin: true,
-            permissions: [],
-            data_entitlements: [],
-            debug_mode: false,
-            password_change_allowed: true,
-          }
+        ? currentUser
         : path === "/api/ready/database"
         ? { status: "ok", check: "ok", detail: null }
         : path === "/api/nl2sql/persistence"
@@ -70,6 +74,32 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(sidebar.getByRole("button", { name: "AI 活用 を折りたたむ" })).toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
+  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "システム設定"]) {
+    await expect(sidebar.getByRole("button", { name: `${section} を展開` })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  }
+  const activeQueryLink = sidebar.getByRole("link", { name: "SQL 生成" });
+  await expect(activeQueryLink).toHaveAttribute("aria-current", "page");
+  const [activeBackground, inactiveBackground] = await Promise.all([
+    activeQueryLink.evaluate((element) => getComputedStyle(element).backgroundColor),
+    sidebar
+      .getByRole("link", { name: "SELECT SQL を実行" })
+      .evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  expect(activeBackground).not.toBe(inactiveBackground);
+  await expect(activeQueryLink.locator("span.absolute")).toHaveCount(1);
+  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("フィードバック管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeHidden();
+
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
@@ -89,6 +119,10 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   }
   expect(aiUseBox.y).toBeLessThan(dataPrepareBox.y);
   expect(securityBox.y).toBeLessThan(settingsBox.y);
+
+  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "システム設定"]) {
+    await sidebar.getByRole("button", { name: `${section} を展開` }).click();
+  }
 
   for (const label of [
     "管理 SQL を実行",
@@ -195,6 +229,7 @@ test("共通ルールは用語・同義語の直下に独立メニューとし�
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await sidebar.getByRole("button", { name: "データ準備 を展開" }).click();
   const glossaryBox = await sidebar.getByText("用語・同義語", { exact: true }).boundingBox();
   const globalRulesBox = await sidebar.getByText("共通ルール", { exact: true }).boundingBox();
   if (!glossaryBox || !globalRulesBox) {
@@ -214,18 +249,37 @@ test("セクション折りたたみで所属項目だけを隠し、他セク�
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  await sidebar.getByRole("button", { name: "データ準備 を折りたたむ" }).click();
+  await sidebar.getByRole("button", { name: "データ準備 を展開" }).click();
 
-  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("SQL 生成", { exact: true })).toBeVisible();
-  await expect(sidebar.getByText("フィードバック管理", { exact: true })).toBeVisible();
-  await expect(sidebar.getByText("質問分類モデル管理", { exact: true })).toBeVisible();
-  await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("フィードバック管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("質問分類モデル管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeHidden();
 
-  await sidebar.getByRole("button", { name: "セキュリティ管理 を折りたたむ" }).click();
-  await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
-  await expect(sidebar.getByText("Deep Data Security", { exact: true })).toBeHidden();
-  await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeVisible();
+  await sidebar.getByRole("button", { name: "セキュリティ管理 を展開" }).click();
+  await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("Deep Data Security", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeHidden();
+});
+
+test("手動で展開したセクションは再読み込み後も保存状態を維持する", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await sidebar.getByRole("button", { name: "データ準備 を展開" }).click();
+  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeVisible();
+
+  await page.reload();
+
+  await expect(sidebar.getByRole("button", { name: "データ準備 を折りたたむ" })).toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
+  await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("フィードバック管理", { exact: true })).toBeHidden();
 });
 
 test("アクティブ経路のセクションは保存済み折りたたみ状態から自動展開する", async ({ page }) => {
@@ -233,7 +287,6 @@ test("アクティブ経路のセクションは保存済み折りたたみ状�
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  await sidebar.getByRole("button", { name: "セキュリティ管理 を折りたたむ" }).click();
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
 
   await page.goto("/settings/security/users");
@@ -250,19 +303,68 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
   await page.goto("/");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  const toggle = sidebar.getByRole("button", { name: "セキュリティ管理 を折りたたむ" });
+  const toggle = sidebar.getByRole("button", { name: "セキュリティ管理 を展開" });
+  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
   await toggle.press("Enter");
 
-  await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
-  await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
-  await expect(sidebar.getByRole("button", { name: "セキュリティ管理 を展開" })).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
-
-  await sidebar.getByRole("button", { name: "セキュリティ管理 を展開" }).press(" ");
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "セキュリティ管理 を折りたたむ" })).toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
+  const expandedToggle = sidebar.getByRole("button", { name: "セキュリティ管理 を折りたたむ" });
+  await expect.poll(() => expandedToggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
+
+  await expandedToggle.press(" ");
+  await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
+  await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
+  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+});
+
+test("SQL 生成権限がない既定入口は root から最初の許可画面へ振り分ける", async ({ page }) => {
+  await page.unroute("**/api/**");
+  await mockApi(page, {
+    ...SYSTEM_ADMIN_USER,
+    user_uuid: "appearance-user",
+    login_user_id: "appearance.user",
+    display_name: "外観閲覧ユーザー",
+    role_codes: ["APPEARANCE_VIEWER"],
+    is_system_admin: false,
+    permissions: ["menu.settings_appearance"],
+  });
+
+  await page.goto("/");
+
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "外観" })).toHaveAttribute(
+    "aria-current",
+    "page"
+  );
+  await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
+});
+
+test("メニュー権限がない root は無権限画面へ移動し、再転送を繰り返さない", async ({ page }) => {
+  await page.unroute("**/api/**");
+  await mockApi(page, {
+    ...SYSTEM_ADMIN_USER,
+    user_uuid: "no-permissions-user",
+    login_user_id: "no.permissions",
+    display_name: "権限なしユーザー",
+    role_codes: ["NO_ACCESS"],
+    is_system_admin: false,
+    permissions: [],
+  });
+
+  await page.goto("/");
+
+  await expect(page).toHaveURL(/\/forbidden$/);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+
+  await page.goto("/query");
+  await expect(page).toHaveURL(/\/forbidden$/);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 });
 
 test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リンクへ到達できる", async ({ page }) => {

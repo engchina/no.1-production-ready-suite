@@ -23,14 +23,19 @@ import {
   Banner,
   EmptyState,
   Pagination,
-  StatusBadge,
+  Skeleton,
   toast,
+  type DataTableColumn,
 } from "@engchina/production-ready-ui";
 
+import { StatusBadge } from "@/components/ui/status-badge";
+import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { FormActionBar } from "@/components/FormActionBar";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
+import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -38,10 +43,7 @@ import { SelectField } from "@/components/ui/select-field";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import {
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
-} from "@/lib/list-density";
+import { INFORMATION_TABLE_SCROLL_CLASS } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -272,6 +274,8 @@ export function FeedbackManagementPage() {
     [appFeedbackItems]
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
+  const initialEntriesLoading =
+    feedback === null && (loadSequence.current === 0 || loading === "load");
 
   const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
@@ -674,6 +678,15 @@ export function FeedbackManagementPage() {
       onChange={changeProfile}
     />
   );
+  const entriesProfileSelect = (
+    <ProfileSelect
+      profiles={profiles}
+      value={profileName}
+      disabled={loading !== ""}
+      onChange={changeProfile}
+      fullWidth
+    />
+  );
 
   return (
     <>
@@ -693,7 +706,23 @@ export function FeedbackManagementPage() {
       />
 
       <main className="grid gap-4 p-4 lg:p-8">
-        <PageNotice notice={message ? { tone: "danger", message } : null} />
+        <PageNotice
+          notice={message ? { tone: "danger", message } : null}
+          action={
+            message && activeView === "entries" ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={loading === "load"}
+                onClick={() => void load()}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>{t("feedbackManagement.action.reload")}</span>
+              </Button>
+            ) : undefined
+          }
+        />
         {loading === "load" ? (
           <ProcessingIndicator
             active
@@ -720,111 +749,113 @@ export function FeedbackManagementPage() {
             labelledBy="feedback-management-tab-entries"
             ariaLabel={t("feedbackManagement.workspace.entries")}
             idPrefix="feedback-management-entries"
-            splitId="feedback-management-entries-split"
-            preferredWidePane="left"
           >
-            <section className="grid min-w-0 gap-4">
+            <section className="grid min-w-0 gap-4" data-testid="feedback-management-entries-workspace">
               <DbObjectPanelHeader
                 title={t("feedbackManagement.entries.title")}
                 description={t("feedbackManagement.entries.hint")}
                 icon={MessageSquareText}
                 action={
-                  <>
-                    <span data-testid="feedback-management-entry-count">
-                      <StatusBadge
-                        variant="neutral"
-                        label={`${t("feedbackManagement.metric.entries")} ${feedback?.total ?? selectAiFeedbackItems.length}`}
-                      />
-                    </span>
-                    {profileSelect}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="lg"
-                      className="h-[44px] w-full whitespace-nowrap sm:w-auto"
-                      loading={loading === "feedback"}
-                      disabled={!profileName.trim()}
-                      onClick={() => void refreshSelectAiFeedback()}
-                    >
-                      <RefreshCw size={15} aria-hidden="true" />
-                      <span>{t("feedbackManagement.action.refresh")}</span>
-                    </Button>
-                  </>
+                  <span data-testid="feedback-management-entry-count">
+                    <StatusBadge
+                      variant="info"
+                      label={t("feedbackManagement.entries.count", {
+                        count: feedback?.total ?? selectAiFeedbackItems.length,
+                      })}
+                    />
+                  </span>
                 }
               />
-              <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
-              <div
-                className={`rounded-md border border-border ${INFORMATION_TABLE_SCROLL_CLASS}`}
-                data-testid="feedback-management-entries-scroll-region"
-              >
-                <table className="min-w-[640px] w-full table-fixed divide-y divide-border text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-background text-xs font-semibold uppercase tracking-normal text-muted">
-                    <tr className="h-10">
-                      <th scope="col" className="w-[42%] px-3 py-2">
-                        {t("feedbackManagement.entries.content")}
-                      </th>
-                      <th scope="col" className="w-[58%] px-3 py-2">
-                        {t("feedbackManagement.entries.sqlText")}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/70 bg-card">
-                    {selectAiFeedbackItems.map((entry, index) => (
-                      <FeedbackEntryRow
-                        key={`${entry.sql_id}-${index}`}
-                        entry={entry}
-                        selected={selectedIndex === index}
-                        onSelect={() => setSelectedIndex(index)}
-                      />
-                    ))}
-                    {selectAiFeedbackItems.length === 0 && (
-                      <tr>
-                        <td colSpan={2} className="px-3 py-8">
-                          <EmptyState
-                            title={t("feedbackManagement.entries.emptyTitle")}
-                            hint={t("feedbackManagement.entries.emptyHint")}
-                          />
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
 
-            <section className="grid min-w-0 gap-4 rounded-md border border-border bg-background p-4">
-              <DbObjectPanelHeader
-                title={t("feedbackManagement.entries.selectedSql")}
-                icon={Code2}
-                action={
-                  <ObjectActionBar
-                    ariaLabel={t("feedbackManagement.entries.selectedSqlActions")}
-                    testId="feedback-selected-sql-actions"
-                    actions={[
-                      {
-                        id: "delete",
-                        label: t("feedbackManagement.delete"),
-                        icon: Trash2,
-                        tone: "danger",
-                        loading: loading === "delete",
-                        disabled: !selectedSelectAiFeedback,
-                        onSelect: () => void deleteSelectedFeedback(),
-                      },
-                    ]}
+              <section
+                className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
+                aria-label={t("feedbackManagement.entries.context")}
+                data-testid="feedback-management-entries-toolbar"
+              >
+                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end xl:max-w-3xl">
+                  {entriesProfileSelect}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="h-[44px] w-full whitespace-nowrap sm:w-auto"
+                    loading={loading === "feedback"}
+                    disabled={!profileName.trim()}
+                    onClick={() => void refreshSelectAiFeedback()}
+                  >
+                    <RefreshCw size={15} aria-hidden="true" />
+                    <span>{t("feedbackManagement.action.refresh")}</span>
+                  </Button>
+                </div>
+
+                <dl
+                  className="grid min-w-0 gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]"
+                  aria-label={t("feedbackManagement.entries.runtimeInfo")}
+                  data-testid="feedback-management-entries-runtime-info"
+                >
+                  <div className="min-w-0 self-start">
+                    <dt className="sr-only">{t("feedbackManagement.entries.runtime")}</dt>
+                    <dd>
+                      <StatusBadge
+                        variant={feedback?.runtime === "oracle" ? "success" : "neutral"}
+                        label={t("feedbackManagement.entries.runtimeBadge", {
+                          value: feedback?.runtime || dbProfiles?.runtime || "-",
+                        })}
+                      />
+                    </dd>
+                  </div>
+                  <TechnicalRuntimeFact
+                    label={t("feedbackManagement.entries.vectorIndex")}
+                    value={feedback?.index_name || "-"}
                   />
+                  <TechnicalRuntimeFact
+                    label={t("feedbackManagement.entries.vectorTable")}
+                    value={feedback?.table_name || "-"}
+                  />
+                </dl>
+              </section>
+
+              <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
+              {loading === "feedback" && feedback ? (
+                <ProcessingIndicator
+                  active
+                  label={t("feedbackManagement.entries.refreshing")}
+                  operationKey={profileName}
+                  placement="workspace"
+                  className="rounded-md border border-border bg-background px-3 py-2"
+                  testId="feedback-management-entries-processing"
+                  activityIcon="none"
+                />
+              ) : null}
+
+              <FixedSplitPane
+                splitId="feedback-management-entries-split"
+                preferredWidePane="left"
+                minLeftPaneWidthPx={560}
+                minRightPaneWidthPx={400}
+                left={
+                  initialEntriesLoading ? (
+                    <FeedbackEntriesListSkeleton />
+                  ) : (
+                    <FeedbackEntriesList
+                      entries={selectAiFeedbackItems}
+                      selectedIndex={selectedSelectAiFeedback ? selectedIndex : null}
+                      onSelect={setSelectedIndex}
+                    />
+                  )
                 }
-              />
-              <div className="flex flex-wrap gap-2">
-                <StatusBadge variant="neutral" label={selectedSelectAiFeedback?.sql_id || "-"} />
-                {feedback?.index_name && <StatusBadge variant="info" label={feedback.index_name} />}
-                {feedback?.table_name && <StatusBadge variant="neutral" label={feedback.table_name} />}
-              </div>
-              <textarea
-                aria-label={t("feedbackManagement.entries.selectedSql")}
-                value={selectedSelectAiFeedback?.sql_text ?? ""}
-                readOnly
-                rows={16}
-                className="min-h-80 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+                right={
+                  initialEntriesLoading ? (
+                    <FeedbackEntryDetailSkeleton />
+                  ) : (
+                    <FeedbackEntryDetail
+                      entry={selectedSelectAiFeedback}
+                      profileName={feedback?.profile_name || profileName}
+                      deleting={loading === "delete"}
+                      onDelete={() => void deleteSelectedFeedback()}
+                    />
+                  )
+                }
               />
             </section>
           </DbObjectManagementPanelShell>
@@ -1348,13 +1379,16 @@ export function FeedbackManagementPage() {
                   ]}
                 />
 
-                <details className="rounded-md border border-border bg-background">
+                <details className="group/disclosure rounded-md border border-border bg-background">
                   <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                    {t("feedbackManagement.similarityIndex.technicalDetails")}
-                    <StatusBadge
-                      variant="neutral"
-                      label={feedbackIndex?.vector_backend ?? "oracle_26ai"}
-                    />
+                    <span>{t("feedbackManagement.similarityIndex.technicalDetails")}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <StatusBadge
+                        variant="neutral"
+                        label={feedbackIndex?.vector_backend ?? "oracle_26ai"}
+                      />
+                      <DisclosureChevron expanded="group" size={15} className="text-muted" />
+                    </span>
                   </summary>
                   <div className="grid gap-3 border-t border-border p-4 sm:grid-cols-2">
                     <CompactFact
@@ -1431,15 +1465,18 @@ export function FeedbackManagementPage() {
                 </section>
 
                 {feedbackVectorOtherEntries.length > 0 && (
-                  <details className="rounded-md border border-border bg-background">
+                  <details className="group/disclosure rounded-md border border-border bg-background">
                     <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                      {t("feedbackManagement.similarityIndex.excludedEntries")}
-                      <StatusBadge
-                        variant="neutral"
-                        label={t("feedbackManagement.similarityIndex.excludedCount", {
-                          count: feedbackVectorOtherEntries.length,
-                        })}
-                      />
+                      <span>{t("feedbackManagement.similarityIndex.excludedEntries")}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <StatusBadge
+                          variant="neutral"
+                          label={t("feedbackManagement.similarityIndex.excludedCount", {
+                            count: feedbackVectorOtherEntries.length,
+                          })}
+                        />
+                        <DisclosureChevron expanded="group" size={15} className="text-muted" />
+                      </span>
                     </summary>
                     <div className="grid gap-3 border-t border-border p-4">
                       {feedbackVectorOtherEntries.slice(0, 6).map((entry) => (
@@ -1467,20 +1504,26 @@ function ProfileSelect({
   value,
   disabled,
   onChange,
+  fullWidth = false,
 }: {
   profiles: SelectAiDbProfile[];
   value: string;
   disabled: boolean;
   onChange: (value: string) => void;
+  fullWidth?: boolean;
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:min-w-72">
+    <label
+      className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${
+        fullWidth ? "w-full" : "sm:min-w-72"
+      }`}
+    >
       <span>{t("feedbackManagement.profile")}</span>
       <select
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-[44px] rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-[44px] w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>
@@ -1553,36 +1596,224 @@ function SimilarityIndexStateNotice({
   return null;
 }
 
-function FeedbackEntryRow({
-  entry,
-  selected,
+function feedbackEntryRowKey(entry: SelectAiFeedbackEntry, index: number) {
+  return `${entry.sql_id || entry.sql_text || "feedback"}-${index}`;
+}
+
+function FeedbackEntriesList({
+  entries,
+  selectedIndex,
   onSelect,
 }: {
-  entry: SelectAiFeedbackEntry;
-  selected: boolean;
-  onSelect: () => void;
+  entries: SelectAiFeedbackEntry[];
+  selectedIndex: number | null;
+  onSelect: (index: number) => void;
 }) {
-  return (
-    <tr className={`${INFORMATION_TABLE_ROW_CLASS} ${selected ? "bg-primary/10" : "hover:bg-background"}`} onClick={onSelect}>
-      <td className="px-3 py-2 align-top">
+  const columns: Array<DataTableColumn<SelectAiFeedbackEntry>> = [
+    {
+      key: "content",
+      header: t("feedbackManagement.entries.content"),
+      className: "w-[42%]",
+      render: (entry, index) => (
         <button
           type="button"
-          className="block w-full rounded-sm text-left text-foreground underline-offset-2 hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+          className="block w-full rounded-sm text-left text-foreground underline-offset-2 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           aria-label={t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           })}
           onClick={(event) => {
             event.stopPropagation();
-            onSelect();
+            onSelect(index);
           }}
         >
           <span className="line-clamp-3 break-words">{entry.content || "-"}</span>
         </button>
-      </td>
-      <td className="px-3 py-2 align-top">
-        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-foreground">{entry.sql_text || "-"}</p>
-      </td>
-    </tr>
+      ),
+    },
+    {
+      key: "sql_text",
+      header: t("feedbackManagement.entries.sqlText"),
+      className: "w-[58%]",
+      render: (entry) => (
+        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-foreground">
+          {entry.sql_text || "-"}
+        </p>
+      ),
+    },
+  ];
+
+  return (
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby="feedback-entries-list-heading">
+      <DbObjectPanelHeader
+        headingId="feedback-entries-list-heading"
+        title={t("feedbackManagement.entries.listTitle")}
+        description={t("feedbackManagement.entries.listHint")}
+        icon={MessageSquareText}
+      />
+      <MasterDetailDataTable
+        columns={columns}
+        rows={entries}
+        getRowKey={feedbackEntryRowKey}
+        selectedRowKey={
+          selectedIndex == null || !entries[selectedIndex]
+            ? null
+            : feedbackEntryRowKey(entries[selectedIndex], selectedIndex)
+        }
+        onRowSelect={(entry) => {
+          const index = entries.indexOf(entry);
+          if (index >= 0) onSelect(index);
+        }}
+        getRowAriaLabel={(entry) =>
+          t("feedbackManagement.entries.select", {
+            content: entry.content || entry.sql_text || "-",
+          })
+        }
+        dense
+        empty={
+          <EmptyState
+            title={t("feedbackManagement.entries.emptyTitle")}
+            hint={t("feedbackManagement.entries.emptyHint")}
+          />
+        }
+        ariaLabel={t("feedbackManagement.entries.listAria")}
+        testId="feedback-management-entries-table"
+        scrollTestId="feedback-management-entries-scroll-region"
+        scrollClassName={INFORMATION_TABLE_SCROLL_CLASS}
+        className="min-w-[640px] table-fixed [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:uppercase [&_tbody_tr]:h-[3.5rem]"
+      />
+    </section>
+  );
+}
+
+function FeedbackEntryDetail({
+  entry,
+  profileName,
+  deleting,
+  onDelete,
+}: {
+  entry: SelectAiFeedbackEntry | null;
+  profileName: string;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  const actions: EntityAction[] = entry
+    ? [
+        {
+          id: "delete",
+          label: t("feedbackManagement.delete"),
+          icon: Trash2,
+          tone: "danger",
+          loading: deleting,
+          onSelect: onDelete,
+        },
+      ]
+    : [];
+
+  return (
+    <section
+      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4"
+      aria-labelledby="feedback-entry-detail-heading"
+      data-testid="feedback-management-entry-detail"
+    >
+      <DbObjectPanelHeader
+        headingId="feedback-entry-detail-heading"
+        title={t("feedbackManagement.entries.selectedSql")}
+        description={entry ? t("feedbackManagement.entries.detailHint") : undefined}
+        icon={Code2}
+        action={
+          actions.length > 0 ? (
+            <ObjectActionBar
+              ariaLabel={t("feedbackManagement.entries.selectedSqlActions")}
+              testId="feedback-selected-sql-actions"
+              actions={actions}
+            />
+          ) : undefined
+        }
+      />
+
+      {entry ? (
+        <>
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+            <CompactFact label={t("feedbackManagement.entries.sqlId")} value={entry.sql_id || "-"} />
+            <CompactFact label={t("feedbackManagement.profile")} value={profileName || "-"} />
+          </div>
+          <section className="rounded-md border border-border bg-card p-3">
+            <p className="text-xs font-medium text-muted">{t("feedbackManagement.entries.content")}</p>
+            <p className="mt-1 break-words text-sm leading-6 text-foreground">{entry.content || "-"}</p>
+          </section>
+          <section className="grid min-w-0 gap-2">
+            <p className="text-xs font-medium text-muted">{t("feedbackManagement.entries.sqlText")}</p>
+            <pre
+              aria-label={t("feedbackManagement.entries.selectedSql")}
+              data-testid="feedback-management-entry-sql"
+              className="max-h-[30.5rem] min-h-44 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg"
+            >
+              <code>{entry.sql_text || "-"}</code>
+            </pre>
+          </section>
+        </>
+      ) : (
+        <div
+          className="grid min-h-52 place-items-center rounded-md border border-border bg-card p-4"
+          data-testid="feedback-management-entry-detail-empty"
+        >
+          <EmptyState
+            title={t("feedbackManagement.entries.detailEmptyTitle")}
+            hint={t("feedbackManagement.entries.detailEmptyHint")}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FeedbackEntriesListSkeleton() {
+  return (
+    <section
+      className="grid min-w-0 content-start gap-3"
+      aria-label={t("feedbackManagement.entries.loading")}
+      aria-busy="true"
+      data-testid="feedback-management-entries-list-skeleton"
+    >
+      <span className="sr-only" role="status">{t("feedbackManagement.entries.loading")}</span>
+      <Skeleton className="h-6 w-44" />
+      <Skeleton className="h-5 w-72 max-w-full" />
+      <div className="overflow-hidden rounded-md border border-border bg-card">
+        <Skeleton className="h-10 rounded-none" />
+        {Array.from({ length: 5 }, (_, index) => (
+          <Skeleton key={index} className="h-14 rounded-none border-t border-border" />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TechnicalRuntimeFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 rounded-md border border-border bg-card px-2 py-1 text-xs leading-5">
+      <dt className="shrink-0 font-medium text-muted">{label}:</dt>
+      <dd className="min-w-0 break-all font-medium text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function FeedbackEntryDetailSkeleton() {
+  return (
+    <section
+      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4"
+      aria-label={t("feedbackManagement.entries.loading")}
+      aria-busy="true"
+      data-testid="feedback-management-entry-detail-skeleton"
+    >
+      <Skeleton className="h-6 w-52 max-w-full" />
+      <Skeleton className="h-5 w-64 max-w-full" />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Skeleton className="h-16" />
+        <Skeleton className="h-16" />
+      </div>
+      <Skeleton className="h-24" />
+      <Skeleton className="h-56" />
+    </section>
   );
 }
 
@@ -1689,9 +1920,10 @@ function FeedbackVectorEntryRow({
           />
         </div>
       </div>
-      <details className="rounded-md border border-border bg-background">
-        <summary className="min-h-11 cursor-pointer px-3 py-2 text-xs font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
-          {t("feedbackManagement.similarityIndex.generatedSql")}
+      <details className="group/disclosure rounded-md border border-border bg-background">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+          <span>{t("feedbackManagement.similarityIndex.generatedSql")}</span>
+          <DisclosureChevron expanded="group" size={14} className="text-muted" />
         </summary>
         <pre className="max-h-36 overflow-auto border-t border-border p-3 text-xs leading-5 text-foreground">
           <code>{entry.generated_sql || "-"}</code>

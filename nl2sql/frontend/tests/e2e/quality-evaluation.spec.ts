@@ -16,6 +16,14 @@ function envelope(route: Route, data: unknown, status = 200) {
   });
 }
 
+function createRequestGate() {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 async function visibleBox(locator: Locator) {
   await expect(locator).toBeVisible();
   const box = await locator.boundingBox();
@@ -446,6 +454,24 @@ async function mockQualityApi(
   };
 }
 
+test("SQL生成評価の読込状態は利用者向けの日本語ラベルを表示する", async ({ page }) => {
+  await mockQualityApi(page);
+  const capabilitiesGate = createRequestGate();
+  await page.route("**/api/nl2sql/quality-evaluations/capabilities**", async (route) => {
+    await capabilitiesGate.promise;
+    return envelope(route, capabilities);
+  });
+
+  await page.goto("/evaluation");
+
+  const loading = page.getByRole("region", { name: "読み込んでいます", exact: true }).first();
+  await expect(loading).toBeVisible();
+  await expect(page.getByText("common.loading", { exact: true })).toHaveCount(0);
+
+  capabilitiesGate.release();
+  await expect(loading).toBeHidden();
+});
+
 test("desktop executes two engines twice, restores the job URL and downloads Excel", async ({
   page,
 }, testInfo) => {
@@ -521,15 +547,26 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await expect(page.getByRole("tab")).toHaveCount(0);
   const checkboxes = page.getByRole("checkbox");
   const engineBulkActions = page.getByTestId("quality-evaluation-engine-selection-actions");
+  const engineGrid = page.getByTestId("quality-evaluation-engine-grid");
+  await expect
+    .poll(async () => {
+      const [actionsBox, gridBox] = await Promise.all([
+        engineBulkActions.boundingBox(),
+        engineGrid.boundingBox(),
+      ]);
+      if (!actionsBox || !gridBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - gridBox.x);
+    })
+    .toBeLessThanOrEqual(1);
   await expect(engineBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
-  await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeDisabled();
+  await expect(engineBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeDisabled();
   await engineBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(checkboxes.nth(0)).toBeChecked();
   await expect(checkboxes.nth(1)).toBeEnabled();
   await expect(checkboxes.nth(1)).toBeChecked();
   await expect(checkboxes.nth(2)).toBeChecked();
-  await expect(engineBulkActions.getByRole("button", { name: "すべて解除" })).toBeEnabled();
-  await engineBulkActions.getByRole("button", { name: "すべて解除" }).click();
+  await expect(engineBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeEnabled();
+  await engineBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
   await expect(checkboxes.nth(0)).not.toBeChecked();
   await expect(checkboxes.nth(1)).not.toBeChecked();
   await expect(checkboxes.nth(2)).not.toBeChecked();
@@ -565,7 +602,10 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
     .getByTestId("quality-evaluation-analysis-toggle")
     .filter({ visible: true })
     .first();
+  const analysisChevron = analysisToggle.locator("svg");
+  await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
   await analysisToggle.click();
+  await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
   const tableBox = await visibleBox(page.getByTestId("quality-evaluation-results-table"));
   const analysisCellBox = await visibleBox(analysisToggle.locator("xpath=ancestor::td[1]"));
   const analysisToggleBox = await visibleBox(analysisToggle);
@@ -907,6 +947,19 @@ test("mobile restores completed results as cards without page overflow", async (
   await mockQualityApi(page, { fixedStatus: "completed_with_errors" });
   await page.goto("/evaluation?job=job-001");
 
+  const engineBulkActions = page.getByTestId("quality-evaluation-engine-selection-actions");
+  const engineGrid = page.getByTestId("quality-evaluation-engine-grid");
+  await expect
+    .poll(async () => {
+      const [actionsBox, gridBox] = await Promise.all([
+        engineBulkActions.boundingBox(),
+        engineGrid.boundingBox(),
+      ]);
+      if (!actionsBox || !gridBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(actionsBox.x - gridBox.x);
+    })
+    .toBeLessThanOrEqual(1);
+
   await expectVerticalOrder([
     page.getByTestId("quality-evaluation-profile-field"),
     page.getByTestId("quality-evaluation-file"),
@@ -926,7 +979,14 @@ test("mobile restores completed results as cards without page overflow", async (
   await expect(
     page.getByText("OCI Enterprise AI timeout").filter({ visible: true }).first()
   ).toBeVisible();
-  await page.getByTestId("quality-evaluation-analysis-toggle").filter({ visible: true }).first().click();
+  const mobileAnalysisToggle = page
+    .getByTestId("quality-evaluation-analysis-toggle")
+    .filter({ visible: true })
+    .first();
+  const mobileAnalysisChevron = mobileAnalysisToggle.locator("svg");
+  await expect.poll(() => mobileAnalysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  await mobileAnalysisToggle.click();
+  await expect.poll(() => mobileAnalysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
   await expect(
     page.getByTestId("quality-evaluation-analysis-detail").filter({ visible: true }).first()
   ).toBeVisible();

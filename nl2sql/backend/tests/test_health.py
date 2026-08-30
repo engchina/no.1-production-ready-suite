@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -50,7 +51,9 @@ from app.features.nl2sql.router import is_select_only
 from app.features.nl2sql.service import (
     GeneratedSql,
     Nl2SqlService,
+    StoredJob,
     _extract_referenced_tables,
+    enforce_row_limit,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
 from app.features.schema import router as schema_router
@@ -415,9 +418,7 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
             "V_DEPT_PROJECT",
         ]
         if object_keys:
-            requested = {
-                (owner.upper(), object_name.upper()) for owner, object_name in object_keys
-            }
+            requested = {(owner.upper(), object_name.upper()) for owner, object_name in object_keys}
             tables = [
                 SchemaTable(table_name=name, logical_name=name, owner=current_owner)
                 for name in sample_names
@@ -575,6 +576,9 @@ async def test_nl2sql_starts_with_empty_business_catalog_and_profile() -> None:
 
     assert resp.status_code == 400
     assert "Schema catalog が空です" in " ".join(resp.json()["error_messages"])
+    # 文言の部分一致に依存しない機械判定用 code(frontend の isSchemaEmptyError が参照)。
+    assert resp.json()["error_code"] == "SCHEMA_CATALOG_EMPTY"
+    assert resp.json()["problem"]["code"] == "SCHEMA_CATALOG_EMPTY"
     assert catalog_resp.status_code == 200
     assert catalog_resp.json()["data"]["tables"] == []
     default_profile = next(
@@ -583,6 +587,26 @@ async def test_nl2sql_starts_with_empty_business_catalog_and_profile() -> None:
     assert default_profile["allowed_tables"] == []
     assert default_profile["glossary"] == {}
     assert default_profile["few_shot_examples"] == []
+
+
+async def test_execute_on_empty_catalog_returns_schema_empty_error_code() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        resp = await client.post("/api/nl2sql/execute", json={"sql": "SELECT * FROM DEPARTMENT"})
+
+    assert resp.status_code == 400
+    assert resp.json()["error_code"] == "SCHEMA_CATALOG_EMPTY"
+
+
+def test_job_on_empty_catalog_sets_schema_empty_error_code() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    created = service.start_job(JobCreateRequest(question="売上トップ10は?"))
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == "SCHEMA_CATALOG_EMPTY"
+    assert "Schema catalog が空です" in (job.error_message or "")
 
 
 async def test_sample_import_enables_preview_and_delete() -> None:
@@ -643,7 +667,10 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
-    assert preview.executable_sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
+    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
+    assert preview.executable_sql == (
+        "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT FETCH FIRST 100 ROWS ONLY"
+    )
     assert fake_client.calls
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
     assert "V_EMP_DEPT" in fake_client.calls[0]["context"]
@@ -709,9 +736,7 @@ def test_select_ai_job_failure_is_logged_with_stage_metadata(
         matching_records = []
         for _ in range(50):
             matching_records = [
-                record
-                for record in caplog.records
-                if record.getMessage() == "nl2sql_job_failed"
+                record for record in caplog.records if record.getMessage() == "nl2sql_job_failed"
             ]
             if matching_records:
                 break
@@ -737,7 +762,7 @@ def test_select_ai_job_blocks_where_when_filter_slot_is_empty() -> None:
         _FakeOracleDb(),
         generated_sql=(
             'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT" '
-            'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+            "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
         ),
     )
     service = _OracleRuntimeNl2SqlService(adapter)
@@ -774,7 +799,7 @@ def test_select_ai_allows_where_when_filter_slot_has_value() -> None:
         _FakeOracleDb(),
         generated_sql=(
             'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "APP"."DEPARTMENT" '
-            'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+            "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
         ),
     )
     service = _OracleRuntimeNl2SqlService(adapter)
@@ -805,7 +830,7 @@ def test_interpretation_separates_empty_input_filter_from_sql_filter() -> None:
     question = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：'
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
-        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+        "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
     )
     profile = service.get_profile("sql_assist_sample")
     allowed = AllowedObjects(table_names=["DEPARTMENT"])
@@ -828,7 +853,7 @@ def test_interpretation_separates_empty_input_filter_from_sql_filter() -> None:
     )
 
     assert artifact.question.filters == []
-    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
+    assert artifact.sql.filters == ["UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"]
     assert artifact.question.warnings
     assert artifact.sql.warnings
     assert "抽出条件が空欄" in " ".join(artifact.warnings)
@@ -840,7 +865,7 @@ def test_interpretation_uses_only_explicit_template_filter_for_question_filters(
     question = "対象テーブル：部署\n抽出項目：部署名\n抽出条件：部署名 = '管理部門'"
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
-        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+        "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
     )
     profile = service.get_profile("sql_assist_sample")
     analysis = service.analyze_sql(sql, AllowedObjects(table_names=["DEPARTMENT"]), None)
@@ -861,7 +886,7 @@ def test_interpretation_uses_only_explicit_template_filter_for_question_filters(
     )
 
     assert artifact.question.filters == ["部署名 = '管理部門'"]
-    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
+    assert artifact.sql.filters == ["UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"]
 
 
 def test_interpretation_does_not_infer_question_filters_from_free_text() -> None:
@@ -869,7 +894,7 @@ def test_interpretation_does_not_infer_question_filters_from_free_text() -> None
     _import_sample(service)
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
-        'WHERE UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\''
+        "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
     )
     profile = service.get_profile("sql_assist_sample")
     analysis = service.analyze_sql(sql, AllowedObjects(table_names=["DEPARTMENT"]), None)
@@ -890,7 +915,7 @@ def test_interpretation_does_not_infer_question_filters_from_free_text() -> None
     )
 
     assert artifact.question.filters == []
-    assert artifact.sql.filters == ['UPPER("DEPARTMENT_NAME") LIKE \'%管理部門%\'']
+    assert artifact.sql.filters == ["UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"]
 
 
 def test_select_ai_request_overrides_use_effective_profile_context() -> None:
@@ -1501,6 +1526,48 @@ def test_oracle_select_ai_extracts_sql_from_error_wrapped_response() -> None:
     )
 
 
+def test_extract_select_statement_preserves_subquery() -> None:
+    sql = 'SELECT a FROM (SELECT b FROM "owner"."t") x'
+
+    assert _extract_select_statement(sql) == sql
+
+
+def test_extract_select_statement_preserves_cte() -> None:
+    sql = "WITH c AS (SELECT 1 FROM dual) SELECT * FROM c"
+
+    assert _extract_select_statement(sql) == sql
+
+
+def test_extract_select_statement_preserves_scalar_subquery_in_select_list() -> None:
+    sql = "SELECT (SELECT MAX(id) FROM t2), name FROM t1"
+
+    assert _extract_select_statement(sql) == sql
+
+
+def test_extract_select_statement_skips_prose_prefix_before_nested_sql() -> None:
+    raw = (
+        "Sorry, unfortunately a valid SELECT statement could not be generated. "
+        'SELECT a FROM (SELECT b FROM "owner"."t") x'
+    )
+
+    assert _extract_select_statement(raw) == 'SELECT a FROM (SELECT b FROM "owner"."t") x'
+
+
+def test_extract_select_statement_truncates_trailing_exception_with_subquery() -> None:
+    raw = (
+        "SELECT a FROM (SELECT b FROM t) x "
+        "Exception encountered: ORA-00942: table or view does not exist"
+    )
+
+    assert _extract_select_statement(raw) == "SELECT a FROM (SELECT b FROM t) x"
+
+
+def test_extract_select_statement_from_json_payload_with_subquery() -> None:
+    raw = '{"sql": "WITH c AS (SELECT 1 FROM dual) SELECT * FROM c"}'
+
+    assert _extract_select_statement(raw) == "WITH c AS (SELECT 1 FROM dual) SELECT * FROM c"
+
+
 def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
     sql = (
         'SELECT * FROM "owner"."trading_partners" t '
@@ -1508,6 +1575,236 @@ def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
     )
 
     assert _extract_referenced_tables(sql) == ["OWNER.TRADING_PARTNERS", "OWNER.BILLS"]
+
+
+def test_enforce_row_limit_keeps_smaller_existing_fetch_first() -> None:
+    sql = "SELECT * FROM INVOICES ORDER BY TOTAL_AMOUNT DESC FETCH FIRST 3 ROWS ONLY"
+
+    assert enforce_row_limit(sql, 100) == (
+        "SELECT * FROM INVOICES ORDER BY TOTAL_AMOUNT DESC FETCH FIRST 3 ROWS ONLY"
+    )
+
+
+def test_enforce_row_limit_caps_larger_existing_fetch_first() -> None:
+    sql = "SELECT * FROM INVOICES FETCH FIRST 500 ROWS ONLY"
+
+    assert enforce_row_limit(sql, 100) == "SELECT * FROM INVOICES FETCH FIRST 100 ROWS ONLY"
+
+
+def test_enforce_row_limit_converts_limit_tail_preserving_smaller_value() -> None:
+    assert enforce_row_limit("SELECT * FROM INVOICES LIMIT 5", 100) == (
+        "SELECT * FROM INVOICES FETCH FIRST 5 ROWS ONLY"
+    )
+
+
+def test_enforce_row_limit_appends_when_absent_and_noop_when_none() -> None:
+    assert enforce_row_limit("SELECT * FROM INVOICES", 100) == (
+        "SELECT * FROM INVOICES FETCH FIRST 100 ROWS ONLY"
+    )
+    assert enforce_row_limit("SELECT * FROM INVOICES;", None) == "SELECT * FROM INVOICES"
+
+
+def test_fail_trigger_words_in_question_are_ignored_on_oracle_runtime() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(id="fail_trigger_profile", name="失敗トリガ検証")
+    )
+
+    preview = service.preview(
+        PreviewRequest(
+            question="select_ai_fail を含む請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        )
+    )
+
+    assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert preview.fallback_reason == ""
+
+
+def test_preview_without_row_limit_applies_profile_default() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", profile_id="sql_assist_sample")
+    )
+
+    assert preview.row_limit == 100
+    assert preview.executable_sql.endswith("FETCH FIRST 100 ROWS ONLY")
+
+
+def test_preview_without_row_limit_uses_custom_profile_default() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="small_default_profile",
+            name="小さい既定値",
+            allowed_tables=["DEPARTMENT"],
+            default_row_limit=25,
+        )
+    )
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", profile_id=profile.id)
+    )
+
+    assert preview.row_limit == 25
+    assert preview.executable_sql.endswith("FETCH FIRST 25 ROWS ONLY")
+
+
+def test_preview_explicit_row_limit_wins_over_profile_default() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+
+    preview = service.preview(
+        PreviewRequest(
+            question="請求金額を確認したい",
+            profile_id="sql_assist_sample",
+            row_limit=7,
+        )
+    )
+
+    assert preview.row_limit == 7
+    assert preview.executable_sql.endswith("FETCH FIRST 7 ROWS ONLY")
+
+
+def test_job_cancel_requested_stops_at_stage_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    release = threading.Event()
+    original = service._generate_with_fallback  # noqa: SLF001
+
+    def blocking_generate(*args: Any, **kwargs: Any) -> Any:
+        release.wait(timeout=5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_generate_with_fallback", blocking_generate)
+    created = service.start_job(JobCreateRequest(question="請求金額を確認したい"))
+
+    cancelled = service.request_job_cancel(created.job_id)
+    assert cancelled is not None
+    release.set()
+
+    job = _wait_for_job(service, created.job_id)
+    assert job is not None
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == "JOB_CANCELLED"
+    assert "キャンセル" in (job.error_message or "")
+
+
+def test_job_cancel_is_noop_after_terminal_state() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    created = service.start_job(JobCreateRequest(question="請求金額を確認したい"))
+    done = _wait_for_job(service, created.job_id)
+    assert done is not None
+    assert done.status == JobStatus.DONE
+
+    after_cancel = service.request_job_cancel(created.job_id)
+
+    assert after_cancel is not None
+    assert after_cancel.status == JobStatus.DONE
+    assert after_cancel.result is not None
+
+
+def test_get_job_denies_non_manage_actor_for_unowned_job() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    # 認証無効期間に作成された job(actor 不明)を想定。
+    created = service.start_job(JobCreateRequest(question="請求金額を確認したい"))
+    _wait_for_job(service, created.job_id)
+
+    with pytest.raises(PermissionError):
+        service.get_job(created.job_id, actor_user_uuid="user-x", actor_can_manage=False)
+    assert (
+        service.get_job(created.job_id, actor_user_uuid="user-x", actor_can_manage=True) is not None
+    )
+    # 認証無効(actor 空)は従来どおり参照できる。
+    assert service.get_job(created.job_id) is not None
+
+
+def test_job_concurrency_is_bounded_by_semaphore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    service._job_concurrency = threading.BoundedSemaphore(1)  # noqa: SLF001
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    original = service._run_job  # noqa: SLF001
+
+    def tracking_run(job_id: str) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.03)
+        try:
+            original(job_id)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(service, "_run_job", tracking_run)
+    job_ids = [
+        service.start_job(JobCreateRequest(question="請求金額を確認したい")).job_id
+        for _ in range(3)
+    ]
+    for job_id in job_ids:
+        job = _wait_for_job(service, job_id)
+        assert job is not None
+        assert job.status == JobStatus.DONE
+
+    assert max_active == 1
+
+
+def test_terminal_job_pruning_keeps_recent_and_running_jobs() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = JobCreateRequest(question="請求金額を確認したい")
+    for index in range(210):
+        job_id = f"job-{index:03d}"
+        service._jobs[job_id] = StoredJob(  # noqa: SLF001
+            job_id=job_id, request=request, status=JobStatus.DONE
+        )
+    service._jobs["job-running"] = StoredJob(  # noqa: SLF001
+        job_id="job-running", request=request, status=JobStatus.RUNNING
+    )
+
+    with service._lock:  # noqa: SLF001
+        service._prune_terminal_jobs_locked()  # noqa: SLF001
+
+    assert len(service._jobs) == 200  # noqa: SLF001
+    assert "job-running" in service._jobs  # noqa: SLF001
+    # 古い terminal から捨てる。
+    assert "job-000" not in service._jobs  # noqa: SLF001
+    assert "job-209" in service._jobs  # noqa: SLF001
+
+
+def test_history_pruning_caps_in_memory_entries() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    for index in range(1005):
+        service._history.append(  # noqa: SLF001
+            HistoryItem(
+                id=f"hist-{index:04d}",
+                question="q",
+                engine=Nl2SqlEngine.SELECT_AI,
+                generated_sql="SELECT 1 FROM DUAL",
+                executable_sql="SELECT 1 FROM DUAL",
+                created_at="2026-08-30T00:00:00+00:00",
+            )
+        )
+
+    with service._lock:  # noqa: SLF001
+        service._prune_history_locked()  # noqa: SLF001
+
+    assert len(service._history) == 1000  # noqa: SLF001
+    assert service._history[0].id == "hist-0005"  # noqa: SLF001
 
 
 def test_select_only_guard() -> None:
@@ -1683,7 +1980,9 @@ async def test_execute_oracle_adapter_error_returns_http_502(
 
     assert resp.status_code == 502
     assert "SELECT の実行に失敗しました" in resp.text
-    assert "ORA-01031" in resp.text
+    assert "実行権限を確認して再試行してください" in resp.text
+    assert "ORA-01031" not in resp.text
+    assert "insufficient privileges" not in resp.text
 
 
 def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1853,7 +2152,6 @@ async def test_asset_refresh() -> None:
         assert {"profile", "tool", "agent", "task", "team"} <= set(asset_data["asset_names"])
 
 
-
 def test_feedback_rating_has_no_needs_review() -> None:
     assert {member.value for member in FeedbackRating} == {"good", "bad"}
 
@@ -1910,8 +2208,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
         assert update_resp.status_code == 200
         assert update_resp.json()["data"]["name"] == "INVOICE_PROFILE_V2"
         assert (
-            update_resp.json()["data"]["select_ai_config"]["profile_name"]
-            == "INVOICE_PROFILE_V2"
+            update_resp.json()["data"]["select_ai_config"]["profile_name"] == "INVOICE_PROFILE_V2"
         )
         assert update_resp.json()["data"]["default_row_limit"] == 50
         assert update_resp.json()["data"]["sql_rules"] == []
@@ -1942,9 +2239,7 @@ async def test_profile_crud_create_update_archive_delete() -> None:
             "/api/nl2sql/profiles", params={"include_archived": "true"}
         )
         assert deleted_list_resp.status_code == 200
-        assert profile_id not in {
-            profile["id"] for profile in deleted_list_resp.json()["data"]
-        }
+        assert profile_id not in {profile["id"] for profile in deleted_list_resp.json()["data"]}
 
         restore_deleted_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/restore")
         assert restore_deleted_resp.status_code == 404
@@ -2373,6 +2668,8 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_history.feedback_comment == "永続化された feedback"
     assert restored_history.admin_feedback_rating == FeedbackRating.GOOD
     assert restored_history.admin_feedback_content == "管理者確認済み"
+
+
 def test_nl2sql_store_deletes_default_profile_without_reseeding() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
@@ -2406,9 +2703,7 @@ def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
     assert restored == {"schema_version": 1, "profiles": [{"id": "default"}]}
     assert fake_db.commits == 1
     assert not any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
-    assert any(
-        sql == "SELECT 1 FROM NL2SQL_STATE_STORE WHERE 1 = 0" for sql in fake_db.executed
-    )
+    assert any(sql == "SELECT 1 FROM NL2SQL_STATE_STORE WHERE 1 = 0" for sql in fake_db.executed)
     assert any(sql.startswith("MERGE INTO NL2SQL_STATE_STORE") for sql in fake_db.executed)
     assert any("state_json" in input_sizes for input_sizes in fake_db.input_sizes)
     assert any(
@@ -3078,9 +3373,7 @@ def test_oracle_adapter_refresh_select_ai_agent_assets_executes_dbms_cloud_ai_ag
     assert meta["package"] == "DBMS_CLOUD_AI_AGENT"
     assert meta["runtime"] == "oracle"
     assert meta["select_ai_profile_meta"]["package"] == "DBMS_CLOUD_AI"
-    assert meta["profile_attributes"]["object_list"] == [
-        {"owner": "SH", "name": "INVOICES"}
-    ]
+    assert meta["profile_attributes"]["object_list"] == [{"owner": "SH", "name": "INVOICES"}]
     assert meta["tool_attributes"]["tool_type"] == "SQL"
     assert meta["tool_attributes"]["tool_params"] == {"profile_name": "NL2SQL_DEFAULT_PROFILE"}
     assert meta["agent_attributes"]["tools"] == ["NL2SQL_DEFAULT_TOOL"]

@@ -167,9 +167,7 @@ def _download_wallet_bytes(
             stream = raw.stream(1024 * 1024, decode_content=True)
         else:
             content = (
-                data
-                if isinstance(data, (bytes, bytearray))
-                else getattr(data, "content", None)
+                data if isinstance(data, (bytes, bytearray)) else getattr(data, "content", None)
             )
             if not isinstance(content, (bytes, bytearray)):
                 raise WalletDownloadResponseError("wallet response body is unavailable")

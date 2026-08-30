@@ -1,12 +1,10 @@
 import { Children, type KeyboardEvent, type ReactNode } from "react";
 import {
-  AlertCircle,
   ArrowDownUp,
   Check,
   Code2,
   Download,
   RefreshCw,
-  Search,
   Table2,
   Trash2,
   X,
@@ -14,9 +12,15 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  DbManagementSearchField,
+  DbObjectSearchOwnerFields,
+  type DbObjectFilterFieldProps,
+} from "@/components/DbObjectFilterFields";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
 import {
   ObjectActionBar,
@@ -29,6 +33,7 @@ import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
@@ -42,8 +47,14 @@ import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import type { DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
+export {
+  DbManagementSearchField,
+  DbObjectSearchOwnerFields,
+  DbOwnerPrefixFilterField,
+} from "@/components/DbObjectFilterFields";
+
 export type DbObjectDetailTab = "columns" | "ddl";
-export type DbObjectOwnerFilter = string;
+export type DbObjectOwnerPrefix = string;
 export type DbObjectSortKey = "name" | "row_count" | "owner";
 export type DbObjectSortDirection = "asc" | "desc";
 export type DbObjectPickerSortKey = "name" | "kind" | "row_count" | "owner";
@@ -68,8 +79,6 @@ export interface DbObjectGridLabels {
   emptyHint: string;
   noResultsTitle: string;
   noResultsHint: string;
-  ownerFilter: string;
-  ownerFilterAll: string;
   objectName: string;
   rows: string;
   owner: string;
@@ -358,38 +367,6 @@ export function DbObjectPanelHeader({
   );
 }
 
-export function DbManagementSearchField({
-  label,
-  placeholder,
-  value,
-  onChange,
-}: {
-  label: string;
-  placeholder: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-      <span>{label}</span>
-      <span className="relative">
-        <Search
-          size={16}
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-          aria-hidden="true"
-        />
-        <input
-          type="search"
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
-          placeholder={placeholder}
-        />
-      </span>
-    </label>
-  );
-}
-
 export function DbObjectSelectorToolbar({
   searchLabel,
   searchPlaceholder,
@@ -398,6 +375,7 @@ export function DbObjectSelectorToolbar({
   resultLabel,
   dataTestId,
   className = "",
+  ownerPrefixField,
   children,
 }: {
   searchLabel: string;
@@ -407,6 +385,7 @@ export function DbObjectSelectorToolbar({
   resultLabel?: string;
   dataTestId?: string;
   className?: string;
+  ownerPrefixField?: DbObjectFilterFieldProps;
   children?: ReactNode;
 }) {
   return (
@@ -414,19 +393,38 @@ export function DbObjectSelectorToolbar({
       className={`grid gap-2 rounded-md border border-border bg-background p-3 ${className}`}
       data-testid={dataTestId}
     >
-      <div className={children ? "grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]" : "grid gap-2"}>
-        <DbManagementSearchField
-          label={searchLabel}
-          placeholder={searchPlaceholder}
-          value={searchValue}
-          onChange={onSearchChange}
+      {ownerPrefixField ? (
+        <DbObjectSearchOwnerFields
+          searchLabel={searchLabel}
+          searchPlaceholder={searchPlaceholder}
+          searchValue={searchValue}
+          onSearchChange={onSearchChange}
+          ownerLabel={ownerPrefixField.label}
+          ownerPlaceholder={ownerPrefixField.placeholder}
+          ownerValue={ownerPrefixField.value}
+          onOwnerChange={ownerPrefixField.onChange}
+          disabled={ownerPrefixField.disabled}
         />
-        {children && (
-          <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
-            {children}
-          </div>
-        )}
-      </div>
+      ) : (
+        <div className={children ? "grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]" : "grid gap-2"}>
+          <DbManagementSearchField
+            label={searchLabel}
+            placeholder={searchPlaceholder}
+            value={searchValue}
+            onChange={onSearchChange}
+          />
+          {children && (
+            <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
+              {children}
+            </div>
+          )}
+        </div>
+      )}
+      {ownerPrefixField && children && (
+        <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end sm:justify-end">
+          {children}
+        </div>
+      )}
       {resultLabel && (
         <p className="text-xs text-muted" aria-live="polite">
           {resultLabel}
@@ -488,15 +486,9 @@ export function DbObjectSelectorFooter({
         )}
       </div>
       {loadMoreError && (
-        <div
-          className="flex flex-col gap-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
-          role="alert"
-        >
-          <span className="flex min-w-0 items-start gap-2">
-            <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 [overflow-wrap:anywhere]">{loadMoreError}</span>
-          </span>
-          {onRetryLoadMore && (
+        <Banner
+          severity="danger"
+          action={onRetryLoadMore ? (
             <Button
               type="button"
               variant="secondary"
@@ -508,8 +500,10 @@ export function DbObjectSelectorFooter({
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("common.retry")}</span>
             </Button>
-          )}
-        </div>
+          ) : undefined}
+        >
+          {loadMoreError}
+        </Banner>
       )}
     </div>
   );
@@ -1033,8 +1027,7 @@ export function DbObjectGrid({
   selectedName,
   loading,
   search,
-  ownerFilter,
-  ownerOptions,
+  ownerPrefix,
   sort,
   labels,
   totalCount,
@@ -1043,7 +1036,7 @@ export function DbObjectGrid({
   loadMoreError = "",
   error = "",
   onSearchChange,
-  onOwnerFilterChange,
+  onOwnerPrefixChange,
   onSortChange,
   onSelect,
   onDrop,
@@ -1058,8 +1051,7 @@ export function DbObjectGrid({
   selectedName: string;
   loading: boolean;
   search: string;
-  ownerFilter: DbObjectOwnerFilter;
-  ownerOptions: string[];
+  ownerPrefix: DbObjectOwnerPrefix;
   sort: DbObjectSortState;
   labels: DbObjectGridLabels;
   totalCount?: number;
@@ -1068,7 +1060,7 @@ export function DbObjectGrid({
   loadMoreError?: string;
   error?: string;
   onSearchChange: (value: string) => void;
-  onOwnerFilterChange: (value: DbObjectOwnerFilter) => void;
+  onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
   onSelect: (name: string) => void;
   onDrop: (name: string) => void;
@@ -1076,11 +1068,7 @@ export function DbObjectGrid({
   onRetryLoadMore?: () => void;
   onRetry?: () => void;
 }) {
-  const ownerSelectOptions =
-    ownerFilter === "all" || ownerOptions.includes(ownerFilter)
-      ? ownerOptions
-      : [ownerFilter, ...ownerOptions];
-  const hasActiveFilter = Boolean(search.trim()) || ownerFilter !== "all";
+  const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim());
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId}>
       <DbObjectPanelHeader
@@ -1092,29 +1080,16 @@ export function DbObjectGrid({
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-background p-3">
-        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
-          <DbManagementSearchField
-            label={t("dbAdmin.search.label")}
-            placeholder={t("dbAdmin.search.placeholder")}
-            value={search}
-            onChange={onSearchChange}
-          />
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{labels.ownerFilter}</span>
-            <select
-              value={ownerFilter}
-              onChange={(event) => onOwnerFilterChange(event.currentTarget.value)}
-              className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-            >
-              <option value="all">{labels.ownerFilterAll}</option>
-              {ownerSelectOptions.map((owner) => (
-                <option key={owner} value={owner}>
-                  {owner}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <DbObjectSearchOwnerFields
+          searchLabel={t("dbAdmin.search.label")}
+          searchPlaceholder={t("dbAdmin.search.placeholder")}
+          searchValue={search}
+          onSearchChange={onSearchChange}
+          ownerLabel={t("dbAdmin.owner.label")}
+          ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
+          ownerValue={ownerPrefix}
+          onOwnerChange={onOwnerPrefixChange}
+        />
       </div>
 
       {loading ? (
@@ -1303,7 +1278,7 @@ export function DbObjectDetailPanel({
       await navigator.clipboard.writeText(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
-      toast.error(t("common.action.copyFailed"));
+      toastError(t("common.action.copyFailed"));
     }
   };
   const detailTabs = [
@@ -1515,7 +1490,7 @@ export function DbObjectDetailPanel({
                   downloadText(`${detailQualifiedName.toLowerCase().replace(".", "_")}_ddl.sql`, detail.ddl);
                   toast.success(t("common.action.downloaded"));
                 } catch {
-                  toast.error(t("common.action.downloadFailed"));
+                  toastError(t("common.action.downloadFailed"));
                 }
               }}
             >
@@ -1644,12 +1619,9 @@ export function DropDbObjectDialog({
             <p className="mt-1 break-all font-mono text-sm font-semibold text-foreground">{objectName}</p>
           </div>
           {error && (
-            <p
-              role="alert"
-              className="rounded-md border border-danger/30 bg-background px-3 py-2 text-sm font-medium text-danger"
-            >
+            <Banner severity="danger">
               {error}
-            </p>
+            </Banner>
           )}
           <fieldset className="grid gap-3 rounded-md border border-border bg-background p-3">
             <legend className="px-1 text-sm font-semibold text-foreground">{labels.executeTitle}</legend>

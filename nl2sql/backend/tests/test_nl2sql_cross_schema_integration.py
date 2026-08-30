@@ -30,12 +30,8 @@ def test_cross_schema_select_ai_profile_and_agent_round_trip() -> None:
         pytest.skip("現在ユーザーから参照可能な外部 schema がありません。")
 
     catalog = adapter.fetch_catalog(include_samples=False)
-    preferred_owners = [
-        owner for owner in ("SH", "SSB", "OML_USER") if owner in external_owners
-    ]
-    preferred_owners.extend(
-        owner for owner in external_owners if owner not in preferred_owners
-    )
+    preferred_owners = [owner for owner in ("SH", "SSB", "OML_USER") if owner in external_owners]
+    preferred_owners.extend(owner for owner in external_owners if owner not in preferred_owners)
     target = next(
         (
             table

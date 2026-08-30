@@ -228,8 +228,58 @@ def _flexible_date_value(value: str) -> datetime | None:
     return None
 
 
+def _normalize_statement_candidate(candidate: str) -> str:
+    """候補末尾の runtime error 文言と 2 文目以降を落とす。"""
+    error_match = re.search(r"\bException encountered\s*:", candidate, flags=re.IGNORECASE)
+    if error_match:
+        candidate = candidate[: error_match.start()]
+    return candidate.split(";", 1)[0].strip()
+
+
+def _mask_sql_quoted_regions(statement: str) -> str:
+    masked = re.sub(r"'[^']*'", "LIT", statement)
+    return re.sub(r'"[^"]*"', "QID", masked)
+
+
+def _plausible_select_statement(statement: str) -> bool:
+    """候補が SQL 本体か(前置き prose や途中からの suffix でないか)を判定する。"""
+    masked = _mask_sql_quoted_regions(statement)
+    depth = 0
+    for char in masked:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            # 閉じ括弧過多 = サブクエリ途中から始まる suffix なので除外する。
+            if depth < 0:
+                return False
+    if re.match(r"^\s*with\s+\S+\s+as\s*\(", masked, flags=re.IGNORECASE):
+        return True
+    depth = 0
+    from_index: int | None = None
+    for match in re.finditer(r"\(|\)|\bfrom\b", masked, flags=re.IGNORECASE):
+        token = match.group(0)
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+        elif depth == 0:
+            from_index = match.start()
+            break
+    if from_index is None:
+        return False
+    # select list に文末句読点が現れる候補は「... generated. SELECT ...」型の前置き prose。
+    select_list = masked[:from_index]
+    return re.search(r"[.。!?！?](\s|$)", select_list) is None
+
+
 def _extract_select_statement(text: str) -> str:
-    """LLM/Select AI response から最初の SELECT/WITH statement を抽出する。"""
+    """LLM/Select AI response から最初の妥当な SELECT/WITH statement を抽出する。
+
+    前置き prose(「Sorry, ... SELECT statement could not be generated. SELECT ...」等)を
+    飛ばしつつ、サブクエリ/CTE を含む statement を先頭から丸ごと保全する。
+    service.py の `_extract_select_from_text`(Enterprise AI Direct 用)と対の関係。
+    """
     cleaned = text.strip()
     try:
         payload = json.loads(cleaned)
@@ -251,11 +301,12 @@ def _extract_select_statement(text: str) -> str:
             candidates.append(candidate)
     if not candidates:
         return ""
-    statement = candidates[-1]
-    error_match = re.search(r"\bException encountered\s*:", statement, flags=re.IGNORECASE)
-    if error_match:
-        statement = statement[: error_match.start()].strip()
-    return statement.split(";", 1)[0].strip()
+    for candidate in candidates:
+        normalized = _normalize_statement_candidate(candidate)
+        if normalized and _plausible_select_statement(normalized):
+            return normalized
+    # 全候補が妥当性検査に落ちた場合は従来挙動(最後の候補)へフォールバックする。
+    return _normalize_statement_candidate(candidates[-1])
 
 
 def _quote_identifier(identifier: str) -> str:
@@ -1325,9 +1376,7 @@ class OracleNl2SqlAdapter:
             comment = _coerce_text(row[0]) if row and row[0] else ""
             if normalized_type == "TABLE" and exact_count:
                 try:
-                    cursor.execute(
-                        f"SELECT COUNT(*) FROM {quoted_object}"  # nosec B608
-                    )
+                    cursor.execute(f"SELECT COUNT(*) FROM {quoted_object}")  # nosec B608
                     row = cursor.fetchone()
                     row_count = int(row[0] or 0) if row else None
                 except Exception as exc:
@@ -1662,8 +1711,7 @@ class OracleNl2SqlAdapter:
                 "値の形式と取込先の制約を確認して再試行してください。"
             )
         match = re.search(
-            r'column\s+"[^"]+"\."[^"]+"\."([^"]+)".*?'
-            r"actual:\s*(\d+),\s*maximum:\s*(\d+)",
+            r'column\s+"[^"]+"\."[^"]+"\."([^"]+)".*?' r"actual:\s*(\d+),\s*maximum:\s*(\d+)",
             message,
             re.IGNORECASE | re.DOTALL,
         )

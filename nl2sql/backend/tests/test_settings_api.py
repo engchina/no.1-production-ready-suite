@@ -281,6 +281,62 @@ def test_read_oci_config_reports_missing_profile(tmp_path: Path) -> None:
     assert "profile が見つかりません" in resp.text
 
 
+def test_oci_config_test_returns_elapsed_time_for_missing_config(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(tmp_path / "missing-config"))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+
+    resp = client.post("/api/settings/oci/config/test")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error_type"] == "HTTPException"
+    assert isinstance(data["elapsed_ms"], int)
+    assert data["elapsed_ms"] >= 0
+
+
+def test_oci_config_test_returns_elapsed_time_for_valid_config(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    config_file = tmp_path / "config"
+    key_file = tmp_path / "oci_api_key.pem"
+    key_file.write_text(
+        "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    config_file.write_text(
+        "[DEFAULT]\n"
+        "user=ocid1.user.oc1..example\n"
+        "fingerprint=aa:bb:cc\n"
+        "tenancy=ocid1.tenancy.oc1..example\n"
+        "region=ap-osaka-1\n"
+        f"key_file={key_file}\n",
+        encoding="utf-8",
+    )
+    tmp_path.chmod(0o700)
+    config_file.chmod(0o600)
+    key_file.chmod(0o600)
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+
+    resp = client.post("/api/settings/oci/config/test")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["oci_directory_mode"] == "0700"
+    assert data["config_file_mode"] == "0600"
+    assert data["key_file_mode"] == "0600"
+    assert isinstance(data["elapsed_ms"], int)
+    assert data["elapsed_ms"] >= 0
+
+
 def test_upload_oci_private_key_saves_fixed_secure_path(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,

@@ -607,7 +607,9 @@ test("Profile 保存が 503 のとき成功通知を出さず失敗を通知す�
 
   await page.goto("/profiles");
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
-  await page.getByLabel("名称").fill("保存失敗プロファイル");
+  // 名称は識別子規則(英字開始・英数字/アンダースコア)、カテゴリは必須のクライアント検証あり。
+  await page.getByLabel("名称").fill("SAVE_FAIL_PROFILE");
+  await page.getByLabel("カテゴリ").fill("保存失敗検証");
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 

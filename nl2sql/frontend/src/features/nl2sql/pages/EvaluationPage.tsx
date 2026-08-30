@@ -15,9 +15,10 @@ import { useSearchParams } from "react-router-dom";
 import {
   Banner,
   EmptyState,
-  StatusBadge,
   toast,
 } from "@engchina/production-ready-ui";
+
+import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { PageHeader } from "@/components/PageHeader";
@@ -25,12 +26,14 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FieldError } from "@/components/ui/field-error";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -202,7 +205,7 @@ export function EvaluationPage() {
       toast.success(t("qualityEvaluation.notice.deleted"));
     },
     onError: () => {
-      toast.error(t("qualityEvaluation.error.delete"));
+      toastError(t("qualityEvaluation.error.delete"));
     },
   });
   const cancelJobMutation = useMutation({
@@ -219,7 +222,7 @@ export function EvaluationPage() {
       toast.success(t("qualityEvaluation.notice.cancelled"));
     },
     onError: () => {
-      toast.error(t("qualityEvaluation.error.cancel"));
+      toastError(t("qualityEvaluation.error.cancel"));
     },
   });
 
@@ -482,30 +485,31 @@ export function EvaluationPage() {
                 data-testid="quality-evaluation-engine-fieldset"
               >
                 <legend className="sr-only">{t("qualityEvaluation.engines.label")}</legend>
-                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-foreground">
-                      {t("qualityEvaluation.engines.label")}
-                    </div>
-                    <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-muted">
-                      {t("qualityEvaluation.engines.hint")}
-                    </p>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">
+                    {t("qualityEvaluation.engines.label")}
                   </div>
-                  {availableEngineIds.length > 0 ? (
-                    <BulkSelectionActions
-                      selectLabel={t("common.selection.selectAll")}
-                      clearLabel={t("common.selection.clearAll")}
-                      selectDisabled={
-                        running || selectedAvailableEngineCount === availableEngineIds.length
-                      }
-                      clearDisabled={running || selectedAvailableEngineCount === 0}
-                      dataTestId="quality-evaluation-engine-selection-actions"
-                      onSelectAll={selectAllEngines}
-                      onClearAll={clearAllEngines}
-                    />
-                  ) : null}
+                  <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-muted">
+                    {t("qualityEvaluation.engines.hint")}
+                  </p>
                 </div>
-                <div className="grid min-w-0 gap-3 md:grid-cols-3">
+                {availableEngineIds.length > 0 ? (
+                  <BulkSelectionActions
+                    selectLabel={t("common.selection.selectAll")}
+                    clearLabel={t("common.selection.clearAll")}
+                    selectDisabled={
+                      running || selectedAvailableEngineCount === availableEngineIds.length
+                    }
+                    clearDisabled={running || selectedAvailableEngineCount === 0}
+                    dataTestId="quality-evaluation-engine-selection-actions"
+                    onSelectAll={selectAllEngines}
+                    onClearAll={clearAllEngines}
+                  />
+                ) : null}
+                <div
+                  className="grid min-w-0 gap-3 md:grid-cols-3"
+                  data-testid="quality-evaluation-engine-grid"
+                >
                   {(capabilities?.engines ?? []).map((capability) => {
                     const selected = engines.includes(capability.engine);
                     return (
@@ -1294,12 +1298,13 @@ function ResultJudgementSummary({ result }: { result: QualityEvaluationResult })
 function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) {
   const errors = [result.generation_error, result.judge_error].filter(Boolean);
   return (
-    <details className="min-w-0 text-xs">
+    <details className="group/disclosure min-w-0 text-xs">
       <summary
-        className="cursor-pointer font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
         data-testid="quality-evaluation-analysis-toggle"
       >
-        {t("qualityEvaluation.details.analysis")}
+        <span>{t("qualityEvaluation.details.analysis")}</span>
+        <DisclosureChevron expanded="group" size={13} />
       </summary>
       <div
         className="mt-2 grid min-w-0 gap-2 rounded-md bg-muted/20 p-3 text-muted"

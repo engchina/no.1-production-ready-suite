@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -67,7 +68,11 @@ from app.features.nl2sql.ontology_sources import (
     OntologySourceStorage,
     extract_ontology_source,
 )
-from app.features.nl2sql.ontology_store import canonical_json, stable_ontology_id
+from app.features.nl2sql.ontology_store import (
+    OntologyVersionConflict,
+    canonical_json,
+    stable_ontology_id,
+)
 from app.features.nl2sql.tabular_files import (
     WORKBOOK_SUFFIXES,
     TabularFileReadError,
@@ -1073,12 +1078,15 @@ def _effective_edge_cardinality(edge: OntologyEdge, view: ProfileOntologyView | 
 
 
 def _effective_edge_allowed(edge: OntologyEdge, view: ProfileOntologyView | None) -> bool:
+    # OntologyEdge に enabled 属性は存在しない(extra=forbid のため参照すると
+    # AttributeError)。view 無し = 共有 Ontology 全体の export なので常に許可、
+    # view 有りは override > allowed_path_ids の順で判定する。
     if view is None:
-        return bool(edge.enabled)
+        return True
     override = _profile_edge_override_map(view).get(edge.id, {})
     if "allowed_path" in override:
         return bool(override.get("allowed_path"))
-    return edge.id in set(view.allowed_path_ids) or bool(edge.enabled)
+    return edge.id in set(view.allowed_path_ids)
 
 
 def _node_markdown_lines(node: OntologyNode, view: ProfileOntologyView | None) -> list[str]:
@@ -1095,7 +1103,11 @@ def _node_markdown_lines(node: OntologyNode, view: ProfileOntologyView | None) -
     if node.provenance.evidence:
         lines.append("  - evidence:")
         for evidence in node.provenance.evidence[:5]:
-            label = str(evidence.label or evidence.location or evidence.source_id or "").strip()
+            # OntologyEvidence の実フィールドは excerpt_ja / locator / source_document_id。
+            # (旧 label/location/source_id は存在せず AttributeError になっていた)
+            label = str(
+                evidence.excerpt_ja or evidence.locator or evidence.source_document_id or ""
+            ).strip()
             if label:
                 lines.append(f"    - {_md_text(label)}")
     return lines
@@ -1170,7 +1182,8 @@ def _physical_object_lines(
         object_type = str(item.get("object_type") or "")
         logical_name = str(item.get("logical_name") or "")
         comment = str(item.get("comment") or "")
-        columns = item.get("columns") if isinstance(item.get("columns"), list) else []
+        raw_columns = item.get("columns")
+        columns: list[Any] = raw_columns if isinstance(raw_columns, list) else []
         lines.extend(
             [
                 f"- {_md_code(object_name)} ({_md_text(object_type)})",
@@ -1496,8 +1509,35 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "(2) 各関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many から"
     "必ず選ぶ。判断できない場合のみ unknown とし、理由を warnings_ja に 1 行残す。"
     "(3) 各エンティティの主識別子(主キーに相当する列)を description_ja に明記する。"
+    "(4) 各エンティティ・同義語には、利用者が質問で使いそうな言い回し"
+    "(短縮形・ひらがな表記・英語名・現場用語)を 2〜5 個 aliases として提案する。"
     "確信が持てない候補は confidence を下げるか warnings_ja に残してください。"
     "文言はすべて日本語にしてください。"
+    # schema-guided few-shot(1 例)。研究では few-shot 付き schema 誘導が最高精度。
+    "\n\n例 — schema_context: "
+    '{"objects":[{"owner":"APP","object_name":"ORDERS",'
+    '"columns":["ORDER_ID","CUSTOMER_ID","AMOUNT"],'
+    '"constraints":[{"type":"P","columns":["ORDER_ID"]},'
+    '{"type":"R","columns":["CUSTOMER_ID"],"references":"APP.CUSTOMERS"}]},'
+    '{"owner":"APP","object_name":"CUSTOMERS",'
+    '"columns":["CUSTOMER_ID","CUSTOMER_NAME"],'
+    '"constraints":[{"type":"P","columns":["CUSTOMER_ID"]}]}]} '
+    "/ 業務文:「受注は顧客に紐づく。売上は確定済み受注の受注金額の合計。」"
+    "に対する期待出力: "
+    '{"entities":[{"object_name":"APP.ORDERS","business_name_ja":"受注",'
+    '"description_ja":"顧客からの受注。主識別子は ORDER_ID。",'
+    '"aliases":["注文","オーダー","じゅちゅう"],"confidence":0.9}],'
+    '"relationships":[{"source_object":"APP.ORDERS","target_object":"APP.CUSTOMERS",'
+    '"relationship_name_ja":"顧客に紐づく","cardinality":"many_to_one",'
+    '"join_conditions":[{"left":"APP.ORDERS.CUSTOMER_ID",'
+    '"right":"APP.CUSTOMERS.CUSTOMER_ID","operator":"="}],'
+    '"evidence_ja":"受注は顧客に紐づく","confidence":0.85}],'
+    '"metrics":[{"metric_name_ja":"売上","expression_sql":"SUM(APP.ORDERS.AMOUNT)",'
+    '"aggregation":"sum","base_columns":["APP.ORDERS.AMOUNT"],"unit":"円",'
+    '"description_ja":"確定済み受注の受注金額の合計",'
+    '"evidence_ja":"売上は確定済み受注の受注金額の合計","confidence":0.8}],'
+    '"synonyms":[{"target":"APP.CUSTOMERS","aliases":["得意先","客先","customer"],'
+    '"evidence_ja":"業務慣用表現"}],"warnings_ja":[]}'
 )
 
 
@@ -1511,6 +1551,84 @@ def _proposal_payload_key(kind_value: str, values: dict[str, Any]) -> str:
             "edges": sorted(str(edge["id"]) for edge in values.get("edge_upserts") or []),
         },
         sort_keys=True,
+    )
+
+
+def merge_build_extractions(
+    base: OntologyBuildExtraction,
+    addition: OntologyBuildExtraction,
+) -> tuple[OntologyBuildExtraction, int]:
+    """gleaning パスの追加抽出を key ベースで重複排除しつつ結合する。
+
+    戻り値は (結合結果, 新規に追加された候補数)。
+    """
+
+    added = 0
+    entities = list(base.entities)
+    entity_keys = {candidate.object_name.strip().upper() for candidate in entities}
+    for candidate in addition.entities:
+        key = candidate.object_name.strip().upper()
+        if key in entity_keys:
+            continue
+        entity_keys.add(key)
+        entities.append(candidate)
+        added += 1
+
+    relationships = list(base.relationships)
+    relationship_keys = {
+        (
+            relationship.source_object.strip().upper(),
+            relationship.target_object.strip().upper(),
+            relationship.relationship_name_ja.strip(),
+        )
+        for relationship in relationships
+    }
+    for relationship in addition.relationships:
+        relationship_key = (
+            relationship.source_object.strip().upper(),
+            relationship.target_object.strip().upper(),
+            relationship.relationship_name_ja.strip(),
+        )
+        if relationship_key in relationship_keys:
+            continue
+        relationship_keys.add(relationship_key)
+        relationships.append(relationship)
+        added += 1
+
+    metrics = list(base.metrics)
+    metric_keys = {metric.metric_name_ja.strip() for metric in metrics}
+    for metric in addition.metrics:
+        metric_key = metric.metric_name_ja.strip()
+        if metric_key in metric_keys:
+            continue
+        metric_keys.add(metric_key)
+        metrics.append(metric)
+        added += 1
+
+    synonyms = list(base.synonyms)
+    synonym_keys = {synonym.target.strip().upper() for synonym in synonyms}
+    for synonym in addition.synonyms:
+        synonym_key = synonym.target.strip().upper()
+        if synonym_key in synonym_keys:
+            continue
+        synonym_keys.add(synonym_key)
+        synonyms.append(synonym)
+        added += 1
+
+    warnings_ja = [*base.warnings_ja]
+    for warning in addition.warnings_ja:
+        if warning not in warnings_ja:
+            warnings_ja.append(warning)
+
+    return (
+        OntologyBuildExtraction(
+            entities=entities,
+            relationships=relationships,
+            metrics=metrics,
+            synonyms=synonyms,
+            warnings_ja=warnings_ja,
+        ),
+        added,
     )
 
 
@@ -1561,6 +1679,51 @@ class _OntologyBuildLlmTask:
     progress_ja: str
     cross_check_sql: list[str] | None = None
     source_evidence: list[OntologyEvidence] = field(default_factory=list)
+    # 二分割リトライ用の元 batch(QA/TEXT のみ)。schema_naming は分割不可。
+    qa_batch: list[QaPair] | None = None
+    text_batch: list[_BuildTextUnit] | None = None
+    schema_payload: dict[str, Any] | None = None
+
+    def split(self) -> list[_OntologyBuildLlmTask] | None:
+        """batch を二分割した子タスクを返す(分割不能・要素 1 件以下は None)。"""
+
+        if self.schema_payload is None:
+            return None
+        if self.qa_batch is not None and len(self.qa_batch) > 1:
+            middle = len(self.qa_batch) // 2
+            qa_halves = [self.qa_batch[:middle], self.qa_batch[middle:]]
+            return [
+                _OntologyBuildLlmTask(
+                    name=self.name,
+                    prompt=self.prompt,
+                    context=_dump_qa_context(self.schema_payload, half),
+                    progress_ja=self.progress_ja,
+                    cross_check_sql=[pair.sql for pair in half],
+                    qa_batch=half,
+                    schema_payload=self.schema_payload,
+                )
+                for half in qa_halves
+            ]
+        if self.text_batch is not None and len(self.text_batch) > 1:
+            middle = len(self.text_batch) // 2
+            text_halves = [self.text_batch[:middle], self.text_batch[middle:]]
+            return [
+                _OntologyBuildLlmTask(
+                    name=self.name,
+                    prompt=self.prompt,
+                    context=_dump_text_context(self.schema_payload, text_half),
+                    progress_ja=self.progress_ja,
+                    source_evidence=[
+                        evidence
+                        for unit in text_half
+                        if (evidence := unit.evidence()) is not None
+                    ],
+                    text_batch=text_half,
+                    schema_payload=self.schema_payload,
+                )
+                for text_half in text_halves
+            ]
+        return None
 
 
 @dataclass(frozen=True)
@@ -1573,12 +1736,7 @@ class _ValidatedBuildExtraction:
 
 
 def _llm_call_chars(prompt: str, context: str) -> int:
-    return (
-        len(_EXTRACTION_SYSTEM_PROMPT)
-        + len(prompt)
-        + len(context)
-        + _LLM_CONTEXT_HEADROOM_CHARS
-    )
+    return len(_EXTRACTION_SYSTEM_PROMPT) + len(prompt) + len(context) + _LLM_CONTEXT_HEADROOM_CHARS
 
 
 def _ensure_llm_call_fits(prompt: str, context: str) -> None:
@@ -1625,6 +1783,13 @@ def _dump_qa_context(schema_context: dict[str, Any], pairs: list[QaPair]) -> str
     )
 
 
+def _extraction_batch_max_chars() -> int:
+    """1 回の抽出呼び出しに載せる資料本文の上限。チャンクが大きいほど抽出漏れが
+    増える(GraphRAG の知見)ため、入力上限とは別に本文量を絞る。"""
+
+    return max(1000, int(get_settings().nl2sql_ontology_extraction_batch_max_chars))
+
+
 def _split_text_unit_for_budget(
     schema_context: dict[str, Any],
     unit: _BuildTextUnit,
@@ -1648,6 +1813,7 @@ def _split_text_unit_for_budget(
             "schema_context が大きすぎるため、資料本文を 1 chunk も LLM 入力へ追加できません。"
             "Profile の対象 object を減らして再実行してください。"
         )
+    available = min(available, _extraction_batch_max_chars())
     if len(unit.text) <= available:
         return [unit]
     parts: list[_BuildTextUnit] = []
@@ -1675,12 +1841,17 @@ def _batch_text_units(
     for unit in units:
         if unit.text.strip():
             expanded.extend(_split_text_unit_for_budget(schema_context, unit, prompt))
+    batch_max_chars = _extraction_batch_max_chars()
     batches: list[list[_BuildTextUnit]] = []
     current: list[_BuildTextUnit] = []
     for unit in expanded:
         candidate = [*current, unit]
         candidate_context = _dump_text_context(schema_context, candidate)
-        if _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+        candidate_content_chars = sum(len(item.text) for item in candidate)
+        if (
+            _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS
+            and candidate_content_chars <= batch_max_chars
+        ):
             current = candidate
             continue
         if not current:
@@ -1698,12 +1869,16 @@ def _batch_qa_pairs(
     pairs: list[QaPair],
     prompt: str,
 ) -> list[list[QaPair]]:
+    batch_max_chars = _extraction_batch_max_chars()
     batches: list[list[QaPair]] = []
     current: list[QaPair] = []
     for pair in pairs:
         candidate = [*current, pair]
         candidate_context = _dump_qa_context(schema_context, candidate)
-        if _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+        candidate_content_chars = sum(len(item.question) + len(item.sql) for item in candidate)
+        if _llm_call_chars(prompt, candidate_context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS and (
+            len(candidate) == 1 or candidate_content_chars <= batch_max_chars
+        ):
             current = candidate
             continue
         if not current:
@@ -1734,6 +1909,7 @@ _MAX_JOB_EVENTS = 100
 _MAX_FINISHED_JOBS = 20
 _TERMINAL_STATUSES = {
     OntologyBuildStatus.SUCCEEDED,
+    OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS,
     OntologyBuildStatus.FAILED,
     OntologyBuildStatus.CANCELLED,
 }
@@ -1757,6 +1933,8 @@ class OntologyBuildService:
         self._source_storage = source_storage or OntologySourceStorage()
         self._jobs: dict[str, OntologyBuildJob] = {}
         self._inputs: dict[str, dict[str, Any]] = {}
+        # _persist_job の read-modify-write を直列化する(worker thread と API thread の競合防止)
+        self._persist_lock = threading.RLock()
         self._lock = threading.Lock()
 
     def start(
@@ -1912,6 +2090,29 @@ class OntologyBuildService:
             raise RuntimeError("Ontology build job の実行結果を取得できません。")
         return result
 
+    def purge_profile_source_documents(self, profile_id: str) -> int:
+        """Profile 削除時に source_documents 行とアップロード実体を削除する(残置リーク防止)。"""
+
+        documents = self._runtime.store.list_documents(
+            "source_documents", {"profile_id": profile_id}
+        )
+        for document in documents:
+            try:
+                source = OntologySourceDocument.model_validate(document["payload"])
+                self._source_storage.delete(source)
+            except Exception:
+                # 実体削除の失敗で行削除・Profile 削除全体を止めない(cleanup は best-effort)
+                logger.warning(
+                    "ontology_source_blob_cleanup_failed",
+                    exc_info=True,
+                    extra={"profile_id": profile_id},
+                )
+        return int(
+            self._runtime.store.delete_documents(
+                "source_documents", {"profile_id": profile_id}
+            )
+        )
+
     def cancel_profile_jobs(self, profile_id: str) -> int:
         """削除対象 Profile の queued/running build を永続的に取消す。"""
 
@@ -2000,6 +2201,7 @@ class OntologyBuildService:
                 )
             try:
                 self._save_cancelled(document, job, "利用者の操作で構築を中止しました。")
+                record_job(job_type="build", status="cancelled", error_code="user_cancelled")
                 return job.model_copy(deep=True)
             except Exception:  # 完了/進捗書込と競合(ETag 不一致)→ 再読して再判定
                 logger.info("ontology_build_cancel_conflict job_id=%s", job_id)
@@ -2072,12 +2274,7 @@ class OntologyBuildService:
         finished = [
             job
             for job in self._jobs.values()
-            if job.status
-            in {
-                OntologyBuildStatus.SUCCEEDED,
-                OntologyBuildStatus.FAILED,
-                OntologyBuildStatus.CANCELLED,
-            }
+            if job.status in _TERMINAL_STATUSES
         ]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
@@ -2085,6 +2282,8 @@ class OntologyBuildService:
         finished.sort(key=lambda job: (job.finished_at or job.created_at, job.id))
         for job in finished[:overflow]:
             del self._jobs[job.id]
+            # business_text / Q/A 全文を保持する入力もあわせて破棄する(メモリリーク防止)
+            self._inputs.pop(job.id, None)
 
     def _update(self, job_id: str, mutate: Any) -> None:
         persisted = self._runtime.store.get_document("jobs", {"job_id": job_id})
@@ -2123,13 +2322,11 @@ class OntologyBuildService:
 
     def _normalize_job_for_response(self, job: OntologyBuildJob) -> OntologyBuildJob:
         normalized = job.model_copy(deep=True)
-        if (
-            normalized.status != OntologyBuildStatus.SUCCEEDED
-            or not (
-                normalized.draft_revision_id
-                or normalized.draft_etag
-                or normalized.markdown_output
-            )
+        if normalized.status not in {
+            OntologyBuildStatus.SUCCEEDED,
+            OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS,
+        } or not (
+            normalized.draft_revision_id or normalized.draft_etag or normalized.markdown_output
         ):
             return normalized
         non_terminal = [
@@ -2142,38 +2339,60 @@ class OntologyBuildService:
             return normalized
         step = non_terminal[0]
         step.status = OntologyBuildStepStatus.SUCCEEDED
-        if not step.detail_ja or "構築 job の完了状態" in step.detail_ja:
+        # code=FINALIZING は「完了状態の保存中」を表す機械可読コード。文言一致は旧データ互換。
+        legacy_finalizing = "構築 job の完了状態" in step.detail_ja
+        if not step.detail_ja or step.code == "FINALIZING" or legacy_finalizing:
             step.detail_ja = "Markdown Draft を生成しました。"
+            step.code = ""
         step.finished_at = normalized.finished_at or step.finished_at or step.started_at
         return normalized
 
     def _persist_job(self, job: OntologyBuildJob) -> None:
-        current = self._runtime.store.get_document("jobs", {"job_id": job.id})
-        with self._lock:
-            input_payload = self._inputs.get(job.id)
-        if input_payload is None and current is not None:
-            current_input = current.get("input_payload")
-            input_payload = dict(current_input) if isinstance(current_input, dict) else {}
-        self._runtime.store.save_document(
-            "jobs",
-            {
-                "job_id": job.id,
-                "job_type": "build",
-                "profile_id": job.profile_id,
-                "status": job.status.value,
-                "payload": job.model_dump(mode="json"),
-                "input_payload": input_payload or {},
-                **(
-                    {
-                        "claimed_by": current.get("claimed_by"),
-                        "claimed_at": time.time(),
-                    }
-                    if current is not None and current.get("claimed_by")
-                    else {}
-                ),
-            },
-            expected_etag=str(current["etag"]) if current is not None else None,
-        )
+        # read(etag) → save の間に別 thread(worker の進捗更新 vs API の cancel)が
+        # 書き込むと etag conflict で状態が分岐する。専用 lock で直列化し、conflict 時は
+        # etag を読み直して再試行する。persisted が CANCELLED になっていたら cancel を優先する。
+        with self._persist_lock:
+            for attempt in range(3):
+                current = self._runtime.store.get_document("jobs", {"job_id": job.id})
+                if (
+                    current is not None
+                    and current.get("status") == OntologyBuildStatus.CANCELLED.value
+                    and job.status != OntologyBuildStatus.CANCELLED
+                ):
+                    cancelled = OntologyBuildJob.model_validate(current["payload"])
+                    with self._lock:
+                        self._jobs[job.id] = cancelled
+                    return
+                with self._lock:
+                    input_payload = self._inputs.get(job.id)
+                if input_payload is None and current is not None:
+                    current_input = current.get("input_payload")
+                    input_payload = dict(current_input) if isinstance(current_input, dict) else {}
+                try:
+                    self._runtime.store.save_document(
+                        "jobs",
+                        {
+                            "job_id": job.id,
+                            "job_type": "build",
+                            "profile_id": job.profile_id,
+                            "status": job.status.value,
+                            "payload": job.model_dump(mode="json"),
+                            "input_payload": input_payload or {},
+                            **(
+                                {
+                                    "claimed_by": current.get("claimed_by"),
+                                    "claimed_at": time.time(),
+                                }
+                                if current is not None and current.get("claimed_by")
+                                else {}
+                            ),
+                        },
+                        expected_etag=str(current["etag"]) if current is not None else None,
+                    )
+                    return
+                except OntologyVersionConflict:
+                    if attempt == 2:
+                        raise
 
     def _save_source_document(self, source: OntologySourceDocument) -> None:
         current = self._runtime.store.get_document(
@@ -2228,6 +2447,8 @@ class OntologyBuildService:
         name: OntologyBuildStepName,
         status: OntologyBuildStepStatus,
         detail_ja: str = "",
+        *,
+        code: str = "",
     ) -> None:
         now = utc_now()
 
@@ -2237,6 +2458,8 @@ class OntologyBuildService:
                     step.status = status
                     if detail_ja:
                         step.detail_ja = detail_ja
+                    if code:
+                        step.code = code
                     if status == OntologyBuildStepStatus.RUNNING and step.started_at is None:
                         step.started_at = now
                     if status in {
@@ -2248,10 +2471,17 @@ class OntologyBuildService:
 
         self._update(job_id, mutate)
 
-    def _emit(self, job_id: str, message_ja: str) -> None:
+    def _emit(
+        self,
+        job_id: str,
+        message_ja: str,
+        *,
+        code: str = "",
+        step: OntologyBuildStepName | None = None,
+    ) -> None:
         """アクティビティタイムラインへ 1 行追記する(上限超過は古い順に間引く)。"""
 
-        event = OntologyBuildEvent(message_ja=message_ja)
+        event = OntologyBuildEvent(message_ja=message_ja, code=code, step=step)
 
         def mutate(job: OntologyBuildJob) -> None:
             job.events.append(event)
@@ -2268,6 +2498,173 @@ class OntologyBuildService:
             job.warnings_ja = [*job.warnings_ja, *warnings]
 
         self._update(job_id, mutate)
+
+    def _generate_extraction(self, client: Any, task: _OntologyBuildLlmTask) -> str:
+        """抽出系呼び出し。出力トークン予算に対応するクライアントには予算を渡す。"""
+
+        budget = int(get_settings().nl2sql_ontology_extraction_max_output_tokens)
+        try:
+            supports_budget = "max_output_tokens" in inspect.signature(client.generate).parameters
+        except (TypeError, ValueError):
+            supports_budget = False
+        if supports_budget and budget > 0:
+            return str(
+                client.generate(
+                    prompt=task.prompt,
+                    context=task.context,
+                    system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                    max_output_tokens=budget,
+                )
+            )
+        return str(
+            client.generate(
+                prompt=task.prompt,
+                context=task.context,
+                system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+            )
+        )
+
+    def _glean_extraction(
+        self,
+        job_id: str,
+        client: Any,
+        task: _OntologyBuildLlmTask,
+        extraction: OntologyBuildExtraction,
+        *,
+        label: str,
+    ) -> OntologyBuildExtraction:
+        """GraphRAG 流 gleaning: 抽出済み候補の一覧を提示し、見逃した候補だけを
+        追加パスで回収する。失敗・追加なし・入力上限超過は静かに打ち切る。"""
+
+        passes = max(0, int(get_settings().nl2sql_ontology_extraction_gleaning_passes))
+        if passes == 0 or task.name not in {
+            OntologyBuildStepName.SCHEMA_NAMING,
+            OntologyBuildStepName.TEXT_EXTRACTION,
+        }:
+            return extraction
+        current = extraction
+        for pass_index in range(1, passes + 1):
+            if self._is_cancelled(job_id):
+                return current
+            seen_summary = json.dumps(
+                {
+                    "entities": [item.object_name for item in current.entities],
+                    "relationships": [
+                        f"{item.source_object}->{item.target_object}"
+                        for item in current.relationships
+                    ],
+                    "metrics": [item.metric_name_ja for item in current.metrics],
+                    "synonyms": [item.target for item in current.synonyms],
+                },
+                ensure_ascii=False,
+            )
+            glean_prompt = (
+                f"{task.prompt}\n\n【追加パス {pass_index}】前回までに抽出済みの候補は"
+                f"次のとおりです: {seen_summary} 。多くの候補が見逃されている可能性が"
+                "あります。これらに含まれていない候補だけを同じ JSON 形式で返して"
+                "ください。新しい候補が無ければ全フィールドが空の JSON を返してください。"
+            )
+            if _llm_call_chars(glean_prompt, task.context) > _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+                return current
+            glean_task = _OntologyBuildLlmTask(
+                name=task.name,
+                prompt=glean_prompt,
+                context=task.context,
+                progress_ja=task.progress_ja,
+            )
+            try:
+                addition = parse_extraction(self._generate_extraction(client, glean_task))
+            except Exception:
+                logger.warning(
+                    "ontology_build_gleaning_failed step=%s pass=%s",
+                    task.name.value,
+                    pass_index,
+                    exc_info=True,
+                )
+                return current
+            merged, added = merge_build_extractions(current, addition)
+            if added == 0:
+                return current
+            current = merged
+            self._emit(
+                job_id,
+                f"{label}: 追加パスで候補 {added} 件を回収しました。",
+                code="EXTRACTION_GLEANING",
+                step=task.name,
+            )
+        return current
+
+    def _execute_llm_task(
+        self,
+        job_id: str,
+        client: Any,
+        task: _OntologyBuildLlmTask,
+        *,
+        label: str,
+        depth: int = 0,
+    ) -> tuple[list[_ValidatedBuildExtraction], list[str]]:
+        """1 タスクを実行する。失敗時は 1 回再試行し、なお失敗する batch は二分割して
+        再帰する(最小 1 件まで)。最終的に失敗した分は warnings として返し、
+        ジョブ全体は止めない。戻り値は (検証済み抽出, 警告)。"""
+
+        if self._is_cancelled(job_id):
+            return [], []
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = self._generate_extraction(client, task)
+                extraction = parse_extraction(raw)
+                if depth == 0:
+                    # 取りこぼし回収(schema_naming / text_extraction のみ・最上位のみ)
+                    extraction = self._glean_extraction(
+                        job_id, client, task, extraction, label=label
+                    )
+                return (
+                    [
+                        _ValidatedBuildExtraction(
+                            name=task.name,
+                            label_ja=label,
+                            extraction=extraction,
+                            cross_check_sql=task.cross_check_sql,
+                            source_evidence=task.source_evidence,
+                        )
+                    ],
+                    [],
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "ontology_build_task_attempt_failed step=%s attempt=%s depth=%s",
+                    task.name.value,
+                    attempt + 1,
+                    depth,
+                    exc_info=True,
+                )
+                if attempt == 0:
+                    self._emit(
+                        job_id,
+                        f"{label}: 抽出に失敗したため再試行します。",
+                        code="EXTRACTION_RETRY",
+                        step=task.name,
+                    )
+        halves = task.split()
+        if halves and depth < 6:
+            self._emit(
+                job_id,
+                f"{label}: batch を分割して再実行します。",
+                code="EXTRACTION_SPLIT",
+                step=task.name,
+            )
+            extractions: list[_ValidatedBuildExtraction] = []
+            half_warnings: list[str] = []
+            for half in halves:
+                half_extractions, half_warns = self._execute_llm_task(
+                    job_id, client, half, label=label, depth=depth + 1
+                )
+                extractions.extend(half_extractions)
+                half_warnings.extend(half_warns)
+            return extractions, half_warnings
+        return [], [f"{task.name.value} の抽出に失敗しました: {last_error}"]
 
     def _run_safely(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
         try:
@@ -2295,18 +2692,23 @@ class OntologyBuildService:
         skip_pending_steps: bool = True,
         failed_step: OntologyBuildStepName | None = None,
         failed_step_detail_ja: str = "",
+        error_code: str = "",
     ) -> None:
         now = utc_now()
 
         def mutate(job: OntologyBuildJob) -> None:
             job.status = OntologyBuildStatus.FAILED
             job.error_message_ja = message_ja
+            if error_code:
+                job.error_code = error_code
             job.finished_at = now
             for step in job.steps:
                 if failed_step is not None and step.name == failed_step:
                     step.status = OntologyBuildStepStatus.FAILED
                     if failed_step_detail_ja:
                         step.detail_ja = failed_step_detail_ja
+                    if error_code:
+                        step.code = error_code
                     if step.started_at is None:
                         step.started_at = now
                     step.finished_at = now
@@ -2350,6 +2752,10 @@ class OntologyBuildService:
                 )
             )
         source_evidence_count = 0
+        # 部分成功の対象ステップ(資料抽出・LLM 抽出)。finish で succeeded_with_warnings に反映する
+        partial_failed_steps: set[OntologyBuildStepName] = set()
+        failed_source_names: list[str] = []
+        failed_source_errors: list[str] = []
         if job.source_document_ids:
             self._set_step(
                 job_id,
@@ -2404,11 +2810,23 @@ class OntologyBuildService:
                         self._source_storage.load(source),
                         vlm_page_runner=image_runner,
                     )
-                    if extracted.warnings_ja:
-                        raise RuntimeError(" / ".join(extracted.warnings_ja))
                     if not extracted.chunks and not extracted.qa_pairs:
                         raise RuntimeError(
                             f"{source.filename}: 抽出可能なテキストまたは Q/A がありません。"
+                            + (
+                                f"({' / '.join(extracted.warnings_ja)})"
+                                if extracted.warnings_ja
+                                else ""
+                            )
+                        )
+                    if extracted.warnings_ja:
+                        # ページ単位のスキップ等は警告として残し、資料全体は成功扱いにする
+                        self._add_warnings(
+                            job_id,
+                            [
+                                f"{source.filename}: {warning}"
+                                for warning in extracted.warnings_ja
+                            ],
                         )
                     for chunk in extracted.chunks:
                         if not chunk.text.strip():
@@ -2456,27 +2874,57 @@ class OntologyBuildService:
                     record_source_extraction(
                         file_format=Path(source.filename).suffix, status="failed"
                     )
-                    self._fail(
+                    # 1 資料の失敗でジョブ全体を止めず、警告として残りの入力で継続する
+                    failed_source_names.append(source.filename)
+                    failed_source_errors.append(error_message)
+                    self._add_warnings(job_id, [error_message])
+                    self._emit(
                         job_id,
-                        error_message,
-                        failed_step=OntologyBuildStepName.SOURCE_EXTRACTION,
-                        failed_step_detail_ja="資料の抽出に失敗しました。",
+                        f"{source.filename}: 抽出に失敗しました(他の入力で処理を継続します)。",
+                        code="SOURCE_EXTRACTION_FAILED",
+                        step=OntologyBuildStepName.SOURCE_EXTRACTION,
                     )
-                    return
+                    continue
             qa_by_key = {(item.question, item.sql): item for item in [*qa_pairs, *extracted_pairs]}
             qa_pairs = list(qa_by_key.values())
+            extracted_source_count = len(job.source_document_ids) - len(failed_source_names)
+            if failed_source_names:
+                partial_failed_steps.add(OntologyBuildStepName.SOURCE_EXTRACTION)
             self._set_step(
                 job_id,
                 OntologyBuildStepName.SOURCE_EXTRACTION,
-                OntologyBuildStepStatus.SUCCEEDED,
-                f"資料 {len(job.source_document_ids)} 件、証拠 {source_evidence_count} 件、"
-                f"Q/A {len(extracted_pairs)} 件を抽出しました。",
+                OntologyBuildStepStatus.FAILED
+                if extracted_source_count == 0
+                else OntologyBuildStepStatus.SUCCEEDED,
+                f"資料 {extracted_source_count}/{len(job.source_document_ids)} 件、"
+                f"証拠 {source_evidence_count} 件、Q/A {len(extracted_pairs)} 件を抽出しました。"
+                + (f" 失敗 {len(failed_source_names)} 件。" if failed_source_names else ""),
+                code="SOURCE_PARTIAL_FAILED" if failed_source_names else "",
             )
             self._emit(job_id, "資料の抽出と証拠位置の記録が完了しました。")
+            if extracted_source_count == 0 and failed_source_names:
+                # 全資料が失敗し、他に入力(業務説明・Q/A・schema 命名)が無ければ
+                # 継続しても成果が出ないためジョブを失敗させる
+                has_other_inputs = (
+                    bool(business_text.strip())
+                    or bool(qa_pairs)
+                    or OntologyBuildStepName.SCHEMA_NAMING in {step.name for step in job.steps}
+                )
+                if not has_other_inputs:
+                    self._fail(
+                        job_id,
+                        "すべての資料の抽出に失敗しました。 "
+                        + " / ".join(failed_source_errors),
+                        failed_step=OntologyBuildStepName.SOURCE_EXTRACTION,
+                        failed_step_detail_ja="資料の抽出に失敗しました。",
+                        error_code="SOURCE_EXTRACTION_FAILED",
+                    )
+                    return
         if client is None or not callable(configured) or not configured():
             self._fail(
                 job_id,
                 "OCI Enterprise AI が未設定のため、AI オントロジー構築を実行できません。",
+                error_code="LLM_UNCONFIGURED",
             )
             return
 
@@ -2499,6 +2947,7 @@ class OntologyBuildService:
             self._emit(job_id, error)
         if object_count == 0 or schema_errors:
             # LLM を無駄撃ちせず、原因(schema 情報未解決)を明確に返す
+            scope_code = "SCHEMA_SCOPE_AMBIGUOUS" if schema_errors else "SCHEMA_SCOPE_EMPTY"
             self._set_step(
                 job_id,
                 OntologyBuildStepName.SCHEMA_CONTEXT,
@@ -2508,6 +2957,7 @@ class OntologyBuildService:
                     if schema_errors
                     else "profile 範囲に DB 表・ビューがありません。"
                 ),
+                code=scope_code,
             )
             self._add_warnings(job_id, [*schema_warnings, *schema_errors])
             unresolved_hint = (
@@ -2520,6 +2970,7 @@ class OntologyBuildService:
                 "profile の対象オブジェクトを DB schema catalog に解決できません。"
                 "DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。"
                 f"{unresolved_hint}",
+                error_code="SCHEMA_SCOPE_UNRESOLVED",
             )
             return
 
@@ -2589,6 +3040,8 @@ class OntologyBuildService:
                     "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
                     "(relationships)と業務指標(metrics)を抽出してください。"
                     "SQL に現れない関係を推測しないでください。"
+                    "cardinality は schema_context の constraints(主キー P / 一意 U)から"
+                    "判断してください(JOIN 先の列が主キー・一意キーなら many_to_one など)。"
                 )
                 try:
                     qa_batches = _batch_qa_pairs(schema_payload, qa_pairs, prompt)
@@ -2613,6 +3066,8 @@ class OntologyBuildService:
                                 f"({processed}/{len(qa_pairs)} 件)。"
                             ),
                             cross_check_sql=[pair.sql for pair in batch],
+                            qa_batch=list(batch),
+                            schema_payload=schema_payload,
                         )
                     )
         if OntologyBuildStepName.TEXT_EXTRACTION in step_names:
@@ -2641,26 +3096,34 @@ class OntologyBuildService:
                     )
                     return
                 processed = 0
-                total_units = sum(len(batch) for batch in text_batches)
-                for batch_index, batch in enumerate(text_batches, start=1):
-                    processed += len(batch)
+                total_units = sum(len(text_batch) for text_batch in text_batches)
+                # 上の Q/A ループの batch(QaPair)と変数を共有しない(型の取り違え防止)。
+                for text_batch_index, text_batch in enumerate(text_batches, start=1):
+                    processed += len(text_batch)
                     llm_tasks.append(
                         _OntologyBuildLlmTask(
                             name=OntologyBuildStepName.TEXT_EXTRACTION,
                             prompt=prompt,
-                            context=_dump_text_context(schema_payload, batch),
+                            context=_dump_text_context(schema_payload, text_batch),
                             progress_ja=(
-                                f"業務説明 chunk batch {batch_index}/{len(text_batches)} を処理中"
+                                f"業務説明 chunk batch {text_batch_index}"
+                                f"/{len(text_batches)} を処理中"
                                 f"({processed}/{total_units} chunk)。"
                             ),
                             source_evidence=[
                                 evidence
-                                for unit in batch
+                                for unit in text_batch
                                 if (evidence := unit.evidence()) is not None
                             ],
+                            text_batch=list(text_batch),
+                            schema_payload=schema_payload,
                         )
                     )
 
+        # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。
+        # 一部 batch の失敗はジョブ全体を止めず warning として継続し、
+        # 全タスク失敗のときだけジョブを FAILED にする(部分成功)。
+        # partial_failed_steps は資料抽出ステップと共有(冒頭で初期化済み)。
         for index, task in enumerate(llm_tasks, start=1):
             if self._is_cancelled(job_id):
                 return
@@ -2675,48 +3138,48 @@ class OntologyBuildService:
                 job_id,
                 f"Enterprise AI に問い合わせています({index}/{len(llm_tasks)}: {label})。"
                 f"{task.progress_ja}",
+                step=task.name,
             )
-            try:
-                raw = client.generate(
-                    prompt=task.prompt,
-                    context=task.context,
-                    system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+            task_extractions, task_warnings = self._execute_llm_task(
+                job_id, client, task, label=label
+            )
+            validated_extractions.extend(task_extractions)
+            if task_warnings:
+                partial_failed_steps.add(task.name)
+                warnings.extend(task_warnings)
+                self._add_warnings(job_id, task_warnings)
+                self._set_step(
+                    job_id,
+                    task.name,
+                    OntologyBuildStepStatus.FAILED
+                    if not task_extractions
+                    else OntologyBuildStepStatus.RUNNING,
+                    "一部の LLM 抽出に失敗しました(成功分で継続します)。",
+                    code="BATCH_EXTRACTION_FAILED",
                 )
-                self._set_step(job_id, task.name, OntologyBuildStepStatus.RUNNING, "応答を検証中…")
-                self._emit(job_id, f"{label}: 応答を受信しました。検証しています。")
-                extraction = parse_extraction(raw)
-                validated_extractions.append(
-                    _ValidatedBuildExtraction(
-                        name=task.name,
-                        label_ja=label,
-                        extraction=extraction,
-                        cross_check_sql=task.cross_check_sql,
-                        source_evidence=task.source_evidence,
-                    )
+                self._emit(
+                    job_id,
+                    f"{label}: 一部の抽出に失敗しました。成功分で処理を継続します。",
+                    code="BATCH_EXTRACTION_FAILED",
+                    step=task.name,
                 )
+            if task_extractions:
                 self._set_step(
                     job_id,
                     task.name,
                     OntologyBuildStepStatus.SUCCEEDED,
                     "応答を検証しました。",
                 )
-                self._emit(job_id, f"{label}: 抽出候補を検証しました。")
-            except Exception as exc:
-                logger.warning("ontology_build_step_failed step=%s", task.name.value, exc_info=True)
-                warning = f"{task.name.value} の抽出に失敗しました: {exc}"
-                warnings.append(warning)
-                self._add_warnings(job_id, [warning])
-                self._set_step(
-                    job_id, task.name, OntologyBuildStepStatus.FAILED, "LLM 抽出に失敗しました。"
-                )
-                self._emit(job_id, f"{label}: LLM 抽出に失敗しました。")
-                self._fail(
-                    job_id,
-                    f"{label}: LLM 抽出に失敗しました。{exc}",
-                    failed_step=task.name,
-                    failed_step_detail_ja="LLM 抽出に失敗しました。",
-                )
-                return
+                self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
+
+        if llm_tasks and not validated_extractions:
+            self._fail(
+                job_id,
+                "すべての LLM 抽出に失敗しました。"
+                "時間をおいて再実行するか、資料を分割してください。",
+                error_code="LLM_EXTRACTION_FAILED",
+            )
+            return
 
         if self._is_cancelled(job_id):
             return
@@ -2852,13 +3315,22 @@ class OntologyBuildService:
         self._emit(job_id, f"Markdown Draft をレンダリングしました({len(markdown_output)} 文字)。")
 
         def save_progress(message_ja: str) -> None:
+            # 保存完了イベントには機械可読コードを付け、frontend は文言正規表現ではなく
+            # このコードで Markdown Draft の再取得を判断できるようにする。
+            code = "MARKDOWN_DRAFT_UPDATED" if "保存しました" in message_ja else ""
             self._set_step(
                 job_id,
                 OntologyBuildStepName.PROPOSAL_REGISTRATION,
                 OntologyBuildStepStatus.RUNNING,
                 message_ja,
+                code=code,
             )
-            self._emit(job_id, message_ja)
+            self._emit(
+                job_id,
+                message_ja,
+                code=code,
+                step=OntologyBuildStepName.PROPOSAL_REGISTRATION,
+            )
 
         try:
             draft_ontology, markdown_artifact = self._runtime.create_build_markdown_draft(
@@ -2890,8 +3362,9 @@ class OntologyBuildService:
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
             OntologyBuildStepStatus.RUNNING,
             "構築 job の完了状態を保存しています…",
+            code="FINALIZING",
         )
-        self._emit(job_id, "構築 job の完了状態を保存しています。")
+        self._emit(job_id, "構築 job の完了状態を保存しています。", code="FINALIZING")
 
         def finish(job: OntologyBuildJob) -> None:
             finished_at = utc_now()
@@ -2899,22 +3372,34 @@ class OntologyBuildService:
                 if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION:
                     step.status = OntologyBuildStepStatus.SUCCEEDED
                     step.detail_ja = registered_note
+                    step.code = ""
                     if step.started_at is None:
                         step.started_at = finished_at
                     step.finished_at = finished_at
                     break
-            job.status = (
-                OntologyBuildStatus.SUCCEEDED
-                if any(step.status == OntologyBuildStepStatus.SUCCEEDED for step in job.steps)
-                else OntologyBuildStatus.FAILED
-            )
+            if any(step.status == OntologyBuildStepStatus.SUCCEEDED for step in job.steps):
+                # 一部の LLM batch が失敗しても成功分で Draft を生成した場合は
+                # 部分成功として区別する(全 discard しない)。
+                job.status = (
+                    OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+                    if partial_failed_steps
+                    else OntologyBuildStatus.SUCCEEDED
+                )
+            else:
+                job.status = OntologyBuildStatus.FAILED
             job.proposal_ids = []
             job.draft_revision_id = draft_ontology.revision.id
             job.draft_etag = str(markdown_artifact.get("etag") or "")
             job.markdown_output = markdown_output
             job.warnings_ja = [*job.warnings_ja, *warnings]
             job.finished_at = finished_at
-            job.events.append(OntologyBuildEvent(message_ja=registered_note))
+            job.events.append(
+                OntologyBuildEvent(
+                    message_ja=registered_note,
+                    code="MARKDOWN_DRAFT_UPDATED",
+                    step=OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                )
+            )
             job.events.append(
                 OntologyBuildEvent(
                     message_ja=(
@@ -2943,7 +3428,9 @@ class OntologyBuildService:
             job_type="build",
             status=(
                 "succeeded"
-                if finished_job is not None and finished_job.status == OntologyBuildStatus.SUCCEEDED
+                if finished_job is not None
+                and finished_job.status
+                in {OntologyBuildStatus.SUCCEEDED, OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS}
                 else "failed"
             ),
             error_code="none" if finished_job is not None else "result_missing",

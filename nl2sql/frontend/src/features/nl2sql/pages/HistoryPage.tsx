@@ -20,11 +20,11 @@ import {
   DEFAULT_PAGE_SIZE,
   EmptyState,
   Pagination,
-  StatusBadge,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
 
+import { StatusBadge } from "@/components/ui/status-badge";
 import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";

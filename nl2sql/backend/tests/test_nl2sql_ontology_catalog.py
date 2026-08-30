@@ -381,3 +381,13 @@ def test_retrieval_uses_glossary_comment_and_optional_embedding_callback() -> No
     assert callback_calls
     assert embedding_hits[0].node_id == customer.id
     assert embedding_hits[0].sources == ["embedding"]
+
+
+def test_catalog_edges_always_carry_machine_readable_kind() -> None:
+    """frontend の graphView はエッジ分類を edge.kind で行う。ラベル文字列一致は
+    旧データ互換のフォールバックであり、catalog 生成エッジは必ず kind を持つこと。"""
+
+    ontology = build_schema_ontology(_catalog())
+    assert ontology.edges, "catalog から少なくとも 1 本のエッジが生成されること"
+    for edge in ontology.edges:
+        assert str(edge.kind or "").strip(), f"edge {edge.id} に kind がありません"

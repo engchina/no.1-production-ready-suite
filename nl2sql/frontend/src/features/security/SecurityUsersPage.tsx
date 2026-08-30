@@ -8,10 +8,12 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Copy,
   KeyRound,
   Pencil,
   Plus,
   RefreshCw,
+  Trash2,
   UserCheck,
   UserRound,
   Users,
@@ -22,20 +24,32 @@ import {
   Banner,
   EmptyState,
   FormStatus,
-  StatusBadge,
   toast,
   type DataTableColumn,
   type DataTableSort,
 } from "@engchina/production-ready-ui";
 
+import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { FieldError } from "@/components/ui/field-error";
 import { FieldLabel, FieldLegend, RequiredFieldsNote } from "@/components/ui/required-field";
-import { isAbortError } from "@/lib/api";
+import { ApiError, isAbortError } from "@/lib/api";
+import {
+  mapApiFieldErrors,
+  unmappedApiErrorMessage,
+  withoutFieldError,
+} from "@/lib/api-field-errors";
 import { t } from "@/lib/i18n";
+import {
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_SCROLL_CLASS,
+} from "@/lib/list-density";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
@@ -54,12 +68,27 @@ import type { AssignedRole, SecurityRole, SecurityUser } from "./types";
 
 type UserPanelView = "list" | "create" | "edit";
 
+interface ResetPasswordError {
+  userUuid: string;
+  message: string;
+}
+
 interface UserDraftState {
   loginUserId: string;
   displayName: string;
   selectedRoleId: string;
   temporaryPassword: string;
 }
+
+type UserFormField = keyof UserDraftState;
+type UserFieldErrors = Partial<Record<UserFormField, string>>;
+
+const USER_POINTER_TO_FIELD = {
+  "/login_user_id": "loginUserId",
+  "/display_name": "displayName",
+  "/role_ids": "selectedRoleId",
+  "/temporary_password": "temporaryPassword",
+} as const satisfies Readonly<Record<string, UserFormField>>;
 
 const EMPTY_DRAFT: UserDraftState = {
   loginUserId: "",
@@ -69,7 +98,7 @@ const EMPTY_DRAFT: UserDraftState = {
 };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 disabled:bg-muted/20 disabled:text-muted";
+  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 read-only:cursor-default read-only:bg-muted/20 read-only:text-muted disabled:bg-muted/20 disabled:text-muted";
 const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
@@ -83,7 +112,7 @@ function userStatusLabel(user: SecurityUser) {
 
 export function SecurityUsersPage() {
   const confirm = useConfirm();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user: currentUser } = useAuth();
   const canManage = hasPermission(MENU_PERMISSIONS.securityUsers);
   const [users, setUsers] = useState<SecurityUser[]>([]);
   const [roles, setRoles] = useState<SecurityRole[]>([]);
@@ -92,14 +121,24 @@ export function SecurityUsersPage() {
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<UserFieldErrors>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<UserPanelView>("list");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "user", direction: "asc" });
   const [draft, setDraft] = useState<UserDraftState>(EMPTY_DRAFT);
-  const [oneTimePassword, setOneTimePassword] = useState("");
+  const [copyPasswordError, setCopyPasswordError] = useState("");
+  const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+  const [statusChangingUserId, setStatusChangingUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [resetPasswordError, setResetPasswordError] = useState<ResetPasswordError | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
+  const loginUserIdRef = useRef<HTMLInputElement | null>(null);
+  const displayNameRef = useRef<HTMLInputElement | null>(null);
+  const temporaryPasswordRef = useRef<HTMLInputElement | null>(null);
+  const roleGroupRef = useRef<HTMLDivElement | null>(null);
   const selectedUserManualSelection = useRef(false);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
@@ -113,6 +152,10 @@ export function SecurityUsersPage() {
   );
 
   const editingUser = users.find((user) => user.user_uuid === editingId) ?? null;
+  const userFormReadOnly = activeView === "edit" && editingUser?.status !== "ACTIVE";
+  const canSubmitUserForm = !userFormReadOnly;
+  const accountActionBusy =
+    resettingUserId !== null || statusChangingUserId !== null || deletingUserId !== null;
   const assignedRoles = (user: SecurityUser): AssignedRole[] => {
     if (user.assigned_roles?.length) return user.assigned_roles;
     return user.role_ids.map((id) => {
@@ -244,15 +287,56 @@ export function SecurityUsersPage() {
     });
   }, [activeView, filteredUsers, loading]);
 
+  const clearFieldError = (field: UserFormField) => {
+    setFieldErrors((current) => withoutFieldError(current, field));
+    setFormError("");
+  };
+
+  const updateDraftField = <Field extends UserFormField>(
+    field: Field,
+    value: UserDraftState[Field]
+  ) => {
+    if (userFormReadOnly) return;
+    setDraft((current) => ({ ...current, [field]: value }));
+    clearFieldError(field);
+  };
+
+  const focusFirstFieldError = (errors: UserFieldErrors) => {
+    window.requestAnimationFrame(() => {
+      if (errors.loginUserId) loginUserIdRef.current?.focus();
+      else if (errors.displayName) displayNameRef.current?.focus();
+      else if (errors.temporaryPassword) temporaryPasswordRef.current?.focus();
+      else if (errors.selectedRoleId) {
+        roleGroupRef.current
+          ?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)')
+          ?.focus();
+      }
+    });
+  };
+
+  const copyTemporaryPassword = async () => {
+    if (activeView !== "edit" || userFormReadOnly || !draft.temporaryPassword) return;
+    setCopyPasswordError("");
+    try {
+      await navigator.clipboard.writeText(draft.temporaryPassword);
+      toast.success(t("common.action.copied"));
+    } catch {
+      setCopyPasswordError(t("security.users.oneTimePassword.copyError"));
+    }
+  };
+
   const startCreate = () => {
     setActiveView("create");
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
     setFormError("");
-    setOneTimePassword("");
+    setFieldErrors({});
+    setActionError("");
+    setCopyPasswordError("");
+    setResetPasswordError(null);
   };
 
-  const startEdit = (user: SecurityUser) => {
+  const startEdit = (user: SecurityUser, temporaryPassword = "") => {
     selectedUserManualSelection.current = true;
     setSelectedId(user.user_uuid);
     setEditingId(user.user_uuid);
@@ -261,25 +345,35 @@ export function SecurityUsersPage() {
       loginUserId: user.login_user_id,
       displayName: user.display_name,
       selectedRoleId: selectKnownRoleId(user.role_ids),
-      temporaryPassword: "",
+      temporaryPassword,
     });
     setFormError("");
-    setOneTimePassword("");
+    setFieldErrors({});
+    setActionError("");
+    setCopyPasswordError("");
+    setResetPasswordError(null);
   };
 
   const returnToList = () => {
     setActiveView("list");
     setEditingId(null);
     setFormError("");
-    setOneTimePassword("");
+    setFieldErrors({});
+    setActionError("");
+    setCopyPasswordError("");
+    setResetPasswordError(null);
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (busy || accountActionBusy || !canSubmitUserForm) return;
     setFormError("");
-    setOneTimePassword("");
+    setFieldErrors({});
+    setActionError("");
     if (!draft.selectedRoleId) {
-      setFormError(t("security.users.roleRequired"));
+      const nextErrors = { selectedRoleId: t("security.users.roleRequired") };
+      setFieldErrors(nextErrors);
+      focusFirstFieldError(nextErrors);
       return;
     }
     const selectedRoleIds = [draft.selectedRoleId];
@@ -309,27 +403,33 @@ export function SecurityUsersPage() {
           temporary_password: draft.temporaryPassword || undefined,
         });
         setUsers((rows) => [...rows, created.user]);
-        selectedUserManualSelection.current = true;
-        setSelectedId(created.user.user_uuid);
-        setEditingId(created.user.user_uuid);
-        setActiveView("edit");
-        setOneTimePassword(created.temporary_password);
-        setDraft({
-          loginUserId: created.user.login_user_id,
-          displayName: created.user.display_name,
-          selectedRoleId: selectKnownRoleId(created.user.role_ids),
-          temporaryPassword: "",
-        });
+        startEdit(created.user, created.temporary_password);
         toast.success(t("security.common.saved"));
       }
     } catch (cause) {
-      setFormError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+      const nextErrors = mapApiFieldErrors(
+        cause,
+        USER_POINTER_TO_FIELD,
+        (problem, apiError) =>
+          apiError.errorCode === "SECURITY_USER_LOGIN_ID_CONFLICT" &&
+          problem.pointer === "/login_user_id"
+            ? t("security.users.loginUserIdConflict")
+            : problem.message
+      );
+      setFieldErrors(nextErrors);
+      setFormError(
+        unmappedApiErrorMessage(cause, USER_POINTER_TO_FIELD, t("security.common.saveError"))
+      );
+      if (cause instanceof ApiError && Object.keys(nextErrors).length > 0) {
+        focusFirstFieldError(nextErrors);
+      }
     } finally {
       setBusy(false);
     }
   };
 
   const handleToggleStatus = async (user: SecurityUser) => {
+    if (accountActionBusy || busy) return;
     const enabling = user.status !== "ACTIVE";
     if (
       !enabling &&
@@ -341,18 +441,26 @@ export function SecurityUsersPage() {
     ) {
       return;
     }
+    setActionError("");
+    setResetPasswordError(null);
+    setStatusChangingUserId(user.user_uuid);
     try {
       const updated = await securityApi.setUserEnabled(user, enabling);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
       selectedUserManualSelection.current = true;
       setSelectedId(updated.user_uuid);
-      toast.success(t("security.common.saved"));
+      toast.success(
+        t(enabling ? "security.users.enableSuccess" : "security.users.disableSuccess")
+      );
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setStatusChangingUserId(null);
     }
   };
 
   const handleResetPassword = async (user: SecurityUser) => {
+    if (user.status !== "ACTIVE" || accountActionBusy || busy) return;
     if (
       !(await confirm({
         title: t("security.users.resetPassword"),
@@ -362,13 +470,34 @@ export function SecurityUsersPage() {
     ) {
       return;
     }
+    selectedUserManualSelection.current = true;
+    setSelectedId(user.user_uuid);
+    setActionError("");
+    setCopyPasswordError("");
+    setResetPasswordError(null);
+    setResettingUserId(user.user_uuid);
     try {
       const result = await securityApi.resetPassword(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === result.user.user_uuid ? result.user : row)));
-      startEdit(result.user);
-      setOneTimePassword(result.temporary_password);
+      if (activeView === "edit" && editingId === result.user.user_uuid) {
+        setDraft((current) => ({
+          ...current,
+          temporaryPassword: result.temporary_password,
+        }));
+      } else {
+        startEdit(result.user, result.temporary_password);
+      }
+      toast.success(t("security.users.oneTimePassword.resetSuccess"));
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+      setResetPasswordError({
+        userUuid: user.user_uuid,
+        message:
+          cause instanceof Error && cause.message.trim()
+            ? cause.message
+            : t("security.users.oneTimePassword.resetError"),
+      });
+    } finally {
+      setResettingUserId(null);
     }
   };
 
@@ -384,6 +513,69 @@ export function SecurityUsersPage() {
     }
   };
 
+  const canDeleteUser = (user: SecurityUser) =>
+    user.status === "DISABLED" &&
+    !user.is_bootstrap_admin &&
+    currentUser?.user_uuid !== user.user_uuid;
+
+  const handleDelete = async (user: SecurityUser) => {
+    if (accountActionBusy || busy || !canDeleteUser(user)) return;
+    selectedUserManualSelection.current = true;
+    setSelectedId(user.user_uuid);
+    if (
+      !(await confirm({
+        title: t("security.users.delete"),
+        description: t("security.users.deleteConfirm", {
+          name: user.display_name,
+          id: user.login_user_id,
+        }),
+        confirmLabel: t("common.delete"),
+        tone: "danger",
+        dismissOnOverlay: false,
+      }))
+    ) {
+      return;
+    }
+
+    setActionError("");
+    setResetPasswordError(null);
+    setDeletingUserId(user.user_uuid);
+    try {
+      await securityApi.deleteUser(user);
+      const deletedIndex = filteredUsers.findIndex((row) => row.user_uuid === user.user_uuid);
+      const nextUser =
+        filteredUsers[deletedIndex + 1] ?? filteredUsers[deletedIndex - 1] ?? null;
+      setUsers((rows) => rows.filter((row) => row.user_uuid !== user.user_uuid));
+      selectedUserManualSelection.current = Boolean(nextUser);
+      setSelectedId(nextUser?.user_uuid ?? null);
+      setEditingId(null);
+      setActiveView("list");
+      setFormError("");
+      setFieldErrors({});
+      setCopyPasswordError("");
+      setResetPasswordError(null);
+      toast.success(t("security.users.deleteSuccess", { name: user.display_name }));
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error && cause.message.trim()
+          ? cause.message
+          : t("security.users.deleteError")
+      );
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
+  const resetPasswordAction = (user: SecurityUser): EntityAction => ({
+    id: "reset-password",
+    label: t("security.users.resetPassword"),
+    icon: KeyRound,
+    onSelect: () => handleResetPassword(user),
+    visible: user.status === "ACTIVE" && !user.is_bootstrap_admin,
+    loading: resettingUserId === user.user_uuid,
+    disabled: busy || accountActionBusy,
+  });
+
   const userActions = (user: SecurityUser): EntityAction[] =>
     canManage
       ? [
@@ -393,16 +585,12 @@ export function SecurityUsersPage() {
             icon: Pencil,
             onSelect: () => startEdit(user),
           },
-          {
-            id: "reset-password",
-            label: t("security.users.resetPassword"),
-            icon: KeyRound,
-            onSelect: () => handleResetPassword(user),
-          },
+          resetPasswordAction(user),
           {
             id: "unlock",
             label: t("security.users.unlock"),
             visible: Boolean(user.locked_until),
+            disabled: accountActionBusy || busy,
             onSelect: () => handleUnlock(user),
           },
           {
@@ -410,16 +598,37 @@ export function SecurityUsersPage() {
             label: user.status === "ACTIVE" ? t("security.users.disable") : t("security.users.enable"),
             icon: user.status === "ACTIVE" ? UserX : UserCheck,
             tone: user.status === "ACTIVE" ? "danger" : "default",
+            loading: statusChangingUserId === user.user_uuid,
+            disabled: busy || accountActionBusy,
             onSelect: () => handleToggleStatus(user),
+          },
+          {
+            id: "delete",
+            label: t("security.users.delete"),
+            icon: Trash2,
+            tone: "danger",
+            visible: canDeleteUser(user),
+            loading: deletingUserId === user.user_uuid,
+            disabled: accountActionBusy || busy,
+            onSelect: () => handleDelete(user),
           },
         ]
       : [];
 
+  const formUserActions = (...actionIds: string[]) => {
+    if (!editingUser || !canManage) return [];
+    const actions = userActions(editingUser);
+    return actionIds.flatMap((actionId) => {
+      const action = actions.find(
+        (candidate) => candidate.id === actionId && candidate.visible !== false
+      );
+      return action ? [entityActionToFormAction(action)] : [];
+    });
+  };
+
   const selectRole = (roleId: string) => {
-    setDraft((current) => ({
-      ...current,
-      selectedRoleId: roleId,
-    }));
+    if (userFormReadOnly) return;
+    updateDraftField("selectedRoleId", roleId);
   };
 
   const userColumns: Array<DataTableColumn<SecurityUser>> = [
@@ -518,7 +727,9 @@ export function SecurityUsersPage() {
       />
       <main className="grid gap-4 p-4 lg:p-8">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
-        {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
+        {activeView === "list" && actionError ? (
+          <Banner severity="danger">{actionError}</Banner>
+        ) : null}
 
         {activeView === "list" ? (
           <SecurityManagementPanelShell
@@ -570,6 +781,13 @@ export function SecurityUsersPage() {
                   getRowAriaLabel={(user) => t("security.users.showUser", { name: user.display_name })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
+                  scrollAriaLabel={t("security.common.listScrollLabel", {
+                    list: t("security.users.list"),
+                  })}
+                  scrollTestId="security-users-scroll-region"
+                  scrollClassName={`${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+                  className="[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead_tr]:h-10"
+                  rowClassName={INFORMATION_TABLE_ROW_CLASS}
                   empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} />}
                   columns={userColumns}
                 />
@@ -580,6 +798,11 @@ export function SecurityUsersPage() {
                 canManage={canManage}
                 assignedRoles={selectedUser ? assignedRoles(selectedUser) : []}
                 actions={selectedUser ? userActions(selectedUser) : []}
+                resetError={
+                  selectedUser && resetPasswordError?.userUuid === selectedUser.user_uuid
+                    ? resetPasswordError.message
+                    : ""
+                }
               />
             </SecurityManagementPanelShell>
         ) : (
@@ -601,65 +824,141 @@ export function SecurityUsersPage() {
                 description={t("security.users.formHint")}
                 headingId="security-users-form-heading"
               />
-              <form className="grid gap-4" onSubmit={handleSubmit} aria-labelledby="security-users-form-heading">
-                <RequiredFieldsNote />
-                {oneTimePassword ? (
-                  <Banner severity="warning" title={t("security.users.oneTimePassword")}>
-                    <code className="mt-2 block select-all break-all rounded bg-background p-2 font-mono text-sm">
-                      {oneTimePassword}
-                    </code>
-                  </Banner>
-                ) : null}
-                <div className="grid gap-4 lg:grid-cols-2">
+              <form
+                ref={formRef}
+                className="grid gap-4"
+                onSubmit={handleSubmit}
+                aria-labelledby="security-users-form-heading"
+              >
+                    <RequiredFieldsNote />
+                    <div className="grid gap-4 lg:grid-cols-2">
                   <div className="grid gap-1.5 text-sm font-medium">
                     <FieldLabel htmlFor="security-user-login-user-id" label={t("security.users.loginUserId")} required />
                     <input
+                      ref={loginUserIdRef}
                       id="security-user-login-user-id"
                       required
                       maxLength={64}
                       disabled={activeView === "edit"}
-                      className={INPUT_CLASS}
+                      className={cn(INPUT_CLASS, fieldErrors.loginUserId && "border-danger")}
+                      aria-invalid={fieldErrors.loginUserId ? "true" : undefined}
+                      aria-describedby={fieldErrors.loginUserId ? "security-user-login-user-id-error" : undefined}
                       autoComplete="off"
                       value={draft.loginUserId}
-                      onChange={(event) => setDraft((current) => ({ ...current, loginUserId: event.target.value }))}
+                      onChange={(event) => updateDraftField("loginUserId", event.target.value)}
                     />
+                    <FieldError id="security-user-login-user-id-error" message={fieldErrors.loginUserId} />
                   </div>
                   <div className="grid gap-1.5 text-sm font-medium">
                     <FieldLabel htmlFor="security-user-display-name" label={t("security.users.displayName")} required />
                     <input
+                      ref={displayNameRef}
                       id="security-user-display-name"
                       required
-                      className={INPUT_CLASS}
+                      disabled={userFormReadOnly}
+                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger")}
+                      aria-invalid={fieldErrors.displayName ? "true" : undefined}
+                      aria-describedby={fieldErrors.displayName ? "security-user-display-name-error" : undefined}
                       value={draft.displayName}
-                      onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
+                      onChange={(event) => updateDraftField("displayName", event.target.value)}
                     />
+                    <FieldError id="security-user-display-name-error" message={fieldErrors.displayName} />
                   </div>
-                </div>
-                {activeView === "create" ? (
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    <span>{t("security.users.tempPassword")}</span>
-                    <input
-                      type="password"
-                      className={INPUT_CLASS}
-                      autoComplete="new-password"
-                      value={draft.temporaryPassword}
-                      onChange={(event) => setDraft((current) => ({ ...current, temporaryPassword: event.target.value }))}
-                    />
-                  </label>
-                ) : null}
-                <fieldset className="grid gap-2">
+                    </div>
+                    <div className="grid gap-1.5 text-sm font-medium">
+                      <FieldLabel
+                        htmlFor="security-user-temporary-password"
+                        label={t(
+                          activeView === "create"
+                            ? "security.users.tempPassword"
+                            : "security.users.oneTimePassword.valueLabel"
+                        )}
+                      />
+                      <div
+                        className={cn(
+                          "grid min-w-0 gap-2",
+                          activeView === "edit" &&
+                            "sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
+                        )}
+                      >
+                        <input
+                          ref={temporaryPasswordRef}
+                          id="security-user-temporary-password"
+                          type={activeView === "create" ? "password" : "text"}
+                          readOnly={activeView === "edit"}
+                          disabled={userFormReadOnly}
+                          className={cn(INPUT_CLASS, fieldErrors.temporaryPassword && "border-danger")}
+                          aria-invalid={fieldErrors.temporaryPassword ? "true" : undefined}
+                          aria-describedby={
+                            fieldErrors.temporaryPassword
+                              ? "security-user-temporary-password-error"
+                              : activeView === "edit" &&
+                                  (copyPasswordError ||
+                                    (resetPasswordError?.userUuid === editingUser?.user_uuid &&
+                                      resetPasswordError?.message))
+                                ? "security-user-temporary-password-action-error"
+                                : undefined
+                          }
+                          autoComplete={activeView === "create" ? "new-password" : "off"}
+                          value={draft.temporaryPassword}
+                          onChange={(event) => {
+                            if (activeView === "create") {
+                              updateDraftField("temporaryPassword", event.target.value);
+                            }
+                          }}
+                          data-testid="security-user-temporary-password"
+                        />
+                        {activeView === "edit" ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full sm:w-auto"
+                            disabled={userFormReadOnly || !draft.temporaryPassword}
+                            onClick={() => void copyTemporaryPassword()}
+                            data-testid="security-user-temporary-password-copy"
+                          >
+                            <Copy size={15} aria-hidden="true" />
+                            <span>{t("security.users.oneTimePassword.copy")}</span>
+                          </Button>
+                        ) : null}
+                      </div>
+                      <FieldError
+                        id="security-user-temporary-password-error"
+                        message={fieldErrors.temporaryPassword}
+                      />
+                      {activeView === "edit" ? (
+                        <div
+                          id="security-user-temporary-password-action-error"
+                          data-testid="security-user-temporary-password-error"
+                        >
+                          <FormStatus
+                            tone="danger"
+                            message={
+                              copyPasswordError ||
+                              (resetPasswordError?.userUuid === editingUser?.user_uuid
+                                ? (resetPasswordError?.message ?? "")
+                                : "")
+                            }
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                    <fieldset className="grid gap-2" disabled={userFormReadOnly}>
                   <FieldLegend id="security-users-role-legend" required>{t("security.users.roles")}</FieldLegend>
                   {roles.length === 0 ? (
                     <p className="text-sm text-muted">{t("security.users.noRole")}</p>
                   ) : (
                     <div
+                      ref={roleGroupRef}
                       className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
                       role="radiogroup"
                       aria-labelledby="security-users-role-legend"
                       aria-required="true"
+                      aria-invalid={fieldErrors.selectedRoleId ? "true" : undefined}
+                      aria-describedby={fieldErrors.selectedRoleId ? "security-users-role-error" : undefined}
                     >
                       {roles.map((role) => {
-                        const disabled = isSystemAdminRoleDisabled(role);
+                        const disabled = userFormReadOnly || isSystemAdminRoleDisabled(role);
                         const hint = systemAdminRoleHint(role);
                         const selected = draft.selectedRoleId === role.role_id;
                         return (
@@ -693,16 +992,54 @@ export function SecurityUsersPage() {
                       })}
                     </div>
                   )}
-                </fieldset>
-                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                  <Button loading={busy} type="submit">
-                    {activeView === "edit" ? t("security.common.save") : t("security.common.create")}
-                  </Button>
-                  <Button type="button" variant="secondary" onClick={returnToList}>
-                    {t("security.common.cancel")}
-                  </Button>
-                  <FormStatus tone="danger" message={formError} className="w-full" />
-                </div>
+                  <FieldError id="security-users-role-error" message={fieldErrors.selectedRoleId} />
+                    </fieldset>
+                    <FormActionBar
+                      ariaLabel={t(
+                        activeView === "edit"
+                          ? "security.users.editActions"
+                          : "security.users.createActions"
+                      )}
+                      testId="security-users-form-actions"
+                      primaryActions={
+                        canSubmitUserForm
+                          ? [
+                              {
+                                id: activeView === "edit" ? "save" : "create",
+                                label:
+                                  activeView === "edit"
+                                    ? t("security.common.save")
+                                    : t("security.common.create"),
+                                loading: busy,
+                                disabled: accountActionBusy,
+                                onClick: () => formRef.current?.requestSubmit(),
+                              },
+                            ]
+                          : []
+                      }
+                      secondaryActions={[
+                        ...(activeView === "edit"
+                          ? formUserActions("reset-password", "enable")
+                          : []),
+                        {
+                          id: "cancel",
+                          label: t("security.common.cancel"),
+                          disabled: busy || accountActionBusy,
+                          onClick: returnToList,
+                        },
+                      ]}
+                      dangerActions={
+                        activeView === "edit"
+                          ? formUserActions("disable", "delete")
+                          : []
+                      }
+                      status={
+                        <FormStatus
+                          tone="danger"
+                          message={formError || (activeView === "edit" ? actionError : "")}
+                        />
+                      }
+                    />
               </form>
             </SecurityManagementPanelShell>
           </>
@@ -729,11 +1066,13 @@ function UserDetailPanel({
   assignedRoles,
   canManage,
   actions,
+  resetError,
 }: {
   user: SecurityUser | null;
   assignedRoles: AssignedRole[];
   canManage: boolean;
   actions: EntityAction[];
+  resetError: string;
 }) {
   if (!user) {
     return (
@@ -767,7 +1106,9 @@ function UserDetailPanel({
           />
         ) : null}
       </div>
-
+      <div data-testid="security-users-reset-password-error">
+        <FormStatus tone="danger" message={resetError} />
+      </div>
       <dl className="grid gap-3 md:grid-cols-2">
         <SecurityDetailField label={t("security.users.loginUserId")}>
           <code className="break-all font-mono text-xs">{user.login_user_id}</code>

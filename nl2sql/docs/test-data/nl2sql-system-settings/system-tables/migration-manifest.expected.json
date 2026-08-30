@@ -1,5 +1,5 @@
 {
-  "schema_head": 15,
+  "schema_head": 17,
   "expected_object_count": 51,
   "expected_table_count": 27,
   "required_versions": [
@@ -12,11 +12,19 @@
     7,
     8,
     9,
-    15
+    15,
+    17
   ],
   "representative_tables": [
     "NL2SQL_PROFILES",
-    "NL2SQL_EXECUTION_LOGS",
-    "NL2SQL_SYSTEM_TABLE_OPS"
+    "NL2SQL_ONTOLOGY_REVISIONS",
+    "NL2SQL_SCHEMA_OPERATIONS"
+  ],
+  "representative_indexes": [
+    "IX_NL2SQL_PROFILES_LIST",
+    "IX_NL2SQL_EVAL_JOB_STATE"
+  ],
+  "representative_sequences": [
+    "NL2SQL_MIGRATION_SNAPSHOT_SEQ"
   ]
 }

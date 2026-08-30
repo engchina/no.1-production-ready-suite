@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 
 import { ApiError, apiGet, apiGetWithMetadata, apiPost } from "@/lib/api";
+import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import type {
   DbAdminObjectPage,
@@ -11,6 +12,7 @@ import type {
   SchemaCatalog,
   SchemaObjectPage,
   SchemaObjectDetail,
+  SchemaRefreshActiveJobData,
   SchemaRefreshJob,
   SelectAiDbProfileRefreshJobData,
 } from "./types";
@@ -21,15 +23,13 @@ import {
   isUserVisibleSchemaObject,
 } from "./objectVisibility";
 import { profileSummaryPageFromLegacyList } from "./profileListState";
-export {
-  waitForSchemaRefreshJob,
-  type WaitForSchemaRefreshJobOptions,
-} from "./schemaRefreshJob";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
 let legacyCatalogOverride: SchemaCatalog | null = null;
 
 const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
+
+export type DbAdminObjectQueryScope = "all" | "name_comment";
 
 export function isLegacyCompatibilityError(error: unknown): boolean {
   return error instanceof ApiError && LEGACY_COMPATIBILITY_STATUSES.has(error.status);
@@ -55,12 +55,42 @@ export const nl2sqlIncrementalKeys = {
   schemaHead: ["schema", "catalog", "head"] as const,
   schemaObjects: (query: string, objectType: string, profileId: string, rowState: string) =>
     ["schema", "objects", query, objectType, profileId, rowState] as const,
-  dbAdminObjects: (query: string, objectType: string, rowState: string, owner = "") =>
-    ["nl2sql", "db-admin", "objects", query, objectType, rowState, owner] as const,
+  dbAdminObjects: (
+    query: string,
+    objectType: string,
+    rowState: string,
+    ownerPrefix = "",
+    queryScope: DbAdminObjectQueryScope = "all"
+  ) =>
+    [
+      "nl2sql",
+      "db-admin",
+      "objects",
+      query,
+      objectType,
+      rowState,
+      ownerPrefix,
+      queryScope,
+    ] as const,
   schemaRefreshJob: (jobId: string) => ["schema", "refresh-job", jobId] as const,
+  activeSchemaRefreshJob: ["schema", "refresh-job-discovery", "active"] as const,
   selectAiDbProfileRefreshJob: (jobId: string) =>
     ["nl2sql", "select-ai", "db-profile-refresh-job", jobId] as const,
 };
+
+/**
+ * 一時的な失敗(ネットワーク断・タイムアウト・認証 cookie 反映前の 401・408/429)のみ
+ * 最大 2 回再試行する。HTTP ステータスを持つそれ以外の応答(404/5xx 等)は再試行せず、
+ * 既存の ErrorState + 手動「再試行」導線に委ねる。
+ * ログイン直後の遷移でワークスペースが ErrorState のまま残るレースの回復用。
+ */
+function retryTransientOnly(failureCount: number, error: unknown): boolean {
+  if (failureCount >= 2) return false;
+  if (error instanceof ApiError) {
+    return error.status === 401 || error.status === 408 || error.status === 429;
+  }
+  return true;
+}
 
 export function useProfileSummaries(query: string) {
   return useInfiniteQuery({
@@ -102,14 +132,14 @@ export function useProfileDetail(profileId: string) {
           timeoutMs: API_TIMEOUT_MS.interactiveList,
         });
         const profile = profiles.find((item) => item.id === profileId);
-        if (!profile) throw new Error("指定された profile が見つかりません。");
+        if (!profile) throw new Error(t("profiles.error.notFound"));
         return { data: profile, etag: profile.etag ?? "" };
       });
       return { profile: response.data, etag: response.etag || response.data.etag };
     },
     enabled: Boolean(profileId),
     staleTime: 5_000,
-    retry: false,
+    retry: retryTransientOnly,
   });
 }
 
@@ -127,7 +157,7 @@ export function useProfileUsageContext(profileId: string) {
           timeoutMs: API_TIMEOUT_MS.interactiveList,
         });
         const profile = profiles.find((item) => item.id === profileId && !item.archived);
-        if (!profile) throw new Error("指定された profile が見つかりません。");
+        if (!profile) throw new Error(t("profiles.error.notFound"));
         return {
           data: {
             id: profile.id,
@@ -163,7 +193,7 @@ export function useProfileOntologyView(profileId: string) {
       ),
     enabled: Boolean(profileId),
     staleTime: 5_000,
-    retry: false,
+    retry: retryTransientOnly,
   });
 }
 
@@ -252,9 +282,21 @@ export function useSchemaObjects(
   });
 }
 
-export function useDbAdminObjects(query: string, objectType: string, rowState: string, owner = "") {
+export function useDbAdminObjects(
+  query: string,
+  objectType: string,
+  rowState: string,
+  ownerPrefix = "",
+  queryScope: DbAdminObjectQueryScope = "all"
+) {
   return useInfiniteQuery({
-    queryKey: nl2sqlIncrementalKeys.dbAdminObjects(query.trim(), objectType, rowState, owner.trim()),
+    queryKey: nl2sqlIncrementalKeys.dbAdminObjects(
+      query.trim(),
+      objectType,
+      rowState,
+      ownerPrefix.trim(),
+      queryScope
+    ),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({
@@ -265,7 +307,8 @@ export function useDbAdminObjects(query: string, objectType: string, rowState: s
       });
       if (pageParam) params.set("cursor", pageParam);
       if (pageParam) params.set("include_counts", "false");
-      if (owner.trim()) params.set("owner", owner.trim());
+      if (ownerPrefix.trim()) params.set("owner_prefix", ownerPrefix.trim());
+      if (queryScope !== "all") params.set("query_scope", queryScope);
       return apiGet<DbAdminObjectPage>(`/api/nl2sql/db-admin/objects?${params}`, {
         signal,
         timeoutMs: API_TIMEOUT_MS.interactiveList,
@@ -342,7 +385,7 @@ export async function getSchemaObjectDetail(
         item.owner.toUpperCase() === owner.toUpperCase() &&
         item.table_name.toUpperCase() === objectName.toUpperCase()
     );
-    if (!table) throw new Error("Schema object が見つかりません。");
+    if (!table) throw new Error(t("nl2sql.schema.objectNotFound"));
     return {
       table,
       dependencies: (catalog.view_dependencies ?? []).filter(
@@ -393,8 +436,25 @@ export function useSchemaRefreshJob(jobId: string) {
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "pending" || status === "running" ? 1_000 : false;
+      return status === "done" || status === "error" ? false : 1_000;
     },
+    retry: false,
+  });
+}
+
+export function useActiveSchemaRefreshJob(enabled = true) {
+  return useQuery({
+    queryKey: nl2sqlIncrementalKeys.activeSchemaRefreshJob,
+    queryFn: ({ signal }) =>
+      apiGet<SchemaRefreshActiveJobData>("/api/schema/refresh-jobs/active", {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.jobControl,
+      }),
+    staleTime: 0,
+    enabled,
+    refetchOnMount: "always",
+    refetchOnReconnect: "always",
+    refetchOnWindowFocus: "always",
     retry: false,
   });
 }

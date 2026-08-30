@@ -145,10 +145,12 @@
 複数選択リストで全選択を出す場合は、必ず全解除も同じスコープに並べて表示し、
 [`<BulkSelectionActions>`](../frontend/src/components/BulkSelectionActions.tsx) を使う。
 
-- **配置**: リスト直上または group header 右側に置き、対象スコープ(全件 / 表示中 / schema / 権限 group)が変わる位置へ混在させない。
+- **配置**: リスト直上または group header 内の leading side(日本語 UI では左側)に置く。group header ではタイトル・件数の下に左揃えで配置し、`ml-auto` / `justify-end` で右寄せしない。対象スコープ(全件 / 表示中 / schema / 権限 group)が変わる位置へ混在させない。
+- **業務操作との分離**: 全選択・選択解除は左側の選択範囲コントロールとしてまとめ、選択項目へ適用する追加・保存・削除・実行などの batch action は右側へ分離する。
 - **variant**: 全選択は `secondary`、全解除は `ghost`。どちらも `size="sm"` を既定とする。
 - **disabled**: 対象がすべて選択済みなら全選択を disabled、対象の選択が 0 件なら全解除を disabled。読取専用・処理中は両方 disabled。
-- **aria-label**: group 単位の同名ボタンは `"{name} をすべて選択"` / `"{name} の選択を解除"` のように scope 名を含める。
+- **aria-label**: group 単位の同名ボタンは `"{name} をすべて選択"` / `"{name} の選択をすべて解除"` のように scope 名を含める。
+- **文言**: 全範囲は `すべて選択` / `選択をすべて解除`、表示中の範囲は `表示中をすべて選択` / `表示中の選択をすべて解除` とし、`全選択` / `全解除` の短縮形は使わない。
 - **レスポンシブ**: `flex-wrap` で折り返し、375px でも横スクロールを出さない。ボタン文言は `whitespace-nowrap` を保ち、隣接テキストと重ねない。
 
 ---

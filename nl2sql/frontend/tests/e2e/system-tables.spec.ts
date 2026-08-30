@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
-import { systemAdminMe } from "./_helpers/database-gate";
+import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
   return {
@@ -56,75 +56,142 @@ const adbInfo = {
 };
 
 type SchemaStatus = "missing" | "partial" | "outdated" | "ready";
-const SCHEMA_HEAD = 15;
+type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE";
+
+const SCHEMA_HEAD = 17;
 const EXPECTED_OBJECT_COUNT = 51;
 const EXPECTED_TABLE_COUNT = 27;
-const APPLIED_VERSIONS = [0, 1, 2, 3, 5, 6, 7, 8, 9, 15] as const;
+const APPLIED_VERSIONS = [0, 1, 2, 3, 5, 6, 7, 8, 9, 15, 17] as const;
 
-function systemTableRows(status: SchemaStatus, count: number) {
-  const ready = status === "ready";
-  const rows = [
-    {
-      name: "NL2SQL_PROFILES",
-      exists: status !== "missing",
-      estimated_rows: status === "missing" ? null : 12,
-      created_at: status === "missing" ? null : "2026-07-19T00:00:00Z",
-      last_analyzed_at: status === "missing" ? null : "2026-07-19T01:00:00Z",
-    },
-    {
-      name: "NL2SQL_ONTOLOGY_REVISIONS",
-      exists: ready,
-      estimated_rows: ready ? 4 : null,
-      created_at: ready ? "2026-07-19T00:00:00Z" : null,
-      last_analyzed_at: null,
-    },
-  ];
+const SYSTEM_TABLE_NAMES = [
+  "NL2SQL_SCHEMA_OPERATIONS",
+  "NL2SQL_SCHEMA_MIGRATIONS",
+  "NL2SQL_ONTOLOGY_REVISIONS",
+  "NL2SQL_ONTOLOGY_NODES",
+  "NL2SQL_ONTOLOGY_EDGES",
+  "NL2SQL_ONTOLOGY_PROFILE_VIEWS",
+  "NL2SQL_ONTOLOGY_QUERY_SESSIONS",
+  "NL2SQL_ONTOLOGY_ARTIFACTS",
+  "NL2SQL_ONTOLOGY_PROPOSALS",
+  "NL2SQL_ONTOLOGY_IDEMPOTENCY",
+  "NL2SQL_ONTOLOGY_SOURCE_DOCS",
+  "NL2SQL_ONTOLOGY_JOBS",
+  "NL2SQL_ONTOLOGY_RECOMMENDATIONS",
+  "NL2SQL_CHANGE_TOKENS",
+  "NL2SQL_PROFILES",
+  "NL2SQL_SCHEMA_CATALOG_HEAD",
+  "NL2SQL_SCHEMA_OBJECTS",
+  "NL2SQL_SCHEMA_COLUMNS",
+  "NL2SQL_SCHEMA_CONSTRAINTS",
+  "NL2SQL_SCHEMA_DEPENDENCIES",
+  "NL2SQL_SCHEMA_SAMPLES",
+  "NL2SQL_SCHEMA_REFRESH_JOBS",
+  "NL2SQL_STATE_DOCUMENTS",
+  "NL2SQL_MIGRATION_OUTBOX",
+  "NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS",
+  "NL2SQL_EVALUATION_JOBS",
+  "NL2SQL_EVALUATION_RESULTS",
+] as const;
 
-  return Array.from({ length: count }, (_, index) =>
-    rows[index] ?? {
-      name: `NL2SQL_SYSTEM_TABLE_${String(index + 1).padStart(2, "0")}`,
-      exists: ready,
-      estimated_rows: ready ? index + 1 : null,
-      created_at: ready ? "2026-07-19T00:00:00Z" : null,
-      last_analyzed_at: ready ? "2026-07-19T01:00:00Z" : null,
-    }
-  );
+const SYSTEM_INDEX_NAMES = [
+  "IX_NL2SQL_ONT_NODE_PHYSICAL",
+  "IX_NL2SQL_ONT_NODE_EMBED",
+  "IX_NL2SQL_ONT_EDGE_SOURCE",
+  "IX_NL2SQL_ONT_EDGE_TARGET",
+  "IX_NL2SQL_ONT_SESSION_PROFILE",
+  "IX_NL2SQL_ONT_ART_SESSION",
+  "IX_NL2SQL_ONT_PROP_SESSION",
+  "IX_NL2SQL_ONT_IDEMPOTENCY_RESOURCE",
+  "IX_NL2SQL_ONT_SOURCE_PROFILE",
+  "IX_NL2SQL_ONT_JOB_STATE",
+  "IX_NL2SQL_ONT_REC_QUESTION",
+  "UX_NL2SQL_ONT_ONE_PUBLISHED",
+  "IX_NL2SQL_PROFILES_LIST",
+  "IX_NL2SQL_SCHEMA_OBJECT_LIST",
+  "IX_NL2SQL_SCHEMA_COLUMN_SEARCH",
+  "IX_NL2SQL_SCHEMA_REFRESH_STATE",
+  "IX_NL2SQL_STATE_DOCUMENT_LIST",
+  "UX_NL2SQL_MIGRATION_OUTBOX_VERSION",
+  "IX_NL2SQL_ONT_VIEW_REVISION",
+  "IX_NL2SQL_ONT_PROPOSAL_PROFILE",
+  "IX_NL2SQL_SCHEMA_REFRESH_LEASE",
+  "IX_NL2SQL_EVAL_JOB_STATE",
+  "IX_NL2SQL_EVAL_JOB_LEASE",
+] as const;
+
+const SYSTEM_REQUIRED_OBJECTS: ReadonlyArray<{
+  name: string;
+  object_type: SystemObjectType;
+}> = [
+  ...SYSTEM_TABLE_NAMES.map((name) => ({ name, object_type: "TABLE" as const })),
+  ...SYSTEM_INDEX_NAMES.map((name) => ({ name, object_type: "INDEX" as const })),
+  { name: "NL2SQL_MIGRATION_SNAPSHOT_SEQ", object_type: "SEQUENCE" },
+];
+
+const PARTIAL_MISSING_NAMES = new Set([
+  "NL2SQL_EVALUATION_JOBS",
+  "NL2SQL_EVALUATION_RESULTS",
+  "IX_NL2SQL_EVAL_JOB_STATE",
+  "IX_NL2SQL_EVAL_JOB_LEASE",
+]);
+
+function systemObjectRows(status: SchemaStatus, count = EXPECTED_OBJECT_COUNT) {
+  return SYSTEM_REQUIRED_OBJECTS.slice(0, count).map((object, index) => {
+    const exists =
+      status === "ready" ||
+      status === "outdated" ||
+      (status === "partial" && !PARTIAL_MISSING_NAMES.has(object.name));
+    const isTable = object.object_type === "TABLE";
+    return {
+      ...object,
+      exists,
+      estimated_rows: exists && isTable ? index + 1 : null,
+      created_at: exists ? "2026-07-19T00:00:00Z" : null,
+      last_analyzed_at: exists && isTable ? "2026-07-19T01:00:00Z" : null,
+    };
+  });
 }
 
 function systemTables(
   status: SchemaStatus,
   options: {
     operationStatus?: string;
-    tableCount?: number;
+    objectCount?: number;
     lastErrorCode?: string;
   } = {}
 ) {
   const ready = status === "ready";
-  const missingCount = status === "missing" ? EXPECTED_OBJECT_COUNT : status === "partial" ? 4 : 0;
   const operationStatus = options.operationStatus ?? "idle";
   const missingObjects =
     status === "partial"
-      ? [
-          { name: "NL2SQL_EVALUATION_JOBS", object_type: "TABLE" },
-          { name: "NL2SQL_EVALUATION_RESULTS", object_type: "TABLE" },
-          { name: "IX_NL2SQL_EVAL_JOB_STATE", object_type: "INDEX" },
-          { name: "IX_NL2SQL_EVAL_JOB_LEASE", object_type: "INDEX" },
-        ]
-      : Array.from({ length: missingCount }, (_, index) => ({
-          name: `NL2SQL_MISSING_${index + 1}`,
-          object_type: "TABLE",
-        }));
+      ? SYSTEM_REQUIRED_OBJECTS.filter((object) => PARTIAL_MISSING_NAMES.has(object.name))
+      : status === "missing"
+        ? [...SYSTEM_REQUIRED_OBJECTS]
+        : [];
+  const missingTableCount = missingObjects.filter(
+    (object) => object.object_type === "TABLE"
+  ).length;
+  const tableRows = systemObjectRows(status).filter(
+    (object) => object.object_type === "TABLE"
+  );
   return {
     status,
     schema_head: SCHEMA_HEAD,
     applied_versions: ready ? [...APPLIED_VERSIONS] : [0, 1, 2, 3, 5, 6],
-    pending_versions: ready ? [] : [7, 8, 9, 15],
+    pending_versions: ready ? [] : [7, 8, 9, 15, 17],
     expected_object_count: EXPECTED_OBJECT_COUNT,
-    existing_object_count: EXPECTED_OBJECT_COUNT - missingCount,
+    existing_object_count: EXPECTED_OBJECT_COUNT - missingObjects.length,
     expected_table_count: EXPECTED_TABLE_COUNT,
-    existing_table_count: ready ? EXPECTED_TABLE_COUNT : Math.max(0, EXPECTED_TABLE_COUNT - missingCount),
+    existing_table_count: EXPECTED_TABLE_COUNT - missingTableCount,
     missing_objects: missingObjects,
-    tables: systemTableRows(status, options.tableCount ?? 2),
+    tables: tableRows.map((object) => ({
+      name: object.name,
+      exists: object.exists,
+      estimated_rows: object.estimated_rows,
+      created_at: object.created_at,
+      last_analyzed_at: object.last_analyzed_at,
+    })),
+    objects: systemObjectRows(status, options.objectCount),
     operation_state: {
       status: operationStatus,
       operation_kind: operationStatus === "running" ? "initialize" : null,
@@ -202,6 +269,53 @@ test("システム設定の独立メニューからシステムテーブル管�
   await expectNoPageOverflow(page);
 });
 
+test("dark theme の状態フィードバックは semantic container 色を使う", async ({ page }, testInfo) => {
+  await mockDatabaseGateReady(page);
+  await page.route("**/api/auth/login**", (route) => fulfill(route, systemAdminMe));
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("ready"))
+  );
+
+  await page.goto("/settings/system-tables");
+  const loginHeading = page.getByRole("heading", { name: "システムにログイン" });
+  const systemTablesCard = page.locator("#system-tables");
+  await expect(systemTablesCard.or(loginHeading)).toBeVisible();
+  if (await loginHeading.isVisible()) {
+    await page.getByLabel("ログインユーザーID").fill("SYSTEM");
+    await page.getByLabel("パスワード").fill("password");
+    await page.getByRole("button", { name: "ログイン", exact: true }).click();
+    await expect(loginHeading).toHaveCount(0);
+  }
+  await page.evaluate(() => {
+    if (window.location.pathname === "/settings/system-tables") return;
+    window.history.pushState({}, "", "/settings/system-tables");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(systemTablesCard).toBeVisible();
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  const readyBadge = page
+    .locator("#system-tables")
+    .locator('[data-status-variant="success"]')
+    .filter({ hasText: "初期化済み" });
+  await expect(readyBadge).toBeVisible();
+  await expect(readyBadge).toHaveCSS("background-color", "rgb(18, 56, 45)");
+  await expect(readyBadge).toHaveCSS("color", "rgb(101, 215, 165)");
+  const summarySurface = page
+    .getByText("存在テーブル / 必須テーブル", { exact: true })
+    .locator("..");
+  await expect(summarySurface).toHaveCSS("background-color", "rgb(46, 50, 56)");
+  await expect(summarySurface.getByText("存在テーブル / 必須テーブル", { exact: true })).toHaveCSS(
+    "color",
+    "rgb(178, 186, 197)"
+  );
+  await expectNoPageOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath(`system-tables-dark-status-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+});
+
 test("状態取得中は aria status を表示し、完了後に操作を有効化する", async ({ page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -244,9 +358,53 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
     ).toBeVisible();
   }
 
-  await card.getByText("システムテーブルの詳細を表示").click();
+  await card.getByText(/管理オブジェクトの詳細を表示/).click();
   await expect(card.getByRole("table")).toBeVisible();
   await expect(card.getByText("NL2SQL_PROFILES", { exact: true })).toBeVisible();
+  await expect(card.getByText("27 / 27", { exact: true })).toBeVisible();
+  await expect(card.getByText("51 / 51", { exact: true })).toBeVisible();
+  await expect(
+    card.getByText("テーブル・索引・シーケンスの合計", { exact: true })
+  ).toBeVisible();
+  const objectRows = card.getByTestId("system-tables-scroll-region").locator("tbody tr");
+  await expect(objectRows).toHaveCount(EXPECTED_OBJECT_COUNT);
+  await expect(card.getByRole("cell", { name: "テーブル", exact: true })).toHaveCount(27);
+  await expect(card.getByRole("cell", { name: "索引", exact: true })).toHaveCount(23);
+  await expect(card.getByRole("cell", { name: "シーケンス", exact: true })).toHaveCount(1);
+  await expectNoPageOverflow(page);
+});
+
+test("不足した索引を全管理オブジェクト一覧で特定できる", async ({ page }) => {
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("partial"))
+  );
+
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  await card.getByText(/管理オブジェクトの詳細を表示/).click();
+  const missingIndex = card.getByRole("row", { name: /IX_NL2SQL_EVAL_JOB_STATE/ });
+  await expect(missingIndex).toContainText("索引");
+  await expect(missingIndex).toContainText("不足");
+  await expect(missingIndex.getByText("対象外", { exact: true })).toHaveCount(2);
+  await expectNoPageOverflow(page);
+});
+
+test("旧API応答では既存のテーブル一覧へ安全にフォールバックする", async ({ page }) => {
+  const legacyResponse = systemTables("ready");
+  delete (legacyResponse as { objects?: unknown }).objects;
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, legacyResponse)
+  );
+
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  await card.getByText(/管理オブジェクトの詳細を表示/).click();
+  await expect(
+    card.getByTestId("system-tables-scroll-region").locator("tbody tr")
+  ).toHaveCount(EXPECTED_TABLE_COUNT);
+  await expect(card.getByRole("cell", { name: "テーブル", exact: true })).toHaveCount(
+    EXPECTED_TABLE_COUNT
+  );
   await expectNoPageOverflow(page);
 });
 
@@ -270,20 +428,20 @@ test("Oracle RDF Network 管理カードと API 呼び出しを表示しない",
 
 test("詳細表はデスクトップ8行・モバイル5行の高さに収め、次行から内部スクロールする", async ({ page }, testInfo) => {
   const expectedRows = expectedInformationRows(testInfo);
-  let tableCount = expectedRows;
+  let objectCount = expectedRows;
   await page.route("**/api/settings/database/system-tables", (route) =>
-    fulfill(route, systemTables("ready", { tableCount }))
+    fulfill(route, systemTables("ready", { objectCount }))
   );
 
   await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
-  await card.getByText("システムテーブルの詳細を表示").click();
+  await card.getByText(/管理オブジェクトの詳細を表示/).click();
 
   const scrollRegion = page.getByTestId("system-tables-scroll-region");
   await expect(scrollRegion).toHaveAttribute("role", "region");
   await expect(scrollRegion).toHaveAttribute(
     "aria-label",
-    "システムテーブル一覧。必要に応じて縦方向または横方向にスクロールできます。"
+    "管理オブジェクト一覧（存在 51 / 必須 51）。必要に応じて縦方向または横方向にスクロールできます。"
   );
   await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows);
 
@@ -308,7 +466,7 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
   expect(exactRows.overflowX).toBe("auto");
   expect(exactRows.overflowY).toBe("auto");
 
-  tableCount = expectedRows + 1;
+  objectCount = expectedRows + 1;
   await card.getByRole("button", { name: "状態を再取得" }).click();
   await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows + 1);
 
@@ -395,8 +553,8 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   await expect(card.getByText("51 / 51", { exact: true })).toBeVisible();
-  await card.getByText("システムテーブルの詳細を表示").click();
-  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9, 15/)).toBeVisible();
+  await card.getByText(/管理オブジェクトの詳細を表示/).click();
+  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9, 15, 17/)).toBeVisible();
   await expect(
     page
       .getByRole("region", { name: "通知" })

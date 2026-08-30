@@ -6,7 +6,7 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pr_backend_core.config import BaseServiceSettings
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
@@ -135,6 +135,9 @@ class Settings(BaseServiceSettings):
     # NL2SQL 安全境界（既定: SELECT のみ許可）。DDL/DML/PLSQL は禁止する方針。
     nl2sql_allow_select_only: bool = True
     nl2sql_default_row_limit: int = 100
+    # 同時に実行する NL2SQL job worker 数の上限(超過分は pending のまま待機)。
+    # job 毎の裸スレッドが Oracle セッションを食い潰さないための安全弁。
+    nl2sql_job_max_concurrency: int = Field(default=4, ge=1, le=64)
     # deterministic: local/CI 用 mock, oracle: python-oracledb 経由で Oracle / Select AI を呼ぶ。
     nl2sql_runtime_mode: str = "deterministic"
     # oracle が既定。memory は local/CI で明示指定する非永続モード。
@@ -166,8 +169,17 @@ class Settings(BaseServiceSettings):
     nl2sql_quality_evaluation_max_file_bytes: int = 10 * 1024 * 1024
     nl2sql_quality_evaluation_max_cases: int = 100
     nl2sql_quality_evaluation_max_attempts: int = 1000
-    # Ontology worker / reasoning。
-    nl2sql_ontology_worker_mode: str = "inprocess"
+    # Ontology worker / reasoning。typo(例: "in-process")だと job が誰にも処理されず
+    # queued のまま沈黙するため、起動時に Literal で検証する。
+    nl2sql_ontology_worker_mode: Literal["inprocess", "external"] = "inprocess"
+    # AI 構築の抽出/命名呼び出し専用の出力トークン上限。汎用の
+    # oci_enterprise_ai_llm_max_output_tokens(既定 1200)では SCHEMA_NAMING の
+    # JSON が途中で切れて全体失敗するため、抽出系は大きめの予算を使う。
+    nl2sql_ontology_extraction_max_output_tokens: int = 8000
+    # GraphRAG 流 gleaning(取りこぼし回収の追加パス)。0 で無効。
+    nl2sql_ontology_extraction_gleaning_passes: int = 1
+    # 1 回の抽出呼び出しに載せる資料本文の上限(チャンクが大きいほど抽出漏れが増えるため)。
+    nl2sql_ontology_extraction_batch_max_chars: int = 12000
     nl2sql_ontology_worker_poll_seconds: float = 1.0
     nl2sql_ontology_worker_claim_timeout_seconds: float = 3900.0
     # Oracle Profile 同期は永続 job で実行し、DB round-trip と job 全体を別々に制限する。

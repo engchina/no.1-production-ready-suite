@@ -122,12 +122,14 @@ export function SecuritySearchField({
   placeholder,
   value,
   testId,
+  disabled = false,
   onChange,
 }: {
   label: string;
   placeholder: string;
   value: string;
   testId?: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -139,8 +141,9 @@ export function SecuritySearchField({
           type="search"
           value={value}
           data-testid={testId}
+          disabled={disabled}
           onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+          className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted"
           placeholder={placeholder}
         />
       </span>

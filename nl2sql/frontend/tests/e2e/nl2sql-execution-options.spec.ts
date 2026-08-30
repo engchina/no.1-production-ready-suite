@@ -86,7 +86,10 @@ async function fulfillJson(route: Route, data: unknown) {
 }
 
 async function mockNl2SqlWorkbenchApi(page: Page) {
-  const state: { jobPayload: Record<string, unknown> | null } = { jobPayload: null };
+  const state: {
+    jobPayload: Record<string, unknown> | null;
+    rewritePayload: Record<string, unknown> | null;
+  } = { jobPayload: null, rewritePayload: null };
   await mockDatabaseGateReady(page);
   await page.route("**/api/nl2sql/profiles/search?*", (route) =>
     fulfillJson(route, {
@@ -181,15 +184,16 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
   await page.route("**/api/nl2sql/similar-history", (route) =>
     fulfillJson(route, { items: [] })
   );
-  await page.route("**/api/nl2sql/rewrite", (route) =>
-    fulfillJson(route, {
+  await page.route("**/api/nl2sql/rewrite", (route) => {
+    state.rewritePayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
       original_question: "請求金額を確認したい",
       rewritten_question: "書き換え後の請求金額",
       source: "deterministic",
       model: "",
       warnings: [],
-    })
-  );
+    });
+  });
   await page.route("**/api/nl2sql/jobs", (route) => {
     state.jobPayload = route.request().postDataJSON() as Record<string, unknown>;
     return fulfillJson(route, {
@@ -302,21 +306,40 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
   await expect(page.getByText("履歴 0 件")).toHaveCount(0);
   const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  const executionOptionsChevron = executionOptionsDisclosure.locator('svg[data-state]');
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(executionOptionsChevron).toHaveAttribute("data-state", "collapsed");
+  await expect(executionOptionsChevron).toHaveClass(/rotate-90/);
   await expect(page.getByLabel("Ontology を使う")).toBeHidden();
   await executionOptionsDisclosure.focus();
   await page.keyboard.press("Enter");
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(executionOptionsChevron).toHaveAttribute("data-state", "expanded");
+  await expect(executionOptionsChevron).toHaveClass(/rotate-0/);
+  const glossaryOption = page.getByLabel("用語・同義語を使う");
+  await expect(glossaryOption).toBeChecked();
+  await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
   await expect(page.getByLabel("Ontology を使う")).toBeChecked();
   await expect(page.getByLabel("解釈を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
+  await expect(executionOptionsDisclosure).not.toContainText("条件あり");
+  await glossaryOption.uncheck();
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  await glossaryOption.check();
+  await expect(executionOptionsDisclosure).not.toContainText("条件あり");
   await expect(page.getByTestId("nl2sql-execution-options")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
   await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
-  await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
+  await expect.poll(() => api.rewritePayload).not.toBeNull();
+  expect(api.rewritePayload).toEqual({
+    question: "請求金額を確認したい",
+    profile_id: "default",
+    use_glossary: true,
+    extra_prompt: "",
+  });
   await expect.poll(() => api.jobPayload).not.toBeNull();
   expect(api.jobPayload).toMatchObject({
     question: "書き換え後の請求金額",
@@ -341,29 +364,29 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(showPromptPanel).toBeVisible();
   await expect(showPromptBody).toBeHidden();
   await expect(showPromptChevron).toHaveAttribute("data-state", "collapsed");
-  await expect(showPromptChevron).not.toHaveClass(/rotate-180/);
+  await expect(showPromptChevron).toHaveClass(/rotate-90/);
 
   await showPromptSummary.click();
   await expect(showPromptBody).toBeVisible();
   await expect(showPromptChevron).toHaveAttribute("data-state", "expanded");
-  await expect(showPromptChevron).toHaveClass(/rotate-180/);
+  await expect(showPromptChevron).toHaveClass(/rotate-0/);
 
   await showPromptSummary.click();
   await expect(showPromptBody).toBeHidden();
   await expect(showPromptChevron).toHaveAttribute("data-state", "collapsed");
-  await expect(showPromptChevron).not.toHaveClass(/rotate-180/);
+  await expect(showPromptChevron).toHaveClass(/rotate-90/);
 
   await showPromptSummary.focus();
   await page.keyboard.press("Enter");
   await expect(showPromptBody).toBeVisible();
   await expect(showPromptChevron).toHaveAttribute("data-state", "expanded");
-  await expect(showPromptChevron).toHaveClass(/rotate-180/);
+  await expect(showPromptChevron).toHaveClass(/rotate-0/);
 
   await showPromptSummary.focus();
   await page.keyboard.press("Space");
   await expect(showPromptBody).toBeHidden();
   await expect(showPromptChevron).toHaveAttribute("data-state", "collapsed");
-  await expect(showPromptChevron).not.toHaveClass(/rotate-180/);
+  await expect(showPromptChevron).toHaveClass(/rotate-90/);
 
   const ontologyOption = page.getByLabel("Ontology を使う");
   await ontologyOption.focus();
@@ -384,8 +407,8 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByLabel("Ontology を使う")).toBeHidden();
   await executionOptionsDisclosure.click();
   await expect(page.getByLabel("Ontology を使う")).toBeChecked();
-  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
-  await expect(page.getByLabel("Schema を使う")).not.toBeChecked();
+  await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
+  await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
   await expect(page.getByLabel("解釈を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
   await expectNoHorizontalOverflow(page);

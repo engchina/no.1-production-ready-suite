@@ -40,6 +40,8 @@ test("FormActionBar の danger menu は ARIA とキーボード契約を持つ",
   assert.match(source, /firstEnabled\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /<DisclosureChevron expanded=\{open\} size=\{16\} \/>/u);
+  assert.doesNotMatch(source, /open && "rotate-180"/u);
 });
 
 test("FormActionBar の danger menu は shared floating menu で viewport 内に配置する", () => {

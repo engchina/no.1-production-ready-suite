@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ACTIVE_JOB_ID_KEY,
+  ACTIVE_JOB_SNAPSHOT_TTL_MS,
   ACTIVE_JOB_STARTED_AT_KEY,
   clearActiveJobSnapshot,
   isJobInFlight,
@@ -58,6 +59,7 @@ import {
   buildTableSqlIdentifierText,
   emptySelection,
   insertTextAtRange,
+  isSchemaEmptyError,
   leadingNewlinePrefix,
   normalizeObjectIdentifier,
   toAllowedObjects,
@@ -344,8 +346,48 @@ test("active job persistence restores and clears polling state", () => {
     jobId: "job-123",
     startedAtMs: 555,
   });
+  // 欠損した startedAt は現在時刻で書き戻され、以後 TTL 判定が効く。
+  assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), "555");
 
   clearActiveJobSnapshot(storage);
+  assert.equal(storage.getItem(ACTIVE_JOB_ID_KEY), null);
+  assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), null);
+});
+
+test("schema-empty error is detected by error_code first, message fragment as fallback", () => {
+  // code がある場合は code のみで判定する(文言変更に影響されない)。
+  assert.equal(
+    isSchemaEmptyError({ message: "別の文言", code: "SCHEMA_CATALOG_EMPTY" }),
+    true
+  );
+  assert.equal(
+    isSchemaEmptyError({ message: "Schema catalog が空です。", code: "OTHER_CODE" }),
+    false
+  );
+  // 移行期フォールバック: code が無い応答は従来の文言一致で判定する。
+  assert.equal(isSchemaEmptyError({ message: "Schema catalog が空です。refresh してください。" }), true);
+  assert.equal(isSchemaEmptyError({ message: "権限がありません。" }), false);
+});
+
+test("active job snapshot within TTL is restored", () => {
+  const storage = new MemoryStorage();
+  const startedAt = 1_000_000;
+  persistActiveJobSnapshot(storage, "job-ttl-ok", startedAt);
+
+  const now = startedAt + ACTIVE_JOB_SNAPSHOT_TTL_MS;
+  assert.deepEqual(readActiveJobSnapshot(storage, now), {
+    jobId: "job-ttl-ok",
+    startedAtMs: startedAt,
+  });
+});
+
+test("active job snapshot past TTL is discarded and storage is cleared", () => {
+  const storage = new MemoryStorage();
+  const startedAt = 1_000_000;
+  persistActiveJobSnapshot(storage, "job-ttl-expired", startedAt);
+
+  const now = startedAt + ACTIVE_JOB_SNAPSHOT_TTL_MS + 1;
+  assert.equal(readActiveJobSnapshot(storage, now), null);
   assert.equal(storage.getItem(ACTIVE_JOB_ID_KEY), null);
   assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), null);
 });

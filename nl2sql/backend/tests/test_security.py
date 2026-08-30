@@ -611,9 +611,7 @@ def test_deepsec_entitlement_migration_uses_compressed_table_safe_column_type() 
     )
     sql = migration_path.read_text(encoding="utf-8")
     scope_filters_migration = (
-        Path(__file__).resolve().parents[1]
-        / "migrations"
-        / "012_deepsec_scope_filters.sql"
+        Path(__file__).resolve().parents[1] / "migrations" / "012_deepsec_scope_filters.sql"
     ).read_text(encoding="utf-8")
 
     assert "COLUMN_NAMES VARCHAR2(4000)" in sql
@@ -1287,6 +1285,235 @@ def test_bootstrap_user_is_marked_in_user_response() -> None:
     assert UserData.from_record(admin).is_bootstrap_admin is True
 
 
+def test_disabled_user_can_be_deleted_with_sessions_and_login_id_reused() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="DELETE_USER_ROLE",
+        display_name="削除対象ユーザー用",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    user, password = service.create_user(
+        login_user_id="delete.target",
+        display_name="削除対象",
+        role_ids=[role.role_id],
+        temporary_password="DeleteTargetPass!123",
+        actor=actor,
+    )
+    service.login(user.login_user_id, password)
+    disabled = service.update_user(
+        user.user_uuid,
+        expected_version=user.version,
+        display_name=user.display_name,
+        status="DISABLED",
+        role_ids=user.role_ids,
+        actor=actor,
+    )
+
+    deleted = service.delete_user(
+        user.user_uuid,
+        expected_version=disabled.version,
+        actor=actor,
+    )
+
+    assert deleted.user_uuid == user.user_uuid
+    assert service.store.get_user(user.user_uuid) is None
+    assert isinstance(service.store, InMemorySecurityStore)
+    assert all(session.user_uuid != user.user_uuid for session in service.store.sessions.values())
+    recreated, _ = service.create_user(
+        login_user_id="delete.target",
+        display_name="再作成ユーザー",
+        role_ids=[role.role_id],
+        temporary_password="RecreatedPass!123",
+        actor=actor,
+    )
+    assert recreated.user_uuid != user.user_uuid
+
+
+def test_user_delete_rejects_active_self_bootstrap_and_stale_version() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="DELETE_USER_GUARDS",
+        display_name="削除ガード",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    user, _ = service.create_user(
+        login_user_id="delete.guards",
+        display_name="削除ガード対象",
+        role_ids=[role.role_id],
+        temporary_password="DeleteGuardsPass!123",
+        actor=actor,
+    )
+
+    with pytest.raises(SecurityApiError) as active_error:
+        service.delete_user(user.user_uuid, expected_version=user.version, actor=actor)
+    assert active_error.value.code == "SECURITY_USER_DELETE_REQUIRES_DISABLED"
+
+    bootstrap = service.store.get_user(actor.user_uuid)
+    assert bootstrap is not None
+    with pytest.raises(SecurityApiError) as self_error:
+        service.delete_user(bootstrap.user_uuid, expected_version=bootstrap.version, actor=actor)
+    assert self_error.value.code == "SECURITY_USER_DELETE_SELF_FORBIDDEN"
+
+    other_admin = replace(actor, user_uuid="configured-system-admin")
+    with pytest.raises(SecurityApiError) as protected_error:
+        service.delete_user(
+            bootstrap.user_uuid,
+            expected_version=bootstrap.version,
+            actor=other_admin,
+        )
+    assert protected_error.value.code == "SECURITY_USER_DELETE_PROTECTED"
+
+    disabled = service.update_user(
+        user.user_uuid,
+        expected_version=user.version,
+        display_name=user.display_name,
+        status="DISABLED",
+        role_ids=user.role_ids,
+        actor=actor,
+    )
+    with pytest.raises(SecurityApiError) as stale_error:
+        service.delete_user(
+            user.user_uuid,
+            expected_version=disabled.version - 1,
+            actor=actor,
+        )
+    assert stale_error.value.code == "SECURITY_STATE_CONFLICT"
+    assert service.store.get_user(user.user_uuid) is not None
+
+
+def test_archived_unassigned_role_without_entitlements_can_be_deleted() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="DELETE_ROLE_TARGET",
+        display_name="削除対象ロール",
+        description="削除対象",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=actor,
+    )
+    archived = service.archive_role(
+        role.role_id,
+        expected_version=role.version,
+        actor=actor,
+    )
+
+    deleted = service.delete_role(
+        role.role_id,
+        expected_version=archived.version,
+        actor=actor,
+    )
+
+    assert deleted.role_code == "DELETE_ROLE_TARGET"
+    assert service.store.get_role(role.role_id) is None
+
+
+def test_role_delete_rejects_active_built_in_assigned_entitled_and_stale_targets() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    active = service.create_role(
+        role_code="DELETE_ROLE_ACTIVE",
+        display_name="有効ロール",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    with pytest.raises(SecurityApiError) as active_error:
+        service.delete_role(active.role_id, expected_version=active.version, actor=actor)
+    assert active_error.value.code == "SECURITY_ROLE_DELETE_REQUIRES_ARCHIVED"
+
+    system_role = service.store.get_role(SYSTEM_ADMIN_ROLE_ID)
+    assert system_role is not None
+    with pytest.raises(SecurityApiError) as built_in_error:
+        service.delete_role(
+            system_role.role_id,
+            expected_version=system_role.version,
+            actor=actor,
+        )
+    assert built_in_error.value.code == "SECURITY_ROLE_DELETE_PROTECTED"
+
+    assigned = service.create_role(
+        role_code="DELETE_ROLE_ASSIGNED",
+        display_name="割当済みロール",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=actor,
+    )
+    service.create_user(
+        login_user_id="assigned.delete.role",
+        display_name="割当ユーザー",
+        role_ids=[assigned.role_id],
+        temporary_password="AssignedDeletePass!123",
+        actor=actor,
+    )
+    assigned_archived = service.archive_role(
+        assigned.role_id,
+        expected_version=assigned.version,
+        actor=actor,
+    )
+    with pytest.raises(SecurityApiError) as assigned_error:
+        service.delete_role(
+            assigned.role_id,
+            expected_version=assigned_archived.version,
+            actor=actor,
+        )
+    assert assigned_error.value.code == "SECURITY_ROLE_DELETE_ASSIGNED"
+
+    entitled = service.create_role(
+        role_code="DELETE_ROLE_ENTITLED",
+        display_name="データ権限あり",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[("HR.EMPLOYEES", "*", "SELECT")],
+        actor=actor,
+    )
+    entitled_archived = service.archive_role(
+        entitled.role_id,
+        expected_version=entitled.version,
+        actor=actor,
+    )
+    with pytest.raises(SecurityApiError) as entitlement_error:
+        service.delete_role(
+            entitled.role_id,
+            expected_version=entitled_archived.version,
+            actor=actor,
+        )
+    assert entitlement_error.value.code == "SECURITY_ROLE_DELETE_ENTITLEMENTS_PRESENT"
+
+    stale = service.create_role(
+        role_code="DELETE_ROLE_STALE",
+        display_name="競合ロール",
+        description="",
+        permissions=set(),
+        entitlements=[],
+        actor=actor,
+    )
+    stale_archived = service.archive_role(
+        stale.role_id,
+        expected_version=stale.version,
+        actor=actor,
+    )
+    with pytest.raises(SecurityApiError) as stale_error:
+        service.delete_role(
+            stale.role_id,
+            expected_version=stale_archived.version - 1,
+            actor=actor,
+        )
+    assert stale_error.value.code == "SECURITY_STATE_CONFLICT"
+    assert service.store.get_role(stale.role_id) is not None
+
+
 def test_system_admin_role_cannot_be_assigned_to_new_user() -> None:
     service = _service()
     actor, _, _ = _login(service)
@@ -1494,8 +1721,7 @@ def test_login_lockout_is_generic() -> None:
         with pytest.raises(SecurityApiError) as error:
             service.login("ADMIN", "wrong")
         assert (
-            error.value.public_message
-            == "ログインユーザーIDまたはパスワードを確認してください。"
+            error.value.public_message == "ログインユーザーIDまたはパスワードを確認してください。"
         )
     user = service.store.get_user_by_login_user_id("admin")
     assert user is not None
@@ -1545,6 +1771,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     )
     assert permission_for_route("POST", "/schema/refresh-jobs") == frozenset(
         {SCHEMA_REFRESH_PERMISSION}
+    )
+    assert permission_for_route("GET", "/schema/refresh-jobs/active") == frozenset(
+        {SCHEMA_READ_PERMISSION}
     )
     assert permission_for_route("GET", "/schema/objects") == frozenset({SCHEMA_READ_PERMISSION})
     assert permission_for_route("GET", "/nl2sql/feedback") == frozenset(
@@ -1602,6 +1831,20 @@ def test_security_audit_permission_and_api_are_removed() -> None:
         {UNCLASSIFIED_PERMISSION}
     )
     assert not any(path.startswith("/api/security/audit") for path in app.openapi()["paths"])
+
+
+def test_schema_refresh_active_static_route_precedes_job_id_route() -> None:
+    from app.features.schema.router import router as schema_router
+
+    schema_paths = [
+        path
+        for route in schema_router.routes
+        if (path := getattr(route, "path", "")).startswith("/schema/refresh-jobs/")
+    ]
+
+    assert schema_paths.index("/schema/refresh-jobs/active") < schema_paths.index(
+        "/schema/refresh-jobs/{job_id}"
+    )
 
 
 def test_sql_use_roles_can_read_profile_usage_context_without_profile_management(
@@ -1691,6 +1934,9 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
             assert "few_shot_examples" not in usage_payload
             assert "select_ai_config" not in usage_payload
             assert (await client.get("/api/schema/objects")).status_code == 200
+            active_schema_refresh = await client.get("/api/schema/refresh-jobs/active")
+            assert active_schema_refresh.status_code == 200
+            assert "active_job" in active_schema_refresh.json()["data"]
             assert (await client.get("/api/nl2sql/profiles/default")).status_code == 403
             ontology_view = await client.get("/api/nl2sql/profiles/default/ontology-view")
             assert ontology_view.status_code == 403
@@ -1858,9 +2104,7 @@ def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
             assert empty_search.status_code == 200
             assert empty_search.json()["data"]["items"] == []
             assert empty_search.headers["ETag"] != allowed_etag
-            blocked_default_usage = await client.get(
-                "/api/nl2sql/profiles/default/usage-context"
-            )
+            blocked_default_usage = await client.get("/api/nl2sql/profiles/default/usage-context")
             assert blocked_default_usage.status_code == 403
             denied_default_preview = await client.post(
                 "/api/nl2sql/preview",
@@ -1876,9 +2120,7 @@ def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
                 "default",
                 "finance",
             }
-            admin_finance_usage = await client.get(
-                "/api/nl2sql/profiles/finance/usage-context"
-            )
+            admin_finance_usage = await client.get("/api/nl2sql/profiles/finance/usage-context")
             assert admin_finance_usage.status_code == 200
 
     try:
@@ -2523,12 +2765,249 @@ def test_user_manager_can_load_role_options_but_not_manage_roles(
                 json={"version": archived_role.version},
             )
             assert restore_role.status_code == 403
+            delete_role = await client.delete(
+                f"/api/security/roles/{archived_role.role_id}",
+                headers={"X-CSRF-Token": csrf, "If-Match": '"1"'},
+            )
+            assert delete_role.status_code == 403
             assert (await client.get("/api/security/permissions")).status_code == 403
 
     try:
         asyncio.run(exercise())
     finally:
         reset_security_service()
+
+
+def test_security_delete_api_requires_csrf_and_if_match_and_deletes_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    admin_user = service.store.get_user(admin.user_uuid)
+    assert admin_user is not None
+    service.store.set_password(
+        admin_user.user_uuid,
+        hash_password("BootstrapPass!123"),
+        force_change=False,
+    )
+    role = service.create_role(
+        role_code="DELETE_API_ROLE",
+        display_name="削除 API ロール",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    user, _ = service.create_user(
+        login_user_id="delete.api.user",
+        display_name="削除 API ユーザー",
+        role_ids=[role.role_id],
+        temporary_password="DeleteApiUserPass!123",
+        actor=admin,
+    )
+    disabled = service.update_user(
+        user.user_uuid,
+        expected_version=user.version,
+        display_name=user.display_name,
+        status="DISABLED",
+        role_ids=user.role_ids,
+        actor=admin,
+    )
+    archived = service.archive_role(
+        role.role_id,
+        expected_version=role.version,
+        actor=admin,
+    )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "ADMIN", "BootstrapPass!123")
+            user_path = f"/api/security/users/{user.user_uuid}"
+
+            no_csrf = await client.delete(
+                user_path,
+                headers={"If-Match": f'"{disabled.version}"'},
+            )
+            assert no_csrf.status_code == 403
+
+            missing_version = await client.delete(
+                user_path,
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert missing_version.status_code == 428
+            assert missing_version.json()["problem"]["code"] == "SECURITY_VERSION_REQUIRED"
+
+            invalid_version = await client.delete(
+                user_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'W/"{disabled.version}"'},
+            )
+            assert invalid_version.status_code == 400
+            assert invalid_version.json()["problem"]["code"] == "SECURITY_VERSION_INVALID"
+
+            stale = await client.delete(
+                user_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{disabled.version - 1}"'},
+            )
+            assert stale.status_code == 409
+            assert stale.json()["problem"]["code"] == "SECURITY_STATE_CONFLICT"
+
+            deleted_user = await client.delete(
+                user_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{disabled.version}"'},
+            )
+            assert deleted_user.status_code == 200
+            assert deleted_user.json()["data"] == {
+                "deleted": True,
+                "user_uuid": user.user_uuid,
+                "login_user_id": "delete.api.user",
+            }
+            deleted_user_again = await client.delete(
+                user_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{disabled.version}"'},
+            )
+            assert deleted_user_again.status_code == 404
+            assert deleted_user_again.json()["problem"]["code"] == "SECURITY_RESOURCE_NOT_FOUND"
+
+            role_path = f"/api/security/roles/{role.role_id}"
+            role_missing_version = await client.delete(
+                role_path,
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert role_missing_version.status_code == 428
+
+            deleted_role = await client.delete(
+                role_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{archived.version}"'},
+            )
+            assert deleted_role.status_code == 200
+            assert deleted_role.json()["data"] == {
+                "deleted": True,
+                "role_id": role.role_id,
+                "role_code": "DELETE_API_ROLE",
+            }
+            deleted_role_again = await client.delete(
+                role_path,
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{archived.version}"'},
+            )
+            assert deleted_role_again.status_code == 404
+            assert deleted_role_again.json()["problem"]["code"] == "SECURITY_RESOURCE_NOT_FOUND"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def test_security_conflicts_and_validation_use_problem_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin_user = service.store.get_user_by_login_user_id("admin")
+    assert admin_user is not None
+    service.store.set_password(
+        admin_user.user_uuid,
+        hash_password("BootstrapPass!123"),
+        force_change=False,
+    )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "ADMIN", "BootstrapPass!123")
+            headers = {
+                "X-CSRF-Token": csrf,
+                "X-Request-ID": "security-problem-contract-test",
+            }
+            role_payload = {
+                "role_code": "DATA_USER",
+                "display_name": "データユーザー",
+                "permissions": ["menu.query"],
+                "data_entitlements": [],
+            }
+            created_role = await client.post(
+                "/api/security/roles",
+                headers=headers,
+                json=role_payload,
+            )
+            assert created_role.status_code == 200
+            role_id = created_role.json()["data"]["role_id"]
+
+            duplicate_role = await client.post(
+                "/api/security/roles",
+                headers=headers,
+                json=role_payload,
+            )
+            assert_problem_contract(
+                duplicate_role,
+                code="SECURITY_ROLE_CODE_CONFLICT",
+                pointer="/role_code",
+            )
+
+            user_payload = {
+                "login_user_id": "duplicate.user",
+                "display_name": "重複確認ユーザー",
+                "temporary_password": "DuplicatePass!123",
+                "role_ids": [role_id],
+            }
+            created_user = await client.post(
+                "/api/security/users",
+                headers=headers,
+                json=user_payload,
+            )
+            assert created_user.status_code == 200
+
+            duplicate_user = await client.post(
+                "/api/security/users",
+                headers=headers,
+                json=user_payload,
+            )
+            assert_problem_contract(
+                duplicate_user,
+                code="SECURITY_USER_LOGIN_ID_CONFLICT",
+                pointer="/login_user_id",
+            )
+            assert duplicate_user.json()["problem"]["detail"] == (
+                "このログインユーザーIDは既に使用されています。別のIDを入力してください。"
+            )
+
+            invalid_user = await client.post(
+                "/api/security/users",
+                headers=headers,
+                json={"login_user_id": "", "display_name": ""},
+            )
+            assert invalid_user.status_code == 422
+            invalid_body = invalid_user.json()
+            assert invalid_body["error_code"] == "REQUEST_VALIDATION_FAILED"
+            assert {item["pointer"] for item in invalid_body["problem"]["field_errors"]} == {
+                "/login_user_id",
+                "/display_name",
+            }
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def assert_problem_contract(
+    response: httpx.Response,
+    *,
+    code: str,
+    pointer: str,
+) -> None:
+    assert response.status_code == 409
+    body = response.json()
+    problem = body["problem"]
+    assert body["error_code"] == code
+    assert body["error_messages"][0] == problem["detail"]
+    assert problem["code"] == code
+    assert problem["status"] == 409
+    assert problem["type"] == f"urn:nl2sql:problem:{code.lower().replace('_', '-')}"
+    assert problem["retryable"] is False
+    assert problem["field_errors"][0]["pointer"] == pointer
+    assert problem["request_id"] == "security-problem-contract-test"
+    assert response.headers["X-Request-ID"] == problem["request_id"]
 
 
 def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2615,6 +3094,11 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
                 },
             )
             assert update_user.status_code == 403
+            delete_user = await client.delete(
+                f"/api/security/users/{target.user_uuid}",
+                headers={"X-CSRF-Token": csrf, "If-Match": f'"{target.version}"'},
+            )
+            assert delete_user.status_code == 403
 
     try:
         asyncio.run(exercise())

@@ -113,8 +113,12 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   className?: string;
   testId?: string;
   showSlowMessage?: boolean;
+  /** 遅延案内を live region にするか。別の status が状態を担う場合は false。 */
+  announceSlow?: boolean;
   /** 同じ operation の主ボタンが loading の場合は "none" にして動的 icon を 1 つへ絞る。 */
   activityIcon?: ProcessingActivityIcon;
+  /** 別の live region が状態遷移を通知する場合は false にして二重読み上げを避ける。 */
+  announceActivity?: boolean;
 }
 
 /** 処理ラベル・spinner・経過時間・取消を一列にまとめた全画面共通表示。 */
@@ -126,7 +130,9 @@ export function ProcessingIndicator({
   className = "",
   testId,
   showSlowMessage = true,
+  announceSlow = true,
   activityIcon = "spinner",
+  announceActivity = true,
   ...timingOptions
 }: ProcessingIndicatorProps) {
   const timing = useOperationTiming(timingOptions);
@@ -141,7 +147,7 @@ export function ProcessingIndicator({
       data-processing-activity-icon={activityIcon}
       data-testid={testId}
     >
-      {timing.active ? (
+      {timing.active && announceActivity ? (
         <span className="sr-only" role="status">
           {label}
         </span>
@@ -187,7 +193,11 @@ export function ProcessingIndicator({
         </span>
       </div>
       {showSlowMessage && timing.slow ? (
-        <p className="text-xs leading-5 text-muted" role="status" data-testid={testId ? `${testId}-slow` : undefined}>
+        <p
+          className="text-xs leading-5 text-muted"
+          role={announceSlow ? "status" : undefined}
+          data-testid={testId ? `${testId}-slow` : undefined}
+        >
           {t("common.processing.slow")}
         </p>
       ) : null}

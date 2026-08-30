@@ -499,6 +499,7 @@ export type OntologyBuildStatus =
   | "queued"
   | "running"
   | "succeeded"
+  | "succeeded_with_warnings"
   | "failed"
   | "cancelled";
 
@@ -506,6 +507,8 @@ export interface OntologyBuildStep {
   name: OntologyBuildStepName;
   status: OntologyBuildStepStatus;
   detail_ja?: string;
+  /** 機械可読の状態/失敗コード(backend が付与。旧 job は空)。 */
+  code?: string;
   started_at?: string | null;
   finished_at?: string | null;
 }
@@ -513,6 +516,10 @@ export interface OntologyBuildStep {
 export interface OntologyBuildEvent {
   at: string;
   message_ja: string;
+  /** 機械可読イベントコード(例: MARKDOWN_DRAFT_UPDATED。旧 job は空)。 */
+  code?: string;
+  /** イベントの帰属ステップ(backend が付与。旧 job は null)。 */
+  step?: OntologyBuildStepName | null;
 }
 
 export interface OntologyBuildJob {
@@ -529,6 +536,8 @@ export interface OntologyBuildJob {
   markdown_output?: string;
   warnings_ja: string[];
   error_message_ja?: string;
+  /** 機械可読の失敗コード(例: SCHEMA_SCOPE_UNRESOLVED。旧 job は空)。 */
+  error_code?: string;
   created_at?: string;
   started_at?: string | null;
   finished_at?: string | null;
@@ -554,6 +563,28 @@ export interface OntologyPublishJob {
   warnings_ja?: string[];
   error_code?: string;
   error_message_ja?: string;
+}
+
+/** SQL 生成が実際に使う ontology-context 検索(語彙+埋め込み+推論展開)の 1 ヒット。 */
+export interface OntologyContextHit {
+  node: OntologyNode;
+  score: number;
+  matched_terms: string[];
+  sources: string[];
+  /** "asserted" 以外は OWL2RL 推論で拡張されたノード。 */
+  inference_source: string;
+}
+
+export interface OntologyContextSearchResult {
+  profile_id: string;
+  profile_view_id: string;
+  ontology_revision_id: string;
+  hits: OntologyContextHit[];
+  nodes: OntologyNode[];
+  edges: OntologyEdge[];
+  mermaid: string;
+  llm_markdown: string;
+  context_hash: string;
 }
 
 export interface OntologyMarkdownState {

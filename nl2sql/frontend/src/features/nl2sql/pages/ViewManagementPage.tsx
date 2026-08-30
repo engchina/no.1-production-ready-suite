@@ -2,18 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
-import { apiFetch, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
+import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
-import { useRequestScope } from "@/lib/useRequestScope";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   DbManagementLoadingSkeleton,
@@ -27,7 +27,7 @@ import {
   dbObjectSortValue,
   parseDbAdminObjectTarget,
   type DbObjectDetailTab,
-  type DbObjectOwnerFilter,
+  type DbObjectOwnerPrefix,
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
@@ -39,11 +39,12 @@ import type {
   DbAdminObjectDetail,
   SchemaRefreshJob,
 } from "../types";
+import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
-  useDbAdminObjects,
-  useSchemaRefreshJob,
-  waitForSchemaRefreshJob,
-} from "../incrementalQueries";
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
@@ -255,9 +256,10 @@ function ViewJoinWherePanel({
             </label>
           </div>
           {result.structure_markdown ? (
-            <details className="rounded-md border border-border bg-card p-3">
-              <summary className="cursor-pointer text-sm font-semibold text-foreground">
-                {t("viewMgmt.joinWhere.structureResult")}
+            <details className="group/disclosure rounded-md border border-border bg-card p-3">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                <span>{t("viewMgmt.joinWhere.structureResult")}</span>
+                <DisclosureChevron expanded="group" size={15} className="text-muted" />
               </summary>
               <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg">
                 {result.structure_markdown}
@@ -268,16 +270,6 @@ function ViewJoinWherePanel({
       ) : null}
     </div>
   );
-}
-
-function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
-  if (!job) return "";
-  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
-  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
-  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
-    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
-    progress,
-  });
 }
 
 function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
@@ -305,10 +297,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
     : t("dataMgmt.schemaJob.error");
 }
 
-function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
-  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
-}
-
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
@@ -331,7 +319,7 @@ export function ViewManagementPage() {
   const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
   const [activeView, setActiveView] = useState<ActiveView>("list");
   const [viewSearch, setViewSearch] = useState("");
-  const [viewOwnerFilter, setViewOwnerFilter] = useState<DbObjectOwnerFilter>("all");
+  const [viewOwnerPrefix, setViewOwnerPrefix] = useState<DbObjectOwnerPrefix>("");
   const [viewSort, setViewSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
@@ -341,39 +329,27 @@ export function ViewManagementPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
-  const loadSequence = useRef(0);
   const completedSchemaRefreshJob = useRef("");
   const autoJoinWhereDdlName = useRef("");
-  const { abortAll, run: runScopedRequest } = useRequestScope();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const debouncedViewSearch = useDebouncedValue(viewSearch, 250);
-  const viewOwnerQuery = viewOwnerFilter === "all" ? "" : viewOwnerFilter;
-  const viewObjectsQuery = useDbAdminObjects(debouncedViewSearch, "view", "all", viewOwnerQuery);
-  const schemaOwnersQuery = useSchemaOwners();
+  const debouncedViewOwnerPrefix = useDebouncedValue(viewOwnerPrefix, 250);
+  const viewObjectsQuery = useDbAdminObjects(
+    debouncedViewSearch,
+    "view",
+    "all",
+    debouncedViewOwnerPrefix,
+    "name_comment"
+  );
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
-  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
-  const schemaRefreshing =
-    !schemaRefreshJobQuery.error &&
-    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
-  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
-    ? schemaRefreshJobQuery.error instanceof Error
-      ? schemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError;
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
   const viewItems = useMemo(
     () => (viewObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
     [viewObjectsQuery.data]
   );
   const firstViewPage = viewObjectsQuery.data?.pages[0];
   const totalViewCount = dbAdminObjectCountsFromPage(firstViewPage, viewItems).totalCount;
-  const viewOwnerOptions = useMemo(
-    () =>
-      (schemaOwnersQuery.data?.owners ?? [])
-        .filter((item) => item.view_count > 0)
-        .map((item) => item.owner.trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right, "ja")),
-    [schemaOwnersQuery.data],
-  );
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/views",
     loadErrorMessage: t("viewMgmt.error.detail"),
@@ -419,61 +395,29 @@ export function ViewManagementPage() {
     }
   };
 
-  const refreshSchema = async (announce = false) => {
-    const sequence = loadSequence.current + 1;
-    loadSequence.current = sequence;
+  const refreshSchema = async () => {
     setLoading("schema-refresh");
     setMessage("");
     setSchemaRefreshError("");
     setSchemaRefreshNeedsFull(false);
     try {
-      await runScopedRequest(async (signal) => {
-        // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-        // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-          signal,
-          timeoutMs: API_TIMEOUT_MS.jobControl,
-        });
-        if (job.job_id) {
-          completedSchemaRefreshJob.current = "";
-          setSchemaRefreshJobId(job.job_id);
-          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
-            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
-          });
-          if (completedJob.status === "done") {
-            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
-          }
-        }
-        if (signal.aborted || sequence !== loadSequence.current) return;
-      });
-      if (sequence !== loadSequence.current) return;
-      const result = await viewObjectsQuery.refetch();
-      if (result.error) throw result.error;
-      if (announce && sequence === loadSequence.current) {
-        toast.success(t("common.action.schemaRefreshed"));
+      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
+      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
+      const job = await sharedSchemaRefresh.start();
+      if (job.job_id) {
+        completedSchemaRefreshJob.current = "";
+        setSchemaRefreshJobId(job.job_id);
       }
     } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
       setMessage(
-        isTimeoutError(err)
-          ? t("dataMgmt.schemaJob.timeout")
-          : err instanceof Error
-            ? err.message
-            : t("viewMgmt.error.load")
+        err instanceof Error
+          ? err.message
+          : t("dataMgmt.schemaJob.submitError")
       );
     } finally {
-      if (sequence === loadSequence.current) setLoading("");
+      setLoading("");
     }
   };
-
-  useEffect(() => {
-    return () => {
-      loadSequence.current += 1;
-      abortAll();
-    };
-  }, []);
 
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
@@ -484,30 +428,14 @@ export function ViewManagementPage() {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
-      toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
       const needsFull = schemaRefreshRequiresFull(job);
       setSchemaRefreshNeedsFull(needsFull);
       setSchemaRefreshError(schemaRefreshErrorMessage(job));
-      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [schemaRefreshJobQuery.data]);
-
-  useEffect(() => {
-    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
-    const reportKey = `${schemaRefreshJobId}:query-error`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    completedSchemaRefreshJob.current = reportKey;
-    const error =
-      schemaRefreshJobQuery.error instanceof Error
-        ? schemaRefreshJobQuery.error.message
-        : t("dataMgmt.schemaJob.error");
-    setSchemaRefreshError(error);
-    setSchemaRefreshNeedsFull(false);
-    toast.error(t("dataMgmt.schemaJob.error"));
-  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
 
   useEffect(() => {
     if (
@@ -537,6 +465,7 @@ export function ViewManagementPage() {
     schema_refresh_reason_code?: string;
   }) => {
     if (result.schema_refresh_job_id) {
+      sharedSchemaRefresh.track(result.schema_refresh_job_id);
       completedSchemaRefreshJob.current = "";
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
@@ -550,16 +479,14 @@ export function ViewManagementPage() {
 
   const filteredViews = useMemo(() => {
     const q = viewSearch.trim().toLowerCase();
-    const ownerKey = viewOwnerFilter.trim().toUpperCase();
+    const ownerPrefixKey = viewOwnerPrefix.trim().toUpperCase();
     return viewItems
       .filter((item) => {
-        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
+        if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
         if (!q) return true;
         return (
-          dbAdminObjectQualifiedName(item).toLowerCase().includes(q) ||
           item.name.toLowerCase().includes(q) ||
-          item.comment.toLowerCase().includes(q) ||
-          item.owner.toLowerCase().includes(q)
+          item.comment.toLowerCase().includes(q)
         );
       })
       .sort((left, right) => {
@@ -568,7 +495,7 @@ export function ViewManagementPage() {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return viewSort.direction === "asc" ? result : -result;
       });
-  }, [viewItems, viewOwnerFilter, viewSearch, viewSort]);
+  }, [viewItems, viewOwnerPrefix, viewSearch, viewSort]);
 
   useEffect(() => {
     if (activeView !== "list") return;
@@ -697,18 +624,7 @@ export function ViewManagementPage() {
         confirmationTitle={t("viewMgmt.create.executeTitle")}
         footerProcessing={
           schemaRefreshing ? (
-            <ProcessingIndicator
-              active
-              label={schemaRefreshProcessingLabel(
-                schemaRefreshJob,
-                t("viewMgmt.workspace.schemaRefreshing"),
-              )}
-              operationKey={schemaRefreshJobId || "view-create-schema-refresh"}
-              placement="workspace"
-              className="rounded-md border border-border bg-background px-3 py-2"
-              testId="view-create-schema-refresh-processing"
-              activityIcon="none"
-            />
+            <SchemaRefreshProcessing testId="view-create-schema-refresh-processing" />
           ) : null
         }
         executeOnly
@@ -742,14 +658,7 @@ export function ViewManagementPage() {
             ? t("common.schemaRefreshedAt", { date: formatDateTime(firstViewPage.refreshed_at) })
             : undefined
         }
-        status={
-          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
-            <PageHeaderStatusBadge
-              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
-              label={schemaRefreshJobLabel(schemaRefreshJob)}
-            />
-          ) : undefined
-        }
+        status={<SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />}
         actionsAriaLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
         actions={
@@ -782,9 +691,9 @@ export function ViewManagementPage() {
                   kind: "utility",
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  loading: loading === "schema-refresh" || schemaRefreshing,
-                  disabled: loading === "schema-refresh" || schemaRefreshing,
-                  onClick: () => void refreshSchema(true),
+                  loading: sharedSchemaRefresh.isStarting,
+                  disabled: schemaRefreshing,
+                  onClick: () => void refreshSchema(),
                 },
               ]
             : []
@@ -797,7 +706,7 @@ export function ViewManagementPage() {
               ? { tone: "danger", message: `${message} ${t("viewMgmt.error.retryHint")}` }
               : visibleSchemaRefreshError
                 ? { tone: "danger", message: visibleSchemaRefreshError }
-              : null
+                : null
           }
           action={
             <Button
@@ -805,14 +714,14 @@ export function ViewManagementPage() {
               variant="secondary"
               size="sm"
               onClick={
-                schemaRefreshNeedsFull
-                  ? () => void refreshSchema(true)
+                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
+                  ? () => void refreshSchema()
                   : () => void refreshObjects()
               }
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>
-                {schemaRefreshNeedsFull
+                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
                   : t("viewMgmt.action.refresh")}
               </span>
@@ -829,21 +738,14 @@ export function ViewManagementPage() {
               splitId="view-management-list"
               preferredWidePane="right"
               processing={
-                viewObjectsQuery.data &&
-                ((viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage) ||
-                  loading === "schema-refresh" ||
-                  schemaRefreshing) ? (
+                schemaRefreshing ? (
+                  <SchemaRefreshProcessing testId="view-management-workspace-processing" />
+                ) : viewObjectsQuery.data &&
+                  viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage ? (
                   <ProcessingIndicator
                     active
-                    label={
-                      loading === "schema-refresh" || schemaRefreshing
-                        ? schemaRefreshProcessingLabel(
-                            schemaRefreshJob,
-                            t("viewMgmt.workspace.schemaRefreshing"),
-                          )
-                        : t("viewMgmt.workspace.refreshing")
-                    }
-                    operationKey={schemaRefreshing ? schemaRefreshJobId : loading}
+                    label={t("viewMgmt.workspace.refreshing")}
+                    operationKey="view-list-refresh"
                     placement="workspace"
                     className="rounded-md border border-border bg-background px-3 py-2"
                     testId="view-management-workspace-processing"
@@ -865,8 +767,7 @@ export function ViewManagementPage() {
                   : ""
               }
               search={viewSearch}
-              ownerFilter={viewOwnerFilter}
-              ownerOptions={viewOwnerOptions}
+              ownerPrefix={viewOwnerPrefix}
               sort={viewSort}
               totalCount={totalViewCount}
               hasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
@@ -885,8 +786,6 @@ export function ViewManagementPage() {
                 emptyHint: t("viewMgmt.list.emptyHint"),
                 noResultsTitle: t("viewMgmt.list.noResultsTitle"),
                 noResultsHint: t("viewMgmt.list.noResultsHint"),
-                ownerFilter: t("viewMgmt.toolbar.filter"),
-                ownerFilterAll: t("viewMgmt.toolbar.filterAll"),
                 objectName: t("viewMgmt.grid.viewName"),
                 rows: t("viewMgmt.grid.rows"),
                 owner: t("viewMgmt.grid.owner"),
@@ -896,7 +795,7 @@ export function ViewManagementPage() {
                 showObject: (name) => t("viewMgmt.grid.showView", { name }),
               }}
               onSearchChange={setViewSearch}
-              onOwnerFilterChange={setViewOwnerFilter}
+              onOwnerPrefixChange={setViewOwnerPrefix}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
               onDrop={openDropDialog}

@@ -6,12 +6,31 @@ import {
   shouldConfirmDatabaseUnavailable,
   type DatabaseOperationalFailure,
 } from "./database-load-error.ts";
+import { t } from "./i18n";
 
 export interface ApiEnvelope<T> {
   data: T;
   error?: string;
   error_code?: string;
   request_id?: string;
+  problem?: ApiProblem;
+}
+
+export interface ApiFieldProblem {
+  pointer: string;
+  code: string;
+  message: string;
+}
+
+export interface ApiProblem {
+  type: string;
+  title: string;
+  status: number;
+  detail: string;
+  code: string;
+  request_id: string;
+  retryable: boolean;
+  field_errors: ApiFieldProblem[];
 }
 
 export interface ApiErrorDetails {
@@ -87,7 +106,13 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
 function notifyAuthStatus(response: Response) {
   if (typeof window === "undefined") return;
   if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
-  if (response.status === 403) window.dispatchEvent(new CustomEvent("app-auth-forbidden"));
+  if (response.status === 403) {
+    window.dispatchEvent(
+      new CustomEvent("app-auth-forbidden", {
+        detail: { requestId: response.headers.get("X-Request-ID") || undefined },
+      })
+    );
+  }
 }
 
 async function recoverAndRetrySafeRequest(
@@ -178,7 +203,16 @@ async function parseJson<T>(response: Response): Promise<T> {
             payload.error ||
               (payload.detail ? String(payload.detail) : "API リクエストに失敗しました"),
           ];
-    throw new ApiError(response.status, messages, payload.error_code, payload.error_details);
+    const problem = decodeApiProblem(payload.problem);
+    const requestId = problem?.request_id || response.headers.get("X-Request-ID") || payload.request_id;
+    throw new ApiError(
+      response.status,
+      messages,
+      payload.error_code,
+      payload.error_details,
+      problem,
+      requestId
+    );
   }
   return payload.data;
 }
@@ -303,6 +337,8 @@ export interface SettingsApiResponse<T> {
   error_messages: string[];
   warning_messages: string[];
   error_code?: string;
+  problem?: ApiProblem;
+  request_id?: string;
 }
 
 export interface EnterpriseAiConfiguredModel {
@@ -412,6 +448,17 @@ export interface SystemTableMetadata {
   last_analyzed_at: string | null;
 }
 
+export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE";
+
+export interface SystemObjectMetadata {
+  name: string;
+  object_type: SystemObjectType;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
 export interface SystemTableOperationState {
   status: SystemTableOperationStatus;
   operation_kind: "initialize" | "recreate" | null;
@@ -432,6 +479,7 @@ export interface SystemTablesStatusData {
   existing_table_count: number;
   missing_objects: SystemTableMissingObject[];
   tables: SystemTableMetadata[];
+  objects?: SystemObjectMetadata[];
   operation_state: SystemTableOperationState;
 }
 
@@ -595,6 +643,7 @@ export interface OciConfigTestResult {
   config_file_mode: string | null;
   key_file_mode: string | null;
   message: string;
+  elapsed_ms: number;
   checked_at: string;
   error_type: string | null;
 }
@@ -617,18 +666,100 @@ export interface OciPrivateKeyUploadData {
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
 export class ApiError extends Error {
   readonly status: number;
+  /** 表示用メッセージ。401/403/429/5xx ではリクエスト ID を末尾に付与する */
   readonly messages: string[];
+  /** リクエスト ID を付与していない元メッセージ(利用者向けに ID を出したくない画面で使う) */
+  readonly baseMessages: string[];
   readonly errorCode?: string;
   readonly details?: ApiErrorDetails;
+  readonly problem?: ApiProblem;
+  readonly fieldErrors: ApiFieldProblem[];
+  readonly requestId?: string;
+  readonly retryable: boolean;
 
-  constructor(status: number, messages: string[], errorCode?: string, details?: ApiErrorDetails) {
-    super(messages[0] ?? `APIエラー (${status})`);
+  constructor(
+    status: number,
+    messages: string[],
+    errorCode?: string,
+    details?: ApiErrorDetails,
+    problem?: ApiProblem,
+    requestId?: string
+  ) {
+    const baseMessages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    const displayMessages = errorMessagesWithRequestId(
+      status,
+      baseMessages,
+      problem?.request_id || requestId
+    );
+    super(displayMessages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
     this.status = status;
-    this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
-    this.errorCode = errorCode;
+    this.messages = displayMessages;
+    this.baseMessages = baseMessages;
+    this.errorCode = problem?.code ?? errorCode;
     this.details = details;
+    this.problem = problem;
+    this.fieldErrors = problem?.field_errors ?? [];
+    this.requestId = problem?.request_id || requestId;
+    this.retryable = problem?.retryable ?? false;
   }
+}
+
+/** 新旧 envelope の共存期間中、妥当な problem だけを採用する。 */
+export function decodeApiProblem(value: unknown): ApiProblem | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ApiProblem>;
+  if (
+    typeof candidate.type !== "string" ||
+    typeof candidate.title !== "string" ||
+    typeof candidate.status !== "number" ||
+    typeof candidate.detail !== "string" ||
+    typeof candidate.code !== "string"
+  ) {
+    return undefined;
+  }
+  const fieldErrors = Array.isArray(candidate.field_errors)
+    ? candidate.field_errors.filter(isApiFieldProblem)
+    : [];
+  return {
+    type: candidate.type,
+    title: candidate.title,
+    status: candidate.status,
+    detail: candidate.detail,
+    code: candidate.code,
+    request_id: typeof candidate.request_id === "string" ? candidate.request_id : "",
+    retryable: candidate.retryable === true,
+    field_errors: fieldErrors,
+  };
+}
+
+function isApiFieldProblem(value: unknown): value is ApiFieldProblem {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ApiFieldProblem>;
+  return (
+    typeof candidate.pointer === "string" &&
+    candidate.pointer.startsWith("/") &&
+    typeof candidate.code === "string" &&
+    typeof candidate.message === "string"
+  );
+}
+
+function errorMessagesWithRequestId(
+  status: number,
+  messages: string[],
+  requestId?: string | null
+): string[] {
+  if (!requestId || !(status === 401 || status === 403 || status === 429 || status >= 500)) {
+    return messages;
+  }
+  const [first, ...rest] = messages;
+  return [
+    t("common.errorWithRequestId", {
+      message: first || t("security.common.saveError"),
+      requestId,
+    }),
+    ...rest,
+  ];
 }
 
 async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApiResponse<T>> {
@@ -643,6 +774,8 @@ async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApi
       error_messages: errorMessages,
       warning_messages: payload.warning_messages ?? [],
       error_code: payload.error_code,
+      problem: decodeApiProblem(payload.problem),
+      request_id: payload.request_id,
     };
   } catch {
     return { data: null, error_messages: [], warning_messages: [] };
@@ -659,12 +792,18 @@ async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> 
   });
   const envelope = await parseSettingsEnvelope<T>(response);
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
+    const requestId = envelope.problem?.request_id || response.headers.get("X-Request-ID") || envelope.request_id;
+    const messages =
       envelope.error_messages.length > 0
         ? envelope.error_messages
-        : [`APIエラー (${response.status})`],
-      envelope.error_code
+        : [`APIエラー (${response.status})`];
+    throw new ApiError(
+      response.status,
+      messages,
+      envelope.error_code,
+      undefined,
+      envelope.problem,
+      requestId
     );
   }
   return envelope.data as T;

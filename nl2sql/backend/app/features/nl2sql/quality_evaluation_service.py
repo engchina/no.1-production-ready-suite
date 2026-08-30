@@ -123,8 +123,9 @@ class QualityEvaluationService:
         repository: QualityEvaluationRepository | None = None,
         engine_runner: EngineRunner | None = None,
         judge_runner: JudgeRunner | None = None,
-        readiness_provider: Callable[[str | None], dict[Nl2SqlEngine, tuple[bool, str]]]
-        | None = None,
+        readiness_provider: (
+            Callable[[str | None], dict[Nl2SqlEngine, tuple[bool, str]]] | None
+        ) = None,
     ) -> None:
         self._nl2sql = nl2sql
         self._repository = repository or self._build_repository()
@@ -156,8 +157,7 @@ class QualityEvaluationService:
         if self._engine_runner and not self._readiness_provider:
             readiness = {engine: (True, "") for engine in _ALLOWED_ENGINES}
         judge_ready = bool(
-            self._judge_runner
-            or self._nl2sql._enterprise_ai_client.is_configured()  # noqa: SLF001
+            self._judge_runner or self._nl2sql._enterprise_ai_client.is_configured()  # noqa: SLF001
         )
         return QualityEvaluationCapabilities(
             engines=[
@@ -298,12 +298,7 @@ class QualityEvaluationService:
             else:
                 # 不正な行も含め、ファイル全体で Case ID の一意性を検証する。
                 seen_case_ids.add(case_id)
-            if (
-                question
-                and expected_sql
-                and is_select_only(expected_sql)
-                and not duplicate_case_id
-            ):
+            if question and expected_sql and is_select_only(expected_sql) and not duplicate_case_id:
                 cases.append(
                     QualityEvaluationCase(
                         case_no=len(cases) + 1,
@@ -525,8 +520,9 @@ class QualityEvaluationService:
         if job.status == QualityEvaluationStatus.PENDING:
             self._dispatch(job.job_id)
             return True
-        if job.status == QualityEvaluationStatus.RUNNING and self._quality_evaluation_lease_expired(
-            job
+        if (
+            job.status == QualityEvaluationStatus.RUNNING
+            and self._quality_evaluation_lease_expired(job)
         ):
             self._dispatch(job.job_id)
             return True
@@ -615,9 +611,7 @@ class QualityEvaluationService:
             repetition_no=repetition,
             generated_sql="",
             normalized_sql="",
-            deterministic_analysis=QualityEvaluationDeterministicAnalysis(
-                risk_findings=[message]
-            ),
+            deterministic_analysis=QualityEvaluationDeterministicAnalysis(risk_findings=[message]),
             generation_elapsed_ms=elapsed_ms,
             judge_elapsed_ms=0,
             total_elapsed_ms=elapsed_ms,
@@ -770,15 +764,16 @@ class QualityEvaluationService:
             latest = self._repository.get_job(job.job_id)
             if latest is None or latest.status in _TERMINAL_STATUSES:
                 return
-            now = _utc_now()
+            # 同メソッド上部の now(datetime)と束縛を分ける(ISO 文字列)。
+            now_iso = _utc_now()
             failed = latest.model_copy(
                 update={
                     "status": QualityEvaluationStatus.FAILED,
                     "error_message": str(exc)[:1000],
                     "current_attempt_started_at": None,
                     "lease_expires_at": None,
-                    "finished_at": now,
-                    "updated_at": now,
+                    "finished_at": now_iso,
+                    "updated_at": now_iso,
                 },
                 deep=True,
             )

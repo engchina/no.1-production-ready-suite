@@ -64,9 +64,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
 
     if nl2sql_service.uses_incremental_store:
         try:
-            migrated, migration_detail = await run_sync_io(
-                nl2sql_service.check_incremental_store
-            )
+            migrated, migration_detail = await run_sync_io(nl2sql_service.check_incremental_store)
         except Exception as exc:  # noqa: BLE001 - normalized readiness boundary
             logger.exception(
                 "incremental_store_check_failed",

@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type QuestionTextVariant = "list" | "detail" | "compact" | "select";
 
 interface QuestionTextProps {
-  value: string;
+  /** API 応答由来の値は欠落しうるため tolerant に受ける(未定義でも画面を落とさない)。 */
+  value: string | null | undefined;
   variant?: QuestionTextVariant;
   maxLines?: number;
   className?: string;
@@ -58,7 +60,7 @@ export function QuestionText({
   expandable = false,
 }: QuestionTextProps) {
   const [expanded, setExpanded] = useState(false);
-  const fullValue = value.trim() || "-";
+  const fullValue = (value ?? "").trim() || "-";
   const displayValue = useMemo(
     () => (variant === "detail" ? fullValue : compactQuestion(fullValue) || "-"),
     [fullValue, variant]
@@ -85,11 +87,12 @@ export function QuestionText({
       {canExpand ? (
         <button
           type="button"
-          className="min-h-8 w-fit rounded-md px-2 text-xs font-semibold text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="inline-flex min-h-8 w-fit items-center gap-1 rounded-md px-2 text-xs font-semibold text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? t("nl2sql.questionText.collapse") : t("nl2sql.questionText.expand")}
+          <span>{expanded ? t("nl2sql.questionText.collapse") : t("nl2sql.questionText.expand")}</span>
+          <DisclosureChevron expanded={expanded} size={14} />
         </button>
       ) : null}
     </span>

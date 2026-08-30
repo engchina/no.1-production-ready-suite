@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { answerOntologyQuestion } from "../src/features/nl2sql/ontology/queryPlayground.ts";
+import {
+  answerOntologyQuestion,
+  browseRelationshipRows,
+  groundedRelationshipRows,
+} from "../src/features/nl2sql/ontology/queryPlayground.ts";
 import type { OntologyGraph } from "../src/features/nl2sql/ontology/types.ts";
 
 const graph: OntologyGraph = {
@@ -174,4 +178,122 @@ test("一致しない質問は no_match と候補を返す", () => {
 
 test("空質問は no_match", () => {
   assert.equal(answerOntologyQuestion(graph, "  ").stage, "no_match");
+});
+
+test("no_match の接地パス行は空(無関係な関係を混ぜない)", () => {
+  const result = answerOntologyQuestion(graph, "天気はどうですか?");
+  const rows = groundedRelationshipRows(graph, result);
+  assert.deepEqual(rows, []);
+});
+
+test("接地一致時の接地パス行はハイライト辺のみ", () => {
+  const result = answerOntologyQuestion(graph, "顧客と注文の関係は?");
+  const rows = groundedRelationshipRows(graph, result);
+  assert.deepEqual(
+    rows.map((row) => row.edge_id),
+    ["edge_customer_order"]
+  );
+});
+
+test("関係一覧は接地なしなら全件へフォールバックする", () => {
+  const grounded = groundedRelationshipRows(graph, answerOntologyQuestion(graph, "天気は?"));
+  const rows = browseRelationshipRows(graph, grounded);
+  assert.ok(rows.length >= 3);
+});
+
+// --- 実データ相当(物理ノードのみの ER ミラー)での接地回帰 -----------------------------
+const physicalGraph: OntologyGraph = {
+  nodes: [
+    {
+      id: "t-employee",
+      kind: "table",
+      business_name_ja: "従業員情報",
+      technical_name: "ADMIN.EMPLOYEE",
+      aliases: ["EMPLOYEE"],
+    },
+    {
+      id: "t-department",
+      kind: "table",
+      business_name_ja: "部署情報",
+      technical_name: "ADMIN.DEPARTMENT",
+    },
+    {
+      id: "c-salary",
+      kind: "column",
+      business_name_ja: "給与",
+      technical_name: "ADMIN.EMPLOYEE.SALARY",
+    },
+    {
+      id: "c-dept-id",
+      kind: "column",
+      business_name_ja: "所属部署ID(外部キー)",
+      technical_name: "ADMIN.EMPLOYEE.DEPARTMENT_ID",
+    },
+  ],
+  edges: [
+    {
+      id: "e-emp-salary",
+      kind: "contains",
+      source_node_id: "t-employee",
+      target_node_id: "c-salary",
+      relationship_name_ja: "含む",
+    },
+    {
+      id: "e-emp-dept-id",
+      kind: "contains",
+      source_node_id: "t-employee",
+      target_node_id: "c-dept-id",
+      relationship_name_ja: "含む",
+    },
+    {
+      id: "e-emp-dept",
+      kind: "foreign_key",
+      source_node_id: "t-employee",
+      target_node_id: "t-department",
+      relationship_name_ja: "従業員情報 → 部署情報",
+      cardinality: "many_to_one",
+      join_conditions: [
+        { source_column: "DEPARTMENT_ID", target_column: "DEPARTMENT_ID", operator: "=" },
+      ],
+    },
+  ],
+};
+
+test("「部署ごとの平均給与を教えて」が部署情報・給与・従業員情報へ接地する", () => {
+  const result = answerOntologyQuestion(physicalGraph, "部署ごとの平均給与を教えて");
+  assert.equal(result.stage, "aggregate");
+  assert.ok(result.highlightNodeIds.includes("t-department"));
+  assert.ok(result.highlightNodeIds.includes("c-salary"));
+  assert.ok(result.highlightNodeIds.includes("t-employee"));
+  assert.ok(result.highlightEdgeIds.includes("e-emp-dept"));
+  assert.ok(result.highlightEdgeIds.includes("e-emp-salary"));
+});
+
+test("「給与とは」が属性単独で親エンティティへ接地する", () => {
+  const result = answerOntologyQuestion(physicalGraph, "給与とは");
+  assert.equal(result.stage, "property");
+  assert.deepEqual([...result.highlightNodeIds].sort(), ["c-salary", "t-employee"]);
+  assert.deepEqual(result.highlightEdgeIds, ["e-emp-salary"]);
+});
+
+test("「従業員情報と部署情報の関係は?」は relationship のまま", () => {
+  const result = answerOntologyQuestion(physicalGraph, "従業員情報と部署情報の関係は?");
+  assert.equal(result.stage, "relationship");
+  assert.ok(result.highlightEdgeIds.includes("e-emp-dept"));
+});
+
+test("部分一致「部署」で 部署情報(表)が列より優先される", () => {
+  const result = answerOntologyQuestion(physicalGraph, "部署の一覧");
+  assert.equal(result.stage, "list_all");
+  assert.deepEqual(result.highlightNodeIds, ["t-department"]);
+});
+
+test("候補はスコア降順で matchedText を持つ(下線表示用)", () => {
+  const result = answerOntologyQuestion(physicalGraph, "部署ごとの平均給与を教えて");
+  assert.ok(result.candidates.length >= 2);
+  const scores = result.candidates.map((candidate) => candidate.score);
+  assert.deepEqual(scores, [...scores].sort((a, b) => b - a));
+  const salary = result.candidates.find((candidate) => candidate.node.id === "c-salary");
+  assert.equal(salary?.matchedText, "給与");
+  assert.ok((salary?.span?.start ?? -1) >= 0);
 });

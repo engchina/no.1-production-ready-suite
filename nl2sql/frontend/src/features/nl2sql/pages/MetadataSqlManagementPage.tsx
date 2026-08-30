@@ -9,21 +9,21 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, StatusBadge, toast } from "@engchina/production-ready-ui";
+import { EmptyState, toast } from "@engchina/production-ready-ui";
+
+import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
-import { apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
+import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
-import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
-import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DB_OBJECT_GRID_ROW_CLASS,
   DbManagementLoadingSkeleton,
@@ -36,12 +36,13 @@ import {
 } from "../components/DbObjectManagementShared";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
-import {
-  useDbAdminObjects,
-  useSchemaRefreshJob,
-  waitForSchemaRefreshJob,
-} from "../incrementalQueries";
+import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
 
 // タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
@@ -102,16 +103,6 @@ export function AnnotationManagementPage() {
   return <MetadataSqlManagementPage mode="annotation" />;
 }
 
-function schemaRefreshJobLabel(job: SchemaRefreshJob | null) {
-  if (!job) return "";
-  const phase = job.phase ?? (job.status === "pending" ? "queued" : job.status);
-  const progress = job.total_objects ? ` ${job.processed_objects ?? 0}/${job.total_objects}` : "";
-  return t(job.mode === "targeted" ? "dataMgmt.schemaJob.deltaProgress" : "dataMgmt.schemaJob.progress", {
-    phase: t(`dataMgmt.schemaJob.phase.${phase}`),
-    progress,
-  });
-}
-
 function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
   if (!job) return false;
   return (
@@ -135,10 +126,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
   return job.error_code
     ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
     : t("dataMgmt.schemaJob.error");
-}
-
-function schemaRefreshProcessingLabel(job: SchemaRefreshJob | null, fullLabel: string) {
-  return job?.mode === "targeted" ? t("common.processing.schemaDeltaSyncing") : fullLabel;
 }
 
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
@@ -168,46 +155,34 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
   const [targetSearch, setTargetSearch] = useState("");
-  const [targetOwnerFilter, setTargetOwnerFilter] = useState("all");
+  const [targetOwnerPrefix, setTargetOwnerPrefix] = useState("");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
   const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
-  const targetOwnerQuery = targetOwnerFilter === "all" ? "" : targetOwnerFilter;
-  const objectsQuery = useDbAdminObjects(debouncedTargetSearch, targetFilter, "all", targetOwnerQuery);
-  const schemaOwnersQuery = useSchemaOwners();
+  const debouncedTargetOwnerPrefix = useDebouncedValue(targetOwnerPrefix, 250);
+  const objectsQuery = useDbAdminObjects(
+    debouncedTargetSearch,
+    targetFilter,
+    "all",
+    debouncedTargetOwnerPrefix,
+    "name_comment"
+  );
   const objectItems = useMemo(
     () => (objectsQuery.data?.pages ?? []).flatMap((page) => page.items),
     [objectsQuery.data]
   );
   const firstObjectPage = objectsQuery.data?.pages[0];
   const totalTargetCount = dbAdminObjectCountsFromPage(firstObjectPage, objectItems).totalCount;
-  const targetOwnerOptions = useMemo(
-    () =>
-      (schemaOwnersQuery.data?.owners ?? [])
-        .filter((item) => item.table_count > 0 || item.view_count > 0)
-        .map((item) => item.owner.trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right, "ja")),
-    [schemaOwnersQuery.data],
-  );
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
-  const loadSequence = useRef(0);
   const completedSchemaRefreshJob = useRef("");
-  const { abortAll, run: runScopedRequest } = useRequestScope();
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
-  const schemaRefreshJob = schemaRefreshJobQuery.data ?? null;
-  const schemaRefreshing =
-    !schemaRefreshJobQuery.error &&
-    (schemaRefreshJob?.status === "pending" || schemaRefreshJob?.status === "running");
-  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
-    ? schemaRefreshJobQuery.error instanceof Error
-      ? schemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError;
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
 
   const allTargets = useMemo(
     () => targetItemsFromObjects(objectItems),
@@ -226,18 +201,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
   const filteredTargets = useMemo(() => {
     const q = targetSearch.trim().toLowerCase();
-    const ownerKey = targetOwnerFilter.trim().toUpperCase();
+    const ownerPrefixKey = targetOwnerPrefix.trim().toUpperCase();
     return allTargets
       .filter((item) => {
-        if (ownerKey && ownerKey !== "ALL" && item.owner.toUpperCase() !== ownerKey) return false;
+        if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
         if (targetFilter !== "all" && item.object_type !== targetFilter) return false;
         if (!q) return true;
         return (
-          item.qualifiedName.toLowerCase().includes(q) ||
           item.object_name.toLowerCase().includes(q) ||
-          item.owner.toLowerCase().includes(q) ||
-          item.comment.toLowerCase().includes(q) ||
-          targetTypeLabel(item.object_type).toLowerCase().includes(q)
+          item.comment.toLowerCase().includes(q)
         );
       })
       .sort((left, right) => {
@@ -246,7 +218,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         const result = a < b ? -1 : a > b ? 1 : 0;
         return targetSort.direction === "asc" ? result : -result;
       });
-  }, [allTargets, targetFilter, targetOwnerFilter, targetSearch, targetSort]);
+  }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch, targetSort]);
 
   const refreshObjects = async (announce = false) => {
     setMessage("");
@@ -260,59 +232,27 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     }
   };
 
-  const refreshSchema = async (announce = false) => {
-    const sequence = loadSequence.current + 1;
-    loadSequence.current = sequence;
+  const refreshSchema = async () => {
     setLoading("schema-refresh");
     setMessage("");
     setSchemaRefreshError("");
     setSchemaRefreshNeedsFull(false);
     try {
-      await runScopedRequest(async (signal) => {
-        const job = await apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
-          signal,
-          timeoutMs: API_TIMEOUT_MS.jobControl,
-        });
-        if (job.job_id) {
-          completedSchemaRefreshJob.current = "";
-          setSchemaRefreshJobId(job.job_id);
-          const completedJob = await waitForSchemaRefreshJob(job.job_id, signal, {
-            maxWaitMs: API_TIMEOUT_MS.interactiveDetail,
-          });
-          if (completedJob.status === "done") {
-            completedSchemaRefreshJob.current = `${completedJob.job_id}:${completedJob.status}`;
-          }
-        }
-        if (signal.aborted || sequence !== loadSequence.current) return;
-      });
-      if (sequence !== loadSequence.current) return;
-      const result = await objectsQuery.refetch();
-      if (result.error) throw result.error;
-      if (announce && sequence === loadSequence.current) {
-        toast.success(t("common.action.schemaRefreshed"));
+      const job = await sharedSchemaRefresh.start();
+      if (job.job_id) {
+        completedSchemaRefreshJob.current = "";
+        setSchemaRefreshJobId(job.job_id);
       }
     } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
       setMessage(
-        isTimeoutError(err)
-          ? t("dataMgmt.schemaJob.timeout")
-          : err instanceof Error
-            ? err.message
-            : t("metadataSql.error.load")
+        err instanceof Error
+          ? err.message
+          : t("dataMgmt.schemaJob.submitError")
       );
     } finally {
-      if (sequence === loadSequence.current) setLoading("");
+      setLoading("");
     }
   };
-
-  useEffect(() => {
-    return () => {
-      loadSequence.current += 1;
-      abortAll();
-    };
-  }, []);
 
   useEffect(() => {
     const job = schemaRefreshJobQuery.data;
@@ -323,33 +263,18 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
-      toast.success(t("common.action.schemaRefreshed"));
       void refreshObjects();
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
       const needsFull = schemaRefreshRequiresFull(job);
       setSchemaRefreshNeedsFull(needsFull);
       setSchemaRefreshError(schemaRefreshErrorMessage(job));
-      toast.error(needsFull ? schemaRefreshRequiredMessage(job.error_code) : t("dataMgmt.schemaJob.error"));
     }
   }, [schemaRefreshJobQuery.data]);
 
-  useEffect(() => {
-    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
-    const reportKey = `${schemaRefreshJobId}:query-error`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    completedSchemaRefreshJob.current = reportKey;
-    const error =
-      schemaRefreshJobQuery.error instanceof Error
-        ? schemaRefreshJobQuery.error.message
-        : t("dataMgmt.schemaJob.error");
-    setSchemaRefreshError(error);
-    setSchemaRefreshNeedsFull(false);
-    toast.error(t("dataMgmt.schemaJob.error"));
-  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
-
   const reloadAfterMutation = (result: DbAdminExecuteData) => {
     if (result.schema_refresh_job_id) {
+      sharedSchemaRefresh.track(result.schema_refresh_job_id);
       completedSchemaRefreshJob.current = "";
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
@@ -479,14 +404,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               })
             : undefined
         }
-        status={
-          schemaRefreshJob && schemaRefreshJob.status !== "done" ? (
-            <PageHeaderStatusBadge
-              variant={schemaRefreshJob.status === "error" ? "danger" : "info"}
-              label={schemaRefreshJobLabel(schemaRefreshJob)}
-            />
-          ) : undefined
-        }
+        status={<SchemaRefreshHeaderStatus testId={`${pageId}-schema-refresh-status`} />}
         actions={[
             {
               id: "refresh",
@@ -501,9 +419,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             kind: "utility",
             label: t("common.action.schemaRefresh"),
             icon: RefreshCw,
-            onClick: () => void refreshSchema(true),
-            loading: loading === "schema-refresh" || schemaRefreshing,
-            disabled: loading === "schema-refresh" || schemaRefreshing,
+            onClick: () => void refreshSchema(),
+            loading: sharedSchemaRefresh.isStarting,
+            disabled: schemaRefreshing,
           },
         ]}
       />
@@ -514,7 +432,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
               : visibleSchemaRefreshError
                 ? { tone: "danger", message: visibleSchemaRefreshError }
-              : null
+                : null
           }
           action={
             <Button
@@ -522,38 +440,27 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               variant="secondary"
               size="sm"
               onClick={
-                schemaRefreshNeedsFull
-                  ? () => void refreshSchema(true)
+                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
+                  ? () => void refreshSchema()
                   : () => void refreshObjects()
               }
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>
-                {schemaRefreshNeedsFull
+                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
                   : t("tableMgmt.action.refresh")}
               </span>
             </Button>
           }
         />
-        {((objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data)) ||
-          loading === "schema-refresh" ||
-          schemaRefreshing) ? (
+        {schemaRefreshing ? (
+          <SchemaRefreshProcessing testId={`${pageId}-workspace-processing`} />
+        ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) ? (
           <ProcessingIndicator
             active
-            label={
-              loading === "schema-refresh" || schemaRefreshing
-                ? schemaRefreshProcessingLabel(
-                    schemaRefreshJob,
-                    t("common.processing.schemaRefreshing"),
-                  )
-                : t("common.processing.refreshing")
-            }
-            operationKey={
-              loading === "schema-refresh" || schemaRefreshing
-                ? schemaRefreshJob?.job_id || loading
-                : "metadata-objects-refresh"
-            }
+            label={t("common.processing.refreshing")}
+            operationKey="metadata-objects-refresh"
             placement="workspace"
             className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
             testId={`${pageId}-workspace-processing`}
@@ -585,8 +492,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
                 : ""
             }
             search={targetSearch}
-            ownerFilter={targetOwnerFilter}
-            ownerOptions={targetOwnerOptions}
+            ownerPrefix={targetOwnerPrefix}
             filter={targetFilter}
             sort={targetSort}
             hasNextPage={Boolean(objectsQuery.hasNextPage)}
@@ -597,7 +503,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
                 : ""
             }
             onSearchChange={setTargetSearch}
-            onOwnerFilterChange={setTargetOwnerFilter}
+            onOwnerPrefixChange={setTargetOwnerPrefix}
             onFilterChange={setTargetFilter}
             onSortChange={toggleSort}
             onToggle={toggleTarget}
@@ -653,8 +559,7 @@ function MetadataTargetGrid({
   loading,
   error,
   search,
-  ownerFilter,
-  ownerOptions,
+  ownerPrefix,
   filter,
   sort,
   hasNextPage,
@@ -662,7 +567,7 @@ function MetadataTargetGrid({
   loadMoreError,
   fetchingDetails,
   onSearchChange,
-  onOwnerFilterChange,
+  onOwnerPrefixChange,
   onFilterChange,
   onSortChange,
   onToggle,
@@ -679,8 +584,7 @@ function MetadataTargetGrid({
   loading: boolean;
   error: string;
   search: string;
-  ownerFilter: string;
-  ownerOptions: string[];
+  ownerPrefix: string;
   filter: TargetFilter;
   sort: TargetSortState;
   hasNextPage: boolean;
@@ -688,7 +592,7 @@ function MetadataTargetGrid({
   loadMoreError: string;
   fetchingDetails: boolean;
   onSearchChange: (value: string) => void;
-  onOwnerFilterChange: (value: string) => void;
+  onOwnerPrefixChange: (value: string) => void;
   onFilterChange: (value: TargetFilter) => void;
   onSortChange: (key: TargetSortKey) => void;
   onToggle: (target: MetadataSqlTarget) => void;
@@ -698,11 +602,7 @@ function MetadataTargetGrid({
   onRetryLoadMore: () => void;
   onFetchDetails: () => void;
 }) {
-  const ownerSelectOptions =
-    ownerFilter === "all" || ownerOptions.includes(ownerFilter)
-      ? ownerOptions
-      : [ownerFilter, ...ownerOptions];
-  const hasActiveFilter = Boolean(search.trim()) || ownerFilter !== "all" || filter !== "all";
+  const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim()) || filter !== "all";
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const selectedVisibleCount = items.filter((item) => selectedSet.has(item.key)).length;
   const allVisibleSelected = items.length > 0 && selectedVisibleCount === items.length;
@@ -727,7 +627,7 @@ function MetadataTargetGrid({
 
       <DbObjectSelectorToolbar
         searchLabel={t("dbAdmin.search.label")}
-        searchPlaceholder={t("metadataSql.targets.searchPlaceholder")}
+        searchPlaceholder={t("dbAdmin.search.placeholder")}
         searchValue={search}
         onSearchChange={onSearchChange}
         resultLabel={t("objectSelector.resultCountWithSelected", {
@@ -736,22 +636,13 @@ function MetadataTargetGrid({
           selected: selectedKeys.length,
         })}
         dataTestId={`${pageId}-target-toolbar`}
+        ownerPrefixField={{
+          label: t("dbAdmin.owner.label"),
+          placeholder: t("dbAdmin.ownerPrefix.placeholder"),
+          value: ownerPrefix,
+          onChange: onOwnerPrefixChange,
+        }}
       >
-        <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
-          <span>{t("metadataSql.targets.ownerFilter")}</span>
-          <select
-            value={ownerFilter}
-            onChange={(event) => onOwnerFilterChange(event.currentTarget.value)}
-            className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-          >
-            <option value="all">{t("metadataSql.targets.ownerFilterAll")}</option>
-            {ownerSelectOptions.map((owner) => (
-              <option key={owner} value={owner}>
-                {owner}
-              </option>
-            ))}
-          </select>
-        </label>
         <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
           <span>{t("metadataSql.targets.typeFilter")}</span>
           <select

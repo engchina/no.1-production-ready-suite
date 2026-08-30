@@ -831,6 +831,8 @@ class OntologyBuildStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    # 一部の LLM 抽出 batch が失敗したが、成功分で Markdown Draft を生成できた状態
+    SUCCEEDED_WITH_WARNINGS = "succeeded_with_warnings"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -871,6 +873,8 @@ class OntologyBuildStep(OntologyContract):
     name: OntologyBuildStepName
     status: OntologyBuildStepStatus = OntologyBuildStepStatus.PENDING
     detail_ja: str = ""
+    # 機械可読の状態/失敗コード。frontend は日本語文言ではなくこのコードで分岐する。
+    code: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -880,6 +884,10 @@ class OntologyBuildEvent(OntologyContract):
 
     at: datetime = Field(default_factory=utc_now)
     message_ja: str = Field(min_length=1)
+    # 機械可読イベントコード(例: MARKDOWN_DRAFT_UPDATED)。文言正規表現の代替。
+    code: str = ""
+    # イベントの帰属ステップ(frontend のステップ別タイムライン用)。
+    step: OntologyBuildStepName | None = None
 
 
 class OntologyBuildJob(OntologyContract):
@@ -898,6 +906,8 @@ class OntologyBuildJob(OntologyContract):
     markdown_output: str = ""
     warnings_ja: list[str] = Field(default_factory=list)
     error_message_ja: str = ""
+    # 機械可読の失敗コード(例: SCHEMA_SCOPE_EMPTY / LLM_EXTRACTION_FAILED)。
+    error_code: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None

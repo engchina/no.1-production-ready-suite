@@ -19,7 +19,7 @@ from threading import RLock
 from typing import Annotated, Any, Literal, NoReturn, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
 from pydantic import Field
 
@@ -110,6 +110,7 @@ from .ontology_store import (
     stable_ontology_id,
     stable_physical_id,
 )
+from .profile_access import assert_profile_access
 from .service import nl2sql_service
 
 logger = logging.getLogger(__name__)
@@ -584,6 +585,14 @@ class OntologyApiRuntime:
             revision_id=revision.id,
         )
         current = self.store.get_artifact(artifact_id)
+        if expected_etag and current is None:
+            # クライアントが etag を提示しているのに artifact 行が無い場合、黙って
+            # 無条件上書きすると並行編集の lost update になるため conflict にする。
+            raise OntologyVersionConflictError(
+                "ONTOLOGY_MARKDOWN_ARTIFACT_MISSING",
+                "Markdown artifact が見つからないため保存できません。"
+                "再読込して再実行してください。",
+            )
         now = utc_now()
         document = {
             "artifact_id": artifact_id,
@@ -731,6 +740,15 @@ class OntologyApiRuntime:
                 if markdown:
                     return markdown
             artifacts = self.store.list_artifacts(revision_id)
+            if profile_id:
+                # 他 profile の published markdown を fallback で返さない
+                # (cross-profile リーク防止)。
+                # profile 非依存(profile_id 空)の artifact のみ fallback を許す。
+                artifacts = [
+                    document
+                    for document in artifacts
+                    if self._artifact_profile_id(document) in ("", profile_id)
+                ]
             published_documents = [
                 document
                 for document in artifacts
@@ -986,10 +1004,14 @@ class OntologyApiRuntime:
                         "業務 node の review status が draft として不正です。",
                     )
                 self._validate_business_node_mapping(node, base_nodes)
+                # AI 構築由来(source_id="ontology_build:<job_id>" 等)の provenance は保持する。
+                # source_id が無い(手編集)場合のみ MANUAL + base revision を刻む。
                 node_map[node.id] = node.model_copy(
                     deep=True,
                     update={
-                        "provenance": node.provenance.model_copy(
+                        "provenance": node.provenance.model_copy(deep=True)
+                        if node.provenance.source_id
+                        else node.provenance.model_copy(
                             update={
                                 "source_kind": OntologySourceKind.MANUAL,
                                 "source_id": base.revision.id,
@@ -1907,6 +1929,9 @@ class OntologyApiRuntime:
         profile_id: str,
         request: OntologyContextSearchRequest,
     ) -> OntologyContextSearchResult:
+        # スナップショット(ロック下)→ 検索・推論・埋め込み HTTP(ロック外)。
+        # LLM/埋め込み呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
+        # 全 ontology API を塞ぐため、状態参照だけをロック下で行う。
         with self._lock:
             profile = self._strict_profile(profile_id)
             ontology = self._query_ontology()
@@ -1919,139 +1944,139 @@ class OntologyApiRuntime:
                     "指定した公開 Ontology revision は現在有効ではありません。",
                 )
             view = self._base_profile_view(profile, ontology)
-            retrieval_hits = retrieve_ontology_nodes(
-                request.question,
-                ontology,
-                view,
-                profile=profile,
-                embedding_callback=lambda text, candidates, limit: self._embedding_hits(
-                    ontology.revision.id, text, candidates, limit
-                ),
-                limit=request.top_k,
-            )
-            node_by_id = {node.id: node for node in ontology.nodes}
-            selected_node_ids = {hit.node_id for hit in retrieval_hits}
-            inferred_node_ids = self._inferred_context_node_ids(
-                ontology.revision.id,
-                selected_node_ids,
-                allowed_node_ids=set(view.node_ids),
-                max_hops=request.max_hops,
-            )
-            selected_node_ids.update(inferred_node_ids)
-            selected_edge_ids: set[str] = set()
-            hit_ids = sorted(selected_node_ids)
-            for index, source_id in enumerate(hit_ids):
-                for target_id in hit_ids[index + 1 :]:
-                    for path in find_bounded_shortest_paths(
-                        ontology,
-                        view,
-                        source_id,
-                        target_id,
-                        max_hops=request.max_hops,
-                        max_paths=2,
-                    ):
-                        selected_node_ids.update(path.node_ids)
-                        selected_edge_ids.update(path.edge_ids)
-            semantic_kinds = {
-                OntologyEdgeKind.IS_A,
-                OntologyEdgeKind.DOMAIN,
-                OntologyEdgeKind.RANGE,
-                OntologyEdgeKind.INSTANCE_OF,
-                OntologyEdgeKind.HAS_VALUE,
-                OntologyEdgeKind.GOVERNS,
-            }
-            for edge in ontology.edges:
-                if (
-                    edge.id in view.edge_ids
-                    and edge.review_status == OntologyReviewStatus.APPROVED
-                    and edge.source_node_id in selected_node_ids
-                    and edge.target_node_id in selected_node_ids
-                    and (edge.id in view.allowed_path_ids or edge.kind in semantic_kinds)
+        retrieval_hits = retrieve_ontology_nodes(
+            request.question,
+            ontology,
+            view,
+            profile=profile,
+            embedding_callback=lambda text, candidates, limit: self._embedding_hits(
+                ontology.revision.id, text, candidates, limit
+            ),
+            limit=request.top_k,
+        )
+        node_by_id = {node.id: node for node in ontology.nodes}
+        selected_node_ids = {hit.node_id for hit in retrieval_hits}
+        inferred_node_ids = self._inferred_context_node_ids(
+            ontology.revision.id,
+            selected_node_ids,
+            allowed_node_ids=set(view.node_ids),
+            max_hops=request.max_hops,
+        )
+        selected_node_ids.update(inferred_node_ids)
+        selected_edge_ids: set[str] = set()
+        hit_ids = sorted(selected_node_ids)
+        for index, source_id in enumerate(hit_ids):
+            for target_id in hit_ids[index + 1 :]:
+                for path in find_bounded_shortest_paths(
+                    ontology,
+                    view,
+                    source_id,
+                    target_id,
+                    max_hops=request.max_hops,
+                    max_paths=2,
                 ):
-                    selected_edge_ids.add(edge.id)
-            nodes = [
-                node_by_id[node_id]
-                for node_id in sorted(selected_node_ids)
-                if node_id in node_by_id and node_id in view.node_ids
-            ]
-            edges = [
-                edge
-                for edge in sorted(ontology.edges, key=lambda item: item.id)
-                if edge.id in selected_edge_ids
-            ]
-            narrowed = view.model_copy(
-                update={
+                    selected_node_ids.update(path.node_ids)
+                    selected_edge_ids.update(path.edge_ids)
+        semantic_kinds = {
+            OntologyEdgeKind.IS_A,
+            OntologyEdgeKind.DOMAIN,
+            OntologyEdgeKind.RANGE,
+            OntologyEdgeKind.INSTANCE_OF,
+            OntologyEdgeKind.HAS_VALUE,
+            OntologyEdgeKind.GOVERNS,
+        }
+        for edge in ontology.edges:
+            if (
+                edge.id in view.edge_ids
+                and edge.review_status == OntologyReviewStatus.APPROVED
+                and edge.source_node_id in selected_node_ids
+                and edge.target_node_id in selected_node_ids
+                and (edge.id in view.allowed_path_ids or edge.kind in semantic_kinds)
+            ):
+                selected_edge_ids.add(edge.id)
+        nodes = [
+            node_by_id[node_id]
+            for node_id in sorted(selected_node_ids)
+            if node_id in node_by_id and node_id in view.node_ids
+        ]
+        edges = [
+            edge
+            for edge in sorted(ontology.edges, key=lambda item: item.id)
+            if edge.id in selected_edge_ids
+        ]
+        narrowed = view.model_copy(
+            update={
+                "node_ids": [node.id for node in nodes],
+                "edge_ids": [edge.id for edge in edges],
+            },
+            deep=True,
+        )
+        artifacts = build_semantic_artifacts(ontology, narrowed)
+        hits = [
+            OntologyContextHit(
+                node=node_by_id[hit.node_id],
+                score=min(hit.score, 1.0),
+                matched_terms=hit.matched_terms,
+                sources=list(hit.sources),
+                inference_source=(
+                    "owl2rl_local"
+                    if node_by_id[hit.node_id].provenance.inferred_by == "owl2rl_local"
+                    else "asserted"
+                ),
+            )
+            for hit in retrieval_hits
+            if hit.node_id in node_by_id
+        ]
+        existing_hit_ids = {hit.node.id for hit in hits}
+        hits.extend(
+            OntologyContextHit(
+                node=node_by_id[node_id],
+                score=0.35,
+                matched_terms=[],
+                sources=["inference"],
+                inference_source="owl2rl_local",
+            )
+            for node_id in sorted(inferred_node_ids - existing_hit_ids)
+            if node_id in node_by_id
+        )
+        published_markdown = self.published_markdown_for_revision(
+            ontology.revision.id,
+            profile_id=profile_id,
+        )
+        context_hash = hashlib.sha256(
+            canonical_json(
+                {
+                    "profile_id": profile_id,
+                    "revision_id": ontology.revision.id,
+                    "question_hash": hashlib.sha256(
+                        request.question.encode("utf-8")
+                    ).hexdigest(),
                     "node_ids": [node.id for node in nodes],
                     "edge_ids": [edge.id for edge in edges],
-                },
-                deep=True,
-            )
-            artifacts = build_semantic_artifacts(ontology, narrowed)
-            hits = [
-                OntologyContextHit(
-                    node=node_by_id[hit.node_id],
-                    score=min(hit.score, 1.0),
-                    matched_terms=hit.matched_terms,
-                    sources=list(hit.sources),
-                    inference_source=(
-                        "owl2rl_local"
-                        if node_by_id[hit.node_id].provenance.inferred_by == "owl2rl_local"
-                        else "asserted"
-                    ),
-                )
-                for hit in retrieval_hits
-                if hit.node_id in node_by_id
-            ]
-            existing_hit_ids = {hit.node.id for hit in hits}
-            hits.extend(
-                OntologyContextHit(
-                    node=node_by_id[node_id],
-                    score=0.35,
-                    matched_terms=[],
-                    sources=["inference"],
-                    inference_source="owl2rl_local",
-                )
-                for node_id in sorted(inferred_node_ids - existing_hit_ids)
-                if node_id in node_by_id
-            )
-            published_markdown = self.published_markdown_for_revision(
-                ontology.revision.id,
-                profile_id=profile_id,
-            )
-            context_hash = hashlib.sha256(
-                canonical_json(
-                    {
-                        "profile_id": profile_id,
-                        "revision_id": ontology.revision.id,
-                        "question_hash": hashlib.sha256(
-                            request.question.encode("utf-8")
-                        ).hexdigest(),
-                        "node_ids": [node.id for node in nodes],
-                        "edge_ids": [edge.id for edge in edges],
-                        "artifact_hashes": artifacts.hashes,
-                        "published_markdown_hash": hashlib.sha256(
-                            published_markdown.encode("utf-8")
-                        ).hexdigest()
+                    "artifact_hashes": artifacts.hashes,
+                    "published_markdown_hash": (
+                        hashlib.sha256(published_markdown.encode("utf-8")).hexdigest()
                         if published_markdown
-                        else "",
-                    }
-                ).encode("utf-8")
-            ).hexdigest()
-            result = OntologyContextSearchResult(
-                profile_id=profile_id,
-                profile_view_id=view.id,
-                ontology_revision_id=ontology.revision.id,
-                hits=hits,
-                nodes=nodes,
-                edges=edges,
-                mermaid=artifacts.mermaid,
-                llm_markdown=published_markdown or artifacts.llm_markdown,
-                owl_turtle=artifacts.owl_turtle,
-                shacl_turtle=artifacts.shacl_turtle,
-                context_hash=context_hash,
-            )
-            record_context_hits(len(result.nodes))
-            return result
+                        else ""
+                    ),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        result = OntologyContextSearchResult(
+            profile_id=profile_id,
+            profile_view_id=view.id,
+            ontology_revision_id=ontology.revision.id,
+            hits=hits,
+            nodes=nodes,
+            edges=edges,
+            mermaid=artifacts.mermaid,
+            llm_markdown=published_markdown or artifacts.llm_markdown,
+            owl_turtle=artifacts.owl_turtle,
+            shacl_turtle=artifacts.shacl_turtle,
+            context_hash=context_hash,
+        )
+        record_context_hits(len(result.nodes))
+        return result
 
     def _inferred_context_node_ids(
         self,
@@ -2133,7 +2158,10 @@ class OntologyApiRuntime:
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
     ) -> QuerySessionData:
-        with self._lock, observe_stage("interpret"):
+        # スナップショット(ロック下)→ LLM 解釈(ロック外)→ 書き戻し(ロック下+再検証)。
+        # Enterprise AI 呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
+        # 全 ontology API を最大 timeout×retry 分塞ぐため、HTTP はロック外で行う。
+        with self._lock:
             profile = self._strict_profile(request.profile_id)
             ontology = self._query_ontology()
             recommendation_id = self._validate_profile_confirmation(request, ontology)
@@ -2149,7 +2177,16 @@ class OntologyApiRuntime:
                 )
             view = self._narrow_profile_view(base_view, ontology, allowed)
             self.sessions.register_profile_view(view)
+        with observe_stage("interpret"):
             intent = self._interpret_question(request.question, profile, ontology, view)
+        with self._lock:
+            # LLM 呼び出し中に revision が公開・置換されていたら stale session を作らない
+            current_ontology = self._query_ontology()
+            if current_ontology.revision.id != ontology.revision.id:
+                raise OntologyVersionConflictError(
+                    "ONTOLOGY_REVISION_CHANGED",
+                    "Ontology revision が更新されました。もう一度実行してください。",
+                )
             row_limit = request.row_limit or profile.default_row_limit
             if intent.limit is None:
                 intent.limit = row_limit
@@ -2243,12 +2280,10 @@ class OntologyApiRuntime:
             node_by_id = {node.id: node for node in ontology.nodes}
             edge_by_id = {edge.id: edge for edge in ontology.edges}
             has_scoped_business_content = any(
-                (node := node_by_id.get(node_id)) is not None
-                and node.kind in _BUSINESS_NODE_KINDS
+                (node := node_by_id.get(node_id)) is not None and node.kind in _BUSINESS_NODE_KINDS
                 for node_id in view.node_ids
             ) or any(
-                (edge := edge_by_id.get(edge_id)) is not None
-                and edge.kind in _BUSINESS_EDGE_KINDS
+                (edge := edge_by_id.get(edge_id)) is not None and edge.kind in _BUSINESS_EDGE_KINDS
                 for edge_id in view.edge_ids
             )
             if not has_scoped_business_content:
@@ -2272,11 +2307,7 @@ class OntologyApiRuntime:
                 retrieved_node_ids=sorted(
                     {item.ontology_node_id for item in intent.entities if item.ontology_node_id}
                     | {item.ontology_node_id for item in intent.metrics if item.ontology_node_id}
-                    | {
-                        item.ontology_node_id
-                        for item in intent.dimensions
-                        if item.ontology_node_id
-                    }
+                    | {item.ontology_node_id for item in intent.dimensions if item.ontology_node_id}
                 ),
                 profile_selection_source="legacy_job",
             )
@@ -2306,14 +2337,10 @@ class OntologyApiRuntime:
                 "revision_id": ontology.revision.id,
                 "revision": ontology.revision.model_dump(mode="json"),
                 "nodes": [
-                    node.model_dump(mode="json")
-                    for node in ontology.nodes
-                    if node.id in node_ids
+                    node.model_dump(mode="json") for node in ontology.nodes if node.id in node_ids
                 ],
                 "edges": [
-                    edge.model_dump(mode="json")
-                    for edge in ontology.edges
-                    if edge.id in edge_ids
+                    edge.model_dump(mode="json") for edge in ontology.edges if edge.id in edge_ids
                 ],
             }
 
@@ -2578,10 +2605,13 @@ class OntologyApiRuntime:
             ontology.revision.id,
             profile_id=session.profile_id,
         )
-        payload["llm_markdown"] = published_markdown or build_semantic_artifacts(
-            ontology,
-            view,
-        ).llm_markdown
+        payload["llm_markdown"] = (
+            published_markdown
+            or build_semantic_artifacts(
+                ontology,
+                view,
+            ).llm_markdown
+        )
         payload["context_hash"] = hashlib.sha256(
             canonical_json(payload).encode("utf-8")
         ).hexdigest()
@@ -2699,6 +2729,13 @@ class OntologyApiRuntime:
         if not callable(configured) or not configured() or not callable(embed):
             return []
         candidate_list = list(candidates)
+        # revision 単位の埋め込みキャッシュは graph cache と同じ上限で LRU 破棄する
+        # (1536 float × node 数 × revision 数の無制限成長を防ぐ)。
+        max_revisions = max(1, int(get_settings().nl2sql_ontology_graph_cache_max_revisions))
+        if revision_id in self._embeddings:
+            self._embeddings[revision_id] = self._embeddings.pop(revision_id)
+        while len(self._embeddings) >= max_revisions and revision_id not in self._embeddings:
+            self._embeddings.pop(next(iter(self._embeddings)))
         vectors = self._embeddings.setdefault(revision_id, {})
         missing = [node for node in candidate_list if node.id not in vectors]
         try:
@@ -3935,19 +3972,28 @@ class OntologyApiRuntime:
         publish/archive のような revision header だけの変更では include_graph=False で
         再永続化を省く。初回 graph 保存は collection ごとの単一 transaction にまとめ、
         大規模スキーマの read path で node/edge 件数分の接続を作らない。
+
+        revision header は nodes/edges の後に保存する。読み手は header 経由でしか
+        revision を発見しないため、途中クラッシュしても「node だけの revision」を
+        観測させない(残った graph 行は再実行時に同一 identity で上書きされる)。
         """
 
-        self._save(
-            "revisions",
-            {
-                "revision_id": ontology.revision.id,
-                "status": ontology.revision.status.value,
-                "schema_fingerprint": ontology.revision.schema_fingerprint,
-                "payload": ontology.revision,
-            },
-        )
-        self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(deep=True)
+        def save_revision_header() -> None:
+            self._save(
+                "revisions",
+                {
+                    "revision_id": ontology.revision.id,
+                    "status": ontology.revision.status.value,
+                    "schema_fingerprint": ontology.revision.schema_fingerprint,
+                    "payload": ontology.revision,
+                },
+            )
+            self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(
+                deep=True
+            )
+
         if not include_graph:
+            save_revision_header()
             return
         self._save_graph_documents_atomic(
             "nodes",
@@ -3984,6 +4030,7 @@ class OntologyApiRuntime:
                 for edge in ontology.edges
             ],
         )
+        save_revision_header()
 
     def _save_graph_documents_atomic(
         self,
@@ -4139,7 +4186,19 @@ ontology_build_service = OntologyBuildService(
     source_storage=ontology_source_storage,
 )
 ontology_publish_service = OntologyPublishService(ontology_runtime)
-router = APIRouter(prefix="/nl2sql", tags=["nl2sql-ontology"])
+
+
+def _require_persistence() -> None:
+    """nl2sql/router.py と同じ persistence ゲート(未準備時は 503 + Retry-After)。"""
+
+    nl2sql_service.ensure_persistence_available()
+
+
+router = APIRouter(
+    prefix="/nl2sql",
+    tags=["nl2sql-ontology"],
+    dependencies=[Depends(_require_persistence)],
+)
 
 
 def _run_runtime_sync[T](
@@ -4342,7 +4401,11 @@ def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]
     "/profiles/{profile_id}/ontology-markdown",
     response_model=ApiResponse[OntologyMarkdownState],
 )
-def get_profile_ontology_markdown(profile_id: str) -> ApiResponse[OntologyMarkdownState]:
+def get_profile_ontology_markdown(
+    profile_id: str,
+    http_request: Request,
+) -> ApiResponse[OntologyMarkdownState]:
+    assert_profile_access(http_request, profile_id)
     try:
         state = _run_runtime_sync(ontology_runtime.ontology_markdown_state, profile_id)
         return ApiResponse(data=state)
@@ -4357,7 +4420,9 @@ def get_profile_ontology_markdown(profile_id: str) -> ApiResponse[OntologyMarkdo
 def save_profile_ontology_markdown_draft(
     profile_id: str,
     request: OntologyMarkdownDraftPatch,
+    http_request: Request,
 ) -> ApiResponse[OntologyMarkdownState]:
+    assert_profile_access(http_request, profile_id)
     try:
         state = _run_runtime_sync(
             ontology_runtime.save_ontology_markdown_draft,
@@ -4373,7 +4438,11 @@ def save_profile_ontology_markdown_draft(
     "/profiles/{profile_id}/ontology-view",
     response_model=ApiResponse[ProfileOntologyViewData],
 )
-def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyViewData]:
+def get_profile_ontology_view(
+    profile_id: str,
+    http_request: Request,
+) -> ApiResponse[ProfileOntologyViewData]:
+    assert_profile_access(http_request, profile_id)
     try:
         view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
         warnings = _run_runtime_sync(
@@ -4408,9 +4477,11 @@ def get_profile_ontology_view(profile_id: str) -> ApiResponse[ProfileOntologyVie
 )
 def materialize_profile_ontology_view(
     profile_id: str,
+    http_request: Request,
 ) -> ApiResponse[ProfileOntologyViewData]:
     """互換 API として現在の Profile scope を明示的に永続化する。"""
 
+    assert_profile_access(http_request, profile_id)
     try:
         view = _run_runtime_sync(ontology_runtime.materialize_profile_view, profile_id)
         _current_view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
@@ -4446,9 +4517,13 @@ class ProfileOntologyMermaidData(OntologyContract):
     "/profiles/{profile_id}/ontology-view/mermaid",
     response_model=ApiResponse[ProfileOntologyMermaidData],
 )
-def get_profile_ontology_mermaid(profile_id: str) -> ApiResponse[ProfileOntologyMermaidData]:
+def get_profile_ontology_mermaid(
+    profile_id: str,
+    http_request: Request,
+) -> ApiResponse[ProfileOntologyMermaidData]:
     """Profile スコープの erDiagram(SQL 生成プロンプトへ注入するものと同じ表現)。"""
 
+    assert_profile_access(http_request, profile_id)
     try:
         view, ontology = _run_runtime_sync(ontology_runtime.profile_view, profile_id)
         return ApiResponse(
@@ -4513,7 +4588,9 @@ def confirm_ontology_profile_recommendation(
 def search_profile_ontology_context(
     profile_id: str,
     request: OntologyContextSearchRequest,
+    http_request: Request,
 ) -> ApiResponse[OntologyContextSearchResult]:
+    assert_profile_access(http_request, profile_id)
     try:
         return ApiResponse(
             data=_run_runtime_sync(
@@ -4533,7 +4610,9 @@ def search_profile_ontology_context(
 def patch_profile_ontology_view(
     profile_id: str,
     request: ProfileOntologyViewPatch,
+    http_request: Request,
 ) -> ApiResponse[ProfileOntologyViewData]:
+    assert_profile_access(http_request, profile_id)
     try:
         view, ontology = _run_runtime_sync(
             ontology_runtime.patch_profile_view,
@@ -4737,9 +4816,11 @@ def create_ontology_improvement_proposal(
     "/ontology/proposals/{proposal_id}",
     response_model=ApiResponse[OntologyProposal],
 )
-def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposal]:
+def get_ontology_proposal(proposal_id: str, http_request: Request) -> ApiResponse[OntologyProposal]:
     try:
-        return ApiResponse(data=_run_runtime_sync(ontology_runtime.get_proposal, proposal_id))
+        proposal = _run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
+        assert_profile_access(http_request, proposal.profile_id)
+        return ApiResponse(data=proposal)
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -4750,8 +4831,11 @@ def get_ontology_proposal(proposal_id: str) -> ApiResponse[OntologyProposal]:
 )
 def accept_ontology_proposal(
     proposal_id: str,
+    http_request: Request,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
+        proposal = _run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
+        assert_profile_access(http_request, proposal.profile_id)
         return ApiResponse(data=_run_runtime_sync(ontology_runtime.accept_proposal, proposal_id))
     except Exception as exc:
         _raise_domain_error(exc)
@@ -4763,8 +4847,11 @@ def accept_ontology_proposal(
 )
 def reject_ontology_proposal(
     proposal_id: str,
+    http_request: Request,
 ) -> ApiResponse[OntologyProposalReviewData]:
     try:
+        proposal = _run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
+        assert_profile_access(http_request, proposal.profile_id)
         return ApiResponse(data=_run_runtime_sync(ontology_runtime.reject_proposal, proposal_id))
     except Exception as exc:
         _raise_domain_error(exc)
@@ -4785,10 +4872,14 @@ class OntologyProposalBatchReviewData(OntologyContract):
 )
 def batch_accept_ontology_proposals(
     request: OntologyProposalBatchAcceptRequest,
+    http_request: Request,
 ) -> ApiResponse[OntologyProposalBatchReviewData]:
     """複数提案を 1 つの draft revision へまとめて承認する(一括承認)。"""
 
     try:
+        for proposal_id in request.proposal_ids:
+            target = _run_runtime_sync(ontology_runtime.get_proposal, proposal_id)
+            assert_profile_access(http_request, target.profile_id)
         proposals, draft = _run_runtime_sync(
             ontology_runtime.accept_proposals,
             request.proposal_ids,
@@ -4829,6 +4920,7 @@ class OntologyProposalListData(OntologyContract):
 )
 async def start_ontology_build(
     profile_id: str,
+    http_request: Request,
     business_text: Annotated[str, Form()] = "",
     run_schema_naming: Annotated[bool, Form()] = True,
     run_qa_extraction: Annotated[bool, Form()] = True,
@@ -4839,7 +4931,11 @@ async def start_ontology_build(
 ) -> ApiResponse[OntologyBuildJobData]:
     """資料を保存し、永続 AI オントロジー構築 job を投入する。"""
 
-    if source_files and len(source_files) > ONTOLOGY_SOURCE_FILE_MAX_COUNT:
+    assert_profile_access(http_request, profile_id)
+    # 互換 qa_file も source_files と同じ永続資料として保存し、解析は worker だけで行う。
+    # 上限判定は qa_file を含む総数で行う(qa_file による上限回避を防ぐ)。
+    uploads = [*(source_files or []), *([qa_file] if qa_file is not None else [])]
+    if len(uploads) > ONTOLOGY_SOURCE_FILE_MAX_COUNT:
         raise HTTPException(
             status_code=400,
             detail={
@@ -4851,9 +4947,13 @@ async def start_ontology_build(
             },
         )
 
+    # 未知 profile のときにファイルだけ残さない(保存前に profile を検証する)
+    try:
+        await run_sync_io(ontology_runtime.ensure_profile, profile_id)
+    except Exception as exc:
+        _raise_domain_error(exc)
+
     stored_sources = []
-    # 互換 qa_file も source_files と同じ永続資料として保存し、解析は worker だけで行う。
-    uploads = [*(source_files or []), *([qa_file] if qa_file is not None else [])]
     for source_file in uploads:
         try:
             stored_sources.append(
@@ -4891,7 +4991,7 @@ async def start_ontology_build(
     "/ontology-build/{job_id}",
     response_model=ApiResponse[OntologyBuildJobData],
 )
-def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+def get_ontology_build_job(job_id: str, http_request: Request) -> ApiResponse[OntologyBuildJobData]:
     job = _run_runtime_sync(ontology_build_service.get, job_id)
     if job is None:
         raise HTTPException(
@@ -4901,6 +5001,7 @@ def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
                 "message_ja": "AI オントロジー構築 job が見つかりません。",
             },
         )
+    assert_profile_access(http_request, job.profile_id)
     return ApiResponse(data=OntologyBuildJobData(job=job))
 
 
@@ -4910,10 +5011,12 @@ def get_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
 )
 def list_profile_ontology_build_jobs(
     profile_id: str,
+    http_request: Request,
     limit: int = 5,
 ) -> ApiResponse[OntologyBuildJobListData]:
     """リロード復旧・履歴表示用の build job 一覧(新しい順)。"""
 
+    assert_profile_access(http_request, profile_id)
     try:
         jobs = _run_runtime_sync(
             ontology_build_service.list_profile_jobs,
@@ -4929,7 +5032,12 @@ def list_profile_ontology_build_jobs(
     "/ontology-build/{job_id}/cancel",
     response_model=ApiResponse[OntologyBuildJobData],
 )
-def cancel_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+def cancel_ontology_build_job(
+    job_id: str, http_request: Request
+) -> ApiResponse[OntologyBuildJobData]:
+    current = _run_runtime_sync(ontology_build_service.get, job_id)
+    if current is not None:
+        assert_profile_access(http_request, current.profile_id)
     try:
         job = _run_runtime_sync(ontology_build_service.cancel, job_id)
         return ApiResponse(data=OntologyBuildJobData(job=job))
@@ -4942,9 +5050,14 @@ def cancel_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
     response_model=ApiResponse[OntologyBuildJobData],
     status_code=202,
 )
-def retry_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
+def retry_ontology_build_job(
+    job_id: str, http_request: Request
+) -> ApiResponse[OntologyBuildJobData]:
     """failed/cancelled job を保存済み入力から再実行する(新規 job を返す)。"""
 
+    current = _run_runtime_sync(ontology_build_service.get, job_id)
+    if current is not None:
+        assert_profile_access(http_request, current.profile_id)
     try:
         job = _run_runtime_sync(ontology_build_service.retry, job_id)
         return ApiResponse(data=OntologyBuildJobData(job=job))
@@ -4958,7 +5071,9 @@ def retry_ontology_build_job(job_id: str) -> ApiResponse[OntologyBuildJobData]:
 )
 def list_profile_ontology_proposals(
     profile_id: str,
+    http_request: Request,
 ) -> ApiResponse[OntologyProposalListData]:
+    assert_profile_access(http_request, profile_id)
     try:
         return ApiResponse(
             data=OntologyProposalListData(

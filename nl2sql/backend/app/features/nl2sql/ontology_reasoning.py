@@ -221,9 +221,7 @@ class OntologyPublishService:
         artifacts = build_semantic_artifacts(ontology)
         draft_markdown_reader = getattr(self.runtime, "draft_markdown_for_revision", None)
         draft_markdown = str(
-            draft_markdown_reader(job.revision_id)
-            if callable(draft_markdown_reader)
-            else ""
+            draft_markdown_reader(job.revision_id) if callable(draft_markdown_reader) else ""
         ).strip()
         llm_markdown = draft_markdown or artifacts.llm_markdown
         rdf_graph_name, inferred_graph_name = revision_graph_names(job.revision_id)
@@ -323,9 +321,7 @@ class OntologyPublishService:
                 "artifact_hashes": {
                     **artifacts.hashes,
                     "llm_markdown": hashlib.sha256(llm_markdown.encode("utf-8")).hexdigest(),
-                    "published_markdown": hashlib.sha256(
-                        llm_markdown.encode("utf-8")
-                    ).hexdigest(),
+                    "published_markdown": hashlib.sha256(llm_markdown.encode("utf-8")).hexdigest(),
                     "inferred_turtle": hashlib.sha256(inferred_turtle.encode("utf-8")).hexdigest(),
                 },
             },

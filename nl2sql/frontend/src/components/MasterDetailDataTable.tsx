@@ -46,6 +46,10 @@ export function MasterDetailDataTable<T>({
   ariaLabel,
   testId,
   className,
+  rowClassName,
+  scrollClassName,
+  scrollTestId,
+  scrollAriaLabel,
 }: {
   columns: Array<DataTableColumn<T>>;
   rows: T[];
@@ -61,6 +65,14 @@ export function MasterDetailDataTable<T>({
   ariaLabel?: string;
   testId?: string;
   className?: string;
+  /** データ行と loading 行へ追加する class。共通の行高などを指定する。 */
+  rowClassName?: string;
+  /** 横スクロール領域へ追加する class。高さ制限や縦スクロールもここへ集約する。 */
+  scrollClassName?: string;
+  /** スクロール領域を E2E / a11y 検証から特定するための任意 ID。 */
+  scrollTestId?: string;
+  /** 縦・横スクロール領域として公開するときのアクセシブルネーム。 */
+  scrollAriaLabel?: string;
 }) {
   const selectable = Boolean(onRowSelect);
   const paddingClass = dense ? "px-3 py-2" : "px-4 py-3";
@@ -72,7 +84,13 @@ export function MasterDetailDataTable<T>({
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card">
-      <div className="overflow-x-auto">
+      <div
+        role={scrollAriaLabel ? "region" : undefined}
+        tabIndex={scrollAriaLabel ? 0 : undefined}
+        aria-label={scrollAriaLabel}
+        className={cn("overflow-x-auto", scrollClassName)}
+        data-testid={scrollTestId}
+      >
         <table
           className={cn("w-full divide-y divide-border text-left text-sm", className)}
           aria-label={ariaLabel}
@@ -132,7 +150,7 @@ export function MasterDetailDataTable<T>({
           <tbody className="divide-y divide-border/70">
             {loading
               ? Array.from({ length: 5 }, (_, index) => (
-                  <tr key={`loading-${index}`}>
+                  <tr key={`loading-${index}`} className={rowClassName}>
                     <td colSpan={columns.length} className={paddingClass}>
                       <div
                         className="h-5 animate-pulse rounded bg-muted/30 motion-reduce:animate-none"
@@ -161,7 +179,8 @@ export function MasterDetailDataTable<T>({
                         className={cn(
                           "transition-colors",
                           selectable && "cursor-pointer",
-                          selected ? "bg-primary/10" : selectable && "hover:bg-background"
+                          selected ? "bg-primary/10" : selectable && "hover:bg-background",
+                          rowClassName
                         )}
                         onClick={(event) => handleRowClick(event, row)}
                       >

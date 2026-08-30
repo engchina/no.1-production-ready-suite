@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Eye, FileText, Network, Sparkles } from "lucide-react";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { Eye, FileText, Network, Sparkles } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import type { Nl2SqlEngine } from "../types";
@@ -45,10 +46,8 @@ export function Nl2SqlExecutionOptionsPanel({
   onIncludeShowPromptChange,
   onOpenChange,
   onRewriteUseGlossaryChange,
-  onRewriteUseSchemaChange,
   onUseOntologyContextChange,
   rewriteUseGlossary,
-  rewriteUseSchema,
 }: {
   disabled: boolean;
   engine: Nl2SqlEngine;
@@ -60,15 +59,12 @@ export function Nl2SqlExecutionOptionsPanel({
   onIncludeShowPromptChange: (checked: boolean) => void;
   onOpenChange: (open: boolean) => void;
   onRewriteUseGlossaryChange: (checked: boolean) => void;
-  onRewriteUseSchemaChange: (checked: boolean) => void;
   onUseOntologyContextChange: (checked: boolean) => void;
   rewriteUseGlossary: boolean;
-  rewriteUseSchema: boolean;
 }) {
   const showPromptUnavailable = includeShowPrompt && engine !== "select_ai";
   const hasChangedOptions =
-    rewriteUseGlossary ||
-    rewriteUseSchema ||
+    !rewriteUseGlossary ||
     !useOntologyContext ||
     !includeInterpretation ||
     !includeShowPrompt;
@@ -103,14 +99,9 @@ export function Nl2SqlExecutionOptionsPanel({
             </span>
           ) : null}
         </span>
-        <ChevronDown
+        <DisclosureChevron
+          expanded={open}
           size={16}
-          className={
-            open
-              ? "shrink-0 rotate-180 transition-transform"
-              : "shrink-0 transition-transform"
-          }
-          aria-hidden="true"
         />
       </Button>
       <div
@@ -126,13 +117,6 @@ export function Nl2SqlExecutionOptionsPanel({
             icon={Sparkles}
             label={t("nl2sql.rewrite.useGlossary")}
             onChange={onRewriteUseGlossaryChange}
-          />
-          <OptionCheckbox
-            checked={rewriteUseSchema}
-            disabled={disabled}
-            icon={Sparkles}
-            label={t("nl2sql.rewrite.useSchema")}
-            onChange={onRewriteUseSchemaChange}
           />
           <OptionCheckbox
             checked={useOntologyContext}

@@ -373,10 +373,15 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   const editorActions = editor.getByTestId("profile-editor-actions");
   const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作", exact: true });
+  const deleteMenuChevron = deleteMenuButton.locator('svg[data-state]');
   await expect(deleteMenuButton).toBeVisible();
+  await expect(deleteMenuChevron).toHaveAttribute("data-state", "collapsed");
+  await expect(deleteMenuChevron).toHaveClass(/rotate-90/);
   await expect(editorActions.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
 
   await deleteMenuButton.click();
+  await expect(deleteMenuChevron).toHaveAttribute("data-state", "expanded");
+  await expect(deleteMenuChevron).toHaveClass(/rotate-0/);
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expect(dialog).toBeVisible();
@@ -384,6 +389,7 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(deleteMenuButton).toBeVisible();
+  await expect(deleteMenuChevron).toHaveAttribute("data-state", "collapsed");
   expect(api.deleteRequests()).toBe(0);
 
   await deleteMenuButton.click();

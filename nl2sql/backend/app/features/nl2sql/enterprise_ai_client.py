@@ -41,6 +41,7 @@ class EnterpriseAiDirectClient(Protocol):
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
@@ -73,6 +74,7 @@ class OciEnterpriseAiDirectClient:
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
@@ -82,6 +84,7 @@ class OciEnterpriseAiDirectClient:
             prompt=prompt,
             context=context,
             system_prompt=system_prompt,
+            max_output_tokens=max_output_tokens,
         )
         response = self._post_json(
             payload,
@@ -196,6 +199,7 @@ def _build_payload(
     prompt: str,
     context: str,
     system_prompt: str,
+    max_output_tokens: int | None = None,
 ) -> Mapping[str, Any]:
     values: dict[str, Any] = {
         "model": model_id,
@@ -204,7 +208,11 @@ def _build_payload(
         "system_prompt": system_prompt,
         "instructions": system_prompt,
         "user_message": f"{context}\n\n質問:\n{prompt}",
-        "max_output_tokens": int(settings.oci_enterprise_ai_llm_max_output_tokens),
+        "max_output_tokens": int(
+            max_output_tokens
+            if max_output_tokens is not None
+            else settings.oci_enterprise_ai_llm_max_output_tokens
+        ),
         "temperature": 0,
     }
     if settings.oci_enterprise_ai_llm_payload_template.strip():

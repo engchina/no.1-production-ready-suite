@@ -31,7 +31,13 @@ moduleResolver._resolveFilename = function resolveTestAlias(
   return originalResolveFilename.call(this, resolvedRequest ?? basePath, parent, isMain, options);
 };
 
-const { NAV_SECTIONS } = await import("../src/components/layout/nav-config.ts");
+const [
+  { NAV_SECTIONS, resolveCollapsedSections },
+  { defaultEntryRoute, firstAllowedRoute },
+] = await Promise.all([
+  import("../src/components/layout/nav-config.ts"),
+  import("../src/features/security/route-permissions.ts"),
+]);
 moduleResolver._resolveFilename = originalResolveFilename;
 
 const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
@@ -87,4 +93,39 @@ test("サイドバーのメニュー icon displayName は重複しない", () =>
   );
 
   assert.equal(new Set(iconNames).size, iconNames.length);
+});
+
+test("サイドバーは AI 活用だけを初期展開し、保存済みの明示状態を優先する", () => {
+  assert.deepEqual(resolveCollapsedSections({}), {
+    "nav.section.use": false,
+    "nav.section.prepare": true,
+    "nav.section.improve": true,
+    "nav.section.security": true,
+    "nav.section.settings": true,
+  });
+
+  assert.deepEqual(
+    resolveCollapsedSections({
+      "nav.section.prepare": false,
+      "nav.section.use": true,
+    }),
+    {
+      "nav.section.use": true,
+      "nav.section.prepare": false,
+      "nav.section.improve": true,
+      "nav.section.security": true,
+      "nav.section.settings": true,
+    }
+  );
+});
+
+test("既定入口は SQL 生成権限がなければ root に戻し、root が最初の許可画面へ振り分ける", () => {
+  const queryOnly = (permission: string) => permission === "menu.query";
+  const appearanceOnly = (permission: string) => permission === "menu.settings_appearance";
+  const noPermissions = () => false;
+
+  assert.equal(defaultEntryRoute(queryOnly), "/query");
+  assert.equal(defaultEntryRoute(appearanceOnly), "/");
+  assert.equal(firstAllowedRoute(appearanceOnly), "/settings/appearance");
+  assert.equal(firstAllowedRoute(noPermissions), "/forbidden");
 });

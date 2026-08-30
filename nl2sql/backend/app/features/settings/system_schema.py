@@ -38,13 +38,11 @@ _IGNORED_APPLY_CODES = frozenset(
 _IGNORED_DROP_CODES = frozenset({"ORA-00942", "ORA-01418", "ORA-02289"})
 _ACTIVE_JOB_STATES = ("ACCEPTED", "PENDING", "QUEUED", "RUNNING", "PROCESSING")
 _CREATE_OBJECT_PATTERN = re.compile(
-    r"\bCREATE\s+(?:UNIQUE\s+|VECTOR\s+)?"
-    r"(TABLE|INDEX|SEQUENCE)\s+([A-Z][A-Z0-9_$#]*)",
+    r"\bCREATE\s+(?:UNIQUE\s+|VECTOR\s+)?" r"(TABLE|INDEX|SEQUENCE)\s+([A-Z][A-Z0-9_$#]*)",
     flags=re.IGNORECASE,
 )
 _ADD_CONSTRAINT_PATTERN = re.compile(
-    r"^\s*ALTER\s+TABLE\s+([A-Z][A-Z0-9_$#]*)\s+"
-    r"ADD\s+CONSTRAINT\s+([A-Z][A-Z0-9_$#]*)\b",
+    r"^\s*ALTER\s+TABLE\s+([A-Z][A-Z0-9_$#]*)\s+" r"ADD\s+CONSTRAINT\s+([A-Z][A-Z0-9_$#]*)\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
 
@@ -182,9 +180,7 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "IX_NL2SQL_EVAL_JOB_LEASE",
 )
 
-MANAGED_SEQUENCES: tuple[str, ...] = (
-    "NL2SQL_MIGRATION_SNAPSHOT_SEQ",
-)
+MANAGED_SEQUENCES: tuple[str, ...] = ("NL2SQL_MIGRATION_SNAPSHOT_SEQ",)
 
 MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "TABLE") for name in MANAGED_TABLES),
@@ -224,9 +220,7 @@ MANAGED_FOREIGN_KEYS: tuple[ManagedForeignKey, ...] = (
         referenced_columns=("PROFILE_ID",),
     ),
 )
-_MANAGED_FOREIGN_KEYS_BY_NAME = {
-    constraint.name: constraint for constraint in MANAGED_FOREIGN_KEYS
-}
+_MANAGED_FOREIGN_KEYS_BY_NAME = {constraint.name: constraint for constraint in MANAGED_FOREIGN_KEYS}
 
 
 class SystemSchemaError(RuntimeError):
@@ -294,9 +288,7 @@ def split_migration_sql(sql: str) -> list[str]:
     if current:
         statement = "\n".join(current).strip()
         if statement:
-            statements.append(
-                statement if in_plsql else _strip_sql_statement_terminator(statement)
-            )
+            statements.append(statement if in_plsql else _strip_sql_statement_terminator(statement))
     return statements
 
 
@@ -390,8 +382,7 @@ def classify_system_schema_status(
     if expected - objects:
         return "partial"
     if any(
-        applied_checksums.get(migration.version) != migration.checksum
-        for migration in MIGRATIONS
+        applied_checksums.get(migration.version) != migration.checksum for migration in MIGRATIONS
     ):
         return "outdated"
     return "ready"
@@ -561,9 +552,7 @@ class SystemSchemaManager:
             for item in status["missing_objects"]
         }
         owned_objects = frozenset(
-            object_key
-            for migration in MIGRATIONS
-            for object_key in migration.created_objects
+            object_key for migration in MIGRATIONS for object_key in migration.created_objects
         )
         uncovered = missing_objects - owned_objects
         if uncovered:
@@ -599,6 +588,7 @@ class SystemSchemaManager:
         ]
         status = classify_system_schema_status(set(objects), applied)
         table_metadata = self._load_table_metadata(connection, objects)
+        object_metadata = self._build_object_metadata(objects, table_metadata)
         return {
             "status": status,
             "schema_head": MIGRATIONS[-1].version,
@@ -607,11 +597,10 @@ class SystemSchemaManager:
             "expected_object_count": len(expected),
             "existing_object_count": len(existing),
             "expected_table_count": len(MANAGED_TABLES),
-            "existing_table_count": sum(
-                (name, "TABLE") in objects for name in MANAGED_TABLES
-            ),
+            "existing_table_count": sum((name, "TABLE") in objects for name in MANAGED_TABLES),
             "missing_objects": missing,
             "tables": table_metadata,
+            "objects": object_metadata,
             "operation_state": self._operation_payload(connection, objects),
         }
 
@@ -625,10 +614,7 @@ class SystemSchemaManager:
                 "AND OBJECT_TYPE IN ('TABLE', 'INDEX', 'SEQUENCE')",
                 binds,
             )
-            return {
-                (str(row[0]).upper(), str(row[1]).upper()): row[2]
-                for row in cursor.fetchall()
-            }
+            return {(str(row[0]).upper(), str(row[1]).upper()): row[2] for row in cursor.fetchall()}
 
     def _load_migrations(
         self,
@@ -639,8 +625,7 @@ class SystemSchemaManager:
             return {}
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT VERSION_NO, CHECKSUM FROM NL2SQL_SCHEMA_MIGRATIONS "
-                "ORDER BY VERSION_NO"
+                "SELECT VERSION_NO, CHECKSUM FROM NL2SQL_SCHEMA_MIGRATIONS " "ORDER BY VERSION_NO"
             )
             return {int(row[0]): str(row[1]) for row in cursor.fetchall()}
 
@@ -659,9 +644,7 @@ class SystemSchemaManager:
                     f"WHERE TABLE_NAME IN ({placeholders})",  # nosec B608 - fixed manifest binds
                     binds,
                 )
-                metadata = {
-                    str(row[0]).upper(): (row[1], row[2]) for row in cursor.fetchall()
-                }
+                metadata = {str(row[0]).upper(): (row[1], row[2]) for row in cursor.fetchall()}
         return [
             {
                 "name": name,
@@ -676,6 +659,31 @@ class SystemSchemaManager:
             }
             for name in MANAGED_TABLES
         ]
+
+    @staticmethod
+    def _build_object_metadata(
+        objects: dict[tuple[str, str], Any],
+        table_metadata: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """既存の table 統計と USER_OBJECTS snapshot を全 manifest object へ展開する。"""
+
+        tables_by_name = {str(item["name"]): item for item in table_metadata}
+        result: list[dict[str, Any]] = []
+        for name, object_type in MANAGED_OBJECTS:
+            table = tables_by_name.get(name) if object_type == "TABLE" else None
+            result.append(
+                {
+                    "name": name,
+                    "object_type": object_type,
+                    "exists": (name, object_type) in objects,
+                    "estimated_rows": (table.get("estimated_rows") if table is not None else None),
+                    "created_at": _iso(objects.get((name, object_type))),
+                    "last_analyzed_at": (
+                        table.get("last_analyzed_at") if table is not None else None
+                    ),
+                }
+            )
+        return result
 
     def _operation_payload(
         self,
@@ -962,9 +970,7 @@ class SystemSchemaManager:
                 """,
                 {"constraint_name": expected.name},
             )
-            referenced_columns = tuple(
-                str(item[0]).upper() for item in cursor.fetchall()
-            )
+            referenced_columns = tuple(str(item[0]).upper() for item in cursor.fetchall())
         actual = (
             str(row[0]).upper(),
             str(row[1]).upper(),

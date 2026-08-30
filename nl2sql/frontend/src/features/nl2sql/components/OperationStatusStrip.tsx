@@ -1,6 +1,7 @@
 import { Database } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Banner } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
@@ -81,6 +82,8 @@ export function OperationStatusStrip({
   sampleImportUnavailableHint = "",
   onPreviewExecute,
   previewExecuteLoading = false,
+  onCancelJob,
+  cancelRequesting = false,
 }: {
   job: JobData | null;
   profileId?: string;
@@ -93,6 +96,9 @@ export function OperationStatusStrip({
   /** プレビュー(擬似 job)経路で `generate_sql` ステップ内に実行ボタンを出すためのハンドラ。 */
   onPreviewExecute?: () => void;
   previewExecuteLoading?: boolean;
+  /** 実行中 job の協調キャンセル要求(POST /jobs/{id}/cancel)。取消可能な処理は同じ領域に置く。 */
+  onCancelJob?: () => void;
+  cancelRequesting?: boolean;
 }) {
   const active = job?.status === "pending" || job?.status === "running";
   const finalElapsed =
@@ -105,6 +111,10 @@ export function OperationStatusStrip({
   const isPreview = Boolean(onPreviewExecute);
   const warningMessage = job.warning_message?.trim();
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
+  // 利用者要求のキャンセルは「失敗」ではなく警告トーンで表示する。
+  const cancelled = job.error_code === "JOB_CANCELLED";
+  const cancelledMessage = cancelled ? errorMessage : "";
+  const failureMessage = cancelled ? "" : errorMessage;
 
   return (
     <WorkflowProgressStrip
@@ -125,7 +135,7 @@ export function OperationStatusStrip({
       stepsAriaLabel={t("nl2sql.progress.stepsLabel")}
       testId="nl2sql-job-progress"
       dataJobStatus={job.status}
-      role={job.status === "error" ? "alert" : active ? "status" : undefined}
+      role={active ? "status" : undefined}
       meta={
         <span className="font-mono">
           {t("nl2sql.status.jobId", { id: `${job.job_id.slice(0, 8)}...` })}
@@ -185,19 +195,39 @@ export function OperationStatusStrip({
       }))}
       footer={
         <>
-          {warningMessage && (
-            <div
-              className="mx-4 mb-4 rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm leading-6 text-warning"
-              role="status"
-            >
-              <p>{warningMessage}</p>
+          {active && onCancelJob && (
+            <div className="mx-4 mb-4 flex justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                loading={cancelRequesting}
+                onClick={onCancelJob}
+              >
+                {t("nl2sql.job.cancel")}
+              </Button>
             </div>
           )}
 
-          {errorMessage && (
-            <div className="mx-4 mb-4 grid gap-3 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
-              <p>{errorMessage}</p>
-              {job.status === "error" && catalogEmpty && onImportSample && (
+          {warningMessage && (
+            <Banner severity="warning" className="mx-4 mb-4">
+              {warningMessage}
+            </Banner>
+          )}
+
+          {cancelledMessage && (
+            <div data-testid="nl2sql-job-cancelled">
+              <Banner severity="warning" className="mx-4 mb-4">
+                {cancelledMessage}
+              </Banner>
+            </div>
+          )}
+
+          {failureMessage && (
+            <Banner
+              severity="danger"
+              className="mx-4 mb-4"
+              action={job.status === "error" && catalogEmpty && onImportSample ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
@@ -211,11 +241,13 @@ export function OperationStatusStrip({
                   </Button>
                   <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
                 </div>
-              )}
+              ) : undefined}
+            >
+              {failureMessage}
               {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
                 <p className="text-xs text-muted">{sampleImportUnavailableHint}</p>
               )}
-            </div>
+            </Banner>
           )}
         </>
       }

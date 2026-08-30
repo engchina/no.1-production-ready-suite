@@ -39,6 +39,10 @@ const profileManagementPage = readFileSync(
   new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
   "utf8",
 );
+const schemaRefreshPresentationSource = readFileSync(
+  new URL("../src/features/nl2sql/schemaRefreshPresentation.ts", import.meta.url),
+  "utf8",
+);
 
 test("PageAction descriptor と固定優先順位をローカル実装が保持する", () => {
   assert.match(source, /export interface PageAction/u);
@@ -76,6 +80,8 @@ test("compact 操作メニューは lg 未満で 44px とキーボード・ARIA 
   assert.match(source, /firstEnabled\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(source, /<DisclosureChevron expanded=\{menuOpen\} size=\{15\} \/>/u);
+  assert.doesNotMatch(source, /menuOpen && "rotate-180"/u);
 });
 
 test("compact 操作メニューは shared floating menu で viewport 内に配置する", () => {
@@ -120,24 +126,25 @@ test("PageHeaderStatusBadge は短いページ状態を live region として公
 
 test("ヘッダー横の状態 badge は共通 PageHeaderStatusBadge を使う", () => {
   for (const page of pageHeaderStatusPages) {
-    assert.match(page, /PageHeaderStatusBadge/u);
+    assert.match(page, /PageHeaderStatusBadge|SchemaRefreshHeaderStatus/u);
     assert.doesNotMatch(page, /<span[^>]+aria-live="polite"[^>]*>\s*<StatusBadge/u);
   }
 });
 
 test("refresh 系の完了状態はヘッダー横 badge に残さない", () => {
   for (const page of pageHeaderStatusPages.slice(0, 5)) {
-    assert.match(page, /!== "done"/u);
+    assert.match(page, /SchemaRefreshHeaderStatus/u);
   }
+  assert.match(schemaRefreshPresentationSource, /job\.status === "done"/u);
+  assert.match(schemaRefreshPresentationSource, /return null/u);
   assert.match(profileManagementPage, /dbProfileRefreshStatus === "error"/u);
-  assert.match(profileManagementPage, /schemaRefreshStatus === "error"/u);
   assert.doesNotMatch(profileManagementPage, /headerRefreshStatus === "done"/u);
 });
 
 test("業務プロファイルの schema / DB Profile refresh ボタンは loading と disabled を揃える", () => {
   assert.match(profileManagementPage, /id: "schema-refresh"/u);
-  assert.match(profileManagementPage, /loading: schemaRefreshing \|\| startSchemaRefresh\.isPending/u);
-  assert.match(profileManagementPage, /disabled: schemaRefreshing \|\| startSchemaRefresh\.isPending/u);
+  assert.match(profileManagementPage, /loading: schemaRefreshing/u);
+  assert.match(profileManagementPage, /disabled: schemaRefreshing/u);
   assert.match(profileManagementPage, /id: "db-profile-refresh"/u);
   assert.match(profileManagementPage, /loading: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);
   assert.match(profileManagementPage, /disabled: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);

@@ -1,9 +1,24 @@
-import type { OntologyEdge, OntologyGraph, OntologyNode } from "./types";
+import {
+  GROUNDING_ATTRIBUTE_KINDS,
+  GROUNDING_ENTITY_KINDS,
+  matchQuestionToNodes,
+  normalizeGroundingText,
+  type GroundingCandidate,
+} from "./groundingMatcher";
+import { isGroundingContextEdge } from "./graphView";
+import {
+  ontologyRelationshipRows,
+  type OntologyEdge,
+  type OntologyGraph,
+  type OntologyNode,
+  type OntologyRelationshipRow,
+} from "./types";
 
 /**
- * 決定論 NL Query Playground(Ontology-Playground の queryEngine.ts の日本語移植)。
- * LLM を呼ばず、質問文をオントロジーのノード/エッジへ段階マッチングして
- * ハイライト対象と説明文を返す。SQL は生成しない(可視化・デバッグ用途)。
+ * 決定論 NL Query Playground。LLM を呼ばず、質問文をオントロジーの
+ * ノード/エッジへ段階マッチングしてハイライト対象と説明文を返す。
+ * SQL は生成しない(可視化・デバッグ用途)。照合は groundingMatcher の
+ * 2 段階エンジン(名称包含+日本語トークン部分一致)を使う。
  */
 
 export type PlaygroundStage =
@@ -11,6 +26,7 @@ export type PlaygroundStage =
   | "list_all"
   | "relationship"
   | "property"
+  | "aggregate"
   | "no_match";
 
 export interface PlaygroundResult {
@@ -20,78 +36,112 @@ export interface PlaygroundResult {
   explanationJa: string;
   matchedEntityNames: string[];
   suggestionsJa: string[];
-}
-
-interface NameVariant {
-  node: OntologyNode;
-  name: string;
+  /** ランク付きの一致候補(下線表示・診断用)。 */
+  candidates: GroundingCandidate[];
+  /** 集計質問(平均/合計/〜ごと 等)を検出したか。 */
+  aggregate: boolean;
 }
 
 const BUSINESS_ENTITY_KINDS = new Set(["business_entity", "business_event"]);
-const PHYSICAL_ENTITY_KINDS = new Set(["table", "view"]);
-const ATTRIBUTE_KINDS = new Set(["property", "metric", "business_term", "column", "enum_value"]);
 const LIST_PATTERNS = [/一覧/, /すべて/, /全て/, /リスト/, /list/i, /show me all/i];
 const DEFINITION_PATTERNS = [/とは/, /について/, /何ですか/, /どういう/, /what is/i];
+const MAX_ENTITY_MATCHES = 3;
+const MAX_ATTRIBUTE_MATCHES = 3;
 
 export function normalizeQuestion(question: string): string {
-  return question.normalize("NFKC").toLowerCase().trim();
+  return normalizeGroundingText(question);
 }
 
-function nameVariants(nodes: OntologyNode[], kinds: Set<string>): NameVariant[] {
-  const variants: NameVariant[] = [];
-  for (const node of nodes) {
-    if (!kinds.has(node.kind)) continue;
-    const names = [node.business_name_ja, ...(node.aliases ?? []), node.technical_name ?? ""];
-    for (const name of names) {
-      const normalized = normalizeQuestion(name);
-      if (normalized.length >= 2) variants.push({ node, name: normalized });
-    }
-  }
-  // 最長一致優先(「注文明細」を「注文」より先に消費する)
-  return variants.sort((a, b) => b.name.length - a.name.length);
+/** 接地結果に厳密に一致した関係行のみ返す(no_match 時は空。無関係な行を接地パスに混ぜない)。 */
+export function groundedRelationshipRows(
+  graph: OntologyGraph,
+  result: Pick<PlaygroundResult, "highlightNodeIds" | "highlightEdgeIds"> | null
+): OntologyRelationshipRow[] {
+  if (!result) return [];
+  const rows = ontologyRelationshipRows(graph);
+  const highlightNodes = new Set(result.highlightNodeIds);
+  const highlightEdges = new Set(result.highlightEdgeIds);
+  return rows.filter(
+    (row) =>
+      highlightEdges.has(row.edge_id) ||
+      (highlightNodes.has(row.source_node_id) && highlightNodes.has(row.target_node_id))
+  );
 }
 
-/** 質問文からノード名を最長一致で消費しつつ、一致ノードを重複なく集める。 */
-function consumeMatches(
-  question: string,
-  variants: NameVariant[]
-): { matched: OntologyNode[]; remaining: string } {
-  const matched: OntologyNode[] = [];
-  const seen = new Set<string>();
-  let remaining = question;
-  for (const variant of variants) {
-    if (!remaining.includes(variant.name)) continue;
-    remaining = remaining.split(variant.name).join(" ");
-    if (!seen.has(variant.node.id)) {
-      seen.add(variant.node.id);
-      matched.push(variant.node);
-    }
-  }
-  return { matched, remaining };
+/** 関係一覧(閲覧用): 接地一致があればそれを、なければ全件を表示する。 */
+export function browseRelationshipRows(
+  graph: OntologyGraph,
+  grounded: OntologyRelationshipRow[]
+): OntologyRelationshipRow[] {
+  return grounded.length > 0 ? grounded : ontologyRelationshipRows(graph);
 }
 
-function edgesTouching(edges: OntologyEdge[], nodeIds: Set<string>): OntologyEdge[] {
+function relationshipLabel(edge: OntologyEdge): string {
+  const cardinality =
+    edge.cardinality && edge.cardinality !== "unknown" ? `(${edge.cardinality})` : "";
+  return `${edge.relationship_name_ja}${cardinality}`;
+}
+
+function edgesBetween(edges: OntologyEdge[], nodeIds: Set<string>): OntologyEdge[] {
   return edges.filter(
     (edge) => nodeIds.has(edge.source_node_id) && nodeIds.has(edge.target_node_id)
   );
 }
 
-function relationshipLabel(edge: OntologyEdge): string {
-  const cardinality = edge.cardinality && edge.cardinality !== "unknown" ? `(${edge.cardinality})` : "";
-  return `${edge.relationship_name_ja}${cardinality}`;
+function edgesTouchingNode(edges: OntologyEdge[], nodeId: string): OntologyEdge[] {
+  return edges.filter(
+    (edge) => edge.source_node_id === nodeId || edge.target_node_id === nodeId
+  );
+}
+
+/** 属性ノードの親エンティティ(表・業務概念)を包含/マッピング系エッジで逆引きする。 */
+function attributeParents(
+  graph: OntologyGraph,
+  attribute: OntologyNode
+): Array<{ parent: OntologyNode; edge: OntologyEdge }> {
+  const parents: Array<{ parent: OntologyNode; edge: OntologyEdge }> = [];
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  for (const edge of edgesTouchingNode(graph.edges, attribute.id)) {
+    if (!isGroundingContextEdge(edge)) continue;
+    const otherId =
+      edge.source_node_id === attribute.id ? edge.target_node_id : edge.source_node_id;
+    const other = nodeById.get(otherId);
+    if (other && GROUNDING_ENTITY_KINDS.has(other.kind)) {
+      parents.push({ parent: other, edge });
+    }
+  }
+  return parents;
+}
+
+/** 業務概念と物理表が同じ文字列で一致した場合は業務概念を優先する。 */
+function preferBusinessEntities(entities: GroundingCandidate[]): GroundingCandidate[] {
+  const businessTexts = new Set(
+    entities
+      .filter((candidate) => BUSINESS_ENTITY_KINDS.has(candidate.node.kind))
+      .map((candidate) => candidate.matchedText)
+  );
+  if (businessTexts.size === 0) return entities;
+  return entities.filter(
+    (candidate) =>
+      BUSINESS_ENTITY_KINDS.has(candidate.node.kind) ||
+      !businessTexts.has(candidate.matchedText)
+  );
+}
+
+function quoteNames(nodes: OntologyNode[]): string {
+  return nodes.map((node) => `「${node.business_name_ja}」`).join("と");
 }
 
 export function answerOntologyQuestion(
   graph: OntologyGraph,
   question: string
 ): PlaygroundResult {
-  const normalized = normalizeQuestion(question);
-  const businessEntityVariants = nameVariants(graph.nodes, BUSINESS_ENTITY_KINDS);
-  const physicalEntityVariants = nameVariants(graph.nodes, PHYSICAL_ENTITY_KINDS);
+  const { candidates, normalizedQuestion, aggregate } = matchQuestionToNodes(graph, question);
+
   const businessSuggestions = [
     ...new Set(
       graph.nodes
-        .filter((node) => node.kind === "business_entity" || node.kind === "business_event")
+        .filter((node) => BUSINESS_ENTITY_KINDS.has(node.kind))
         .map((node) => node.business_name_ja)
     ),
   ];
@@ -102,58 +152,102 @@ export function answerOntologyQuestion(
         .map((node) => node.business_name_ja)
     ),
   ];
-  const suggestions = (businessSuggestions.length > 0 ? businessSuggestions : physicalSuggestions).slice(
-    0,
-    5
+  const suggestions = (
+    businessSuggestions.length > 0 ? businessSuggestions : physicalSuggestions
+  ).slice(0, 5);
+
+  const noMatch = (explanationJa: string): PlaygroundResult => ({
+    stage: "no_match",
+    highlightNodeIds: [],
+    highlightEdgeIds: [],
+    explanationJa,
+    matchedEntityNames: [],
+    suggestionsJa: suggestions,
+    candidates,
+    aggregate,
+  });
+
+  if (!normalizedQuestion) return noMatch("質問を入力してください。");
+
+  const entityCandidates = preferBusinessEntities(
+    candidates.filter((candidate) => GROUNDING_ENTITY_KINDS.has(candidate.node.kind))
+  ).slice(0, MAX_ENTITY_MATCHES);
+  const entityTexts = new Map(
+    entityCandidates.map((candidate) => [candidate.matchedText, candidate.score])
   );
+  // エンティティを接地させたのと同じ文字列で(同点以下の)属性が重複一致した場合は落とす
+  // (例:「部署」が 部署情報(表)と 部署ID(列)の両方に前方一致するケース)。
+  const attributeCandidates = candidates
+    .filter((candidate) => GROUNDING_ATTRIBUTE_KINDS.has(candidate.node.kind))
+    .filter(
+      (candidate) => (entityTexts.get(candidate.matchedText) ?? -1) < candidate.score
+    )
+    .slice(0, MAX_ATTRIBUTE_MATCHES);
 
-  if (!normalized) {
+  const entities = entityCandidates.map((candidate) => candidate.node);
+  const attributes = attributeCandidates.map((candidate) => candidate.node);
+  const matchedEntityNames = entities.map((node) => node.business_name_ja);
+
+  if (entities.length === 0 && attributes.length === 0) {
+    return noMatch("質問に一致するエンティティが見つかりませんでした。");
+  }
+
+  // --- 属性単独接地: 親エンティティを自動連結する(「給与とは」) --------------------------
+  if (entities.length === 0) {
+    const primary = attributes[0];
+    const parents = attributeParents(graph, primary);
+    const highlightNodeIds = [primary.id, ...parents.map(({ parent }) => parent.id)];
+    const highlightEdgeIds = parents.map(({ edge }) => edge.id);
+    const parentText =
+      parents.length > 0
+        ? `「${parents[0].parent.business_name_ja}」が持つ`
+        : "";
     return {
-      stage: "no_match",
-      highlightNodeIds: [],
-      highlightEdgeIds: [],
-      explanationJa: "質問を入力してください。",
-      matchedEntityNames: [],
-      suggestionsJa: suggestions,
+      stage: aggregate ? "aggregate" : "property",
+      highlightNodeIds,
+      highlightEdgeIds,
+      explanationJa:
+        `「${primary.business_name_ja}」は${parentText}` +
+        `${primary.kind === "metric" ? "指標" : "属性・列"}です。` +
+        (primary.description_ja ? ` ${primary.description_ja}` : "") +
+        (aggregate ? " 集計(平均・合計・グループ化など)の対象になります。" : ""),
+      matchedEntityNames: parents.map(({ parent }) => parent.business_name_ja),
+      suggestionsJa: [],
+      candidates,
+      aggregate,
     };
   }
 
-  const businessMatch = consumeMatches(normalized, businessEntityVariants);
-  const { matched, remaining } =
-    businessMatch.matched.length > 0
-      ? businessMatch
-      : consumeMatches(normalized, physicalEntityVariants);
-
-  if (matched.length === 0) {
-    return {
-      stage: "no_match",
-      highlightNodeIds: [],
-      highlightEdgeIds: [],
-      explanationJa: "質問に一致するエンティティが見つかりませんでした。",
-      matchedEntityNames: [],
-      suggestionsJa: suggestions,
-    };
-  }
-
-  const matchedNames = matched.map((node) => node.business_name_ja);
-
-  if (matched.length >= 2) {
-    // 関係辿り: 直接辺 → なければ 1-hop(中継ノード経由)
-    const matchedIds = new Set(matched.map((node) => node.id));
-    const direct = edgesTouching(graph.edges, matchedIds);
+  // --- 複数エンティティ: 関係辿り(直接辺 → 1-hop) ------------------------------------
+  if (entities.length >= 2) {
+    const matchedIds = new Set(entities.map((node) => node.id));
+    const attributeExtras = attributes.flatMap((attribute) => {
+      const parents = attributeParents(graph, attribute);
+      return [
+        attribute.id,
+        ...parents.map(({ parent }) => parent.id),
+      ];
+    });
+    const attributeEdges = attributes.flatMap((attribute) =>
+      attributeParents(graph, attribute).map(({ edge }) => edge.id)
+    );
+    const direct = edgesBetween(graph.edges, matchedIds);
     if (direct.length > 0) {
       return {
-        stage: "relationship",
-        highlightNodeIds: [...matchedIds],
-        highlightEdgeIds: direct.map((edge) => edge.id),
+        stage: aggregate ? "aggregate" : "relationship",
+        highlightNodeIds: [...new Set([...matchedIds, ...attributeExtras])],
+        highlightEdgeIds: [...new Set([...direct.map((edge) => edge.id), ...attributeEdges])],
         explanationJa:
-          `「${matchedNames.join("」と「")}」は ` +
-          `${direct.map(relationshipLabel).join("、")} で結ばれています。`,
-        matchedEntityNames: matchedNames,
+          `${quoteNames(entities)}は ` +
+          `${direct.map(relationshipLabel).join("、")} で結ばれています。` +
+          (aggregate ? " 集計(平均・合計・グループ化など)を検出しました。" : ""),
+        matchedEntityNames,
         suggestionsJa: [],
+        candidates,
+        aggregate,
       };
     }
-    const [first, second] = matched;
+    const [first, second] = entities;
     for (const node of graph.nodes) {
       if (node.id === first.id || node.id === second.id) continue;
       const viaFirst = graph.edges.filter(
@@ -168,14 +262,16 @@ export function answerOntologyQuestion(
       );
       if (viaFirst.length > 0 && viaSecond.length > 0) {
         return {
-          stage: "relationship",
+          stage: aggregate ? "aggregate" : "relationship",
           highlightNodeIds: [first.id, node.id, second.id],
           highlightEdgeIds: [viaFirst[0].id, viaSecond[0].id],
           explanationJa:
             `「${first.business_name_ja}」と「${second.business_name_ja}」は` +
             `「${node.business_name_ja}」を経由してつながります。`,
-          matchedEntityNames: matchedNames,
+          matchedEntityNames,
           suggestionsJa: [],
+          candidates,
+          aggregate,
         };
       }
     }
@@ -184,49 +280,82 @@ export function answerOntologyQuestion(
       highlightNodeIds: [...matchedIds],
       highlightEdgeIds: [],
       explanationJa:
-        `「${matchedNames.join("」と「")}」の間に承認済みの関係が見つかりませんでした。`,
-      matchedEntityNames: matchedNames,
+        `${quoteNames(entities)}の間に承認済みの関係が見つかりませんでした。`,
+      matchedEntityNames,
       suggestionsJa: [],
+      candidates,
+      aggregate,
     };
   }
 
-  const entity = matched[0];
-  const connectedEdges = graph.edges.filter(
-    (edge) => edge.source_node_id === entity.id || edge.target_node_id === entity.id
-  );
+  // --- 単一エンティティ ---------------------------------------------------------------
+  const entity = entities[0];
+  const connectedEdges = edgesTouchingNode(graph.edges, entity.id);
 
-  // 属性質問: 残り文にプロパティ/指標/用語名が含まれるか
-  const attributeVariants = nameVariants(graph.nodes, ATTRIBUTE_KINDS);
-  const attribute = consumeMatches(remaining, attributeVariants).matched[0];
-  if (attribute) {
-    const connecting = connectedEdges.filter(
+  if (attributes.length > 0) {
+    const attribute = attributes[0];
+    const directEdges = connectedEdges.filter(
       (edge) => edge.source_node_id === attribute.id || edge.target_node_id === attribute.id
     );
+    // 属性がエンティティと直接つながらない場合は親エンティティ経由の接地パスを組み立てる
+    // (例:「部署ごとの平均給与」→ 部署情報 ↔ 従業員情報 が持つ 給与)。
+    let bridgeNodeIds: string[] = [];
+    let bridgeEdgeIds: string[] = [];
+    let bridgeText = "";
+    if (directEdges.length === 0) {
+      const parents = attributeParents(graph, attribute).filter(
+        ({ parent }) => parent.id !== entity.id
+      );
+      for (const { parent, edge } of parents) {
+        const joinEdges = edgesBetween(
+          graph.edges,
+          new Set([entity.id, parent.id])
+        );
+        if (joinEdges.length === 0) continue;
+        bridgeNodeIds = [parent.id];
+        bridgeEdgeIds = [edge.id, ...joinEdges.map((item) => item.id)];
+        bridgeText =
+          `「${attribute.business_name_ja}」は「${parent.business_name_ja}」の` +
+          `${attribute.kind === "metric" ? "指標" : "属性"}で、` +
+          `「${entity.business_name_ja}」とは ${joinEdges
+            .map(relationshipLabel)
+            .join("、")} で結ばれています。`;
+        break;
+      }
+    }
     return {
-      stage: "property",
-      highlightNodeIds: [entity.id, attribute.id],
-      highlightEdgeIds: connecting.map((edge) => edge.id),
+      stage: aggregate ? "aggregate" : "property",
+      highlightNodeIds: [...new Set([entity.id, attribute.id, ...bridgeNodeIds])],
+      highlightEdgeIds: [
+        ...new Set([...directEdges.map((edge) => edge.id), ...bridgeEdgeIds]),
+      ],
       explanationJa:
-        `「${attribute.business_name_ja}」は「${entity.business_name_ja}」に関連する` +
-        `${attribute.kind === "metric" ? "指標" : "属性・用語"}です。` +
-        (attribute.description_ja ? ` ${attribute.description_ja}` : ""),
-      matchedEntityNames: matchedNames,
+        (bridgeText ||
+          `「${attribute.business_name_ja}」は「${entity.business_name_ja}」に関連する` +
+            `${attribute.kind === "metric" ? "指標" : "属性・用語"}です。` +
+            (attribute.description_ja ? ` ${attribute.description_ja}` : "")) +
+        (aggregate ? " 集計(平均・合計・グループ化など)を検出しました。" : ""),
+      matchedEntityNames,
       suggestionsJa: [],
+      candidates,
+      aggregate,
     };
   }
 
-  if (LIST_PATTERNS.some((pattern) => pattern.test(normalized))) {
+  if (LIST_PATTERNS.some((pattern) => pattern.test(normalizedQuestion))) {
     return {
       stage: "list_all",
       highlightNodeIds: [entity.id],
       highlightEdgeIds: [],
       explanationJa: `「${entity.business_name_ja}」の一覧照会に対応するエンティティです。`,
-      matchedEntityNames: matchedNames,
+      matchedEntityNames,
       suggestionsJa: [],
+      candidates,
+      aggregate,
     };
   }
 
-  const isDefinition = DEFINITION_PATTERNS.some((pattern) => pattern.test(normalized));
+  const isDefinition = DEFINITION_PATTERNS.some((pattern) => pattern.test(normalizedQuestion));
   return {
     stage: "entity_definition",
     highlightNodeIds: [entity.id],
@@ -234,7 +363,9 @@ export function answerOntologyQuestion(
     explanationJa:
       `「${entity.business_name_ja}」${entity.description_ja ? `: ${entity.description_ja}` : "に対応するエンティティです。"}` +
       (connectedEdges.length > 0 ? ` 関係が ${connectedEdges.length} 件あります。` : ""),
-    matchedEntityNames: matchedNames,
+    matchedEntityNames,
     suggestionsJa: [],
+    candidates,
+    aggregate,
   };
 }

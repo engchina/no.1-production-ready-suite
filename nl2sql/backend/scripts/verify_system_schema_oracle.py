@@ -91,21 +91,13 @@ def main() -> int:
         # 旧 migration の対象表がロック中でも、欠損 object の所有 migration (v8)
         # だけを選べば更新できることを二つの session で確認する。
         with temporary_connection() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                "DROP TABLE NL2SQL_EVALUATION_RESULTS CASCADE CONSTRAINTS PURGE"
-            )
-            cursor.execute(
-                "DROP TABLE NL2SQL_EVALUATION_JOBS CASCADE CONSTRAINTS PURGE"
-            )
-            cursor.execute(
-                "DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 8"
-            )
+            cursor.execute("DROP TABLE NL2SQL_EVALUATION_RESULTS CASCADE CONSTRAINTS PURGE")
+            cursor.execute("DROP TABLE NL2SQL_EVALUATION_JOBS CASCADE CONSTRAINTS PURGE")
+            cursor.execute("DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 8")
             connection.commit()
         with temporary_connection() as locked_connection:
             with locked_connection.cursor() as cursor:
-                cursor.execute(
-                    "LOCK TABLE NL2SQL_SCHEMA_COLUMNS IN ROW EXCLUSIVE MODE"
-                )
+                cursor.execute("LOCK TABLE NL2SQL_SCHEMA_COLUMNS IN ROW EXCLUSIVE MODE")
             selective_migration = manager.initialize()
             locked_connection.rollback()
         assert selective_migration["status"] == "ready"
@@ -117,9 +109,7 @@ def main() -> int:
                     "ALTER TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS "
                     "DROP CONSTRAINT FK_NL2SQL_ONT_VIEW_PROFILE"
                 )
-                cursor.execute(
-                    "DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 7"
-                )
+                cursor.execute("DELETE FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO = 7")
                 connection.commit()
 
         # timeout まで解放されない実ロックは ORA-00054/409 相当となり、
@@ -127,9 +117,7 @@ def main() -> int:
         reset_v7_constraint()
         with temporary_connection() as locked_connection:
             with locked_connection.cursor() as cursor:
-                cursor.execute(
-                    "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS IN ROW EXCLUSIVE MODE"
-                )
+                cursor.execute("LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS IN ROW EXCLUSIVE MODE")
             try:
                 manager.initialize()
             except SystemSchemaError as exc:
@@ -153,8 +141,7 @@ def main() -> int:
                 with temporary_connection() as locked_connection:
                     with locked_connection.cursor() as cursor:
                         cursor.execute(
-                            "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS "
-                            "IN ROW EXCLUSIVE MODE"
+                            "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS " "IN ROW EXCLUSIVE MODE"
                         )
                     lock_ready.set()
                     time.sleep(0.25)
@@ -178,8 +165,7 @@ def main() -> int:
             raise AssertionError("lock session did not finish")
         assert released_within_timeout["status"] == "ready"
         with temporary_connection() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO NL2SQL_PROFILES
                     (PROFILE_ID, NAME, CATEGORY, DESCRIPTION, ARCHIVED,
                      ALLOWED_TABLE_COUNT, ALLOWED_VIEW_COUNT, GLOSSARY_COUNT,
@@ -187,8 +173,7 @@ def main() -> int:
                 VALUES
                     ('integration-profile', 'Integration', NULL, NULL, 0,
                      0, 0, 0, 0, 1, 'integration-etag', '{}')
-                """
-            )
+                """)
             cursor.execute(
                 "UPDATE NL2SQL_SCHEMA_MIGRATIONS SET CHECKSUM = 'stale' WHERE VERSION_NO = 5"
             )
@@ -198,8 +183,7 @@ def main() -> int:
         migrated = manager.initialize()
         with temporary_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_PROFILES "
-                "WHERE PROFILE_ID = 'integration-profile'"
+                "SELECT COUNT(*) FROM NL2SQL_PROFILES " "WHERE PROFILE_ID = 'integration-profile'"
             )
             profile_preserved = int(cursor.fetchone()[0]) == 1
         assert profile_preserved

@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import {
   Check,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Loader2,
   Route,
@@ -10,10 +9,10 @@ import {
   X,
 } from "lucide-react";
 
-import { StatusBadge } from "@engchina/production-ready-ui";
-
 import { useOperationTiming } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 
@@ -68,10 +67,10 @@ export interface WorkflowProgressStripProps {
 }
 
 function toneBorderClass(tone: WorkflowProgressTone) {
-  if (tone === "danger") return "border-l-red-600";
-  if (tone === "success") return "border-l-emerald-600";
-  if (tone === "neutral") return "border-l-slate-400";
-  return "border-l-sky-700";
+  if (tone === "danger") return "border-l-danger";
+  if (tone === "success") return "border-l-success";
+  if (tone === "neutral") return "border-l-muted";
+  return "border-l-primary";
 }
 
 function toneIconClass(tone: WorkflowProgressTone) {
@@ -96,9 +95,11 @@ function stepTextClass(status: WorkflowProgressStepStatus) {
 }
 
 function stepCircleClass(status: WorkflowProgressStepStatus) {
-  if (status === "running") return "border-primary bg-primary text-white";
-  if (status === "done") return "border-success bg-success text-white";
-  if (status === "error") return "border-danger bg-danger text-white";
+  if (status === "running") {
+    return "border-primary-fill bg-primary-fill text-primary-fill-foreground";
+  }
+  if (status === "done") return "border-success-fill bg-success-fill text-white";
+  if (status === "error") return "border-danger-fill bg-danger-fill text-white";
   if (status === "skipped") return "border-border bg-muted/30 text-muted";
   return "border-border bg-card text-muted";
 }
@@ -215,15 +216,9 @@ export function WorkflowProgressStrip({
               onClick={() => collapsible.onCollapsedChange(!collapsed)}
               data-testid={collapsible.toggleTestId}
             >
-              <ChevronDown
+              <DisclosureChevron
+                expanded={!collapsed}
                 size={16}
-                className={
-                  collapsed
-                    ? "transition-transform motion-reduce:transition-none"
-                    : "rotate-180 transition-transform motion-reduce:transition-none"
-                }
-                data-state={collapsed ? "collapsed" : "expanded"}
-                aria-hidden="true"
               />
             </Button>
           ) : null}
@@ -257,16 +252,16 @@ export function WorkflowProgressStrip({
                   <StepIcon status={step.status} index={index} />
                 </span>
                 <details
-                  className="group min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-background sm:px-2"
+                  className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-background sm:px-2"
                   open={step.open}
                 >
                   <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:gap-3 [&::-webkit-details-marker]:hidden">
                     <span className="flex min-w-0 max-w-full flex-1 basis-full items-center gap-2 font-semibold text-foreground sm:basis-0">
                       <span className="min-w-0 break-words sm:truncate">{step.label}</span>
-                      <ChevronDown
+                      <DisclosureChevron
+                        expanded="group"
                         size={14}
-                        className="shrink-0 text-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
-                        aria-hidden="true"
+                        className="text-muted"
                       />
                     </span>
                     <span

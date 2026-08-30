@@ -6,8 +6,12 @@ import type { OntologyGraph } from "../src/features/nl2sql/ontology/types.ts";
 
 const require = createRequire(import.meta.url);
 const {
+  cardinalityShortLabel,
+  isOntologyJoinEdge,
+  isOntologyMappingEdge,
   ontologyGraphForViewMode,
   ontologyGraphWithDetailVisibility,
+  selectOntologyEdgeHandles,
 } = require("../src/features/nl2sql/ontology/graphView.ts") as typeof import("../src/features/nl2sql/ontology/graphView.ts");
 
 const graph: OntologyGraph = {
@@ -88,4 +92,49 @@ test("physical ER view excludes business-only nodes", () => {
     physical.nodes.map((node) => node.id).sort(),
     ["orders-amount", "orders-table"].sort()
   );
+});
+
+test("cardinalityShortLabel は ER 図流の短縮表記を返す(unknown は空)", () => {
+  assert.equal(cardinalityShortLabel("one_to_one"), "1:1");
+  assert.equal(cardinalityShortLabel("one_to_many"), "1:N");
+  assert.equal(cardinalityShortLabel("many_to_one"), "N:1");
+  assert.equal(cardinalityShortLabel("many_to_many"), "N:N");
+  assert.equal(cardinalityShortLabel("unknown"), "");
+  assert.equal(cardinalityShortLabel(undefined), "");
+});
+
+test("selectOntologyEdgeHandles は縦優勢で上下・横優勢で左右ハンドルを選ぶ", () => {
+  // 業務概念(上)→ 物理表(下): 縦優勢 → bottom→top + vertical
+  assert.deepEqual(selectOntologyEdgeHandles({ x: 100, y: 0 }, { x: 120, y: 300 }), {
+    sourceHandle: "s-bottom",
+    targetHandle: "t-top",
+    orientation: "vertical",
+  });
+  // 下→上
+  assert.deepEqual(selectOntologyEdgeHandles({ x: 0, y: 300 }, { x: 0, y: 0 }).sourceHandle, "s-top");
+  // 同一レーンの右方向
+  assert.deepEqual(selectOntologyEdgeHandles({ x: 0, y: 10 }, { x: 400, y: 0 }), {
+    sourceHandle: "s-right",
+    targetHandle: "t-left",
+    orientation: "horizontal",
+  });
+  // 同一レーンの左方向(従来はここで自己ループ状になっていた)
+  assert.equal(selectOntologyEdgeHandles({ x: 400, y: 0 }, { x: 0, y: 10 }).sourceHandle, "s-left");
+});
+
+test("mapping/join エッジ判定は kind と join_conditions で決まる", () => {
+  assert.equal(isOntologyMappingEdge({ id: "e", source_node_id: "a", target_node_id: "b", relationship_name_ja: "対応", kind: "maps_to" }), true);
+  assert.equal(isOntologyMappingEdge({ id: "e", source_node_id: "a", target_node_id: "b", relationship_name_ja: "参照", kind: "foreign_key" }), false);
+  assert.equal(isOntologyJoinEdge({ id: "e", source_node_id: "a", target_node_id: "b", relationship_name_ja: "参照", kind: "foreign_key" }), true);
+  assert.equal(
+    isOntologyJoinEdge({
+      id: "e",
+      source_node_id: "a",
+      target_node_id: "b",
+      relationship_name_ja: "参照",
+      join_conditions: [{ source_column: "X", target_column: "Y", operator: "=" }],
+    }),
+    true
+  );
+  assert.equal(isOntologyJoinEdge({ id: "e", source_node_id: "a", target_node_id: "b", relationship_name_ja: "含む", kind: "contains" }), false);
 });
