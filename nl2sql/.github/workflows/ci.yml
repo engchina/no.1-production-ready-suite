@@ -98,7 +98,10 @@ jobs:
               raise SystemExit(f"forbidden package entries: {sorted(forbidden)}")
           if not mode & stat.S_IXUSR:
               raise SystemExit("extract_wallet.sh is not executable in package")
-          if "APP_ADMIN_USERNAME=" not in locals_tf or "APP_ADMIN_PASSWORD=" not in locals_tf:
+          if (
+              "APP_ADMIN_LOGIN_USER_ID=" not in locals_tf
+              or "APP_ADMIN_PASSWORD=" not in locals_tf
+          ):
               raise SystemExit("APP_ADMIN credentials are missing from backend.env")
           deepsec_schema_group = re.search(
               r"- title: Deep Data Security\s+visible: true\s+variables:\s+"
