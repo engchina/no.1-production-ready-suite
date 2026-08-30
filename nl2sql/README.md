@@ -15,6 +15,11 @@ The button downloads the latest Terraform Resource Manager stack release asset:
 
 `production-ready-nl2sql-terraform-stack.zip`
 
+Latest release:
+[v0.1.24](https://github.com/engchina/no.1-production-ready-nl2sql/releases/tag/v0.1.24).
+To pin a specific version instead of `latest`, replace `releases/latest/download`
+with `releases/download/v0.1.24` in the deploy URL.
+
 The Compute deployment serves the frontend through Nginx on HTTP port `80` and
 proxies API calls through the same origin at `/api/...`.
 

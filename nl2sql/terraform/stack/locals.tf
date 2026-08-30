@@ -61,6 +61,7 @@ NL2SQL_SCHEMA_REFRESH_WORKER_ENABLED=true
 NL2SQL_SCHEMA_REFRESH_WORKER_MODE=external
 NL2SQL_QUALITY_EVALUATION_WORKER_MODE=external
 NL2SQL_ONTOLOGY_WORKER_MODE=external
+NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED
 EOT
 
   cloud_init_rendered = templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {

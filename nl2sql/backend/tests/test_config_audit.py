@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.config_audit import audit_configuration, stable_audit_json
+from app.config_audit import ENV_ASSIGNMENT_RE, audit_configuration, stable_audit_json
+from app.settings import Settings
 
 
 def test_repository_env_example_is_complete_and_secret_free(tmp_path: Path) -> None:
@@ -110,3 +111,31 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     assert "ORACLE_CLIENT_LIB_DIR=" in locals_tf
     assert "instantclient" not in init_script
     assert "instantclient" not in dockerfile
+
+
+def _terraform_backend_env_body() -> str:
+    """locals.tf の backend_env heredoc 本文だけを取り出す。"""
+    repo_root = Path(__file__).resolve().parents[2]
+    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    _, _, after = locals_tf.partition("backend_env = <<-EOT\n")
+    assert after, "locals.tf に backend_env heredoc が見つかりません。"
+    body, _, _ = after.partition("\nEOT")
+    return body
+
+
+def test_terraform_backend_env_renders_select_ai_credential_name() -> None:
+    """Select AI credential 名は env 専用キーのため Terraform が書き込む必要がある。"""
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_backend_env_body()
+
+
+def test_terraform_backend_env_keys_are_known_settings() -> None:
+    """Terraform が撒くキーは Settings に存在する（未知キーは audit の error になる）。"""
+    known_keys = {name.upper() for name in Settings.model_fields}
+    rendered_keys = {
+        match.group("key")
+        for line in _terraform_backend_env_body().splitlines()
+        if (match := ENV_ASSIGNMENT_RE.match(line)) is not None
+    }
+
+    assert rendered_keys, "backend_env から key を抽出できませんでした。"
+    assert rendered_keys <= known_keys
