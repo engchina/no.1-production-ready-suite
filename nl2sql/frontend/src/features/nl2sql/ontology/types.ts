@@ -1,3 +1,8 @@
+import {
+  ontologyJoinConditionText,
+  ontologyPhysicalNodeLabel,
+} from "./physicalIdentity";
+
 export type OntologyJsonValue =
   | string
   | number
@@ -183,6 +188,7 @@ export interface OntologyEdge {
   source_node_id: string;
   target_node_id: string;
   relationship_name_ja: string;
+  description_ja?: string;
   direction?: OntologyDirection;
   cardinality?: OntologyCardinality;
   join_conditions?: OntologyJoinCondition[];
@@ -744,6 +750,13 @@ export interface VisibleOntologyGraph extends OntologyGraph {
   hidden_node_kinds: Partial<Record<OntologyNodeKind, number>>;
 }
 
+/**
+ * 関係カード下段に出す補足の種別。
+ * join = Join 条件式 / physical = 物理対応名 / description = 関係の説明 / none = 補足なし。
+ * contains(含む)や maps_to のように構造上 Join 条件を持たない関係でも空欄を出さないための区別。
+ */
+export type OntologyRelationshipDetailKind = "join" | "physical" | "description" | "none";
+
 export interface OntologyRelationshipRow {
   edge_id: string;
   source_node_id: string;
@@ -752,6 +765,8 @@ export interface OntologyRelationshipRow {
   target_node_id: string;
   target_label: string;
   join_condition: string;
+  detail_kind: OntologyRelationshipDetailKind;
+  detail_text: string;
   validation_status: OntologyValidationStatus;
 }
 
@@ -873,35 +888,43 @@ function nodeLabel(node: OntologyNode | undefined, fallback: string): string {
   return node?.business_name_ja || fallback;
 }
 
-function joinConditionLabel(edge: OntologyEdge): string {
-  if (!edge.join_conditions?.length) return "-";
-  return edge.join_conditions
-    .slice()
-    .sort((left, right) => (left.ordinal ?? 0) - (right.ordinal ?? 0))
-    .map((condition) => {
-      const source = condition.source_column ?? condition.left?.column_name ?? "?";
-      const target = condition.target_column ?? condition.right?.column_name ?? "?";
-      return `${source} ${condition.operator ?? "="} ${target}`;
-    })
-    .join(" AND ");
+function relationshipDetail(
+  graph: OntologyGraph,
+  edge: OntologyEdge,
+  nodesById: Map<string, OntologyNode>
+): { kind: OntologyRelationshipDetailKind; text: string } {
+  const joinText = ontologyJoinConditionText(graph, edge);
+  if (joinText) return { kind: "join", text: joinText };
+  const description = (edge.description_ja ?? "").trim();
+  if (description) return { kind: "description", text: description };
+  const physical =
+    ontologyPhysicalNodeLabel(nodesById.get(edge.target_node_id)) ||
+    ontologyPhysicalNodeLabel(nodesById.get(edge.source_node_id));
+  if (physical) return { kind: "physical", text: physical };
+  return { kind: "none", text: "" };
 }
 
 export function ontologyRelationshipRows(graph: OntologyGraph): OntologyRelationshipRow[] {
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
-  return graph.edges.map((edge) => ({
-    edge_id: edge.id,
-    source_node_id: edge.source_node_id,
-    source_label: nodeLabel(nodesById.get(edge.source_node_id), edge.source_node_id),
-    relationship_label: edge.relationship_name_ja,
-    target_node_id: edge.target_node_id,
-    target_label: nodeLabel(nodesById.get(edge.target_node_id), edge.target_node_id),
-    join_condition: joinConditionLabel(edge),
-    validation_status:
-      edge.validation_status ??
-      (["published", "reviewed", "approved"].includes(edge.review_status ?? "")
-        ? "passed"
-        : "unreviewed"),
-  }));
+  return graph.edges.map((edge) => {
+    const detail = relationshipDetail(graph, edge, nodesById);
+    return {
+      edge_id: edge.id,
+      source_node_id: edge.source_node_id,
+      source_label: nodeLabel(nodesById.get(edge.source_node_id), edge.source_node_id),
+      relationship_label: edge.relationship_name_ja,
+      target_node_id: edge.target_node_id,
+      target_label: nodeLabel(nodesById.get(edge.target_node_id), edge.target_node_id),
+      join_condition: detail.kind === "join" ? detail.text : "",
+      detail_kind: detail.kind,
+      detail_text: detail.text,
+      validation_status:
+        edge.validation_status ??
+        (["published", "reviewed", "approved"].includes(edge.review_status ?? "")
+          ? "passed"
+          : "unreviewed"),
+    };
+  });
 }
 
 export function sortOntologyRelationshipRows(

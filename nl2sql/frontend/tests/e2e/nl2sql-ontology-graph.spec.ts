@@ -1018,6 +1018,28 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
   expect(parallelPaths[0]).not.toEqual(parallelPaths[1]);
 });
 
+test("Join 条件を持たない関係カードは空枠ではなく物理対応名を表示する", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+
+  const containsCard = playground.getByTestId("ontology-inspector-relationship-contains-employee");
+  await containsCard.scrollIntoViewIfNeeded();
+  await expect(containsCard).toBeVisible();
+  // contains は構造上 Join 条件を持たないので、物理対応名へ縮退する。
+  await expect(containsCard).toContainText("物理対応");
+  await expect(containsCard.getByTestId("ontology-inspector-relationship-detail")).toHaveText(
+    "ADMIN.EMPLOYEE"
+  );
+
+  // ハイフンだけの空枠(旧フォールバック)が残っていないこと。
+  const details = playground.getByTestId("ontology-inspector-relationship-detail");
+  for (const text of await details.allInnerTexts()) {
+    expect(text.trim()).not.toBe("-");
+  }
+});
+
 test("ノードはドラッグで移動でき、リセットで決定論レイアウトに戻る", async ({ page }, testInfo) => {
   // タッチエミュレーション環境でのマウス合成ドラッグは React Flow のジェスチャ判定と
   // 相性が悪く不安定なため、ドラッグ検証はデスクトップのみで行う(タッチ操作は

@@ -1,10 +1,15 @@
-import type {
-  OntologyEdge,
-  OntologyGraph,
-  OntologyJoinCondition,
-  OntologyJsonValue,
-  OntologyNode,
-} from "./types";
+import type { OntologyGraph, OntologyJsonValue, OntologyNode } from "./types";
+import {
+  OBJECT_KINDS,
+  columnIdentityFromNode,
+  edgeEndpoint,
+  jsonString,
+  objectIdentityFromNode,
+  objectMatches,
+  objectName,
+  ontologyJoinConditionText,
+  type ObjectIdentity,
+} from "./physicalIdentity";
 
 export type OntologyErKeyRole = "none" | "pk" | "fk" | "pk_fk";
 
@@ -37,20 +42,6 @@ export interface OntologyErDetails {
   joins: OntologyErJoinDetail[];
 }
 
-interface ObjectIdentity {
-  owner: string;
-  objectName: string;
-  objectType: "table" | "view" | "unknown";
-  nodeId?: string;
-}
-
-interface ColumnIdentity extends ObjectIdentity {
-  columnName: string;
-}
-
-type JoinEndpoint = Partial<NonNullable<OntologyJoinCondition["left"]>>;
-
-const OBJECT_KINDS = new Set(["table", "view"]);
 const MAPPABLE_KINDS = new Set([
   "business_entity",
   "business_event",
@@ -58,10 +49,6 @@ const MAPPABLE_KINDS = new Set([
   "metric",
   "business_term",
 ]);
-
-function jsonString(value: OntologyJsonValue | undefined): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function jsonNumber(value: OntologyJsonValue | undefined): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -80,152 +67,8 @@ function jsonBoolean(value: OntologyJsonValue | undefined): boolean {
   return false;
 }
 
-function normalizeIdentifier(value: string | undefined): string {
-  return (value ?? "").trim().toLocaleUpperCase("en-US");
-}
-
-function objectType(value: string | undefined): ObjectIdentity["objectType"] {
-  const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized.includes("view")) return "view";
-  if (normalized.includes("table")) return "table";
-  return "unknown";
-}
-
-function objectName(identity: ObjectIdentity): string {
-  return identity.owner ? `${identity.owner}.${identity.objectName}` : identity.objectName;
-}
-
-function splitQualifiedName(value: string | undefined): {
-  owner: string;
-  objectName: string;
-  columnName: string;
-} {
-  const parts = (value ?? "")
-    .split(".")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length >= 3) {
-    return {
-      owner: parts[parts.length - 3],
-      objectName: parts[parts.length - 2],
-      columnName: parts[parts.length - 1],
-    };
-  }
-  if (parts.length === 2) return { owner: parts[0], objectName: parts[1], columnName: "" };
-  return { owner: "", objectName: parts[0] ?? "", columnName: "" };
-}
-
-function firstMappingObject(node: OntologyNode) {
-  return node.physical_mappings?.[0]?.object_ref;
-}
-
-function objectIdentityFromNode(node: OntologyNode): ObjectIdentity | null {
-  const mapping = firstMappingObject(node);
-  const fallback = node.physical_mapping;
-  const technical = splitQualifiedName(node.technical_name);
-  const metadata = node.metadata ?? {};
-  const allowTechnicalFallback = OBJECT_KINDS.has(node.kind) || node.kind === "column";
-  const owner = normalizeIdentifier(
-    mapping?.owner ||
-      jsonString(metadata.owner) ||
-      fallback?.owner ||
-      (allowTechnicalFallback ? technical.owner : "")
-  );
-  const objectNameValue =
-    mapping?.object_name ||
-    jsonString(metadata.object_name) ||
-    fallback?.object_name ||
-    (allowTechnicalFallback ? technical.objectName : "");
-  const normalizedObjectName = normalizeIdentifier(objectNameValue);
-  if (!normalizedObjectName) return null;
-  const resolvedType = objectType(
-    mapping?.object_type || jsonString(metadata.object_type) || fallback?.object_type || node.kind
-  );
-  return {
-    owner,
-    objectName: normalizedObjectName,
-    objectType: resolvedType,
-    nodeId: mapping?.node_id || (OBJECT_KINDS.has(node.kind) ? node.id : undefined),
-  };
-}
-
-function columnIdentityFromNode(node: OntologyNode): ColumnIdentity | null {
-  if (node.kind !== "column") return null;
-  const object = objectIdentityFromNode(node);
-  if (!object) return null;
-  const columnRef = node.physical_mappings?.[0]?.column_refs?.[0];
-  const technical = splitQualifiedName(node.technical_name);
-  const metadata = node.metadata ?? {};
-  const columnName = normalizeIdentifier(
-    columnRef?.column_name ||
-      jsonString(metadata.column_name) ||
-      node.physical_mapping?.column_name ||
-      technical.columnName
-  );
-  if (!columnName) return null;
-  return { ...object, columnName };
-}
-
-function objectMatches(left: ObjectIdentity, right: ObjectIdentity): boolean {
-  if (left.nodeId && right.nodeId && left.nodeId === right.nodeId) return true;
-  return left.owner === right.owner && left.objectName === right.objectName;
-}
-
-function endpointIdentity(endpoint: JoinEndpoint | undefined): ObjectIdentity | null {
-  const objectNameValue = normalizeIdentifier(endpoint?.object_name);
-  if (!objectNameValue) return null;
-  return {
-    owner: normalizeIdentifier(endpoint?.owner),
-    objectName: objectNameValue,
-    objectType: "unknown",
-  };
-}
-
-function endpointColumn(endpoint: JoinEndpoint | undefined): string {
-  return normalizeIdentifier(endpoint?.column_name);
-}
-
 function nodeLabel(node: OntologyNode | undefined, fallback: string): string {
   return node?.business_name_ja || node?.technical_name || fallback;
-}
-
-function edgeEndpoint(
-  graph: OntologyGraph,
-  edge: OntologyEdge,
-  condition: OntologyJoinCondition,
-  side: "left" | "right"
-): ColumnIdentity | null {
-  const explicit = side === "left" ? condition.left : condition.right;
-  const explicitObject = endpointIdentity(explicit);
-  const explicitColumn = endpointColumn(explicit);
-  if (explicitObject && explicitColumn) return { ...explicitObject, columnName: explicitColumn };
-
-  const nodeId = side === "left" ? edge.source_node_id : edge.target_node_id;
-  const fallbackNode = graph.nodes.find((node) => node.id === nodeId);
-  const fallbackObject = fallbackNode ? objectIdentityFromNode(fallbackNode) : null;
-  const fallbackColumn = normalizeIdentifier(
-    side === "left" ? condition.source_column : condition.target_column
-  );
-  if (fallbackObject && fallbackColumn) return { ...fallbackObject, columnName: fallbackColumn };
-  return null;
-}
-
-function endpointLabel(endpoint: ColumnIdentity | null): string {
-  if (!endpoint) return "?";
-  const qualified = objectName(endpoint);
-  return qualified ? `${qualified}.${endpoint.columnName}` : endpoint.columnName;
-}
-
-function joinConditionLabel(graph: OntologyGraph, edge: OntologyEdge): string {
-  return (edge.join_conditions ?? [])
-    .slice()
-    .sort((left, right) => (left.ordinal ?? 0) - (right.ordinal ?? 0))
-    .map((condition) => {
-      const left = edgeEndpoint(graph, edge, condition, "left");
-      const right = edgeEndpoint(graph, edge, condition, "right");
-      return `${endpointLabel(left)} ${condition.operator ?? "="} ${endpointLabel(right)}`;
-    })
-    .join(" AND ");
 }
 
 function explicitPrimaryKey(node: OntologyNode): boolean {
@@ -347,7 +190,7 @@ export function deriveOntologyErDetails(
       sourceLabel: nodeLabel(nodeById.get(edge.source_node_id), edge.source_node_id),
       targetLabel: nodeLabel(nodeById.get(edge.target_node_id), edge.target_node_id),
       cardinality: edge.cardinality ?? "unknown",
-      joinCondition: joinConditionLabel(graph, edge) || "-",
+      joinCondition: ontologyJoinConditionText(graph, edge) || "-",
     }));
 
   return {

@@ -69,8 +69,111 @@ test("relationship list renders ordered composite join conditions and sorts in J
 
   const rows = ontologyRelationshipRows(graph);
   assert.equal(rows[0]?.join_condition, "TENANT_ID = TENANT_ID AND CUSTOMER_ID = ID");
+  assert.equal(rows[0]?.detail_kind, "join");
+  assert.equal(rows[0]?.detail_text, "TENANT_ID = TENANT_ID AND CUSTOMER_ID = ID");
   assert.equal(rows[0]?.validation_status, "passed");
   assert.equal(sortOntologyRelationshipRows(rows, "target", "desc")[0]?.target_label, "顧客");
+});
+
+test("relationship rows qualify join conditions and fall back to physical name or description", () => {
+  const graph: OntologyGraph = {
+    nodes: [
+      {
+        id: "department-table",
+        kind: "table",
+        business_name_ja: "部署情報",
+        technical_name: "ADMIN.DEPARTMENT",
+      },
+      {
+        id: "employee-table",
+        kind: "table",
+        business_name_ja: "従業員情報",
+        technical_name: "ADMIN.EMPLOYEE",
+      },
+      {
+        id: "created-at-column",
+        kind: "column",
+        business_name_ja: "レコード作成日時。",
+        technical_name: "ADMIN.DEPARTMENT.CREATED_AT",
+      },
+      { id: "department-view", kind: "view", business_name_ja: "部署ビュー", technical_name: "ADMIN.V_DEPARTMENT" },
+    ],
+    edges: [
+      {
+        id: "fk-employee-department",
+        kind: "foreign_key",
+        source_node_id: "employee-table",
+        target_node_id: "department-table",
+        relationship_name_ja: "従業員情報 → 部署情報",
+        description_ja: "Oracle 外部キー FK_EMP_DEPT",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+          },
+        ],
+      },
+      {
+        id: "contains-created-at",
+        kind: "contains",
+        source_node_id: "department-table",
+        target_node_id: "created-at-column",
+        relationship_name_ja: "含む",
+      },
+      {
+        id: "lineage-department-view",
+        kind: "lineage",
+        source_node_id: "department-view",
+        target_node_id: "department-table",
+        relationship_name_ja: "参照元",
+        description_ja: "ADMIN.V_DEPARTMENT は ADMIN.DEPARTMENT を参照",
+      },
+    ],
+  };
+
+  const rows = ontologyRelationshipRows(graph);
+  const byId = new Map(rows.map((row) => [row.edge_id, row]));
+
+  // Join 条件は所有者・表名まで修飾する(列名だけでは左右の表が分からないため)。
+  assert.equal(byId.get("fk-employee-department")?.detail_kind, "join");
+  assert.equal(
+    byId.get("fk-employee-department")?.detail_text,
+    "ADMIN.EMPLOYEE.DEPARTMENT_ID = ADMIN.DEPARTMENT.DEPARTMENT_ID"
+  );
+
+  // 含む(contains)は構造上 Join 条件を持たないため、物理対応名へ縮退し空欄を出さない。
+  assert.equal(byId.get("contains-created-at")?.join_condition, "");
+  assert.equal(byId.get("contains-created-at")?.detail_kind, "physical");
+  assert.equal(byId.get("contains-created-at")?.detail_text, "ADMIN.DEPARTMENT.CREATED_AT");
+
+  // 説明を持つ関係(lineage)は説明を出す。
+  assert.equal(byId.get("lineage-department-view")?.detail_kind, "description");
+  assert.equal(
+    byId.get("lineage-department-view")?.detail_text,
+    "ADMIN.V_DEPARTMENT は ADMIN.DEPARTMENT を参照"
+  );
+});
+
+test("relationship rows report no detail when neither join, description nor physical name exists", () => {
+  const graph: OntologyGraph = {
+    nodes: [
+      { id: "order", kind: "business_entity", business_name_ja: "注文" },
+      { id: "customer", kind: "business_entity", business_name_ja: "顧客" },
+    ],
+    edges: [
+      {
+        id: "order-customer",
+        source_node_id: "order",
+        target_node_id: "customer",
+        relationship_name_ja: "購入者",
+      },
+    ],
+  };
+
+  const rows = ontologyRelationshipRows(graph);
+  assert.equal(rows[0]?.detail_kind, "none");
+  assert.equal(rows[0]?.detail_text, "");
+  assert.equal(rows[0]?.join_condition, "");
 });
 
 test("profile ontology scope excludes otherwise approved nodes and relationships", () => {

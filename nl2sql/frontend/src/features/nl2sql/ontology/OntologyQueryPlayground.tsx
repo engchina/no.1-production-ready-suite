@@ -304,6 +304,12 @@ function ServerSearchResultPanel({
   );
 }
 
+function relationshipDetailLabel(kind: OntologyRelationshipRow["detail_kind"]): string {
+  if (kind === "join") return t("ontologyPlayground.inspector.detailJoin");
+  if (kind === "physical") return t("ontologyPlayground.inspector.detailPhysical");
+  return t("ontologyPlayground.inspector.detailNote");
+}
+
 function RelationshipCard({
   row,
   selected,
@@ -331,9 +337,26 @@ function RelationshipCard({
       <span className="text-xs leading-5 text-muted">
         {row.source_label} → {row.target_label}
       </span>
-      <code className="break-all rounded bg-card px-2 py-1 font-mono text-xs leading-5 text-foreground">
-        {row.join_condition}
-      </code>
+      {row.detail_kind === "none" ? null : (
+        <span className="grid gap-0.5">
+          <span className="text-[11px] leading-4 text-muted">{relationshipDetailLabel(row.detail_kind)}</span>
+          {row.detail_kind === "join" ? (
+            <code
+              className="break-all rounded bg-card px-2 py-1 font-mono text-xs leading-5 text-foreground"
+              data-testid="ontology-inspector-relationship-detail"
+            >
+              {row.detail_text}
+            </code>
+          ) : (
+            <span
+              className="break-all text-xs leading-5 text-foreground"
+              data-testid="ontology-inspector-relationship-detail"
+            >
+              {row.detail_text}
+            </span>
+          )}
+        </span>
+      )}
     </button>
   );
 }
