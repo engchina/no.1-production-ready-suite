@@ -470,7 +470,7 @@ variable "app_admin_login_user_id" {
   }
 }
 
-variable "app_admin_password" {
+variable "app_admin_login_user_password" {
   description = "Login password for the built-in SYSTEM_ADMIN configuration administrator."
   type        = string
   sensitive   = true
@@ -478,19 +478,19 @@ variable "app_admin_password" {
 
   validation {
     condition = (
-      var.app_admin_password == ""
+      var.app_admin_login_user_password == ""
       || (
-        length(var.app_admin_password) >= 12
-        && length(var.app_admin_password) <= 30
-        && !can(regex("[\r\n]", var.app_admin_password))
-        && !can(regex("\"", var.app_admin_password))
-        && !can(regex("admin", var.app_admin_password))
-        && can(regex("[0-9]", var.app_admin_password))
-        && can(regex("[a-z]", var.app_admin_password))
-        && can(regex("[A-Z]", var.app_admin_password))
+        length(var.app_admin_login_user_password) >= 12
+        && length(var.app_admin_login_user_password) <= 30
+        && !can(regex("[\r\n]", var.app_admin_login_user_password))
+        && !can(regex("\"", var.app_admin_login_user_password))
+        && !can(regex("admin", var.app_admin_login_user_password))
+        && can(regex("[0-9]", var.app_admin_login_user_password))
+        && can(regex("[a-z]", var.app_admin_login_user_password))
+        && can(regex("[A-Z]", var.app_admin_login_user_password))
       )
     )
-    error_message = "app_admin_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
+    error_message = "app_admin_login_user_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
   }
 }
 

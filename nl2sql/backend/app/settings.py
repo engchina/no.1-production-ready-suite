@@ -213,7 +213,7 @@ class Settings(BaseServiceSettings):
     # アプリケーション認証/RBAC。local/CI は APP_AUTH_ENABLED=false を明示する。
     app_auth_enabled: bool = True
     app_admin_login_user_id: str = ""
-    app_admin_password: str = ""
+    app_admin_login_user_password: str = ""
     app_auth_cookie_secure: bool = False
     app_auth_session_cookie_name: str = "nl2sql_session"
     app_auth_csrf_cookie_name: str = "nl2sql_csrf"

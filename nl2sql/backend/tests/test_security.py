@@ -88,7 +88,7 @@ def _settings() -> Settings:
         oracle_user="DBADMIN",
         oracle_password="DbAdminPass!123",
         app_admin_login_user_id="system_admin",
-        app_admin_password="AppAdminPass123",
+        app_admin_login_user_password="AppAdminPass123",
         oracle_dsn="test",
         nl2sql_persistence_mode="memory",
         app_auth_enabled=True,
@@ -111,7 +111,7 @@ def _patch_app_admin_env(
     env_file = tmp_path / ".env"
     env_file.write_text(
         f"APP_ADMIN_LOGIN_USER_ID={login_user_id}\n"
-        f"APP_ADMIN_PASSWORD={password}\n"
+        f"APP_ADMIN_LOGIN_USER_PASSWORD={password}\n"
         "APP_AUTH_ENABLED=true\n",
         encoding="utf-8",
     )
@@ -167,7 +167,7 @@ def _configure_memory_api_auth(monkeypatch: pytest.MonkeyPatch) -> SecurityServi
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
-    monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
+    monkeypatch.setattr(settings, "app_admin_login_user_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
     from app.security.service import get_security_service
@@ -523,6 +523,51 @@ def test_configured_system_admin_requires_fixed_login_user_id(
     assert "system_admin" in error.value.public_message
 
 
+def test_configured_system_admin_accepts_legacy_app_admin_password_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """旧キー APP_ADMIN_PASSWORD だけの既存 .env でもログインできる(後方互換)。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "APP_ADMIN_LOGIN_USER_ID=system_admin\n"
+        "APP_ADMIN_PASSWORD=AppAdminPass123\n"
+        "APP_AUTH_ENABLED=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
+    service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
+
+    principal, _token, _csrf = service.login("system_admin", "AppAdminPass123")
+
+    assert principal.login_user_id == "system_admin"
+
+
+def test_configured_system_admin_password_change_migrates_legacy_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """password 変更時に旧キー行は除去され、新キーだけが残る。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "APP_ADMIN_LOGIN_USER_ID=system_admin\n"
+        "APP_ADMIN_PASSWORD=AppAdminPass123\n"
+        "APP_AUTH_ENABLED=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
+    service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
+    principal, _token, _csrf = service.login("system_admin", "AppAdminPass123")
+
+    service.change_password(principal, "AppAdminPass123", "UpdatedPass123A")
+
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "APP_ADMIN_LOGIN_USER_PASSWORD=UpdatedPass123A" in env_text
+    assert "APP_ADMIN_PASSWORD=" not in env_text
+    relogged, _, _ = service.login("system_admin", "UpdatedPass123A")
+    assert relogged.login_user_id == "system_admin"
+
+
 def test_configured_system_admin_password_change_updates_env_without_auth_tables(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -537,7 +582,7 @@ def test_configured_system_admin_password_change_updates_env_without_auth_tables
     assert changed.user_uuid == principal.user_uuid
     env_text = env_file.read_text(encoding="utf-8")
     assert "APP_ADMIN_LOGIN_USER_ID=system_admin" in env_text
-    assert "APP_ADMIN_PASSWORD=UpdatedPass123A" in env_text
+    assert "APP_ADMIN_LOGIN_USER_PASSWORD=UpdatedPass123A" in env_text
     assert env_text.index("APP_ADMIN_LOGIN_USER_ID=system_admin") < env_text.index(
         "APP_AUTH_ENABLED=true"
     )
@@ -2369,7 +2414,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
-    monkeypatch.setattr(settings, "app_admin_password", "BootstrapPass123")
+    monkeypatch.setattr(settings, "app_admin_login_user_password", "BootstrapPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
 
@@ -2482,7 +2527,7 @@ def test_api_enforces_menu_permissions(
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
-    monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
+    monkeypatch.setattr(settings, "app_admin_login_user_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
     from app.security.service import get_security_service
@@ -3752,7 +3797,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
-    monkeypatch.setattr(settings, "app_admin_password", "AppAdminPass123")
+    monkeypatch.setattr(settings, "app_admin_login_user_password", "AppAdminPass123")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     _patch_security_threadpools(monkeypatch)
     reset_security_service()

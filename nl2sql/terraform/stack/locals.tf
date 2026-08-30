@@ -23,7 +23,7 @@ DEBUG=false
 
 APP_AUTH_ENABLED=true
 APP_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}
-APP_ADMIN_PASSWORD=${var.app_admin_password}
+APP_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}
 APP_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
 APP_AUTH_SESSION_COOKIE_NAME=nl2sql_session
 APP_AUTH_CSRF_COOKIE_NAME=nl2sql_csrf

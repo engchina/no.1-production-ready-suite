@@ -63,7 +63,7 @@ jobs:
               variables_tf = archive.read("variables.tf").decode()
           if (
               "APP_ADMIN_LOGIN_USER_ID=" not in locals_tf
-              or "APP_ADMIN_PASSWORD=" not in locals_tf
+              or "APP_ADMIN_LOGIN_USER_PASSWORD=" not in locals_tf
           ):
               raise SystemExit("APP_ADMIN credentials are missing from backend.env")
           deepsec_schema_group = re.search(

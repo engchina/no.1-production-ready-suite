@@ -45,7 +45,7 @@ def _settings(
         oracle_user="APP_OWNER",
         oracle_password="ControlPass!123",
         app_admin_login_user_id="system_admin",
-        app_admin_password="AppAdminPass123",
+        app_admin_login_user_password="AppAdminPass123",
         oracle_dsn="test",
         oracle_driver_mode=driver_mode,
         oracle_connection_security=connection_security,

@@ -138,7 +138,8 @@ _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
 _FIXED_APP_ADMIN_LOGIN_USER_ID = "system_admin"
 _APP_ADMIN_LOGIN_USER_ID_KEY = "APP_ADMIN_LOGIN_USER_ID"
 _LEGACY_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
-_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"
+_APP_ADMIN_LOGIN_USER_PASSWORD_KEY = "APP_ADMIN_LOGIN_USER_PASSWORD"
+_LEGACY_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"
 _APP_AUTH_ENABLED_KEY = "APP_AUTH_ENABLED"
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 _ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -358,7 +359,7 @@ class SecurityService:
             self._validate_configured_system_admin_password_for_change(new_password)
             self._write_configured_system_admin_password(new_password)
             self.settings.app_admin_login_user_id = _FIXED_APP_ADMIN_LOGIN_USER_ID
-            self.settings.app_admin_password = new_password
+            self.settings.app_admin_login_user_password = new_password
             return principal
         user = self.store.get_user(principal.user_uuid)
         if user is None or not verify_password(current_password, user.password_hash)[0]:
@@ -905,11 +906,13 @@ class SecurityService:
         login_user_id = _read_backend_env_value(_APP_ADMIN_LOGIN_USER_ID_KEY)
         if login_user_id is None:
             login_user_id = _read_backend_env_value(_LEGACY_APP_ADMIN_USERNAME_KEY)
-        password = _read_backend_env_value(_APP_ADMIN_PASSWORD_KEY)
+        password = _read_backend_env_value(_APP_ADMIN_LOGIN_USER_PASSWORD_KEY)
+        if password is None:
+            password = _read_backend_env_value(_LEGACY_APP_ADMIN_PASSWORD_KEY)
         if login_user_id is None:
             login_user_id = self.settings.app_admin_login_user_id
         if password is None:
-            password = self.settings.app_admin_password
+            password = self.settings.app_admin_login_user_password
         return login_user_id.strip(), password
 
     @staticmethod
@@ -923,7 +926,7 @@ class SecurityService:
             raise SecurityApiError(
                 503,
                 "構成管理者の認証情報が設定されていません。"
-                "APP_ADMIN_LOGIN_USER_ID と APP_ADMIN_PASSWORD を設定してください。",
+                "APP_ADMIN_LOGIN_USER_ID と APP_ADMIN_LOGIN_USER_PASSWORD を設定してください。",
             )
 
     @staticmethod
@@ -952,12 +955,13 @@ class SecurityService:
             not in {
                 _APP_ADMIN_LOGIN_USER_ID_KEY,
                 _LEGACY_APP_ADMIN_USERNAME_KEY,
-                _APP_ADMIN_PASSWORD_KEY,
+                _APP_ADMIN_LOGIN_USER_PASSWORD_KEY,
+                _LEGACY_APP_ADMIN_PASSWORD_KEY,
             }
         ]
         admin_lines = [
             f"{_APP_ADMIN_LOGIN_USER_ID_KEY}={_FIXED_APP_ADMIN_LOGIN_USER_ID}",
-            f"{_APP_ADMIN_PASSWORD_KEY}={_format_env_value(password)}",
+            f"{_APP_ADMIN_LOGIN_USER_PASSWORD_KEY}={_format_env_value(password)}",
         ]
         insert_at = next(
             (

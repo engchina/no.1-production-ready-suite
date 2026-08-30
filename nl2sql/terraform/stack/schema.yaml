@@ -34,7 +34,7 @@ variableGroups:
     visible: true
     variables:
       - app_admin_login_user_id
-      - app_admin_password
+      - app_admin_login_user_password
 
   - title: Deep Data Security
     visible: true
@@ -199,7 +199,7 @@ variables:
       - "system_admin"
     default: "system_admin"
 
-  app_admin_password:
+  app_admin_login_user_password:
     type: password
     required: true
     visible: true

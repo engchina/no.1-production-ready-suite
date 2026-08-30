@@ -17,7 +17,7 @@ ENV_ASSIGNMENT_RE = re.compile(
 )
 EXAMPLE_EMPTY_KEYS = frozenset(
     {
-        "APP_ADMIN_PASSWORD",
+        "APP_ADMIN_LOGIN_USER_PASSWORD",
         "APP_AUTH_SECRET",
         "OCI_COMPARTMENT_ID",
         "OCI_ENTERPRISE_AI_API_KEY",

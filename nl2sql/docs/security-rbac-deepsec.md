@@ -3,7 +3,7 @@
 ## 適用範囲
 
 本機能は OCI IAM を使用せず、Oracle に永続化した local application user と role で認証・認可する。
-ただし `backend/.env` の `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_PASSWORD` に一致する構成管理者は、
+ただし `backend/.env` の `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` に一致する構成管理者は、
 認証 table を参照しない `SYSTEM_ADMIN` として扱う。`APP_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
 大小文字区別であり、`System_Admin` / `SYSTEM_ADMIN` などは database user へ fallback しない。
 `ORACLE_USER` / `ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
@@ -50,7 +50,7 @@ V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、De
 
 ## 初期 migration と構成管理者
 
-`APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
+`APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
 アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` /
 `NL2SQL_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
 使う場合は、DB 接続後に次を一度実行する。
@@ -63,7 +63,9 @@ uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 ```
 
 通常の application user は `NL2SQL_APP_USERS` から照合される。構成管理者の password は application
-password 変更画面から変更でき、変更結果は `backend/.env` の `APP_ADMIN_PASSWORD` に書き戻される。
+password 変更画面から変更でき、変更結果は `backend/.env` の `APP_ADMIN_LOGIN_USER_PASSWORD` に書き戻される。
+旧キー `APP_ADMIN_PASSWORD` だけを持つ既存 `.env` は読み取り時に fallback として受理されるが、
+password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PASSWORD` へ移行する。
 通常 user の password はこれまでどおり DB hash として保存される。ユーザー管理 API/UI は
 `system_admin` の大小文字違いを含む DB user 作成を拒否する。
 

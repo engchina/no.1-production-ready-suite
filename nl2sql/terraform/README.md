@@ -130,7 +130,7 @@ The configured `SYSTEM_ADMIN` login comes from the application administrator
 values supplied in Resource Manager:
 
 - `APP_ADMIN_LOGIN_USER_ID=system_admin`
-- `APP_ADMIN_PASSWORD`
+- `APP_ADMIN_LOGIN_USER_PASSWORD`
 
 Deep Data Security is enabled by default in Terraform deployments:
 
