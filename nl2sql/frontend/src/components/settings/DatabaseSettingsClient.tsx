@@ -7,7 +7,6 @@ import {
   Database,
   Eye,
   EyeOff,
-  Loader2,
   PlugZap,
   Power,
   PowerOff,
@@ -17,7 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { toast } from "@engchina/production-ready-ui";
+import { Spinner, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -1031,7 +1030,7 @@ function PasswordField({
           className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {revealPending ? (
-            <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden />
+            <Spinner size={16} />
           ) : visible ? (
             <EyeOff size={16} aria-hidden />
           ) : (

@@ -459,6 +459,68 @@ def test_sql_semantic_graph_covers_cte_subquery_join_window_and_all_clauses() ->
     assert graph.lineage
 
 
+def test_sql_semantic_graph_binds_star_join_endpoints_from_on_condition() -> None:
+    """star join では ON 句が結ぶ表を左端点にする(直前の join の右表ではない)。"""
+    star = parse_oracle_sql(
+        'SELECT "D"."DEPARTMENT_ID", "E"."EMPLOYEE_ID", "P"."PROJECT_ID" '
+        'FROM "ADMIN"."DEPARTMENT" "D" '
+        'JOIN "ADMIN"."EMPLOYEE" "E" ON "E"."DEPARTMENT_ID" = "D"."DEPARTMENT_ID" '
+        'JOIN "ADMIN"."PROJECT" "P" ON "P"."DEPARTMENT_ID" = "D"."DEPARTMENT_ID"',
+        ontology_revision_id="revision_1",
+    )
+    assert star.graph is not None
+    assert [(join.left_source, join.right_source) for join in star.graph.joins] == [
+        ("ADMIN.DEPARTMENT D", "ADMIN.EMPLOYEE E"),
+        ("ADMIN.DEPARTMENT D", "ADMIN.PROJECT P"),
+    ]
+
+    # 別名なしの star join でも表名 qualifier から解決する。
+    unaliased = parse_oracle_sql(
+        "SELECT 1 FROM ADMIN.DEPARTMENT "
+        "JOIN ADMIN.EMPLOYEE ON EMPLOYEE.DEPARTMENT_ID = DEPARTMENT.DEPARTMENT_ID "
+        "JOIN ADMIN.PROJECT ON PROJECT.DEPARTMENT_ID = DEPARTMENT.DEPARTMENT_ID",
+        ontology_revision_id="revision_1",
+    )
+    assert unaliased.graph is not None
+    assert [join.left_source for join in unaliased.graph.joins] == [
+        "ADMIN.DEPARTMENT",
+        "ADMIN.DEPARTMENT",
+    ]
+
+    # 左深 chain は従来どおり。
+    chain = parse_oracle_sql(
+        "SELECT 1 FROM APP.T1 X JOIN APP.T2 Y ON Y.ID = X.ID JOIN APP.T3 Z ON Z.ID = Y.ID",
+        ontology_revision_id="revision_1",
+    )
+    assert chain.graph is not None
+    assert [join.left_source for join in chain.graph.joins] == ["APP.T1 X", "APP.T2 Y"]
+
+
+def test_sql_semantic_graph_keeps_positional_join_endpoints_when_unresolvable() -> None:
+    """USING / CROSS / 複数表を跨ぐ ON は解決できないため位置ベースへ戻す。"""
+    using = parse_oracle_sql(
+        "SELECT 1 FROM APP.T1 X JOIN APP.T2 Y USING (ID) JOIN APP.T3 Z USING (ID)",
+        ontology_revision_id="revision_1",
+    )
+    assert using.graph is not None
+    assert [join.left_source for join in using.graph.joins] == ["APP.T1 X", "APP.T2 Y"]
+
+    crossed = parse_oracle_sql(
+        "SELECT 1 FROM APP.T1 X CROSS JOIN APP.T2 Y",
+        ontology_revision_id="revision_1",
+    )
+    assert crossed.graph is not None
+    assert [join.left_source for join in crossed.graph.joins] == ["APP.T1 X"]
+
+    multi = parse_oracle_sql(
+        "SELECT 1 FROM APP.T1 X JOIN APP.T2 Y ON Y.ID = X.ID "
+        "JOIN APP.T3 Z ON Z.ID = Y.ID AND Z.CODE = X.CODE",
+        ontology_revision_id="revision_1",
+    )
+    assert multi.graph is not None
+    assert [join.left_source for join in multi.graph.joins] == ["APP.T1 X", "APP.T2 Y"]
+
+
 def test_sql_semantic_graph_covers_union_and_rejects_incomplete_or_mutating_sql() -> None:
     union = parse_oracle_sql(
         "SELECT id FROM APP.CUSTOMERS UNION ALL SELECT customer_id FROM APP.ORDERS",

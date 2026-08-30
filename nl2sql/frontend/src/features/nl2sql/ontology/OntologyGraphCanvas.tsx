@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
@@ -16,6 +16,7 @@ import {
   Minus,
   Network,
   Plus,
+  RotateCcw,
   Route,
   Search,
   ShieldCheck,
@@ -36,6 +37,7 @@ import {
   useReactFlow,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -47,21 +49,28 @@ import { t } from "@/lib/i18n";
 import {
   layoutOntologyGraphSemanticMatrix,
   ontologyGraphObjectClusterKey,
+  type GraphPoint,
   type OntologyGraphSemanticLane,
   type OntologyGraphSemanticLaneId,
 } from "./graphLayout";
 import { cssVar, edgeStroke, nodeFill, nodeFillVar, nodeStroke } from "./graphPalette";
 import {
+  applyOntologyNodeDimensionChanges,
+  applyOntologyNodePositionChanges,
   cardinalityShortLabel,
+  isOntologyContainmentEdge,
   isOntologyDetailNodeKind,
   isOntologyJoinEdge,
   isOntologyMappingEdge,
   ontologyGraphForViewMode,
   ontologyGraphWithDetailVisibility,
   selectOntologyEdgeHandles,
+  type OntologyEdgeHandleSelection,
   type OntologyGraphViewMode,
+  type OntologyNodeDimensions,
 } from "./graphView";
 import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
+import OntologyParallelEdge from "./ParallelEdge";
 import type { OntologyGraph, OntologyNode } from "./types";
 
 interface OntologyGraphCanvasProps {
@@ -128,6 +137,11 @@ interface OntologyNodeData extends Record<string, unknown> {
   };
 }
 
+/** smoothstep の pathOptions(stepPosition 等)を持てる Edge のローカル拡張。 */
+type OntologyFlowEdge = Edge & {
+  pathOptions?: { borderRadius?: number; offset?: number; stepPosition?: number };
+};
+
 /** 凡例と kind フィルタで使う表示グループ。 */
 const LEGEND_GROUPS: Array<{
   id: string;
@@ -169,8 +183,12 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-/** アイコン + 業務名 + 技術名のカード。型=塗り/状態=枠のチャネル分離は graphPalette を踏襲。 */
-function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>) {
+/** アイコン + 業務名 + 技術名のカード。型=塗り/状態=枠のチャネル分離は graphPalette を踏襲。
+ *  memo 化でドラッグ中の無関係ノード再レンダを防ぐ。 */
+const OntologyNodeCard = memo(function OntologyNodeCard({
+  data,
+  selected,
+}: NodeProps<Node<OntologyNodeData>>) {
   const { node, highlighted, searchMatched, dimmed, stats } = data;
   const Icon = KIND_ICONS[node.kind] ?? Circle;
   const display = ontologyNodeDisplay(node, { highlighted });
@@ -190,6 +208,8 @@ function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>)
       className="grid h-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2"
       data-testid={`ontology-node-card-${node.id}`}
       data-ontology-node-kind={node.kind}
+      // 接地(ハイライト)は枠色と opacity で表すため、テストから検証できる印を残す。
+      data-ontology-node-grounded={highlighted ? "true" : "false"}
       title={hoverTitle}
       style={{
         width: NODE_WIDTH,
@@ -256,11 +276,19 @@ function OntologyNodeCard({ data, selected }: NodeProps<Node<OntologyNodeData>>)
       <Handle id="s-bottom" type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} />
     </div>
   );
-}
+});
 
+// 型マップはモジュールレベル定数にする(インライン定義だと毎レンダで全要素が再マウントされる)
 const NODE_TYPES = { ontology: OntologyNodeCard };
+const EDGE_TYPES = { ontologyParallel: OntologyParallelEdge };
 
-function FlowControls() {
+function FlowControls({
+  onResetLayout,
+  resetDisabled,
+}: {
+  onResetLayout: () => void;
+  resetDisabled: boolean;
+}) {
   const flow = useReactFlow();
   return (
     <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card p-1 shadow-sm">
@@ -293,6 +321,18 @@ function FlowControls() {
         onClick={() => void flow.fitView({ padding: 0.18, duration: 0 })}
       >
         <Maximize2 size={15} aria-hidden="true" />
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        aria-label={t("nl2sql.ontology.graphResetLayout")}
+        title={t("nl2sql.ontology.graphResetLayout")}
+        disabled={resetDisabled}
+        onClick={onResetLayout}
+        data-testid="ontology-graph-reset-layout"
+      >
+        <RotateCcw size={15} aria-hidden="true" />
       </Button>
     </div>
   );
@@ -456,6 +496,14 @@ function GraphToolbarSearchField({
         type="search"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          // Escape で検索をクリアする(入力が空のときはブラウザ既定に任せる)
+          if (event.key === "Escape" && value) {
+            event.preventDefault();
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
         placeholder={label}
         aria-label={label}
         className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-foreground shadow-none outline-none placeholder:text-muted/70 focus:border-transparent focus:shadow-none focus:outline-none focus:ring-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
@@ -507,6 +555,16 @@ function OntologyFlow({
   const [showDetails, setShowDetails] = useState(false);
   const [disabledLegendGroups, setDisabledLegendGroups] = useState<Set<string>>(new Set());
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  // ドラッグによる座標上書き。レイアウトは決定論のまま、差分だけを保持する
+  const [positionOverrides, setPositionOverrides] = useState<Map<string, GraphPoint>>(
+    () => new Map()
+  );
+  // React Flow が実測したノードサイズ。`measured` として返さないと配列再生成のたびに
+  // handleBounds がリセットされ、全エッジが 1 フレーム消えて点滅する(controlled flow の契約)
+  const [measuredById, setMeasuredById] = useState<Map<string, OntologyNodeDimensions>>(
+    () => new Map()
+  );
   const [internalViewMode, setInternalViewMode] = useState<OntologyGraphViewMode>(
     defaultViewMode ?? "all"
   );
@@ -516,10 +574,6 @@ function OntologyFlow({
     onViewModeChange?.(nextMode);
   };
 
-  const detailCount = useMemo(
-    () => graph.nodes.filter((node) => isOntologyDetailNodeKind(node.kind)).length,
-    [graph.nodes]
-  );
   const externalHighlight =
     (highlightNodeIds?.length ?? 0) > 0 || (highlightEdgeIds?.length ?? 0) > 0;
   const query = normalize(search.trim());
@@ -528,6 +582,11 @@ function OntologyFlow({
   const scopedGraph = useMemo<OntologyGraph>(
     () => ontologyGraphForViewMode(graph, currentViewMode, highlightNodeIds, highlightEdgeIds),
     [graph, currentViewMode, highlightNodeIds, highlightEdgeIds]
+  );
+  // トグルに出す件数は view-mode 適用後を数える(接地パスで実際に出る列数と一致させる)。
+  const detailCount = useMemo(
+    () => scopedGraph.nodes.filter((node) => isOntologyDetailNodeKind(node.kind)).length,
+    [scopedGraph]
   );
   const searchMatchedNodeIds = useMemo(() => {
     if (!query) return [] as string[];
@@ -588,7 +647,46 @@ function OntologyFlow({
       }),
     [visibleGraph]
   );
+  // 決定論レイアウトへドラッグ上書きをマージした実効座標(表示中ノードのみ適用)
+  const effectivePositions = useMemo(() => {
+    if (positionOverrides.size === 0) return semanticLayout.positions;
+    const merged = new Map(semanticLayout.positions);
+    for (const [nodeId, position] of positionOverrides) {
+      if (merged.has(nodeId)) merged.set(nodeId, position);
+    }
+    return merged;
+  }, [semanticLayout.positions, positionOverrides]);
   const statsByObject = useMemo(() => objectNodeStats(graph), [graph]);
+
+  const onNodesChange = useCallback((changes: NodeChange<Node<OntologyNodeData>>[]) => {
+    setPositionOverrides((current) => applyOntologyNodePositionChanges(current, changes));
+    setMeasuredById((current) => applyOntologyNodeDimensionChanges(current, changes));
+  }, []);
+  // レイアウトの意味が変わるビューモード切替をまたいだ上書きの持ち越しは混乱の元なので破棄
+  const lastViewModeRef = useRef(currentViewMode);
+  useEffect(() => {
+    if (lastViewModeRef.current === currentViewMode) return;
+    lastViewModeRef.current = currentViewMode;
+    setPositionOverrides(new Map());
+  }, [currentViewMode]);
+  const resetLayout = () => {
+    setPositionOverrides(new Map());
+    // 上書きクリアの再レンダ後にフィットする(即時だと旧座標でフィットしてしまう)
+    window.setTimeout(() => {
+      void flow.fitView({ padding: 0.18, duration: prefersReducedMotion() ? 0 : 300 });
+    }, 80);
+  };
+
+  // ホバー中は隣接ノード・エッジを残して他を減光する(接地/検索の強調中は無効)
+  const hoverNeighborIds = useMemo(() => {
+    if (!hoveredNodeId) return null;
+    const neighbors = new Set([hoveredNodeId]);
+    for (const edge of visibleGraph.edges) {
+      if (edge.source_node_id === hoveredNodeId) neighbors.add(edge.target_node_id);
+      else if (edge.target_node_id === hoveredNodeId) neighbors.add(edge.source_node_id);
+    }
+    return neighbors;
+  }, [hoveredNodeId, visibleGraph.edges]);
 
   // 強調は 2 チャネルを合成する: 接地ハイライト(枠・塗り)と検索一致(リング)。
   // 以前は接地表示中に検索が無反応だったため、両者を独立チャネルとして常に効かせる。
@@ -623,17 +721,19 @@ function OntologyFlow({
     searchMatchedNodeIds,
     visibleGraph,
   ]);
+  // ホバー減光は接地・検索の強調が非アクティブのときだけ効かせる第 3 の一時チャネル
+  const hoverDimActive = Boolean(hoverNeighborIds) && !emphasis.active;
 
   // 検索一致のジャンプナビゲーション(レイアウト位置順)
   const orderedSearchMatches = useMemo(() => {
     return searchMatchedNodeIds
-      .filter((id) => semanticLayout.positions.has(id))
+      .filter((id) => effectivePositions.has(id))
       .sort((a, b) => {
-        const pa = semanticLayout.positions.get(a)!;
-        const pb = semanticLayout.positions.get(b)!;
+        const pa = effectivePositions.get(a)!;
+        const pb = effectivePositions.get(b)!;
         return pa.y - pb.y || pa.x - pb.x;
       });
-  }, [searchMatchedNodeIds, semanticLayout.positions]);
+  }, [searchMatchedNodeIds, effectivePositions]);
   useEffect(() => {
     setSearchCursor(0);
   }, [query]);
@@ -643,7 +743,7 @@ function OntologyFlow({
       (searchCursor + direction + orderedSearchMatches.length) % orderedSearchMatches.length;
     setSearchCursor(next);
     const nodeId = orderedSearchMatches[next];
-    const position = semanticLayout.positions.get(nodeId);
+    const position = effectivePositions.get(nodeId);
     if (!position) return;
     onSelectNode?.(nodeId);
     void flow.setCenter(position.x + NODE_WIDTH / 2, position.y + NODE_HEIGHT / 2, {
@@ -663,8 +763,8 @@ function OntologyFlow({
     () => [...(highlightNodeIds ?? [])].sort().join("|"),
     [highlightNodeIds]
   );
-  const layoutPositionsRef = useRef(semanticLayout.positions);
-  layoutPositionsRef.current = semanticLayout.positions;
+  const layoutPositionsRef = useRef(effectivePositions);
+  layoutPositionsRef.current = effectivePositions;
   const highlightNodeIdsRef = useRef(highlightNodeIds);
   highlightNodeIdsRef.current = highlightNodeIds;
   useEffect(() => {
@@ -683,6 +783,41 @@ function OntologyFlow({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [visibleSignature, highlightSignature, flow]);
+
+  // インスペクタ等の外部選択で対象が画面外のときだけ、そのノードへセンタリングする
+  // (fitView での全体リセットはしない。ズームは現状維持ベース)。
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const position = layoutPositionsRef.current.get(selectedNodeId);
+    const container = canvasRef.current;
+    if (!position || !container) return;
+    const { x, y, zoom } = flow.getViewport();
+    const centerX = (position.x + NODE_WIDTH / 2) * zoom + x;
+    const centerY = (position.y + NODE_HEIGHT / 2) * zoom + y;
+    const rect = container.getBoundingClientRect();
+    const margin = 24;
+    const visible =
+      centerX >= margin &&
+      centerX <= rect.width - margin &&
+      centerY >= margin &&
+      centerY <= rect.height - margin;
+    if (visible) return;
+    void flow.setCenter(position.x + NODE_WIDTH / 2, position.y + NODE_HEIGHT / 2, {
+      zoom: Math.max(flow.getZoom(), 0.8),
+      duration: prefersReducedMotion() ? 0 : 250,
+    });
+  }, [selectedNodeId, flow]);
+
+  // スクリーンリーダー向けの選択通知文(aria-live)。選択解除時は空にする
+  const selectedNodeAnnouncement = useMemo(() => {
+    if (!selectedNodeId) return "";
+    const node = graph.nodes.find((item) => item.id === selectedNodeId);
+    if (!node) return "";
+    return t("nl2sql.ontology.graphSelectionAnnouncement", {
+      label: ontologyNodeDisplay(node, { highlighted: false }).ariaLabel,
+    });
+  }, [selectedNodeId, graph.nodes]);
 
   const presentLegendGroupIds = useMemo(() => {
     const present = new Set<string>();
@@ -710,15 +845,19 @@ function OntologyFlow({
       visibleGraph.nodes.map((node) => {
         const highlighted = emphasis.highlightNodes.has(node.id);
         const searchMatched = emphasis.searchNodes.has(node.id);
+        const hoverDimmed = hoverDimActive && !hoverNeighborIds!.has(node.id);
+        const measured = measuredById.get(node.id);
         return {
           id: node.id,
           type: "ontology",
-          position: semanticLayout.positions.get(node.id) ?? { x: 0, y: 0 },
+          position: effectivePositions.get(node.id) ?? { x: 0, y: 0 },
+          // 実測サイズを返して handleBounds を保持させる(無いと再生成のたびにエッジが点滅)
+          ...(measured ? { measured } : {}),
           data: {
             node,
             highlighted,
             searchMatched,
-            dimmed: emphasis.active && !highlighted && !searchMatched,
+            dimmed: (emphasis.active && !highlighted && !searchMatched) || hoverDimmed,
             stats: statsByObject.get(ontologyGraphObjectClusterKey(node) ?? ""),
           },
           ariaLabel: ontologyNodeDisplay(node, { highlighted }).ariaLabel,
@@ -726,65 +865,161 @@ function OntologyFlow({
           style: { width: NODE_WIDTH, minHeight: NODE_HEIGHT, padding: 0, border: "none" },
         };
       }),
-    [visibleGraph.nodes, semanticLayout.positions, selectedNodeId, emphasis, statsByObject]
+    [
+      visibleGraph.nodes,
+      effectivePositions,
+      selectedNodeId,
+      emphasis,
+      statsByObject,
+      hoverDimActive,
+      hoverNeighborIds,
+      measuredById,
+    ]
   );
 
-  const edges = useMemo<Edge[]>(
-    () =>
-      visibleGraph.edges.map((edge) => {
-        const highlighted =
-          emphasis.highlightEdges.has(edge.id) || emphasis.searchEdges.has(edge.id);
-        const selected = edge.id === selectedEdgeId;
-        const showFullLabel = highlighted || selected || edge.id === hoveredEdgeId;
-        // ER 図流: join を持つ関係は hover を待たずカーディナリティを常時表示する
-        const persistentLabel = isOntologyJoinEdge(edge)
-          ? cardinalityShortLabel(edge.cardinality)
-          : "";
-        // 相対位置でハンドルを選ぶ(レーン間は上下・同一レーンは左右。自己ループ防止)
-        const sourcePosition = semanticLayout.positions.get(edge.source_node_id);
-        const targetPosition = semanticLayout.positions.get(edge.target_node_id);
-        const handles =
-          sourcePosition && targetPosition
-            ? selectOntologyEdgeHandles(sourcePosition, targetPosition)
-            : null;
-        const mappingEdge = isOntologyMappingEdge(edge);
-        return {
-          id: edge.id,
-          source: edge.source_node_id,
-          target: edge.target_node_id,
-          ...(handles
-            ? {
-                sourceHandle: handles.sourceHandle,
-                targetHandle: handles.targetHandle,
-                // レーン間(縦)は直角の smoothstep で ER 図らしく描く
-                ...(handles.orientation === "vertical" ? { type: "smoothstep" as const } : {}),
-              }
-            : {}),
-          label: showFullLabel ? edge.relationship_name_ja : persistentLabel || undefined,
-          ariaLabel: `${edge.relationship_name_ja}${
-            emphasis.highlightEdges.has(edge.id) ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
-          }`,
-          markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--graph-line") },
-          style: {
-            stroke: highlighted || selected ? cssVar("--primary") : edgeStroke(edge),
-            strokeWidth: highlighted || selected
-              ? 2.5
-              : edge.validation_status === "blocked"
-                ? 2
-                : mappingEdge
-                  ? 1
-                  : 1.25,
-            // 「対応」(maps_to)は点線で FK join の実線と区別。proposed の点線は従来どおり優先
-            strokeDasharray:
-              edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
-            opacity: emphasis.active && !highlighted ? 0.3 : 1,
-          },
-          labelStyle: { fill: cssVar("--muted"), fontSize: 11, fontWeight: 600 },
-          labelBgStyle: { fill: cssVar("--card"), fillOpacity: 0.92 },
+  const edges = useMemo<OntologyFlowEdge[]>(() => {
+    const kindById = new Map(visibleGraph.nodes.map((node) => [node.id, node.kind]));
+    // 第 1 パス: 実効座標からハンドル方向を決める。schema 絡み・包含・同一レーン別行は
+    // 縦優先にし、同じ行のノードを真横に貫通する bezier を出さない。
+    const prepared = visibleGraph.edges.map((edge) => {
+      const sourcePosition = effectivePositions.get(edge.source_node_id);
+      const targetPosition = effectivePositions.get(edge.target_node_id);
+      let handles: OntologyEdgeHandleSelection | null = null;
+      if (sourcePosition && targetPosition) {
+        const sameLane =
+          semanticLayout.laneByNodeId.get(edge.source_node_id) ===
+          semanticLayout.laneByNodeId.get(edge.target_node_id);
+        const preferVertical =
+          kindById.get(edge.source_node_id) === "schema" ||
+          kindById.get(edge.target_node_id) === "schema" ||
+          isOntologyContainmentEdge(edge) ||
+          (sameLane && Math.abs(targetPosition.y - sourcePosition.y) >= NODE_HEIGHT);
+        handles = selectOntologyEdgeHandles(sourcePosition, targetPosition, { preferVertical });
+      }
+      return { edge, targetPosition, handles };
+    });
+
+    // 縦エッジは source ごとに水平セグメント高さ(stepPosition)を扇状に散らし、
+    // schema→表のような 1:N の線・ラベルが同じ高さで重ならないようにする
+    const verticalBySource = new Map<string, typeof prepared>();
+    for (const item of prepared) {
+      if (item.handles?.orientation !== "vertical") continue;
+      const group = verticalBySource.get(item.edge.source_node_id) ?? [];
+      group.push(item);
+      verticalBySource.set(item.edge.source_node_id, group);
+    }
+    const fanStepByEdgeId = new Map<string, number>();
+    for (const group of verticalBySource.values()) {
+      const sorted = [...group].sort(
+        (a, b) =>
+          (a.targetPosition?.x ?? 0) - (b.targetPosition?.x ?? 0) ||
+          a.edge.id.localeCompare(b.edge.id, "en-US")
+      );
+      sorted.forEach((item, index) => {
+        fanStepByEdgeId.set(
+          item.edge.id,
+          sorted.length === 1 ? 0.5 : 0.3 + (0.4 * index) / (sorted.length - 1)
+        );
+      });
+    }
+
+    // 同一ノードペア間の並行エッジ(向き無視)を数え、経路とラベルの完全重なりを防ぐ
+    const pairKeyOf = (edge: OntologyGraph["edges"][number]) =>
+      [edge.source_node_id, edge.target_node_id].sort().join("::");
+    const pairCounts = new Map<string, number>();
+    for (const item of prepared) {
+      const key = pairKeyOf(item.edge);
+      pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+    }
+    const pairSeen = new Map<string, number>();
+
+    return prepared.map(({ edge, handles }) => {
+      const highlighted =
+        emphasis.highlightEdges.has(edge.id) || emphasis.searchEdges.has(edge.id);
+      const selected = edge.id === selectedEdgeId;
+      const showFullLabel = highlighted || selected || edge.id === hoveredEdgeId;
+      // ER 図流: join を持つ関係は hover を待たずカーディナリティを常時表示する
+      const persistentLabel = isOntologyJoinEdge(edge)
+        ? cardinalityShortLabel(edge.cardinality)
+        : "";
+      const mappingEdge = isOntologyMappingEdge(edge);
+      const pairKey = pairKeyOf(edge);
+      const parallelCount = pairCounts.get(pairKey) ?? 1;
+      const parallelIndex = pairSeen.get(pairKey) ?? 0;
+      pairSeen.set(pairKey, parallelIndex + 1);
+      const centeredParallel = parallelIndex - (parallelCount - 1) / 2;
+
+      let edgeType: string | undefined;
+      let pathOptions: OntologyFlowEdge["pathOptions"];
+      let edgeData: OntologyFlowEdge["data"];
+      if (handles?.orientation === "vertical") {
+        // レーン間・schema→表(縦)は直角の smoothstep で ER 図らしく描く
+        edgeType = "smoothstep";
+        const fanStep = fanStepByEdgeId.get(edge.id) ?? 0.5;
+        pathOptions = {
+          borderRadius: 8,
+          offset: 12 + 8 * parallelIndex,
+          stepPosition: Math.min(
+            0.85,
+            Math.max(0.15, fanStep + (parallelCount > 1 ? centeredParallel * 0.16 : 0))
+          ),
         };
-      }),
-    [visibleGraph.edges, emphasis, hoveredEdgeId, selectedEdgeId, semanticLayout.positions]
-  );
+      } else if (handles && parallelCount > 1) {
+        // 同 y の並行エッジは直線に潰れるため、法線オフセット付きの弧で分離する
+        edgeType = "ontologyParallel";
+        edgeData = { parallelOffset: centeredParallel * 20 };
+      }
+      const hoverDimmed =
+        hoverDimActive &&
+        edge.source_node_id !== hoveredNodeId &&
+        edge.target_node_id !== hoveredNodeId;
+      return {
+        id: edge.id,
+        source: edge.source_node_id,
+        target: edge.target_node_id,
+        ...(handles
+          ? { sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle }
+          : {}),
+        ...(edgeType ? { type: edgeType } : {}),
+        ...(pathOptions ? { pathOptions } : {}),
+        ...(edgeData ? { data: edgeData } : {}),
+        label: showFullLabel ? edge.relationship_name_ja : persistentLabel || undefined,
+        ariaLabel: `${edge.relationship_name_ja}${
+          emphasis.highlightEdges.has(edge.id) ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
+        }`,
+        markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--graph-line") },
+        // hover/選択中のエッジラベルは他エッジより前面に出す
+        ...(showFullLabel ? { zIndex: 1000 } : {}),
+        style: {
+          stroke: highlighted || selected ? cssVar("--primary") : edgeStroke(edge),
+          strokeWidth: highlighted || selected
+            ? 2.5
+            : edge.validation_status === "blocked"
+              ? 2
+              : mappingEdge
+                ? 1
+                : 1.25,
+          // 「対応」(maps_to)は点線で FK join の実線と区別。proposed の点線は従来どおり優先
+          strokeDasharray:
+            edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
+          opacity: emphasis.active && !highlighted ? 0.3 : hoverDimmed ? 0.35 : 1,
+        },
+        labelStyle: { fill: cssVar("--muted"), fontSize: 11, fontWeight: 600 },
+        labelBgStyle: { fill: cssVar("--card"), fillOpacity: 0.92 },
+        labelBgPadding: [6, 3] as [number, number],
+        labelBgBorderRadius: 4,
+      };
+    });
+  }, [
+    visibleGraph,
+    emphasis,
+    hoveredEdgeId,
+    selectedEdgeId,
+    effectivePositions,
+    semanticLayout.laneByNodeId,
+    hoverDimActive,
+    hoveredNodeId,
+  ]);
 
   return (
     <div className="grid gap-2">
@@ -846,23 +1081,33 @@ function OntologyFlow({
           </label>
         ) : null}
       </div>
-      <div className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-background">
+      <div
+        ref={canvasRef}
+        className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-background"
+      >
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         fitView
         fitViewOptions={{ padding: 0.18 }}
         minZoom={0.25}
         maxZoom={1.8}
-        // レイアウトは決定論(semantic matrix)で管理し、onNodesChange を持たない
-        // controlled flow のためドラッグ/内部選択は無効(選択は onNodeClick + selected prop で制御)
-        nodesDraggable={false}
+        // 初期レイアウトは決定論(semantic matrix)。ドラッグ差分だけを positionOverrides に
+        // 反映する controlled flow(内部選択は無効のまま。選択は onNodeClick + selected prop)。
+        nodesDraggable
+        onNodesChange={onNodesChange}
+        // 既定 1px だと微小な手ぶれがドラッグ扱いになりクリック選択が不発になる
+        nodeDragThreshold={4}
         nodesConnectable={false}
         elementsSelectable={false}
         nodesFocusable
         edgesFocusable
+        onlyRenderVisibleElements={visibleGraph.nodes.length > 150}
         onNodeClick={(_event, node) => onSelectNode?.(node.id)}
+        onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
+        onNodeMouseLeave={() => setHoveredNodeId(null)}
         onEdgeClick={(_event, edge) => onSelectEdge?.(edge.id)}
         onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
@@ -870,7 +1115,7 @@ function OntologyFlow({
       >
         <Background color={cssVar("--border")} gap={20} size={1} />
         <LaneOverlays lanes={semanticLayout.lanes} />
-        {visibleGraph.nodes.length > 20 ? (
+        {visibleGraph.nodes.length > 12 ? (
           // 小規模グラフでは全体が一目で見えるため出さない(白い矩形ノイズを避ける)
           <MiniMap
             pannable
@@ -880,11 +1125,15 @@ function OntologyFlow({
             style={{ width: 140, height: 90 }}
             bgColor={cssVar("--card")}
             maskColor="color-mix(in srgb, var(--border) 45%, transparent)"
-            nodeColor={cssVar("--graph-line")}
+            // 種別(型チャネル)の塗りをミニマップにも反映し、縮小表示でも構造が読めるようにする
+            nodeColor={(node) => {
+              const data = node.data as OntologyNodeData | undefined;
+              return data?.node ? nodeFill(data.node) : cssVar("--graph-line");
+            }}
             nodeStrokeColor={cssVar("--graph-line")}
           />
         ) : null}
-        <FlowControls />
+        <FlowControls onResetLayout={resetLayout} resetDisabled={positionOverrides.size === 0} />
       </ReactFlow>
       <OntologyGraphLegend
         presentGroupIds={presentLegendGroupIds}
@@ -892,6 +1141,14 @@ function OntologyFlow({
         onToggleGroup={toggleLegendGroup}
       />
       </div>
+      {/* スクリーンリーダー向け: 選択されたノードを読み上げる(視覚は selected 枠で表現済み) */}
+      <span
+        className="sr-only"
+        aria-live="polite"
+        data-testid="ontology-graph-selection-announcement"
+      >
+        {selectedNodeAnnouncement}
+      </span>
     </div>
   );
 }

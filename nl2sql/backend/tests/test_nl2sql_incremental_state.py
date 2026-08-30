@@ -379,8 +379,8 @@ def test_enterprise_ai_direct_uses_incremental_schema_when_legacy_catalog_is_emp
 
     assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
     assert preview.sql == "SELECT ID FROM APP.ORDERS"
-    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
-    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY"
+    # row_limit(既定 100)は取得時の fetch 上限だけで効かせ、SQL へは書き足さない。
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
     assert fake_client.calls
     context = fake_client.calls[0]["context"]
     assert "table APP.ORDERS" in context
@@ -636,8 +636,8 @@ def test_enterprise_ai_direct_deterministic_fallback_uses_incremental_schema_sna
     )
 
     assert preview.sql == "SELECT ID FROM APP.ORDERS"
-    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
-    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY"
+    # row_limit(既定 100)は取得時の fetch 上限だけで効かせ、SQL へは書き足さない。
+    assert preview.executable_sql == "SELECT ID FROM APP.ORDERS"
     assert "enterprise_ai_direct:" in preview.fallback_reason
 
 

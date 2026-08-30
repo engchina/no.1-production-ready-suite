@@ -1785,7 +1785,7 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
   await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
-  await expect(processing.locator("svg.lucide-loader-circle")).toHaveCount(0);
+  await expect(processing.locator("svg.animate-spin")).toHaveCount(0);
 
   refreshGate.release();
   await expect(processing).toHaveCount(0);
@@ -1949,7 +1949,7 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
-  await expect(skeleton.locator("svg.lucide-loader-circle")).toHaveCSS("animation-name", "none");
+  await expect(skeleton.locator("svg.animate-spin")).toHaveCSS("animation-name", "none");
 
   await page.clock.fastForward(11_000);
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:11");

@@ -3,11 +3,11 @@ import {
   Check,
   CheckCircle2,
   Clock3,
-  Loader2,
   Route,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { Spinner } from "@engchina/production-ready-ui";
 
 import { useOperationTiming } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
@@ -112,7 +112,7 @@ function StepIcon({
   index: number;
 }) {
   if (status === "running") {
-    return <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />;
+    return <Spinner size={14} />;
   }
   if (status === "done") return <Check size={14} aria-hidden="true" />;
   if (status === "error") return <X size={14} aria-hidden="true" />;

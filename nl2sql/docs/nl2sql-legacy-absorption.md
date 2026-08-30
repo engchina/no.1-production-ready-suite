@@ -9,7 +9,7 @@
 - `POST /classifier/predict`: 学習済み分類器で profile category を予測する。
 - `GET /classifier`: training data と classifier artifact の状態を確認する。
 - `POST /classifier/model/import`: joblib / JSON artifact で唯一の classifier model を置き換える。旧 `/classifier/models/import` は互換 alias として `activate=true` の場合だけ受理する。
-- `POST /rewrite`: glossary/extra prompt を使い、OCI Enterprise AI で自然言語質問を書き換える。未設定または失敗時は deterministic rewrite。
+- `POST /rewrite`: glossary(用語・同義語)の置換だけを決定論で行う。**LLM による自由な書き換えはしない**(件数・抽出条件など質問の意味を変える追加を裏で行わないため)。`use_glossary=false` は無変換、`extra_prompt` は未使用(client 互換のため field のみ存置)。
 - `GET /select-ai/db-profiles`: Oracle DBMS_CLOUD_AI profile 一覧を表示する。
 - `POST /select-ai/db-profiles/{profile_name}/drop`: profile 名と確認語を指定して drop を実行する。
 - `POST /select-ai-agent/run-team`: Select AI Agent team を実行する。

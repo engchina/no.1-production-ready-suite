@@ -14,6 +14,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import type { EntityAction } from "@/components/ObjectActionsCore";
 import { t } from "@/lib/i18n";
+import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
 import { cn } from "@/lib/utils";
 
 export interface FormActionDescriptor {
@@ -207,7 +208,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
 
   const closeMenu = (restoreFocus = false) => {
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+    if (restoreFocus) restoreMenuTriggerFocus(triggerRef, containerRef, menuRef);
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

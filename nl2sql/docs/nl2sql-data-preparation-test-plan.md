@@ -102,7 +102,7 @@
 
 | ID | データ | 手順 | 期待結果 |
 |---|---|---|---|
-| DP-DATA-001 | `TD_NL2SQL_ORDERS` | limit=5 で表示 | 5 行まで表示、SQL に `FETCH FIRST 5 ROWS ONLY` |
+| DP-DATA-001 | `TD_NL2SQL_ORDERS` | limit=5 で表示 | 5 行まで表示(行数上限は取得時の fetch 上限で適用。SQL へ `FETCH FIRST` は付与しない) |
 | DP-DATA-002 | `TD_NL2SQL_ORDERS` | WHERE=`STATUS = 'NEW'` | 2 行表示 |
 | DP-DATA-003 | `sql/negative_invalid_preview_where.txt` | WHERE 欄に貼り付ける | `WHERE 句に複数 statement は指定できません` |
 | DP-DATA-004 | `V_TD_NL2SQL_ORDER_SUMMARY` | 表示して Excel 出力 | preview workbook に `data` と `query` sheet |

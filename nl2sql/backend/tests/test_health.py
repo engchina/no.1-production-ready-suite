@@ -53,7 +53,7 @@ from app.features.nl2sql.service import (
     Nl2SqlService,
     StoredJob,
     _extract_referenced_tables,
-    enforce_row_limit,
+    normalize_executable_sql,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
 from app.features.schema import router as schema_router
@@ -667,15 +667,14 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
-    # row_limit 未指定でも profile 既定(100)が executable_sql へ適用される。
-    assert preview.executable_sql == (
-        "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT FETCH FIRST 100 ROWS ONLY"
-    )
+    # row_limit(既定 100)は取得時の fetch 上限だけで効かせ、SQL へは書き足さない。
+    assert preview.executable_sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert fake_client.calls
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
     assert "V_EMP_DEPT" in fake_client.calls[0]["context"]
     assert "SELECT または WITH" in fake_client.calls[0]["system_prompt"]
-    assert "FETCH FIRST" not in fake_client.calls[0]["system_prompt"]
+    assert "FETCH FIRST 100" not in fake_client.calls[0]["system_prompt"]
+    assert "勝手に付けないでください" in fake_client.calls[0]["system_prompt"]
 
 
 def test_oracle_runtime_question_does_not_include_custom_learning_examples() -> None:
@@ -1259,6 +1258,16 @@ def test_select_ai_job_returns_interpretation_and_showprompt_artifacts(
     assert job.result.interpretation.available is True
     assert job.result.interpretation.question.rewritten_question == "請求金額を確認したい"
     assert any(table.endswith(".INVOICES") for table in job.result.interpretation.sql.tables)
+    # 処理手順(logical_steps)は include_interpretation=True のとき決定論で同梱する。
+    assert job.result.interpretation.sql.logical_steps
+    assert job.result.interpretation.sql.logical_steps[0] == job.result.interpretation.sql.summary
+    # 業務者向け/技術者向けの併記版も同梱し、technical は従来文字列と一致させる。
+    details = job.result.interpretation.sql.logical_step_details
+    assert [detail.technical for detail in details] == job.result.interpretation.sql.logical_steps
+    assert details[0].kind == "summary"
+    assert details[0].business.endswith("を行います。")
+    assert all(detail.business for detail in details)
+    assert job.result.interpretation.ontology_grounding_enabled is True
     assert job.result.interpretation.ontology_graph is not None
     assert job.result.interpretation.ontology_graph.revision_id == "revision-artifact"
     assert job.result.interpretation.ontology_graph.nodes[0]["id"] == "node-invoices"
@@ -1266,6 +1275,85 @@ def test_select_ai_job_returns_interpretation_and_showprompt_artifacts(
     assert job.result.show_prompt.available is True
     assert "Select AI" in job.result.show_prompt.prompt
     assert adapter.actions == ["showsql", "showprompt"]
+
+
+def test_interpretation_flags_split_logical_steps_and_ontology_grounding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """include_interpretation=処理手順 / use_ontology_context=接地確認 を独立に制御する。"""
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="artifact_flags_profile",
+            name="Artifact flags profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+    ontology_graph = Nl2SqlOntologyGraphSnapshot(revision_id="revision-flags")
+    snapshot_calls: list[str] = []
+
+    def _fake_snapshot(**_kwargs: object) -> tuple[Nl2SqlOntologyGraphSnapshot, list[str]]:
+        snapshot_calls.append("called")
+        return ontology_graph, []
+
+    monkeypatch.setattr(
+        service,
+        "_build_interpretation_ontology_graph_snapshot",
+        _fake_snapshot,
+    )
+
+    # Ontology OFF + 処理手順 ON: 接地確認は無効・snapshot 未構築、steps は同梱。
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            use_ontology_context=False,
+            include_interpretation=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+    assert job is not None and job.status == JobStatus.DONE and job.result is not None
+    assert job.result.interpretation is not None
+    assert job.result.interpretation.ontology_grounding_enabled is False
+    assert job.result.interpretation.ontology_graph is None
+    assert snapshot_calls == []
+    assert job.result.interpretation.sql.logical_steps
+    assert job.result.interpretation.sql.logical_step_details
+
+    # Ontology ON + 処理手順 OFF: artifact は接地確認用に構築し、steps は空。
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            use_ontology_context=True,
+            include_interpretation=False,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+    assert job is not None and job.status == JobStatus.DONE and job.result is not None
+    assert job.result.interpretation is not None
+    assert job.result.interpretation.ontology_grounding_enabled is True
+    assert job.result.interpretation.ontology_graph is not None
+    assert snapshot_calls == ["called"]
+    assert job.result.interpretation.sql.logical_steps == []
+    assert job.result.interpretation.sql.logical_step_details == []
+
+    # 両方 OFF: artifact 自体を作らない。
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            use_ontology_context=False,
+            include_interpretation=False,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+    assert job is not None and job.status == JobStatus.DONE and job.result is not None
+    assert job.result.interpretation is None
 
 
 def test_interpretation_ontology_graph_failure_keeps_job_done(
@@ -1577,31 +1665,29 @@ def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
     assert _extract_referenced_tables(sql) == ["OWNER.TRADING_PARTNERS", "OWNER.BILLS"]
 
 
-def test_enforce_row_limit_keeps_smaller_existing_fetch_first() -> None:
+def test_normalize_executable_sql_keeps_existing_fetch_first() -> None:
     sql = "SELECT * FROM INVOICES ORDER BY TOTAL_AMOUNT DESC FETCH FIRST 3 ROWS ONLY"
 
-    assert enforce_row_limit(sql, 100) == (
+    assert normalize_executable_sql(sql) == (
         "SELECT * FROM INVOICES ORDER BY TOTAL_AMOUNT DESC FETCH FIRST 3 ROWS ONLY"
     )
 
 
-def test_enforce_row_limit_caps_larger_existing_fetch_first() -> None:
+def test_normalize_executable_sql_does_not_cap_existing_fetch_first() -> None:
     sql = "SELECT * FROM INVOICES FETCH FIRST 500 ROWS ONLY"
 
-    assert enforce_row_limit(sql, 100) == "SELECT * FROM INVOICES FETCH FIRST 100 ROWS ONLY"
+    assert normalize_executable_sql(sql) == "SELECT * FROM INVOICES FETCH FIRST 500 ROWS ONLY"
 
 
-def test_enforce_row_limit_converts_limit_tail_preserving_smaller_value() -> None:
-    assert enforce_row_limit("SELECT * FROM INVOICES LIMIT 5", 100) == (
-        "SELECT * FROM INVOICES FETCH FIRST 5 ROWS ONLY"
+def test_normalize_executable_sql_keeps_limit_tail_untouched() -> None:
+    assert normalize_executable_sql("SELECT * FROM INVOICES LIMIT 5") == (
+        "SELECT * FROM INVOICES LIMIT 5"
     )
 
 
-def test_enforce_row_limit_appends_when_absent_and_noop_when_none() -> None:
-    assert enforce_row_limit("SELECT * FROM INVOICES", 100) == (
-        "SELECT * FROM INVOICES FETCH FIRST 100 ROWS ONLY"
-    )
-    assert enforce_row_limit("SELECT * FROM INVOICES;", None) == "SELECT * FROM INVOICES"
+def test_normalize_executable_sql_never_appends_row_limit() -> None:
+    assert normalize_executable_sql("SELECT * FROM INVOICES") == "SELECT * FROM INVOICES"
+    assert normalize_executable_sql("SELECT * FROM INVOICES;") == "SELECT * FROM INVOICES"
 
 
 def test_fail_trigger_words_in_question_are_ignored_on_oracle_runtime() -> None:
@@ -1632,7 +1718,7 @@ def test_preview_without_row_limit_applies_profile_default() -> None:
     )
 
     assert preview.row_limit == 100
-    assert preview.executable_sql.endswith("FETCH FIRST 100 ROWS ONLY")
+    assert "FETCH FIRST" not in preview.executable_sql
 
 
 def test_preview_without_row_limit_uses_custom_profile_default() -> None:
@@ -1652,7 +1738,7 @@ def test_preview_without_row_limit_uses_custom_profile_default() -> None:
     )
 
     assert preview.row_limit == 25
-    assert preview.executable_sql.endswith("FETCH FIRST 25 ROWS ONLY")
+    assert "FETCH FIRST" not in preview.executable_sql
 
 
 def test_preview_explicit_row_limit_wins_over_profile_default() -> None:
@@ -1668,7 +1754,7 @@ def test_preview_explicit_row_limit_wins_over_profile_default() -> None:
     )
 
     assert preview.row_limit == 7
-    assert preview.executable_sql.endswith("FETCH FIRST 7 ROWS ONLY")
+    assert "FETCH FIRST" not in preview.executable_sql
 
 
 def test_job_cancel_requested_stops_at_stage_boundary(

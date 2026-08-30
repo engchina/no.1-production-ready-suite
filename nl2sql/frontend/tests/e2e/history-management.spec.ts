@@ -234,6 +234,19 @@ async function expectDenseLayoutContained(page: Page) {
     detail.getByTestId("history-detail-question"),
     detail.getByRole("button", { name: "この質問で再実行" })
   );
+  await expectSameWidth(
+    detail.getByTestId("history-detail-question-block"),
+    detail.getByTestId("history-detail-rewritten-block")
+  );
+}
+
+async function expectSameWidth(a: Locator, b: Locator) {
+  const boxA = await a.boundingBox();
+  const boxB = await b.boundingBox();
+  expect(boxA).not.toBeNull();
+  expect(boxB).not.toBeNull();
+  expect(Math.abs(boxA!.width - boxB!.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
 
 test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳細確認できる", async ({ page }) => {

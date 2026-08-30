@@ -1,3 +1,4 @@
+import type { GraphPoint } from "./graphLayout";
 import type { OntologyCardinality, OntologyGraph } from "./types";
 
 export type OntologyGraphViewMode = "grounding" | "all" | "physical_er";
@@ -13,6 +14,13 @@ export function isOntologyMappingEdge(edge: OntologyGraph["edges"][number]): boo
 export function isOntologyJoinEdge(edge: OntologyGraph["edges"][number]): boolean {
   const kind = (edge.kind ?? "").trim().toLocaleLowerCase();
   return kind === "foreign_key" || (edge.join_conditions ?? []).length > 0;
+}
+
+/** 包含(schema→表、表→列 等)を表すエッジ。レーン内でも縦ルーティングさせる対象。 */
+const CONTAINMENT_EDGE_KINDS = new Set(["contains", "physical_contains"]);
+
+export function isOntologyContainmentEdge(edge: OntologyGraph["edges"][number]): boolean {
+  return CONTAINMENT_EDGE_KINDS.has((edge.kind ?? "").trim().toLocaleLowerCase());
 }
 
 /** ER 図流の常時表示用カーディナリティ短縮ラベル(unknown/未設定は空)。 */
@@ -44,11 +52,14 @@ export interface OntologyEdgeHandleSelection {
  */
 export function selectOntologyEdgeHandles(
   source: { x: number; y: number },
-  target: { x: number; y: number }
+  target: { x: number; y: number },
+  options: { preferVertical?: boolean } = {}
 ): OntologyEdgeHandleSelection {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
-  if (Math.abs(dy) > Math.abs(dx)) {
+  // preferVertical: 同一レーン内の別行(schema→表 等)は dx 優勢でも上下で結び、
+  // 途中のノードを真横に貫通する bezier を避ける(dy=0 のときは従来判定)。
+  if (Math.abs(dy) > Math.abs(dx) || (options.preferVertical && dy !== 0)) {
     return dy >= 0
       ? { sourceHandle: "s-bottom", targetHandle: "t-top", orientation: "vertical" }
       : { sourceHandle: "s-top", targetHandle: "t-bottom", orientation: "vertical" };
@@ -118,6 +129,8 @@ export function ontologyGraphForViewMode(
     keep.add(edge.source_node_id);
     keep.add(edge.target_node_id);
   }
+  // 接地ノードから文脈エッジ 1 ホップ分だけ隣接ノードを足す。SQL に登場しない隣接表
+  // (FK 先など)も「接地はしていない減光ノード」として残し、周辺に何があるかを示す仕様。
   const contextAnchor = new Set(keep);
   for (const edge of graph.edges) {
     if (!contextAnchor.has(edge.source_node_id) && !contextAnchor.has(edge.target_node_id)) continue;
@@ -126,6 +139,78 @@ export function ontologyGraphForViewMode(
     keep.add(edge.target_node_id);
   }
   return filterGraphByNodeIds(graph, keep);
+}
+
+/**
+ * 同一ノードペア間の並行(horizontal)エッジ用の 2 次ベジェ経路。
+ * 同じ y の bezier/smoothstep は直線に潰れて完全に重なるため、進行方向の
+ * 単位法線に沿って制御点をずらした弧で分離する。ラベルは曲線の t=0.5 点。
+ */
+export function ontologyParallelEdgeGeometry(
+  source: GraphPoint,
+  target: GraphPoint,
+  offset: number
+): { path: string; labelX: number; labelY: number } {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy) || 1;
+  // 2 次ベジェの t=0.5 での実オフセットは制御点オフセットの半分なので 2 倍しておく
+  const controlX = (source.x + target.x) / 2 + (-dy / length) * offset * 2;
+  const controlY = (source.y + target.y) / 2 + (dx / length) * offset * 2;
+  return {
+    path: `M ${source.x},${source.y} Q ${controlX},${controlY} ${target.x},${target.y}`,
+    labelX: 0.25 * source.x + 0.5 * controlX + 0.25 * target.x,
+    labelY: 0.25 * source.y + 0.5 * controlY + 0.25 * target.y,
+  };
+}
+
+/**
+ * ノードドラッグの position change だけを座標上書き Map へ反映する
+ * (select/dimensions/remove 等は無視。変更が無ければ同一 Map 参照を返す)。
+ * controlled flow でこの反映を怠るとドラッグがスナップバックする。
+ */
+export function applyOntologyNodePositionChanges(
+  overrides: Map<string, GraphPoint>,
+  changes: ReadonlyArray<{ type: string; id?: string; position?: GraphPoint }>
+): Map<string, GraphPoint> {
+  let next: Map<string, GraphPoint> | null = null;
+  for (const change of changes) {
+    if (change.type !== "position" || !change.id || !change.position) continue;
+    if (!Number.isFinite(change.position.x) || !Number.isFinite(change.position.y)) continue;
+    next ??= new Map(overrides);
+    next.set(change.id, { x: change.position.x, y: change.position.y });
+  }
+  return next ?? overrides;
+}
+
+export interface OntologyNodeDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * React Flow が通知する dimensions change を実測サイズ Map へ反映する。
+ * この実測値をノードへ `measured` として返さないと、配列再生成(hover 等)のたびに
+ * React Flow が handleBounds をリセットし、全エッジが 1 フレーム消えて点滅する。
+ * 値が同じなら同一 Map 参照を返し、measure → 反映 → 再 measure のループを断つ。
+ */
+export function applyOntologyNodeDimensionChanges(
+  dimensions: Map<string, OntologyNodeDimensions>,
+  changes: ReadonlyArray<{ type: string; id?: string; dimensions?: OntologyNodeDimensions }>
+): Map<string, OntologyNodeDimensions> {
+  let next: Map<string, OntologyNodeDimensions> | null = null;
+  for (const change of changes) {
+    if (change.type !== "dimensions" || !change.id || !change.dimensions) continue;
+    const { width, height } = change.dimensions;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      continue;
+    }
+    const current = (next ?? dimensions).get(change.id);
+    if (current && current.width === width && current.height === height) continue;
+    next ??= new Map(dimensions);
+    next.set(change.id, { width, height });
+  }
+  return next ?? dimensions;
 }
 
 export function ontologyGraphWithDetailVisibility(

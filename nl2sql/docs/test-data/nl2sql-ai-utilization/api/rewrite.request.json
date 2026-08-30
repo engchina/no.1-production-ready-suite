@@ -1,6 +1,6 @@
 {
-  "question": "今月の売上トップ5",
+  "question": "今月の売上を確認したい",
   "profile_id": "default",
   "use_glossary": true,
-  "extra_prompt": "受注テーブルの金額列を使う"
+  "extra_prompt": ""
 }

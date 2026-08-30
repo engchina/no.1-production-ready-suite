@@ -203,6 +203,57 @@ def _from_sources(select: Any) -> list[Any]:
     return sources
 
 
+def _normalize_qualifier(value: str) -> str:
+    return value.replace('"', "").strip().upper()
+
+
+def _source_qualifiers(source: Any, exp: Any) -> set[str]:
+    """ON 句の列 qualifier から source を引くための正規化 key 集合を作る。"""
+    values: set[str] = set()
+    alias = _normalize_qualifier(_text(getattr(source, "alias", "")))
+    if alias:
+        values.add(alias)
+    if isinstance(source, exp.Table):
+        name = _normalize_qualifier(_text(getattr(source, "name", "")))
+        if name:
+            values.add(name)
+    return values
+
+
+def _condition_left_source(
+    condition: Any,
+    exp: Any,
+    right_source: Any,
+    known_sources: list[Any],
+) -> str:
+    """ON 句が実際に結ぶ左端点を、列の qualifier から解決する。
+
+    star join(hub 表へ複数表を join する形)では「直前の join の右表」が左端点とは
+    限らないため、位置ではなく ON 句を正とする。解決できない場合は "" を返し、
+    呼び出し側の位置ベース fallback に委ねる。
+    """
+    if condition is None:
+        return ""
+    right_qualifiers = _source_qualifiers(right_source, exp)
+    candidates: dict[str, Any] = {}
+    for source in known_sources:
+        for qualifier in _source_qualifiers(source, exp):
+            candidates.setdefault(qualifier, source)
+    matched: list[Any] = []
+    for column in condition.find_all(exp.Column):
+        qualifier = _normalize_qualifier(_text(getattr(column, "table", "")))
+        if not qualifier or qualifier in right_qualifiers:
+            continue
+        source = candidates.get(qualifier)
+        if source is None:
+            return ""
+        if not any(source is item for item in matched):
+            matched.append(source)
+    if len(matched) != 1:
+        return ""
+    return _source_name(matched[0], exp)
+
+
 def _join_type(join: Any) -> str:
     side = _text(join.args.get("side")).lower()
     kind = _text(join.args.get("kind")).lower()
@@ -450,10 +501,17 @@ def parse_oracle_sql(
     for select in query_scopes:
         scope_id = scope_ids[id(select)]
         sources = _from_sources(select)
-        left_source = _source_name(sources[0], exp) if sources else ""
+        known_sources = list(sources)
+        chained_source = _source_name(sources[0], exp) if sources else ""
         for index, join in enumerate(select.args.get("joins") or [], start=1):
             right_source = _source_name(join.this, exp)
             condition = join.args.get("on")
+            # ON 句が結ぶ実際の左端点を優先し、解決できないときだけ位置ベースへ戻す。
+            left_source = (
+                _condition_left_source(condition, exp, join.this, known_sources) or chained_source
+            )
+            if join.this is not None:
+                known_sources.append(join.this)
             using_columns = _using_columns(join)
             join_type = _join_type(join)
             method = _text(join.args.get("method")).lower()
@@ -475,7 +533,7 @@ def parse_oracle_sql(
                     ),
                 )
             )
-            left_source = right_source or left_source
+            chained_source = right_source or chained_source
 
     projections: list[SqlProjection] = []
     lineage: list[SqlLineage] = []

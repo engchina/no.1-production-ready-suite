@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
+import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
 import { cn } from "@/lib/utils";
 
 export type PageActionKind = "primary" | "secondary" | "utility" | "danger";
@@ -148,7 +149,7 @@ export function PageActionBar({
 
   const closeMenu = (restoreFocus = false) => {
     setMenuOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+    if (restoreFocus) restoreMenuTriggerFocus(triggerRef, containerRef, menuRef);
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

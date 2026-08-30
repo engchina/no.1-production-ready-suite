@@ -10,6 +10,10 @@ const floatingSource = readFileSync(
   new URL("../src/components/FloatingMenu.tsx", import.meta.url),
   "utf8",
 );
+const menuFocusSource = readFileSync(
+  new URL("../src/lib/menu-focus.ts", import.meta.url),
+  "utf8"
+);
 
 const migratedPages = [
   "../src/features/nl2sql/pages/TableManagementPage.tsx",
@@ -78,7 +82,10 @@ test("compact 操作メニューは lg 未満で 44px とキーボード・ARIA 
     assert.match(source, new RegExp(`event\\.key === "${key}"`, "u"));
   }
   assert.match(source, /firstEnabled\?\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
+  // フォーカス復帰は共有 helper が担う(閉じた直後に別要素へ移っていたら奪い返さない)。
+  assert.match(source, /restoreMenuTriggerFocus\(triggerRef, containerRef, menuRef\)/u);
+  assert.match(menuFocusSource, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(menuFocusSource, /active !== document\.body/u);
   assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(source, /<DisclosureChevron expanded=\{menuOpen\} size=\{15\} \/>/u);
   assert.doesNotMatch(source, /menuOpen && "rotate-180"/u);

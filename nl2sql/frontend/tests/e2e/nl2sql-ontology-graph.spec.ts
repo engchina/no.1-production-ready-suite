@@ -857,3 +857,310 @@ test("FK エッジは hover なしでカーディナリティ短縮ラベルを�
   );
   await expect(mappingPath).toHaveAttribute("style", /dasharray/i);
 });
+
+const schemaContainsOntologyGraph = {
+  nodes: [
+    {
+      id: "schema-admin",
+      kind: "schema",
+      business_name_ja: "ADMIN スキーマ",
+      technical_name: "ADMIN",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: { owner: "ADMIN" },
+    },
+    {
+      id: "employee-table",
+      kind: "table",
+      business_name_ja: "従業員情報",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: { owner: "ADMIN", object_name: "EMPLOYEE", object_type: "TABLE" },
+    },
+    {
+      id: "department-table",
+      kind: "table",
+      business_name_ja: "部署情報",
+      technical_name: "ADMIN.DEPARTMENT",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: { owner: "ADMIN", object_name: "DEPARTMENT", object_type: "TABLE" },
+    },
+    {
+      id: "employee-business",
+      kind: "business_entity",
+      business_name_ja: "従業員",
+      technical_name: "ADMIN.EMPLOYEE",
+      review_status: "approved",
+      physical_mappings: [
+        {
+          object_ref: {
+            node_id: "employee-table",
+            owner: "ADMIN",
+            object_name: "EMPLOYEE",
+            object_type: "table",
+          },
+        },
+      ],
+    },
+    {
+      id: "department-business",
+      kind: "business_entity",
+      business_name_ja: "部署",
+      technical_name: "ADMIN.DEPARTMENT",
+      review_status: "approved",
+      physical_mappings: [
+        {
+          object_ref: {
+            node_id: "department-table",
+            owner: "ADMIN",
+            object_name: "DEPARTMENT",
+            object_type: "table",
+          },
+        },
+      ],
+    },
+  ],
+  edges: [
+    {
+      id: "contains-employee",
+      kind: "contains",
+      source_node_id: "schema-admin",
+      target_node_id: "employee-table",
+      relationship_name_ja: "含む",
+      cardinality: "one_to_many",
+      review_status: "approved",
+    },
+    {
+      id: "contains-department",
+      kind: "contains",
+      source_node_id: "schema-admin",
+      target_node_id: "department-table",
+      relationship_name_ja: "含む",
+      cardinality: "one_to_many",
+      review_status: "approved",
+    },
+    {
+      id: "belongs-to",
+      kind: "business_relationship",
+      source_node_id: "employee-business",
+      target_node_id: "department-business",
+      relationship_name_ja: "所属する",
+      review_status: "approved",
+    },
+    {
+      id: "manages",
+      kind: "business_relationship",
+      source_node_id: "employee-business",
+      target_node_id: "department-business",
+      relationship_name_ja: "管理される",
+      review_status: "approved",
+    },
+  ],
+};
+
+test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジは経路が分離される", async ({
+  page,
+}) => {
+  await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  // schema ノードは表と同じ行ではなく専用上段行に置かれる
+  const schemaBox = await playground
+    .locator('.react-flow__node[data-id="schema-admin"]')
+    .boundingBox();
+  const tableBox = await playground
+    .locator('.react-flow__node[data-id="employee-table"]')
+    .boundingBox();
+  expect(schemaBox).not.toBeNull();
+  expect(tableBox).not.toBeNull();
+  expect(schemaBox!.y + schemaBox!.height).toBeLessThanOrEqual(tableBox!.y + 1);
+
+  // contains エッジは縦優先の smoothstep(横一列の bezier 貫通の再発防止)。
+  // 経路全体が schema 下端〜表上端の余白帯内に収まる = 表ノードを貫通しない。
+  const containsPaths: string[] = [];
+  for (const edgeId of ["contains-employee", "contains-department"]) {
+    const edge = playground.locator(`.react-flow__edge[data-testid="rf__edge-${edgeId}"]`);
+    await expect(edge).toHaveClass(/react-flow__edge-smoothstep/);
+    const d = await playground
+      .locator(`[data-testid="rf__edge-${edgeId}"] path.react-flow__edge-path`)
+      .getAttribute("d");
+    const points = [...(d ?? "").matchAll(/(-?\d+(?:\.\d+)?)[, ](-?\d+(?:\.\d+)?)/g)];
+    expect(points.length).toBeGreaterThanOrEqual(2);
+    const startY = Number(points[0]![2]);
+    const endY = Number(points[points.length - 1]![2]);
+    expect(endY).toBeGreaterThan(startY);
+    for (const point of points) {
+      const y = Number(point[2]);
+      expect(y).toBeGreaterThanOrEqual(startY - 1);
+      expect(y).toBeLessThanOrEqual(endY + 1);
+    }
+    containsPaths.push(d ?? "");
+  }
+  // stepPosition の扇形分離で 2 本の経路は一致しない
+  expect(containsPaths[0]).not.toEqual(containsPaths[1]);
+
+  // 同一ノードペア間の並行(horizontal)エッジは専用エッジ型の弧で分離される
+  const parallelPaths: string[] = [];
+  for (const edgeId of ["belongs-to", "manages"]) {
+    const edge = playground.locator(`.react-flow__edge[data-testid="rf__edge-${edgeId}"]`);
+    await expect(edge).toHaveClass(/react-flow__edge-ontologyParallel/);
+    parallelPaths.push(
+      (await playground
+        .locator(`[data-testid="rf__edge-${edgeId}"] path.react-flow__edge-path`)
+        .getAttribute("d")) ?? ""
+    );
+  }
+  expect(parallelPaths[0]).not.toEqual(parallelPaths[1]);
+});
+
+test("ノードはドラッグで移動でき、リセットで決定論レイアウトに戻る", async ({ page }, testInfo) => {
+  // タッチエミュレーション環境でのマウス合成ドラッグは React Flow のジェスチャ判定と
+  // 相性が悪く不安定なため、ドラッグ検証はデスクトップのみで行う(タッチ操作は
+  // React Flow がネイティブ対応)。
+  test.skip(testInfo.project.name === "mobile-375", "ドラッグ検証はデスクトップのみ");
+  await mockApi(page, { ontologyGraph: employeeOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  const node = playground.locator('.react-flow__node[data-id="employee-table"]');
+  await expect(node).toBeVisible();
+  // 初期 fitView(80ms 遅延 + 300ms アニメーション)が完全に終わってから座標を取る。
+  // アニメーション中に boundingBox を取るとポインタ位置からノードがずれ、
+  // ノードドラッグではなくキャンバスのパンになってしまう。
+  await page.waitForTimeout(700);
+  const initialTransform = await node.evaluate((el) => el.style.transform);
+  const resetButton = playground.getByTestId("ontology-graph-reset-layout");
+  await expect(resetButton).toBeDisabled();
+
+  const box = await node.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  // hover 再レンダが落ち着いてから押す(直後の mousedown はパン判定になりうる)
+  await page.waitForTimeout(120);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width / 2 + 120, box!.y + box!.height / 2 + 80, {
+    steps: 8,
+  });
+  await page.mouse.up();
+
+  // ドラッグ後は transform が変わり、自動 refit にスナップバックされない
+  await expect.poll(() => node.evaluate((el) => el.style.transform)).not.toBe(initialTransform);
+  await page.waitForTimeout(500);
+  expect(await node.evaluate((el) => el.style.transform)).not.toBe(initialTransform);
+
+  // ドラッグ後もクリック選択は生きている(aria-live で通知される)
+  await node.click();
+  await expect(playground.getByTestId("ontology-graph-selection-announcement")).toContainText(
+    "選択中"
+  );
+
+  // リセットで決定論レイアウトの座標に戻る
+  await expect(resetButton).toBeEnabled();
+  await resetButton.click();
+  await expect.poll(() => node.evaluate((el) => el.style.transform)).toBe(initialTransform);
+});
+
+test("ノードを hover してもエッジが 1 フレームも消えない(点滅回帰防止)", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name === "mobile-375", "hover 検証はマウス前提のためデスクトップのみ");
+  await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+  const node = playground.locator('.react-flow__node[data-id="employee-table"]');
+  await expect(node).toBeVisible();
+  await page.waitForTimeout(700);
+
+  // 毎フレームのエッジ数を記録(handleBounds リセットが起きると 1 フレーム 0 になる)
+  await page.evaluate(() => {
+    const w = window as unknown as { __edgeCounts: number[]; __raf: number };
+    w.__edgeCounts = [];
+    const tick = () => {
+      w.__edgeCounts.push(document.querySelectorAll(".react-flow__edge").length);
+      w.__raf = requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  const box = await node.boundingBox();
+  expect(box).not.toBeNull();
+  for (let i = 0; i < 3; i += 1) {
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, { steps: 2 });
+    await page.waitForTimeout(200);
+    await page.mouse.move(box!.x - 60, box!.y - 60, { steps: 2 });
+    await page.waitForTimeout(200);
+  }
+  const counts = await page.evaluate(() => {
+    const w = window as unknown as { __edgeCounts: number[]; __raf: number };
+    cancelAnimationFrame(w.__raf);
+    return w.__edgeCounts;
+  });
+  expect(counts.length).toBeGreaterThan(10);
+  expect(Math.min(...counts)).toBe(4);
+  expect(Math.max(...counts)).toBe(4);
+});
+
+test("サーバ検索結果のヒット一覧は最大高さを超えると縦スクロールになる", async ({ page }) => {
+  await mockApi(page, { ontologyGraph: employeeOntologyGraph });
+  await page.route("**/api/nl2sql/profiles/*/ontology-context/search", (route) =>
+    fulfillJson(route, {
+      profile_id: "default",
+      profile_view_id: "v",
+      ontology_revision_id: "rev1",
+      hits: Array.from({ length: 8 }, (_, index) => ({
+        node: {
+          id: `hit-${index + 1}`,
+          kind: index < 2 ? "business_entity" : "column",
+          business_name_ja: `ヒット概念 ${index + 1}`,
+          review_status: "approved",
+        },
+        score: 1 - index * 0.08,
+        matched_terms: ["従業員"],
+        sources: ["lexical"],
+        inference_source: "asserted",
+      })),
+      nodes: [],
+      edges: [],
+      mermaid: "",
+      llm_markdown: "",
+      context_hash: "hash",
+    })
+  );
+  await page.goto("/ontology-build?profile=default");
+  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  await playground.scrollIntoViewIfNeeded();
+  await playground.getByTestId("ontology-playground-question").fill("従業員");
+  await playground.getByTestId("ontology-playground-server-search").click();
+
+  const hits = playground.getByTestId("ontology-playground-server-hits");
+  await expect(hits.locator("li")).toHaveCount(8);
+  // 関係一覧と同じ標準: max-h-80(20rem) + overflow-y-auto でリスト内スクロール
+  const metrics = await hits.evaluate((el) => ({
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
+    overflowY: getComputedStyle(el).overflowY,
+    maxHeightPx: Number.parseFloat(getComputedStyle(el).maxHeight),
+    remPx: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+  }));
+  expect(metrics.overflowY).toBe("auto");
+  // max-h-80 = 20rem(root font-size 14px なら 280px)
+  expect(metrics.maxHeightPx).toBeCloseTo(20 * metrics.remPx, 0);
+  expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.maxHeightPx + 1);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  await hits.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  expect(await hits.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  // 見出しとヒット件数バッジはスクロール外で常時見える
+  await expect(
+    playground.getByTestId("ontology-playground-server-result").getByText("8 件ヒット")
+  ).toBeVisible();
+});

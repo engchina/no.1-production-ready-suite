@@ -900,6 +900,22 @@ class Nl2SqlQuestionInterpretation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class Nl2SqlLogicalStep(BaseModel):
+    """処理手順 1 件を業務者向け(business)/技術者向け(technical)で併記する。"""
+
+    kind: str = ""
+    business: str = ""
+    technical: str = ""
+
+
+class Nl2SqlLogicalStructureItem(BaseModel):
+    """SQL 論理構造 1 項目を業務者向け/技術者向けで併記する。"""
+
+    kind: str = ""
+    business: str = ""
+    technical: str = ""
+
+
 class Nl2SqlSqlInterpretation(BaseModel):
     """生成 SQL の意味構造を表示する artifact。"""
 
@@ -915,6 +931,10 @@ class Nl2SqlSqlInterpretation(BaseModel):
     group_by: list[str] = Field(default_factory=list)
     order_by: list[str] = Field(default_factory=list)
     limit: int | None = None
+    # 生成 SQL を業務向けに説明する決定論の処理手順(include_interpretation 時のみ非空)。
+    logical_steps: list[str] = Field(default_factory=list)
+    # 同じ手順を業務者向け/技術者向けで併記する構造化版(UI は空でなければこちらを描画)。
+    logical_step_details: list[Nl2SqlLogicalStep] = Field(default_factory=list)
     semantic_graph: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -935,6 +955,9 @@ class Nl2SqlInterpretationArtifact(BaseModel):
     question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
     sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
     ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
+    # use_ontology_context のエコー。False のとき UI は Ontology 接地確認を表示しない。
+    # 既存永続 job(フィールド無し)は従来挙動を保つため default True。
+    ontology_grounding_enabled: bool = True
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1495,6 +1518,7 @@ class RewriteRequest(BaseModel):
     question: str = Field(min_length=1)
     profile_id: str | None = None
     use_glossary: bool = True
+    # LLM 書き換えを廃止したため未使用。既存 client 互換のため field だけ残す。
     extra_prompt: str = ""
 
 
@@ -1979,7 +2003,9 @@ class ReverseSqlData(BaseModel):
     explanation: str
     referenced_tables: list[str]
     logical_structure: str = ""
+    logical_structure_items: list[Nl2SqlLogicalStructureItem] = Field(default_factory=list)
     logical_steps: list[str] = Field(default_factory=list)
+    logical_step_details: list[Nl2SqlLogicalStep] = Field(default_factory=list)
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
 

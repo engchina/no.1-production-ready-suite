@@ -76,7 +76,7 @@
 | QRY-005 | engine 切替 | `select_ai` / `select_ai_agent` / `enterprise_ai_direct` / `auto` を選択 | POST payload の `engine` が選択値になる | `api/preview.request.json`、`api/job-create.request.json` |
 | QRY-006 | Select AI override | engine `select_ai` で詳細設定を開き role / additional instructions を入力 | `select_ai_overrides` が payload に含まれる | `api/preview-select-ai-overrides.request.json` |
 | QRY-007 | override 不正組合せ | engine `enterprise_ai_direct` で override 付き payload を送る | backend validation で 400 になり、UI はエラーを表示 | `api/preview-invalid-overrides.request.json` |
-| QRY-008 | 質問 rewrite | 用語・同義語/Schema 利用 checkbox を ON にし rewrite を実行 | 書き換え候補、source、model、適用ボタンが表示される | `api/rewrite.request.json`、`mock-responses/rewrite.success.json` |
+| QRY-008 | 質問 rewrite(用語置換のみ) | `用語・同義語を使う` を ON にして検索実行 | glossary 置換が起きたときだけ書き換えカード(変更前/生成に使用される質問・適用ボタン)が出る。無変換ならカードは出ず、件数表現などは追加されない | `api/rewrite.request.json`、`mock-responses/rewrite.success.json` |
 | QRY-009 | similar history | 質問入力後 650ms 待つ | 類似履歴の score、reason、SQL snippet が表示される | `api/similar-history.request.json`、`mock-responses/similar-history.success.json` |
 | QRY-010 | preview 成功 | `SQL プレビュー` を実行 | SQL、safety badge、推奨事項、`preview SQL を実行` 導線が表示される | `api/preview.request.json`、`mock-responses/preview.safe.json` |
 | QRY-011 | preview block | DML を誘導する質問で preview | blocked badge、blocked reason、実行ボタン disabled | `mock-responses/preview.blocked.json` |

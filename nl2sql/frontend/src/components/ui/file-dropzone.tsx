@@ -8,9 +8,9 @@ import {
 import {
   FileSpreadsheet,
   FileText,
-  Loader2,
   Upload,
 } from "lucide-react";
+import { Spinner } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "@/lib/file-dropzone";
@@ -208,7 +208,7 @@ export function FileDropzone({
             aria-hidden="true"
           >
             {loading ? (
-              <Loader2 size={16} className="animate-spin motion-reduce:animate-none" />
+              <Spinner size={16} />
             ) : (
               <Icon size={16} />
             )}

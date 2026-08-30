@@ -65,6 +65,12 @@ from .incremental_store import (
     OracleIncrementalNl2SqlRepository,
     VersionedTtlCache,
 )
+from .logical_steps import (
+    LabelResolver,
+    build_business_explanation,
+    build_logical_steps,
+    build_logical_structure_items,
+)
 from .models import (
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
@@ -166,6 +172,8 @@ from .models import (
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
     Nl2SqlInterpretationArtifact,
+    Nl2SqlLogicalStep,
+    Nl2SqlLogicalStructureItem,
     Nl2SqlOntologyGraphSnapshot,
     Nl2SqlProfile,
     Nl2SqlQuestionInterpretation,
@@ -1883,45 +1891,18 @@ def _column_allowed(
     return True
 
 
-def _strip_row_limit(sql: str) -> str:
-    without_fetch = re.sub(
-        r"\s+fetch\s+first\s+\d+\s+rows\s+only\s*;?\s*$",
-        "",
-        sql,
-        flags=re.IGNORECASE,
-    )
-    return re.sub(r"\s+limit\s+\d+\s*;?\s*$", "", without_fetch, flags=re.IGNORECASE)
-
-
 def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
 
 
-_FETCH_FIRST_TAIL_RE = re.compile(r"\s+fetch\s+first\s+(\d+)\s+rows\s+only\s*;?\s*$", re.IGNORECASE)
-_LIMIT_TAIL_RE = re.compile(r"\s+limit\s+(\d+)\s*;?\s*$", re.IGNORECASE)
+def normalize_executable_sql(sql: str) -> str:
+    """実行可能な形へ整えるだけ(前後空白と末尾セミコロンの除去)。
 
-
-def _existing_row_limit(sql: str) -> int | None:
-    for pattern in (_FETCH_FIRST_TAIL_RE, _LIMIT_TAIL_RE):
-        match = pattern.search(sql)
-        if match:
-            return int(match.group(1))
-    return None
-
-
-def enforce_row_limit(sql: str, row_limit: int | None) -> str:
-    """Oracle 向けに row limit を明示する。
-
-    生成 SQL 末尾に既存の FETCH FIRST/LIMIT があれば min(既存値, 要求値) を適用する
-    (「上位 3 件」の意図は保全し、過大値だけ安全上限へ丸める)。
-    サブクエリ内の FETCH FIRST は対象外(末尾のみ判定)。
+    行数上限を SQL 文へ裏で書き足さない。利用者や LLM が自分で書いた
+    FETCH FIRST / LIMIT はそのまま保持する。行数上限は画面の「取得件数上限」
+    (= 取得時の fetch 上限、OracleAdapter.execute_select の fetchmany)だけで効かせる。
     """
-    normalized = sql.strip().rstrip(";")
-    if not row_limit:
-        return normalized
-    existing = _existing_row_limit(normalized)
-    effective = min(existing, row_limit) if existing else row_limit
-    return f"{_strip_row_limit(normalized)} FETCH FIRST {effective} ROWS ONLY"
+    return sql.strip().rstrip(";")
 
 
 _JOB_RESULT_PERSISTENCE_WARNING = (
@@ -5155,7 +5136,7 @@ class Nl2SqlService:
         allowed: AllowedObjects,
         row_limit: int | None,
     ) -> tuple[SafetyReport, str, QueryResults]:
-        executable = enforce_row_limit(sql, row_limit)
+        executable = normalize_executable_sql(sql)
         if not self._use_oracle_runtime() and not self._catalog.tables:
             return (
                 SafetyReport(
@@ -5269,7 +5250,7 @@ class Nl2SqlService:
         if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
             warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
         elif row_limit and "fetch first" not in sql.lower():
-            warnings.append("行数制限が見つからないため実行時に FETCH FIRST を付与します。")
+            warnings.append(f"SQL に行数制限がないため、取得は先頭 {row_limit} 件までになります。")
         if sql.strip().endswith(";") and ";" not in sql.strip().rstrip(";"):
             warnings.append("API 実行時は末尾のセミコロンを除去します。")
         if has_wildcard and allowed.columns:
@@ -5283,12 +5264,11 @@ class Nl2SqlService:
             referenced_tables=referenced,
             referenced_columns=referenced_columns,
         )
-        executable_sql = enforce_row_limit(sql, row_limit) if select_only else ""
+        executable_sql = normalize_executable_sql(sql) if select_only else ""
         repaired_sql = self._repair_sql(
             sql=sql,
             safety=safety,
             allowed=allowed,
-            row_limit=row_limit,
             referenced_tables=referenced,
             referenced_columns=referenced_columns,
             has_wildcard=has_wildcard,
@@ -7231,63 +7211,31 @@ class Nl2SqlService:
         )
 
     def rewrite(self, request: RewriteRequest) -> RewriteData:
+        """用語・同義語の置換だけを行う(LLM による自由な書き換えはしない)。
+
+        `use_glossary` が False のときは一切変換しない。質問の意味を変える書き換え
+        (件数・抽出条件の追加など)を裏で行わないため、決定論処理のみで完結させる。
+        """
         profile = self.get_profile(request.profile_id)
-        warnings: list[str] = []
-        empty_filter_slot = _question_has_empty_filter_slot(request.question)
-        deterministic = self._rewrite_question_preserving_empty_filter(request.question, profile)
-        if empty_filter_slot:
+        question = request.question.strip()
+        if not request.use_glossary:
             return RewriteData(
                 original_question=request.question,
-                rewritten_question=deterministic,
+                rewritten_question=question,
+                source="deterministic",
+            )
+        if _question_has_empty_filter_slot(question):
+            return RewriteData(
+                original_question=request.question,
+                rewritten_question=question,
                 source="deterministic",
                 warnings=[_EMPTY_FILTER_SLOT_WARNING],
             )
-        if not self._enterprise_ai_client.is_configured():
-            return RewriteData(
-                original_question=request.question,
-                rewritten_question=deterministic,
-                source="deterministic",
-                warnings=[
-                    "OCI Enterprise AI が未設定のため deterministic rewrite を使用しました。"
-                ],
-            )
-        try:
-            context = self._rewrite_context(
-                profile=profile,
-                use_glossary=request.use_glossary,
-                extra_prompt=request.extra_prompt,
-            )
-            rewritten = self._enterprise_ai_client.generate(
-                prompt=request.question,
-                context=context,
-                system_prompt=(
-                    "あなたは日本語の NL2SQL 入力を業務語彙に合わせて"
-                    "検索意図が保たれるように書き換えるアシスタントです。"
-                    "SQL は生成せず、書き換え後の自然言語質問だけを返してください。"
-                    "表名・列名・コメントなどから抽出条件や値を推測して"
-                    "追加してはいけません。"
-                    "入力に「抽出条件:」または「抽出条件：」が空欄で含まれる場合は、"
-                    "その空欄を保持し、WHERE 条件を作らせる表現を追加しないでください。"
-                ),
-            ).strip()
-            rewritten = self._strip_code_fence(rewritten).splitlines()[0].strip()
-            if not rewritten:
-                rewritten = deterministic
-                warnings.append("Enterprise AI rewrite が空だったため fallback しました。")
-            return RewriteData(
-                original_question=request.question,
-                rewritten_question=rewritten,
-                source="oci_enterprise_ai",
-                model=self._enterprise_ai_client.model_id(),
-                warnings=warnings,
-            )
-        except EnterpriseAiDirectError as exc:
-            return RewriteData(
-                original_question=request.question,
-                rewritten_question=deterministic,
-                source="deterministic",
-                warnings=[f"Enterprise AI rewrite に失敗したため fallback しました: {exc}"],
-            )
+        return RewriteData(
+            original_question=request.question,
+            rewritten_question=self.rewrite_question(question, profile),
+            source="deterministic",
+        )
 
     def reverse_sql(self, request: ReverseSqlRequest) -> ReverseSqlData:
         profile = self.get_profile(request.profile_id)
@@ -7328,23 +7276,48 @@ class Nl2SqlService:
                 profile=profile,
                 enabled=True,
             )
-        logical_steps = [
-            structure["summary"],
-            *[f"条件: {item}" for item in structure["filters"][:3]],
-            *[f"結合: {item}" for item in structure["joins"][:3]],
-            *[f"集計: {item}" for item in structure["aggregations"][:3]],
-        ]
+        limit = self._sql_fetch_limit(request.sql)
+        logical_steps = self._logical_steps_from_structure(structure, limit=limit)
         if request.use_glossary:
             logical_steps = [
                 self._apply_reverse_glossary(step, profile=profile, enabled=True)
                 for step in logical_steps
             ]
+        table_label, column_label = self._business_label_resolvers(
+            profile=profile,
+            catalog=catalog,
+            referenced=referenced,
+            use_glossary=request.use_glossary,
+        )
+        logical_step_details = self._apply_glossary_to_steps(
+            build_logical_steps(
+                structure,
+                limit=limit,
+                table_labels=table_labels,
+                table_label=table_label,
+                column_label=column_label,
+            ),
+            profile=profile,
+            enabled=request.use_glossary,
+        )
+        logical_structure_items = self._apply_glossary_to_structure_items(
+            build_logical_structure_items(
+                structure,
+                table_labels=table_labels,
+                table_label=table_label,
+                column_label=column_label,
+            ),
+            profile=profile,
+            enabled=request.use_glossary,
+        )
         return ReverseSqlData(
             question=question,
-            explanation=("SELECT 句・FROM/JOIN 句・条件・集計をもとに自然言語説明を生成しました。"),
+            explanation=self._reverse_business_explanation(structure, table_labels),
             referenced_tables=referenced,
             logical_structure=logical_structure,
+            logical_structure_items=logical_structure_items,
             logical_steps=logical_steps,
+            logical_step_details=logical_step_details,
         )
 
     def reverse_sql_deep(self, request: ReverseSqlRequest) -> ReverseSqlData:
@@ -7572,6 +7545,128 @@ class Nl2SqlService:
             if items:
                 lines.append(f"- {label}: " + "; ".join(items))
         return "\n".join(lines)
+
+    def _business_label_resolvers(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        catalog: SchemaCatalog | None,
+        referenced: list[str],
+        use_glossary: bool,
+    ) -> tuple[LabelResolver, LabelResolver]:
+        """物理参照 -> 業務ラベル(表 / 列)の解決関数を作る。
+
+        処理手順・SQL 論理構造の「業務者向け」文面で使う。カタログに無い参照は物理名の
+        末尾へ縮退させ、勝手な言い換えはしない。
+        """
+
+        def table_label(value: str) -> str:
+            table = self._reverse_table_for_ref(value, catalog)
+            fallback = value.strip().replace('"', "").rsplit(".", 1)[-1]
+            label = (
+                table.logical_name.strip()
+                if table and table.logical_name.strip()
+                else table.comment.strip() if table and table.comment.strip() else fallback
+            )
+            return self._apply_reverse_glossary(label, profile=profile, enabled=use_glossary)
+
+        def column_label(value: str) -> str:
+            column = self._reverse_column_for_ref(value, referenced, catalog)
+            fallback = value.strip().replace('"', "").rsplit(".", 1)[-1]
+            label = (
+                column.logical_name.strip()
+                if column and column.logical_name.strip()
+                else column.comment.strip() if column and column.comment.strip() else fallback
+            )
+            return self._apply_reverse_glossary(label, profile=profile, enabled=use_glossary)
+
+        return table_label, column_label
+
+    def _apply_glossary_to_steps(
+        self,
+        steps: list[Nl2SqlLogicalStep],
+        *,
+        profile: Nl2SqlProfile,
+        enabled: bool,
+    ) -> list[Nl2SqlLogicalStep]:
+        if not enabled:
+            return steps
+        return [
+            step.model_copy(
+                update={
+                    "business": self._apply_reverse_glossary(
+                        step.business, profile=profile, enabled=True
+                    ),
+                    "technical": self._apply_reverse_glossary(
+                        step.technical, profile=profile, enabled=True
+                    ),
+                }
+            )
+            for step in steps
+        ]
+
+    def _apply_glossary_to_structure_items(
+        self,
+        items: list[Nl2SqlLogicalStructureItem],
+        *,
+        profile: Nl2SqlProfile,
+        enabled: bool,
+    ) -> list[Nl2SqlLogicalStructureItem]:
+        if not enabled:
+            return items
+        return [
+            item.model_copy(
+                update={
+                    "business": self._apply_reverse_glossary(
+                        item.business, profile=profile, enabled=True
+                    ),
+                    "technical": self._apply_reverse_glossary(
+                        item.technical, profile=profile, enabled=True
+                    ),
+                }
+            )
+            for item in items
+        ]
+
+    def _reverse_business_explanation(
+        self,
+        structure: dict[str, Any],
+        table_labels: list[str],
+    ) -> str:
+        """説明文も業務者向けを主・SQL 構造を副にして併記する。"""
+
+        return build_business_explanation(structure, table_labels)
+
+    def _logical_steps_from_structure(
+        self,
+        structure: dict[str, Any],
+        *,
+        limit: int | None = None,
+    ) -> list[str]:
+        """SQL 構造から業務向けの処理手順(決定論)を組み立てる。
+
+        reverse(SQL→質問)と生成側 interpretation の両方で共有し、
+        条件・結合・集計に加えてグループ化・並び替え・件数制限も手順化する。
+        """
+        steps = [
+            str(structure.get("summary", "")).strip(),
+            *[f"条件: {item}" for item in list(structure.get("filters", []))[:3]],
+            *[f"結合: {item}" for item in list(structure.get("joins", []))[:3]],
+            *[f"集計: {item}" for item in list(structure.get("aggregations", []))[:3]],
+            *[f"グループ化: {item}" for item in list(structure.get("group_by", []))[:3]],
+            *[f"並び替え: {item}" for item in list(structure.get("order_by", []))[:3]],
+        ]
+        if limit is not None and limit > 0:
+            steps.append(f"件数制限: 上位{limit}件")
+        return [step for step in steps if step]
+
+    @staticmethod
+    def _sql_fetch_limit(sql: str) -> int | None:
+        """FETCH FIRST N ROWS 形式の上位N件を決定論で読み取る(無ければ None)。"""
+        match = re.search(r"\bfetch\s+first\s+(\d+)\s+rows?\b", sql, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
 
     def _apply_reverse_glossary(self, text: str, *, profile: Nl2SqlProfile, enabled: bool) -> str:
         glossary = self._effective_glossary(profile)
@@ -8811,7 +8906,7 @@ class Nl2SqlService:
     def synthetic_data_results(self, table_name: str, limit: int = 100) -> SyntheticDataResultsData:
         identity = self._db_admin_object_identity(table_name)
         safe_table_name = identity.qualified_name
-        sql = enforce_row_limit(f"SELECT * FROM {_quote_object_identity(identity)}", limit)
+        sql = normalize_executable_sql(f"SELECT * FROM {_quote_object_identity(identity)}")
         warnings: list[str] = []
         if self._use_oracle_runtime():
             try:
@@ -10064,7 +10159,7 @@ class Nl2SqlService:
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
         if len(statements) == 1 and select_only_flags == [True]:
-            sql = enforce_row_limit(statements[0], request.row_limit)
+            sql = normalize_executable_sql(statements[0])
             try:
                 results = (
                     self._oracle_adapter.execute_select(sql, request.row_limit)
@@ -10709,7 +10804,7 @@ class Nl2SqlService:
             sql += f" WHERE {where_body}"
         if len(_split_sql_statements(sql)) != 1 or not is_select_only(sql):
             raise ValueError("WHERE 句が不正です。単一の SELECT になる条件のみ指定できます。")
-        sql += f" FETCH FIRST {int(request.limit)} ROWS ONLY"
+        # 行数上限は SQL へ書き足さず、取得時の fetch 上限だけで効かせる。
         return sql
 
     def upload_db_admin_csv(self, request: DbAdminCsvUploadRequest) -> DbAdminCsvUploadData:
@@ -13101,33 +13196,6 @@ class Nl2SqlService:
             }
         )
 
-    def _rewrite_context(
-        self,
-        *,
-        profile: Nl2SqlProfile,
-        use_glossary: bool,
-        extra_prompt: str,
-    ) -> str:
-        lines = [f"profile: {profile.name}"]
-        glossary = self._effective_glossary(profile)
-        if use_glossary and glossary:
-            lines.append("glossary:")
-            for term, replacement in list(glossary.items())[:40]:
-                lines.append(f"- {term}: {replacement}")
-        rules = self._effective_sql_rules(profile)
-        if rules:
-            lines.append("sql_rules:")
-            for rule in rules[:20]:
-                lines.append(f"- {rule}")
-        additional_instructions = profile.select_ai_config.additional_instructions.strip()
-        if additional_instructions:
-            lines.append("additional_instructions:")
-            lines.append(additional_instructions)
-        if extra_prompt.strip():
-            lines.append("extra_instruction:")
-            lines.append(extra_prompt.strip())
-        return "\n".join(lines)
-
     def _strip_code_fence(self, value: str) -> str:
         cleaned = value.strip()
         if cleaned.startswith("```"):
@@ -13634,6 +13702,8 @@ class Nl2SqlService:
         row_limit: int | None,
         ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None,
         ontology_graph_warnings: list[str] | None = None,
+        include_logical_steps: bool = True,
+        ontology_grounding_enabled: bool = True,
     ) -> Nl2SqlInterpretationArtifact:
         try:
             sql_for_analysis = executable_sql or generated_sql
@@ -13649,6 +13719,54 @@ class Nl2SqlService:
             ]
             question_filters = _structured_question_filter_values(request.question)
             sql_summary = analysis.structure_summary or analysis.explanation
+            sql_limit = (
+                graph.limit if graph is not None else self._sql_fetch_limit(sql_for_analysis)
+            )
+            logical_steps: list[str] = []
+            logical_step_details: list[Nl2SqlLogicalStep] = []
+            if include_logical_steps:
+                # 「処理手順を表示」用の決定論 steps。SQL に無い行数上限は手順へ含めない。
+                step_structure = {
+                    "summary": sql_summary,
+                    "filters": analysis.filters or analysis.conditions,
+                    "joins": analysis.joins,
+                    "aggregations": analysis.aggregations,
+                    "group_by": analysis.group_by,
+                    "order_by": analysis.order_by,
+                }
+                logical_steps = [
+                    self._apply_reverse_glossary(step, profile=profile, enabled=True)
+                    for step in self._logical_steps_from_structure(
+                        step_structure,
+                        limit=sql_limit,
+                    )
+                ]
+                # 業務者向け併記は表示専用。カタログが引けなくても手順自体は落とさない。
+                referenced_tables = analysis.object_names or safety.referenced_tables
+                step_catalog = self._reverse_sql_catalog(profile, list(referenced_tables))
+                table_labels = self._reverse_table_labels(
+                    list(referenced_tables),
+                    profile=profile,
+                    catalog=step_catalog,
+                    use_glossary=True,
+                )
+                table_label, column_label = self._business_label_resolvers(
+                    profile=profile,
+                    catalog=step_catalog,
+                    referenced=list(referenced_tables),
+                    use_glossary=True,
+                )
+                logical_step_details = self._apply_glossary_to_steps(
+                    build_logical_steps(
+                        step_structure,
+                        limit=sql_limit,
+                        table_labels=table_labels,
+                        table_label=table_label,
+                        column_label=column_label,
+                    ),
+                    profile=profile,
+                    enabled=True,
+                )
             sql_interpretation = Nl2SqlSqlInterpretation(
                 available=bool(sql_summary or graph_dump),
                 source="sql_semantics",
@@ -13662,6 +13780,8 @@ class Nl2SqlService:
                 group_by=analysis.group_by,
                 order_by=analysis.order_by,
                 limit=graph.limit if graph is not None else (row_limit or None),
+                logical_steps=logical_steps,
+                logical_step_details=logical_step_details,
                 semantic_graph=graph_dump,
                 warnings=warnings,
             )
@@ -13687,6 +13807,7 @@ class Nl2SqlService:
                 question=question_interpretation,
                 sql=sql_interpretation,
                 ontology_graph=ontology_graph,
+                ontology_grounding_enabled=ontology_grounding_enabled,
                 warnings=warnings,
             )
         except Exception as exc:  # pragma: no cover - artifact must never fail the job
@@ -13917,14 +14038,19 @@ class Nl2SqlService:
             stage_timings=stage_timings,
         )
         interpretation: Nl2SqlInterpretationArtifact | None = None
-        if request.include_interpretation:
+        # include_interpretation は処理手順、use_ontology_context は Ontology 接地確認を担う。
+        # どちらかが要る場合に artifact を構築し、不要な部分は空にする。
+        if request.include_interpretation or request.use_ontology_context:
             try:
-                ontology_graph, ontology_graph_warnings = (
-                    self._build_interpretation_ontology_graph_snapshot(
-                        profile=profile,
-                        allowed=allowed,
+                ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
+                ontology_graph_warnings: list[str] = []
+                if request.use_ontology_context:
+                    ontology_graph, ontology_graph_warnings = (
+                        self._build_interpretation_ontology_graph_snapshot(
+                            profile=profile,
+                            allowed=allowed,
+                        )
                     )
-                )
                 interpretation = self._build_interpretation_artifact(
                     request=request,
                     profile=profile,
@@ -13936,6 +14062,8 @@ class Nl2SqlService:
                     row_limit=row_limit,
                     ontology_graph=ontology_graph,
                     ontology_graph_warnings=ontology_graph_warnings,
+                    include_logical_steps=request.include_interpretation,
+                    ontology_grounding_enabled=request.use_ontology_context,
                 )
             except Exception as exc:  # pragma: no cover - defensive artifact boundary
                 logger.warning("nl2sql_interpretation_artifact_boundary_failed", exc_info=True)
@@ -14438,7 +14566,7 @@ class Nl2SqlService:
                     self._ontology_generation_context_prompt(ontology_context),
                 ]
             )
-        system_prompt = self._enterprise_ai_sql_system_prompt(row_limit)
+        system_prompt = self._enterprise_ai_sql_system_prompt()
         generate_kwargs: dict[str, Any] = {
             "prompt": question,
             "context": context,
@@ -14527,19 +14655,15 @@ class Nl2SqlService:
             lines.append(learning_context)
         return "\n".join(line for line in lines if line.strip())
 
-    def _enterprise_ai_sql_system_prompt(self, row_limit: int | None) -> str:
-        row_limit_instruction = (
-            f"必要に応じて FETCH FIRST {row_limit} ROWS ONLY を使ってください。"
-            if row_limit
-            else ""
-        )
+    def _enterprise_ai_sql_system_prompt(self) -> str:
         return (
             "あなたは Oracle Database 26ai 向け NL2SQL エンジンです。"
             "与えられた schema/context の表と列だけを使用してください。"
             "FROM/JOIN の物理 object は必ず OWNER.OBJECT で修飾してください。"
             "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"
             "必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
-            f"{row_limit_instruction}"
+            "質問に件数の指定が無い限り、FETCH FIRST n ROWS ONLY などの行数制限を"
+            "勝手に付けないでください。"
             '出力は JSON のみ: {"sql":"...", "explanation":"..."}。'
             "説明は日本語で簡潔にしてください。"
         )
@@ -15124,7 +15248,6 @@ class Nl2SqlService:
         sql: str,
         safety: SafetyReport,
         allowed: AllowedObjects,
-        row_limit: int | None,
         referenced_tables: list[str],
         referenced_columns: list[str],
         has_wildcard: bool,
@@ -15137,7 +15260,7 @@ class Nl2SqlService:
         if not safety.is_select_only:
             for statement in [part.strip() for part in sql.split(";") if part.strip()]:
                 if is_select_only(statement):
-                    return enforce_row_limit(statement, row_limit)
+                    return normalize_executable_sql(statement)
             return ""
 
         current_owner = self._current_schema_owner()
@@ -15150,10 +15273,9 @@ class Nl2SqlService:
             if not table_name:
                 return ""
             select_list = self._allowed_select_list(table_name, allowed, catalog)
-            return enforce_row_limit(
+            return normalize_executable_sql(
                 # Safe: table and columns are resolved from allowed_objects.
                 f"SELECT {select_list} FROM {table_name}",  # nosec B608
-                row_limit,
             )
 
         if has_wildcard or not _column_allowed(
@@ -15169,7 +15291,7 @@ class Nl2SqlService:
                 else self._first_allowed_table(allowed, catalog)
             )
             if not table_name:
-                return enforce_row_limit(stripped, row_limit)
+                return normalize_executable_sql(stripped)
             select_list = self._allowed_select_list(table_name, allowed, catalog)
             if _extract_select_list(stripped):
                 repaired = re.sub(
@@ -15179,14 +15301,13 @@ class Nl2SqlService:
                     count=1,
                     flags=re.IGNORECASE | re.DOTALL,
                 )
-                return enforce_row_limit(repaired, row_limit)
+                return normalize_executable_sql(repaired)
             # Safe: repair fallback uses allowed table/column list.
-            return enforce_row_limit(
+            return normalize_executable_sql(
                 f"SELECT {select_list} FROM {table_name}",  # nosec B608
-                row_limit,
             )
 
-        executable = enforce_row_limit(stripped, row_limit)
+        executable = normalize_executable_sql(stripped)
         return executable if executable != stripped else ""
 
     def _first_allowed_table(

@@ -14,6 +14,7 @@ import { FloatingActionMenu } from "@/components/FloatingMenu";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { t } from "@/lib/i18n";
+import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
 import { cn } from "@/lib/utils";
 import { splitObjectActions, visibleEntityActions, type EntityAction } from "./ObjectActionsCore";
 
@@ -52,7 +53,7 @@ function useActionMenu() {
 
   const close = (restoreFocus = false) => {
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+    if (restoreFocus) restoreMenuTriggerFocus(triggerRef, containerRef, menuRef);
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

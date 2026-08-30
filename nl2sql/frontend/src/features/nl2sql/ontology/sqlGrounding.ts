@@ -60,6 +60,7 @@ interface GroundingIndex {
 }
 
 const TABLE_NODE_KINDS = new Set(["table", "view", "business_entity", "business_event"]);
+const QUALIFIED_COLUMN_PATTERN = /(?:(?:"[^"]+"|[A-Za-z_][\w$#]*)\.){1,2}(?:"[^"]+"|[A-Za-z_][\w$#]*)/gu;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -240,11 +241,31 @@ function matchingObjectEntries(index: GroundingIndex, identity: ObjectIdentity |
   return index.objectEntries.filter((entry) => objectMatches(entry, identity));
 }
 
-function matchingColumnEntries(index: GroundingIndex, identity: ColumnIdentity): ColumnEntry[] {
-  if (!identity.objectName) {
-    return index.columnEntries.filter((entry) => entry.columnName === identity.columnName);
+/**
+ * 未修飾列(`SELECT "SALARY" FROM ...` のようにテーブル修飾が無い列)は、
+ * その SQL scope の FROM 句に現れた表だけに束縛する。列名だけで ontology 全体を
+ * 横断一致させると、同名列を持つ無関係な表(例: DEPARTMENT_ID を持つ DEPARTMENT /
+ * PROJECT)まで接地扱いになるため。
+ */
+function matchingColumnEntries(
+  index: GroundingIndex,
+  identity: ColumnIdentity,
+  scopeObjects: ObjectIdentity[]
+): ColumnEntry[] {
+  if (identity.objectName) {
+    return index.columnEntries.filter((entry) => columnMatches(entry, identity));
   }
-  return index.columnEntries.filter((entry) => columnMatches(entry, identity));
+  const byName = index.columnEntries.filter((entry) => entry.columnName === identity.columnName);
+  if (scopeObjects.length === 0) return byName;
+  const scoped = byName.filter((entry) =>
+    scopeObjects.some((object) => objectMatches(entry, object))
+  );
+  if (scoped.length > 0) return scoped;
+  // FROM の表が ontology に 1 つも接地しないときだけ全体フォールバックする。
+  // 接地しているのに列が無い場合は素直に「未接地」として報告する。
+  return scopeObjects.some((object) => matchingObjectEntries(index, object).length > 0)
+    ? []
+    : byName;
 }
 
 function dedupe<T>(values: T[]): T[] {
@@ -271,6 +292,36 @@ function tableAliasMap(sqlGraph: SqlSemanticGraph): Map<string, ObjectIdentity> 
     if (table.qualified_name) aliases.set(normalizeAlias(table.qualified_name), identity);
   }
   return aliases;
+}
+
+interface TableScope {
+  byScope: Map<string, ObjectIdentity[]>;
+  all: ObjectIdentity[];
+}
+
+/** SQL の FROM 句に現れる実体表を scope 単位で集める(CTE は tableIdentityFromItem が除外)。 */
+function tableScopeIdentities(sqlGraph: SqlSemanticGraph): TableScope {
+  const byScope = new Map<string, ObjectIdentity[]>();
+  const all: ObjectIdentity[] = [];
+  for (const rawTable of sqlGraph.tables) {
+    const table = normalizeSqlItem(rawTable);
+    const identity = tableIdentityFromItem(table);
+    if (!identity?.objectName) continue;
+    all.push(identity);
+    const scopeId = String(table.scope_id ?? "").trim();
+    if (!scopeId) continue;
+    const bucket = byScope.get(scopeId);
+    if (bucket) bucket.push(identity);
+    else byScope.set(scopeId, [identity]);
+  }
+  return { byScope, all };
+}
+
+/** 列が属する scope の表集合。scope が判らない旧 artifact は SQL 全体の表へ縮退する。 */
+function scopeObjectsForItem(scope: TableScope, item: SqlSemanticItem): ObjectIdentity[] {
+  const scopeId = String(item.scope_id ?? "").trim();
+  const scoped = scopeId ? scope.byScope.get(scopeId) : undefined;
+  return scoped?.length ? scoped : scope.all;
 }
 
 function identityFromSourceName(source: string | undefined | null, aliases: Map<string, ObjectIdentity>): ObjectIdentity | null {
@@ -320,7 +371,7 @@ function columnIdentitiesFromItem(item: SqlSemanticItem, aliases: Map<string, Ob
   for (const value of item.lineage ?? []) values.add(value);
   for (const value of [item.expression, item.expression_sql, item.source_sql, item.qualified_name]) {
     if (!value) continue;
-    for (const match of value.matchAll(/(?:(?:"[^"]+"|[A-Za-z_][\w$#]*)\.){1,2}(?:"[^"]+"|[A-Za-z_][\w$#]*)/gu)) {
+    for (const match of value.matchAll(QUALIFIED_COLUMN_PATTERN)) {
       values.add(match[0]);
     }
   }
@@ -348,6 +399,53 @@ function endpointIdentity(endpoint: { owner?: string; object_name?: string; colu
   return { owner: normalizeIdentifier(endpoint?.owner), objectName, columnName };
 }
 
+function columnIdentityFromObject(
+  object: ObjectIdentity | null,
+  columnName: string | undefined
+): ColumnIdentity | null {
+  const normalized = normalizeIdentifier(columnName);
+  if (!object || !normalized) return null;
+  return { ...object, columnName: normalized };
+}
+
+function edgeJoinConditionPairs(
+  index: GroundingIndex,
+  edge: OntologyEdge
+): Array<{ left: ColumnIdentity; right: ColumnIdentity }> {
+  const sourceNode = index.nodesById.get(edge.source_node_id);
+  const targetNode = index.nodesById.get(edge.target_node_id);
+  const sourceObject = sourceNode ? objectIdentityFromNode(sourceNode) : null;
+  const targetObject = targetNode ? objectIdentityFromNode(targetNode) : null;
+  const pairs: Array<{ left: ColumnIdentity; right: ColumnIdentity }> = [];
+  for (const condition of edge.join_conditions ?? []) {
+    const left =
+      endpointIdentity(condition.left) ?? columnIdentityFromObject(sourceObject, condition.source_column);
+    const right =
+      endpointIdentity(condition.right) ?? columnIdentityFromObject(targetObject, condition.target_column);
+    if (left && right) pairs.push({ left, right });
+  }
+  return pairs;
+}
+
+/**
+ * ON 句の列対で edge を照合する。left_source/right_source の表ペアは star join で
+ * ずれることがあるため、接地は ON 句の列を正として先に判定する。
+ */
+function edgeMatchesJoinColumns(
+  index: GroundingIndex,
+  edge: OntologyEdge,
+  columns: ColumnIdentity[]
+): boolean {
+  if (columns.length === 0) return false;
+  const pairs = edgeJoinConditionPairs(index, edge);
+  if (pairs.length === 0) return false;
+  return pairs.every(
+    (pair) =>
+      columns.some((column) => columnMatches(column, pair.left)) &&
+      columns.some((column) => columnMatches(column, pair.right))
+  );
+}
+
 function edgeMatchesObjects(index: GroundingIndex, edge: OntologyEdge, left: ObjectIdentity, right: ObjectIdentity): boolean {
   const source = index.nodesById.get(edge.source_node_id);
   const target = index.nodesById.get(edge.target_node_id);
@@ -369,9 +467,48 @@ function edgeMatchesObjects(index: GroundingIndex, edge: OntologyEdge, left: Obj
   return false;
 }
 
+function joinColumnIdentities(
+  join: SqlSemanticJoin,
+  aliases: Map<string, ObjectIdentity>
+): ColumnIdentity[] {
+  const values = new Set<string>();
+  for (const value of join.referenced_columns ?? []) values.add(value);
+  for (const value of [join.condition_sql, join.condition, join.expression, join.expression_sql]) {
+    if (!value) continue;
+    for (const match of value.matchAll(QUALIFIED_COLUMN_PATTERN)) values.add(match[0]);
+  }
+  return [...values]
+    .map((value) => columnIdentityFromPath(value, aliases))
+    .filter((value): value is ColumnIdentity => Boolean(value?.columnName && value.objectName));
+}
+
+/**
+ * SELECT で新しく作られた出力別名(`COUNT(*) AS "CNT"` の CNT など)。
+ * ORDER BY / GROUP BY / HAVING はこの別名を未修飾で参照できるが物理列ではないので、
+ * 未接地として報告しない。式が参照列そのものの別名(`t.SALARY` → SALARY)は除く。
+ */
+function computedOutputNames(sqlGraph: SqlSemanticGraph): Set<string> {
+  const names = new Set<string>();
+  for (const rawProjection of sqlGraph.projections ?? []) {
+    const projection = normalizeSqlItem(rawProjection);
+    const outputName = normalizeIdentifier(projection.output_name);
+    if (!outputName) continue;
+    const referenced = (projection.referenced_columns ?? []).some((value) => {
+      const parts = String(value).split(".");
+      return normalizeIdentifier(parts[parts.length - 1]) === outputName;
+    });
+    if (!referenced) names.add(outputName);
+  }
+  return names;
+}
+
 function sqlItemsForColumnGrounding(sqlGraph: SqlSemanticGraph): Array<SqlSemanticItem | string> {
+  // columns[] は backend が全 clause の列参照を (scope, clause, 式) で重複排除した正本。
+  // projections/filters/aggregates/… は同じ列の再掲なので、併せて走査すると同一列を
+  // 二重に数えてしまう(接地件数が実際の倍になる)。
+  if (sqlGraph.columns.length > 0) return sqlGraph.columns;
+  // columns[] を持たない旧 artifact 互換。
   return [
-    ...sqlGraph.columns,
     ...(sqlGraph.projections ?? []),
     ...sqlGraph.filters,
     ...sqlGraph.aggregates,
@@ -400,6 +537,8 @@ export function groundSqlSemanticGraphOnOntologyGraph(
 
   const index = buildIndex(ontologyGraph);
   const aliases = tableAliasMap(sqlGraph);
+  const tableScope = tableScopeIdentities(sqlGraph);
+  const outputNames = computedOutputNames(sqlGraph);
   const highlightedNodes = new Set<string>();
   const highlightedEdges = new Set<string>();
   const matchedTables: SqlOntologyGroundingNodeMatch[] = [];
@@ -425,14 +564,20 @@ export function groundSqlSemanticGraphOnOntologyGraph(
   for (const rawItem of sqlItemsForColumnGrounding(sqlGraph)) {
     const item = normalizeSqlItem(rawItem);
     const label = itemLabel(item);
+    const scopeObjects = scopeObjectsForItem(tableScope, item);
     const columnEntries = dedupe(
-      columnIdentitiesFromItem(item, aliases).flatMap((identity) => matchingColumnEntries(index, identity))
+      columnIdentitiesFromItem(item, aliases).flatMap((identity) =>
+        matchingColumnEntries(index, identity, scopeObjects)
+      )
     );
     if (columnEntries.length === 0) {
       const hasColumnHint =
         (item.referenced_columns?.length ?? 0) > 0 ||
         Boolean(item.table && (item.column || item.name)) ||
-        Boolean(item.column);
+        Boolean(item.column) ||
+        // columns[] 由来の未修飾列(clause 付き・table 空)も未接地として報告する。
+        // ただし SELECT で作られた出力別名の参照は物理列ではないので除く。
+        Boolean(item.clause && item.name && !outputNames.has(normalizeIdentifier(item.name)));
       if (hasColumnHint) unmatchedColumns.push(label);
       continue;
     }
@@ -446,6 +591,12 @@ export function groundSqlSemanticGraphOnOntologyGraph(
     const label = itemLabel(join);
     const directEdge = join.ontology_edge_id ? index.edgesById.get(join.ontology_edge_id) : undefined;
     let edgeIds = directEdge ? [directEdge.id] : [];
+    if (edgeIds.length === 0) {
+      const joinColumns = joinColumnIdentities(join, aliases);
+      edgeIds = ontologyGraph.edges
+        .filter((edge) => edgeMatchesJoinColumns(index, edge, joinColumns))
+        .map((edge) => edge.id);
+    }
     if (edgeIds.length === 0) {
       const left = identityFromSourceName(join.left_source || join.source_table, aliases);
       const right = identityFromSourceName(join.right_source || join.target_table, aliases);

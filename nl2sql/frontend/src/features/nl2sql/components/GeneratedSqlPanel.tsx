@@ -1,11 +1,12 @@
 import { lazy, Suspense, useMemo, useState, type SyntheticEvent } from "react";
-import { Copy, FileText, Network, Play } from "lucide-react";
+import { Copy, FileText, ListOrdered, Network, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { Banner, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
+import { LogicalStepsList } from "./LogicalStepsList";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
@@ -261,8 +262,10 @@ function InterpretationArtifactPanel({
   const inputFilterEmpty = template.hasTemplate && inputFilterSlotExists && !inputFilter.trim();
   const sqlFilters = artifact.sql.filters.filter(Boolean);
   const hasFilterMismatch = inputFilterEmpty && sqlFilters.length > 0;
+  // 「Ontology を使う」OFF(backend echo)のときは接地確認を出さない。未指定の旧データは互換で表示。
+  const groundingEnabled = artifact.ontology_grounding_enabled !== false;
 
-  if (!hasFilterMismatch && !sqlGraph) return null;
+  if (!hasFilterMismatch && !(groundingEnabled && sqlGraph)) return null;
 
   return (
     <div
@@ -275,12 +278,49 @@ function InterpretationArtifactPanel({
           {t("nl2sql.interpretation.emptyFilterMismatch")}
         </Banner>
       )}
-      <SqlOntologyGroundingPanel
-        sqlGraph={sqlGraph}
-        profileId={effectiveProfileId}
-        ontologyGraph={artifact.ontology_graph ?? null}
-      />
+      {groundingEnabled && (
+        <SqlOntologyGroundingPanel
+          sqlGraph={sqlGraph}
+          profileId={effectiveProfileId}
+          ontologyGraph={artifact.ontology_graph ?? null}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * 生成 SQL の処理手順(決定論 logical_steps)を番号付きで表示する独立パネル。
+ * 「処理手順を表示」OFF のときは backend が steps を空にするため描画されない。
+ */
+function SqlLogicalStepsPanel({
+  artifact,
+}: {
+  artifact?: Nl2SqlInterpretationArtifact | null;
+}) {
+  const available = artifact?.available ?? false;
+  const steps = available ? (artifact?.sql.logical_steps ?? []) : [];
+  const stepDetails = available ? (artifact?.sql.logical_step_details ?? []) : [];
+  if (steps.length === 0 && stepDetails.length === 0) return null;
+
+  return (
+    <section
+      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      aria-labelledby="nl2sql-logical-steps-title"
+      data-testid="nl2sql-logical-steps-panel"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <ListOrdered size={16} className="shrink-0 text-foreground" aria-hidden="true" />
+        <h4 id="nl2sql-logical-steps-title" className="text-sm font-semibold text-foreground">
+          {t("nl2sql.logicalSteps.title")}
+        </h4>
+      </div>
+      <LogicalStepsList
+        steps={stepDetails}
+        fallbackSteps={steps}
+        listAriaLabel={t("nl2sql.logicalSteps.listAria")}
+      />
+    </section>
   );
 }
 
@@ -428,6 +468,7 @@ export function GeneratedSqlSummary({
       )}
       <p className="text-sm leading-6 text-foreground">{result.explanation}</p>
       <InterpretationArtifactPanel artifact={result.interpretation} profileId={profileId} />
+      <SqlLogicalStepsPanel artifact={result.interpretation} />
       <ShowPromptArtifactPanel artifact={result.show_prompt} />
     </div>
   );

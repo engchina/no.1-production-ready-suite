@@ -159,7 +159,7 @@ function ExecutableNl2SqlWorkbench() {
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
-  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(true);
+  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [useOntologyContext, setUseOntologyContext] = useState(true);
   const [includeInterpretation, setIncludeInterpretation] = useState(true);
@@ -549,6 +549,9 @@ function ExecutableNl2SqlWorkbench() {
     const trimmed = question.trim();
     if (trimmed.length < 4 || active || profiles.length === 0) {
       setSimilarHistory([]);
+      // 実行開始・質問クリア時は in-flight を abort するため .finally が走らない。
+      // loading フラグを明示的に落とさないと「参考履歴を検索中」が固まって残る。
+      setSimilarHistoryLoading(false);
       return undefined;
     }
     const controller = new AbortController();
@@ -704,6 +707,12 @@ function ExecutableNl2SqlWorkbench() {
     if (!rewriteData) return;
     setQuestion(rewriteData.rewritten_question);
   };
+
+  // 用語・同義語の置換が起きていない（= 無変換）ときはカードを出さない。
+  // 変更前後が同一なのに「生成に使用される質問」を並べると、書き換えられた誤解を招く。
+  // 「抑止した」等の内部処理 warning だけではカードを開かない（無変換の報告は余計な情報）。
+  const rewriteChanged =
+    !!rewriteData && rewriteData.rewritten_question.trim() !== question.trim();
 
   const submit = async () => {
     const trimmed = question.trim();
@@ -1172,7 +1181,7 @@ function ExecutableNl2SqlWorkbench() {
                     onUseOntologyContextChange={setUseOntologyContext}
                     rewriteUseGlossary={rewriteUseGlossary}
                   />
-                  {rewriteData && (
+                  {rewriteData && rewriteChanged && (
                     <div className="grid gap-3 rounded-md border border-primary/30 bg-card p-3">
                       <dl className="grid gap-2 text-sm">
                         <div>
@@ -1199,9 +1208,7 @@ function ExecutableNl2SqlWorkbench() {
                         </div>
                       )}
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
-                          {rewriteData.source}
-                        </span>
+                        {/* source（deterministic 等）は内部識別子なので画面には出さない。 */}
                         {rewriteData.model && (
                           <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
                             {rewriteData.model}
@@ -1316,7 +1323,7 @@ function ExecutableNl2SqlWorkbench() {
                         setQuestion("");
                         setResult(null);
                         setRewriteData(null);
-                        setRewriteUseGlossary(true);
+                        setRewriteUseGlossary(false);
                         setRewriteExtraPrompt("");
                         setUseOntologyContext(true);
                         setIncludeInterpretation(true);

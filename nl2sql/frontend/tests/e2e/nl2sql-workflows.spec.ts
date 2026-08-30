@@ -1945,7 +1945,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     })
   );
   await page.route("**/api/nl2sql/rewrite", (route) => {
-    // 入力質問を反映した決定論変換で返す(rewrite 既定 ON でも payload の質問を判別できる)。
+    // 入力質問を反映した決定論変換で返す(rewrite を ON にしても payload の質問を判別できる)。
     const body = route.request().postDataJSON() as { question?: string };
     const original = String(body?.question ?? "");
     return fulfillJson(route, {
@@ -2006,10 +2006,27 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.reverseDeepPayload = route.request().postDataJSON() as Record<string, unknown>;
     return fulfillJson(route, {
       question: "請求金額を条件付きで一覧確認したい",
-      explanation: "INVOICES から請求金額を取得します。",
+      explanation: "請求情報を対象に、一覧の取得を行います。(SQL 構造: SELECT)",
       logical_structure: "SQL 論理構造\n- SELECT: 請求金額\n- FROM: INVOICES",
+      logical_structure_items: [
+        {
+          kind: "summary",
+          business: "請求情報を対象に、一覧の取得を行います。",
+          technical: "INVOICES を参照し、SELECT 操作を行います。",
+        },
+        { kind: "statement", business: "データを取り出すだけの参照 SQL です", technical: "SELECT" },
+        { kind: "operations", business: "一覧の取得", technical: "SELECT" },
+      ],
       referenced_tables: ["INVOICES"],
       logical_steps: ["INVOICES を参照", "請求金額を選択"],
+      logical_step_details: [
+        {
+          kind: "summary",
+          business: "請求情報を対象に、一覧の取得を行います。",
+          technical: "INVOICES を参照",
+        },
+        { kind: "aggregation", business: "合計を計算します", technical: "集計: SUM" },
+      ],
       source: "oci_enterprise_ai",
       warnings: [],
     });
@@ -3954,9 +3971,8 @@ test("検索実行開始時に前回の結果表を先に消す", async ({ page 
   await question.fill("請求件数を数えたい");
   await page.getByRole("button", { name: "検索を実行" }).click();
 
-  await expect.poll(() => jobPayload?.question).toBe(
-    "請求件数を数えたい（請求金額=INVOICES.TOTAL_AMOUNT）"
-  );
+  // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
+  await expect.poll(() => jobPayload?.question).toBe("請求件数を数えたい");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
@@ -4043,14 +4059,13 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
   await expect(question).toHaveValue("請求金額を業務用語で解釈したい");
-  await expect.poll(() => jobPayload?.question).toBe(
-    "請求金額を業務用語で解釈したい（請求金額=INVOICES.TOTAL_AMOUNT）"
-  );
+  // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
+  await expect.poll(() => jobPayload?.question).toBe("請求金額を業務用語で解釈したい");
 
   jobsGate.release();
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
   expect(jobPayload).toMatchObject({
-    question: "請求金額を業務用語で解釈したい（請求金額=INVOICES.TOTAL_AMOUNT）",
+    question: "請求金額を業務用語で解釈したい",
     profile_id: "default",
     engine: "select_ai",
   });
@@ -4097,6 +4112,38 @@ test("参考履歴は API が空の場合に表示しない", async ({ page }) =
 
   await expect.poll(() => requested).toBe(true);
   await expect(page.getByRole("button", { name: /参考履歴/ })).toHaveCount(0);
+});
+
+test("参考履歴の「検索中」は SQL 生成の実行中に固まって残らない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  // 参考履歴の応答を握って in-flight のまま実行へ進める（abort で .finally が走らない経路）。
+  const similarGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", async (route) => {
+    await similarGate.promise;
+    return fulfillJson(route, { items: [] });
+  });
+  const jobsGate = createRequestGate();
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    await jobsGate.promise;
+    return fulfillJson(route, { job_id: "job-similar-stuck", status: "running", steps: [] });
+  });
+
+  await page.goto("/query");
+  await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toContainText("参考履歴を検索中");
+
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  // 実行中は入力系が無効化される。参考履歴は「検索中」のまま残らず消える。
+  await expect(nl2sqlQuestionInput(page)).toBeDisabled();
+  await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
+  await expect(header).toHaveCount(0);
+
+  similarGate.release();
+  jobsGate.release();
 });
 
 test("参考履歴は管理者レビュー結果が良い履歴だけを表示する", async ({ page }) => {
@@ -4351,6 +4398,9 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
+  // 用語・同義語は既定 off のため、書き換え後の質問を検証する本テストでは明示 ON にする。
+  await openNl2SqlExecutionOptions(page);
+  await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
@@ -4373,7 +4423,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
     await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
     expect(jobPayload).toMatchObject({
-      // rewrite 既定 ON のため job には辞書適用後の質問が渡る。
+      // 用語・同義語を ON にしたため job には辞書適用後の質問が渡る。
       question: `${questionText}（請求金額=INVOICES.TOTAL_AMOUNT）`,
       engine: "select_ai",
       profile_id: "default",
@@ -4579,12 +4629,12 @@ test("検索ジョブの失敗段階を示し、入力を保持して再実行�
   await expectNoHorizontalScroll(page);
 });
 
-test("Query Rewrite は用語・同義語を既定で使い、Schema オプションを表示しない", async ({ page }) => {
+test("Query Rewrite の用語・同義語は既定 off で、Schema オプションを表示しない", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   await expect(page.getByText("スキーマ参照")).toBeVisible();
 
-  await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
+  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
 
   // 独立した「質問を書き換え」ボタンは廃止済み（検索実行時に統合）
@@ -4664,7 +4714,7 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
   await expect(nl2sqlQuestionInput(page)).toHaveValue(questionText);
 });
 
-test("空の抽出条件では rewrite warning を表示し、条件を増やさずジョブ投入する", async ({ page }) => {
+test("空の抽出条件では rewrite カードを出さず、条件を増やさずジョブ投入する", async ({ page }) => {
   await mockNl2SqlApi(page);
   const questionText = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：';
   const warning = "抽出条件が空欄のため条件追加を抑止しました。";
@@ -4783,8 +4833,10 @@ test("空の抽出条件では rewrite warning を表示し、条件を増やさ
   await page.getByLabel("用語・同義語を使う").check();
   await page.getByRole("button", { name: "検索を実行" }).click();
 
-  await expect(page.getByText("生成に使用される質問")).toBeVisible();
-  await expect(page.getByText(warning)).toBeVisible();
+  // 質問が無変換のときは rewrite カード自体を出さない（内部処理の warning も表に出さない）。
+  await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
+  await expect(page.getByText(warning)).toHaveCount(0);
+  await expect(page.getByText("deterministic", { exact: true })).toHaveCount(0);
   expect(jobPayload).toMatchObject({ question: questionText, engine: "select_ai" });
   const submittedJobPayload = jobPayload as Record<string, unknown> | null;
   expect(String(submittedJobPayload?.question ?? "")).not.toContain("管理部門");
@@ -4796,8 +4848,8 @@ test("空の抽出条件では rewrite warning を表示し、条件を増やさ
   await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
-  await expect(page.getByText("生成に使用される質問")).toBeVisible();
-  await expect(page.getByText(warning)).toBeVisible();
+  await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
+  await expect(page.getByText(warning)).toHaveCount(0);
   await expect(interpretation.getByText("入力と SQL が一致していません")).toBeVisible();
   await expect(interpretation.getByText("入力の抽出条件は空欄ですが")).toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -4807,7 +4859,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   await mockNl2SqlApi(page);
   const questionText = "部署ごとの従業員氏名を表示";
   const generatedSql =
-    'SELECT "d"."DEPARTMENT_NAME" AS "部署名", "e"."EMPLOYEE_NAME" AS "従業員氏名" FROM "ADMIN"."DEPARTMENT" "d" JOIN "ADMIN"."EMPLOYEE" "e" ON "e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"';
+    'SELECT "d"."DEPARTMENT_NAME" AS "部署名", "e"."EMPLOYEE_NAME" AS "従業員氏名", "p"."PROJECT_NAME" AS "プロジェクト名" FROM "ADMIN"."DEPARTMENT" "d" JOIN "ADMIN"."EMPLOYEE" "e" ON "e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID" JOIN "ADMIN"."PROJECT" "p" ON "p"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"';
   const sqlGraph = {
     dialect: "oracle",
     statement_type: "SELECT",
@@ -4829,6 +4881,14 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         alias: "e",
         qualified_name: "ADMIN.EMPLOYEE",
         source_sql: '"ADMIN"."EMPLOYEE" "e"',
+      },
+      {
+        id: "table-project",
+        owner: "ADMIN",
+        name: "PROJECT",
+        alias: "p",
+        qualified_name: "ADMIN.PROJECT",
+        source_sql: '"ADMIN"."PROJECT" "p"',
       },
     ],
     columns: [
@@ -4856,6 +4916,18 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         name: "DEPARTMENT_ID",
         expression_sql: '"d"."DEPARTMENT_ID"',
       },
+      {
+        id: "column-project-name",
+        table: "p",
+        name: "PROJECT_NAME",
+        expression_sql: '"p"."PROJECT_NAME"',
+      },
+      {
+        id: "column-project-department-id",
+        table: "p",
+        name: "DEPARTMENT_ID",
+        expression_sql: '"p"."DEPARTMENT_ID"',
+      },
     ],
     joins: [
       {
@@ -4864,6 +4936,14 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         right_source: '"ADMIN"."EMPLOYEE" "e"',
         join_type: "inner",
         condition_sql: '"e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+      },
+      {
+        // star join。過去 artifact 互換のため位置ベースの誤った左端点を保持する。
+        id: "join-department-project",
+        left_source: '"ADMIN"."EMPLOYEE" "e"',
+        right_source: '"ADMIN"."PROJECT" "p"',
+        join_type: "inner",
+        condition_sql: '"p"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
       },
     ],
     projections: [
@@ -4878,6 +4958,12 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         output_name: "従業員氏名",
         expression_sql: '"e"."EMPLOYEE_NAME" AS "従業員氏名"',
         referenced_columns: ["e.EMPLOYEE_NAME"],
+      },
+      {
+        id: "projection-project",
+        output_name: "プロジェクト名",
+        expression_sql: '"p"."PROJECT_NAME" AS "プロジェクト名"',
+        referenced_columns: ["p.PROJECT_NAME"],
       },
     ],
     filters: [],
@@ -4948,6 +5034,14 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         metadata: { owner: "ADMIN", object_name: "EMPLOYEE" },
       },
       {
+        id: "project-table",
+        kind: "table",
+        technical_name: "ADMIN.PROJECT",
+        business_name_ja: "プロジェクト情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "PROJECT" },
+      },
+      {
         id: "department-name",
         kind: "property",
         technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
@@ -4978,6 +5072,22 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         business_name_ja: "従業員部署ID",
         review_status: "approved",
         metadata: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+      },
+      {
+        id: "project-name",
+        kind: "property",
+        technical_name: "ADMIN.PROJECT.PROJECT_NAME",
+        business_name_ja: "プロジェクト名",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "PROJECT", column_name: "PROJECT_NAME" },
+      },
+      {
+        id: "project-department-id",
+        kind: "column",
+        technical_name: "ADMIN.PROJECT.DEPARTMENT_ID",
+        business_name_ja: "部門ID",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "PROJECT", column_name: "DEPARTMENT_ID" },
       },
     ],
     edges: [
@@ -5029,6 +5139,30 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
           },
         ],
       },
+      {
+        id: "project-name-column",
+        kind: "column",
+        source_node_id: "project-table",
+        target_node_id: "project-name",
+        relationship_name_ja: "列",
+        review_status: "approved",
+      },
+      {
+        id: "department-project-join",
+        kind: "foreign_key",
+        source_node_id: "department-table",
+        target_node_id: "project-table",
+        relationship_name_ja: "部署とプロジェクトの Join",
+        review_status: "approved",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "PROJECT", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+      },
     ],
   };
 
@@ -5047,8 +5181,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
       ],
     })
   );
-  await page.route("**/api/nl2sql/jobs/job-ontology-grounding-001", (route) =>
-    fulfillJson(route, {
+  const groundingJobDetail = {
       job_id: "job-ontology-grounding-001",
       status: "done",
       created_at: "2026-06-21T10:00:00.000Z",
@@ -5117,14 +5250,349 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
             source: "sql_semantics",
             summary: "ADMIN.DEPARTMENT と ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
             statement_type: "SELECT",
-            tables: ["ADMIN.DEPARTMENT", "ADMIN.EMPLOYEE"],
-            columns: ["ADMIN.DEPARTMENT.DEPARTMENT_NAME", "ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
-            joins: ['"e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"'],
+            tables: ["ADMIN.DEPARTMENT", "ADMIN.EMPLOYEE", "ADMIN.PROJECT"],
+            columns: [
+              "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
+              "ADMIN.EMPLOYEE.EMPLOYEE_NAME",
+              "ADMIN.PROJECT.PROJECT_NAME",
+            ],
+            joins: [
+              '"e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+              '"p"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+            ],
             filters: [],
             aggregations: [],
             group_by: [],
             order_by: [],
             limit: null,
+            logical_steps: [
+              "ADMIN.DEPARTMENT と ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
+              '結合: "e"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+              '結合: "p"."DEPARTMENT_ID"="d"."DEPARTMENT_ID"',
+            ],
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: ontologyGraph,
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+  };
+  await page.route("**/api/nl2sql/jobs/job-ontology-grounding-001", (route) =>
+    fulfillJson(route, groundingJobDetail)
+  );
+  await page.route("**/api/nl2sql/profiles/default/ontology-view", (route) =>
+    fulfillJson(route, {
+      profile_ontology_view: {
+        id: "profile-view-admin-hr",
+        profile_id: "default",
+        ontology_revision_id: "revision-admin-hr",
+        node_ids: ontologyGraph.nodes.map((node) => node.id),
+        edge_ids: ontologyGraph.edges.map((edge) => edge.id),
+      },
+      ontology_graph: ontologyGraph,
+      materialized: true,
+      stale: false,
+      warnings_ja: [],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("SQL 全要素を接地");
+  // 処理手順パネルは接地確認の下に独立表示し、番号付きで手順を示す。
+  const stepsPanel = page.getByTestId("nl2sql-logical-steps-panel");
+  await expect(stepsPanel).toBeVisible();
+  await expect(stepsPanel).toContainText("SQL の処理手順");
+  await expect(stepsPanel).toContainText(
+    "ADMIN.DEPARTMENT と ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。"
+  );
+  await expect(stepsPanel.locator("ol > li")).toHaveCount(3);
+  await stepsPanel.screenshot({ path: testInfo.outputPath("sql-logical-steps.png") });
+  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
+  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
+  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
+  await expect(page.getByTestId("ontology-node-card-department-table")).toContainText("部署情報");
+  await expect(page.getByTestId("ontology-node-card-employee-table")).toContainText("従業員情報");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("ADMIN.DEPARTMENT");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("部署と従業員の Join");
+  // star join の 2 本目も ON 句の列対で接地する(left_source は誤ったまま)。
+  await expect(page.getByTestId("ontology-node-card-project-table")).toContainText(
+    "プロジェクト情報"
+  );
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText(
+    "部署とプロジェクトの Join"
+  );
+
+  const graphSearch = panel.getByTestId("ontology-graph-search");
+  await graphSearch.focus();
+  await expect(graphSearch).toBeFocused();
+  const zoomIn = panel.getByLabel("グラフを拡大");
+  await zoomIn.focus();
+  await expect(zoomIn).toBeFocused();
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("SQL 全要素を接地")).toBeVisible();
+  await expect(stepsPanel).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sql-ontology-grounding.png"), fullPage: true });
+
+  // 「Ontology を使う」OFF(backend echo)のときは接地確認を出さず、処理手順は残す。
+  await page.unroute("**/api/nl2sql/jobs/job-ontology-grounding-001");
+  await page.route("**/api/nl2sql/jobs/job-ontology-grounding-001", (route) =>
+    fulfillJson(route, {
+      ...groundingJobDetail,
+      result: {
+        ...groundingJobDetail.result,
+        interpretation: {
+          ...groundingJobDetail.result.interpretation,
+          ontology_grounding_enabled: false,
+          ontology_graph: null,
+        },
+      },
+    })
+  );
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(page.getByTestId("nl2sql-sql-grounding-panel")).toHaveCount(0);
+  await expect(stepsPanel).toBeVisible();
+  await expect(stepsPanel).toContainText("SQL の処理手順");
+});
+
+test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const questionText = "従業員の一覧を表示";
+  // 実 SQL 相当: 別名 EMP を付けながら SELECT 列は未修飾。列名だけで ontology 全体を
+  // 横断一致させると DEPARTMENT / PROJECT の同名列まで接地扱いになる回帰を防ぐ。
+  const generatedSql =
+    'SELECT "EMPLOYEE_ID" AS "EMPLOYEE_ID","DEPARTMENT_ID" AS "DEPARTMENT_ID","EMPLOYEE_NAME" AS "EMPLOYEE_NAME","SALARY" AS "SALARY" FROM "ADMIN"."EMPLOYEE" "EMP"';
+  const columnNames = ["EMPLOYEE_ID", "DEPARTMENT_ID", "EMPLOYEE_NAME", "SALARY"];
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-employee",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        name: "EMPLOYEE",
+        alias: "EMP",
+        qualified_name: "ADMIN.EMPLOYEE",
+        source_sql: '"ADMIN"."EMPLOYEE" "EMP"',
+      },
+    ],
+    // backend の parse_oracle_sql は未修飾列を table:"" で返し、projections に同じ列を再掲する。
+    columns: columnNames.map((name) => ({
+      id: `column-${name}`,
+      scope_id: "scope_1",
+      owner: "",
+      table: "",
+      name,
+      clause: "select",
+      expression_sql: `"${name}"`,
+    })),
+    projections: columnNames.map((name) => ({
+      id: `projection-${name}`,
+      scope_id: "scope_1",
+      output_name: name,
+      expression_sql: `"${name}" AS "${name}"`,
+      referenced_columns: [name],
+    })),
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    limit: null,
+  };
+
+  const businessNode = (id: string, label: string, objectName: string, nodeId: string) => ({
+    id,
+    kind: "business_entity",
+    business_name_ja: label,
+    review_status: "approved",
+    physical_mappings: [
+      {
+        object_ref: { node_id: nodeId, owner: "ADMIN", object_name: objectName, object_type: "table" },
+      },
+    ],
+  });
+  const tableNode = (id: string, objectName: string, label: string) => ({
+    id,
+    kind: "table",
+    technical_name: `ADMIN.${objectName}`,
+    business_name_ja: label,
+    review_status: "approved",
+    metadata: { owner: "ADMIN", object_name: objectName },
+  });
+  const columnNode = (id: string, objectName: string, columnName: string, label: string) => ({
+    id,
+    kind: "column",
+    technical_name: `ADMIN.${objectName}.${columnName}`,
+    business_name_ja: label,
+    review_status: "approved",
+    metadata: { owner: "ADMIN", object_name: objectName, column_name: columnName },
+  });
+  const ontologyGraph = {
+    id: "revision-admin-hr",
+    nodes: [
+      businessNode("employee-business", "従業員", "EMPLOYEE", "employee-table"),
+      businessNode("department-business", "部署", "DEPARTMENT", "department-table"),
+      businessNode("project-business", "プロジェクト", "PROJECT", "project-table"),
+      tableNode("employee-table", "EMPLOYEE", "従業員情報"),
+      tableNode("department-table", "DEPARTMENT", "部署情報"),
+      tableNode("project-table", "PROJECT", "プロジェクト情報"),
+      columnNode("employee-id", "EMPLOYEE", "EMPLOYEE_ID", "従業員ID(主キー)"),
+      columnNode("employee-department-id", "EMPLOYEE", "DEPARTMENT_ID", "所属部署ID(外部キー)"),
+      columnNode("employee-name", "EMPLOYEE", "EMPLOYEE_NAME", "従業員氏名"),
+      columnNode("employee-salary", "EMPLOYEE", "SALARY", "給与"),
+      // 同名 DEPARTMENT_ID を持つだけの無関係な列。接地してはならない。
+      columnNode("department-id", "DEPARTMENT", "DEPARTMENT_ID", "部署ID(主キー)"),
+      columnNode("project-department-id", "PROJECT", "DEPARTMENT_ID", "部門ID"),
+    ],
+    edges: [
+      {
+        id: "fk-employee-department",
+        source_node_id: "employee-table",
+        target_node_id: "department-table",
+        kind: "foreign_key",
+        relationship_name_ja: "所属部署",
+        cardinality: "many_to_one",
+        review_status: "approved",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+      },
+      {
+        id: "fk-project-department",
+        source_node_id: "project-table",
+        target_node_id: "department-table",
+        kind: "foreign_key",
+        relationship_name_ja: "担当部署",
+        cardinality: "many_to_one",
+        review_status: "approved",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "PROJECT", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+      },
+    ],
+  };
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "job-unqualified-grounding-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-unqualified-grounding-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-unqualified-grounding-001",
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-unqualified-grounding-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "従業員テーブルの一覧を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ["ADMIN.EMPLOYEE"],
+          referenced_columns: columnNames.map((name) => `ADMIN.EMPLOYEE.${name}`),
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: columnNames,
+          rows: [
+            {
+              EMPLOYEE_ID: 1,
+              DEPARTMENT_ID: 10,
+              EMPLOYEE_NAME: "山田太郎",
+              SALARY: 500000,
+            },
+          ],
+          total: 1,
+        },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ["ADMIN.EMPLOYEE"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.EMPLOYEE"],
+            columns: columnNames.map((name) => `ADMIN.EMPLOYEE.${name}`),
+            joins: [],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            logical_steps: ["ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。"],
             semantic_graph: sqlGraph,
             warnings: [],
           },
@@ -5157,27 +5625,45 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
 
   const panel = page.getByTestId("nl2sql-sql-grounding-panel");
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText("全て接地");
-  await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
-  await expect(page.getByText("入力テンプレート")).toHaveCount(0);
-  await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
-  await expect(page.getByTestId("ontology-node-card-department-table")).toContainText("部署情報");
-  await expect(page.getByTestId("ontology-node-card-employee-table")).toContainText("従業員情報");
-  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("ADMIN.DEPARTMENT");
-  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("部署と従業員の Join");
+  // 表 1 + 列 4 = 5 件。projections[] の再掲を二重に数えない。
+  await expect(panel).toContainText("SQL 全要素を接地");
+  await expect(panel).toContainText("SQL 要素 5 件を接地");
 
-  const graphSearch = panel.getByTestId("ontology-graph-search");
-  await graphSearch.focus();
-  await expect(graphSearch).toBeFocused();
-  const zoomIn = panel.getByLabel("グラフを拡大");
-  await zoomIn.focus();
-  await expect(zoomIn).toBeFocused();
+  const grounded = (nodeId: string) =>
+    panel.getByTestId(`ontology-node-card-${nodeId}`).getAttribute("data-ontology-node-grounded");
+  for (const nodeId of [
+    "employee-business",
+    "employee-table",
+    "employee-id",
+    "employee-department-id",
+    "employee-name",
+    "employee-salary",
+  ]) {
+    await expect
+      .poll(() => grounded(nodeId), { message: `接地すべきノード: ${nodeId}` })
+      .toBe("true");
+  }
+  // FK で隣接するだけの表は文脈ノードとして残るが、接地はしない。
+  await expect(panel.getByTestId("ontology-node-card-department-table")).toBeVisible();
+  for (const nodeId of ["department-table", "department-id", "project-table", "project-department-id"]) {
+    const card = panel.getByTestId(`ontology-node-card-${nodeId}`);
+    if ((await card.count()) === 0) continue;
+    await expect
+      .poll(() => grounded(nodeId), { message: `接地してはならないノード: ${nodeId}` })
+      .toBe("false");
+  }
+
+  await panel.screenshot({
+    path: testInfo.outputPath("sql-grounding-unqualified-columns.png"),
+  });
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(panel).toBeVisible();
-  await expect(panel.getByText("全て接地")).toBeVisible();
   await expectNoHorizontalScroll(page);
-  await page.screenshot({ path: testInfo.outputPath("sql-ontology-grounding.png"), fullPage: true });
+  await page.screenshot({
+    path: testInfo.outputPath("sql-grounding-unqualified-columns-375.png"),
+    fullPage: true,
+  });
 });
 
 test("schema catalog が空のとき、ジョブ失敗からサンプルデータ投入で復旧できる", async ({ page }) => {
@@ -5309,9 +5795,8 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await nl2sqlQuestionInput(page).fill("前四半期の売上を確認したい");
   await page.getByRole("button", { name: "検索を実行" }).click();
 
-  await expect.poll(() => api.jobPayload?.question).toBe(
-    "前四半期の売上を確認したい（請求金額=INVOICES.TOTAL_AMOUNT）"
-  );
+  // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
+  await expect.poll(() => api.jobPayload?.question).toBe("前四半期の売上を確認したい");
   expect(api.jobPayload).toMatchObject({
     engine: "select_ai",
     select_ai_overrides: {
@@ -6366,6 +6851,8 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  // 用語・同義語は既定 off。本テストは適用時の payload を検証するので明示 ON にする。
+  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await page.getByLabel("用語・同義語を使う").check();
   const generateButton = page.getByRole("button", { name: "業務質問を生成" });
   await expect(generateButton).toBeEnabled();
@@ -6379,7 +6866,20 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   await expect(page.getByText("SQL 論理構造").first()).toBeVisible();
-  await expect(page.getByText("SELECT: 請求金額")).toBeVisible();
+  // SQL 論理構造は「見出し + 業務者向け説明 + 技術詳細」で併記する。
+  const structureList = page.getByTestId("sql-to-question-structure-list");
+  await expect(structureList).toBeVisible();
+  await expect(structureList).toContainText("SQL 種別");
+  await expect(structureList).toContainText("データを取り出すだけの参照 SQL です");
+  await expect(structureList.getByText("SELECT").first()).toBeVisible();
+  // 処理手順は「SQL の処理手順」ラベルの番号付きリストで、業務文と技術行を併記する。
+  const resultPanel = page.locator("#sql-to-question-panel-result");
+  await expect(resultPanel.getByText("SQL の処理手順", { exact: true })).toBeVisible();
+  await expect(resultPanel.locator("ol > li")).toHaveCount(2);
+  await expect(resultPanel).toContainText("請求情報を対象に、一覧の取得を行います。");
+  await expect(resultPanel).toContainText("合計を計算します");
+  await expect(resultPanel.getByText("INVOICES を参照")).toBeVisible();
+  await expect(resultPanel.getByText("集計: SUM")).toBeVisible();
   await expect.poll(() => api.reverseDeepPayload).toEqual({
     sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     profile_id: "default",

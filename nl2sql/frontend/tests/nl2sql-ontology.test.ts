@@ -261,8 +261,10 @@ test("SQL semantic graph grounds generated SQL on profile ontology graph", () =>
       { qualified_name: "ADMIN.EMPLOYEE", alias: "e" },
     ],
     columns: [
-      { table: "d", name: "DEPARTMENT_NAME", expression_sql: "d.DEPARTMENT_NAME" },
-      { expression_sql: "e.EMPLOYEE_NAME", referenced_columns: ["e.EMPLOYEE_NAME"] },
+      { table: "d", name: "DEPARTMENT_NAME", clause: "select", expression_sql: "d.DEPARTMENT_NAME" },
+      { expression_sql: "e.EMPLOYEE_NAME", clause: "select", referenced_columns: ["e.EMPLOYEE_NAME"] },
+      // backend の columns[] は where 句の列も含む(filters[] は同じ列の再掲)。
+      { table: "e", name: "UNKNOWN_COLUMN", clause: "where", expression_sql: '"e"."UNKNOWN_COLUMN"' },
     ],
     joins: [
       {
@@ -289,7 +291,358 @@ test("SQL semantic graph grounds generated SQL on profile ontology graph", () =>
   assert.ok(result.highlightEdgeIds.includes("dept-employee"));
   assert.deepEqual(result.unmatchedTables, []);
   assert.deepEqual(result.unmatchedJoins, []);
-  assert.deepEqual(result.unmatchedColumns, ["e.UNKNOWN_COLUMN IS NOT NULL"]);
+  assert.deepEqual(result.unmatchedColumns, ['"e"."UNKNOWN_COLUMN"']);
+});
+
+test("star join grounds each SQL join on the relationship its ON clause actually links", () => {
+  const objectNode = (id: string, owner: string, objectName: string, label: string) => ({
+    id,
+    kind: "table" as const,
+    technical_name: `${owner}.${objectName}`,
+    business_name_ja: label,
+    review_status: "approved" as const,
+    physical_mappings: [
+      { object_ref: { node_id: id, owner, object_name: objectName, object_type: "table" as const } },
+    ],
+  });
+  const ontologyGraph: OntologyGraph = {
+    nodes: [
+      objectNode("dept-table", "ADMIN", "DEPARTMENT", "部署情報"),
+      objectNode("employee-table", "ADMIN", "EMPLOYEE", "従業員情報"),
+      objectNode("project-table", "ADMIN", "PROJECT", "プロジェクト情報"),
+    ],
+    edges: [
+      {
+        id: "dept-employee",
+        kind: "foreign_key",
+        source_node_id: "employee-table",
+        target_node_id: "dept-table",
+        relationship_name_ja: "従業員情報 → 部署情報",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "EMPLOYEE", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+        review_status: "approved",
+      },
+      {
+        id: "dept-project",
+        kind: "foreign_key",
+        source_node_id: "project-table",
+        target_node_id: "dept-table",
+        relationship_name_ja: "プロジェクト情報 → 部署情報",
+        join_conditions: [
+          {
+            left: { owner: "ADMIN", object_name: "PROJECT", column_name: "DEPARTMENT_ID" },
+            right: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_ID" },
+            operator: "=",
+            ordinal: 1,
+          },
+        ],
+        review_status: "approved",
+      },
+    ],
+  };
+  const sqlGraph: SqlSemanticGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    ctes: [],
+    tables: [
+      { owner: "ADMIN", name: "DEPARTMENT", alias: "D", qualified_name: "ADMIN.DEPARTMENT" },
+      { owner: "ADMIN", name: "EMPLOYEE", alias: "E", qualified_name: "ADMIN.EMPLOYEE" },
+      { owner: "ADMIN", name: "PROJECT", alias: "P", qualified_name: "ADMIN.PROJECT" },
+    ],
+    columns: [],
+    joins: [
+      {
+        left_source: "ADMIN.DEPARTMENT D",
+        right_source: "ADMIN.EMPLOYEE E",
+        condition_sql: '"E"."DEPARTMENT_ID" = "D"."DEPARTMENT_ID"',
+      },
+      {
+        // 既存 artifact は誤った位置ベースの左端点(EMPLOYEE)を持つ。
+        left_source: "ADMIN.EMPLOYEE E",
+        right_source: "ADMIN.PROJECT P",
+        condition_sql: '"P"."DEPARTMENT_ID" = "D"."DEPARTMENT_ID"',
+      },
+    ],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+  };
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.deepEqual(result.unmatchedJoins, []);
+  assert.equal(result.matchedJoins.length, 2);
+  assert.deepEqual(
+    result.matchedJoins.map((join) => join.ontologyEdgeIds).flat().sort(),
+    ["dept-employee", "dept-project"]
+  );
+  assert.ok(result.highlightEdgeIds.includes("dept-project"));
+  assert.ok(result.highlightNodeIds.includes("project-table"));
+  assert.equal(result.status, "matched");
+});
+
+test("join grounding falls back to table endpoints when the ON clause has no qualified columns", () => {
+  const ontologyGraph: OntologyGraph = {
+    nodes: [
+      {
+        id: "dept-table",
+        kind: "table",
+        technical_name: "ADMIN.DEPARTMENT",
+        business_name_ja: "部署情報",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "dept-table",
+              owner: "ADMIN",
+              object_name: "DEPARTMENT",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      {
+        id: "employee-table",
+        kind: "table",
+        technical_name: "ADMIN.EMPLOYEE",
+        business_name_ja: "従業員情報",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "employee-table",
+              owner: "ADMIN",
+              object_name: "EMPLOYEE",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+    ],
+    edges: [
+      {
+        id: "dept-employee",
+        kind: "foreign_key",
+        source_node_id: "dept-table",
+        target_node_id: "employee-table",
+        relationship_name_ja: "部署と従業員の Join",
+        review_status: "approved",
+      },
+    ],
+  };
+  const sqlGraph: SqlSemanticGraph = {
+    dialect: "oracle",
+    ctes: [],
+    tables: [
+      { owner: "ADMIN", name: "DEPARTMENT", alias: "D", qualified_name: "ADMIN.DEPARTMENT" },
+      { owner: "ADMIN", name: "EMPLOYEE", alias: "E", qualified_name: "ADMIN.EMPLOYEE" },
+    ],
+    columns: [],
+    joins: [
+      {
+        left_source: "ADMIN.DEPARTMENT D",
+        right_source: "ADMIN.EMPLOYEE E",
+        condition_sql: "",
+        using_columns: ["DEPARTMENT_ID"],
+      },
+    ],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+  };
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.deepEqual(result.unmatchedJoins, []);
+  assert.deepEqual(result.matchedJoins[0]?.ontologyEdgeIds, ["dept-employee"]);
+});
+
+// 単一表 SELECT で未修飾列を出す実 SQL 相当の fixture。
+// SELECT "EMPLOYEE_ID","DEPARTMENT_ID","SALARY" FROM "ADMIN"."EMPLOYEE" "EMP"
+// backend の parse_oracle_sql は columns[] を table:"" (未修飾) で返し、
+// projections[] に同じ列を再掲する。
+function unqualifiedSingleTableFixture() {
+  const objectNode = (id: string, owner: string, objectName: string, label: string) => ({
+    id,
+    kind: "table" as const,
+    technical_name: `${owner}.${objectName}`,
+    business_name_ja: label,
+    review_status: "approved" as const,
+    metadata: { owner, object_name: objectName },
+  });
+  const columnNode = (
+    id: string,
+    owner: string,
+    objectName: string,
+    columnName: string,
+    label: string
+  ) => ({
+    id,
+    kind: "column" as const,
+    technical_name: `${owner}.${objectName}.${columnName}`,
+    business_name_ja: label,
+    review_status: "approved" as const,
+    metadata: { owner, object_name: objectName, column_name: columnName },
+  });
+  const ontologyGraph: OntologyGraph = {
+    nodes: [
+      {
+        id: "employee-business",
+        kind: "business_entity",
+        business_name_ja: "従業員",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "employee-table",
+              owner: "ADMIN",
+              object_name: "EMPLOYEE",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      objectNode("employee-table", "ADMIN", "EMPLOYEE", "従業員情報"),
+      objectNode("dept-table", "ADMIN", "DEPARTMENT", "部署情報"),
+      objectNode("project-table", "ADMIN", "PROJECT", "プロジェクト情報"),
+      columnNode("employee-id", "ADMIN", "EMPLOYEE", "EMPLOYEE_ID", "従業員ID"),
+      columnNode("employee-dept-id", "ADMIN", "EMPLOYEE", "DEPARTMENT_ID", "所属部署ID"),
+      columnNode("employee-salary", "ADMIN", "EMPLOYEE", "SALARY", "給与"),
+      // 同名列を持つ無関係な表。未修飾列の横断一致で誤接地しやすい。
+      columnNode("dept-dept-id", "ADMIN", "DEPARTMENT", "DEPARTMENT_ID", "部署ID"),
+      columnNode("project-dept-id", "ADMIN", "PROJECT", "DEPARTMENT_ID", "部門ID"),
+    ],
+    edges: [],
+  };
+  const columns = [
+    { scope_id: "scope_1", table: "", name: "EMPLOYEE_ID", clause: "select", expression_sql: '"EMPLOYEE_ID"' },
+    { scope_id: "scope_1", table: "", name: "DEPARTMENT_ID", clause: "select", expression_sql: '"DEPARTMENT_ID"' },
+    { scope_id: "scope_1", table: "", name: "SALARY", clause: "select", expression_sql: '"SALARY"' },
+  ];
+  const sqlGraph: SqlSemanticGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    ctes: [],
+    tables: [
+      {
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        name: "EMPLOYEE",
+        alias: "EMP",
+        qualified_name: "ADMIN.EMPLOYEE",
+      },
+    ],
+    columns,
+    projections: columns.map((column) => ({
+      scope_id: "scope_1",
+      output_name: column.name,
+      expression_sql: `${column.expression_sql} AS "${column.name}"`,
+      referenced_columns: [column.name],
+    })),
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+  };
+  return { ontologyGraph, sqlGraph };
+}
+
+test("unqualified columns ground only on the tables in the SQL FROM scope", () => {
+  const { ontologyGraph, sqlGraph } = unqualifiedSingleTableFixture();
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.equal(result.status, "matched");
+  for (const nodeId of ["employee-table", "employee-business", "employee-id", "employee-dept-id", "employee-salary"]) {
+    assert.ok(result.highlightNodeIds.includes(nodeId), `expected highlight: ${nodeId}`);
+  }
+  // 同名 DEPARTMENT_ID を持つだけの無関係な表・列は接地しない。
+  for (const nodeId of ["dept-table", "dept-dept-id", "project-table", "project-dept-id"]) {
+    assert.ok(!result.highlightNodeIds.includes(nodeId), `unexpected highlight: ${nodeId}`);
+  }
+});
+
+test("columns[] is the single source so projections[] does not double count grounded columns", () => {
+  const { ontologyGraph, sqlGraph } = unqualifiedSingleTableFixture();
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.equal(result.matchedTables.length, 1);
+  assert.equal(result.matchedColumns.length, 3);
+  assert.equal(result.matchedJoins.length, 0);
+  assert.deepEqual(result.unmatchedColumns, []);
+});
+
+test("unqualified columns absent from the FROM scope are reported as unmatched", () => {
+  const { ontologyGraph, sqlGraph } = unqualifiedSingleTableFixture();
+  sqlGraph.columns = [
+    ...sqlGraph.columns,
+    // DEPARTMENT にしか無い列を未修飾で参照している = EMPLOYEE には接地できない。
+    { scope_id: "scope_1", table: "", name: "DEPARTMENT_NAME", clause: "select", expression_sql: '"DEPARTMENT_NAME"' },
+  ];
+  // 実 backend と同じく projections にも同じ列が再掲される(出力別名 = 参照列なので
+  // 「計算された別名」ではなく、未接地の抑止対象にならないことを確認する)。
+  sqlGraph.projections = [
+    ...(sqlGraph.projections ?? []),
+    {
+      scope_id: "scope_1",
+      output_name: "DEPARTMENT_NAME",
+      expression_sql: '"DEPARTMENT_NAME" AS "DEPARTMENT_NAME"',
+      referenced_columns: ["DEPARTMENT_NAME"],
+    },
+  ];
+  ontologyGraph.nodes.push({
+    id: "dept-name",
+    kind: "column",
+    technical_name: "ADMIN.DEPARTMENT.DEPARTMENT_NAME",
+    business_name_ja: "部署名",
+    review_status: "approved",
+    metadata: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: "DEPARTMENT_NAME" },
+  });
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.unmatchedColumns, ['"DEPARTMENT_NAME"']);
+  assert.ok(!result.highlightNodeIds.includes("dept-name"));
+});
+
+test("ORDER BY on a SELECT output alias is not reported as an unmatched column", () => {
+  const { ontologyGraph, sqlGraph } = unqualifiedSingleTableFixture();
+  // COUNT(*) AS "CNT" … ORDER BY "CNT" 相当。CNT は物理列ではないので未接地にしない。
+  sqlGraph.columns = [
+    ...sqlGraph.columns,
+    { scope_id: "scope_1", table: "", name: "CNT", clause: "order", expression_sql: '"CNT"' },
+  ];
+  sqlGraph.projections = [
+    ...(sqlGraph.projections ?? []),
+    {
+      scope_id: "scope_1",
+      output_name: "CNT",
+      expression_sql: 'COUNT(*) AS "CNT"',
+      referenced_columns: [],
+    },
+  ];
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.deepEqual(result.unmatchedColumns, []);
+  assert.equal(result.status, "matched");
 });
 
 test("query session adapters restore current version and hash-bound execution request", () => {

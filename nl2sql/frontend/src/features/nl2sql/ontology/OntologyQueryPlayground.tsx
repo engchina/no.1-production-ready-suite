@@ -240,7 +240,12 @@ function ServerSearchResultPanel({
       {result.hits.length === 0 ? (
         <Banner severity="info">{t("ontologyPlayground.serverSearch.empty")}</Banner>
       ) : (
-        <ol className="grid gap-1.5" data-testid="ontology-playground-server-hits">
+        <ol
+          // 関係一覧(ontology-inspector-relationship-list)と同じ標準: 最大高さ + 縦スクロール。
+          // ヘッダーと比較バッジは常時見えるよう、スクロールはヒット一覧だけに限定する。
+          className="grid max-h-80 gap-1.5 overflow-y-auto overscroll-contain pr-1"
+          data-testid="ontology-playground-server-hits"
+        >
           {result.hits.map((hit, index) => {
             const display = ontologyNodeDisplay(hit.node);
             const scorePercent = Math.round(hit.score * 100);

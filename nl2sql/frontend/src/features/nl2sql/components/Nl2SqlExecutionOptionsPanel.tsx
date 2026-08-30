@@ -63,8 +63,9 @@ export function Nl2SqlExecutionOptionsPanel({
   rewriteUseGlossary: boolean;
 }) {
   const showPromptUnavailable = includeShowPrompt && engine !== "select_ai";
+  // 既定値からの変更有無でバッジを出す。用語・同義語だけは既定 off なので ON が「変更あり」。
   const hasChangedOptions =
-    !rewriteUseGlossary ||
+    rewriteUseGlossary ||
     !useOntologyContext ||
     !includeInterpretation ||
     !includeShowPrompt;

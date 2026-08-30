@@ -1851,7 +1851,8 @@ def test_preview_data_builds_guarded_select() -> None:
 
     plain = service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name="INVOICES"))
     assert plain.runtime == "deterministic"
-    assert plain.sql == 'SELECT * FROM "APP"."INVOICES" FETCH FIRST 100 ROWS ONLY'
+    # 行数上限は SQL へ書き足さず、取得時の fetch 上限だけで効かせる。
+    assert plain.sql == 'SELECT * FROM "APP"."INVOICES"'
     assert plain.results.columns
 
     filtered = service.preview_db_admin_data(
@@ -1862,7 +1863,7 @@ def test_preview_data_builds_guarded_select() -> None:
         )
     )
     assert "WHERE STATUS = 'A' AND TOTAL_AMOUNT > 100" in filtered.sql
-    assert filtered.sql.endswith("FETCH FIRST 10 ROWS ONLY")
+    assert "FETCH FIRST" not in filtered.sql
 
     with pytest.raises(ValueError, match="複数 statement"):
         service.preview_db_admin_data(
@@ -2442,10 +2443,7 @@ def test_preview_data_exports_xlsx() -> None:
     assert filename == "app_invoices_preview.xlsx"
     assert workbook.sheetnames == ["data", "query"]
     assert workbook["data"].max_row >= 1
-    assert (
-        workbook["query"]["A2"].value
-        == 'SELECT * FROM "APP"."INVOICES" WHERE STATUS = \'A\' FETCH FIRST 10 ROWS ONLY'
-    )
+    assert workbook["query"]["A2"].value == 'SELECT * FROM "APP"."INVOICES" WHERE STATUS = \'A\''
 
 
 def test_cross_schema_management_resolves_duplicate_object_names() -> None:
@@ -2530,7 +2528,7 @@ def test_cross_schema_management_resolves_duplicate_object_names() -> None:
     preview = service.preview_db_admin_data(
         DbAdminDataPreviewRequest(object_name="ORDERS", owner="SH", limit=5)
     )
-    assert preview.sql == 'SELECT * FROM "SH"."ORDERS" FETCH FIRST 5 ROWS ONLY'
+    assert preview.sql == 'SELECT * FROM "SH"."ORDERS"'
 
 
 def test_cross_schema_mutations_and_metadata_sql_use_qualified_targets() -> None:

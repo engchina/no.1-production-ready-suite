@@ -465,8 +465,26 @@ export interface Nl2SqlSqlInterpretation {
   group_by: string[];
   order_by: string[];
   limit?: number | null;
+  /** 生成 SQL を業務向けに説明する決定論の処理手順(処理手順を表示 ON のとき非空)。 */
+  logical_steps?: string[];
+  /** 同じ処理手順を業務者向け/技術者向けで併記した構造化版。 */
+  logical_step_details?: Nl2SqlLogicalStep[];
   semantic_graph: Record<string, unknown>;
   warnings: string[];
+}
+
+/** 処理手順 1 件の業務者向け(business)/技術者向け(technical)併記。 */
+export interface Nl2SqlLogicalStep {
+  kind?: string;
+  business?: string;
+  technical?: string;
+}
+
+/** SQL 論理構造 1 項目の業務者向け/技術者向け併記。 */
+export interface Nl2SqlLogicalStructureItem {
+  kind?: string;
+  business?: string;
+  technical?: string;
 }
 
 export interface Nl2SqlInterpretationArtifact {
@@ -474,6 +492,8 @@ export interface Nl2SqlInterpretationArtifact {
   question: Nl2SqlQuestionInterpretation;
   sql: Nl2SqlSqlInterpretation;
   ontology_graph?: OntologyGraph | null;
+  /** use_ontology_context のエコー。false のとき Ontology 接地確認を表示しない(未指定は互換で表示)。 */
+  ontology_grounding_enabled?: boolean;
   warnings: string[];
 }
 
@@ -814,7 +834,9 @@ export interface ReverseSqlData {
   explanation: string;
   referenced_tables: string[];
   logical_structure?: string;
+  logical_structure_items?: Nl2SqlLogicalStructureItem[];
   logical_steps?: string[];
+  logical_step_details?: Nl2SqlLogicalStep[];
   source?: string;
   warnings?: string[];
 }

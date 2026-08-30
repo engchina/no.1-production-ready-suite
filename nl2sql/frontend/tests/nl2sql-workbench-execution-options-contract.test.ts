@@ -17,6 +17,10 @@ const generatedSqlPanelSource = readFileSync(
   new URL("../src/features/nl2sql/components/GeneratedSqlPanel.tsx", import.meta.url),
   "utf8"
 );
+const logicalStepsListSource = readFileSync(
+  new URL("../src/features/nl2sql/components/LogicalStepsList.tsx", import.meta.url),
+  "utf8"
+);
 
 test("NL2SQL workbench keeps one execution action and removes preview/session buttons", () => {
   assert.equal(workbenchSource.includes('t("nl2sql.action.preview")'), false);
@@ -29,9 +33,10 @@ test("NL2SQL workbench keeps one execution action and removes preview/session bu
 });
 
 test("execution options default to showing interpretation and show prompt artifacts", () => {
+  // 用語・同義語は既定 off(明示 ON のときだけ質問を書き換える)。
   assert.match(
     workbenchSource,
-    /const \[rewriteUseGlossary, setRewriteUseGlossary\] = useState\(true\);/
+    /const \[rewriteUseGlossary, setRewriteUseGlossary\] = useState\(false\);/
   );
   assert.match(
     workbenchSource,
@@ -69,6 +74,15 @@ test("execution options panel keeps glossary rewrite and removes schema rewrite"
 test("generated SQL summary renders ontology grounding and show prompt artifact panels", () => {
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-interpretation-panel"/);
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-sql-grounding-panel"/);
+  // 処理手順パネルは接地確認の下・Show Prompt の上に独立表示する。
+  assert.match(generatedSqlPanelSource, /data-testid="nl2sql-logical-steps-panel"/);
+  assert.match(generatedSqlPanelSource, /nl2sql\.logicalSteps\.title/);
+  // 「Ontology を使う」OFF のとき接地確認を出さない(backend echo で判定)。
+  assert.match(generatedSqlPanelSource, /ontology_grounding_enabled !== false/);
+  assert.match(
+    generatedSqlPanelSource,
+    /<InterpretationArtifactPanel[\s\S]*?\/>\s*<SqlLogicalStepsPanel[\s\S]*?\/>\s*<ShowPromptArtifactPanel/
+  );
   assert.doesNotMatch(generatedSqlPanelSource, /useProfileOntologyView/);
   assert.match(generatedSqlPanelSource, /artifact\.ontology_graph/);
   assert.doesNotMatch(generatedSqlPanelSource, /nl2sql\.interpretation\.inputTitle/);
@@ -76,4 +90,17 @@ test("generated SQL summary renders ontology grounding and show prompt artifact 
   assert.match(generatedSqlPanelSource, /data-testid="nl2sql-show-prompt-panel"/);
   assert.match(generatedSqlPanelSource, /artifact\.prompt/);
   assert.match(generatedSqlPanelSource, /whitespace-pre-wrap/);
+});
+
+test("処理手順は業務者向け説明と技術詳細を併記し、旧文字列手順へ縮退できる", () => {
+  // 業務行(business)と技術行(technical)の 2 行構造。
+  assert.match(logicalStepsListSource, /step\.business/);
+  assert.match(logicalStepsListSource, /step\.technical/);
+  assert.match(logicalStepsListSource, /nl2sql\.logicalSteps\.technicalLabel/);
+  assert.match(logicalStepsListSource, /nl2sql\.logicalSteps\.technicalSrLabel/);
+  // details が無い過去 job / 旧 API では従来の文字列手順を業務行として描画する。
+  assert.match(logicalStepsListSource, /fallbackSteps/);
+  // 生成 SQL パネルは自前の <ol> を持たず共有コンポーネントへ委譲する。
+  assert.match(generatedSqlPanelSource, /<LogicalStepsList/);
+  assert.match(generatedSqlPanelSource, /logical_step_details/);
 });

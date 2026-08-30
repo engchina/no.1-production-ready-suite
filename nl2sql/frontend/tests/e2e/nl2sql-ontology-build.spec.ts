@@ -1212,7 +1212,7 @@ test("Profile と Markdown Ontology の初期読込では loading を表示す�
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
-  await expect(skeleton.locator("svg.lucide-loader-circle")).toBeVisible();
+  await expect(skeleton.locator("svg.animate-spin")).toBeVisible();
   await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveCount(0);
   await expect(page.getByTestId("ontology-publish-actions")).toHaveCount(0);

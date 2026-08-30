@@ -172,6 +172,8 @@ export function layoutOntologyGraphSemanticMatrix(
     lanePaddingY?: number;
     left?: number;
     top?: number;
+    /** physical レーン内で schema 行と表・ビュー行の間に確保するエッジ専用の余白帯。 */
+    schemaRowGap?: number;
   } = {}
 ): OntologyGraphSemanticLayout {
   const positions = new Map<string, GraphPoint>();
@@ -189,6 +191,14 @@ export function layoutOntologyGraphSemanticMatrix(
   const lanePaddingY = options.lanePaddingY ?? 22;
   const left = options.left ?? 220;
   const top = options.top ?? 34;
+  const schemaRowGap = options.schemaRowGap ?? 40;
+  // schema は physical レーン内の専用上段行に置き、schema→表エッジが同一行の
+  // 表ノードを真横に貫通しないようにする(下段との間はエッジ専用の余白帯)。
+  const schemaNodeIds = new Set(
+    graph.nodes.filter((node) => node.kind === "schema").map((node) => node.id)
+  );
+  const hasSchemaRow = schemaNodeIds.size > 0;
+  const physicalRowOffset = hasSchemaRow ? nodeHeight + schemaRowGap : 0;
   const incomingObjectCluster = new Map(
     graph.nodes
       .map((node) => [node.id, ontologyGraphObjectClusterKey(node)] as const)
@@ -227,12 +237,42 @@ export function layoutOntologyGraphSemanticMatrix(
     const cluster = clusterByNodeId.get(node.id) ?? stableClusterId("node", node.id);
     clusterOrder.set(cluster, Math.min(clusterOrder.get(cluster) ?? index, index));
   });
-  const clusters = [...clusterOrder]
+  const initialClusters = [...clusterOrder]
     .sort((leftEntry, rightEntry) => {
       const indexCompare = leftEntry[1] - rightEntry[1];
       return indexCompare || leftEntry[0].localeCompare(rightEntry[0], "en-US");
     })
     .map(([cluster]) => cluster);
+  // バリセンタ 1 パス: 隣接クラスタの初期順位との平均で列順を安定ソートし、
+  // 横方向の長距離エッジと交差を減らす(初期順位・クラスタ ID タイブレークで決定論)。
+  const initialIndex = new Map(initialClusters.map((cluster, index) => [cluster, index]));
+  const neighborOrder = new Map<string, { sum: number; count: number }>();
+  const addNeighbor = (cluster: string, neighborRank: number) => {
+    const entry = neighborOrder.get(cluster) ?? { sum: 0, count: 0 };
+    entry.sum += neighborRank;
+    entry.count += 1;
+    neighborOrder.set(cluster, entry);
+  };
+  for (const edge of graph.edges) {
+    const sourceCluster = clusterByNodeId.get(edge.source_node_id);
+    const targetCluster = clusterByNodeId.get(edge.target_node_id);
+    if (!sourceCluster || !targetCluster || sourceCluster === targetCluster) continue;
+    addNeighbor(sourceCluster, initialIndex.get(targetCluster) ?? 0);
+    addNeighbor(targetCluster, initialIndex.get(sourceCluster) ?? 0);
+  }
+  const barycenter = (cluster: string): number => {
+    const own = initialIndex.get(cluster) ?? 0;
+    const neighbors = neighborOrder.get(cluster);
+    if (!neighbors || neighbors.count === 0) return own;
+    return (own + neighbors.sum / neighbors.count) / 2;
+  };
+  const clusters = [...initialClusters].sort((leftCluster, rightCluster) => {
+    const barycenterCompare = barycenter(leftCluster) - barycenter(rightCluster);
+    if (barycenterCompare !== 0) return barycenterCompare;
+    const indexCompare =
+      (initialIndex.get(leftCluster) ?? 0) - (initialIndex.get(rightCluster) ?? 0);
+    return indexCompare || leftCluster.localeCompare(rightCluster, "en-US");
+  });
   const clusterIndex = new Map(clusters.map((cluster, index) => [cluster, index]));
   const cells = new Map<string, OntologyNode[]>();
   for (const node of graph.nodes) {
@@ -247,8 +287,30 @@ export function layoutOntologyGraphSemanticMatrix(
     cell.sort(sortNodesForSemanticCell);
   }
 
+  // physical レーンが schema 行を持つときは、非 schema の最大行数を別勘定で高さに使う
+  let maxPhysicalObjectRows = 0;
+  if (hasSchemaRow) {
+    for (const [cellKey, cellNodes] of cells) {
+      if (!cellKey.startsWith("physical")) continue;
+      maxPhysicalObjectRows = Math.max(
+        maxPhysicalObjectRows,
+        cellNodes.filter((node) => !schemaNodeIds.has(node.id)).length
+      );
+    }
+  }
   const laneHeights = new Map<OntologyGraphSemanticLaneId, number>();
   for (const lane of SEMANTIC_LANES) {
+    if (lane === "physical" && hasSchemaRow) {
+      // schema 行(上段) + 余白帯 + 表・ビュー行(下段)で高さを積む
+      const rowsHeight =
+        maxPhysicalObjectRows > 0
+          ? physicalRowOffset +
+            maxPhysicalObjectRows * nodeHeight +
+            (maxPhysicalObjectRows - 1) * nodeGap
+          : nodeHeight;
+      laneHeights.set(lane, lanePaddingY * 2 + rowsHeight);
+      continue;
+    }
     let maxRows = 1;
     for (const cluster of clusters) {
       maxRows = Math.max(maxRows, cells.get(`${lane}\u0000${cluster}`)?.length ?? 0);
@@ -274,10 +336,27 @@ export function layoutOntologyGraphSemanticMatrix(
     const [lane, cluster] = cellKey.split("\u0000") as [OntologyGraphSemanticLaneId, string];
     const laneMeta = lanes.find((item) => item.id === lane);
     const x = left + (clusterIndex.get(cluster) ?? 0) * (nodeWidth + clusterGap);
+    const baseY = (laneMeta?.y ?? top) + lanePaddingY;
+    if (lane === "physical" && hasSchemaRow) {
+      // schema は常に上段行、表・ビューは余白帯を挟んだ下段行に積む
+      let objectRowIndex = 0;
+      for (const node of cellNodes) {
+        if (schemaNodeIds.has(node.id)) {
+          positions.set(node.id, { x, y: baseY });
+          continue;
+        }
+        positions.set(node.id, {
+          x,
+          y: baseY + physicalRowOffset + objectRowIndex * (nodeHeight + nodeGap),
+        });
+        objectRowIndex += 1;
+      }
+      continue;
+    }
     cellNodes.forEach((node, index) => {
       positions.set(node.id, {
         x,
-        y: (laneMeta?.y ?? top) + lanePaddingY + index * (nodeHeight + nodeGap),
+        y: baseY + index * (nodeHeight + nodeGap),
       });
     });
   }

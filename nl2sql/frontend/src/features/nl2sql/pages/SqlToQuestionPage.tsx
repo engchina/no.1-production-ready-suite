@@ -19,7 +19,9 @@ import { DbObjectPanelHeader, DbObjectStepIndicator } from "../components/DbObje
 import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { profileDisplayLabel } from "../profileDisplay";
+import { LogicalStepsList } from "../components/LogicalStepsList";
 import type {
+  Nl2SqlLogicalStructureItem,
   ProfileSummary,
   ProfileSummaryPage,
   ProfileUsageContext,
@@ -38,8 +40,9 @@ export function SqlToQuestionPage() {
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [sql, setSql] = useState("");
-  const [useGlossary, setUseGlossary] = useState(true);
+  const [useGlossary, setUseGlossary] = useState(false);
   const [structureText, setStructureText] = useState("");
+  const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
@@ -156,6 +159,7 @@ export function SqlToQuestionPage() {
       });
       setReverse(data);
       if (data.logical_structure) setStructureText(data.logical_structure);
+      setStructureItems(data.logical_structure_items ?? []);
     } catch (err) {
       setActionError(actionableError(err, t("sqlToQuestion.error.reverse")));
     } finally {
@@ -164,7 +168,8 @@ export function SqlToQuestionPage() {
   };
 
   const actionBusy = reverseLoading;
-  const stepIndex = reverse ? 3 : structureText ? 1 : 0;
+  const hasStructure = structureItems.length > 0 || Boolean(structureText);
+  const stepIndex = reverse ? 3 : hasStructure ? 1 : 0;
 
   return (
     <>
@@ -259,6 +264,7 @@ export function SqlToQuestionPage() {
                   onChange={(event) => {
                     setSql(event.currentTarget.value);
                     setStructureText("");
+                    setStructureItems([]);
                     setReverse(null);
                     setActionError("");
                   }}
@@ -333,7 +339,9 @@ export function SqlToQuestionPage() {
             title={t("sqlToQuestion.structure.title")}
             description={t("sqlToQuestion.structure.hint")}
           />
-          {structureText ? (
+          {structureItems.length > 0 ? (
+            <LogicalStructureList items={structureItems} />
+          ) : structureText ? (
             <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg">
               <code>{structureText}</code>
             </pre>
@@ -377,7 +385,17 @@ export function SqlToQuestionPage() {
                 label={t("sqlToQuestion.result.tables")}
                 value={reverse.referenced_tables.join(", ") || "-"}
               />
-              <TextList label={t("sqlToQuestion.result.steps")} items={reverse.logical_steps ?? []} />
+              <div>
+                <p className="mb-1 text-xs font-medium text-muted">
+                  {t("sqlToQuestion.result.steps")}
+                </p>
+                <LogicalStepsList
+                  steps={reverse.logical_step_details}
+                  fallbackSteps={reverse.logical_steps}
+                  surface="card"
+                  listAriaLabel={t("nl2sql.logicalSteps.listAria")}
+                />
+              </div>
               <TextList label={t("sqlToQuestion.result.warnings")} items={reverse.warnings ?? []} />
             </section>
           ) : (
@@ -476,15 +494,76 @@ function schemaSummaryTable(item: SchemaObjectPage["items"][number]): SchemaTabl
   };
 }
 
+// SQL 論理構造の項目 kind -> 見出し文言。未知の kind は技術詳細だけを見出し無しで出す。
+const STRUCTURE_LABEL_KEYS: Record<string, string> = {
+  summary: "sqlToQuestion.structure.summary",
+  statement: "sqlToQuestion.structure.statement",
+  operations: "sqlToQuestion.structure.operations",
+  filters: "sqlToQuestion.structure.filters",
+  joins: "sqlToQuestion.structure.joins",
+  group_by: "sqlToQuestion.structure.groupBy",
+  order_by: "sqlToQuestion.structure.orderBy",
+  aggregations: "sqlToQuestion.structure.aggregations",
+};
+
+/** SQL 論理構造を「見出し + 業務者向け説明 + 技術詳細」で併記する。 */
+function LogicalStructureList({ items }: { items: Nl2SqlLogicalStructureItem[] }) {
+  return (
+    <dl
+      className="grid gap-2"
+      aria-label={t("sqlToQuestion.structure.listAria")}
+      data-testid="sql-to-question-structure-list"
+    >
+      {items.map((item, index) => {
+        const labelKey = STRUCTURE_LABEL_KEYS[item.kind ?? ""];
+        return (
+          <div
+            key={`${index}-${item.kind ?? ""}`}
+            className="grid gap-1 rounded-md border border-border bg-card px-3 py-2"
+            data-structure-kind={item.kind || undefined}
+          >
+            <dt className="text-xs font-medium text-muted">
+              {labelKey ? t(labelKey) : (item.kind ?? "")}
+            </dt>
+            <dd className="grid min-w-0 gap-1">
+              <span className="min-w-0 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
+                {item.business}
+              </span>
+              {item.technical && (
+                <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-muted">
+                  <span className="sr-only">{t("nl2sql.logicalSteps.technicalSrLabel")}</span>
+                  <span
+                    className="mt-0.5 shrink-0 rounded bg-muted/20 px-1.5 font-medium"
+                    aria-hidden="true"
+                  >
+                    {t("nl2sql.logicalSteps.technicalLabel")}
+                  </span>
+                  <code className="min-w-0 font-mono [overflow-wrap:anywhere]">
+                    {item.technical}
+                  </code>
+                </span>
+              )}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
 function TextList({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
     <div>
       <p className="mb-1 text-xs font-medium text-muted">{label}</p>
       <ul className="grid gap-1">
-        {items.map((item) => (
-          <li key={item} className="rounded-md border border-border bg-card px-3 py-2 text-foreground">
-            {item}
+        {items.map((item, index) => (
+          <li
+            // 同一文が並ぶことがあるため index を key に含める。
+            key={`${index}-${item}`}
+            className="flex min-w-0 items-start gap-2 rounded-md border border-border bg-card px-3 py-2 text-foreground"
+          >
+            <span className="min-w-0 [overflow-wrap:anywhere]">{item}</span>
           </li>
         ))}
       </ul>

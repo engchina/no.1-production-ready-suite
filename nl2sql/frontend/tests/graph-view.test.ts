@@ -6,11 +6,15 @@ import type { OntologyGraph } from "../src/features/nl2sql/ontology/types.ts";
 
 const require = createRequire(import.meta.url);
 const {
+  applyOntologyNodeDimensionChanges,
+  applyOntologyNodePositionChanges,
   cardinalityShortLabel,
+  isOntologyContainmentEdge,
   isOntologyJoinEdge,
   isOntologyMappingEdge,
   ontologyGraphForViewMode,
   ontologyGraphWithDetailVisibility,
+  ontologyParallelEdgeGeometry,
   selectOntologyEdgeHandles,
 } = require("../src/features/nl2sql/ontology/graphView.ts") as typeof import("../src/features/nl2sql/ontology/graphView.ts");
 
@@ -120,6 +124,72 @@ test("selectOntologyEdgeHandles は縦優勢で上下・横優勢で左右ハン
   });
   // 同一レーンの左方向(従来はここで自己ループ状になっていた)
   assert.equal(selectOntologyEdgeHandles({ x: 400, y: 0 }, { x: 0, y: 10 }).sourceHandle, "s-left");
+});
+
+test("selectOntologyEdgeHandles は preferVertical 指定で dx 優勢でも縦を選ぶ(dy=0 は従来判定)", () => {
+  // schema→表: dx が大きくても dy があれば bottom→top(貫通 bezier を出さない)
+  assert.deepEqual(
+    selectOntologyEdgeHandles({ x: 0, y: 0 }, { x: 600, y: 116 }, { preferVertical: true }),
+    { sourceHandle: "s-bottom", targetHandle: "t-top", orientation: "vertical" }
+  );
+  // dy=0 のときは縦にできないので従来どおり左右ハンドル
+  assert.equal(
+    selectOntologyEdgeHandles({ x: 0, y: 0 }, { x: 600, y: 0 }, { preferVertical: true }).orientation,
+    "horizontal"
+  );
+});
+
+test("isOntologyContainmentEdge は contains / physical_contains を包含エッジと判定する", () => {
+  const base = { id: "e", source_node_id: "a", target_node_id: "b", relationship_name_ja: "含む" };
+  assert.equal(isOntologyContainmentEdge({ ...base, kind: "contains" }), true);
+  assert.equal(isOntologyContainmentEdge({ ...base, kind: "physical_contains" }), true);
+  assert.equal(isOntologyContainmentEdge({ ...base, kind: "maps_to" }), false);
+  assert.equal(isOntologyContainmentEdge({ ...base }), false);
+});
+
+test("applyOntologyNodePositionChanges は position change だけを反映する", () => {
+  const initial = new Map([["kept", { x: 1, y: 2 }]]);
+  const applied = applyOntologyNodePositionChanges(initial, [
+    { type: "position", id: "moved", position: { x: 10, y: 20 } },
+    { type: "select", id: "ignored" },
+    { type: "dimensions", id: "ignored-too" },
+    { type: "position", id: "bad", position: { x: Number.NaN, y: 0 } },
+  ]);
+  assert.notEqual(applied, initial);
+  assert.deepEqual(applied.get("moved"), { x: 10, y: 20 });
+  assert.deepEqual(applied.get("kept"), { x: 1, y: 2 });
+  assert.equal(applied.has("bad"), false);
+  // 反映対象がなければ同一 Map 参照を返す(無駄な再レンダを避ける)
+  const untouched = applyOntologyNodePositionChanges(initial, [{ type: "select", id: "x" }]);
+  assert.equal(untouched, initial);
+});
+
+test("applyOntologyNodeDimensionChanges は実測サイズを蓄積し、同値なら同一 Map 参照を返す", () => {
+  const initial = new Map([["a", { width: 220, height: 76 }]]);
+  const applied = applyOntologyNodeDimensionChanges(initial, [
+    { type: "dimensions", id: "b", dimensions: { width: 220, height: 92 } },
+    { type: "position", id: "ignored" },
+    { type: "dimensions", id: "bad", dimensions: { width: 0, height: -1 } },
+  ]);
+  assert.notEqual(applied, initial);
+  assert.deepEqual(applied.get("b"), { width: 220, height: 92 });
+  assert.equal(applied.has("bad"), false);
+  // 同じ実測値の再通知では参照を変えない(measure → 反映 → 再 measure のループを断つ)
+  const unchanged = applyOntologyNodeDimensionChanges(applied, [
+    { type: "dimensions", id: "b", dimensions: { width: 220, height: 92 } },
+  ]);
+  assert.equal(unchanged, applied);
+});
+
+test("ontologyParallelEdgeGeometry は法線方向の弧とラベル座標を返す", () => {
+  const straight = ontologyParallelEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 0);
+  assert.equal(straight.labelX, 50);
+  assert.equal(straight.labelY, 0);
+  const arced = ontologyParallelEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 20);
+  // 2 次ベジェの t=0.5 点は制御点オフセット(offset*2)の半分 = offset だけ離れる
+  assert.equal(arced.labelX, 50);
+  assert.equal(arced.labelY, 20);
+  assert.ok(arced.path.startsWith("M 0,0 Q 50,40 100,0"));
 });
 
 test("mapping/join エッジ判定は kind と join_conditions で決まる", () => {

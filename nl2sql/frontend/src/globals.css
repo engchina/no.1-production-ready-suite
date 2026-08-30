@@ -145,6 +145,25 @@
   rotate: 90deg;
 }
 
+/*
+ * 回転アイコン（animate-spin）は原点を viewBox 中心（= 図形中心）へ固定し、
+ * 継続回転する要素として独立レイヤーで合成させる（毎フレームの再ラスタライズを避ける）。
+ * 「回転が中心からずれて見える」現象の主因は図形側にあるため、スピナーは全周トラックを持つ
+ * 共有 `Spinner` を使うこと（欠けた円弧だけの Loader2 はインク重心が角度ごとに動く）。
+ * 共有 tokens.css にも同じ規則があるが、アプリ側でも明示して意図を残す。
+ */
+svg.animate-spin {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  svg.animate-spin {
+    animation: none;
+  }
+}
+
 @layer base {
   /*
    * border-border を使う既存 field へ strong control border を局所注入する。

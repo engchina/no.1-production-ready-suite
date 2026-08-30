@@ -9,7 +9,6 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
     AnnotationApplyItem,
     AnnotationApplyRequest,
@@ -397,7 +396,7 @@ def test_db_admin_executor_select_uses_oracle_select_data_plane(
     assert selected.committed is False
     assert selected.statements[0].statement_type == "SELECT"
     assert selected.statements[0].status == "executed"
-    assert adapter.select_calls == [("SELECT * FROM INVOICES FETCH FIRST 3 ROWS ONLY", 3)]
+    assert adapter.select_calls == [("SELECT * FROM INVOICES", 3)]
 
 
 def test_db_admin_executor_zero_row_limit_does_not_append_fetch_first(
@@ -1341,32 +1340,63 @@ def test_comment_llm_generation_uses_enterprise_ai_and_falls_back_on_bad_json() 
     assert "fallback" in fallback.warnings[0]
 
 
-def test_rewrite_uses_enterprise_ai_and_falls_back_on_generation_error() -> None:
+def test_rewrite_never_calls_enterprise_ai_and_only_applies_glossary() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     fake = FakeEnterpriseAiClient("請求金額を税込金額として一覧したい")
     cast(Any, service)._enterprise_ai_client = fake
+    service.update_profile(
+        "default",
+        lambda current: current.model_copy(update={"glossary": {"請求金額": "TOTAL_AMOUNT"}}),
+    )
 
     rewritten = service.rewrite(
         RewriteRequest(question="請求金額を一覧で見たい", profile_id="default")
     )
 
-    assert rewritten.source == "oci_enterprise_ai"
-    assert rewritten.model == "fake-enterprise-ai"
-    assert rewritten.rewritten_question == "請求金額を税込金額として一覧したい"
-    assert "schema:" not in fake.calls[0]["context"]
+    # LLM による自由な書き換えはしない(用語・同義語の置換だけ)。
+    assert fake.calls == []
+    assert rewritten.source == "deterministic"
+    assert rewritten.model == ""
+    assert rewritten.rewritten_question == "請求金額を一覧で見たい（請求金額=TOTAL_AMOUNT）"
+    assert rewritten.warnings == []
     assert RewriteRequest(question="売上を確認").use_glossary is True
     assert "use_schema" not in RewriteRequest.model_json_schema()["properties"]
 
-    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
-        EnterpriseAiDirectError("boom")
+
+def test_rewrite_without_glossary_flag_returns_question_unchanged() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake = FakeEnterpriseAiClient("勝手に書き換えた質問")
+    cast(Any, service)._enterprise_ai_client = fake
+    service.update_profile(
+        "default",
+        lambda current: current.model_copy(update={"glossary": {"請求金額": "TOTAL_AMOUNT"}}),
     )
 
-    fallback = service.rewrite(
-        RewriteRequest(question="請求金額を一覧で見たい", profile_id="default")
+    rewritten = service.rewrite(
+        RewriteRequest(question="請求金額を一覧で見たい", profile_id="default", use_glossary=False)
     )
 
-    assert fallback.source == "deterministic"
-    assert fallback.warnings
+    assert fake.calls == []
+    assert rewritten.rewritten_question == "請求金額を一覧で見たい"
+
+
+def test_rewrite_does_not_turn_sql_row_limit_into_question_text() -> None:
+    """SQL を貼っても「先頭100件」のような件数表現を質問へ勝手に足さない。"""
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake = FakeEnterpriseAiClient("従業員IDと所属部署IDを先頭100件取得したい")
+    cast(Any, service)._enterprise_ai_client = fake
+    sql = (
+        'SELECT "e"."EMPLOYEE_ID","e"."DEPARTMENT_ID" FROM "ADMIN"."EMPLOYEE" "e" '
+        "FETCH FIRST 100 ROWS ONLY"
+    )
+
+    rewritten = service.rewrite(RewriteRequest(question=sql, profile_id="default"))
+
+    assert fake.calls == []
+    assert rewritten.rewritten_question == sql
+    assert "先頭" not in rewritten.rewritten_question
+    assert "100件" not in rewritten.rewritten_question
 
 
 def test_rewrite_preserves_empty_filter_template_and_skips_enterprise_ai() -> None:
@@ -1384,18 +1414,21 @@ def test_rewrite_preserves_empty_filter_template_and_skips_enterprise_ai() -> No
     assert fake.calls == []
 
 
-def test_rewrite_allows_enterprise_ai_when_filter_slot_has_value() -> None:
+def test_rewrite_applies_glossary_when_filter_slot_has_value() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     fake = FakeEnterpriseAiClient("部署名が管理部門の部署を検索する。")
     cast(Any, service)._enterprise_ai_client = fake
+    service.update_profile(
+        "default",
+        lambda current: current.model_copy(update={"glossary": {"部署": "DEPARTMENT"}}),
+    )
     question = "対象テーブル：部署\n抽出項目：\n抽出条件：部署名 = '管理部門'"
 
     rewritten = service.rewrite(RewriteRequest(question=question, profile_id="default"))
 
-    assert rewritten.source == "oci_enterprise_ai"
-    assert rewritten.rewritten_question == "部署名が管理部門の部署を検索する。"
-    assert fake.calls
-    assert "抽出条件" in fake.calls[0]["system_prompt"]
+    assert fake.calls == []
+    assert rewritten.source == "deterministic"
+    assert rewritten.rewritten_question == f"{question}（部署=DEPARTMENT）"
 
 
 def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> None:
@@ -1425,6 +1458,110 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
 
     assert fallback.source == "deterministic"
     assert fallback.warnings
+
+
+def test_reverse_logical_steps_include_group_order_and_limit() -> None:
+    """決定論の処理手順は 条件/結合/集計 に加え グループ化/並び替え/件数制限 も含む。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    reversed_sql = service.reverse_sql(
+        ReverseSqlRequest(
+            sql=(
+                "SELECT DEPARTMENT_ID, COUNT(*) FROM EMPLOYEE "
+                "WHERE SALARY > 1000 GROUP BY DEPARTMENT_ID "
+                "ORDER BY DEPARTMENT_ID DESC FETCH FIRST 2 ROWS ONLY"
+            )
+        )
+    )
+
+    steps = reversed_sql.logical_steps or []
+    assert any(step.startswith("条件: ") for step in steps)
+    assert any(step.startswith("集計: COUNT") for step in steps)
+    assert any(step.startswith("グループ化: ") for step in steps)
+    assert any(step.startswith("並び替え: ") for step in steps)
+    assert "件数制限: 上位2件" in steps
+
+
+def test_reverse_logical_step_details_pair_business_and_technical() -> None:
+    """処理手順は業務者向け(business)と技術者向け(technical)を併記する。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    reversed_sql = service.reverse_sql(
+        ReverseSqlRequest(
+            sql=(
+                "SELECT DEPARTMENT_ID, COUNT(*) FROM EMPLOYEE "
+                "WHERE SALARY > 1000 GROUP BY DEPARTMENT_ID "
+                "ORDER BY DEPARTMENT_ID DESC FETCH FIRST 2 ROWS ONLY"
+            )
+        )
+    )
+
+    details = reversed_sql.logical_step_details
+    assert [detail.kind for detail in details] == [
+        "summary",
+        "filter",
+        "aggregation",
+        "group_by",
+        "order_by",
+        "limit",
+    ]
+    # technical は従来の logical_steps 文字列そのまま(技術者向けの情報量を落とさない)。
+    assert [detail.technical for detail in details] == reversed_sql.logical_steps
+    business = {detail.kind: detail.business for detail in details}
+    assert business["filter"] == "SALARYが1000より大きい行に絞り込みます"
+    assert business["aggregation"] == "件数を数えます"
+    assert business["group_by"] == "DEPARTMENT_IDごとに集計します"
+    assert business["order_by"] == "DEPARTMENT_IDの降順で並べ替えます"
+    assert business["limit"] == "先頭 2 件だけ取り出します"
+    # 業務者向け文には SQL 記法(引用符・句キーワード)を残さない。
+    for detail in details:
+        assert '"' not in detail.business
+        assert "GROUP BY" not in detail.business
+    # 説明文も「業務者向け + SQL 構造」の併記にする。
+    assert reversed_sql.explanation.startswith("EMPLOYEEを対象に、")
+    assert "SQL 構造: SELECT, GROUP BY, ORDER BY" in reversed_sql.explanation
+
+
+def test_reverse_logical_structure_items_pair_business_and_technical() -> None:
+    """SQL 論理構造も業務者向け/技術者向けの併記項目で返す。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    reversed_sql = service.reverse_sql(
+        ReverseSqlRequest(sql="SELECT TOTAL_AMOUNT FROM INVOICES WHERE STATUS = 'OPEN'")
+    )
+
+    items = {item.kind: item for item in reversed_sql.logical_structure_items}
+    assert items["statement"].business == "データを取り出すだけの参照 SQL です"
+    assert items["statement"].technical == "SELECT"
+    assert items["operations"].business == "一覧の取得"
+    assert items["filters"].business == "STATUSがOPENと一致する行に絞り込みます"
+    assert items["filters"].technical == "STATUS = 'OPEN'"
+    # 従来の平文 logical_structure も後方互換のため残す。
+    assert reversed_sql.logical_structure.startswith("SQL 論理構造")
+
+
+def test_reverse_logical_step_details_apply_glossary_to_business_text() -> None:
+    """用語・同義語 ON のときは業務者向け文にも用語を反映する。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="billing-steps",
+            name="請求管理",
+            description="請求テーブルを扱う profile。",
+            allowed_tables=["INVOICES"],
+            glossary={"請求金額": "TOTAL_AMOUNT"},
+        )
+    )
+
+    reversed_sql = service.reverse_sql(
+        ReverseSqlRequest(
+            sql="SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT >= 1000",
+            profile_id="billing-steps",
+            use_glossary=True,
+        )
+    )
+
+    filters = [detail for detail in reversed_sql.logical_step_details if detail.kind == "filter"]
+    assert filters
+    assert filters[0].business == "請求金額が1000以上の行に絞り込みます"
+    assert "請求金額" in filters[0].technical
 
 
 def test_reverse_deep_uses_profile_context_and_glossary() -> None:

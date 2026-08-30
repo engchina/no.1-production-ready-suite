@@ -2351,6 +2351,74 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
   await expectNoPageHorizontalScroll(page);
 });
 
+test("行アクションメニューを閉じた直後に別要素へフォーカスしても奪い返さない", async ({
+  page,
+}) => {
+  await mockDatabaseGateReady(page);
+  const viewerRole = {
+    ...systemRole,
+    role_id: "role-focus-viewer",
+    role_code: "FOCUS_VIEWER",
+    display_name: "フォーカス確認ロール",
+    is_built_in: false,
+    permissions: ["menu.query"],
+  };
+  const firstUser = {
+    user_uuid: "focus-first-user",
+    login_user_id: "focus.first",
+    display_name: "先のユーザー",
+    status: "ACTIVE",
+    force_password_change: false,
+    locked_until: null,
+    version: 1,
+    role_ids: [viewerRole.role_id],
+    assigned_roles: [],
+    is_bootstrap_admin: false,
+  };
+  const secondUser = {
+    ...firstUser,
+    user_uuid: "focus-second-user",
+    login_user_id: "focus.second",
+    display_name: "後のユーザー",
+    version: 2,
+  };
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [viewerRole])
+  );
+  await page.route("**/api/security/users", (route) => fulfill(route, [firstUser, secondUser]));
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/settings/security/users");
+
+  const firstTrigger = page.getByTestId("security-users-row-actions-focus-first-user-trigger");
+  const secondTrigger = page.getByTestId("security-users-row-actions-focus-second-user-trigger");
+  await firstTrigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+
+  // Escape で閉じた直後（フォーカス復帰の rAF が走る前）に別の行へフォーカスを移す。
+  await page.evaluate(() => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+    );
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="security-users-row-actions-focus-second-user-trigger"]'
+      )
+      ?.focus();
+  });
+
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(secondTrigger).toBeFocused();
+  await expect(firstTrigger).not.toBeFocused();
+
+  // 移した先の行でそのままメニューを開ける（開くのは後のユーザーの行）。
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await expect(secondTrigger).toHaveAttribute("aria-expanded", "true");
+  await expect(firstTrigger).toHaveAttribute("aria-expanded", "false");
+});
+
 test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const users = [

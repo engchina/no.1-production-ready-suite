@@ -67,6 +67,8 @@ test("operation timer resets on operation changes and recovers from background t
 test("processing state avoids noisy announcements and respects reduced motion", () => {
   assert.match(processingSource, /role="timer"/u);
   assert.match(processingSource, /aria-live="off"/u);
-  assert.match(processingSource, /motion-reduce:animate-none/u);
+  // reduced motion 対応は共有 Spinner（motion-reduce:animate-none + globals.css）が担う
+  assert.match(processingSource, /<Spinner size=\{16\}/u);
+  assert.doesNotMatch(processingSource, /Loader2/u);
   assert.match(processingSource, /tabular-nums/u);
 });

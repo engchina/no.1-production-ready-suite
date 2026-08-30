@@ -377,48 +377,48 @@ function HistoryDetailPanel({
 
   return (
     <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3 [grid-template-columns:minmax(0,1fr)]" aria-labelledby="history-detail-heading" data-testid="history-detail">
-      <div className="flex min-w-0 flex-wrap items-start gap-3" data-testid="history-detail-header">
-        <div className="min-w-0 flex-[1_1_28rem]">
+      <div className="grid min-w-0 gap-2 [grid-template-columns:minmax(0,1fr)]" data-testid="history-detail-header">
+        <div className="flex min-w-0 flex-wrap items-start gap-3">
           <h2
             id="history-detail-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="min-w-0 break-words text-base font-semibold leading-6 text-foreground [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="min-w-0 flex-1 break-words text-base font-semibold leading-6 text-foreground [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
             {t("history.detail.title")}
           </h2>
-          <div className="mt-2 rounded-md border border-border bg-card p-3">
-            <p className="text-xs font-medium text-muted">{t("history.grid.question")}</p>
-            <QuestionText
-              value={item.question}
-              variant="detail"
-              maxLines={3}
-              expandable
-              className="mt-1 text-sm font-normal"
-              testId="history-detail-question"
-            />
-          </div>
-          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
-            <StatusBadge variant="info" label={engineLabel(item.engine)} />
-            <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-            <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={userFeedbackRatingBadgeLabel(item.feedback_rating)} />
-            <StatusBadge
-              variant={item.safety_is_safe ? "success" : "danger"}
-              label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
-            />
-          </div>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
+            onClick={() => onRerun(item)}
+          >
+            <RotateCcw size={15} aria-hidden="true" />
+            <span>{t("history.action.rerun")}</span>
+          </Button>
         </div>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
-          onClick={() => onRerun(item)}
-        >
-          <RotateCcw size={15} aria-hidden="true" />
-          <span>{t("history.action.rerun")}</span>
-        </Button>
+        <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid="history-detail-question-block">
+          <p className="text-xs font-medium text-muted">{t("history.grid.question")}</p>
+          <QuestionText
+            value={item.question}
+            variant="detail"
+            maxLines={3}
+            expandable
+            className="mt-1 text-sm font-normal"
+            testId="history-detail-question"
+          />
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
+          <StatusBadge variant="info" label={engineLabel(item.engine)} />
+          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+          <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={userFeedbackRatingBadgeLabel(item.feedback_rating)} />
+          <StatusBadge
+            variant={item.safety_is_safe ? "success" : "danger"}
+            label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
+          />
+        </div>
       </div>
 
       <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={t("history.detail.tabsLabel")}>
@@ -457,7 +457,7 @@ function HistoryDetailPanel({
             <HistoryFact icon={Rows3} label={t("history.rows")} value={formatNumber(item.result_row_count)} />
             <HistoryFact icon={Columns3} label={t("history.columns")} value={formatNumber(item.result_columns.length)} />
           </div>
-          <HistoryDetailSection title={t("history.rewritten")} value={item.rewritten_question || "—"} />
+          <HistoryDetailSection title={t("history.rewritten")} value={item.rewritten_question || "—"} testId="history-detail-rewritten-block" />
           <HistoryDetailSection title={t("history.resultColumns")} value={columnsLabel(item)} mono />
           <div className="rounded-md border border-border bg-card p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -491,9 +491,9 @@ function HistoryFact({ icon: Icon, label, value }: { icon: typeof Database; labe
   );
 }
 
-function HistoryDetailSection({ title, value, mono = false }: { title: string; value: string; mono?: boolean }) {
+function HistoryDetailSection({ title, value, mono = false, testId }: { title: string; value: string; mono?: boolean; testId?: string }) {
   return (
-    <div className="rounded-md border border-border bg-card p-3">
+    <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid={testId}>
       <p className="text-xs font-medium text-muted">{title}</p>
       {mono ? (
         <p className="mt-1 break-words font-mono text-xs leading-6 text-foreground [overflow-wrap:anywhere]">{value}</p>

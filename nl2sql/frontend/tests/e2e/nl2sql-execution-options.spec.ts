@@ -268,6 +268,20 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
             group_by: [],
             order_by: [],
             limit: 100,
+            logical_steps: [
+              "APP.INVOICES を参照し、SELECT 操作を行います。",
+              "集計: SUM",
+              "件数制限: 上位100件",
+            ],
+            logical_step_details: [
+              {
+                kind: "summary",
+                business: "請求情報を対象に、一覧の取得・集計を行います。",
+                technical: "APP.INVOICES を参照し、SELECT 操作を行います。",
+              },
+              { kind: "aggregation", business: "合計を計算します", technical: "集計: SUM" },
+              { kind: "limit", business: "先頭 100 件だけ取り出します", technical: "件数制限: 上位100件" },
+            ],
             semantic_graph: {},
             warnings: [],
           },
@@ -317,16 +331,19 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(executionOptionsChevron).toHaveAttribute("data-state", "expanded");
   await expect(executionOptionsChevron).toHaveClass(/rotate-0/);
   const glossaryOption = page.getByLabel("用語・同義語を使う");
-  await expect(glossaryOption).toBeChecked();
+  // 用語・同義語は既定 off。ON にしたときだけ「条件あり」バッジが出る。
+  await expect(glossaryOption).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
   await expect(page.getByLabel("Ontology を使う")).toBeChecked();
-  await expect(page.getByLabel("解釈を表示")).toBeChecked();
+  await expect(page.getByLabel("処理手順を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
   await expect(executionOptionsDisclosure).not.toContainText("条件あり");
-  await glossaryOption.uncheck();
-  await expect(executionOptionsDisclosure).toContainText("条件あり");
   await glossaryOption.check();
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  await glossaryOption.uncheck();
   await expect(executionOptionsDisclosure).not.toContainText("条件あり");
+  // 以降の rewrite 呼び出し検証のため ON に戻す。
+  await glossaryOption.check();
   await expect(page.getByTestId("nl2sql-execution-options")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
@@ -351,10 +368,23 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
     /SELECT TOTAL_AMOUNT FROM INVOICES/
   );
   await expect(page.getByTestId("nl2sql-interpretation-panel")).toHaveCount(0);
+  // 処理手順パネルは semantic graph が無くても logical_steps だけで表示できる。
+  const logicalStepsPanel = page.getByTestId("nl2sql-logical-steps-panel");
+  await expect(logicalStepsPanel).toBeVisible();
+  await expect(logicalStepsPanel).toContainText("SQL の処理手順");
+  // 各手順は業務者向けの説明を主、技術詳細(SQL 断片)を副として併記する。
+  await expect(logicalStepsPanel).toContainText("請求情報を対象に、一覧の取得・集計を行います。");
+  await expect(logicalStepsPanel).toContainText("合計を計算します");
+  await expect(logicalStepsPanel).toContainText("先頭 100 件だけ取り出します");
+  await expect(logicalStepsPanel).toContainText("集計: SUM");
+  await expect(logicalStepsPanel).toContainText("件数制限: 上位100件");
+  await expect(logicalStepsPanel.locator("ol > li")).toHaveCount(3);
+  await expect(logicalStepsPanel.getByText("技術詳細").first()).toBeAttached();
   await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
   await expect(page.getByText("入力テンプレート")).toHaveCount(0);
   await expect(page.getByText("生成 SQL の意味")).toHaveCount(0);
-  await expect(page.getByText("APP.INVOICES を参照し、SELECT 操作を行います。")).toHaveCount(0);
+  // summary 文は旧「生成 SQL の意味」パネルではなく処理手順パネルの手順 1 としてのみ現れる。
+  await expect(page.getByText("APP.INVOICES を参照し、SELECT 操作を行います。")).toHaveCount(1);
   await expect(page.getByText("1200000")).toBeVisible();
 
   const showPromptPanel = page.getByTestId("nl2sql-show-prompt-panel");
@@ -407,9 +437,10 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByLabel("Ontology を使う")).toBeHidden();
   await executionOptionsDisclosure.click();
   await expect(page.getByLabel("Ontology を使う")).toBeChecked();
-  await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
+  // リセットで用語・同義語は既定の off に戻る。
+  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
-  await expect(page.getByLabel("解釈を表示")).toBeChecked();
+  await expect(page.getByLabel("処理手順を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
   await expectNoHorizontalOverflow(page);
 });
@@ -434,4 +465,36 @@ test("execution options keep ontology toggle usable at mobile width", async ({ p
   await page.keyboard.press("Space");
   await expect(ontologyOption).not.toBeChecked();
   await expectNoHorizontalOverflow(page);
+});
+
+test("用語置換が起きないときは書き換えカードを表示せず、入力そのままで実行する", async ({
+  page,
+}) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
+  // 後から登録した route が優先される。無変換（= 入力と同一）の応答を返す。
+  const question =
+    'SELECT "e"."EMPLOYEE_ID","e"."DEPARTMENT_ID" FROM "ADMIN"."EMPLOYEE" "e"';
+  await page.route("**/api/nl2sql/rewrite", (route) =>
+    fulfillJson(route, {
+      original_question: question,
+      rewritten_question: question,
+      source: "deterministic",
+      model: "",
+      warnings: [],
+    })
+  );
+  await page.goto("/query");
+
+  // 用語・同義語は既定 off のため、書き換え経路を通すには明示的に ON にする。
+  await page.getByRole("button", { name: /実行オプション/ }).click();
+  await page.getByLabel("用語・同義語を使う").check();
+
+  await page.locator("#nl2sql-question-input").fill(question);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  // 「先頭100件」のような件数表現を足さず、入力そのままが job へ渡る。
+  expect(api.jobPayload).toMatchObject({ question });
+  await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
+  await expect(page.getByText("変更前の質問")).toHaveCount(0);
 });
