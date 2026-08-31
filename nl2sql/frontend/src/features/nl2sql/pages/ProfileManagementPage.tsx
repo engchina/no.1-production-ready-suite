@@ -24,11 +24,12 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel } from "@/components/ui/required-field";
+import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
-import { useSchemaOwners } from "@/lib/queries";
+import { useSchemaOwners, useSelectAiCredential } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
@@ -91,6 +92,11 @@ type DbProfileRefreshSignal = {
 
 const SELECT_AI_MAX_TOKENS_MIN = 4096;
 const SELECT_AI_MAX_TOKENS_MAX = 32000;
+const SELECT_AI_DEFAULT_REGION = "ap-osaka-1";
+const SELECT_AI_REGION_OPTIONS = [
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
+  { value: "us-chicago-1", label: "us-chicago-1" },
+] as const satisfies readonly SelectFieldOption<string>[];
 const PROFILE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/u;
 
 function filterProfileObjects(objects: SchemaTable[], query: string) {
@@ -117,7 +123,7 @@ interface ProfileFormState {
 
 const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   profile_name: "",
-  region: "us-chicago-1",
+  region: SELECT_AI_DEFAULT_REGION,
   model: "xai.grok-4.3",
   embedding_model: "cohere.embed-v4.0",
   max_tokens: SELECT_AI_MAX_TOKENS_MAX,
@@ -137,12 +143,12 @@ const EMPTY_FORM: ProfileFormState = {
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
 };
 
-function emptyProfileForm(): ProfileFormState {
+function emptyProfileForm(region = SELECT_AI_DEFAULT_REGION): ProfileFormState {
   return {
     ...EMPTY_FORM,
     allowedTables: [],
     allowedViews: [],
-    selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG },
+    selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG, region: normalizeSelectAiRegion(region) },
   };
 }
 
@@ -168,6 +174,13 @@ function normalizeSelectAiMaxTokens(value: unknown) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return SELECT_AI_MAX_TOKENS_MAX;
   return Math.min(SELECT_AI_MAX_TOKENS_MAX, Math.max(SELECT_AI_MAX_TOKENS_MIN, Math.trunc(numeric)));
+}
+
+function normalizeSelectAiRegion(value: unknown) {
+  const region = typeof value === "string" ? value.trim() : "";
+  return SELECT_AI_REGION_OPTIONS.some((option) => option.value === region)
+    ? region
+    : SELECT_AI_DEFAULT_REGION;
 }
 
 function parseMaxTokensInput(value: string) {
@@ -224,6 +237,7 @@ function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
     allowed_views: (profile.allowed_views ?? []).filter(isUserVisibleObjectName),
     select_ai_config: {
       ...selectAiConfig,
+      region: normalizeSelectAiRegion(selectAiConfig.region),
       max_tokens: normalizeSelectAiMaxTokens(selectAiConfig.max_tokens),
     },
   };
@@ -259,7 +273,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
-      region: form.selectAiConfig.region.trim(),
+      region: normalizeSelectAiRegion(form.selectAiConfig.region),
       model: form.selectAiConfig.model.trim(),
       embedding_model: form.selectAiConfig.embedding_model.trim() || "cohere.embed-v4.0",
       max_tokens: normalizeSelectAiMaxTokens(form.selectAiConfig.max_tokens),
@@ -499,34 +513,20 @@ function SelectAiConfigFields({
       tabIndex={-1}
     >
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(8rem,0.9fr)_minmax(12rem,1.2fr)_minmax(8rem,0.8fr)_minmax(12rem,1.2fr)]">
-        <div className="grid min-w-0 content-start gap-1">
-          <FieldLabel
-            htmlFor="profile-select-ai-region"
-            label={t("profiles.field.region")}
-            required
-          />
-          <input
-            id="profile-select-ai-region"
-            value={form.selectAiConfig.region}
-            placeholder="ap-osaka-1"
-            required
-            aria-required="true"
-            aria-invalid={Boolean(requiredErrors.region)}
-            aria-describedby={requiredErrors.region ? "profile-select-ai-region-error" : undefined}
-            onChange={(event) => {
-              updateSelectAiConfig(setForm, { region: event.currentTarget.value });
-              if (requiredErrors.region) onRequiredErrorClear("region");
-            }}
-            className={`${inputClass} ${
-              requiredErrors.region ? "border-danger focus:border-danger focus:ring-danger/40" : ""
-            }`}
-          />
-          {requiredErrors.region && (
-            <RequiredFieldError id="profile-select-ai-region-error">
-              {t("profiles.error.regionRequired")}
-            </RequiredFieldError>
-          )}
-        </div>
+        <SelectField
+          id="profile-select-ai-region"
+          label={t("profiles.field.region")}
+          value={form.selectAiConfig.region}
+          options={SELECT_AI_REGION_OPTIONS}
+          required
+          error={requiredErrors.region ? t("profiles.error.regionRequired") : undefined}
+          onValueChange={(value) => {
+            updateSelectAiConfig(setForm, { region: value });
+            if (requiredErrors.region) onRequiredErrorClear("region");
+          }}
+          className="min-w-0"
+          buttonClassName="h-11"
+        />
         <div className="grid min-w-0 content-start gap-1">
           <FieldLabel
             htmlFor="profile-select-ai-model"
@@ -1369,6 +1369,7 @@ export function ProfileManagementPage() {
 
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
+  const syncJobParam = searchParams.get("syncJobId") ?? "";
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
   const profilesQuery = useProfileSummaries(profileSearch);
@@ -1376,6 +1377,7 @@ export function ProfileManagementPage() {
   const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
   const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
   const schemaOwnersQuery = useSchemaOwners();
+  const selectAiCredentialQuery = useSelectAiCredential();
   const schemaHeadQuery = useSchemaCatalogHead();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
@@ -1407,6 +1409,12 @@ export function ProfileManagementPage() {
       return status && ["succeeded", "failed", "cancelled"].includes(status) ? false : 1_000;
     },
   });
+
+  useEffect(() => {
+    if (!syncJobParam) return;
+    setOracleSyncJobId(syncJobParam);
+    if (selectedProfileId) setOracleSyncProfileId(selectedProfileId);
+  }, [selectedProfileId, syncJobParam]);
   const profiles = useMemo(
     () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [profilesQuery.data]
@@ -1589,14 +1597,20 @@ export function ProfileManagementPage() {
 
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
+  const formInitializationKey =
+    editTargetKey === "new" && selectAiCredentialQuery.isPending ? "" : editTargetKey;
   useEffect(() => {
-    if (!editTargetKey) return;
-    setForm(selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm());
+    if (!formInitializationKey) return;
+    setForm(
+      selectedProfile
+        ? profileToForm(selectedProfile)
+        : emptyProfileForm(selectAiCredentialQuery.data?.region)
+    );
     setOracleConfirmation("");
     setNameError(null);
     setRequiredErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editTargetKey]);
+  }, [formInitializationKey]);
 
   useEffect(() => {
     const job = oracleSyncJobQuery.data;
@@ -1609,8 +1623,6 @@ export function ProfileManagementPage() {
         void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
       }
       toast.success(t("profiles.oracle.sync.succeeded"));
-    } else if (job.status === "failed") {
-      toastError(t("profiles.oracle.sync.failed"));
     }
   }, [oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal]);
 
@@ -1811,7 +1823,6 @@ export function ProfileManagementPage() {
       setOracleSyncSubmissionError(
         err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
       );
-      toastError(t("profiles.oracle.sync.savedButFailed"));
     } finally {
       setLoading("");
     }

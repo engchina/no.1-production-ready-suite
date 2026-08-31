@@ -18,13 +18,14 @@ import time
 from base64 import b64decode
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pr_backend_core import ApiResponse
 from starlette.responses import JSONResponse
 
@@ -42,6 +43,10 @@ from app.clients.oci_database import (
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.features.nl2sql.oracle_adapter import (
+    OracleNl2SqlAdapter,
+    SelectAiCredentialExistsError,
+)
 from app.features.settings.errors import DatabaseWalletOperationError
 from app.features.settings.system_schema import (
     SystemSchemaError,
@@ -77,6 +82,8 @@ from app.schemas.settings import (
     OciPrivateKeyUploadData,
     OciSettingsData,
     OciSettingsUpdate,
+    SelectAiCredentialCreateRequest,
+    SelectAiCredentialData,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
     SystemTablesStatusData,
@@ -106,6 +113,14 @@ OCI_CONFIG_FILE_MODE = 0o600
 OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
 OCI_PRIVATE_KEY_FILE_MODE = 0o600
 OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
+SELECT_AI_CREDENTIAL_NAME = "OCI_CRED"
+SELECT_AI_CREDENTIAL_REGIONS = frozenset({"ap-osaka-1", "us-chicago-1"})
+OCI_USER_OCID_RE = re.compile(r"^ocid1\.user\.[A-Za-z0-9.-]+$", re.IGNORECASE)
+OCI_TENANCY_OCID_RE = re.compile(r"^ocid1\.tenancy\.[A-Za-z0-9.-]+$", re.IGNORECASE)
+OCI_FINGERPRINT_RE = re.compile(
+    r"^(?:[0-9a-f]{2}:){15}[0-9a-f]{2}$",
+    re.IGNORECASE,
+)
 ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIRECTORY_MODE = 0o700
@@ -183,6 +198,22 @@ MODEL_TEST_IMAGE_BYTES = b64decode(
 )
 
 
+@dataclass(frozen=True)
+class _SelectAiSigningMaterial:
+    user_ocid: str
+    tenancy_ocid: str
+    fingerprint: str
+    private_key: str
+
+
+class _SelectAiCredentialConfigurationError(RuntimeError):
+    def __init__(self, code: str, public_message: str, missing_fields: list[str]) -> None:
+        self.code = code
+        self.public_message = public_message
+        self.missing_fields = list(dict.fromkeys(missing_fields))
+        super().__init__(public_message)
+
+
 @router.get("/model", response_model=ApiResponse[ModelSettingsData])
 def get_model_settings() -> ApiResponse[ModelSettingsData]:
     settings = get_settings()
@@ -232,6 +263,183 @@ async def test_model_settings(
 @router.get("/database", response_model=ApiResponse[DatabaseSettingsData])
 def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     return ApiResponse(data=_database_settings_data(get_settings()))
+
+
+@router.get(
+    "/database/select-ai-credential",
+    response_model=ApiResponse[SelectAiCredentialData],
+)
+def get_select_ai_credential() -> ApiResponse[SelectAiCredentialData] | JSONResponse:
+    """現 Oracle schema と OCI signing material の安全な readiness を返す。"""
+    settings = get_settings()
+    try:
+        schema_name, exists = OracleNl2SqlAdapter(
+            settings=settings
+        ).get_select_ai_credential_status(SELECT_AI_CREDENTIAL_NAME)
+    except Exception:
+        logger.warning(
+            "select_ai_credential_status_failed",
+            exc_info=True,
+            extra={"credential_name": SELECT_AI_CREDENTIAL_NAME},
+        )
+        return _select_ai_credential_error_response(
+            status_code=503,
+            code="SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE",
+            message=(
+                "Select AI Credential の状態を Oracle から取得できませんでした。"
+                "データベース接続を確認して再試行してください。"
+            ),
+        )
+
+    missing_fields: list[str] = []
+    try:
+        _load_select_ai_signing_material(settings)
+    except _SelectAiCredentialConfigurationError as exc:
+        missing_fields = exc.missing_fields
+    return ApiResponse(
+        data=SelectAiCredentialData(
+            schema_name=schema_name or settings.oracle_user.strip().upper(),
+            exists=exists,
+            region=_select_ai_region(settings),
+            oci_auth_ready=not missing_fields,
+            missing_fields=missing_fields,
+        )
+    )
+
+
+@router.post(
+    "/database/select-ai-credential",
+    response_model=ApiResponse[SelectAiCredentialData],
+)
+def create_select_ai_credential(
+    payload: SelectAiCredentialCreateRequest,
+    request: Request,
+) -> ApiResponse[SelectAiCredentialData] | JSONResponse:
+    """管理者の明示操作で OCI signing key Credential を作成または再作成する。"""
+    if payload.confirmation != "ADMIN_EXECUTE":
+        return _select_ai_credential_error_response(
+            status_code=422,
+            code="SELECT_AI_CONFIRMATION_REQUIRED",
+            message="実行するには確認語 ADMIN_EXECUTE を入力してください。",
+        )
+
+    settings = get_settings()
+    adapter = OracleNl2SqlAdapter(settings=settings)
+    try:
+        _schema_name, already_exists = adapter.get_select_ai_credential_status(
+            SELECT_AI_CREDENTIAL_NAME
+        )
+    except Exception as exc:
+        _log_select_ai_credential_failure(
+            request=request,
+            action="status",
+            region=payload.region,
+            exc=exc,
+            adapter=adapter,
+        )
+        return _select_ai_credential_error_response(
+            status_code=503,
+            code="SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE",
+            message=(
+                "Select AI Credential の状態を Oracle から取得できませんでした。"
+                "データベース接続を確認して再試行してください。"
+            ),
+        )
+    if already_exists and not payload.recreate:
+        return _select_ai_credential_error_response(
+            status_code=409,
+            code="SELECT_AI_CREDENTIAL_EXISTS",
+            message=(
+                "OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
+                "「Credential を再作成」を実行してください。"
+            ),
+        )
+    try:
+        material = _load_select_ai_signing_material(settings)
+    except _SelectAiCredentialConfigurationError as exc:
+        return _select_ai_credential_error_response(
+            status_code=422,
+            code=exc.code,
+            message=exc.public_message,
+        )
+
+    try:
+        operation = adapter.create_select_ai_credential(
+            credential_name=SELECT_AI_CREDENTIAL_NAME,
+            user_ocid=material.user_ocid,
+            tenancy_ocid=material.tenancy_ocid,
+            fingerprint=material.fingerprint,
+            private_key=material.private_key,
+            recreate=payload.recreate,
+        )
+    except SelectAiCredentialExistsError:
+        return _select_ai_credential_error_response(
+            status_code=409,
+            code="SELECT_AI_CREDENTIAL_EXISTS",
+            message=(
+                "OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
+                "「Credential を再作成」を実行してください。"
+            ),
+        )
+    except Exception as exc:
+        _log_select_ai_credential_failure(
+            request=request,
+            action="recreate" if payload.recreate else "create",
+            region=payload.region,
+            exc=exc,
+            adapter=adapter,
+        )
+        return _select_ai_credential_error_response(
+            status_code=502,
+            code="SELECT_AI_CREDENTIAL_CREATE_FAILED",
+            message=(
+                "Select AI Credential を Oracle に作成できませんでした。"
+                "データベース権限と OCI 認証設定を確認して再試行してください。"
+            ),
+        )
+
+    try:
+        _persist_select_ai_credential_settings(settings, payload.region)
+    except HTTPException:
+        logger.error(
+            "select_ai_credential_settings_persist_failed",
+            exc_info=True,
+            extra={
+                "actor": _request_actor(request),
+                "action": operation,
+                "credential_name": SELECT_AI_CREDENTIAL_NAME,
+                "region": payload.region,
+            },
+        )
+        return _select_ai_credential_error_response(
+            status_code=500,
+            code="SELECT_AI_CREDENTIAL_SETTINGS_PERSIST_FAILED",
+            message=(
+                "Credential は Oracle に作成されましたが、Select AI の既定設定を"
+                "保存できませんでした。状態を再取得して管理者ログを確認してください。"
+            ),
+        )
+
+    schema_name, exists = adapter.get_select_ai_credential_status(SELECT_AI_CREDENTIAL_NAME)
+    logger.info(
+        "select_ai_credential_changed",
+        extra={
+            "actor": _request_actor(request),
+            "action": operation,
+            "credential_name": SELECT_AI_CREDENTIAL_NAME,
+            "region": payload.region,
+        },
+    )
+    return ApiResponse(
+        data=SelectAiCredentialData(
+            schema_name=schema_name or settings.oracle_user.strip().upper(),
+            exists=exists,
+            region=payload.region,
+            oci_auth_ready=True,
+            missing_fields=[],
+            operation=operation,
+        )
+    )
 
 
 @router.get(
@@ -1660,6 +1868,172 @@ def _oci_settings_data(settings: Settings) -> OciSettingsData:
         key_file_exists=_expand(key_file).exists(),
         config_file_exists=_expand(config_file).exists(),
         config_source="runtime",
+    )
+
+
+def _select_ai_region(settings: Settings) -> Literal["ap-osaka-1", "us-chicago-1"]:
+    candidate = (
+        settings.nl2sql_select_ai_region.strip()
+        or settings.oci_region.strip()
+        or "ap-osaka-1"
+    )
+    return "us-chicago-1" if candidate == "us-chicago-1" else "ap-osaka-1"
+
+
+def _load_select_ai_signing_material(settings: Settings) -> _SelectAiSigningMaterial:
+    """OCI config と非暗号化秘密鍵を検証し、Oracle bind 用の最小値だけ返す。"""
+    config_file = _oci_config_file(settings)
+    profile = _oci_profile(settings)
+    try:
+        parsed = _parse_oci_config(_read_oci_config_text(config_file), profile)
+    except HTTPException as exc:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_OCI_CONFIG_INCOMPLETE",
+            "OCI config を読み取れません。OCI 認証設定を保存してから再試行してください。",
+            ["config_file"],
+        ) from exc
+
+    missing_fields = [
+        name
+        for name, value in (
+            ("user", parsed.user),
+            ("tenancy", parsed.tenancy),
+            ("fingerprint", parsed.fingerprint),
+            ("key_file", parsed.key_file),
+        )
+        if not value.strip()
+    ]
+    if not OCI_USER_OCID_RE.fullmatch(parsed.user.strip()):
+        missing_fields.append("user")
+    if not OCI_TENANCY_OCID_RE.fullmatch(parsed.tenancy.strip()):
+        missing_fields.append("tenancy")
+    if not OCI_FINGERPRINT_RE.fullmatch(parsed.fingerprint.strip()):
+        missing_fields.append("fingerprint")
+    if missing_fields:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_OCI_CONFIG_INCOMPLETE",
+            "OCI 認証設定の必須項目が不足しているか、形式が正しくありません。",
+            missing_fields,
+        )
+
+    key_path = resolve_oci_key_file(parsed.key_file, config_file)
+    try:
+        if not key_path.is_file():
+            raise FileNotFoundError(key_path)
+        if key_path.stat().st_size > OCI_PRIVATE_KEY_MAX_BYTES:
+            raise ValueError("private key too large")
+        key_mode = stat.S_IMODE(key_path.stat().st_mode)
+        if key_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            raise PermissionError("private key permissions are too broad")
+        key_bytes = key_path.read_bytes()
+    except PermissionError as exc:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_PRIVATE_KEY_INVALID",
+            "OCI 秘密鍵の権限を所有者だけが読み書きできる 0600 にしてください。",
+            ["key_file_permissions"],
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_PRIVATE_KEY_INVALID",
+            "OCI 秘密鍵ファイルを読み取れません。OCI 認証設定を確認してください。",
+            ["key_file"],
+        ) from exc
+
+    if pem_file_is_encrypted(key_path) or b"ENCRYPTED" in key_bytes.upper():
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_PRIVATE_KEY_INVALID",
+            "Select AI Credential には非暗号化 OCI 秘密鍵が必要です。",
+            ["private_key_encrypted"],
+        )
+    try:
+        load_pem_private_key(key_bytes, password=None)
+    except (TypeError, ValueError) as exc:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_PRIVATE_KEY_INVALID",
+            "OCI 秘密鍵の PEM 形式が正しくありません。鍵を再アップロードしてください。",
+            ["private_key"],
+        ) from exc
+
+    private_key = "".join(
+        line.strip()
+        for line in key_bytes.decode("ascii", errors="strict").splitlines()
+        if line.strip() and not line.strip().startswith("-----")
+    )
+    if not private_key:
+        raise _SelectAiCredentialConfigurationError(
+            "SELECT_AI_PRIVATE_KEY_INVALID",
+            "OCI 秘密鍵の PEM 形式が正しくありません。鍵を再アップロードしてください。",
+            ["private_key"],
+        )
+    return _SelectAiSigningMaterial(
+        user_ocid=parsed.user.strip(),
+        tenancy_ocid=parsed.tenancy.strip(),
+        fingerprint=parsed.fingerprint.strip(),
+        private_key=private_key,
+    )
+
+
+def _persist_select_ai_credential_settings(settings: Settings, region: str) -> None:
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "NL2SQL_SELECT_AI_CREDENTIAL_NAME": SELECT_AI_CREDENTIAL_NAME,
+            "NL2SQL_SELECT_AI_REGION": region,
+        },
+        section_comment="# Select AI Credential",
+        error_detail="Select AI Credential 設定を backend/.env へ保存できませんでした。",
+    )
+    settings.nl2sql_select_ai_credential_name = SELECT_AI_CREDENTIAL_NAME
+    settings.nl2sql_select_ai_region = region
+
+
+def _select_ai_credential_error_response(
+    *, status_code: int, code: str, message: str
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "data": None,
+            "error_messages": [message],
+            "warning_messages": [],
+            "error_code": code,
+        },
+    )
+
+
+def _request_actor(request: Request) -> str:
+    principal = getattr(request.state, "principal", None)
+    return str(
+        getattr(principal, "login_user_id", "")
+        or getattr(principal, "user_uuid", "")
+        or "system"
+    )[:256]
+
+
+def _log_select_ai_credential_failure(
+    *,
+    request: Request,
+    action: str,
+    region: str,
+    exc: Exception,
+    adapter: OracleNl2SqlAdapter,
+) -> None:
+    actual_exists: bool | None = None
+    with suppress(Exception):
+        _schema_name, actual_exists = adapter.get_select_ai_credential_status(
+            SELECT_AI_CREDENTIAL_NAME
+        )
+    logger.warning(
+        "select_ai_credential_change_failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={
+            "actor": _request_actor(request),
+            "action": action,
+            "credential_name": SELECT_AI_CREDENTIAL_NAME,
+            "region": region,
+            "oracle_error_code": oracle_error_code(exc),
+            "credential_exists_after_failure": actual_exists,
+        },
     )
 
 

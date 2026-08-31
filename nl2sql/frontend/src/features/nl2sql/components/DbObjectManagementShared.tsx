@@ -19,6 +19,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DbManagementSearchField,
   DbObjectSearchOwnerFields,
+  DbOwnerPrefixFilterField,
   type DbObjectFilterFieldProps,
 } from "@/components/DbObjectFilterFields";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
@@ -49,6 +50,7 @@ import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
 export {
   DbManagementSearchField,
+  DbManagementSelectField,
   DbObjectSearchOwnerFields,
   DbOwnerPrefixFilterField,
 } from "@/components/DbObjectFilterFields";
@@ -393,7 +395,27 @@ export function DbObjectSelectorToolbar({
       className={`grid gap-2 rounded-md border border-border bg-background p-3 ${className}`}
       data-testid={dataTestId}
     >
-      {ownerPrefixField ? (
+      {ownerPrefixField && children ? (
+        <div className="grid min-w-0 gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:items-end">
+          <DbManagementSearchField
+            label={searchLabel}
+            placeholder={searchPlaceholder}
+            value={searchValue}
+            onChange={onSearchChange}
+            disabled={ownerPrefixField.disabled}
+          />
+          <DbOwnerPrefixFilterField
+            label={ownerPrefixField.label}
+            placeholder={ownerPrefixField.placeholder}
+            value={ownerPrefixField.value}
+            onChange={ownerPrefixField.onChange}
+            disabled={ownerPrefixField.disabled}
+          />
+          <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
+            {children}
+          </div>
+        </div>
+      ) : ownerPrefixField ? (
         <DbObjectSearchOwnerFields
           searchLabel={searchLabel}
           searchPlaceholder={searchPlaceholder}
@@ -418,11 +440,6 @@ export function DbObjectSelectorToolbar({
               {children}
             </div>
           )}
-        </div>
-      )}
-      {ownerPrefixField && children && (
-        <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end sm:justify-end">
-          {children}
         </div>
       )}
       {resultLabel && (

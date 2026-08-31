@@ -942,6 +942,8 @@ export const ja = {
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
   "settings.model.loading": "モデル設定を読み込んでいます。",
   "settings.model.loadError": "モデル設定の取得に失敗しました。",
+  "settings.model.saveError":
+    "モデル設定を保存できませんでした。入力内容とバックエンド接続を確認して再試行してください。",
   "settings.model.saved": "モデル設定を保存しました。",
   "settings.model.resetDone": "変更を元に戻しました。",
   "settings.model.save": "保存",
@@ -970,7 +972,8 @@ export const ja = {
 
   "settings.model.enterprise.title": "OCI Enterprise AI",
   "settings.model.enterprise.description":
-    "回答生成と Vision/OCR 解析に使う Enterprise AI endpoint、project、モデルカタログ。",
+    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。",
+  "settings.model.enterprise.saved": "OCI Enterprise AI 接続設定を保存しました。",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
@@ -986,6 +989,9 @@ export const ja = {
   "settings.model.enterprise.apiKeyHide": "API key を隠す",
   "settings.model.enterprise.clearApiKey": "保存済み API key を削除する",
   "settings.model.enterprise.models": "登録モデル",
+  "settings.model.enterprise.modelsDescription":
+    "回答生成と Vision/OCR 解析に使用するモデルを登録し、既定モデルを選択します。",
+  "settings.model.enterprise.modelsSaved": "登録モデルを保存しました。",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.default": "既定",
   "settings.model.enterprise.modelId": "モデル ID",
@@ -1027,6 +1033,7 @@ export const ja = {
   "settings.model.genai.title": "OCI Generative AI",
   "settings.model.genai.description":
     "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
+  "settings.model.genai.saved": "OCI Generative AI 設定を保存しました。",
   "settings.model.genai.embeddingModel": "埋め込みモデル ID",
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp": "Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
@@ -1196,6 +1203,49 @@ export const ja = {
     "DB 接続テスト API の呼び出しに失敗しました。バックエンドとデータベースの起動状態を確認して再試行してください。",
   "settings.database.hint":
     "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
+  "settings.database.selectAiCredential.title": "Select AI Credential",
+  "settings.database.selectAiCredential.description":
+    "Oracle DBMS_CLOUD_AI が OCI を呼び出すための署名鍵 Credential を、現在のデータベースユーザーに作成します。秘密鍵はブラウザへ返しません。",
+  "settings.database.selectAiCredential.status.created": "作成済み",
+  "settings.database.selectAiCredential.status.notCreated": "未作成",
+  "settings.database.selectAiCredential.field.name": "Credential 名",
+  "settings.database.selectAiCredential.field.schema": "Oracle schema",
+  "settings.database.selectAiCredential.field.region": "Select AI 既定リージョン",
+  "settings.database.selectAiCredential.field.regionHelper":
+    "新しい業務 Profile の初期値として使用します。Credential 自体の作成パラメータには含まれません。",
+  "settings.database.selectAiCredential.ociReady":
+    "サーバーの OCI 認証材料を利用できます。秘密鍵は Oracle の bind variable だけで渡されます。",
+  "settings.database.selectAiCredential.ociMissing":
+    "OCI 認証材料を準備できません。不足または修正が必要な項目: {fields}",
+  "settings.database.selectAiCredential.missing.configFile": "OCI config",
+  "settings.database.selectAiCredential.missing.user": "User OCID",
+  "settings.database.selectAiCredential.missing.tenancy": "Tenancy OCID",
+  "settings.database.selectAiCredential.missing.fingerprint": "Fingerprint",
+  "settings.database.selectAiCredential.missing.keyFile": "秘密鍵ファイル",
+  "settings.database.selectAiCredential.missing.keyPermissions": "秘密鍵のファイル権限 (0600)",
+  "settings.database.selectAiCredential.missing.keyEncrypted": "非暗号化の秘密鍵",
+  "settings.database.selectAiCredential.missing.keyInvalid": "有効な PEM 秘密鍵",
+  "settings.database.selectAiCredential.missing.unknown": "OCI 認証設定",
+  "settings.database.selectAiCredential.action.openOciSettings": "OCI 認証設定を開く",
+  "settings.database.selectAiCredential.action.create": "Credential を作成",
+  "settings.database.selectAiCredential.action.recreate": "Credential を再作成",
+  "settings.database.selectAiCredential.action.openProfiles": "業務 Profile を開く",
+  "settings.database.selectAiCredential.confirmation.createHelper":
+    "作成するには確認語 {phrase} を入力してください。",
+  "settings.database.selectAiCredential.confirmation.recreateHelper":
+    "再作成するには確認語 {phrase} を入力してください。既存 Credential は置き換えられます。",
+  "settings.database.selectAiCredential.recreate.confirmTitle":
+    "Select AI Credential を再作成しますか",
+  "settings.database.selectAiCredential.recreate.confirmDescription":
+    "既存の OCI_CRED を削除して同じ名前で作成し直します。依存する Select AI は処理中に一時的に利用できなくなる可能性があります。",
+  "settings.database.selectAiCredential.success":
+    "Select AI Credential を作成し、既定リージョンを保存しました。",
+  "settings.database.selectAiCredential.successNextStep":
+    "履歴ジョブは自動再実行されません。業務 Profile に戻り、「Oracle 反映を再試行」を手動で実行してください。",
+  "settings.database.selectAiCredential.error.load":
+    "Select AI Credential の状態を取得できませんでした。データベース接続を確認して再試行してください。",
+  "settings.database.selectAiCredential.error.change":
+    "Select AI Credential を変更できませんでした。OCI 認証設定とデータベース権限を確認してください。",
   "settings.database.validation.required": "値を入力してください。",
   "settings.database.validation.passwordRequired":
     "DB設定を保存するにはデータベースパスワードを入力してください。",

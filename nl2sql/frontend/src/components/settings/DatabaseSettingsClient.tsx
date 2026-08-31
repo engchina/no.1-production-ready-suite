@@ -7,27 +7,32 @@ import {
   Database,
   Eye,
   EyeOff,
+  KeyRound,
   PlugZap,
   Power,
   PowerOff,
   RefreshCw,
+  RotateCcw,
   Save,
   Server,
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Spinner, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   SettingsTestResultPanel,
@@ -40,14 +45,17 @@ import {
   type DatabaseConnectionTestResult,
   type DatabaseSettingsData,
   type DatabaseSettingsUpdate,
+  type SelectAiCredentialRegion,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   useAdbInfo,
+  useCreateSelectAiCredential,
   useDatabaseSettings,
   useDownloadDatabaseWallet,
   useRevealDatabasePassword,
+  useSelectAiCredential,
   useStartAdb,
   useStopAdb,
   useTestDatabaseSettings,
@@ -55,7 +63,9 @@ import {
   useUpdateDatabaseSettings,
   useUploadDatabaseWallet,
 } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 
 interface DatabaseSettingsForm {
   user: string;
@@ -448,7 +458,267 @@ export function DatabaseSettingsClient() {
             </CardContent>
           </Card>
         </form>
+
+        <SelectAiCredentialCard />
       </div>
+    </div>
+  );
+}
+
+const SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE";
+const SELECT_AI_CREDENTIAL_REGION_OPTIONS = [
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
+  { value: "us-chicago-1", label: "us-chicago-1" },
+] satisfies SelectFieldOption<SelectAiCredentialRegion>[];
+
+const SELECT_AI_MISSING_FIELD_KEYS: Record<string, I18nKey> = {
+  config_file: "settings.database.selectAiCredential.missing.configFile",
+  user: "settings.database.selectAiCredential.missing.user",
+  tenancy: "settings.database.selectAiCredential.missing.tenancy",
+  fingerprint: "settings.database.selectAiCredential.missing.fingerprint",
+  key_file: "settings.database.selectAiCredential.missing.keyFile",
+  key_file_permissions: "settings.database.selectAiCredential.missing.keyPermissions",
+  private_key_encrypted: "settings.database.selectAiCredential.missing.keyEncrypted",
+  private_key: "settings.database.selectAiCredential.missing.keyInvalid",
+};
+
+/** DBMS_CLOUD.CREATE_CREDENTIAL を管理者の明示操作だけで実行する運用カード。 */
+function SelectAiCredentialCard() {
+  const [searchParams] = useSearchParams();
+  const status = useSelectAiCredential();
+  const changeCredential = useCreateSelectAiCredential();
+  const confirm = useConfirm();
+  const [region, setRegion] = useState<SelectAiCredentialRegion>("ap-osaka-1");
+  const [confirmation, setConfirmation] = useState("");
+  const data = status.data;
+  const confirmed = confirmation.trim() === SELECT_AI_CREDENTIAL_CONFIRMATION;
+  const requestedReturnTo = searchParams.get("returnTo") ?? "";
+  const profileReturnTo = requestedReturnTo.startsWith(`${APP_ROUTES.profiles}?`)
+    ? requestedReturnTo
+    : APP_ROUTES.profiles;
+
+  useEffect(() => {
+    if (data?.region) setRegion(data.region);
+  }, [data?.region]);
+
+  const resetFeedback = () => {
+    changeCredential.reset();
+  };
+
+  const execute = async () => {
+    if (!data || !confirmed || !data.oci_auth_ready) return;
+    if (data.exists) {
+      const accepted = await confirm({
+        title: t("settings.database.selectAiCredential.recreate.confirmTitle"),
+        description: t("settings.database.selectAiCredential.recreate.confirmDescription"),
+        confirmLabel: t("settings.database.selectAiCredential.action.recreate"),
+        tone: "danger",
+        dismissOnOverlay: false,
+      });
+      if (!accepted) return;
+    }
+    changeCredential.mutate(
+      {
+        region,
+        confirmation: SELECT_AI_CREDENTIAL_CONFIRMATION,
+        recreate: data.exists,
+      },
+      { onSuccess: () => setConfirmation("") }
+    );
+  };
+
+  const errorMessage =
+    changeCredential.error instanceof ApiError
+      ? changeCredential.error.message
+      : t("settings.database.selectAiCredential.error.change");
+  const statusError =
+    status.error instanceof ApiError
+      ? status.error.message
+      : t("settings.database.selectAiCredential.error.load");
+  const missingLabels = (data?.missing_fields ?? []).map((field) =>
+    t(SELECT_AI_MISSING_FIELD_KEYS[field] ?? "settings.database.selectAiCredential.missing.unknown")
+  );
+
+  return (
+    <Card
+      id="select-ai-credential"
+      className="min-w-0 max-w-full scroll-mt-24 rounded-md"
+      aria-busy={status.isFetching || changeCredential.isPending}
+      data-testid="select-ai-credential-card"
+    >
+      <CardHeader className="p-6 pb-0">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <KeyRound size={18} aria-hidden />
+              <CardTitle className="text-lg">
+                {t("settings.database.selectAiCredential.title")}
+              </CardTitle>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {t("settings.database.selectAiCredential.description")}
+            </p>
+          </div>
+          {data ? (
+            <StatusBadge
+              variant={data.exists ? "success" : "neutral"}
+              label={t(
+                data.exists
+                  ? "settings.database.selectAiCredential.status.created"
+                  : "settings.database.selectAiCredential.status.notCreated"
+              )}
+            />
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 p-6">
+        {status.isPending ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Skeleton className="h-20 w-full rounded-md" />
+            <Skeleton className="h-20 w-full rounded-md" />
+          </div>
+        ) : status.isError || !data ? (
+          <div className="space-y-3">
+            <FormStatus tone="danger" message={statusError} />
+            <Button size="sm" variant="secondary" onClick={() => void status.refetch()}>
+              <RefreshCw size={15} aria-hidden />
+              {t("common.retry")}
+            </Button>
+          </div>
+        ) : (
+          <>
+            <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
+              <CredentialSummary
+                label={t("settings.database.selectAiCredential.field.name")}
+                value={data.credential_name}
+                mono
+              />
+              <CredentialSummary
+                label={t("settings.database.selectAiCredential.field.schema")}
+                value={data.schema_name || "-"}
+                mono
+              />
+            </dl>
+
+            <SelectField<SelectAiCredentialRegion>
+              id="select-ai-credential-region"
+              label={t("settings.database.selectAiCredential.field.region")}
+              value={region}
+              options={SELECT_AI_CREDENTIAL_REGION_OPTIONS}
+              onValueChange={(value) => {
+                setRegion(value);
+                resetFeedback();
+              }}
+              helper={t("settings.database.selectAiCredential.field.regionHelper")}
+              buttonClassName="h-11"
+            />
+
+            {data.oci_auth_ready ? (
+              <FormStatus
+                tone="success"
+                message={t("settings.database.selectAiCredential.ociReady")}
+              />
+            ) : (
+              <div className="space-y-3">
+                <FormStatus
+                  tone="warning"
+                  message={t("settings.database.selectAiCredential.ociMissing", {
+                    fields:
+                      missingLabels.join("、") ||
+                      t("settings.database.selectAiCredential.missing.unknown"),
+                  })}
+                />
+                <Link
+                  to={APP_ROUTES.settingsOci}
+                  className={buttonVariants({ variant: "secondary", size: "sm" })}
+                >
+                  {t("settings.database.selectAiCredential.action.openOciSettings")}
+                </Link>
+              </div>
+            )}
+
+            <ExecutionConfirmationField
+              value={confirmation}
+              onChange={(value) => {
+                setConfirmation(value);
+                resetFeedback();
+              }}
+              confirmed={confirmed}
+              placeholder={SELECT_AI_CREDENTIAL_CONFIRMATION}
+              expectedLabel={SELECT_AI_CREDENTIAL_CONFIRMATION}
+              helper={t(
+                data.exists
+                  ? "settings.database.selectAiCredential.confirmation.recreateHelper"
+                  : "settings.database.selectAiCredential.confirmation.createHelper",
+                { phrase: SELECT_AI_CREDENTIAL_CONFIRMATION }
+              )}
+              tone={data.exists ? "danger" : "neutral"}
+              disabled={changeCredential.isPending || !data.oci_auth_ready}
+              actions={
+                <Button
+                  size="sm"
+                  variant={data.exists ? "danger" : "primary"}
+                  className="w-full sm:w-auto"
+                  loading={changeCredential.isPending}
+                  disabled={!confirmed || !data.oci_auth_ready || changeCredential.isPending}
+                  onClick={() => void execute()}
+                >
+                  {data.exists ? (
+                    <RotateCcw size={15} aria-hidden />
+                  ) : (
+                    <KeyRound size={15} aria-hidden />
+                  )}
+                  {t(
+                    data.exists
+                      ? "settings.database.selectAiCredential.action.recreate"
+                      : "settings.database.selectAiCredential.action.create"
+                  )}
+                </Button>
+              }
+            />
+
+            {changeCredential.isError ? (
+              <FormStatus tone="danger" message={errorMessage} />
+            ) : null}
+            {changeCredential.isSuccess ? (
+              <div className="space-y-3" data-testid="select-ai-credential-success">
+                <FormStatus
+                  tone="success"
+                  message={t("settings.database.selectAiCredential.success")}
+                />
+                <p className="text-sm leading-6 text-muted">
+                  {t("settings.database.selectAiCredential.successNextStep")}
+                </p>
+                <Link
+                  to={profileReturnTo}
+                  className={buttonVariants({ variant: "secondary", size: "sm" })}
+                >
+                  {t("settings.database.selectAiCredential.action.openProfiles")}
+                </Link>
+              </div>
+            ) : null}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CredentialSummary({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-card p-3">
+      <dt className="text-xs font-medium text-muted">{label}</dt>
+      <dd className={cn("mt-1 break-all text-sm font-semibold text-foreground", mono && "font-mono")}>
+        {value}
+      </dd>
     </div>
   );
 }

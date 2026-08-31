@@ -35,9 +35,11 @@ from app.features.nl2sql.models import (
     SelectAiDbProfileUpsertRequest,
     SyntheticDataGenerateRequest,
 )
+from app.features.nl2sql.oracle_adapter import SelectAiCredentialMissingError
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.main import app
+from app.settings import get_settings
 
 
 class FakeEnterpriseAiClient:
@@ -550,6 +552,47 @@ def test_profile_select_ai_attributes_use_tables_and_views_object_list() -> None
     object_list = attributes["object_list"]
     assert [item["name"] for item in object_list] == ["INVOICES", "V_INVOICE_SUMMARY"]
     assert all(item["owner"] for item in object_list)
+
+
+def test_select_ai_region_prefers_profile_then_select_ai_default_then_oci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_select_ai_region", "us-chicago-1")
+    monkeypatch.setattr(settings, "oci_region", "ap-tokyo-1")
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    base = Nl2SqlProfile(id="region-default", name="リージョン既定")
+
+    assert service.build_select_ai_profile_attributes(base)["region"] == "us-chicago-1"
+
+    explicit = base.model_copy(
+        update={
+            "select_ai_config": ProfileSelectAiConfig(region="ap-osaka-1"),
+        }
+    )
+    assert service.build_select_ai_profile_attributes(explicit)["region"] == "ap-osaka-1"
+
+    monkeypatch.setattr(settings, "nl2sql_select_ai_region", "")
+    assert service.build_select_ai_profile_attributes(base)["region"] == "ap-tokyo-1"
+
+
+def test_select_ai_profile_upsert_preserves_credential_missing_exception() -> None:
+    class MissingCredentialAdapter:
+        def upsert_select_ai_profile_low_level(self, **_kwargs: object) -> dict[str, object]:
+            raise SelectAiCredentialMissingError("OCI_CRED", "ADMIN")
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._oracle_adapter = MissingCredentialAdapter()
+    cast(Any, service)._use_oracle_runtime = lambda: True
+
+    with pytest.raises(SelectAiCredentialMissingError):
+        service.upsert_select_ai_db_profile(
+            SelectAiDbProfileUpsertRequest(
+                profile_name="NL2SQL_DEFAULT_PROFILE",
+                attributes={"provider": "oci", "credential_name": "OCI_CRED"},
+                confirmation="NL2SQL_DEFAULT_PROFILE",
+            )
+        )
 
 
 def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() -> None:

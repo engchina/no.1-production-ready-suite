@@ -44,6 +44,25 @@ class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
 
 
+class SelectAiCredentialMissingError(OracleAdapterError):
+    """DBMS_CLOUD_AI Profile が参照する Credential が現 schema に存在しない。"""
+
+    code = "SELECT_AI_CREDENTIAL_MISSING"
+
+    def __init__(self, credential_name: str, schema_name: str) -> None:
+        self.credential_name = credential_name
+        self.schema_name = schema_name
+        super().__init__(
+            f'Select AI Credential "{schema_name}"."{credential_name}" が存在しません。'
+        )
+
+
+class SelectAiCredentialExistsError(OracleAdapterError):
+    """明示的な再作成指定なしに既存 Credential を上書きしようとした。"""
+
+    code = "SELECT_AI_CREDENTIAL_EXISTS"
+
+
 class TabularImportValidationError(OracleAdapterError):
     """Excel/CSV 取込を DB mutation 前に拒否する利用者修正可能なエラー。"""
 
@@ -2214,6 +2233,11 @@ class OracleNl2SqlAdapter:
         attrs = json.dumps(attributes or {}, ensure_ascii=False)
         desc = description or ""
         with self.connection() as conn, conn.cursor() as cursor:
+            credential_name = str((attributes or {}).get("credential_name") or "").strip()
+            if credential_name:
+                schema_name = self._current_schema(cursor)
+                if not self._select_ai_credential_exists_with_cursor(cursor, credential_name):
+                    raise SelectAiCredentialMissingError(credential_name, schema_name)
             if original_name.strip() and original_name.strip().upper() != safe_name.upper():
                 self._drop_cloud_ai_profile_best_effort(cursor, original_name.strip())
             self._drop_cloud_ai_profile_best_effort(cursor, safe_name)
@@ -2253,6 +2277,85 @@ class OracleNl2SqlAdapter:
             "attributes": attributes,
             "description": desc,
         }
+
+    def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
+        """現接続 schema の Credential 所有状態を副作用なしで返す。"""
+        safe_name = credential_name.strip().upper()
+        if not safe_name:
+            raise OracleAdapterError("credential_name が空です。")
+        with self.connection() as conn, conn.cursor() as cursor:
+            schema_name = self._current_schema(cursor)
+            exists = self._select_ai_credential_exists_with_cursor(cursor, safe_name)
+        return schema_name, exists
+
+    def create_select_ai_credential(
+        self,
+        *,
+        credential_name: str,
+        user_ocid: str,
+        tenancy_ocid: str,
+        fingerprint: str,
+        private_key: str,
+        recreate: bool,
+    ) -> str:
+        """OCI signing key Credential を bind variable のみで作成または再作成する。"""
+        safe_name = credential_name.strip().upper()
+        if not safe_name:
+            raise OracleAdapterError("credential_name が空です。")
+        with self.connection() as conn, conn.cursor() as cursor:
+            exists = self._select_ai_credential_exists_with_cursor(cursor, safe_name)
+            if exists and not recreate:
+                raise SelectAiCredentialExistsError(
+                    f'Select AI Credential "{safe_name}" は既に存在します。'
+                )
+            if exists:
+                self._execute_plsql(
+                    cursor,
+                    """
+                    BEGIN
+                        DBMS_CLOUD.DROP_CREDENTIAL(credential_name => :credential_name);
+                    END;
+                    """,
+                    {"credential_name": safe_name},
+                )
+            self._execute_plsql(
+                cursor,
+                """
+                BEGIN
+                    DBMS_CLOUD.CREATE_CREDENTIAL(
+                        credential_name => :credential_name,
+                        user_ocid => :user_ocid,
+                        tenancy_ocid => :tenancy_ocid,
+                        private_key => :private_key,
+                        fingerprint => :fingerprint
+                    );
+                END;
+                """,
+                {
+                    "credential_name": safe_name,
+                    "user_ocid": user_ocid,
+                    "tenancy_ocid": tenancy_ocid,
+                    "private_key": private_key,
+                    "fingerprint": fingerprint,
+                },
+            )
+            conn.commit()
+        return "recreated" if exists else "created"
+
+    @staticmethod
+    def _current_schema(cursor: Any) -> str:
+        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+        row = cursor.fetchone()
+        return str(row[0] or "").strip().upper() if row else ""
+
+    @staticmethod
+    def _select_ai_credential_exists_with_cursor(cursor: Any, credential_name: str) -> bool:
+        cursor.execute(
+            "SELECT COUNT(*) FROM USER_CREDENTIALS WHERE CREDENTIAL_NAME = UPPER(:name)",
+            {"name": credential_name},
+        )
+        row = cursor.fetchone()
+        return bool(row and int(row[0] or 0) > 0)
 
     def list_agent_conversations(
         self, *, team_name: str | None = None, limit: int = 20
@@ -3213,8 +3316,11 @@ class OracleNl2SqlAdapter:
             attributes["credential_name"] = self.settings.nl2sql_select_ai_credential_name
         if self.settings.nl2sql_select_ai_model:
             attributes["model"] = self.settings.nl2sql_select_ai_model
-        if self.settings.oci_region:
-            attributes["region"] = self.settings.oci_region
+        select_ai_region = (
+            self.settings.nl2sql_select_ai_region.strip() or self.settings.oci_region.strip()
+        )
+        if select_ai_region:
+            attributes["region"] = select_ai_region
         if self.settings.oci_compartment_id:
             attributes["oci_compartment_id"] = self.settings.oci_compartment_id
         return attributes

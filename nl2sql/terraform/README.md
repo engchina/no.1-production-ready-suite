@@ -193,18 +193,20 @@ Deep Data Security is enabled by default in Terraform deployments:
 After deployment, open `システム設定 > Deep Data Security`, apply the V001 steps in
 order, then run the Data Grant verification.
 
-Oracle Select AI is configured through `backend/.env` only; the application
-System Settings pages cannot write this value. The stack therefore writes a
-fixed credential name:
+The stack reserves a fixed Oracle Select AI credential name and the default
+Select AI region:
 
 - `NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED`
+- `NL2SQL_SELECT_AI_REGION=ap-osaka-1`
 
-To use Select AI, create a matching `OCI_CRED` credential on the ADB with
-`DBMS_CLOUD.CREATE_CREDENTIAL`. The backend never creates the credential itself.
-When the credential name is left empty or the credential does not exist, Select
-AI reports a readiness warning and the engine stays unavailable. To use a
-different name, edit `backend/.env` on the instance and restart
-`production-ready-nl2sql-backend`.
+After deployment, open `システム設定 > データベース設定 > Select AI Credential`.
+The administrator explicitly creates `OCI_CRED` for the current Oracle schema
+from the server-side OCI config signing key. The private key is passed to
+`DBMS_CLOUD.CREATE_CREDENTIAL` only as an Oracle bind variable; Terraform,
+browser responses, and persisted application settings never receive it. An
+existing credential is not overwritten automatically and requires the explicit
+recreate confirmation flow. Historical Profile sync jobs are not retried
+automatically after credential creation.
 
 This configured administrator is independent from the database connection user,
 does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables

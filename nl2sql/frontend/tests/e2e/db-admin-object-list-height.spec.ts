@@ -49,6 +49,55 @@ async function expectEqualFilterWidths(search: Locator, owner: Locator) {
     .toBeLessThanOrEqual(2);
 }
 
+async function expectThreeFieldFilterLayout(
+  search: Locator,
+  owner: Locator,
+  kind: Locator,
+  layout: "desktop" | "tablet" | "mobile"
+) {
+  const [searchBox, ownerBox, kindBox] = await Promise.all([
+    search.boundingBox(),
+    owner.boundingBox(),
+    kind.boundingBox(),
+  ]);
+  if (!searchBox || !ownerBox || !kindBox) {
+    throw new Error("フィルタの配置寸法を取得できませんでした");
+  }
+
+  expect(Math.abs(searchBox.height - ownerBox.height)).toBeLessThanOrEqual(2);
+  expect(Math.abs(searchBox.height - kindBox.height)).toBeLessThanOrEqual(2);
+  expect(searchBox.height).toBeGreaterThanOrEqual(44);
+
+  if (layout === "desktop") {
+    expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
+    expect(Math.abs(searchBox.y - kindBox.y)).toBeLessThanOrEqual(2);
+    expect(searchBox.x).toBeLessThan(ownerBox.x);
+    expect(ownerBox.x).toBeLessThan(kindBox.x);
+    expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
+    expect(kindBox.width).toBeGreaterThanOrEqual(166);
+    expect(kindBox.width).toBeLessThanOrEqual(170);
+    return;
+  }
+
+  if (layout === "tablet") {
+    expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
+    expect(searchBox.x).toBeLessThan(ownerBox.x);
+    expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
+    expect(searchBox.y + searchBox.height).toBeLessThan(kindBox.y);
+    expect(Math.abs(searchBox.x - kindBox.x)).toBeLessThanOrEqual(2);
+    expect(kindBox.width).toBeGreaterThanOrEqual(166);
+    expect(kindBox.width).toBeLessThanOrEqual(170);
+    return;
+  }
+
+  expect(searchBox.y + searchBox.height).toBeLessThan(ownerBox.y);
+  expect(ownerBox.y + ownerBox.height).toBeLessThan(kindBox.y);
+  expect(Math.abs(searchBox.x - ownerBox.x)).toBeLessThanOrEqual(2);
+  expect(Math.abs(searchBox.x - kindBox.x)).toBeLessThanOrEqual(2);
+  expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(searchBox.width - kindBox.width)).toBeLessThanOrEqual(2);
+}
+
 async function expectFloatingMenuWithoutVerticalScrollbar(menu: Locator) {
   await expect
     .poll(() =>
@@ -378,7 +427,6 @@ async function mockMetadataManagementApi(
       excluded_oracle_maintained_count: 0,
     })
   );
-  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, catalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, {
       runtime: "deterministic",
@@ -412,7 +460,6 @@ async function mockMetadataManagementApi(
 
 async function mockDataManagementApi(page: Page) {
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
-  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) => fulfillJson(route, tableObjects));
   await page.route("**/api/nl2sql/db-admin/views", (route) => fulfillJson(route, viewObjects));
   await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
@@ -446,7 +493,6 @@ async function mockSortableDataManagementApi(page: Page) {
   const viewItems = items.filter((item) => item.object_type === "view");
 
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
-  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, { runtime: "deterministic", items: tableItems, warnings: [] })
   );
@@ -501,12 +547,6 @@ async function mockPagedDbAdminObjectsApi(page: Page) {
         { owner: "APP", is_current: true, table_count: tableItems.length, view_count: viewItems.length },
       ],
       excluded_oracle_maintained_count: 0,
-    })
-  );
-  await page.route("**/api/schema/refresh", (route) =>
-    fulfillJson(route, {
-      refreshed_at: "2026-06-21T10:00:00.000Z",
-      tables: [],
     })
   );
   await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
@@ -928,7 +968,7 @@ for (const scenario of metadataScenarios) {
     await expectObjectListRowLimit(list, "tbody tr", fixedTargetVisibleRows);
   });
 
-  test(`${scenario.title}は共通検索と所有者入力を種類フィルタの前に表示する`, async ({ page }) => {
+  test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, async ({ page }, testInfo) => {
     await mockOwnerFilterDbAdminObjectsApi(page);
     const ownerPrefixRequests: string[] = [];
     const exactOwnerRequests: string[] = [];
@@ -951,11 +991,21 @@ for (const scenario of metadataScenarios) {
     await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
     await expectEqualFilterWidths(search, ownerFilter);
     await expect(toolbar.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
-    await expect(toolbar.getByLabel("種類フィルタ")).toBeVisible();
+    const typeFilter = toolbar.getByLabel("種類フィルタ");
+    await expect(typeFilter).toBeVisible();
+    await expectThreeFieldFilterLayout(
+      search,
+      ownerFilter,
+      typeFilter,
+      testInfo.project.name === "mobile-375" ? "mobile" : "desktop"
+    );
     await search.focus();
     await page.keyboard.press("Tab");
     await expect(ownerFilter).toBeFocused();
     expect(await ownerFilter.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe("none");
+    await page.keyboard.press("Tab");
+    await expect(typeFilter).toBeFocused();
+    expect(await typeFilter.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe("none");
     await search.fill("BILLING");
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
     await search.clear();
@@ -970,6 +1020,10 @@ for (const scenario of metadataScenarios) {
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
     await ownerFilter.fill("");
     await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
+    await typeFilter.selectOption("view");
+    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_VIEW_01", { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
+    await typeFilter.selectOption("all");
     await expectNoHorizontalScroll(page);
   });
 
@@ -1066,6 +1120,41 @@ test("データ管理のテーブル・ビュー件数 badge は API 総数を�
   await expect(controls.getByText("テーブル149", { exact: true })).toBeVisible();
   await expect(controls.getByText("ビュー2", { exact: true })).toBeVisible();
   await expect(page.getByTestId("data-preview-object-footer")).toContainText("100 / 151 件を表示");
+});
+
+test("データプレビューは検索・所有者・種別フィルタを共通配置する", async ({ page }, testInfo) => {
+  await mockDataManagementApi(page);
+  await page.goto("/data-management");
+
+  const toolbar = page.getByTestId("data-preview-object-toolbar");
+  const search = toolbar.getByRole("searchbox", { name: "検索" });
+  const ownerFilter = toolbar.getByRole("searchbox", { name: "所有者" });
+  const kindFilter = toolbar.getByLabel("種別フィルタ");
+  await expectThreeFieldFilterLayout(
+    search,
+    ownerFilter,
+    kindFilter,
+    testInfo.project.name === "mobile-375" ? "mobile" : "desktop"
+  );
+
+  await search.focus();
+  await page.keyboard.press("Tab");
+  await expect(ownerFilter).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(kindFilter).toBeFocused();
+
+  const previewList = page.getByTestId("data-preview-object-list");
+  await kindFilter.selectOption("view");
+  await expect(previewList.getByText("APP.VIEW_01", { exact: true })).toBeVisible();
+  await expect(previewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
+  await kindFilter.selectOption("all");
+  await expectNoHorizontalScroll(page);
+
+  if (testInfo.project.name === "mobile-375") {
+    await page.setViewportSize({ width: 812, height: 375 });
+    await expectThreeFieldFilterLayout(search, ownerFilter, kindFilter, "tablet");
+    await expectNoHorizontalScroll(page);
+  }
 });
 
 test("データ管理の対象ピッカーはヘッダーで並び替えできる", async ({ page }, testInfo) => {
@@ -1196,7 +1285,6 @@ test("データ管理の対象 picker は NL2SQL_ システム object を表示�
   const viewItems = items.filter((item) => item.object_type === "view");
 
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
-  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, managementCatalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, { runtime: "deterministic", items: tableItems, warnings: [] })
   );

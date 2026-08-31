@@ -136,6 +136,23 @@ async function mockNl2sqlSettingsApi(page: Page) {
   const modelSettings = modelSettingsFixture();
 
   const databaseSettings = databaseSettingsFixture();
+  let selectAiCredential: {
+    credential_name: "OCI_CRED";
+    schema_name: string;
+    exists: boolean;
+    region: "ap-osaka-1" | "us-chicago-1";
+    oci_auth_ready: boolean;
+    missing_fields: string[];
+    operation: "created" | "recreated" | null;
+  } = {
+    credential_name: "OCI_CRED" as const,
+    schema_name: "ADMIN",
+    exists: false,
+    region: "ap-osaka-1",
+    oci_auth_ready: true,
+    missing_fields: [] as string[],
+    operation: null as "created" | "recreated" | null,
+  };
 
   const adbInfo = adbInfoFixture();
 
@@ -214,6 +231,21 @@ async function mockNl2sqlSettingsApi(page: Page) {
   await page.route("**/api/settings/database", (route) =>
     fulfillJson(route, databaseSettings)
   );
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") {
+      const request = route.request().postDataJSON() as {
+        region: "ap-osaka-1" | "us-chicago-1";
+        recreate: boolean;
+      };
+      selectAiCredential = {
+        ...selectAiCredential,
+        exists: true,
+        region: request.region,
+        operation: request.recreate ? "recreated" : "created",
+      };
+    }
+    await fulfillJson(route, selectAiCredential);
+  });
   await page.route("**/api/settings/database/password/reveal", (route) =>
     fulfillJson(route, { password: "database-secret-fixture" })
   );
@@ -621,8 +653,20 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
 
   await page.goto("/settings/model");
   await expect(page.getByRole("heading", { name: "モデル設定" }).first()).toBeVisible();
-  await expect(page.getByText("OCI Enterprise AI", { exact: true })).toBeVisible();
-  await expect(page.getByText("OCI Generative AI", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "OCI Enterprise AI", exact: true })
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登録モデル", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "OCI Generative AI", exact: true })
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeVisible();
+  await expect(page.locator("#enterprise-api-path")).toHaveCount(0);
+  await expect(page.locator("#enterprise-vlm-input-mode")).toHaveCount(0);
+  await expect(page.locator("#enterprise-timeout")).toHaveCount(0);
+  await expect(page.locator("#enterprise-retries")).toHaveCount(0);
   await expectNoOperationsMemoOrReadiness(page);
   await expectModelPreviewPanelsAbsent(page);
   const modelSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(
@@ -1076,6 +1120,141 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   await expectNoHorizontalOverflow(page);
 });
 
+test("モデル設定を3カードごとに独立保存し、非表示設定と未保存入力を保持する", async ({
+  page,
+}) => {
+  await page.unroute("**/api/settings/model");
+  const base = modelSettingsFixture();
+  let persisted = modelSettingsFixture({
+    settings: {
+      ...base.settings,
+      enterprise_ai: {
+        ...base.settings.enterprise_ai,
+        api_path: "/custom-responses",
+        vlm_input_mode: "inline_image",
+        timeout_seconds: 177,
+        max_retries: 4,
+      },
+    },
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  const firstSaveGate = createRequestGate();
+  let holdFirstSave = true;
+  let rejectNextSave = false;
+
+  await page.route("**/api/settings/model", async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await fulfillJson(route, persisted);
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    requests.push(body);
+    if (holdFirstSave) {
+      holdFirstSave = false;
+      await firstSaveGate.promise;
+    }
+    if (rejectNextSave) {
+      rejectNextSave = false;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "登録モデルを保存できませんでした。" }),
+      });
+      return;
+    }
+    persisted = modelSettingsFixture({ settings: body });
+    await fulfillJson(route, persisted);
+  });
+
+  await page.goto("/settings/model");
+  await expect(page.locator("#enterprise-api-path")).toHaveCount(0);
+  await expect(page.locator("#enterprise-vlm-input-mode")).toHaveCount(0);
+  await expect(page.locator("#enterprise-timeout")).toHaveCount(0);
+  await expect(page.locator("#enterprise-retries")).toHaveCount(0);
+
+  await page.locator("#enterprise-endpoint").fill("https://changed.example.com");
+  await page.getByRole("textbox", { name: "モデル ID 1" }).fill("enterprise-unsaved-model");
+  await page.locator("#genai-embedding-model").fill("cohere.unsaved-embed");
+
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(
+    page.getByRole("button", { name: "OCI Enterprise AI: 保存中…" })
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeDisabled();
+  firstSaveGate.release();
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。")).toBeVisible();
+
+  const connectionRequest = requests[0];
+  const connectionEnterprise = connectionRequest.enterprise_ai as Record<string, unknown>;
+  expect(connectionEnterprise.endpoint).toBe("https://changed.example.com");
+  expect(connectionEnterprise.api_path).toBe("/custom-responses");
+  expect(connectionEnterprise.vlm_input_mode).toBe("inline_image");
+  expect(connectionEnterprise.timeout_seconds).toBe(177);
+  expect(connectionEnterprise.max_retries).toBe(4);
+  expect(
+    ((connectionEnterprise.models as Array<Record<string, unknown>>)[0]).model_id
+  ).toBe("enterprise-nl2sql-llm");
+  expect(
+    (connectionRequest.generative_ai as Record<string, unknown>).embedding_model
+  ).toBe("cohere.embed-v4.0");
+  await expect(page.getByRole("textbox", { name: "モデル ID 1" })).toHaveValue(
+    "enterprise-unsaved-model"
+  );
+  await expect(page.locator("#genai-embedding-model")).toHaveValue("cohere.unsaved-embed");
+
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
+  const modelsRequest = requests[1];
+  const modelsEnterprise = modelsRequest.enterprise_ai as Record<string, unknown>;
+  expect(modelsEnterprise.endpoint).toBe("https://changed.example.com");
+  expect(modelsEnterprise.api_path).toBe("/custom-responses");
+  expect(modelsEnterprise.vlm_input_mode).toBe("inline_image");
+  expect(modelsEnterprise.timeout_seconds).toBe(177);
+  expect(modelsEnterprise.max_retries).toBe(4);
+  expect(((modelsEnterprise.models as Array<Record<string, unknown>>)[0]).model_id).toBe(
+    "enterprise-unsaved-model"
+  );
+  expect((modelsRequest.generative_ai as Record<string, unknown>).embedding_model).toBe(
+    "cohere.embed-v4.0"
+  );
+  await expect(page.locator("#genai-embedding-model")).toHaveValue("cohere.unsaved-embed");
+
+  const generativeSave = page.getByRole("button", { name: "OCI Generative AI: 保存" });
+  await generativeSave.focus();
+  await expect(generativeSave).toBeFocused();
+  await generativeSave.press("Enter");
+  await expect(page.getByText("OCI Generative AI 設定を保存しました。")).toBeVisible();
+  const generativeRequest = requests[2];
+  expect(
+    (generativeRequest.generative_ai as Record<string, unknown>).embedding_model
+  ).toBe("cohere.unsaved-embed");
+  expect(
+    ((generativeRequest.enterprise_ai as Record<string, unknown>).models as Array<
+      Record<string, unknown>
+    >)[0].model_id
+  ).toBe("enterprise-unsaved-model");
+
+  rejectNextSave = true;
+  await page.getByRole("textbox", { name: "モデル ID 1" }).fill("enterprise-failed-model");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  const modelsForm = page
+    .getByRole("button", { name: "登録モデル: 保存" })
+    .locator("xpath=ancestor::form[1]");
+  await expect(modelsForm.getByRole("alert")).toContainText(
+    "登録モデルを保存できませんでした。"
+  );
+  await expect(page.getByRole("textbox", { name: "モデル ID 1" })).toHaveValue(
+    "enterprise-failed-model"
+  );
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalOverflow(page);
+  await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeVisible();
+});
+
 test("モデル API Key を .env に新規保存して削除でき、プレビュー欄を表示しない", async ({
   page,
 }) => {
@@ -1122,16 +1301,16 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   await page.getByLabel("API key", { exact: true }).fill("new-key-fixture");
   await expectModelPreviewPanelsAbsent(page);
   await expect(page.locator("body")).not.toContainText("new-key-fixture");
-  await page.getByRole("button", { name: "モデル設定: 保存" }).click();
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
   const notificationRegion = page.getByRole("region", { name: "通知" });
-  await expect(notificationRegion).toContainText("モデル設定を保存しました。");
-  await expect(page.getByText("モデル設定を保存しました。")).toHaveCount(1);
+  await expect(notificationRegion).toContainText("OCI Enterprise AI 接続設定を保存しました。");
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。")).toHaveCount(1);
   expect((requests[0].enterprise_ai as Record<string, unknown>).api_key).toBe(
     "new-key-fixture"
   );
 
   await page.getByLabel("保存済み API key を削除する").check();
-  await page.getByRole("button", { name: "モデル設定: 保存" }).click();
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
   expect((requests[1].enterprise_ai as Record<string, unknown>).clear_api_key).toBe(true);
   await expect(page.getByText("未設定", { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -1158,7 +1337,7 @@ test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key 
   await page.goto("/settings/model");
   await expect(page.getByText("旧 JSON に API Key が残っています")).toBeVisible();
   await expect(page.getByText(/原因: v1 の model-settings.json/)).toBeVisible();
-  await page.getByRole("button", { name: "モデル設定: 保存" }).click();
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
 
   expect(savedRequests).toHaveLength(1);
   const enterprise = savedRequests[0]?.enterprise_ai as Record<string, unknown>;
@@ -1565,6 +1744,175 @@ test("ADB OCID がない場合は自動取得せず手動アップロードを�
   );
   await expect.poll(() => downloadCount).toBe(0);
   await expectNoHorizontalOverflow(page);
+});
+
+test("Select AI Credential を明示確認で作成し、業務 Profile の手動再試行へ案内する", async ({
+  page,
+}) => {
+  let posted: Record<string, unknown> | null = null;
+  let credential = {
+    credential_name: "OCI_CRED",
+    schema_name: "ADMIN",
+    exists: false,
+    region: "ap-osaka-1",
+    oci_auth_ready: true,
+    missing_fields: [],
+    operation: null as string | null,
+  };
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") {
+      posted = route.request().postDataJSON() as Record<string, unknown>;
+      credential = { ...credential, exists: true, region: "us-chicago-1", operation: "created" };
+    }
+    await fulfillJson(route, credential);
+  });
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  await expect(card.getByRole("heading", { name: "Select AI Credential" })).toBeVisible();
+  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
+  await card.getByRole("combobox", { name: "Select AI 既定リージョン" }).click();
+  await page.getByRole("option", { name: "us-chicago-1" }).click();
+  const confirmation = card.getByTestId("execution-confirmation-field").getByRole("textbox");
+  const create = card.getByRole("button", { name: "Credential を作成" });
+  await expect(create).toBeDisabled();
+  await confirmation.fill("ADMIN_EXECUTE");
+  await expect(create).toBeEnabled();
+  await create.click();
+
+  await expect.poll(() => posted).not.toBeNull();
+  expect(posted).toEqual({
+    region: "us-chicago-1",
+    confirmation: "ADMIN_EXECUTE",
+    recreate: false,
+  });
+  expect(posted).not.toHaveProperty("private_key");
+  const success = card.getByTestId("select-ai-credential-success");
+  await expect(success).toContainText("Select AI Credential を作成");
+  await expect(success).toContainText("履歴ジョブは自動再実行されません");
+  await expect(success.getByRole("link", { name: "業務 Profile を開く" })).toHaveAttribute(
+    "href",
+    "/profiles"
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
+test("既存 Select AI Credential の再作成は danger 確認ダイアログを必須にする", async ({
+  page,
+}) => {
+  let recreateRequest: Record<string, unknown> | null = null;
+  const existing = {
+    credential_name: "OCI_CRED",
+    schema_name: "ADMIN",
+    exists: true,
+    region: "ap-osaka-1",
+    oci_auth_ready: true,
+    missing_fields: [],
+    operation: null,
+  };
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") {
+      recreateRequest = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(route, { ...existing, operation: "recreated" });
+      return;
+    }
+    await fulfillJson(route, existing);
+  });
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  await expect(card.getByText("作成済み", { exact: true })).toBeVisible();
+  await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
+    "ADMIN_EXECUTE"
+  );
+  await card.getByRole("button", { name: "Credential を再作成" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("依存する Select AI は処理中に一時的に利用できなくなる");
+  await expect.poll(() => recreateRequest).toBeNull();
+  await dialog.getByRole("button", { name: "Credential を再作成" }).press("Enter");
+  await expect.poll(() => recreateRequest).not.toBeNull();
+  expect(recreateRequest).toEqual({
+    region: "ap-osaka-1",
+    confirmation: "ADMIN_EXECUTE",
+    recreate: true,
+  });
+  await expect(card.getByTestId("select-ai-credential-success")).toBeVisible();
+});
+
+test("OCI 認証材料不足を 375px で案内し、作成操作を無効化する", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", (route) =>
+    fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "ap-osaka-1",
+      oci_auth_ready: false,
+      missing_fields: ["fingerprint", "key_file_permissions"],
+      operation: null,
+    })
+  );
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  const readinessStatus = card
+    .getByRole("status")
+    .filter({ hasText: "OCI 認証材料を準備できません" });
+  await expect(readinessStatus).toContainText("Fingerprint");
+  await expect(readinessStatus).toContainText("秘密鍵のファイル権限 (0600)");
+  await expect(card.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveAttribute(
+    "href",
+    "/settings/oci"
+  );
+  await expect(card.getByRole("button", { name: "Credential を作成" })).toBeDisabled();
+  await expect(card.getByTestId("execution-confirmation-field").getByRole("textbox")).toBeDisabled();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("Select AI Credential API 失敗は固定 alert だけに表示し Toast を重複させない", async ({
+  page,
+}) => {
+  const apiError = "Select AI Credential を Oracle に作成できませんでした。";
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: null,
+          error_messages: [apiError],
+          warning_messages: [],
+          error_code: "SELECT_AI_CREDENTIAL_CREATE_FAILED",
+        }),
+      });
+      return;
+    }
+    await fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "ap-osaka-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: null,
+    });
+  });
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
+    "ADMIN_EXECUTE"
+  );
+  await card.getByRole("button", { name: "Credential を作成" }).click();
+
+  await expect(card.getByRole("alert").filter({ hasText: apiError })).toBeVisible();
+  await expect(page.getByText(apiError, { exact: true })).toHaveCount(1);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
 });
 
 test("外観設定でダーク/ライト/自動テーマを切り替えられる", async ({ page }) => {

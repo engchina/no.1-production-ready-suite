@@ -257,6 +257,7 @@ from .object_visibility import (
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
+    SelectAiCredentialMissingError,
     TabularImportValidationError,
 )
 from .sql_semantics import parse_oracle_sql
@@ -2846,29 +2847,6 @@ class Nl2SqlService:
         self._catalog = filter_user_visible_catalog(self._catalog)
         return self._catalog
 
-    def refresh_catalog(self) -> SchemaCatalog:
-        if self._incremental_repository is not None:
-            job = self.start_schema_refresh_job(dispatch=False)
-            # Legacy synchronous API remains available only as a compatibility path.
-            self._run_schema_refresh_job(job.job_id)
-            completed = self.get_schema_refresh_job(job.job_id)
-            if completed is None or completed.status != SchemaRefreshJobStatus.DONE:
-                raise Nl2SqlPersistenceUnavailable("schema_refresh_failed")
-            return self.get_catalog()
-        if self._use_oracle_runtime():
-            owners = self._oracle_adapter.fetch_schema_owners()
-            self._catalog = self._oracle_adapter.fetch_catalog(include_samples=False).model_copy(
-                update={
-                    "current_owner": owners.current_owner,
-                    "excluded_oracle_maintained_count": (owners.excluded_oracle_maintained_count),
-                }
-            )
-            self._persist_state()
-            return self._catalog
-        self._catalog = self._build_default_catalog()
-        self._persist_state()
-        return self._catalog
-
     def _submit_schema_refresh_after_admin_mutation(
         self,
         *,
@@ -4380,7 +4358,11 @@ class Nl2SqlService:
             "object_list": self._select_ai_object_list(self.profile_allowed_object_names(profile)),
         }
         credential_name = settings.nl2sql_select_ai_credential_name.strip()
-        region = config.region.strip() or settings.oci_region.strip()
+        region = (
+            config.region.strip()
+            or settings.nl2sql_select_ai_region.strip()
+            or settings.oci_region.strip()
+        )
         model = config.model.strip() or settings.nl2sql_select_ai_model.strip()
         embedding_model = (
             config.embedding_model.strip()
@@ -12647,6 +12629,8 @@ class Nl2SqlService:
                 actual_scope=set(),
                 warning=str(exc),
             )
+            if isinstance(exc, SelectAiCredentialMissingError):
+                raise
             return SelectAiDbProfileMutationData(
                 runtime="oracle",
                 executed=False,

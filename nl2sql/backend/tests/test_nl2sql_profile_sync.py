@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,10 @@ from app.features.nl2sql.models import (
     SelectAiDbProfileMutationData,
 )
 from app.features.nl2sql.ontology_store import InMemoryOntologyStore
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
+from app.features.nl2sql.oracle_adapter import (
+    OracleNl2SqlAdapter,
+    SelectAiCredentialMissingError,
+)
 from app.features.nl2sql.profile_sync import ProfileSyncService
 from app.settings import Settings
 
@@ -139,6 +143,42 @@ def test_profile_sync_failure_is_persisted_and_retryable(
     assert service.oracle_calls == 2
 
 
+def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingCredentialService(_FakeProfileService):
+        def upsert_profile_select_ai_profile(
+            self,
+            profile_id: str,
+            _request: object,
+        ) -> SelectAiDbProfileMutationData:
+            assert profile_id == self.profile.id
+            self.oracle_calls += 1
+            error = SelectAiCredentialMissingError("OCI_CRED", "ADMIN")
+            error.__cause__ = RuntimeError("ORA-06512: at line 2291 private stack")
+            raise error
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = MissingCredentialService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="missing-credential",
+    )
+
+    failed = sync.run_persisted(started.job_id)
+
+    assert failed.status == ProfileSyncJobStatus.FAILED
+    assert failed.error_code == "SELECT_AI_CREDENTIAL_MISSING"
+    assert "OCI_CRED" in failed.error_message_ja
+    assert "データベース設定" in failed.error_message_ja
+    assert "ORA-" not in failed.error_message_ja
+    retried = sync.retry(failed.job_id)
+    assert retried.retry_of_job_id == failed.job_id
+
+
 def test_profile_sync_can_be_cancelled_before_worker_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -213,3 +253,56 @@ def test_drop_profile_compatibility_signatures_stop_after_first_success() -> Non
     adapter._drop_cloud_ai_profile_best_effort(cursor, "INVOICE_PROFILE")  # noqa: SLF001
 
     assert cursor.calls == 1
+
+
+def test_select_ai_credential_preflight_happens_before_profile_drop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statements: list[str] = []
+
+    class Cursor:
+        result: tuple[object, ...] = ()
+
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            statements.append(sql)
+            if "CURRENT_SCHEMA" in sql:
+                self.result = ("ADMIN",)
+            elif "USER_CREDENTIALS" in sql:
+                self.result = (0,)
+            else:
+                raise AssertionError(
+                    "Credential preflight 後に Profile mutation が実行されました。"
+                )
+
+        def fetchone(self) -> tuple[object, ...]:
+            return self.result
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    adapter = OracleNl2SqlAdapter(Settings())
+
+    @contextmanager
+    def fake_connection() -> object:
+        yield Connection()
+
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+
+    with pytest.raises(SelectAiCredentialMissingError) as exc_info:
+        adapter.upsert_select_ai_profile_low_level(
+            profile_name="INVOICE_PROFILE",
+            original_name="OLD_PROFILE",
+            attributes={"provider": "oci", "credential_name": "OCI_CRED"},
+        )
+
+    assert exc_info.value.code == "SELECT_AI_CREDENTIAL_MISSING"
+    assert any("USER_CREDENTIALS" in sql for sql in statements)
+    assert all("DROP_PROFILE" not in sql for sql in statements)
+    assert all("CREATE_PROFILE" not in sql for sql in statements)

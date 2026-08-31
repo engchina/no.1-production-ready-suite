@@ -1,7 +1,7 @@
 import { Search } from "lucide-react";
 
 const INPUT_CLASS =
-  "min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted";
+  "min-h-[44px] w-full rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted";
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -21,6 +21,20 @@ export interface DbObjectSearchOwnerFieldsProps {
   ownerPlaceholder: string;
   ownerValue: string;
   onOwnerChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}
+
+export interface DbManagementSelectOption<T extends string = string> {
+  value: T;
+  label: string;
+}
+
+export interface DbManagementSelectFieldProps<T extends string = string> {
+  label: string;
+  value: T;
+  options: readonly DbManagementSelectOption<T>[];
+  onChange: (value: T) => void;
   disabled?: boolean;
   className?: string;
 }
@@ -78,6 +92,33 @@ export function DbOwnerPrefixFilterField({
         autoComplete="off"
         spellCheck={false}
       />
+    </label>
+  );
+}
+
+export function DbManagementSelectField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+  className = "",
+}: DbManagementSelectFieldProps<T>) {
+  return (
+    <label className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+      <span>{label}</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.value as T)}
+        className={INPUT_CLASS}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

@@ -34,6 +34,7 @@ import {
 import {
   DB_OBJECT_PICKER_SHORT_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
+  DbManagementSelectField,
   DropDbObjectDialog,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
@@ -1128,18 +1129,17 @@ function PreviewControlsPanel({
               onChange: onPreviewObjectOwnerPrefixChange,
             }}
           >
-            <label className="grid gap-1 text-sm font-medium text-foreground sm:w-36">
-              <span>{t("dataMgmt.preview.kindFilter")}</span>
-              <select
-                value={previewObjectKindFilter}
-                onChange={(event) => onPreviewObjectKindFilterChange(event.currentTarget.value as PreviewObjectKindFilter)}
-                className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-              >
-                <option value="all">{t("dataMgmt.preview.kindFilterAll")}</option>
-                <option value="table">{t("dataMgmt.preview.kindFilterTable")}</option>
-                <option value="view">{t("dataMgmt.preview.kindFilterView")}</option>
-              </select>
-            </label>
+            <DbManagementSelectField
+              label={t("dataMgmt.preview.kindFilter")}
+              value={previewObjectKindFilter}
+              options={[
+                { value: "all", label: t("dataMgmt.preview.kindFilterAll") },
+                { value: "table", label: t("dataMgmt.preview.kindFilterTable") },
+                { value: "view", label: t("dataMgmt.preview.kindFilterView") },
+              ]}
+              className="sm:w-48"
+              onChange={onPreviewObjectKindFilterChange}
+            />
           </DbObjectSelectorToolbar>
           {initialLoading ? (
             <DbManagementLoadingSkeleton

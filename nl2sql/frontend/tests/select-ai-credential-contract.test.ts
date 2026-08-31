@@ -1,0 +1,65 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
+const databaseSettingsSource = readFileSync(
+  new URL("../src/components/settings/DatabaseSettingsClient.tsx", import.meta.url),
+  "utf8",
+);
+const profilePageSource = readFileSync(
+  new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
+  "utf8",
+);
+const profileProgressSource = readFileSync(
+  new URL("../src/features/nl2sql/components/ProfileSaveProgress.tsx", import.meta.url),
+  "utf8",
+);
+
+test("Select AI Credential API keeps the fixed name and supported region contract", () => {
+  assert.match(
+    apiSource,
+    /export type SelectAiCredentialRegion = "ap-osaka-1" \| "us-chicago-1"/u,
+  );
+  assert.match(apiSource, /credential_name: "OCI_CRED"/u);
+  assert.match(apiSource, /getSelectAiCredential/u);
+  assert.match(apiSource, /createSelectAiCredential/u);
+  assert.match(queriesSource, /selectAiCredential/u);
+  assert.match(queriesSource, /useCreateSelectAiCredential/u);
+});
+
+test("database settings exposes create, explicit recreate, readiness and fixed feedback", () => {
+  assert.match(databaseSettingsSource, /data-testid="select-ai-credential-card"/u);
+  assert.match(databaseSettingsSource, /SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE"/u);
+  assert.match(databaseSettingsSource, /data\.oci_auth_ready/u);
+  assert.match(databaseSettingsSource, /data\.exists \? "danger" : "primary"/u);
+  assert.match(databaseSettingsSource, /tone: "danger"/u);
+  assert.match(databaseSettingsSource, /dismissOnOverlay: false/u);
+  assert.match(databaseSettingsSource, /<ExecutionConfirmationField/u);
+  assert.match(databaseSettingsSource, /<FormStatus[\s\S]*tone="danger"/u);
+  assert.match(databaseSettingsSource, /data-testid="select-ai-credential-success"/u);
+});
+
+test("new Profiles use the Select AI default while existing explicit regions remain mapped", () => {
+  assert.match(profilePageSource, /useSelectAiCredential\(\)/u);
+  assert.match(
+    profilePageSource,
+    /emptyProfileForm\(selectAiCredentialQuery\.data\?\.region\)/u,
+  );
+  assert.match(profilePageSource, /selectedProfile\s*\? profileToForm\(selectedProfile\)/u);
+});
+
+test("credential-missing Profile sync uses one fixed error surface and recovery link", () => {
+  assert.match(profileProgressSource, /SELECT_AI_CREDENTIAL_MISSING/u);
+  assert.match(profileProgressSource, /settingsDatabase/u);
+  assert.match(profileProgressSource, /profiles\.oracle\.sync\.openDatabaseSettings/u);
+  assert.doesNotMatch(
+    profilePageSource,
+    /job\.status === "failed"[\s\S]{0,160}toastError\(t\("profiles\.oracle\.sync\.failed"\)\)/u,
+  );
+  assert.doesNotMatch(
+    profilePageSource,
+    /toastError\(t\("profiles\.oracle\.sync\.savedButFailed"\)\)/u,
+  );
+});

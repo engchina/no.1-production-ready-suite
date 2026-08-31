@@ -50,21 +50,29 @@ test("データ管理プレビューは所有者前方一致入力と種別フ�
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.rowFilter"\)/u);
 });
 
-test("対象6画面の検索・所有者文言と44px入力を共通化する", () => {
+test("対象画面の検索・所有者・種類フィルタを共通化する", () => {
   assert.equal(t("dbAdmin.search.label"), "検索");
   assert.equal(t("dbAdmin.search.placeholder"), "名前・コメントを入力");
   assert.equal(t("dbAdmin.owner.label"), "所有者");
   assert.equal(t("dbAdmin.ownerPrefix.placeholder"), "所有者の先頭を入力（例：ADM）");
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSearchField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbOwnerPrefixFilterField/u);
+  assert.match(dbObjectFilterFieldsSource, /export function DbManagementSelectField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbObjectSearchOwnerFields/u);
   assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
-  assert.match(dbObjectFilterFieldsSource, /min-h-11/u);
+  assert.match(dbObjectFilterFieldsSource, /min-h-\[44px\]/u);
   assert.match(dbObjectFilterFieldsSource, /disabled:cursor-not-allowed/u);
   assert.match(dbObjectFilterFieldsSource, /focus:ring-2/u);
   assert.match(dbObjectFilterFieldsSource, /event\.currentTarget\.value\.toUpperCase\(\)/u);
   assert.match(dbObjectSharedSource, /from "@\/components\/DbObjectFilterFields"/u);
   assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields/u);
+  assert.match(dbObjectSharedSource, /ownerPrefixField && children/u);
+  assert.match(
+    dbObjectSharedSource,
+    /md:grid-cols-2 xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)_auto\] xl:items-end/u
+  );
+  assert.match(dataManagementSource, /<DbManagementSelectField[\s\S]{0,450}className="sm:w-48"/u);
+  assert.match(metadataSqlManagementSource, /<DbManagementSelectField[\s\S]{0,450}className="sm:w-48"/u);
   assert.doesNotMatch(dbObjectSharedSource, /md:grid-cols-\[minmax\(0,1fr\)_13rem\]/u);
 });
 

@@ -73,7 +73,10 @@ test("schema refresh formatter never invents unknown totals and clears success h
 
 test("active discovery and durable job hooks use focus recovery and one-second active polling", () => {
   const hooks = source("../src/features/nl2sql/incrementalQueries.ts");
+  assert.match(hooks, /apiPost<SchemaRefreshJob>\("\/api\/schema\/refresh-jobs"/u);
   assert.match(hooks, /\/api\/schema\/refresh-jobs\/active/u);
+  assert.doesNotMatch(hooks, /\/api\/schema\/refresh["']/u);
+  assert.doesNotMatch(hooks, /legacyCatalogOverride/u);
   assert.match(hooks, /refetchOnMount: "always"/u);
   assert.match(hooks, /refetchOnReconnect: "always"/u);
   assert.match(hooks, /refetchOnWindowFocus: "always"/u);

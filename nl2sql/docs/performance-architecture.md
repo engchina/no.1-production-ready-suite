@@ -18,7 +18,8 @@ Ontology graph、embedding を読み込まない。構造再取得や AI 処理�
 | `long-running` | HTTP 実行禁止 | durable job + worker。lease、heartbeat、再開、coalescing 必須 |
 
 timeout とユーザー取消は区別する。取消はエラー表示せず、timeout は現在の表示を保持して再試行を出す。
-legacy fallback は 404/410/501 の互換性エラーだけに限定し、network/timeout/5xx で重い旧 API を呼ばない。
+参照系の legacy fallback は 404/410/501 の互換性エラーだけに限定する。Schema refresh は
+旧同期 API へ fallback せず、durable job の submit/status API だけを使用する。
 
 ユーザーが直接見ている処理は、処理領域内に経過時間を表示する。`interactive-list` は 60 秒、
 `interactive-detail` は 30 秒、`job-control` は 5 秒の予算を共有定数から適用し、それを超える実処理は

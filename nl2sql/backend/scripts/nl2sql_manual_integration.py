@@ -43,6 +43,7 @@ from app.features.nl2sql.models import (
     PreviewRequest,
     SampleDataMutationRequest,
     SampleDataStep,
+    SchemaRefreshJobStatus,
     SimilarHistoryRequest,
     SyntheticDataGenerateRequest,
 )
@@ -294,13 +295,36 @@ def _refresh_catalog(enabled: bool) -> StepResult:
             message=f"using cached catalog; tables={len(catalog.tables)}",
         )
     try:
-        catalog = nl2sql_service.refresh_catalog()
+        job = nl2sql_service.start_schema_refresh_job(
+            dispatch=False,
+            source="manual_integration",
+        )
+        if job.status != SchemaRefreshJobStatus.DONE:
+            nl2sql_service.run_next_schema_refresh_job()
+        completed = nl2sql_service.get_schema_refresh_job(job.job_id) or job
+        if completed.status != SchemaRefreshJobStatus.DONE:
+            status = completed.status
+            status_value = status.value if hasattr(status, "value") else str(status)
+            return StepResult(
+                name="schema_catalog",
+                ok=False,
+                message=(
+                    f"refresh job {completed.job_id} status={status_value}; "
+                    f"error_code={completed.error_code or '-'}"
+                ),
+            )
+        catalog = nl2sql_service.get_catalog()
+        catalog_version = completed.catalog_version
     except Exception as exc:
         return StepResult(name="schema_catalog", ok=False, message=str(exc))
     return StepResult(
         name="schema_catalog",
         ok=True,
-        message=f"refreshed; tables={len(catalog.tables)}; refreshed_at={catalog.refreshed_at}",
+        message=(
+            f"refreshed via job={completed.job_id}; tables={len(catalog.tables)}; "
+            f"catalog_version={catalog_version if catalog_version is not None else '-'}; "
+            f"refreshed_at={catalog.refreshed_at}"
+        ),
     )
 
 

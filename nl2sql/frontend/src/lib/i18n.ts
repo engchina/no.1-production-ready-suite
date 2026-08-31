@@ -1288,6 +1288,9 @@ const nl2sqlJa = {
   "profiles.oracle.sync.succeeded": "Oracle Profile の反映が完了しました。",
   "profiles.oracle.sync.failed": "業務 Profile は保存されましたが、Oracle 反映に失敗しました。",
   "profiles.oracle.sync.savedButFailed": "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。",
+  "profiles.oracle.sync.credentialMissing":
+    "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.sync.openDatabaseSettings": "データベース設定を開く",
   "profiles.oracle.progress.title": "業務プロファイル保存・Oracle反映",
   "profiles.oracle.progress.stepsLabel": "業務プロファイル保存とOracle反映の処理ステップ",
   "profiles.oracle.progress.jobId": "ジョブ {id}",

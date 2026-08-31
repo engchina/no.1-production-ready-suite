@@ -371,10 +371,7 @@ function ExecutableNl2SqlWorkbench() {
       setPageError(null);
       return;
     }
-    if (
-      (pageError.source === "schema-load" || pageError.source === "schema-refresh") &&
-      schemaCatalogHasObjects
-    ) {
+    if (pageError.source === "schema-load" && schemaCatalogHasObjects) {
       setPageError(null);
     }
   }, [

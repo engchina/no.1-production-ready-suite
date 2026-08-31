@@ -1,10 +1,12 @@
-import { Bot, RefreshCw } from "lucide-react";
+import { Bot, Database, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Banner } from "@engchina/production-ready-ui";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 
 import { engineLabel } from "../labels";
 import {
@@ -45,11 +47,23 @@ function progressMessage(job: ProfileSyncJobData | null, status: ProfileSaveProg
 }
 
 function failureMessage(job: ProfileSyncJobData | null, submissionError: string) {
+  if (job?.error_code === "SELECT_AI_CREDENTIAL_MISSING") {
+    return t("profiles.oracle.sync.credentialMissing");
+  }
   const detail = submissionError || job?.error_message_ja || "";
   const summary = submissionError
     ? t("profiles.oracle.sync.savedButFailed")
     : t("profiles.oracle.sync.failed");
   return detail ? `${summary} ${detail}` : summary;
+}
+
+function credentialSettingsHref(job: ProfileSyncJobData | null) {
+  const returnParams = new URLSearchParams();
+  if (job?.profile_id) returnParams.set("profile", job.profile_id);
+  if (job?.job_id) returnParams.set("syncJobId", job.job_id);
+  const returnTo = `${APP_ROUTES.profiles}?${returnParams.toString()}`;
+  const settingsParams = new URLSearchParams({ returnTo });
+  return `${APP_ROUTES.settingsDatabase}?${settingsParams.toString()}#select-ai-credential`;
 }
 
 function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
@@ -106,6 +120,7 @@ export function ProfileSaveProgress({
   if (!presentation) return null;
 
   const failed = presentation.status === "failed" || presentation.status === "submission_failed";
+  const credentialMissing = job?.error_code === "SELECT_AI_CREDENTIAL_MISSING";
   const shortJobId = job
     ? `${job.job_id.slice(0, 12)}${job.job_id.length > 12 ? "…" : ""}`
     : "";
@@ -156,16 +171,28 @@ export function ProfileSaveProgress({
             severity="danger"
             className="mx-4 mb-4"
             action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={retrying}
-                onClick={onRetry}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
-                <span>{t("profiles.oracle.sync.retry")}</span>
-              </Button>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                {credentialMissing ? (
+                  <Link
+                    to={credentialSettingsHref(job)}
+                    className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
+                  >
+                    <Database size={15} aria-hidden="true" />
+                    <span>{t("profiles.oracle.sync.openDatabaseSettings")}</span>
+                  </Link>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  loading={retrying}
+                  onClick={onRetry}
+                >
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("profiles.oracle.sync.retry")}</span>
+                </Button>
+              </div>
             }
           >
             {failureMessage(job, submissionError)}

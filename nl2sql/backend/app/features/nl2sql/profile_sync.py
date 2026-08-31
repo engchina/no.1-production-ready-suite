@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from .models import (
 )
 from .ontology_observability import record_job
 from .ontology_store import OntologyStore, OntologyVersionConflict, canonical_json
+from .oracle_adapter import OracleAdapterError, SelectAiCredentialMissingError
 from .service import Nl2SqlService, nl2sql_service
 
 logger = logging.getLogger(__name__)
@@ -31,10 +33,37 @@ _TERMINAL_STATUSES = {
     ProfileSyncJobStatus.FAILED,
     ProfileSyncJobStatus.CANCELLED,
 }
+_ORACLE_ERROR_CODE_RE = re.compile(r"\bORA-\d{4,5}\b", re.IGNORECASE)
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _profile_sync_public_error(exc: Exception) -> tuple[str, str]:
+    """既知 Oracle 例外を復旧可能な日本語へ変換し、PL/SQL stack を公開しない。"""
+    if isinstance(exc, SelectAiCredentialMissingError):
+        return (
+            exc.code,
+            (
+                f'Select AI Credential "{exc.schema_name}"."{exc.credential_name}" '
+                "が存在しません。データベース設定で Credential を作成してから、"
+                "Oracle 反映を再試行してください。"
+            ),
+        )
+    if isinstance(exc, OracleAdapterError) or _ORACLE_ERROR_CODE_RE.search(str(exc)):
+        return (
+            "PROFILE_SYNC_FAILED",
+            (
+                "Oracle Profile の反映に失敗しました。データベース設定と Select AI の"
+                "構成を確認してから再試行してください。"
+            ),
+        )
+    detail = str(exc).strip()
+    message = "Oracle Profile の反映に失敗しました。"
+    if detail:
+        message = f"{message} {detail[:500]}"
+    return "PROFILE_SYNC_FAILED", f"{message} 再試行してください。"
 
 
 class ProfileSyncService:
@@ -280,7 +309,19 @@ class ProfileSyncService:
         try:
             self._execute(job_id)
         except Exception as exc:  # pragma: no cover - 最終防壁は status で検証する
-            logger.warning("profile_sync_job_failed", exc_info=True, extra={"job_id": job_id})
+            error_code, public_message = _profile_sync_public_error(exc)
+            oracle_code_match = _ORACLE_ERROR_CODE_RE.search(str(exc))
+            logger.warning(
+                "profile_sync_job_failed",
+                exc_info=True,
+                extra={
+                    "job_id": job_id,
+                    "error_code": error_code,
+                    "oracle_error_code": (
+                        oracle_code_match.group(0).upper() if oracle_code_match else ""
+                    ),
+                },
+            )
             current = self.get(job_id)
             if current is None or current.status == ProfileSyncJobStatus.CANCELLED:
                 return
@@ -288,10 +329,8 @@ class ProfileSyncService:
                 update={
                     "status": ProfileSyncJobStatus.FAILED,
                     "phase": ProfileSyncJobPhase.FAILED,
-                    "error_code": "PROFILE_SYNC_FAILED",
-                    "error_message_ja": (
-                        f"Oracle Profile の反映に失敗しました: {exc} 再試行してください。"
-                    ),
+                    "error_code": error_code,
+                    "error_message_ja": public_message,
                     "finished_at": _now(),
                 }
             )
@@ -299,7 +338,7 @@ class ProfileSyncService:
             record_job(
                 job_type="profile_sync",
                 status="failed",
-                error_code="PROFILE_SYNC_FAILED",
+                error_code=error_code,
             )
 
     def _assert_current_profile(self, job: ProfileSyncJobData) -> None:

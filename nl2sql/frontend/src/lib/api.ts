@@ -427,6 +427,25 @@ export interface DatabaseSettingsData {
   config_source: "runtime";
 }
 
+export type SelectAiCredentialRegion = "ap-osaka-1" | "us-chicago-1";
+export type SelectAiCredentialOperation = "created" | "recreated" | "already_exists";
+
+export interface SelectAiCredentialData {
+  credential_name: "OCI_CRED";
+  schema_name: string;
+  exists: boolean;
+  region: SelectAiCredentialRegion;
+  oci_auth_ready: boolean;
+  missing_fields: string[];
+  operation: SelectAiCredentialOperation | null;
+}
+
+export interface SelectAiCredentialCreateRequest {
+  region: SelectAiCredentialRegion;
+  confirmation: string;
+  recreate: boolean;
+}
+
 export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
 export type SystemTableOperationStatus = "idle" | "running" | "failed";
 export type SystemTableOperationResult =
@@ -858,6 +877,16 @@ export const api = {
     settingsRequest<DatabaseSettingsData>("/api/settings/database", {
       signal: options.signal,
     }),
+  getSelectAiCredential: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SelectAiCredentialData>(
+      "/api/settings/database/select-ai-credential",
+      { signal: options.signal }
+    ),
+  createSelectAiCredential: (body: SelectAiCredentialCreateRequest) =>
+    settingsRequest<SelectAiCredentialData>(
+      "/api/settings/database/select-ai-credential",
+      jsonBody(body)
+    ),
   getSystemTablesStatus: (options: ApiRequestOptions = {}) =>
     settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables", {
       signal: options.signal,

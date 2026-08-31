@@ -25,8 +25,6 @@ import {
 import { profileSummaryPageFromLegacyList } from "./profileListState";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
-let legacyCatalogOverride: SchemaCatalog | null = null;
-
 const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
 
 export type DbAdminObjectQueryScope = "all" | "name_comment";
@@ -36,7 +34,6 @@ export function isLegacyCompatibilityError(error: unknown): boolean {
 }
 
 async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
-  if (legacyCatalogOverride) return filterUserVisibleCatalog(legacyCatalogOverride);
   return filterUserVisibleCatalog(
     await apiGet<SchemaCatalog>("/api/schema/catalog", {
       signal,
@@ -404,23 +401,6 @@ export function useStartSchemaRefresh() {
     mutationFn: () =>
       apiPost<SchemaRefreshJob>("/api/schema/refresh-jobs", undefined, {
         timeoutMs: API_TIMEOUT_MS.jobControl,
-      }).catch(async (error: unknown) => {
-        if (!isLegacyCompatibilityError(error)) throw error;
-        legacyCatalogOverride = filterUserVisibleCatalog(
-          await apiPost<SchemaCatalog>("/api/schema/refresh", {}, {
-            timeoutMs: API_TIMEOUT_MS.jobControl,
-          })
-        );
-        return {
-          job_id: "",
-          status: "done" as const,
-          created_at: new Date().toISOString(),
-          scanned_objects: legacyCatalogOverride.tables.length,
-          changed_objects: legacyCatalogOverride.tables.length,
-          deleted_objects: 0,
-          catalog_version: 0,
-          error_code: "",
-        };
       }),
   });
 }

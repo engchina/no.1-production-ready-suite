@@ -196,7 +196,8 @@ class Settings(BaseServiceSettings):
     nl2sql_enterprise_ai_direct_enabled: bool = True
     nl2sql_select_ai_profile_prefix: str = "NL2SQL"
     nl2sql_select_ai_provider: str = "oci"
-    nl2sql_select_ai_credential_name: str = ""
+    nl2sql_select_ai_credential_name: str = "OCI_CRED"
+    nl2sql_select_ai_region: str = "ap-osaka-1"
     nl2sql_select_ai_model: str = ""
     nl2sql_schema_owner_allowlist: list[str] = Field(default_factory=list)
     nl2sql_schema_sample_rows: int = 3

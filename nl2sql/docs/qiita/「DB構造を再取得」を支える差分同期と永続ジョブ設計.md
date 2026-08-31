@@ -161,13 +161,12 @@ GET /api/schema/refresh-jobs/{job_id}
 
 `total_objects` が確定するまでは、UI は無理に `0/0` を表示しません。値が確定した後だけ、たとえば「DB 構造再取得: 保存中 218/218」と表示します。
 
-### 旧同期 API
+### 同期 API の削除
 
-```http
-POST /api/schema/refresh
-```
-
-旧 API は互換用に残っていますが、`Deprecation: true`、`Sunset: Wed, 30 Sep 2026 00:00:00 GMT`、後継 API を示す `Link` header を返します。フロントエンドも 404/410/501 の互換性エラー時だけ旧 API へ fallback し、timeout や 5xx を理由に重い同期 API を呼び直すことはありません。
+Schema refresh の同期 API は削除済みです。フロントエンドと外部クライアントは
+`POST /api/schema/refresh-jobs` で job を投入し、`GET /api/schema/refresh-jobs/{job_id}` または
+`GET /api/schema/refresh-jobs/active` で進捗を確認します。job 投入に失敗した場合も旧同期 API へ
+fallback せず、固定エラー表示と手動再試行に委ねます。
 
 ## `LAST_DDL_TIME` を使った差分検出
 

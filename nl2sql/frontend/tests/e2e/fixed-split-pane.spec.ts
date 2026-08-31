@@ -18,12 +18,6 @@ async function mockTableManagementApi(page: Page) {
       tables: [],
     })
   );
-  await page.route("**/api/schema/refresh", (route) =>
-    fulfillJson(route, {
-      refreshed_at: "2026-06-21T10:00:00.000Z",
-      tables: [],
-    })
-  );
   await page.route("**/api/nl2sql/db-admin/tables", (route) =>
     fulfillJson(route, {
       runtime: "deterministic",

@@ -549,8 +549,6 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed("menu.settings_system_tables")
     if route_path.startswith("/settings/database"):
         return _allowed("menu.settings_database")
-    if route_path == "/schema/refresh":
-        return _allowed(SCHEMA_REFRESH_PERMISSION)
     if route_path.startswith("/schema/refresh-jobs"):
         if method == "POST":
             return _allowed(SCHEMA_REFRESH_PERMISSION)

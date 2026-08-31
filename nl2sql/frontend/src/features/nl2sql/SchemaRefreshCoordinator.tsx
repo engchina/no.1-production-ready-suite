@@ -117,7 +117,7 @@ export function SchemaRefreshCoordinator({
 
   useEffect(() => {
     if (!job || (job.status !== "done" && job.status !== "error")) return;
-    const reportKey = `${job.job_id || "legacy"}:${job.status}`;
+    const reportKey = `${job.job_id}:${job.status}`;
     if (reportedTerminal.current === reportKey) return;
     reportedTerminal.current = reportKey;
     setCompletedJob(job);

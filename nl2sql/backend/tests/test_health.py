@@ -3878,3 +3878,12 @@ async def test_schema_import_csv_route_was_removed() -> None:
         )
 
     assert resp.status_code == 404
+
+
+async def test_schema_refresh_sync_route_was_removed_from_runtime_and_openapi() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        resp = await client.post("/api/schema/refresh")
+
+    assert resp.status_code == 404
+    assert "/api/schema/refresh" not in app.openapi()["paths"]
+    assert "/api/schema/refresh-jobs" in app.openapi()["paths"]

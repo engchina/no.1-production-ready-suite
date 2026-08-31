@@ -5,13 +5,14 @@ import {
   Database,
   Eye,
   EyeOff,
+  ListChecks,
   Plus,
   Save,
   TestTube2,
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
-import { toast } from "@engchina/production-ready-ui";
+import { FormStatus, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -22,7 +23,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { InputActionField } from "@/components/ui/input-action-field";
 import { RequiredIndicator } from "@/components/ui/required-field";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
@@ -34,7 +34,6 @@ import {
   ApiError,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiModelSettings,
-  type EnterpriseAiVlmInputMode,
   type GenerativeAiModelSettings,
   type ModelSettingsData,
   type ModelSettingsPayload,
@@ -47,24 +46,7 @@ import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "
 import { cn } from "@/lib/utils";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
-
-const VLM_INPUT_MODE_OPTIONS = [
-  {
-    value: "auto",
-    label: t("settings.model.enterprise.vlmInputMode.auto"),
-    description: t("settings.model.enterprise.vlmInputMode.auto.description"),
-  },
-  {
-    value: "files_api",
-    label: t("settings.model.enterprise.vlmInputMode.filesApi"),
-    description: t("settings.model.enterprise.vlmInputMode.filesApi.description"),
-  },
-  {
-    value: "inline_image",
-    label: t("settings.model.enterprise.vlmInputMode.inlineImage"),
-    description: t("settings.model.enterprise.vlmInputMode.inlineImage.description"),
-  },
-] as const satisfies readonly SelectFieldOption<EnterpriseAiVlmInputMode>[];
+type ModelSaveSection = "enterprise_connection" | "enterprise_models" | "generative_ai";
 
 /** モデル設定画面。既存 Settings のランタイム値を編集する。 */
 export function ModelSettingsClient() {
@@ -76,7 +58,10 @@ export function ModelSettingsClient() {
   const [draft, setDraft] = useState<ModelSettingsPayload | null>(null);
   const [baselineData, setBaselineData] = useState<ModelSettingsData | null>(null);
   const [checkData, setCheckData] = useState<ModelSettingsData | null>(null);
-  const [errorText, setErrorText] = useState("");
+  const [saveErrors, setSaveErrors] = useState<
+    Partial<Record<ModelSaveSection, string>>
+  >({});
+  const [activeSaveSection, setActiveSaveSection] = useState<ModelSaveSection | null>(null);
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
   const [testResults, setTestResults] = useState<Partial<Record<ModelTestKey, ModelSettingsTestResult>>>({});
@@ -90,6 +75,7 @@ export function ModelSettingsClient() {
   }, [draft, query.data]);
 
   const canSubmit = Boolean(draft);
+  const saveInProgress = activeSaveSection !== null;
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
@@ -110,7 +96,7 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setErrorText("");
+    clearSaveError(key === "default_model_id" ? "enterprise_models" : "enterprise_connection");
   };
 
   const updateGenerative = <K extends keyof GenerativeAiModelSettings>(
@@ -127,7 +113,7 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults((current) => ({ ...current, embedding: undefined, rerank: undefined }));
-    setErrorText("");
+    clearSaveError("generative_ai");
   };
 
   const updateApiKeyClear = (clear: boolean) => {
@@ -145,7 +131,7 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setErrorText("");
+    clearSaveError("enterprise_connection");
   };
 
   const updateEnterpriseModel = (
@@ -177,7 +163,7 @@ export function ModelSettingsClient() {
     });
     setCheckData(baselineData);
     setTestResults((current) => ({ ...current, [`enterprise:${index}`]: undefined }));
-    setErrorText("");
+    clearSaveError("enterprise_models");
   };
 
   const addEnterpriseModel = () => {
@@ -197,7 +183,7 @@ export function ModelSettingsClient() {
     );
     setCheckData(baselineData);
     setTestResults({});
-    setErrorText("");
+    clearSaveError("enterprise_models");
   };
 
   const removeEnterpriseModel = async (index: number) => {
@@ -230,15 +216,18 @@ export function ModelSettingsClient() {
     });
     setCheckData(baselineData);
     setTestResults({});
-    setErrorText("");
+    clearSaveError("enterprise_models");
   };
+
+  function clearSaveError(section: ModelSaveSection) {
+    setSaveErrors((current) => ({ ...current, [section]: undefined }));
+  }
 
   const handleTestModel = async (
     key: ModelTestKey,
     target: Omit<ModelSettingsTestRequest, "settings">
   ) => {
     if (!draft) return;
-    setErrorText("");
     setTestResults((current) => ({ ...current, [key]: undefined }));
     setTestingKey(key);
     try {
@@ -255,19 +244,31 @@ export function ModelSettingsClient() {
     }
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (
+    event: FormEvent<HTMLFormElement>,
+    section: ModelSaveSection
+  ) => {
     event.preventDefault();
-    if (!draft) return;
-    setErrorText("");
+    if (!draft || !baselineData || activeSaveSection) return;
+    clearSaveError(section);
+    setActiveSaveSection(section);
     try {
-      const data = await updateMutation.mutateAsync(draft);
+      const payload = buildSectionSavePayload(baselineData.settings, draft, section);
+      const data = await updateMutation.mutateAsync(payload);
       const saved = cloneSettings(data.settings);
-      setDraft(saved);
+      setDraft((current) =>
+        current ? mergeSavedSectionIntoDraft(current, saved, section) : saved
+      );
       setBaselineData(data);
       setCheckData(data);
-      toast.success(t("settings.model.saved"));
+      toast.success(t(MODEL_SAVE_SUCCESS_KEYS[section]));
     } catch (error) {
-      setErrorText(error instanceof ApiError ? error.message : t("settings.model.loadError"));
+      setSaveErrors((current) => ({
+        ...current,
+        [section]: error instanceof ApiError ? error.message : t("settings.model.saveError"),
+      }));
+    } finally {
+      setActiveSaveSection(null);
     }
   };
 
@@ -310,7 +311,7 @@ export function ModelSettingsClient() {
   return (
     <div>
       <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-      <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6 p-8">
+      <div className="space-y-6 p-8">
         {legacySecretDetected ? (
           <Banner
             severity="warning"
@@ -319,187 +320,203 @@ export function ModelSettingsClient() {
             {t("settings.model.legacySecret.description")}
           </Banner>
         ) : null}
-        {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
-
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Cpu size={16} className="text-primary" aria-hidden />
-                {t("settings.model.enterprise.title")}
-              </CardTitle>
-              <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-5 md:grid-cols-2">
-              <TextField
-                id="enterprise-endpoint"
-                label={t("settings.model.enterprise.endpoint")}
-                badge={t("settings.model.requiredInOci")}
-                value={draft.enterprise_ai.endpoint}
-                placeholder={t("settings.model.placeholder.endpoint")}
-                helper={t("settings.model.enterprise.endpointHelp")}
-                onChange={(value) => updateEnterprise("endpoint", value)}
-                className="md:col-span-2"
-              />
-              <TextField
-                id="enterprise-project-ocid"
-                label={t("settings.model.enterprise.project")}
-                badge={t("settings.model.requiredInOci")}
-                value={draft.enterprise_ai.project_ocid}
-                placeholder={t("settings.model.placeholder.project")}
-                helper={t("settings.model.enterprise.projectHelp")}
-                onChange={(value) => updateEnterprise("project_ocid", value)}
-                className="md:col-span-2"
-              />
-              <SecretField
-                id="enterprise-api-key"
-                label={t("settings.model.enterprise.apiKey")}
-                value={draft.enterprise_ai.api_key}
-                visible={apiKeyVisible}
-                disabled={draft.enterprise_ai.clear_api_key}
-                hasSavedSecret={draft.enterprise_ai.has_api_key}
-                placeholder={t("settings.model.placeholder.apiKey")}
-                helper={t("settings.model.enterprise.apiKeyHelp")}
-                onToggleVisible={() => setApiKeyVisible((current) => !current)}
-                onChange={(value) => updateEnterprise("api_key", value)}
-                className="md:col-span-2"
-              />
-              {draft.enterprise_ai.has_api_key ? (
-                <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30 md:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={draft.enterprise_ai.clear_api_key}
-                    onChange={(event) => updateApiKeyClear(event.target.checked)}
-                    className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+          <form
+            onSubmit={(event) => void handleSubmit(event, "enterprise_connection")}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Cpu size={16} className="text-primary" aria-hidden />
+                  {t("settings.model.enterprise.title")}
+                </CardTitle>
+                <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-5 md:grid-cols-2">
+                  <TextField
+                    id="enterprise-endpoint"
+                    label={t("settings.model.enterprise.endpoint")}
+                    badge={t("settings.model.requiredInOci")}
+                    value={draft.enterprise_ai.endpoint}
+                    placeholder={t("settings.model.placeholder.endpoint")}
+                    helper={t("settings.model.enterprise.endpointHelp")}
+                    onChange={(value) => updateEnterprise("endpoint", value)}
+                    className="md:col-span-2"
                   />
-                  <span className="text-foreground">
-                    {t("settings.model.enterprise.clearApiKey")}
-                  </span>
-                </label>
-              ) : null}
-              <ModelCatalogEditor
-                models={draft.enterprise_ai.models}
-                defaultModelId={draft.enterprise_ai.default_model_id}
-                testingKey={testingKey}
-                testResults={testResults}
-                onDefaultChange={(modelId) => updateEnterprise("default_model_id", modelId)}
-                onModelChange={updateEnterpriseModel}
-                onAdd={addEnterpriseModel}
-                onRemove={removeEnterpriseModel}
-                onTest={(key, target) => void handleTestModel(key, target)}
-              />
-              <TextField
-                id="enterprise-api-path"
-                label={t("settings.model.enterprise.apiPath")}
-                value={draft.enterprise_ai.api_path}
-                placeholder={t("settings.model.placeholder.apiPath")}
-                onChange={(value) => updateEnterprise("api_path", value)}
-                className="md:col-span-2"
-              />
-              <SelectField
-                id="enterprise-vlm-input-mode"
-                label={t("settings.model.enterprise.vlmInputMode")}
-                value={draft.enterprise_ai.vlm_input_mode}
-                options={VLM_INPUT_MODE_OPTIONS}
-                helper={t("settings.model.enterprise.vlmInputModeHelp")}
-                onValueChange={(value) => updateEnterprise("vlm_input_mode", value)}
-                className="md:col-span-2"
-              />
-              <NumberField
-                id="enterprise-timeout"
-                label={t("settings.model.enterprise.timeout")}
-                min={0.1}
-                max={600}
-                step={0.1}
-                value={draft.enterprise_ai.timeout_seconds}
-                onChange={(value) => updateEnterprise("timeout_seconds", value)}
-              />
-              <NumberField
-                id="enterprise-retries"
-                label={t("settings.model.enterprise.retries")}
-                min={0}
-                max={5}
-                step={1}
-                value={draft.enterprise_ai.max_retries}
-                onChange={(value) => updateEnterprise("max_retries", value)}
-              />
-            </CardContent>
-          </Card>
+                  <TextField
+                    id="enterprise-project-ocid"
+                    label={t("settings.model.enterprise.project")}
+                    badge={t("settings.model.requiredInOci")}
+                    value={draft.enterprise_ai.project_ocid}
+                    placeholder={t("settings.model.placeholder.project")}
+                    helper={t("settings.model.enterprise.projectHelp")}
+                    onChange={(value) => updateEnterprise("project_ocid", value)}
+                    className="md:col-span-2"
+                  />
+                  <SecretField
+                    id="enterprise-api-key"
+                    label={t("settings.model.enterprise.apiKey")}
+                    value={draft.enterprise_ai.api_key}
+                    visible={apiKeyVisible}
+                    disabled={draft.enterprise_ai.clear_api_key}
+                    hasSavedSecret={draft.enterprise_ai.has_api_key}
+                    placeholder={t("settings.model.placeholder.apiKey")}
+                    helper={t("settings.model.enterprise.apiKeyHelp")}
+                    onToggleVisible={() => setApiKeyVisible((current) => !current)}
+                    onChange={(value) => updateEnterprise("api_key", value)}
+                    className="md:col-span-2"
+                  />
+                  {draft.enterprise_ai.has_api_key ? (
+                    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30 md:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.enterprise_ai.clear_api_key}
+                        onChange={(event) => updateApiKeyClear(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+                      />
+                      <span className="text-foreground">
+                        {t("settings.model.enterprise.clearApiKey")}
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+                <ModelFormActions
+                  sectionLabel={t("settings.model.enterprise.title")}
+                  canSubmit={canSubmit}
+                  saving={activeSaveSection === "enterprise_connection"}
+                  disabled={saveInProgress}
+                  errorText={saveErrors.enterprise_connection}
+                  variant="secondary"
+                />
+              </CardContent>
+            </Card>
+          </form>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Database size={16} className="text-primary" aria-hidden />
-                {t("settings.model.genai.title")}
-              </CardTitle>
-              <CardDescription>{t("settings.model.genai.description")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-5 md:grid-cols-2">
-                <TestableTextField
-                  id="genai-embedding-model"
-                  label={t("settings.model.genai.embeddingModel")}
-                  value={draft.generative_ai.embedding_model}
-                  placeholder={t("settings.model.placeholder.embeddingModel")}
-                  onChange={(value) => updateGenerative("embedding_model", value)}
-                  testResult={testResults.embedding}
-                  testing={testingKey === "embedding"}
-                  onTest={() =>
-                    void handleTestModel("embedding", {
-                      target_type: "embedding",
-                      model_id: draft.generative_ai.embedding_model,
-                      vision_enabled: false,
-                    })
+          <form onSubmit={(event) => void handleSubmit(event, "enterprise_models")}>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ListChecks size={16} className="text-primary" aria-hidden />
+                  {t("settings.model.enterprise.models")}
+                </CardTitle>
+                <CardDescription>
+                  {t("settings.model.enterprise.modelsDescription")}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <ModelCatalogEditor
+                  models={draft.enterprise_ai.models}
+                  defaultModelId={draft.enterprise_ai.default_model_id}
+                  testingKey={testingKey}
+                  testResults={testResults}
+                  onDefaultChange={(modelId) =>
+                    updateEnterprise("default_model_id", modelId)
                   }
+                  onModelChange={updateEnterpriseModel}
+                  onAdd={addEnterpriseModel}
+                  onRemove={removeEnterpriseModel}
+                  onTest={(key, target) => void handleTestModel(key, target)}
                 />
-                <NumberField
-                  id="genai-embedding-dim"
-                  label={t("settings.model.genai.embeddingDim")}
-                  badge={t("settings.model.fixed")}
-                  value={draft.generative_ai.embedding_dim}
-                  min={1536}
-                  max={1536}
-                  step={1}
-                  readOnly
-                  helper={t("settings.model.genai.embeddingDimHelp")}
-                  onChange={(value) => updateGenerative("embedding_dim", value)}
+                <ModelFormActions
+                  sectionLabel={t("settings.model.enterprise.models")}
+                  canSubmit={canSubmit}
+                  saving={activeSaveSection === "enterprise_models"}
+                  disabled={saveInProgress}
+                  errorText={saveErrors.enterprise_models}
+                  variant="secondary"
                 />
-                <TestableTextField
-                  id="genai-rerank-model"
-                  label={t("settings.model.genai.rerankModel")}
-                  value={draft.generative_ai.rerank_model}
-                  placeholder={t("settings.model.placeholder.rerankModel")}
-                  onChange={(value) => updateGenerative("rerank_model", value)}
-                  className="md:col-span-2"
-                  testResult={testResults.rerank}
-                  testing={testingKey === "rerank"}
-                  onTest={() =>
-                    void handleTestModel("rerank", {
-                      target_type: "rerank",
-                      model_id: draft.generative_ai.rerank_model,
-                      vision_enabled: false,
-                    })
-                  }
+              </CardContent>
+            </Card>
+          </form>
+
+          <form onSubmit={(event) => void handleSubmit(event, "generative_ai")}>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database size={16} className="text-primary" aria-hidden />
+                  {t("settings.model.genai.title")}
+                </CardTitle>
+                <CardDescription>{t("settings.model.genai.description")}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-5 md:grid-cols-2">
+                  <TestableTextField
+                    id="genai-embedding-model"
+                    label={t("settings.model.genai.embeddingModel")}
+                    value={draft.generative_ai.embedding_model}
+                    placeholder={t("settings.model.placeholder.embeddingModel")}
+                    onChange={(value) => updateGenerative("embedding_model", value)}
+                    testResult={testResults.embedding}
+                    testing={testingKey === "embedding"}
+                    onTest={() =>
+                      void handleTestModel("embedding", {
+                        target_type: "embedding",
+                        model_id: draft.generative_ai.embedding_model,
+                        vision_enabled: false,
+                      })
+                    }
+                  />
+                  <NumberField
+                    id="genai-embedding-dim"
+                    label={t("settings.model.genai.embeddingDim")}
+                    badge={t("settings.model.fixed")}
+                    value={draft.generative_ai.embedding_dim}
+                    min={1536}
+                    max={1536}
+                    step={1}
+                    readOnly
+                    helper={t("settings.model.genai.embeddingDimHelp")}
+                    onChange={(value) => updateGenerative("embedding_dim", value)}
+                  />
+                  <TestableTextField
+                    id="genai-rerank-model"
+                    label={t("settings.model.genai.rerankModel")}
+                    value={draft.generative_ai.rerank_model}
+                    placeholder={t("settings.model.placeholder.rerankModel")}
+                    onChange={(value) => updateGenerative("rerank_model", value)}
+                    className="md:col-span-2"
+                    testResult={testResults.rerank}
+                    testing={testingKey === "rerank"}
+                    onTest={() =>
+                      void handleTestModel("rerank", {
+                        target_type: "rerank",
+                        model_id: draft.generative_ai.rerank_model,
+                        vision_enabled: false,
+                      })
+                    }
+                  />
+                </div>
+                <ModelFormActions
+                  sectionLabel={t("settings.model.genai.title")}
+                  canSubmit={canSubmit}
+                  saving={activeSaveSection === "generative_ai"}
+                  disabled={saveInProgress}
+                  errorText={saveErrors.generative_ai}
                 />
-              </div>
-              <ModelFormActions
-                canSubmit={canSubmit}
-                saving={updateMutation.isPending}
-              />
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </form>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
 
 function ModelFormActions({
+  sectionLabel,
   canSubmit,
   saving,
+  disabled,
+  errorText,
+  variant = "primary",
 }: {
+  sectionLabel: string;
   canSubmit: boolean;
   saving: boolean;
+  disabled: boolean;
+  errorText?: string;
+  variant?: "primary" | "secondary";
 }) {
   const saveLabel = saving ? t("settings.model.saving") : t("settings.model.save");
 
@@ -507,15 +524,19 @@ function ModelFormActions({
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
       <Button
         type="submit"
+        variant={variant}
         size="lg"
         className="whitespace-nowrap"
-        aria-label={`${t("nav.settingsModel")}: ${saveLabel}`}
-        disabled={!canSubmit}
+        aria-label={`${sectionLabel}: ${saveLabel}`}
+        disabled={!canSubmit || disabled}
         loading={saving}
       >
         {!saving ? <Save size={15} aria-hidden /> : null}
         {saveLabel}
       </Button>
+      {errorText ? (
+        <FormStatus tone="danger" message={errorText} className="min-w-0 flex-1" />
+      ) : null}
     </div>
   );
 }
@@ -989,5 +1010,69 @@ function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
       models: settings.enterprise_ai.models.map((model) => ({ ...model })),
     },
     generative_ai: { ...settings.generative_ai },
+  };
+}
+
+const MODEL_SAVE_SUCCESS_KEYS = {
+  enterprise_connection: "settings.model.enterprise.saved",
+  enterprise_models: "settings.model.enterprise.modelsSaved",
+  generative_ai: "settings.model.genai.saved",
+} as const satisfies Record<ModelSaveSection, Parameters<typeof t>[0]>;
+
+function buildSectionSavePayload(
+  baseline: ModelSettingsPayload,
+  draft: ModelSettingsPayload,
+  section: ModelSaveSection
+): ModelSettingsPayload {
+  const payload = cloneSettings(baseline);
+  if (section === "enterprise_connection") {
+    payload.enterprise_ai.endpoint = draft.enterprise_ai.endpoint;
+    payload.enterprise_ai.project_ocid = draft.enterprise_ai.project_ocid;
+    payload.enterprise_ai.api_key = draft.enterprise_ai.api_key;
+    payload.enterprise_ai.has_api_key = draft.enterprise_ai.has_api_key;
+    payload.enterprise_ai.clear_api_key = draft.enterprise_ai.clear_api_key;
+  } else if (section === "enterprise_models") {
+    payload.enterprise_ai.models = draft.enterprise_ai.models.map((model) => ({ ...model }));
+    payload.enterprise_ai.default_model_id = draft.enterprise_ai.default_model_id;
+  } else {
+    payload.generative_ai = { ...draft.generative_ai };
+  }
+  return payload;
+}
+
+function mergeSavedSectionIntoDraft(
+  draft: ModelSettingsPayload,
+  saved: ModelSettingsPayload,
+  section: ModelSaveSection
+): ModelSettingsPayload {
+  if (section === "enterprise_connection") {
+    return {
+      enterprise_ai: {
+        ...saved.enterprise_ai,
+        models: draft.enterprise_ai.models.map((model) => ({ ...model })),
+        default_model_id: draft.enterprise_ai.default_model_id,
+      },
+      generative_ai: { ...draft.generative_ai },
+    };
+  }
+  if (section === "enterprise_models") {
+    return {
+      enterprise_ai: {
+        ...saved.enterprise_ai,
+        endpoint: draft.enterprise_ai.endpoint,
+        project_ocid: draft.enterprise_ai.project_ocid,
+        api_key: draft.enterprise_ai.api_key,
+        has_api_key: draft.enterprise_ai.has_api_key,
+        clear_api_key: draft.enterprise_ai.clear_api_key,
+      },
+      generative_ai: { ...draft.generative_ai },
+    };
+  }
+  return {
+    enterprise_ai: {
+      ...draft.enterprise_ai,
+      models: draft.enterprise_ai.models.map((model) => ({ ...model })),
+    },
+    generative_ai: { ...saved.generative_ai },
   };
 }

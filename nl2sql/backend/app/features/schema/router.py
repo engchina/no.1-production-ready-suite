@@ -35,18 +35,6 @@ def catalog(response: Response) -> ApiResponse[SchemaCatalog]:
     return ApiResponse(data=nl2sql_service.get_catalog())
 
 
-@router.post("/refresh", response_model=ApiResponse[SchemaCatalog])
-def refresh(response: Response) -> ApiResponse[SchemaCatalog]:
-    """Oracle schema catalog を再取得する。
-
-    local skeleton では deterministic sample catalog を返す。
-    """
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
-    response.headers["Link"] = '</api/schema/refresh-jobs>; rel="successor-version"'
-    return ApiResponse(data=nl2sql_service.refresh_catalog())
-
-
 @router.get("/catalog/head", response_model=ApiResponse[SchemaCatalogHead])
 def catalog_head(
     response: Response,

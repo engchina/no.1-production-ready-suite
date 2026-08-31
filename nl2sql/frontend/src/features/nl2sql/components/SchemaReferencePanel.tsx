@@ -60,7 +60,7 @@ export function SchemaReferencePanel({
   allowedTableNames?: string[] | null;
   /** リスト領域の最大高さ Tailwind クラス。 */
   listMaxHeightClass?: string;
-  /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh）。 */
+  /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh-jobs）。 */
   onRefreshSchema?: () => void;
   refreshing?: boolean;
   searchQuery?: string;

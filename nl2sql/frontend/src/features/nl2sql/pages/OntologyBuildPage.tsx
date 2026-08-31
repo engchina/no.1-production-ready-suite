@@ -124,7 +124,7 @@ export function OntologyBuildPage() {
   useEffect(() => {
     const job = sharedSchemaRefresh.completedJob;
     if (!job) return;
-    const reportKey = `${job.job_id || "legacy"}:${job.status}`;
+    const reportKey = `${job.job_id}:${job.status}`;
     if (handledSchemaRefreshJob.current === reportKey) return;
     handledSchemaRefreshJob.current = reportKey;
     if (job.status === "done") {

@@ -1162,7 +1162,6 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         "## SQL構造分析\n\n### JOIN句\n- JOIN: EMPLOYEE(e) JOIN DEPARTMENT(d)\n\n### WHERE句\n- EMPLOYEE(e).STATUS = 'A'",
     });
   });
-  await page.route("**/api/schema/refresh", (route) => fulfillJson(route, schemaCatalog));
   await page.route("**/api/nl2sql/profiles", (route) => fulfillJson(route, profiles));
   await page.route("**/api/nl2sql/profiles/search?*", (route) =>
     fulfillJson(route, {
@@ -3353,38 +3352,57 @@ test("低信頼度の業務プロファイル自動判定は選択を変更し�
   await expectNoHorizontalScroll(page);
 });
 
-test("schema 更新の開始失敗はページ固定面のみに表示し toast を出さない", async ({ page }) => {
-  await mockNl2SqlApi(page);
-  const refreshError = "DB 構造の再取得を開始できませんでした。";
-  await page.route("**/api/schema/refresh-jobs", (route) =>
-    route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: refreshError }),
-    })
-  );
+for (const statusCode of [404, 410, 501, 503]) {
+  test(`schema 更新の開始失敗(${statusCode})は旧同期 API へ fallback せず固定面に表示する`, async ({
+    page,
+  }) => {
+    await mockNl2SqlApi(page);
+    const refreshError = "DB 構造の再取得を開始できませんでした。";
+    let legacyRefreshRequests = 0;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (request.method() === "POST" && url.pathname === "/api/schema/refresh") {
+        legacyRefreshRequests += 1;
+      }
+    });
+    await page.route("**/api/schema/refresh", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "旧同期 API は呼び出されない想定です。" }),
+      })
+    );
+    await page.route("**/api/schema/refresh-jobs", (route) =>
+      route.fulfill({
+        status: statusCode,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: refreshError }),
+      })
+    );
 
-  await page.goto("/query");
-  await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
-  // mobile 幅ではヘッダー操作が「その他の操作」メニューへ収納される。
-  const refreshButton = page.getByRole("button", { name: "DB 構造を再取得" });
-  if (await refreshButton.isVisible()) {
-    await refreshButton.click();
-  } else {
-    await page.getByRole("button", { name: "その他の操作", exact: true }).click();
-    await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
-  }
+    await page.goto("/query");
+    await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+    // mobile 幅ではヘッダー操作が「その他の操作」メニューへ収納される。
+    const refreshButton = page.getByRole("button", { name: "DB 構造を再取得" });
+    if (await refreshButton.isVisible()) {
+      await refreshButton.click();
+    } else {
+      await page.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
+    }
 
-  // 固定面(PageNotice)が正本。永続 Toast との二重表示はしない(messaging spec §0.6)。
-  await expect(page.getByText(refreshError)).toHaveCount(1);
-  await expect(
-    page.getByRole("region", { name: "通知" }).getByRole("status")
-  ).toHaveCount(0);
-});
+    // 固定面(PageNotice)が正本。永続 Toast との二重表示はしない(messaging spec §0.6)。
+    await expect(page.getByText(refreshError)).toHaveCount(1);
+    await expect(
+      page.getByRole("region", { name: "通知" }).getByRole("status")
+    ).toHaveCount(0);
+    expect(legacyRefreshRequests).toBe(0);
+  });
+}
 
 test("catalog 空のときスキーマ参照からスキーマを更新して表を取得できる", async ({ page }) => {
   await mockNl2SqlApi(page);
-  // 初回 GET は空、更新（POST /refresh）で実表を返す
+  // 初回 GET は空、更新 job 完了後に実表を返す。
   let refreshed = false;
   await page.unroute("**/api/schema/catalog");
   await page.route("**/api/schema/catalog", (route) =>
@@ -3416,11 +3434,6 @@ test("catalog 空のときスキーマ参照からスキーマを更新して表
   await page.route("**/api/nl2sql/profiles", (route) =>
     fulfillJson(route, [{ ...profiles[0], allowed_tables: [], allowed_views: [] }])
   );
-  await page.unroute("**/api/schema/refresh");
-  await page.route("**/api/schema/refresh", (route) => {
-    refreshed = true;
-    return fulfillJson(route, schemaCatalog);
-  });
   await page.route("**/api/schema/refresh-jobs", (route) => {
     refreshed = true;
     return fulfillJson(route, {

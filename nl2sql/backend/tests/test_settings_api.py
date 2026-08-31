@@ -11,6 +11,8 @@ from zipfile import ZipFile, ZipInfo
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from fastapi import HTTPException
 from pytest import MonkeyPatch
@@ -20,7 +22,11 @@ from app.clients.oci_database import (
     OciDatabaseClient,
     WalletDownloadTooLargeError,
 )
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter, oracle_connect_kwargs
+from app.features.nl2sql.oracle_adapter import (
+    OracleNl2SqlAdapter,
+    SelectAiCredentialExistsError,
+    oracle_connect_kwargs,
+)
 from app.features.settings import router as settings_router
 from app.main import app
 from app.settings import Settings, get_settings, load_persisted_model_settings
@@ -54,11 +60,292 @@ class _AsgiTestClient:
 client = _AsgiTestClient()
 
 
+def _write_oci_signing_config(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    *,
+    key_content: bytes | None = None,
+    key_exists: bool = True,
+) -> tuple[Settings, Path, bytes]:
+    settings = get_settings()
+    config_file = tmp_path / "config"
+    key_file = tmp_path / "oci_api_key.pem"
+    if key_content is None:
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        key_content = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    if key_exists:
+        key_file.write_bytes(key_content)
+        key_file.chmod(0o600)
+    config_file.write_text(
+        "[DEFAULT]\n"
+        "user=ocid1.user.oc1..example\n"
+        "tenancy=ocid1.tenancy.oc1..example\n"
+        f"fingerprint={'aa:' * 15}aa\n"
+        "region=ap-osaka-1\n"
+        f"key_file={key_file}\n",
+        encoding="utf-8",
+    )
+    config_file.chmod(0o600)
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    return settings, key_file, key_content
+
+
+class _FakeSelectAiCredentialAdapter:
+    def __init__(self, *, exists: bool = False) -> None:
+        self.exists = exists
+        self.calls: list[dict[str, Any]] = []
+
+    def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
+        assert credential_name == "OCI_CRED"
+        return "ADMIN", self.exists
+
+    def create_select_ai_credential(self, **kwargs: Any) -> str:
+        self.calls.append(kwargs)
+        if self.exists and not kwargs["recreate"]:
+            raise SelectAiCredentialExistsError("exists")
+        operation = "recreated" if self.exists else "created"
+        self.exists = True
+        return operation
+
+
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
     data = settings_router.MODEL_TEST_IMAGE_BYTES
 
     assert data.startswith(b"\xff\xd8")
     assert len(data) > 1024
+
+
+@pytest.mark.parametrize(
+    ("initial_exists", "recreate", "expected_operation"),
+    [(False, False, "created"), (True, True, "recreated")],
+)
+def test_select_ai_credential_create_and_recreate_persist_safe_settings(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    initial_exists: bool,
+    recreate: bool,
+    expected_operation: str,
+) -> None:
+    settings, _key_file, key_content = _write_oci_signing_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        settings,
+        "nl2sql_select_ai_credential_name",
+        settings.nl2sql_select_ai_credential_name,
+    )
+    monkeypatch.setattr(
+        settings,
+        "nl2sql_select_ai_region",
+        settings.nl2sql_select_ai_region,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("KEEP_ME=1\n", encoding="utf-8")
+    fake_adapter = _FakeSelectAiCredentialAdapter(exists=initial_exists)
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: fake_adapter,
+    )
+
+    response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={
+            "region": "us-chicago-1",
+            "confirmation": "ADMIN_EXECUTE",
+            "recreate": recreate,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["operation"] == expected_operation
+    assert response.json()["data"]["exists"] is True
+    assert fake_adapter.calls[0]["credential_name"] == "OCI_CRED"
+    assert fake_adapter.calls[0]["recreate"] is recreate
+    normalized_private_key = fake_adapter.calls[0]["private_key"]
+    assert "BEGIN PRIVATE KEY" not in normalized_private_key
+    assert "\n" not in normalized_private_key
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "KEEP_ME=1" in env_text
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in env_text
+    assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in env_text
+    assert settings.nl2sql_select_ai_credential_name == "OCI_CRED"
+    assert settings.nl2sql_select_ai_region == "us-chicago-1"
+    secret_body = b"".join(
+        line for line in key_content.splitlines() if not line.startswith(b"-----")
+    ).decode("ascii")
+    assert secret_body not in response.text
+    assert secret_body not in env_text
+    assert secret_body not in caplog.text
+
+
+def test_select_ai_credential_existing_requires_explicit_recreate(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _write_oci_signing_config(tmp_path, monkeypatch)
+    fake_adapter = _FakeSelectAiCredentialAdapter(exists=True)
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: fake_adapter,
+    )
+
+    response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={
+            "region": "ap-osaka-1",
+            "confirmation": "ADMIN_EXECUTE",
+            "recreate": False,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "SELECT_AI_CREDENTIAL_EXISTS"
+    assert "private_key" not in response.text.lower()
+
+
+def test_select_ai_credential_rejects_wrong_confirmation_before_reading_key(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    called = False
+
+    def unexpected_adapter(settings: Settings) -> object:
+        nonlocal called
+        called = True
+        return object()
+
+    monkeypatch.setattr(settings_router, "OracleNl2SqlAdapter", unexpected_adapter)
+    response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={
+            "region": "ap-osaka-1",
+            "confirmation": "WRONG",
+            "recreate": False,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "SELECT_AI_CONFIRMATION_REQUIRED"
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    ("key_content", "key_exists", "expected_field"),
+    [
+        (b"", False, "key_file"),
+        (
+            b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n"
+            b"-----END ENCRYPTED PRIVATE KEY-----\n",
+            True,
+            "private_key_encrypted",
+        ),
+        (
+            b"-----BEGIN PRIVATE KEY-----\ndamaged\n-----END PRIVATE KEY-----\n",
+            True,
+            "private_key",
+        ),
+    ],
+)
+def test_select_ai_credential_status_reports_missing_or_invalid_key_without_secret(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    key_content: bytes,
+    key_exists: bool,
+    expected_field: str,
+) -> None:
+    _write_oci_signing_config(
+        tmp_path,
+        monkeypatch,
+        key_content=key_content,
+        key_exists=key_exists,
+    )
+    fake_adapter = _FakeSelectAiCredentialAdapter(exists=False)
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: fake_adapter,
+    )
+
+    response = client.get("/api/settings/database/select-ai-credential")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["credential_name"] == "OCI_CRED"
+    assert data["schema_name"] == "ADMIN"
+    assert data["exists"] is False
+    assert data["oci_auth_ready"] is False
+    assert expected_field in data["missing_fields"]
+    if key_content:
+        assert key_content.decode("ascii", errors="ignore") not in response.text
+
+    create_response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={
+            "region": "ap-osaka-1",
+            "confirmation": "ADMIN_EXECUTE",
+            "recreate": False,
+        },
+    )
+    assert create_response.status_code == 422
+    assert create_response.json()["error_code"] == "SELECT_AI_PRIVATE_KEY_INVALID"
+    assert fake_adapter.calls == []
+
+
+def test_select_ai_credential_rejects_private_key_with_broad_permissions(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _settings, key_file, _key_content = _write_oci_signing_config(tmp_path, monkeypatch)
+    key_file.chmod(0o644)
+    fake_adapter = _FakeSelectAiCredentialAdapter()
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: fake_adapter,
+    )
+
+    response = client.get("/api/settings/database/select-ai-credential")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["missing_fields"] == ["key_file_permissions"]
+    assert fake_adapter.calls == []
+
+
+def test_select_ai_credential_create_reports_incomplete_oci_config(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(tmp_path / "missing"))
+    fake_adapter = _FakeSelectAiCredentialAdapter(exists=False)
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: fake_adapter,
+    )
+    response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={
+            "region": "ap-osaka-1",
+            "confirmation": "ADMIN_EXECUTE",
+            "recreate": False,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "SELECT_AI_OCI_CONFIG_INCOMPLETE"
+
+
+def test_select_ai_credential_routes_keep_sync_oracle_io_off_asgi_event_loop() -> None:
+    assert asyncio.iscoroutinefunction(settings_router.get_select_ai_credential) is False
+    assert asyncio.iscoroutinefunction(settings_router.create_select_ai_credential) is False
 
 
 def test_read_object_storage_namespace_uses_oci_sdk(

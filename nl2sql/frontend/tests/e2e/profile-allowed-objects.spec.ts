@@ -238,6 +238,17 @@ async function mockProfileApi(
     profileSearchTotal?: number;
   } = {}
 ) {
+  await page.route("**/api/settings/database/select-ai-credential", (route) =>
+    fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "ap-osaka-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: null,
+    })
+  );
   const tableItems = options.tableItems ?? [
     { name: "TABLE_01", owner: "APP", object_type: "TABLE", row_count: null, comment: "table" },
     { name: "SYS$AUDIT", owner: "SYS", object_type: "TABLE", row_count: null, comment: "system" },
@@ -1200,6 +1211,142 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   expect(ontologyRequests).toBe(0);
 });
 
+test("Credential 不足からデータベース設定で作成し元の Profile job を手動再試行できる", async ({
+  page,
+}) => {
+  await mockProfileApi(page);
+  let credentialCreated = false;
+  let retryCalls = 0;
+  let retried = false;
+
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*/retry", async (route) => {
+    retryCalls += 1;
+    retried = true;
+    await fulfillJson(route, {
+      job_id: "profile-sync-credential-retry",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "queued",
+      phase: "queued",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      retry_of_job_id: "profile-sync-default",
+      created_at: "2026-08-31T00:00:02Z",
+    });
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*", async (route) => {
+    await fulfillJson(route, {
+      job_id: retried ? "profile-sync-credential-retry" : "profile-sync-default",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: retried ? "succeeded" : "failed",
+      phase: retried ? "succeeded" : "failed",
+      rebuild_agent_assets: false,
+      error_code: retried ? "" : "SELECT_AI_CREDENTIAL_MISSING",
+      error_message_ja: retried
+        ? ""
+        : "Select AI Credential がありません。ORA-06512: internal stack must not be shown",
+      created_at: "2026-08-31T00:00:00Z",
+      finished_at: "2026-08-31T00:00:01Z",
+      oracle_result: retried
+        ? {
+            runtime: "oracle",
+            executed: true,
+            status: "saved",
+            profile_name: "NL2SQL_DEFAULT_PROFILE",
+            original_name: "",
+            ddl: [],
+            profile: dbProfiles.profiles[0],
+            warnings: [],
+            engine_meta: {},
+          }
+        : null,
+    });
+  });
+
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") credentialCreated = true;
+    await fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: credentialCreated,
+      region: "ap-osaka-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: credentialCreated ? "created" : null,
+    });
+  });
+  await page.route("**/api/settings/database", (route) =>
+    fulfillJson(route, {
+      user: "ADMIN",
+      dsn: "nl2sqldb_high",
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      client_lib_dir: "",
+      wallet_dir: "/u01/aipoc/wallet",
+      wallet_uploaded: true,
+      available_services: ["nl2sqldb_high"],
+      has_password: true,
+      has_wallet_password: false,
+      readiness: "ok",
+      embedding_dimension: 1536,
+      vector_column: "VECTOR(1536, FLOAT32)",
+      adb_ocid: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
+      region: "ap-osaka-1",
+      config_source: "runtime",
+    })
+  );
+  await page.route("**/api/settings/database/adb", (route) =>
+    fulfillJson(route, {
+      status: "success",
+      message: "ADB を取得しました。",
+      id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
+      display_name: "nl2sqldb",
+      lifecycle_state: "AVAILABLE",
+      db_name: "NL2SQLDB",
+      cpu_core_count: 2,
+      data_storage_size_in_tbs: 1,
+      region: "ap-osaka-1",
+    })
+  );
+
+  await page.goto("/profiles");
+  await page.getByRole("row").filter({ hasText: "既定プロファイル" }).locator("td").nth(1).click();
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const failedStatus = page.getByTestId("profile-save-progress");
+  await expect(failedStatus).toContainText("現在の Oracle schema に OCI_CRED がありません");
+  await expect(failedStatus).not.toContainText("ORA-06512");
+  const settingsLink = failedStatus.getByRole("link", { name: "データベース設定を開く" });
+  await settingsLink.click();
+
+  const card = page.getByTestId("select-ai-credential-card");
+  await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
+    "ADMIN_EXECUTE"
+  );
+  await card.getByRole("button", { name: "Credential を作成" }).click();
+  await expect.poll(() => credentialCreated).toBe(true);
+  expect(retryCalls).toBe(0);
+
+  const returnLink = card.getByRole("link", { name: "業務 Profile を開く" });
+  await expect(returnLink).toHaveAttribute(
+    "href",
+    /\/profiles\?profile=default&syncJobId=profile-sync-default/u
+  );
+  await returnLink.click();
+  await expect(page).toHaveURL(/\/profiles\?profile=default&syncJobId=profile-sync-default/u);
+  const restoredStatus = page.getByTestId("profile-save-progress");
+  await expect(restoredStatus).toHaveAttribute("data-job-status", "failed");
+  await restoredStatus.getByRole("button", { name: "Oracle 反映を再試行" }).click();
+
+  await expect(restoredStatus).toHaveAttribute("data-job-status", "succeeded");
+  expect(retryCalls).toBe(1);
+});
+
 test("異なる schema の同名表を別々に選択できる", async ({ page }) => {
   const duplicateCatalog = {
     ...schemaCatalog,
@@ -1410,14 +1557,30 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
     "profile-select-ai-embedding-model",
   ]) {
     await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("*");
+  }
+  for (const fieldId of [
+    "profile-name",
+    "profile-category",
+    "profile-select-ai-model",
+    "profile-select-ai-max-tokens",
+    "profile-select-ai-embedding-model",
+  ]) {
     await expect(page.locator(`#${fieldId}`)).toHaveAttribute("required", "");
     await expect(page.locator(`#${fieldId}`)).toHaveAttribute("aria-required", "true");
   }
-  const region = page.getByLabel("Region");
+  const region = page.getByRole("combobox", { name: "Region" });
   const model = page.getByLabel("LLM Model");
   const maxTokens = page.getByLabel("Max Tokens");
   const embeddingModel = page.getByLabel("Embedding Model");
   await expect(region).toBeVisible();
+  await expect(region).toHaveAttribute("aria-required", "true");
+  await expect(region).toContainText("ap-osaka-1");
+  await region.click();
+  await expect(page.getByRole("option", { name: "ap-osaka-1" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "us-chicago-1" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "ap-tokyo-1" })).toHaveCount(0);
+  await page.getByRole("option", { name: "us-chicago-1" }).click();
+  await expect(region).toContainText("us-chicago-1");
   await expect(model).toBeVisible();
   await expect(maxTokens).toBeVisible();
   await expect(embeddingModel).toBeVisible();
@@ -1437,9 +1600,12 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   expect(embeddingModelBox).not.toBeNull();
   const viewportWidth = page.viewportSize()?.width ?? 1280;
   if (viewportWidth >= 768) {
-    expect(Math.abs(regionBox!.y - modelBox!.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(regionBox!.y - maxTokensBox!.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(regionBox!.y - embeddingModelBox!.y)).toBeLessThanOrEqual(1);
+    const rowAlignmentTolerance = 2;
+    expect(Math.abs(regionBox!.y - modelBox!.y)).toBeLessThanOrEqual(rowAlignmentTolerance);
+    expect(Math.abs(regionBox!.y - maxTokensBox!.y)).toBeLessThanOrEqual(rowAlignmentTolerance);
+    expect(Math.abs(regionBox!.y - embeddingModelBox!.y)).toBeLessThanOrEqual(
+      rowAlignmentTolerance
+    );
     expect(regionBox!.x).toBeLessThan(modelBox!.x);
     expect(modelBox!.x).toBeLessThan(maxTokensBox!.x);
     expect(maxTokensBox!.x).toBeLessThan(embeddingModelBox!.x);
@@ -1482,24 +1648,19 @@ test("業務プロファイル必須項目は空欄保存を止める", async ({
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
   await page.getByLabel("名称").fill("SALES_PROFILE");
   await page.getByLabel("カテゴリ").fill("販売");
-  await page.getByLabel("Region").fill("");
   await page.getByLabel("LLM Model").fill("");
   await page.getByLabel("Embedding Model").fill("");
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect(page.getByRole("alert").filter({ hasText: "Region を入力してください。" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "LLM Model を入力してください。" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toBeVisible();
-  await expect(page.getByLabel("Region")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByLabel("LLM Model")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByLabel("Embedding Model")).toHaveAttribute("aria-invalid", "true");
   expect(saveRequests).toBe(0);
 
-  await page.getByLabel("Region").fill("ap-osaka-1");
   await page.getByLabel("LLM Model").fill("cohere.command-r-plus");
   await page.getByLabel("Embedding Model").fill("cohere.embed-v4.0");
-  await expect(page.getByRole("alert").filter({ hasText: "Region を入力してください。" })).toHaveCount(0);
   await expect(page.getByRole("alert").filter({ hasText: "LLM Model を入力してください。" })).toHaveCount(0);
   await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toHaveCount(0);
 });

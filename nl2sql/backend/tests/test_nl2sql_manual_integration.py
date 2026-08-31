@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from app.features.nl2sql.models import (
     DiagnosticReadiness,
     DiagnosticsData,
     Nl2SqlEngine,
+    SchemaRefreshJobStatus,
 )
 from app.settings import get_settings
 from scripts import nl2sql_manual_integration as script
@@ -266,6 +268,60 @@ def test_manual_integration_require_refreshed_assets_checks_selected_engines(
     assert select_ai_only.ok
     assert not agent_required.ok
     assert "select_ai_agent:warning" in agent_required.message
+
+
+def test_manual_integration_refresh_catalog_uses_durable_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    job = SimpleNamespace(
+        job_id="manual-refresh-1",
+        status=SchemaRefreshJobStatus.PENDING,
+        catalog_version=None,
+        error_code="",
+    )
+    completed = SimpleNamespace(
+        job_id="manual-refresh-1",
+        status=SchemaRefreshJobStatus.DONE,
+        catalog_version=7,
+        error_code="",
+    )
+
+    class _Service:
+        def start_schema_refresh_job(self, *, dispatch: bool, source: str) -> Any:
+            calls.append(f"start:{dispatch}:{source}")
+            return job
+
+        def run_next_schema_refresh_job(self) -> bool:
+            calls.append("run_next")
+            return True
+
+        def get_schema_refresh_job(self, job_id: str) -> Any:
+            calls.append(f"get:{job_id}")
+            return completed
+
+        def get_catalog(self) -> Any:
+            calls.append("catalog")
+            return SimpleNamespace(
+                tables=[object(), object()],
+                refreshed_at="2026-08-31T00:00:00Z",
+            )
+
+    service = _Service()
+    monkeypatch.setattr(script, "nl2sql_service", service)
+
+    result = script._refresh_catalog(True)
+
+    assert result.ok
+    assert result.name == "schema_catalog"
+    assert "refreshed via job=manual-refresh-1" in result.message
+    assert "tables=2" in result.message
+    assert calls == [
+        "start:False:manual_integration",
+        "run_next",
+        "get:manual-refresh-1",
+        "catalog",
+    ]
 
 
 def test_manual_integration_execute_feedback_index_smoke(

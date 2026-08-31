@@ -15,6 +15,8 @@ ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "e
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 DatabaseConnectionSecurity = Literal["wallet_mtls", "walletless_tls"]
 DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
+SelectAiCredentialRegion = Literal["ap-osaka-1", "us-chicago-1"]
+SelectAiCredentialOperation = Literal["created", "recreated", "already_exists"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 AdbOperationStatus = Literal[
@@ -216,6 +218,31 @@ class DatabasePasswordRevealData(BaseModel):
     """明示操作でのみ返す Oracle DB password。通常の設定取得には含めない。"""
 
     password: str = Field(default="", max_length=4096)
+
+
+class SelectAiCredentialData(BaseModel):
+    """Select AI Credential の安全な表示用状態。秘密鍵本文は含めない。"""
+
+    credential_name: Literal["OCI_CRED"] = "OCI_CRED"
+    schema_name: str
+    exists: bool
+    region: SelectAiCredentialRegion
+    oci_auth_ready: bool
+    missing_fields: list[str] = Field(default_factory=list)
+    operation: SelectAiCredentialOperation | None = None
+
+
+class SelectAiCredentialCreateRequest(BaseModel):
+    """Credential 作成・再作成の明示操作 payload。"""
+
+    region: SelectAiCredentialRegion = "ap-osaka-1"
+    confirmation: str = Field(default="", max_length=64)
+    recreate: bool = False
+
+    @field_validator("confirmation")
+    @classmethod
+    def strip_confirmation(cls, value: str) -> str:
+        return value.strip()
 
 
 class DatabaseWalletDownloadData(BaseModel):

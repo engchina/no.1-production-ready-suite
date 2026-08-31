@@ -6,6 +6,7 @@ import {
   type DatabaseSettingsUpdate,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
+  type SelectAiCredentialCreateRequest,
   type SystemTablesInitializeRequest,
   type UploadStorageSettingsUpdate,
 } from "@/lib/api";
@@ -15,6 +16,7 @@ export const queryKeys = {
   persistenceStatus: ["nl2sql", "persistence"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
+  selectAiCredential: ["settings", "database", "select-ai-credential"] as const,
   systemTables: ["settings", "database", "system-tables"] as const,
   schemaOwners: ["schema", "owners"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
@@ -93,6 +95,24 @@ export function useDatabaseSettings() {
   return useQuery({
     queryKey: queryKeys.databaseSettings,
     queryFn: ({ signal }) => api.getDatabaseSettings({ signal }),
+  });
+}
+
+export function useSelectAiCredential() {
+  return useQuery({
+    queryKey: queryKeys.selectAiCredential,
+    queryFn: ({ signal }) => api.getSelectAiCredential({ signal }),
+    retry: false,
+  });
+}
+
+export function useCreateSelectAiCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: SelectAiCredentialCreateRequest) =>
+      api.createSelectAiCredential(payload),
+    onSuccess: (data) => qc.setQueryData(queryKeys.selectAiCredential, data),
+    onError: () => qc.invalidateQueries({ queryKey: queryKeys.selectAiCredential }),
   });
 }
 

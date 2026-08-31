@@ -27,6 +27,7 @@ import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DB_OBJECT_GRID_ROW_CLASS,
   DbManagementLoadingSkeleton,
+  DbManagementSelectField,
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectPanelHeader,
@@ -643,18 +644,17 @@ function MetadataTargetGrid({
           onChange: onOwnerPrefixChange,
         }}
       >
-        <label className="grid gap-1 text-sm font-medium text-foreground sm:w-52">
-          <span>{t("metadataSql.targets.typeFilter")}</span>
-          <select
-            value={filter}
-            onChange={(event) => onFilterChange(event.currentTarget.value as TargetFilter)}
-            className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-          >
-            <option value="all">{t("metadataSql.targets.typeFilterAll")}</option>
-            <option value="table">{t("metadataSql.targets.typeFilterTables")}</option>
-            <option value="view">{t("metadataSql.targets.typeFilterViews")}</option>
-          </select>
-        </label>
+        <DbManagementSelectField
+          label={t("metadataSql.targets.typeFilter")}
+          value={filter}
+          options={[
+            { value: "all", label: t("metadataSql.targets.typeFilterAll") },
+            { value: "table", label: t("metadataSql.targets.typeFilterTables") },
+            { value: "view", label: t("metadataSql.targets.typeFilterViews") },
+          ]}
+          className="sm:w-48"
+          onChange={onFilterChange}
+        />
       </DbObjectSelectorToolbar>
 
       {!loading && items.length > 0 ? (
