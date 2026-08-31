@@ -414,11 +414,15 @@ def verify(package_path: Path) -> None:
         context="adb_compartment_ocid",
     )
 
+    if not re.search(
+        r"effective_oracle_wallet_password\s*=\s*"
+        r"local\.create_new_adb \? var\.adb_password : var\.existing_oracle_password",
+        adb,
+    ):
+        raise AssertionError("ADB network mapping is missing effective wallet password mapping")
     _require_all(
         adb,
         [
-            "effective_oracle_wallet_password = local.create_new_adb ? "
-            "var.adb_password : var.existing_oracle_password",
             f'var.adb_network_access_type == "{PRIVATE_ACCESS}"',
             f'var.adb_network_access_type == "{ALLOWED_ACCESS}"',
             f'var.adb_network_access_type == "{EVERYWHERE_ACCESS}"',
