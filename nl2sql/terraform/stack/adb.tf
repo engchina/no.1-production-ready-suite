@@ -74,12 +74,12 @@ locals {
     trimspace(local.existing_adb_db_name) != "" ? "${lower(local.existing_adb_db_name)}_high" : ""
   )
 
-  effective_adb_ocid                 = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
-  effective_adb_name                 = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
-  effective_oracle_user              = local.create_new_adb ? "ADMIN" : var.existing_oracle_user
-  effective_oracle_password          = local.create_new_adb ? var.adb_password : var.existing_oracle_password
-  effective_oracle_dsn               = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
-  effective_oracle_wallet_password   = local.create_new_adb ? var.adb_password : var.existing_oracle_password
+  effective_adb_ocid               = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
+  effective_adb_name               = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
+  effective_oracle_user            = local.create_new_adb ? "ADMIN" : var.existing_oracle_user
+  effective_oracle_password        = local.create_new_adb ? var.adb_password : var.existing_oracle_password
+  effective_oracle_dsn             = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
+  effective_oracle_wallet_password = local.create_new_adb ? var.adb_password : var.existing_oracle_password
 }
 
 resource "oci_database_autonomous_database" "generated_database_autonomous_database" {
