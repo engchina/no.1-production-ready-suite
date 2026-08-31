@@ -1211,7 +1211,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   expect(ontologyRequests).toBe(0);
 });
 
-test("Credential 不足からデータベース設定で作成し元の Profile job を手動再試行できる", async ({
+test("Credential 不足からデータベース設定で作成し、履歴 job を自動再試行しない", async ({
   page,
 }) => {
   await mockProfileApi(page);
@@ -1332,19 +1332,10 @@ test("Credential 不足からデータベース設定で作成し元の Profile 
   await expect.poll(() => credentialCreated).toBe(true);
   expect(retryCalls).toBe(0);
 
-  const returnLink = card.getByRole("link", { name: "業務 Profile を開く" });
-  await expect(returnLink).toHaveAttribute(
-    "href",
-    /\/profiles\?profile=default&syncJobId=profile-sync-default/u
-  );
-  await returnLink.click();
-  await expect(page).toHaveURL(/\/profiles\?profile=default&syncJobId=profile-sync-default/u);
-  const restoredStatus = page.getByTestId("profile-save-progress");
-  await expect(restoredStatus).toHaveAttribute("data-job-status", "failed");
-  await restoredStatus.getByRole("button", { name: "Oracle 反映を再試行" }).click();
-
-  await expect(restoredStatus).toHaveAttribute("data-job-status", "succeeded");
-  expect(retryCalls).toBe(1);
+  const success = card.getByTestId("select-ai-credential-success");
+  await expect(success).toContainText("Select AI Credential を作成");
+  await expect(success.getByRole("link")).toHaveCount(0);
+  expect(retryCalls).toBe(0);
 });
 
 test("異なる schema の同名表を別々に選択できる", async ({ page }) => {

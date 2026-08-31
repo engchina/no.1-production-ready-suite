@@ -244,7 +244,8 @@ test("データ管理の分割線は左右の内容幅を保ち、狭い画面�
   const right = page.getByTestId("fixed-split-pane-data-management-preview-right");
   await expect(pane).toHaveAttribute("data-split-layout", "split");
   await expect(divider).toBeVisible();
-  await page.getByRole("button", { name: "DENPYO_FILES のデータを表示" }).click();
+  await page.getByRole("button", { name: "DENPYO_FILES を選択" }).click();
+  await right.getByRole("button", { name: "データを表示", exact: true }).click();
   await expect(page.getByTestId("query-results-table")).toBeVisible();
 
   for (const deltaX of [-4_000, 8_000]) {

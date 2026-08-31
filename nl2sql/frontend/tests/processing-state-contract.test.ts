@@ -41,8 +41,9 @@ test("processing placement is semantic and exposed for UI verification", () => {
   assert.match(processingSource, /data-processing-placement=\{placement\}/u);
   assert.match(processingSource, /data-processing-activity-icon=\{activityIcon\}/u);
   assert.match(managementShellSource, /processing\?: ReactNode/u);
+  assert.match(managementShellSource, /topContent\?: ReactNode/u);
   assert.match(managementShellSource, /aria-busy=\{processing \? true : undefined\}/u);
-  assert.match(managementShellSource, /\{processing\}\s*\{splitPaneId \?/u);
+  assert.match(managementShellSource, /\{processing\}\s*\{topContent\}\s*\{splitPaneId \?/u);
 });
 
 test("processing activity icon defaults protect result areas from duplicate spinners", () => {

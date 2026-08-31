@@ -917,16 +917,12 @@ export function TableManagementPage() {
                 objectName: t("tableMgmt.grid.tableName"),
                 rows: t("tableMgmt.grid.rows"),
                 owner: t("tableMgmt.grid.owner"),
-                actions: t("tableMgmt.grid.actions"),
-                detail: t("tableMgmt.grid.detail"),
-                drop: t("tableMgmt.grid.drop"),
                 showObject: (name) => t("tableMgmt.grid.showTable", { name }),
               }}
               onSearchChange={setTableSearch}
               onOwnerPrefixChange={setTableOwnerPrefix}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
-              onDrop={openDropDialog}
               onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}

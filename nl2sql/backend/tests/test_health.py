@@ -535,6 +535,24 @@ def _import_sample(service: Nl2SqlService) -> None:
     )
 
 
+def _create_sample_profile(service: Nl2SqlService) -> Nl2SqlProfile:
+    return service.create_profile(
+        Nl2SqlProfile(
+            id="sql_assist_sample",
+            name="SQL_ASSIST_SAMPLE",
+            category="SAMPLE",
+            description="SQL Assist sample objects test profile.",
+            allowed_tables=["DEPARTMENT", "EMPLOYEE", "PROJECT"],
+            allowed_views=["V_EMP_DEPT", "V_DEPT_PROJECT"],
+        )
+    )
+
+
+def _import_sample_with_profile(service: Nl2SqlService) -> Nl2SqlProfile:
+    _import_sample(service)
+    return _create_sample_profile(service)
+
+
 async def _api_import_sample(client: httpx.AsyncClient) -> None:
     resp = await client.post(
         "/api/nl2sql/sample-data/import",
@@ -542,6 +560,7 @@ async def _api_import_sample(client: httpx.AsyncClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["executed"] is True
+    assert resp.json()["data"]["profile_id"] == ""
 
 
 def _wait_for_job(service: Nl2SqlService, job_id: str) -> Any:
@@ -627,10 +646,7 @@ async def test_sample_import_enables_preview_and_delete() -> None:
         table_names = {table["table_name"] for table in catalog_resp.json()["data"]["tables"]}
         assert {"DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"} <= table_names
 
-        resp = await client.post(
-            "/api/nl2sql/preview",
-            json={"question": "社員一覧を見たい", "profile_id": "sql_assist_sample"},
-        )
+        resp = await client.post("/api/nl2sql/preview", json={"question": "社員一覧を見たい"})
         assert resp.status_code == 200
         delete_resp = await client.post(
             "/api/nl2sql/sample-data/delete",
@@ -648,7 +664,7 @@ async def test_sample_import_enables_preview_and_delete() -> None:
 
 def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     fake_client = _FakeEnterpriseAiClient(
         '{"sql":"SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT",'
         '"explanation":"社員と部署を取得します。"}'
@@ -825,7 +841,7 @@ def test_select_ai_allows_where_when_filter_slot_has_value() -> None:
 
 def test_interpretation_separates_empty_input_filter_from_sql_filter() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     question = '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：'
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
@@ -860,7 +876,7 @@ def test_interpretation_separates_empty_input_filter_from_sql_filter() -> None:
 
 def test_interpretation_uses_only_explicit_template_filter_for_question_filters() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     question = "対象テーブル：部署\n抽出項目：部署名\n抽出条件：部署名 = '管理部門'"
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
@@ -890,7 +906,7 @@ def test_interpretation_uses_only_explicit_template_filter_for_question_filters(
 
 def test_interpretation_does_not_infer_question_filters_from_free_text() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     sql = (
         'SELECT "DEPARTMENT_ID", "DEPARTMENT_NAME" FROM "DEPARTMENT" '
         "WHERE UPPER(\"DEPARTMENT_NAME\") LIKE '%管理部門%'"
@@ -1021,7 +1037,7 @@ def test_job_ontology_context_disabled_passes_none_to_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     captured_contexts: list[Any | None] = []
 
     def fake_generate_with_fallback(*_args: Any, **kwargs: Any) -> GeneratedSql:
@@ -1055,7 +1071,7 @@ def test_job_ontology_context_unavailable_returns_none(
     from app.features.nl2sql import ontology_router
 
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     profile = service.get_profile("sql_assist_sample")
     allowed = service.resolve_allowed_objects("sql_assist_sample", AllowedObjects())
 
@@ -1089,7 +1105,7 @@ def test_job_ontology_context_empty_runtime_passes_none_to_generation(
     from app.features.nl2sql import ontology_router
 
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     captured_contexts: list[Any | None] = []
 
     monkeypatch.setattr(
@@ -1148,7 +1164,7 @@ def test_job_applies_ontology_context_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     context = _simple_ontology_context()
 
     monkeypatch.setattr(service, "_job_ontology_context", lambda **_kwargs: context)
@@ -1395,7 +1411,7 @@ def test_interpretation_ontology_graph_failure_keeps_job_done(
 
 def test_interpretation_failure_keeps_job_done(monkeypatch: pytest.MonkeyPatch) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
 
     def fail_interpretation(**_kwargs: object) -> object:
         raise RuntimeError("artifact boom")
@@ -1450,7 +1466,7 @@ def test_showprompt_is_unavailable_without_select_ai_engine() -> None:
 
 def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     profile = service.create_profile(
         Nl2SqlProfile(
             id="safe_scope",
@@ -1711,7 +1727,7 @@ def test_fail_trigger_words_in_question_are_ignored_on_oracle_runtime() -> None:
 
 def test_preview_without_row_limit_applies_profile_default() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
 
     preview = service.preview(
         PreviewRequest(question="請求金額を確認したい", profile_id="sql_assist_sample")
@@ -1723,7 +1739,7 @@ def test_preview_without_row_limit_applies_profile_default() -> None:
 
 def test_preview_without_row_limit_uses_custom_profile_default() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
     profile = service.create_profile(
         Nl2SqlProfile(
             id="small_default_profile",
@@ -1743,7 +1759,7 @@ def test_preview_without_row_limit_uses_custom_profile_default() -> None:
 
 def test_preview_explicit_row_limit_wins_over_profile_default() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    _import_sample(service)
+    _import_sample_with_profile(service)
 
     preview = service.preview(
         PreviewRequest(
@@ -1925,6 +1941,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
 
     assert imported.executed is True
     assert imported.runtime == "oracle"
+    assert imported.profile_id == ""
     assert adapter.admin_execute_calls == 1
     assert any("CREATE TABLE DEPARTMENT" in statement for statement in adapter.admin_statements)
     assert len(adapter.admin_statements) > 5
@@ -1935,16 +1952,10 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
         "CREATE TABLE DEPARTMENT" in statement and "CREATE TABLE EMPLOYEE" in statement
         for statement in adapter.admin_statements
     )
-    profile = service.get_profile(imported.profile_id)
-    current_owner = get_settings().oracle_user.strip().upper() or "APP"
-    assert set(profile.allowed_tables) == {
-        f"{current_owner}.DEPARTMENT",
-        f"{current_owner}.EMPLOYEE",
-        f"{current_owner}.PROJECT",
-        f"{current_owner}.V_EMP_DEPT",
-        f"{current_owner}.V_DEPT_PROJECT",
-    }
+    with pytest.raises(ValueError, match="profile"):
+        service.get_profile("sql_assist_sample")
     info = service.sample_data_info()
+    assert info.profile_id == ""
     assert info.imported_objects == [
         "DEPARTMENT",
         "EMPLOYEE",
@@ -1961,6 +1972,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     )
 
     assert deleted.executed is True
+    assert deleted.profile_id == ""
     assert {statement.status for statement in deleted.statements} == {"skipped_missing_object"}
     assert deleted.warnings
     assert missing_adapter.admin_execute_calls == 1
@@ -1970,6 +1982,24 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
 
     assert rejected.executed is False
     assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
+
+
+def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    imported = service.import_sample_data(
+        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert imported.executed is True
+    assert imported.runtime == "deterministic"
+    assert imported.profile_id == ""
+    assert {
+        table.table_name for table in service.get_catalog().tables
+    } >= {"DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"}
+    with pytest.raises(ValueError, match="profile"):
+        service.get_profile("sql_assist_sample")
+    assert service.sample_data_info().profile_id == ""
 
 
 def test_auto_job_supports_select_ai_agent_and_timing() -> None:

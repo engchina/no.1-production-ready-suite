@@ -22,6 +22,8 @@ import { sqlExecutePayload } from "../previewState";
 import type { QueryResults } from "../types";
 import { emptySelection, toAllowedObjects } from "../workbenchState";
 
+const DIRECT_SQL_MAX_ROW_LIMIT = 100000;
+
 interface ExecutionRunState {
   operationKey: number;
   status: ExecutionActivityStatus;
@@ -67,10 +69,10 @@ function ExecutableDirectSqlPage() {
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  // /api/nl2sql/execute は 1..5000 のみ受理する(0=無制限は db-admin 専用)。
+  // /api/nl2sql/execute は 1..100000 のみ受理する(0=無制限は db-admin 専用)。
   const parsedRowLimit = parseSqlRowLimit(rowLimitInput);
   const rowLimit =
-    parsedRowLimit !== null && parsedRowLimit >= 1 && parsedRowLimit <= 5000
+    parsedRowLimit !== null && parsedRowLimit >= 1 && parsedRowLimit <= DIRECT_SQL_MAX_ROW_LIMIT
       ? parsedRowLimit
       : null;
   const rowLimitError = rowLimit === null ? t("queryResults.rowLimit.errorBounded") : "";
@@ -166,10 +168,11 @@ function ExecutableDirectSqlPage() {
               onChange={setRowLimitInput}
               disabled={loading}
               error={rowLimitError}
-              className="sm:w-48"
+              className="w-full max-w-[22rem]"
               min={1}
-              max={5000}
+              max={DIRECT_SQL_MAX_ROW_LIMIT}
               helper={t("queryResults.rowLimit.helperBounded")}
+              helperClassName="whitespace-nowrap"
             />
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button

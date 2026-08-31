@@ -98,17 +98,6 @@ async function expectThreeFieldFilterLayout(
   expect(Math.abs(searchBox.width - kindBox.width)).toBeLessThanOrEqual(2);
 }
 
-async function expectFloatingMenuWithoutVerticalScrollbar(menu: Locator) {
-  await expect
-    .poll(() =>
-      menu.evaluate((node) => ({
-        constrained: node.getAttribute("data-floating-menu-constrained"),
-        fitsWithoutScrollbar: node.scrollHeight <= node.clientHeight + 1,
-      }))
-    )
-    .toEqual({ constrained: null, fitsWithoutScrollbar: true });
-}
-
 async function pickerRowNames(list: Locator) {
   return list.getByRole("listitem").evaluateAll((rows) =>
     rows.map((row) => row.querySelector("button span")?.textContent?.trim() ?? "")
@@ -462,6 +451,18 @@ async function mockDataManagementApi(page: Page) {
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
   await page.route("**/api/nl2sql/db-admin/tables", (route) => fulfillJson(route, tableObjects));
   await page.route("**/api/nl2sql/db-admin/views", (route) => fulfillJson(route, viewObjects));
+  await page.route("**/api/nl2sql/db-admin/preview-data", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      sql: 'SELECT * FROM "TABLE_01" FETCH FIRST 10 ROWS ONLY',
+      results: {
+        columns: ["ID", "NAME"],
+        rows: [{ ID: 1, NAME: "標準化サンプル" }],
+        total: 1,
+      },
+      warnings: [],
+    })
+  );
   await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
     const items = [...tableObjects.items, ...viewObjects.items];
     return fulfillJson(route, {
@@ -1143,11 +1144,43 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await page.keyboard.press("Tab");
   await expect(kindFilter).toBeFocused();
 
+  const previewRowLimitInput = page.getByLabel("取得件数上限");
+  await expect(previewRowLimitInput).toHaveValue("100");
+  await expect(page.getByText("0 は取得上限なし。")).toBeVisible();
+  await expect(page.getByText("表示件数 10 件固定")).toHaveCount(0);
   const previewList = page.getByTestId("data-preview-object-list");
+  await expect(previewList.getByText("操作", { exact: true })).toHaveCount(0);
+  await expect(previewList.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await kindFilter.selectOption("view");
   await expect(previewList.getByText("APP.VIEW_01", { exact: true })).toBeVisible();
   await expect(previewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
   await kindFilter.selectOption("all");
+  await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
+  const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
+  const previewClearButton = page.getByRole("button", { name: "クリア", exact: true });
+  await expect(previewShowButton).toBeEnabled();
+  await expect(previewClearButton).toBeDisabled();
+  await previewShowButton.click();
+  await expect(previewClearButton).toBeEnabled();
+  const previewResultsActions = page.getByTestId("data-preview-results-actions");
+  const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
+  const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
+  await expect(previewExportButton).toBeVisible();
+  await expect(previewMoreButton).toBeVisible();
+  const [exportBox, moreBox] = await Promise.all([
+    previewExportButton.boundingBox(),
+    previewMoreButton.boundingBox(),
+  ]);
+  expect(exportBox).not.toBeNull();
+  expect(moreBox).not.toBeNull();
+  if (Math.abs(moreBox!.y - exportBox!.y) <= 2) {
+    expect(moreBox!.x).toBeGreaterThan(exportBox!.x);
+  } else {
+    expect(moreBox!.y).toBeGreaterThan(exportBox!.y);
+  }
+  await previewMoreButton.click();
+  await expect(page.getByRole("menuitem", { name: "APP.TABLE_01 のデータを空にする" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expectNoHorizontalScroll(page);
 
   if (testInfo.project.name === "mobile-375") {
@@ -1412,7 +1445,7 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   await expectNoHorizontalScroll(page);
 });
 
-test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタンを折り返さない", async ({ page }) => {
+test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー操作を折り返さず、一覧操作列を持たない", async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");
@@ -1451,16 +1484,10 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   await expect(grid.locator("tbody tr")).toHaveCount(30);
   await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
   await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
-  const rowAction = grid.getByRole("button", { name: /操作: APP\.TABLE_01/ });
-  await expect(rowAction).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /操作: APP\.TABLE_01/ })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);
-  await rowAction.click();
-  const menu = page.getByRole("menu");
-  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
-  await expect(page.getByRole("menuitem", { name: "詳細" })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
-  await page.keyboard.press("Escape");
   const secondRow = grid.locator("tbody tr").nth(1);
   await secondRow.locator("td").nth(1).click();
   await expect(secondRow).toHaveAttribute("data-selected", "true");
@@ -1475,7 +1502,7 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・操作ボタ
   expect(scroll.pageHorizontal).toBe(false);
 });
 
-test("テーブル管理の行メニューは下端では上方向に開く", async ({
+test("テーブル管理の一覧下端は操作列なしで行選択できる", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
@@ -1487,26 +1514,16 @@ test("テーブル管理の行メニューは下端では上方向に開く", as
     node.scrollTop = node.scrollHeight;
   });
 
-  const bottomRowAction = page.getByRole("button", { name: /操作: APP\.TABLE_30/ });
-  await expect(bottomRowAction).toBeVisible();
-  const bottomTriggerBox = await bottomRowAction.boundingBox();
-  expect(bottomTriggerBox).not.toBeNull();
-  await bottomRowAction.click();
-
-  const bottomMenu = page.getByRole("menu");
-  await expect(bottomMenu).toBeVisible();
-  await expect(bottomMenu).toHaveAttribute("data-floating-menu-placement", "top");
-  const bottomMenuBox = await bottomMenu.boundingBox();
-  expect(bottomMenuBox).not.toBeNull();
-  const viewport = page.viewportSize();
-  expect(viewport).not.toBeNull();
-  expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(bottomTriggerBox!.y + 1);
-  expect(bottomMenuBox!.y).toBeGreaterThanOrEqual(0);
-  expect(bottomMenuBox!.y + bottomMenuBox!.height).toBeLessThanOrEqual(viewport!.height + 1);
-  await expectFloatingMenuWithoutVerticalScrollbar(bottomMenu);
+  const grid = page.getByTestId("table-management-grid");
+  const bottomRow = grid.locator("tbody tr").filter({ hasText: "APP.TABLE_30" });
+  await expect(bottomRow).toBeVisible();
+  await expect(grid.getByRole("button", { name: /操作: APP\.TABLE_30/ })).toHaveCount(0);
+  await bottomRow.click();
+  await expect(bottomRow).toHaveAttribute("data-selected", "true");
+  await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.TABLE_30");
 });
 
-test("テーブル管理の行メニューは少件数の一覧でも裁切されない", async ({ page }) => {
+test("テーブル管理の少件数一覧も操作列なしで行選択できる", async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
   await mockObjectManagementApi(page, scenarios[0], { itemCount: 1 });
   await page.goto("/table-management");
@@ -1514,20 +1531,13 @@ test("テーブル管理の行メニューは少件数の一覧でも裁切さ�
   const shortList = page.getByTestId("db-admin-object-list");
   const shortListBox = await shortList.boundingBox();
   expect(shortListBox).not.toBeNull();
-  const shortRowAction = page.getByRole("button", { name: /操作: APP\.TABLE_01/ });
-  await expect(shortRowAction).toBeVisible();
-  await shortRowAction.click();
-
-  const shortMenu = page.getByRole("menu");
-  await expect(shortMenu).toBeVisible();
-  await expect(shortMenu).toHaveAttribute("data-floating-menu-placement", "bottom");
-  const shortMenuBox = await shortMenu.boundingBox();
-  expect(shortMenuBox).not.toBeNull();
-  const viewport = page.viewportSize();
-  expect(viewport).not.toBeNull();
-  expect(shortMenuBox!.y + shortMenuBox!.height).toBeGreaterThan(shortListBox!.y + shortListBox!.height);
-  expect(shortMenuBox!.y).toBeGreaterThanOrEqual(0);
-  expect(shortMenuBox!.y + shortMenuBox!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  const grid = page.getByTestId("table-management-grid");
+  const row = grid.locator("tbody tr").filter({ hasText: "APP.TABLE_01" });
+  await expect(row).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /操作: APP\.TABLE_01/ })).toHaveCount(0);
+  await row.click();
+  await expect(row).toHaveAttribute("data-selected", "true");
 });
 
 test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初回表示で後追い取得する", async ({
@@ -2658,16 +2668,10 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
   if (await ownerHeader.count()) {
     await expectSingleLine(ownerHeader.locator("span").first());
   }
-  const rowAction = grid.getByRole("button", { name: /操作: APP\.VIEW_01/ });
-  await expect(rowAction).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /操作: APP\.VIEW_01/ })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "削除" })).toHaveCount(0);
-  await rowAction.click();
-  const menu = page.getByRole("menu");
-  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
-  await expect(page.getByRole("menuitem", { name: "詳細" })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "削除" })).toBeVisible();
-  await page.keyboard.press("Escape");
 });
 
 test("ビュー管理はアクションボタンで作成・JOIN/WHERE を開閉できる", async ({ page }) => {

@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../src/components/ui/confirm-dialog.tsx", import.meta.url), "utf8");
+const overlaySource = readFileSync(
+  new URL("../src/components/ui/dialog-overlay.tsx", import.meta.url),
+  "utf8"
+);
 
 test("ConfirmDialog is app-local and keeps the existing promise API", () => {
   assert.match(source, /const ConfirmContext = createContext<ConfirmFn \| null>\(null\)/u);
@@ -14,8 +18,12 @@ test("ConfirmDialog is app-local and keeps the existing promise API", () => {
 });
 
 test("ConfirmDialog keeps the compact alert layout with DB object delete dialog surface tokens", () => {
-  assert.match(source, /bg-black\/60/u);
-  assert.match(source, /fixed inset-0 z-50/u);
+  assert.match(source, /DialogOverlayPortal/u);
+  assert.match(overlaySource, /createPortal/u);
+  assert.match(overlaySource, /document\.body/u);
+  assert.match(overlaySource, /bg-black\/60/u);
+  assert.match(overlaySource, /fixed inset-0 z-50/u);
+  assert.match(overlaySource, /data-testid=\{testId\}/u);
   assert.match(source, /max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl/u);
   assert.match(source, /flex items-start gap-3 bg-card px-5 pt-5/u);
   assert.match(source, /rounded-full border bg-background \$\{iconClass\}/u);
@@ -26,6 +34,7 @@ test("ConfirmDialog keeps the compact alert layout with DB object delete dialog 
   assert.match(source, /<Button ref=\{confirmRef\} variant=\{confirmVariant\} size="sm" onClick=\{onConfirm\}>/u);
   assert.doesNotMatch(source, /border-l-danger/u);
   assert.doesNotMatch(source, /bg-danger-bg/u);
+  assert.doesNotMatch(overlaySource, /z-\[1000\]/u);
   assert.doesNotMatch(source, /z-\[1000\]/u);
   assert.doesNotMatch(source, /command\.hint\.close/u);
 });

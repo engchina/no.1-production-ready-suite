@@ -8,11 +8,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { MessageText, toneIcon, type FeedbackTone } from "@engchina/production-ready-ui";
 
 import { Button } from "@/components/ui/button";
+import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import { t } from "@/lib/i18n";
 
 export interface ConfirmOptions {
@@ -167,9 +167,8 @@ function ConfirmDialog({
   const panelClass =
     "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl";
 
-  return createPortal(
-    <div
-      className="animate-overlay-in fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center sm:p-4"
+  return (
+    <DialogOverlayPortal
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && dismissOnOverlay) onCancel();
       }}
@@ -208,7 +207,6 @@ function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>,
-    document.body
+    </DialogOverlayPortal>
   );
 }

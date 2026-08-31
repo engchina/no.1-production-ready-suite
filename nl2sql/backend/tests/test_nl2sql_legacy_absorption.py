@@ -324,15 +324,15 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
     assert confirmation_required.statements[0].status == "confirmation_required"
 
 
-def test_sql_execute_row_limit_is_bounded_1_to_5000() -> None:
+def test_sql_execute_row_limit_is_bounded_1_to_100000() -> None:
     assert ExecuteRequest(sql="SELECT * FROM INVOICES").row_limit == 100
     assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=1).row_limit == 1
-    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5000).row_limit == 5000
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=100000).row_limit == 100000
     # 0(無制限 fetch)は許可しない。無制限は db-admin 専用。
     with pytest.raises(ValidationError):
         ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0)
     with pytest.raises(ValidationError):
-        ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001)
+        ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=100001)
     with pytest.raises(ValidationError):
         ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
 

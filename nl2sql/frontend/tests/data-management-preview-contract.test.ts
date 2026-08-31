@@ -125,15 +125,42 @@ test("データプレビューと COMMENT/ANNOTATION は name_comment scope を�
   assert.match(metadataSqlManagementSource, /debouncedTargetOwnerPrefix,\s*"name_comment"/u);
 });
 
-test("データ管理プレビューは表示件数を10件固定にし、詳細条件入力を出さない", () => {
-  assert.match(dataManagementSource, /const DATA_PREVIEW_ROW_LIMIT = 10/u);
-  assert.match(dataManagementSource, /limit: DATA_PREVIEW_ROW_LIMIT/u);
+test("データ管理プレビューは取得件数上限を指定でき、詳細条件入力を出さない", () => {
+  assert.match(dataManagementSource, /const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT/u);
+  assert.match(dataManagementSource, /useState\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
+  assert.match(dataManagementSource, /parseSqlRowLimit\(previewRowLimitInput\)/u);
+  assert.match(dataManagementSource, /limit: rowLimit/u);
+  assert.match(dataManagementSource, /<RowLimitField/u);
+  assert.match(dataManagementSource, /<Play size=\{16\} aria-hidden="true" \/>/u);
+  assert.match(dataManagementSource, /<X size=\{16\} aria-hidden="true" \/>/u);
+  assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.show"\)\}/u);
+  assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.clear"\)\}/u);
+  assert.match(dataManagementSource, /onSelectPreviewObject=\{\(objectName\) => selectPreviewObject\(objectName, \{ manualSelection: true \}\)\}/u);
+  assert.match(dataManagementSource, /setPreviewRowLimitInput\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
+  assert.match(dataManagementSource, /<QueryResultsTable results=\{preview\.results\} rowLimit=\{executedRowLimit\} \/>/u);
   assert.match(dataManagementSource, /where_clause: ""/u);
-  assert.match(dataManagementSource, /t\("dataMgmt\.preview\.fixedLimit", \{ count: DATA_PREVIEW_ROW_LIMIT \}\)/u);
-  assert.equal(t("dataMgmt.preview.fixedLimit", { count: 10 }), "表示件数 10 件固定");
+  assert.equal(t("queryResults.rowLimit.helper"), "0 は取得上限なし。");
+  assert.equal(t("dataMgmt.preview.clear"), "クリア");
+  assert.doesNotMatch(dataManagementSource, /const DATA_PREVIEW_ROW_LIMIT/u);
+  assert.doesNotMatch(dataManagementSource, /limit: DATA_PREVIEW_ROW_LIMIT/u);
+  assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.fixedLimit/u);
+  assert.doesNotMatch(dataManagementSource, /onSelect=\{\(item\) => onShowPreview\(item\.key\)\}/u);
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.limit"\)/u);
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.where"\)/u);
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.wherePlaceholder"\)/u);
+});
+
+test("データ管理プレビューは対象選択から結果確認へのステップを表示する", () => {
+  assert.equal(t("dataMgmt.preview.steps"), "テーブル・ビューデータ表示ステップ");
+  assert.equal(t("dataMgmt.preview.stepTarget"), "対象選択");
+  assert.equal(t("dataMgmt.preview.stepResults"), "結果確認");
+  assert.match(dbObjectSharedSource, /topContent\?: ReactNode/u);
+  assert.match(dbObjectSharedSource, /\{topContent\}[\s\S]{0,120}\{splitPaneId \?/u);
+  assert.match(
+    dataManagementSource,
+    /topContent=\{\s*<DbObjectStepIndicator[\s\S]{0,260}dataTestId="data-preview-steps"/u
+  );
+  assert.match(dataManagementSource, /activeIndex=\{previewObject \? 1 : 0\}/u);
 });
 
 test("データ管理の対象ピッカーはヘッダーソート契約を持つ", () => {

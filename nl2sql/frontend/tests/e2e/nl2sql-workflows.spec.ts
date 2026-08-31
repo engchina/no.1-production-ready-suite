@@ -27,6 +27,18 @@ async function clickRowAction(page: Page, testId: string, name: string) {
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
+async function clickObjectDetailAction(page: Page, testId: string, name: string) {
+  const actions = page.getByTestId(testId);
+  await expect(actions).toBeVisible();
+  const visibleButton = actions.getByRole("button", { name, exact: true });
+  if (await visibleButton.isVisible()) {
+    await visibleButton.click();
+    return;
+  }
+  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
 async function expectContentActionsRightAligned(actions: Locator) {
   const metrics = await actions.evaluate((node) => {
     const group = node.querySelector('[role="group"]');
@@ -58,6 +70,24 @@ async function expectButtonBelowInput(input: Locator, button: Locator) {
   expect(inputBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+}
+
+async function expectOneLineWithoutOverflow(locator: Locator) {
+  await expect(locator).toBeVisible();
+  const metrics = await locator.evaluate((node) => {
+    const element = node as HTMLElement;
+    const style = window.getComputedStyle(element);
+    return {
+      clientWidth: element.clientWidth,
+      lineHeight: Number.parseFloat(style.lineHeight),
+      offsetHeight: element.offsetHeight,
+      scrollWidth: element.scrollWidth,
+      whiteSpace: style.whiteSpace,
+    };
+  });
+  expect(metrics.whiteSpace).toBe("nowrap");
+  expect(metrics.offsetHeight).toBeLessThanOrEqual(metrics.lineHeight + 1);
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
 }
 
 async function expectEqualFilterWidths(search: Locator, owner: Locator) {
@@ -148,6 +178,33 @@ async function mainScrollTop(page: Page) {
 
 async function expectMainScrolledBelowTop(page: Page) {
   await expect.poll(() => mainScrollTop(page)).toBeGreaterThan(0);
+}
+
+async function expectAppDialogOverlayCoversViewport(page: Page) {
+  const overlay = page.getByTestId("app-dialog-overlay");
+  await expect(overlay).toBeVisible();
+  const metrics = await overlay.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      backgroundColor: window.getComputedStyle(node).backgroundColor,
+    };
+  });
+
+  expect(Math.abs(metrics.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.top)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.right - metrics.viewportWidth)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.bottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.width - metrics.viewportWidth)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.height - metrics.viewportHeight)).toBeLessThanOrEqual(1);
+  expect(metrics.backgroundColor).toMatch(/^(rgba\(0, 0, 0, 0\.6\)|oklab\(0 0 0 \/ 0\.6\))$/u);
 }
 
 export async function expectNeutralDangerConfirmationSurface(surface: Locator) {
@@ -609,7 +666,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/sample-data", (route) =>
     fulfillJson(route, {
       runtime: "deterministic",
-      profile_id: "sql_assist_sample",
+      profile_id: "",
       confirmation: "SQL_ASSIST_SAMPLE",
       objects: sampleObjects,
       imported_objects: sampleImportedObjects,
@@ -637,7 +694,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           },
         ],
         warnings: [],
-        profile_id: "sql_assist_sample",
+        profile_id: "",
         timing,
       });
     }
@@ -650,7 +707,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       objects: sampleObjects,
       statements: [{ index: 1, statement_type: "CREATE", status: "applied_to_local_state", sql: sampleSql.tables[0], error_message: "" }],
       warnings: [],
-      profile_id: "sql_assist_sample",
+      profile_id: "",
       timing,
     });
   });
@@ -665,7 +722,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       objects: sampleObjects,
       statements: [{ index: 1, statement_type: "DROP", status: "applied_to_local_state", sql: sampleSql.delete[0], error_message: "" }],
       warnings: [],
-      profile_id: "sql_assist_sample",
+      profile_id: "",
       timing,
     });
   });
@@ -863,15 +920,19 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.previewDataPayload = route.request().postDataJSON() as Record<string, unknown>;
     const owner = String(state.previewDataPayload.owner ?? "").trim();
     const objectName = String(state.previewDataPayload.object_name ?? "INVOICES");
-    const rowLimit = Number(state.previewDataPayload.limit ?? 10);
+    const rowLimit = Number(state.previewDataPayload.limit ?? 100);
+    const returnedRowCount = rowLimit === 0 ? 25 : rowLimit;
     const objectRef = owner ? `"${owner}"."${objectName}"` : `"${objectName}"`;
-    const rows = Array.from({ length: rowLimit }, (_, index) => ({
+    const rows = Array.from({ length: returnedRowCount }, (_, index) => ({
       CUSTOMER_NAME: `顧客${String(index + 1).padStart(2, "0")}`,
       TOTAL_AMOUNT: (index + 1) * 1000,
     }));
     return fulfillJson(route, {
       runtime: "deterministic",
-      sql: `SELECT * FROM ${objectRef} FETCH FIRST ${rowLimit} ROWS ONLY`,
+      sql:
+        rowLimit === 0
+          ? `SELECT * FROM ${objectRef}`
+          : `SELECT * FROM ${objectRef} FETCH FIRST ${rowLimit} ROWS ONLY`,
       results: {
         columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
         rows,
@@ -5879,7 +5940,9 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
 
   const sqlInput = directSqlInput(page);
   const rowLimitInput = directSql.getByLabel("取得件数上限");
+  const rowLimitHelper = directSql.getByText("1〜100000 の整数。取得上限なしは指定できません。");
   await expect(rowLimitInput).toHaveValue("100");
+  await expectOneLineWithoutOverflow(rowLimitHelper);
   await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "SQL 実行" }).click();
@@ -5900,16 +5963,16 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(rowLimitInput).toHaveValue("100");
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
 
-  // /api/nl2sql/execute は 1..5000 のみ受理(0=無制限 fetch は db-admin 専用で、この画面では送信不可)。
+  // /api/nl2sql/execute は 1..100000 のみ受理(0=無制限 fetch は db-admin 専用で、この画面では送信不可)。
   await rowLimitInput.fill("-1");
-  await expect(directSql.getByRole("alert")).toContainText("1〜5000 の整数で入力してください。");
+  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
   await rowLimitInput.fill("0");
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await expect(directSql.getByRole("alert")).toContainText("1〜5000 の整数で入力してください。");
+  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
-  await rowLimitInput.fill("5001");
-  await expect(directSql.getByRole("alert")).toContainText("1〜5000 の整数で入力してください。");
+  await rowLimitInput.fill("100001");
+  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
 
   await page.getByRole("button", { name: "クリア" }).click();
@@ -5939,6 +6002,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 900 });
+  await expectOneLineWithoutOverflow(rowLimitHelper);
   await expectNoHorizontalScroll(page);
 });
 
@@ -8705,16 +8769,24 @@ test("data preparation read results use the shared detail skeleton without stale
   const resultsPanel = page.locator("#data-management-panel-preview").locator("section").filter({
     has: page.getByRole("heading", { name: "表示結果" }),
   });
-  const invoicesPreviewButton = page.getByRole("button", { name: "APP.INVOICES のデータを表示" });
-  const viewPreviewButton = page.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" });
-  const invoicesTruncateAction = page.getByTestId("data-preview-object-list-row-actions-APP.INVOICES-trigger");
-  await invoicesPreviewButton.click();
+  const invoicesSelectButton = page.getByRole("button", { name: "APP.INVOICES を選択" });
+  const viewSelectButton = page.getByRole("button", { name: "APP.V_EMP_DEPT を選択" });
+  const showPreviewButton = resultsPanel.getByRole("button", { name: "データを表示", exact: true });
+  const resultsActions = resultsPanel.getByTestId("data-preview-results-actions");
+  await invoicesSelectButton.click();
+  await showPreviewButton.click();
   const dataSkeleton = page.getByTestId("data-preview-results-detail-skeleton");
   await expect(dataSkeleton).toBeVisible();
-  await expect(invoicesPreviewButton).toBeDisabled();
-  await expect(viewPreviewButton).toBeDisabled();
-  await expect(invoicesTruncateAction).toBeDisabled();
-  await expect(page.getByTestId("data-preview-object-list-row-actions-APP.V_EMP_DEPT-trigger")).toHaveCount(0);
+  await expect(showPreviewButton).toBeDisabled();
+  await expect(invoicesSelectButton).toBeEnabled();
+  await expect(viewSelectButton).toBeEnabled();
+  await expect(resultsActions.getByRole("button", { name: "XLSX ダウンロード" })).toBeDisabled();
+  await expect(resultsActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await resultsActions.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toBeDisabled();
+  await resultsActions.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByTestId("data-preview-object-list").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  await expect(resultsPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
   await expect(resultsPanel.getByText("データ未表示")).toHaveCount(0);
   await expect(resultsPanel.getByText("スケルトン確認顧客")).toHaveCount(0);
 
@@ -8744,12 +8816,12 @@ test("data preparation read results use the shared detail skeleton without stale
   firstPreviewGate.release();
   await expect(resultsPanel.getByRole("cell", { name: "スケルトン確認顧客" })).toBeVisible();
 
-  await invoicesPreviewButton.click();
+  await showPreviewButton.click();
   await expect(resultsPanel.getByRole("cell", { name: "スケルトン確認顧客" })).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expectNoHorizontalScroll(page);
-  await invoicesPreviewButton.click();
+  await showPreviewButton.click();
   await expect(dataSkeleton).toBeVisible();
   await expect(resultsPanel.getByRole("cell", { name: "スケルトン確認顧客" })).toHaveCount(0);
   failedPreviewGate.release();
@@ -9316,12 +9388,16 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expectToastStackBottomRight(page);
   generateGate.release();
   await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
-  await expect(syntheticPanel.getByRole("heading", { name: "結果確認" })).toBeVisible();
+  const syntheticResultsSection = syntheticPanel.locator("section[aria-labelledby='synthetic-results-heading']");
+  await expect(syntheticResultsSection.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
+  await expect(syntheticResultsSection.getByText("生成後に結果テーブルを選択すると表示できます。").first()).toBeVisible();
   await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成が完了しました。");
   await expectToastStackBottomRight(page);
 
   const resultsGate = createRequestGate();
+  const syntheticResultsRequests: URL[] = [];
   await page.route("**/api/nl2sql/synthetic-data/results**", async (route) => {
+    syntheticResultsRequests.push(new URL(route.request().url()));
     await resultsGate.promise;
     return fulfillJson(route, {
       runtime: "deterministic",
@@ -9334,27 +9410,45 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
       warnings: [],
     });
   });
+  const resultTableSelect = syntheticPanel.getByTestId("synthetic-result-table-select");
+  const resultLimitInput = syntheticResultsSection.getByLabel("取得件数上限");
   const resultsActions = syntheticPanel.getByTestId("data-synthetic-results-actions");
-  await expect(resultsActions.getByText("生成結果データの表示")).toBeVisible();
-  await expect(resultsActions.getByText("選択中のテーブルから生成結果データを取得します。")).toBeVisible();
-  await expectTopToBottomOrder(syntheticPanel.getByTestId("synthetic-result-table-select"), resultsActions);
-  const showDataButton = syntheticPanel.getByRole("button", { name: "データを表示" });
+  await expect(resultTableSelect).toHaveValue("APP.INVOICES");
+  await expect(resultLimitInput).toHaveValue("100");
+  await expect(resultLimitInput).toHaveAttribute("max", "10000");
+  await expect(syntheticResultsSection.getByText("表示するデータはまだありません")).toBeVisible();
+  await expectTopToBottomOrder(resultTableSelect, resultLimitInput, resultsActions);
+  const showDataButton = syntheticResultsSection.getByRole("button", { name: "データを表示" });
+  await resultLimitInput.fill("-1");
+  await expect(syntheticResultsSection.getByRole("alert")).toContainText("1〜10000 の整数で入力してください。");
+  await expect(showDataButton).toBeDisabled();
+  expect(syntheticResultsRequests).toHaveLength(0);
+  await resultLimitInput.fill("100");
+  await expect(syntheticResultsSection.getByText("1〜10000 の整数で入力してください。")).toHaveCount(0);
+  await expect(showDataButton).toBeEnabled();
   await showDataButton.click();
   const syntheticResultsSkeleton = page.getByTestId("data-synthetic-results-detail-skeleton");
   await expect(syntheticResultsSkeleton).toBeVisible();
   await expect(showDataButton.locator("svg.animate-spin")).toHaveCount(1);
   await expect(syntheticResultsSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("表示するデータはまだありません")).toHaveCount(0);
+  await expect.poll(() => syntheticResultsRequests.length).toBe(1);
+  expect(syntheticResultsRequests[0].searchParams.get("table_name")).toBe("APP.INVOICES");
+  expect(syntheticResultsRequests[0].searchParams.get("limit")).toBe("100");
   resultsGate.release();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-loading-customer" })).toBeVisible();
+  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
+  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(refreshTablesActions.getByRole("button", { name: "テーブル一覧を取得" })).toBeVisible();
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
-  await expect(resultsActions.getByRole("button", { name: "データを表示" })).toBeVisible();
-  await resultsActions.getByRole("button", { name: "データを表示" }).click();
+  await expect(showDataButton).toBeVisible();
+  await showDataButton.click();
+  await expect.poll(() => syntheticResultsRequests.length).toBe(2);
+  expect(syntheticResultsRequests[1].searchParams.get("limit")).toBe("100");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectToastStackBottomRight(page);
   await expectNoHorizontalScroll(page);
@@ -9756,6 +9850,7 @@ test("data management CSV upload hides unmatched columns when Oracle reports non
 
 test("sample data and data management run imported workflows", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
+  const currentPreviewDataPayload = () => api.previewDataPayload;
   const dbAdminObjectOwnerPrefixRequests: string[] = [];
   const dbAdminObjectExactOwnerRequests: string[] = [];
   page.on("request", (request) => {
@@ -9882,30 +9977,88 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await previewOwnerFilter.clear();
   await expect(dataPreviewPanel.getByLabel("種別フィルタ")).toBeVisible();
   await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
-  await expect(dataPreviewPanel.getByLabel("取得件数上限")).toHaveCount(0);
+  const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
+  await expect(previewRowLimitInput).toHaveValue("100");
+  await expect(dataPreviewPanel.getByText("0 は取得上限なし。")).toBeVisible();
   await expect(dataPreviewPanel.getByLabel("WHERE 条件(任意)")).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByText("表示件数 10 件固定")).toBeVisible();
   await expect(dataPreviewPanel.getByText("統計未取得")).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(3);
-  await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(4);
-  await expect(dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true })).toHaveCount(0);
-  const invoicesTruncateAction = dataPreviewPanel.getByTestId(
-    "data-preview-object-list-row-actions-APP.INVOICES-trigger"
-  );
-  await invoicesTruncateAction.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toHaveCount(0);
-  await expect(invoicesTruncateAction).toBeFocused();
-  await clickRowAction(
-    page,
-    "data-preview-object-list-row-actions-APP.INVOICES",
-    "APP.INVOICES のデータを空にする"
-  );
+  await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
+  await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);
+  const previewShowButton = dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true });
+  const previewClearButton = dataPreviewPanel.getByRole("button", { name: "クリア", exact: true });
+  const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
+  const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
+  const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
+  const previewSteps = dataPreviewPanel.getByTestId("data-preview-steps");
+  const previewResultsStep = previewSteps.getByRole("listitem").filter({ hasText: "結果確認" });
+  await expect(previewSteps).toHaveAttribute("aria-label", "テーブル・ビューデータ表示ステップ");
+  await expect(previewSteps).toContainText("対象選択");
+  await expect(previewSteps).toContainText("結果確認");
+  await expect(previewShowButton).toBeEnabled();
+  await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
+  await expect(previewClearButton).toBeDisabled();
+  api.previewDataPayload = null;
+  await dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
+  expect(api.previewDataPayload).toBeNull();
+  await previewRowLimitInput.fill("-1");
+  await expect(dataPreviewPanel.getByText("0 以上の整数で入力してください。")).toBeVisible();
+  await expect(previewShowButton).toBeDisabled();
+  await expect(previewExportButton).toBeDisabled();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeEnabled();
+  await previewRowLimitInput.fill("100");
+  await expect(dataPreviewPanel.getByText("0 以上の整数で入力してください。")).toHaveCount(0);
+  await previewShowButton.click();
+  await expect(previewExportButton).toBeVisible();
+  await expect(previewMoreButton).toBeVisible();
+  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得件数 100 件");
+  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(dataPreviewPanel.getByTestId("query-results-pagination")).toContainText("1-10 / 100 件");
+  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await dataPreviewPanel.getByRole("button", { name: "次へ" }).click();
+  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toBeVisible();
+  await dataPreviewPanel.getByRole("button", { name: "前へ" }).click();
+  await previewClearButton.click();
+  await expect(previewRowLimitInput).toHaveValue("100");
+  await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await expect(previewClearButton).toBeDisabled();
+  await expect(previewShowButton).toBeEnabled();
+  api.previewDataPayload = null;
+  await previewShowButton.click();
+  await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("INVOICES");
+  expect(currentPreviewDataPayload()?.owner).toBe("APP");
+  expect(currentPreviewDataPayload()?.limit).toBe(100);
+  expect(currentPreviewDataPayload()?.where_clause).toBe("");
+  const tableDownloadPromise = page.waitForEvent("download");
+  await previewExportButton.click();
+  const tableDownload = await tableDownloadPromise;
+  expect(tableDownload.suggestedFilename()).toBe("app_invoices_preview.xlsx");
+  await expect.poll(() => api.previewDataExportPayload?.object_name).toBe("INVOICES");
+  expect(api.previewDataExportPayload?.owner).toBe("APP");
+  expect(api.previewDataExportPayload?.limit).toBe(100);
+  expect(api.previewDataExportPayload?.where_clause).toBe("");
+  const [exportBox, moreBox] = await Promise.all([
+    previewExportButton.boundingBox(),
+    previewMoreButton.boundingBox(),
+  ]);
+  expect(exportBox).not.toBeNull();
+  expect(moreBox).not.toBeNull();
+  if (Math.abs(moreBox!.y - exportBox!.y) <= 2) {
+    expect(moreBox!.x).toBeGreaterThan(exportBox!.x);
+  } else {
+    expect(moreBox!.y).toBeGreaterThan(exportBox!.y);
+  }
+  await clickObjectDetailAction(page, "data-preview-results-actions", "APP.INVOICES のデータを空にする");
   const truncateDialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
   await expect(truncateDialog).toBeVisible();
+  await mainScroller(page).evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  await expectAppDialogOverlayCoversViewport(page);
   await expectOnlyConfirmationFieldHasNoLeftAccent(truncateDialog);
   const truncateButton = truncateDialog.getByRole("button", { name: "データを空にする" });
   await expect(truncateButton).toBeDisabled();
@@ -9920,8 +10073,8 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" })).toHaveCount(0);
 
   await previewSearch.fill("EMP");
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" })).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
   await previewSearch.fill("ZZZ");
   await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
   await previewSearch.fill("");
@@ -9929,37 +10082,43 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(previewOwnerFilter).toHaveValue("AP");
   await expect.poll(() => dbAdminObjectOwnerPrefixRequests.includes("AP")).toBe(true);
   expect(dbAdminObjectExactOwnerRequests).toEqual([]);
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await previewOwnerFilter.fill("ZZZ");
   await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
   await previewOwnerFilter.fill("");
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await dataPreviewPanel.getByLabel("種別フィルタ").selectOption("view");
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" })).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByTestId("data-preview-object-list-row-actions-APP.V_EMP_DEPT-trigger")).toHaveCount(0);
-  const viewPreviewTarget = dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを表示" });
-  await expect(viewPreviewTarget).toBeEnabled();
-  await viewPreviewTarget.focus();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
+  await previewRowLimitInput.fill("0");
+  await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByRole("button", { name: "データを空にする", exact: true })).toHaveCount(0);
+  await expect(previewResultsActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
+  const viewSelectTarget = dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" });
+  await expect(viewSelectTarget).toBeEnabled();
+  await viewSelectTarget.focus();
   await page.keyboard.press("Enter");
-  await expect(viewPreviewTarget).toHaveAttribute("aria-current", "true");
-  await expect(viewPreviewTarget).toBeEnabled();
+  await expect(viewSelectTarget).toHaveAttribute("aria-current", "true");
+  await expect(previewShowButton).toBeEnabled();
 
-  await viewPreviewTarget.click();
+  api.previewDataPayload = null;
+  await previewShowButton.click();
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 10 件");
+  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限なし");
+  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 25 件");
   await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-  await expect.poll(() => api.previewDataPayload?.object_name).toBe("V_EMP_DEPT");
-  expect(api.previewDataPayload?.owner).toBe("APP");
-  expect(api.previewDataPayload?.limit).toBe(10);
-  expect(api.previewDataPayload?.where_clause).toBe("");
+  await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
+  expect(currentPreviewDataPayload()?.owner).toBe("APP");
+  expect(currentPreviewDataPayload()?.limit).toBe(0);
+  expect(currentPreviewDataPayload()?.where_clause).toBe("");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "XLSX ダウンロード" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("app_v_emp_dept_preview.xlsx");
   await expect.poll(() => api.previewDataExportPayload?.object_name).toBe("V_EMP_DEPT");
   expect(api.previewDataExportPayload?.owner).toBe("APP");
-  expect(api.previewDataExportPayload?.limit).toBe(10);
+  expect(api.previewDataExportPayload?.limit).toBe(0);
   expect(api.previewDataExportPayload?.where_clause).toBe("");
   await expectNoHorizontalScroll(page);
 
@@ -10015,7 +10174,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticPanel.getByText("Oracle への synthetic data 生成")).toBeVisible();
   await expect(syntheticPanel.getByRole("heading", { name: "対象選択" })).toBeVisible();
   await expect(syntheticPanel.getByRole("heading", { name: "進捗と状態" })).toHaveCount(0);
-  await expect(syntheticPanel.getByRole("heading", { name: "結果確認" })).toBeVisible();
+  await expect(syntheticPanel.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   const syntheticGenerateButton = syntheticPanel.getByRole("button", { name: "生成開始" });
   await expect(syntheticGenerateButton).toBeDisabled();
   const syntheticProfileSelect = syntheticPanel.getByLabel("Profile");
@@ -10035,6 +10194,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await syntheticGenerateButton.click();
   await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
   await expect(syntheticPanel.getByTestId("synthetic-result-table-select")).toHaveValue("APP.INVOICES");
+  await expect(syntheticPanel.getByLabel("取得件数上限")).toHaveValue("100");
   await expect(syntheticPanel.getByRole("option", { name: "AUDIT_LOG" })).toHaveCount(0);
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
   await syntheticPanel.getByRole("button", { name: "データを表示" }).click();
@@ -10065,7 +10225,7 @@ test("SampleData schema refresh recovery disables CTA while workspace processing
       objects: [],
       statements: [],
       warnings: [],
-      profile_id: "sql_assist_sample",
+      profile_id: "",
       schema_refresh_required: true,
       schema_refresh_reason_code: "schema_refresh_full_required",
       timing,
@@ -10598,16 +10758,16 @@ test("data management keeps loaded object rows when load more times out and retr
   });
 
   await page.goto("/data-management");
-  await expect(page.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await page.getByTestId("data-preview-object-footer").getByRole("button", { name: "さらに読み込む" }).click();
-  await expect(page.getByRole("button", { name: "APP.INVOICES のデータを表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await expect(page.getByText(/追加読み込みが60秒以内に完了しませんでした/)).toBeVisible();
   allowSuccess = true;
   timeoutGate.release();
   const retry = page.getByTestId("data-preview-object-footer").getByRole("button", { name: "再試行" });
   await retry.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "APP.PAYMENTS のデータを表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "APP.PAYMENTS を選択" })).toBeVisible();
   expect(cursorAttempts).toBe(2);
   await expectNoHorizontalScroll(page);
 });
@@ -11419,9 +11579,14 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const ddlDownload = await ddlDownloadPromise;
   expect(ddlDownload.suggestedFilename()).toBe("app_invoices_ddl.sql");
 
-  await clickRowAction(page, "table-management-row-actions-APP.INVOICES", "削除");
+  await expect(page.getByTestId("table-management-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  await clickObjectDetailAction(page, "table-management-detail-actions", "削除");
   const dropTableDialog = page.getByRole("dialog", { name: "DROP TABLE の確認" });
   await expect(dropTableDialog).toBeVisible();
+  await mainScroller(page).evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  await expectAppDialogOverlayCoversViewport(page);
   await expectOnlyConfirmationFieldHasNoLeftAccent(dropTableDialog);
   await dropTableDialog.getByLabel("実行確認語").fill("APP.INVOICES");
   await expect(dropTableDialog.getByText("確認済み", { exact: true })).toHaveCount(1);
@@ -11622,9 +11787,14 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
   await page.getByRole("button", { name: "一覧に戻る" }).click();
-  await clickRowAction(page, "view-management-row-actions-APP.V_EMP_DEPT", "削除");
+  await expect(page.getByTestId("view-management-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  await clickObjectDetailAction(page, "view-management-detail-actions", "削除");
   const dropViewDialog = page.getByRole("dialog", { name: "DROP VIEW の確認" });
   await expect(dropViewDialog).toBeVisible();
+  await mainScroller(page).evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  await expectAppDialogOverlayCoversViewport(page);
   await expectOnlyConfirmationFieldHasNoLeftAccent(dropViewDialog);
   await expect(page.getByRole("button", { name: "Drop 実行" })).toBeDisabled();
   await page.getByLabel("実行確認語").fill("APP.V_EMP_DEPT");

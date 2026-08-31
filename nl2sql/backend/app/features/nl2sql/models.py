@@ -710,7 +710,7 @@ class SampleDataInfo(BaseModel):
     """Optional SQL Assist sample package status."""
 
     runtime: str = "deterministic"
-    profile_id: str = "sql_assist_sample"
+    profile_id: str = ""
     confirmation: str = "SQL_ASSIST_SAMPLE"
     objects: list[str] = Field(default_factory=list)
     imported_objects: list[str] = Field(default_factory=list)
@@ -734,7 +734,7 @@ class SampleDataMutationData(BaseModel):
     objects: list[str] = Field(default_factory=list)
     statements: list[DbAdminStatementResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    profile_id: str = "sql_assist_sample"
+    profile_id: str = ""
     schema_refresh_job_id: str = ""
     schema_refresh_required: bool = False
     schema_refresh_reason_code: str = ""
@@ -780,7 +780,7 @@ class DbAdminDataPreviewRequest(BaseModel):
 
     object_name: str = Field(min_length=1)
     owner: str = ""
-    limit: int = Field(default=100, ge=1, le=10000)
+    limit: int = Field(default=100, ge=0)
     where_clause: str = ""
 
 
@@ -1035,8 +1035,8 @@ class ExecuteRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    # Preview/JobCreate と同じ 1..5000。0(無制限)は db-admin 専用(DbAdminExecuteRequest)。
-    row_limit: int | None = Field(default=100, ge=1, le=5000)
+    # Direct SQL execute は 1..100000。0(無制限)は db-admin 専用(DbAdminExecuteRequest)。
+    row_limit: int | None = Field(default=100, ge=1, le=100000)
 
 
 class JobCreateRequest(BaseModel):

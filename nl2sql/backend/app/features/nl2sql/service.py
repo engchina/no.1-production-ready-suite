@@ -3578,7 +3578,7 @@ class Nl2SqlService:
         imported = self._sample_imported_objects(warnings=warnings)
         return SampleDataInfo(
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-            profile_id=_SAMPLE_PROFILE_ID,
+            profile_id="",
             confirmation=_SAMPLE_CONFIRMATION,
             objects=list(_SAMPLE_OBJECTS),
             imported_objects=imported,
@@ -3620,16 +3620,8 @@ class Nl2SqlService:
             schema_refresh_job_id = execution.schema_refresh_job_id
             schema_refresh_required = execution.schema_refresh_required
             schema_refresh_reason_code = execution.schema_refresh_reason_code
-            if executed:
-                # Schema refresh は非同期なので、直後の Catalog は新規 object をまだ含まない。
-                # 実行した既知の sample DDL から scope を確定し、refresh 完了を待たずに
-                # Profile を一貫した状態で公開する。
-                self._ensure_sample_profile(
-                    allowed_tables=self._sample_profile_objects_for_step(step)
-                )
         else:
             self._apply_sample_import_to_catalog(step)
-            self._ensure_sample_profile()
             results = self._statement_results(statements, status="applied_to_local_state")
             executed = True
             self._persist_local_catalog()
@@ -3641,7 +3633,7 @@ class Nl2SqlService:
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
-            profile_id=_SAMPLE_PROFILE_ID,
+            profile_id="",
             schema_refresh_job_id=schema_refresh_job_id,
             schema_refresh_required=schema_refresh_required,
             schema_refresh_reason_code=schema_refresh_reason_code,
@@ -3703,7 +3695,7 @@ class Nl2SqlService:
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
-            profile_id=_SAMPLE_PROFILE_ID,
+            profile_id="",
             schema_refresh_job_id=schema_refresh_job_id,
             schema_refresh_required=schema_refresh_required,
             schema_refresh_reason_code=schema_refresh_reason_code,
@@ -3807,14 +3799,6 @@ class Nl2SqlService:
                 existing.add(identity.object_name)
         return [name for name in _SAMPLE_OBJECTS if name in existing]
 
-    def _sample_profile_objects_for_step(self, step: SampleDataStep) -> list[str]:
-        existing = set(self._sample_imported_objects())
-        if step in {SampleDataStep.ALL, SampleDataStep.TABLES}:
-            existing.update(_SAMPLE_OBJECTS[:3])
-        if step in {SampleDataStep.ALL, SampleDataStep.VIEWS}:
-            existing.update(_SAMPLE_OBJECTS[3:])
-        return [name for name in _SAMPLE_OBJECTS if name in existing]
-
     def _sample_confirmation_error(self, confirmation: str) -> str:
         if confirmation.strip() == _SAMPLE_CONFIRMATION:
             return ""
@@ -3896,36 +3880,6 @@ class Nl2SqlService:
                 self._profile_cache.put(_SAMPLE_PROFILE_ID, archived)
         elif profile is not None:
             self._profiles[_SAMPLE_PROFILE_ID] = profile.model_copy(update={"archived": True})
-
-    def _ensure_sample_profile(self, *, allowed_tables: Sequence[str] | None = None) -> None:
-        profile = Nl2SqlProfile(
-            id=_SAMPLE_PROFILE_ID,
-            name="SQL Assist サンプル",
-            description="DEPARTMENT / EMPLOYEE / PROJECT の明示 import sample profile。",
-            allowed_tables=(
-                list(allowed_tables)
-                if allowed_tables is not None
-                else self._sample_imported_objects()
-            ),
-            glossary={},
-            sql_rules=[],
-            default_row_limit=get_settings().nl2sql_default_row_limit,
-            few_shot_examples=[],
-            select_ai_config=ProfileSelectAiConfig(
-                additional_instructions="sample data は明示 import 後のみ利用",
-            ),
-            archived=False,
-        )
-        if self._incremental_repository is not None:
-            current = self._incremental_repository.get_profile(_SAMPLE_PROFILE_ID)
-            stored = self._incremental_repository.save_profile(
-                profile,
-                expected_etag=current.etag if current is not None else None,
-            )
-            self._profile_cache.discard(_SAMPLE_PROFILE_ID)
-            self._profile_cache.put(_SAMPLE_PROFILE_ID, stored)
-            return
-        self._profiles[_SAMPLE_PROFILE_ID] = profile
 
     def _persist_local_catalog(self) -> None:
         repository = self._incremental_repository

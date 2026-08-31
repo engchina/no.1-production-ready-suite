@@ -1746,7 +1746,7 @@ test("ADB OCID がない場合は自動取得せず手動アップロードを�
   await expectNoHorizontalOverflow(page);
 });
 
-test("Select AI Credential を明示確認で作成し、業務 Profile の手動再試行へ案内する", async ({
+test("Select AI Credential を明示確認で作成し、成功状態だけを表示する", async ({
   page,
 }) => {
   let posted: Record<string, unknown> | null = null;
@@ -1791,15 +1791,11 @@ test("Select AI Credential を明示確認で作成し、業務 Profile の手�
   expect(posted).not.toHaveProperty("private_key");
   const success = card.getByTestId("select-ai-credential-success");
   await expect(success).toContainText("Select AI Credential を作成");
-  await expect(success).toContainText("履歴ジョブは自動再実行されません");
-  await expect(success.getByRole("link", { name: "業務 Profile を開く" })).toHaveAttribute(
-    "href",
-    "/profiles"
-  );
+  await expect(success.getByRole("link")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 
-test("既存 Select AI Credential の再作成は danger 確認ダイアログを必須にする", async ({
+test("既存 Select AI Credential の再作成は確認語だけで直接実行する", async ({
   page,
 }) => {
   let recreateRequest: Record<string, unknown> | null = null;
@@ -1829,10 +1825,7 @@ test("既存 Select AI Credential の再作成は danger 確認ダイアログ�
     "ADMIN_EXECUTE"
   );
   await card.getByRole("button", { name: "Credential を再作成" }).click();
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("依存する Select AI は処理中に一時的に利用できなくなる");
-  await expect.poll(() => recreateRequest).toBeNull();
-  await dialog.getByRole("button", { name: "Credential を再作成" }).press("Enter");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect.poll(() => recreateRequest).not.toBeNull();
   expect(recreateRequest).toEqual({
     region: "ap-osaka-1",

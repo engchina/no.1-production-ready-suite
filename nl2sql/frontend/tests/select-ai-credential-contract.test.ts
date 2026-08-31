@@ -34,8 +34,9 @@ test("database settings exposes create, explicit recreate, readiness and fixed f
   assert.match(databaseSettingsSource, /SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE"/u);
   assert.match(databaseSettingsSource, /data\.oci_auth_ready/u);
   assert.match(databaseSettingsSource, /data\.exists \? "danger" : "primary"/u);
-  assert.match(databaseSettingsSource, /tone: "danger"/u);
-  assert.match(databaseSettingsSource, /dismissOnOverlay: false/u);
+  assert.doesNotMatch(databaseSettingsSource, /useConfirm/u);
+  assert.doesNotMatch(databaseSettingsSource, /successNextStep/u);
+  assert.doesNotMatch(databaseSettingsSource, /action\.openProfiles/u);
   assert.match(databaseSettingsSource, /<ExecutionConfirmationField/u);
   assert.match(databaseSettingsSource, /<FormStatus[\s\S]*tone="danger"/u);
   assert.match(databaseSettingsSource, /data-testid="select-ai-credential-success"/u);

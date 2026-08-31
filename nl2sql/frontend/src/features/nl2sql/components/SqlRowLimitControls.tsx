@@ -21,6 +21,7 @@ export function RowLimitField({
   disabled = false,
   error = "",
   className = "",
+  helperClassName = "",
   min = 0,
   max,
   helper = t("queryResults.rowLimit.helper"),
@@ -30,6 +31,7 @@ export function RowLimitField({
   disabled?: boolean;
   error?: string;
   className?: string;
+  helperClassName?: string;
   /** 許容最小値。0 = 無制限を許す画面(db-admin)は既定のまま、/execute 系は 1 を渡す。 */
   min?: number;
   max?: number;
@@ -57,7 +59,7 @@ export function RowLimitField({
         aria-invalid={error ? "true" : undefined}
         className="h-10 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40"
       />
-      <p id={helperId} className="text-xs leading-5 text-muted">
+      <p id={helperId} className={`text-xs leading-5 text-muted ${helperClassName}`}>
         {helper}
       </p>
       <FieldError id={errorId} message={error} />

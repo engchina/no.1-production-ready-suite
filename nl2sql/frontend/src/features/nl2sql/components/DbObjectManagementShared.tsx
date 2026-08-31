@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
+import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DbManagementSearchField,
@@ -84,9 +85,6 @@ export interface DbObjectGridLabels {
   objectName: string;
   rows: string;
   owner: string;
-  actions: string;
-  detail: string;
-  drop: string;
   showObject: (name: string) => string;
 }
 
@@ -293,6 +291,7 @@ export function DbObjectManagementPanelShell({
   minRightPaneWidthPx,
   role = "tabpanel",
   processing,
+  topContent,
   children,
 }: {
   id: string;
@@ -309,6 +308,8 @@ export function DbObjectManagementPanelShell({
   role?: "tabpanel" | "region";
   /** 既存内容を保持する明示的な再取得など、作業領域に属する処理状態。 */
   processing?: ReactNode;
+  /** 左右分割の外側に置く、画面全幅の補助コンテンツ。 */
+  topContent?: ReactNode;
   children: ReactNode;
 }) {
   const panelChildren = Children.toArray(children);
@@ -326,6 +327,7 @@ export function DbObjectManagementPanelShell({
       data-management-id={idPrefix}
     >
       {processing}
+      {topContent}
       {splitPaneId ? (
         <FixedSplitPane
           splitId={splitPaneId}
@@ -1056,7 +1058,6 @@ export function DbObjectGrid({
   onOwnerPrefixChange,
   onSortChange,
   onSelect,
-  onDrop,
   onLoadMore,
   onRetryLoadMore,
   onRetry,
@@ -1080,7 +1081,6 @@ export function DbObjectGrid({
   onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
   onSelect: (name: string) => void;
-  onDrop: (name: string) => void;
   onLoadMore?: () => void;
   onRetryLoadMore?: () => void;
   onRetry?: () => void;
@@ -1125,12 +1125,11 @@ export function DbObjectGrid({
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
           <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
-            <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
+            <table className="w-full min-w-[24rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
               <colgroup>
-                <col className="w-[9.5rem]" />
-                <col className="w-[4.25rem]" />
-                <col className="w-[4.25rem]" />
-                <col className="w-[3.5rem]" />
+                <col className="w-[55%]" />
+                <col className="w-[7.5rem]" />
+                <col className="w-[7.5rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>
@@ -1143,22 +1142,12 @@ export function DbObjectGrid({
                   <th className="hidden whitespace-nowrap px-3 py-2 lg:table-cell">
                     <SortButton label={labels.owner} sortKey="owner" sort={sort} onToggle={onSortChange} />
                   </th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right">{labels.actions}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
                 {items.map((item) => {
                   const qualifiedName = dbAdminObjectQualifiedName(item);
                   const selected = qualifiedName === selectedName;
-                  const rowActions: EntityAction[] = [
-                    {
-                      id: "drop",
-                      label: labels.drop,
-                      icon: Trash2,
-                      tone: "danger",
-                      onSelect: () => onDrop(qualifiedName),
-                    },
-                  ];
                   return (
                     <tr
                       key={qualifiedName}
@@ -1187,13 +1176,6 @@ export function DbObjectGrid({
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
                       <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-muted lg:table-cell">{item.owner || "-"}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right align-top">
-                        <RowActionMenu
-                          actions={rowActions}
-                          ariaLabel={`${labels.actions}: ${qualifiedName}`}
-                          testId={`${idPrefix}-row-actions-${qualifiedName}`}
-                        />
-                      </td>
                     </tr>
                   );
                 })}
@@ -1611,7 +1593,7 @@ export function DropDbObjectDialog({
 }) {
   const canExecute = confirmation.trim() === objectName;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="presentation">
+    <DialogOverlayPortal className="p-3 sm:items-center">
       <section
         role="dialog"
         aria-modal="true"
@@ -1665,6 +1647,6 @@ export function DropDbObjectDialog({
           </fieldset>
         </div>
       </section>
-    </div>
+    </DialogOverlayPortal>
   );
 }

@@ -18,14 +18,13 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Spinner, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FormStatus } from "@/components/ui/form-status";
@@ -484,18 +483,12 @@ const SELECT_AI_MISSING_FIELD_KEYS: Record<string, I18nKey> = {
 
 /** DBMS_CLOUD.CREATE_CREDENTIAL を管理者の明示操作だけで実行する運用カード。 */
 function SelectAiCredentialCard() {
-  const [searchParams] = useSearchParams();
   const status = useSelectAiCredential();
   const changeCredential = useCreateSelectAiCredential();
-  const confirm = useConfirm();
   const [region, setRegion] = useState<SelectAiCredentialRegion>("ap-osaka-1");
   const [confirmation, setConfirmation] = useState("");
   const data = status.data;
   const confirmed = confirmation.trim() === SELECT_AI_CREDENTIAL_CONFIRMATION;
-  const requestedReturnTo = searchParams.get("returnTo") ?? "";
-  const profileReturnTo = requestedReturnTo.startsWith(`${APP_ROUTES.profiles}?`)
-    ? requestedReturnTo
-    : APP_ROUTES.profiles;
 
   useEffect(() => {
     if (data?.region) setRegion(data.region);
@@ -505,18 +498,8 @@ function SelectAiCredentialCard() {
     changeCredential.reset();
   };
 
-  const execute = async () => {
+  const execute = () => {
     if (!data || !confirmed || !data.oci_auth_ready) return;
-    if (data.exists) {
-      const accepted = await confirm({
-        title: t("settings.database.selectAiCredential.recreate.confirmTitle"),
-        description: t("settings.database.selectAiCredential.recreate.confirmDescription"),
-        confirmLabel: t("settings.database.selectAiCredential.action.recreate"),
-        tone: "danger",
-        dismissOnOverlay: false,
-      });
-      if (!accepted) return;
-    }
     changeCredential.mutate(
       {
         region,
@@ -681,20 +664,11 @@ function SelectAiCredentialCard() {
               <FormStatus tone="danger" message={errorMessage} />
             ) : null}
             {changeCredential.isSuccess ? (
-              <div className="space-y-3" data-testid="select-ai-credential-success">
+              <div data-testid="select-ai-credential-success">
                 <FormStatus
                   tone="success"
                   message={t("settings.database.selectAiCredential.success")}
                 />
-                <p className="text-sm leading-6 text-muted">
-                  {t("settings.database.selectAiCredential.successNextStep")}
-                </p>
-                <Link
-                  to={profileReturnTo}
-                  className={buttonVariants({ variant: "secondary", size: "sm" })}
-                >
-                  {t("settings.database.selectAiCredential.action.openProfiles")}
-                </Link>
               </div>
             ) : null}
           </>

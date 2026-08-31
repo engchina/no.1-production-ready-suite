@@ -49,12 +49,18 @@ test("ExecutionConfirmationField keeps empty, mismatch, and confirmed status ton
 
 test("Drop object dialog does not wrap the confirmation field in a second danger surface", () => {
   const sourceText = source("../src/features/nl2sql/components/DbObjectManagementShared.tsx");
+  const overlaySource = source("../src/components/ui/dialog-overlay.tsx");
   const component = sliceFrom(
     sourceText,
     "export function DropDbObjectDialog",
   );
 
   assert.doesNotMatch(sourceText, /fieldset className="grid gap-3 rounded-md border border-danger\/30 bg-danger-bg\/70 p-3"/u);
+  assert.match(component, /<DialogOverlayPortal className="p-3 sm:items-center">/u);
+  assert.match(overlaySource, /createPortal/u);
+  assert.match(overlaySource, /document\.body/u);
+  assert.match(overlaySource, /fixed inset-0 z-50/u);
+  assert.match(overlaySource, /bg-black\/60/u);
   assert.match(component, /border border-border bg-card shadow-xl/u);
   assert.match(component, /border-b border-border bg-card/u);
   assert.match(component, /border border-border bg-background px-3 py-2/u);

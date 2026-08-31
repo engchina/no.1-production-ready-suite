@@ -10,6 +10,7 @@ from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 from app.features.nl2sql.models import (
     AssetRefreshData,
     Nl2SqlEngine,
+    Nl2SqlProfile,
     SampleDataMutationRequest,
     SampleDataStep,
 )
@@ -58,6 +59,19 @@ def _service(**kwargs: object) -> QualityEvaluationService:
         Nl2SqlService(store=MemoryNl2SqlStore()),
         repository=MemoryQualityEvaluationRepository(),
         **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _create_sample_profile(service: Nl2SqlService) -> Nl2SqlProfile:
+    return service.create_profile(
+        Nl2SqlProfile(
+            id="sql_assist_sample",
+            name="SQL_ASSIST_SAMPLE",
+            category="SAMPLE",
+            description="SQL Assist sample objects test profile.",
+            allowed_tables=["DEPARTMENT", "EMPLOYEE", "PROJECT"],
+            allowed_views=["V_EMP_DEPT", "V_DEPT_PROJECT"],
+        )
     )
 
 
@@ -914,6 +928,7 @@ def test_default_judge_uses_profile_schema_catalog_without_argument_error(
     nl2sql.import_sample_data(
         SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
     )
+    _create_sample_profile(nl2sql)
     fake_client = _FakeEnterpriseAiClient(
         '{"verdict":"correct","confidence":0.91,"summary":"意味が一致します。",'
         '"differences":[],"risks":[],"correction_suggestion":""}'
@@ -951,6 +966,7 @@ def test_strict_enterprise_ai_direct_generation_passes_timeout_override(
     service.import_sample_data(
         SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
     )
+    _create_sample_profile(service)
     fake_client = _FakeEnterpriseAiClient(
         '{"sql":"SELECT EMPLOYEE_ID FROM EMPLOYEE","explanation":"社員IDを取得します。"}'
     )

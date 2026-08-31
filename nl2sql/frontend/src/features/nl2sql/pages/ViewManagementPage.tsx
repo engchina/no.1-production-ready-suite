@@ -789,16 +789,12 @@ export function ViewManagementPage() {
                 objectName: t("viewMgmt.grid.viewName"),
                 rows: t("viewMgmt.grid.rows"),
                 owner: t("viewMgmt.grid.owner"),
-                actions: t("viewMgmt.grid.actions"),
-                detail: t("viewMgmt.grid.detail"),
-                drop: t("viewMgmt.grid.drop"),
                 showObject: (name) => t("viewMgmt.grid.showView", { name }),
               }}
               onSearchChange={setViewSearch}
               onOwnerPrefixChange={setViewOwnerPrefix}
               onSortChange={toggleSort}
               onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
-              onDrop={openDropDialog}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}

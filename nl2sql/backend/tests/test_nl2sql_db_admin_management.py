@@ -1890,6 +1890,26 @@ def test_preview_data_builds_guarded_select() -> None:
         service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET'))
 
 
+def test_preview_data_limit_zero_uses_unbounded_oracle_fetch() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    preview = service.preview_db_admin_data(
+        DbAdminDataPreviewRequest(object_name="INVOICES", limit=0)
+    )
+
+    assert preview.runtime == "oracle"
+    assert adapter.select_calls[-1][1] == 0
+
+    filename, content = service.export_db_admin_preview_xlsx(
+        DbAdminDataPreviewRequest(object_name="INVOICES", limit=0)
+    )
+
+    assert filename == "app_invoices_preview.xlsx"
+    assert content
+    assert adapter.select_calls[-1][1] == 0
+
+
 def test_oracle_adapter_execute_select_normalizes_driver_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2706,7 +2726,7 @@ def test_view_export_xlsx_contains_column_information_only() -> None:
     ]
     assert [sheet.cell(row=2, column=index).value for index in range(1, 7)] == [
         "EMPLOYEE_NAME",
-        "EMPLOYEE_NAME",
+        "-",
         "社員名",
         "VARCHAR2(120)",
         "NO",

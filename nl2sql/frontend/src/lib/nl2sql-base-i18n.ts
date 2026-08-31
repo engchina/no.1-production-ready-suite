@@ -1229,19 +1229,12 @@ export const ja = {
   "settings.database.selectAiCredential.action.openOciSettings": "OCI 認証設定を開く",
   "settings.database.selectAiCredential.action.create": "Credential を作成",
   "settings.database.selectAiCredential.action.recreate": "Credential を再作成",
-  "settings.database.selectAiCredential.action.openProfiles": "業務 Profile を開く",
   "settings.database.selectAiCredential.confirmation.createHelper":
     "作成するには確認語 {phrase} を入力してください。",
   "settings.database.selectAiCredential.confirmation.recreateHelper":
     "再作成するには確認語 {phrase} を入力してください。既存 Credential は置き換えられます。",
-  "settings.database.selectAiCredential.recreate.confirmTitle":
-    "Select AI Credential を再作成しますか",
-  "settings.database.selectAiCredential.recreate.confirmDescription":
-    "既存の OCI_CRED を削除して同じ名前で作成し直します。依存する Select AI は処理中に一時的に利用できなくなる可能性があります。",
   "settings.database.selectAiCredential.success":
     "Select AI Credential を作成し、既定リージョンを保存しました。",
-  "settings.database.selectAiCredential.successNextStep":
-    "履歴ジョブは自動再実行されません。業務 Profile に戻り、「Oracle 反映を再試行」を手動で実行してください。",
   "settings.database.selectAiCredential.error.load":
     "Select AI Credential の状態を取得できませんでした。データベース接続を確認して再試行してください。",
   "settings.database.selectAiCredential.error.change":

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ArrowRight, Database, Eye, FileSpreadsheet, RefreshCw, Table2, Trash2, Upload } from "lucide-react";
+import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
+import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
@@ -31,6 +32,11 @@ import {
   downloadBlob,
   fileToBase64,
 } from "../components/DbAdminShared";
+import {
+  DEFAULT_SQL_ROW_LIMIT,
+  RowLimitField,
+  parseSqlRowLimit,
+} from "../components/SqlRowLimitControls";
 import {
   DB_OBJECT_PICKER_SHORT_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
@@ -88,7 +94,9 @@ type PreviewObjectKindFilter = "all" | PreviewObjectKind;
 type SyntheticLoading = "" | "tables" | "generate" | "results";
 
 const DATA_MANAGEMENT_ID = "data-management";
-const DATA_PREVIEW_ROW_LIMIT = 10;
+const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT;
+const DEFAULT_SYNTHETIC_RESULT_LIMIT = DEFAULT_SQL_ROW_LIMIT;
+const SYNTHETIC_RESULT_MAX_LIMIT = 10000;
 const DEFAULT_OBJECT_PICKER_SORT: DbObjectPickerSortState = { key: "name", direction: "asc" };
 
 interface PreviewObject {
@@ -123,7 +131,9 @@ export function DataManagementPage() {
   const [previewObjectOwnerPrefix, setPreviewObjectOwnerPrefix] = useState("");
   const [previewObjectKindFilter, setPreviewObjectKindFilter] = useState<PreviewObjectKindFilter>("all");
   const [previewObjectSort, setPreviewObjectSort] = useState<DbObjectPickerSortState>(DEFAULT_OBJECT_PICKER_SORT);
+  const [previewRowLimitInput, setPreviewRowLimitInput] = useState(String(DEFAULT_DATA_PREVIEW_ROW_LIMIT));
   const [preview, setPreview] = useState<DbAdminDataPreviewData | null>(null);
+  const [executedPreviewRowLimit, setExecutedPreviewRowLimit] = useState<number | null>(null);
   const [csvTable, setCsvTable] = useState("");
   const [csvTableSearch, setCsvTableSearch] = useState("");
   const [csvTableSort, setCsvTableSort] = useState<DbObjectPickerSortState>(DEFAULT_OBJECT_PICKER_SORT);
@@ -144,7 +154,8 @@ export function DataManagementPage() {
   const [syntheticSampleRows, setSyntheticSampleRows] = useState(5);
   const [syntheticUseComments, setSyntheticUseComments] = useState(true);
   const [syntheticResultTable, setSyntheticResultTable] = useState("");
-  const [syntheticResultLimit, setSyntheticResultLimit] = useState(100);
+  const [syntheticResultLimitInput, setSyntheticResultLimitInput] = useState(String(DEFAULT_SYNTHETIC_RESULT_LIMIT));
+  const [executedSyntheticResultLimit, setExecutedSyntheticResultLimit] = useState<number | null>(null);
   const [previewLoadingObject, setPreviewLoadingObject] = useState("");
   const [truncateTargetName, setTruncateTargetName] = useState("");
   const [truncateConfirmation, setTruncateConfirmation] = useState("");
@@ -259,6 +270,22 @@ export function DataManagementPage() {
       ),
     [filteredPreviewObjects, previewObjectSort]
   );
+  const selectedPreviewObjectItem = useMemo(
+    () => previewObjectPickerItems.find((item) => item.key === previewObject),
+    [previewObject, previewObjectPickerItems]
+  );
+  const parsedPreviewRowLimit = parseSqlRowLimit(previewRowLimitInput);
+  const previewRowLimitError =
+    parsedPreviewRowLimit === null ? t("queryResults.rowLimit.error") : "";
+  const canShowPreview =
+    Boolean(previewObject) && !previewLoadingObject && parsedPreviewRowLimit !== null;
+  const canClearPreview =
+    Boolean(previewLoadingObject) ||
+    Boolean(preview) ||
+    Boolean(previewError) ||
+    Boolean(exportError) ||
+    executedPreviewRowLimit !== null ||
+    previewRowLimitInput !== String(DEFAULT_DATA_PREVIEW_ROW_LIMIT);
   const csvTablePickerItems = useMemo(
     () =>
       sortDbObjectPickerItems(
@@ -292,6 +319,36 @@ export function DataManagementPage() {
   const canGenerateSyntheticData = Boolean(
     syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed
   );
+  const parsedSyntheticResultLimit = parseSqlRowLimit(syntheticResultLimitInput);
+  const syntheticResultLimit =
+    parsedSyntheticResultLimit !== null &&
+    parsedSyntheticResultLimit >= 1 &&
+    parsedSyntheticResultLimit <= SYNTHETIC_RESULT_MAX_LIMIT
+      ? parsedSyntheticResultLimit
+      : null;
+  const syntheticResultLimitError =
+    syntheticResultLimit === null ? t("dataTools.syntheticData.resultLimitError") : "";
+  const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
+  const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
+  const canLoadSyntheticDataResults = Boolean(
+    syntheticAvailableTables.includes(syntheticResultTable) && syntheticResultLimit !== null && syntheticLoading !== "results"
+  );
+  const canClearSyntheticDataResults = Boolean(
+    syntheticDataResults ||
+      syntheticResultError ||
+      executedSyntheticResultLimit !== null ||
+      syntheticResultLimitInput !== String(DEFAULT_SYNTHETIC_RESULT_LIMIT)
+  );
+
+  const clearSyntheticResultState = ({ resetLimit = false }: { resetLimit?: boolean } = {}) => {
+    setSyntheticDataResults(null);
+    setExecutedSyntheticResultLimit(null);
+    if (resetLimit) setSyntheticResultLimitInput(String(DEFAULT_SYNTHETIC_RESULT_LIMIT));
+    if (syntheticErrorOperation === "results") {
+      setSyntheticError("");
+      setSyntheticErrorOperation("");
+    }
+  };
 
   const clearSyntheticProfileTargets = () => {
     setSyntheticAvailableTables([]);
@@ -299,6 +356,12 @@ export function DataManagementPage() {
     setSyntheticResultTable("");
     setSyntheticData(null);
     setSyntheticDataResults(null);
+    setExecutedSyntheticResultLimit(null);
+    setSyntheticResultLimitInput(String(DEFAULT_SYNTHETIC_RESULT_LIMIT));
+    if (syntheticErrorOperation === "results") {
+      setSyntheticError("");
+      setSyntheticErrorOperation("");
+    }
   };
 
   const changeSyntheticProfileName = (value: string) => {
@@ -326,6 +389,7 @@ export function DataManagementPage() {
     previewRequestSequence.current += 1;
     setPreviewObject(nextObject);
     setPreview(null);
+    setExecutedPreviewRowLimit(null);
     setPreviewLoadingObject("");
     setPreviewError("");
     setExportError("");
@@ -430,6 +494,19 @@ export function DataManagementPage() {
     }
   };
 
+  const selectPreviewObject = (objectName: string, options: { manualSelection?: boolean } = {}) => {
+    const target = parseDbAdminObjectTarget(objectName);
+    if (options.manualSelection) previewObjectManualSelection.current = true;
+    if (target.qualifiedName === previewObject && !previewLoadingObject) return;
+    previewRequestSequence.current += 1;
+    setPreviewObject(target.qualifiedName);
+    setPreview(null);
+    setExecutedPreviewRowLimit(null);
+    setPreviewLoadingObject("");
+    setPreviewError("");
+    setExportError("");
+  };
+
   const trackSchemaRefreshResult = (result: {
     schema_refresh_job_id?: string;
     schema_refresh_required?: boolean;
@@ -450,13 +527,15 @@ export function DataManagementPage() {
   };
 
   const showPreview = async (objectName: string, options: { manualSelection?: boolean } = {}) => {
-    if (!objectName || previewLoadingObject) return;
+    const rowLimit = parsedPreviewRowLimit;
+    if (!objectName || previewLoadingObject || rowLimit === null) return;
     const target = parseDbAdminObjectTarget(objectName);
     const sequence = previewRequestSequence.current + 1;
     previewRequestSequence.current = sequence;
     if (options.manualSelection) previewObjectManualSelection.current = true;
     setPreviewObject(target.qualifiedName);
     setPreview(null);
+    setExecutedPreviewRowLimit(null);
     setPreviewLoadingObject(target.qualifiedName);
     setPreviewError("");
     setExportError("");
@@ -466,13 +545,14 @@ export function DataManagementPage() {
         {
           object_name: target.name,
           owner: target.owner,
-          limit: DATA_PREVIEW_ROW_LIMIT,
+          limit: rowLimit,
           where_clause: "",
         },
         { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
       if (sequence !== previewRequestSequence.current) return;
       setPreview(result);
+      setExecutedPreviewRowLimit(rowLimit);
     } catch (err) {
       if (sequence !== previewRequestSequence.current) return;
       setPreviewError(apiErrorMessage(err, "dataMgmt.error.preview"));
@@ -529,7 +609,8 @@ export function DataManagementPage() {
   };
 
   const downloadPreviewXlsx = async () => {
-    if (!previewObject) return;
+    const rowLimit = parsedPreviewRowLimit;
+    if (!previewObject || rowLimit === null) return;
     const target = parseDbAdminObjectTarget(previewObject);
     setExportLoading(true);
     setExportError("");
@@ -543,7 +624,7 @@ export function DataManagementPage() {
         body: JSON.stringify({
           object_name: target.name,
           owner: target.owner,
-          limit: DATA_PREVIEW_ROW_LIMIT,
+          limit: rowLimit,
           where_clause: "",
         }),
         signal: AbortSignal.timeout(API_TIMEOUT_MS.interactiveDetail),
@@ -559,6 +640,24 @@ export function DataManagementPage() {
     } finally {
       setExportLoading(false);
     }
+  };
+
+  const updatePreviewRowLimitInput = (value: string) => {
+    setPreviewRowLimitInput(value);
+    setPreview(null);
+    setExecutedPreviewRowLimit(null);
+    setPreviewError("");
+    setExportError("");
+  };
+
+  const clearPreview = () => {
+    previewRequestSequence.current += 1;
+    setPreview(null);
+    setExecutedPreviewRowLimit(null);
+    setPreviewLoadingObject("");
+    setPreviewError("");
+    setExportError("");
+    setPreviewRowLimitInput(String(DEFAULT_DATA_PREVIEW_ROW_LIMIT));
   };
 
   const pickCsvFile = async (file: File | undefined) => {
@@ -629,7 +728,7 @@ export function DataManagementPage() {
       setSyntheticSelectedTables((current) => current.filter((tableName) => nextTables.includes(tableName)));
       setSyntheticResultTable((current) => (current && nextTables.includes(current) ? current : (nextTables[0] ?? "")));
       setSyntheticData(null);
-      setSyntheticDataResults(null);
+      clearSyntheticResultState();
       toast.success(t("dataTools.syntheticData.toast.tablesLoaded", { count: nextTables.length }));
     } catch (err) {
       setSyntheticError(apiErrorMessage(err, "dataTools.error.load"));
@@ -648,7 +747,7 @@ export function DataManagementPage() {
     setSyntheticErrorOperation("");
     toast.info(t("dataTools.syntheticData.toast.generateStarted"));
     try {
-      setSyntheticDataResults(null);
+      clearSyntheticResultState();
       const result = await apiPost<SyntheticDataOperationData>("/api/nl2sql/synthetic-data/generate", {
         table_name: singleTable ? selectedTables[0] : "",
         object_list: singleTable ? [] : selectedTables,
@@ -684,16 +783,20 @@ export function DataManagementPage() {
 
   const loadSyntheticDataResults = async () => {
     const tableName = syntheticResultTable.trim();
-    if (!tableName || !syntheticAvailableTables.includes(tableName)) return;
+    const rowLimit = syntheticResultLimit;
+    if (!tableName || !syntheticAvailableTables.includes(tableName) || rowLimit === null) return;
     setSyntheticLoading("results");
     setSyntheticError("");
     setSyntheticErrorOperation("");
+    setSyntheticDataResults(null);
+    setExecutedSyntheticResultLimit(null);
     try {
       const result = await apiGet<SyntheticDataResultsData>(
-        `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=${syntheticResultLimit}`,
+        `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=${rowLimit}`,
         { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
       setSyntheticDataResults(result);
+      setExecutedSyntheticResultLimit(rowLimit);
       toast.success(t("dataTools.syntheticData.toast.resultsLoaded", { name: result.table_name }));
     } catch (err) {
       setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticResults"));
@@ -833,6 +936,14 @@ export function DataManagementPage() {
             preferredWidePane="right"
             minLeftPaneWidthPx={520}
             minRightPaneWidthPx={560}
+            topContent={
+              <DbObjectStepIndicator
+                steps={[t("dataMgmt.preview.stepTarget"), t("dataMgmt.preview.stepResults")]}
+                activeIndex={previewObject ? 1 : 0}
+                ariaLabel={t("dataMgmt.preview.steps")}
+                dataTestId="data-preview-steps"
+              />
+            }
           >
             <PreviewControlsPanel
               previewObjectCounts={previewObjectCounts}
@@ -842,7 +953,6 @@ export function DataManagementPage() {
               previewObjectOwnerPrefix={previewObjectOwnerPrefix}
               previewObjectKindFilter={previewObjectKindFilter}
               previewObjectSort={previewObjectSort}
-              loadingObjectName={previewLoadingObject}
               initialLoading={previewObjectsQuery.isPending && !previewObjectsQuery.data}
               error={previewObjectErrorMessage}
               hasNextPage={Boolean(previewObjectsQuery.hasNextPage)}
@@ -854,8 +964,7 @@ export function DataManagementPage() {
               onPreviewObjectSortChange={(key) =>
                 setPreviewObjectSort((current) => nextObjectPickerSort(current, key))
               }
-              onShowPreview={(objectName) => void showPreview(objectName, { manualSelection: true })}
-              onTruncateTable={openTruncateDialog}
+              onSelectPreviewObject={(objectName) => selectPreviewObject(objectName, { manualSelection: true })}
               onRetry={() => void refreshObjects()}
               onLoadMore={() => void previewObjectsQuery.fetchNextPage()}
             />
@@ -865,8 +974,25 @@ export function DataManagementPage() {
               exporting={exportLoading}
               previewError={previewError}
               exportError={exportError}
+              rowLimitInput={previewRowLimitInput}
+              rowLimitError={previewRowLimitError}
+              executedRowLimit={executedPreviewRowLimit}
+              canShowPreview={canShowPreview}
+              canClearPreview={canClearPreview}
+              selectedObjectName={previewObject}
+              selectedObjectKind={
+                selectedPreviewObjectItem?.kind === "table" ||
+                selectedPreviewObjectItem?.kind === "view"
+                  ? selectedPreviewObjectItem.kind
+                  : undefined
+              }
+              truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
+              onRowLimitChange={updatePreviewRowLimitInput}
+              onShowPreview={() => void showPreview(previewObject)}
+              onClearPreview={clearPreview}
               onRetryPreview={() => void showPreview(previewObject)}
               onDownload={() => void downloadPreviewXlsx()}
+              onTruncateTable={openTruncateDialog}
             />
           </DbObjectManagementPanelShell>
         )}
@@ -964,9 +1090,14 @@ export function DataManagementPage() {
               syntheticSampleRows={syntheticSampleRows}
               syntheticUseComments={syntheticUseComments}
               syntheticResultTable={syntheticResultTable}
-              syntheticResultLimit={syntheticResultLimit}
+              syntheticResultLimitInput={syntheticResultLimitInput}
+              syntheticResultLimitError={syntheticResultLimitError}
+              executedSyntheticResultLimit={executedSyntheticResultLimit}
+              canLoadSyntheticDataResults={canLoadSyntheticDataResults}
+              canClearSyntheticDataResults={canClearSyntheticDataResults}
               loading={syntheticLoading}
-              error={syntheticError}
+              error={syntheticWorkspaceError}
+              resultError={syntheticResultError}
               dbProfileRefreshRequired={dbProfileRefreshRequired}
               dbProfileRefreshing={dbProfileRefreshing || startDbProfileRefresh.isPending}
               dbProfileRefreshError={dbProfileRefreshError}
@@ -983,7 +1114,7 @@ export function DataManagementPage() {
                   currentTable && nextTables.includes(currentTable) ? currentTable : (nextTables[0] ?? "")
                 );
                 setSyntheticData(null);
-                setSyntheticDataResults(null);
+                clearSyntheticResultState();
               }}
               onSyntheticTablesBulkChange={(tableNames, selected) => {
                 const targetSet = new Set(tableNames);
@@ -995,7 +1126,7 @@ export function DataManagementPage() {
                   currentTable && nextTables.includes(currentTable) ? currentTable : (nextTables[0] ?? "")
                 );
                 setSyntheticData(null);
-                setSyntheticDataResults(null);
+                clearSyntheticResultState();
               }}
               onSyntheticPromptChange={setSyntheticPrompt}
               onSyntheticConfirmationChange={setSyntheticConfirmation}
@@ -1005,11 +1136,15 @@ export function DataManagementPage() {
               onSyntheticResultTableChange={(value) => {
                 if (!syntheticAvailableTables.includes(value)) return;
                 setSyntheticResultTable(value);
-                setSyntheticDataResults(null);
+                clearSyntheticResultState();
               }}
-              onSyntheticResultLimitChange={(value) => setSyntheticResultLimit(clampNumber(value, 1, 10000))}
+              onSyntheticResultLimitChange={(value) => {
+                setSyntheticResultLimitInput(value);
+                clearSyntheticResultState();
+              }}
               onGenerateSyntheticData={() => void generateSyntheticData()}
               onLoadSyntheticDataResults={() => void loadSyntheticDataResults()}
+              onClearSyntheticDataResults={() => clearSyntheticResultState({ resetLimit: true })}
               onRetry={() => {
                 if (syntheticErrorOperation === "tables") void refreshSyntheticTables();
                 else if (syntheticErrorOperation === "results") void loadSyntheticDataResults();
@@ -1056,7 +1191,6 @@ function PreviewControlsPanel({
   previewObjectOwnerPrefix,
   previewObjectKindFilter,
   previewObjectSort,
-  loadingObjectName,
   initialLoading,
   error,
   hasNextPage,
@@ -1066,8 +1200,7 @@ function PreviewControlsPanel({
   onPreviewObjectOwnerPrefixChange,
   onPreviewObjectKindFilterChange,
   onPreviewObjectSortChange,
-  onShowPreview,
-  onTruncateTable,
+  onSelectPreviewObject,
   onRetry,
   onLoadMore,
 }: {
@@ -1078,7 +1211,6 @@ function PreviewControlsPanel({
   previewObjectOwnerPrefix: string;
   previewObjectKindFilter: PreviewObjectKindFilter;
   previewObjectSort: DbObjectPickerSortState;
-  loadingObjectName: string;
   initialLoading: boolean;
   error: string;
   hasNextPage: boolean;
@@ -1088,8 +1220,7 @@ function PreviewControlsPanel({
   onPreviewObjectOwnerPrefixChange: (value: string) => void;
   onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
   onPreviewObjectSortChange: (key: DbObjectPickerSortKey) => void;
-  onShowPreview: (objectName: string) => void;
-  onTruncateTable: (objectName: string) => void;
+  onSelectPreviewObject: (objectName: string) => void;
   onRetry: () => void;
   onLoadMore: () => void;
 }) {
@@ -1164,19 +1295,8 @@ function PreviewControlsPanel({
                 dataTestId="data-preview-object-list"
                 sort={previewObjectSort}
                 onSortChange={onPreviewObjectSortChange}
-                onSelect={(item) => onShowPreview(item.key)}
-                selectAriaLabel={(item) => t("dataMgmt.preview.showObject", { name: item.name })}
-                selectDisabled={() => Boolean(loadingObjectName)}
-                action={{
-                  id: "truncate-data",
-                  label: t("dataMgmt.truncate.action"),
-                  icon: Trash2,
-                  tone: "danger",
-                  ariaLabel: (item) => t("dataMgmt.truncate.actionObject", { name: item.name }),
-                  visible: (item) => item.kind === "table",
-                  disabled: () => Boolean(loadingObjectName),
-                  onClick: (item) => onTruncateTable(item.key),
-                }}
+                onSelect={(item) => onSelectPreviewObject(item.key)}
+                selectAriaLabel={(item) => t("dataMgmt.preview.selectObject", { name: item.name })}
               />
               <DbObjectSelectorFooter
                 visibleCount={previewObjectPickerItems.length}
@@ -1316,17 +1436,68 @@ function PreviewResultsPanel({
   exporting,
   previewError,
   exportError,
+  rowLimitInput,
+  rowLimitError,
+  executedRowLimit,
+  canShowPreview,
+  canClearPreview,
+  selectedObjectName,
+  selectedObjectKind,
+  truncateDisabled,
+  onRowLimitChange,
+  onShowPreview,
+  onClearPreview,
   onRetryPreview,
   onDownload,
+  onTruncateTable,
 }: {
   preview: DbAdminDataPreviewData | null;
   loading: boolean;
   exporting: boolean;
   previewError: string;
   exportError: string;
+  rowLimitInput: string;
+  rowLimitError: string;
+  executedRowLimit: number | null;
+  canShowPreview: boolean;
+  canClearPreview: boolean;
+  selectedObjectName: string;
+  selectedObjectKind?: PreviewObjectKind;
+  truncateDisabled?: boolean;
+  onRowLimitChange: (value: string) => void;
+  onShowPreview: () => void;
+  onClearPreview: () => void;
   onRetryPreview: () => void;
   onDownload: () => void;
+  onTruncateTable: (objectName: string) => void;
 }) {
+  const showTruncateAction = Boolean(selectedObjectName) && selectedObjectKind === "table";
+  const hasRowLimitError = Boolean(rowLimitError);
+  const previewActions: EntityAction[] = [
+    {
+      id: "download-preview-xlsx",
+      label: t("dataMgmt.preview.exportXlsx"),
+      icon: FileSpreadsheet,
+      loading: exporting,
+      disabled: !preview || preview.results.rows.length === 0 || hasRowLimitError,
+      onSelect: onDownload,
+    },
+    {
+      id: "truncate-preview-table",
+      label: t("dataMgmt.truncate.action"),
+      ariaLabel: selectedObjectName
+        ? t("dataMgmt.truncate.actionObject", { name: selectedObjectName })
+        : t("dataMgmt.truncate.action"),
+      icon: Trash2,
+      tone: "danger",
+      visible: showTruncateAction,
+      disabled: truncateDisabled,
+      onSelect: () => {
+        if (selectedObjectName) onTruncateTable(selectedObjectName);
+      },
+    },
+  ];
+
   return (
     <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="data-preview-results-heading">
       <DbObjectPanelHeader
@@ -1335,25 +1506,47 @@ function PreviewResultsPanel({
         title={t("dataMgmt.preview.resultsTitle")}
         description={t("dataMgmt.preview.resultsHint")}
         action={
-          <>
-            <StatusBadge
-              variant="info"
-              label={t("dataMgmt.preview.fixedLimit", { count: DATA_PREVIEW_ROW_LIMIT })}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={exporting}
-              disabled={!preview || preview.results.rows.length === 0}
-              onClick={onDownload}
-            >
-              <FileSpreadsheet size={15} aria-hidden="true" />
-              <span>{t("dataMgmt.preview.exportXlsx")}</span>
-            </Button>
-          </>
+          <ObjectActionBar
+            actions={previewActions}
+            ariaLabel={t("dataMgmt.preview.actions")}
+            testId="data-preview-results-actions"
+          />
         }
       />
+      <div className="grid gap-3 border-t border-border pt-3">
+        <RowLimitField
+          value={rowLimitInput}
+          onChange={onRowLimitChange}
+          disabled={loading}
+          error={rowLimitError}
+          className="sm:w-48"
+        />
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            className="w-full sm:w-auto"
+            loading={loading}
+            disabled={!canShowPreview}
+            onClick={onShowPreview}
+          >
+            <Play size={16} aria-hidden="true" />
+            <span>{t("dataMgmt.preview.show")}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="w-full sm:w-auto"
+            disabled={!canClearPreview}
+            onClick={onClearPreview}
+          >
+            <X size={16} aria-hidden="true" />
+            <span>{t("dataMgmt.preview.clear")}</span>
+          </Button>
+        </div>
+      </div>
       {loading ? (
         <DbManagementLoadingSkeleton
           idPrefix="data-preview-results"
@@ -1375,7 +1568,7 @@ function PreviewResultsPanel({
               {warning}
             </p>
           ))}
-          <QueryResultsTable results={preview.results} />
+          <QueryResultsTable results={preview.results} rowLimit={executedRowLimit} />
         </div>
       ) : (
         <>
@@ -1674,9 +1867,14 @@ function SyntheticWorkspace({
   syntheticSampleRows,
   syntheticUseComments,
   syntheticResultTable,
-  syntheticResultLimit,
+  syntheticResultLimitInput,
+  syntheticResultLimitError,
+  executedSyntheticResultLimit,
+  canLoadSyntheticDataResults,
+  canClearSyntheticDataResults,
   loading,
   error,
+  resultError,
   dbProfileRefreshRequired,
   dbProfileRefreshing,
   dbProfileRefreshError,
@@ -1695,6 +1893,7 @@ function SyntheticWorkspace({
   onSyntheticResultLimitChange,
   onGenerateSyntheticData,
   onLoadSyntheticDataResults,
+  onClearSyntheticDataResults,
   onRetry,
 }: {
   selectAiDbProfiles: SelectAiDbProfilesData | null;
@@ -1712,9 +1911,14 @@ function SyntheticWorkspace({
   syntheticSampleRows: number;
   syntheticUseComments: boolean;
   syntheticResultTable: string;
-  syntheticResultLimit: number;
+  syntheticResultLimitInput: string;
+  syntheticResultLimitError: string;
+  executedSyntheticResultLimit: number | null;
+  canLoadSyntheticDataResults: boolean;
+  canClearSyntheticDataResults: boolean;
   loading: SyntheticLoading;
   error: string;
+  resultError: string;
   dbProfileRefreshRequired: boolean;
   dbProfileRefreshing: boolean;
   dbProfileRefreshError: string;
@@ -1730,9 +1934,10 @@ function SyntheticWorkspace({
   onSyntheticSampleRowsChange: (value: number) => void;
   onSyntheticUseCommentsChange: (value: boolean) => void;
   onSyntheticResultTableChange: (value: string) => void;
-  onSyntheticResultLimitChange: (value: number) => void;
+  onSyntheticResultLimitChange: (value: string) => void;
   onGenerateSyntheticData: () => void;
   onLoadSyntheticDataResults: () => void;
+  onClearSyntheticDataResults: () => void;
   onRetry: () => void;
 }) {
   const activeStep = syntheticData || syntheticDataResults ? 1 : 0;
@@ -2022,21 +2227,22 @@ function SyntheticWorkspace({
         </fieldset>
       </section>
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-results-heading">
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
           headingId="synthetic-results-heading"
           icon={Eye}
-          title={t("dataTools.syntheticData.stepResults")}
-          description={t("dataTools.syntheticData.resultsHint")}
+          title={t("dataTools.syntheticData.resultsActionTitle")}
+          description={t("dataTools.syntheticData.resultsActionDisabled")}
         />
 
-        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <div className="grid gap-3 border-t border-border pt-3">
           <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
             <span>{t("dataTools.syntheticData.resultTable")}</span>
             <select
               data-testid="synthetic-result-table-select"
               value={hasValidResultTable ? syntheticResultTable : ""}
               onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
+              disabled={loading === "results"}
               className="h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
             >
               {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
@@ -2047,43 +2253,47 @@ function SyntheticWorkspace({
               ))}
             </select>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
-            <span>{t("dataTools.syntheticData.resultLimit")}</span>
-            <input
-              type="number"
-              min={1}
-              max={10000}
-              value={syntheticResultLimit}
-              onChange={(event) => onSyntheticResultLimitChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </label>
-        </div>
-
-        <ContentActionBar
-          ariaLabel={t("dataTools.syntheticData.resultsActions")}
-          title={t("dataTools.syntheticData.resultsActionTitle")}
-          description={
-            hasValidResultTable
-              ? t("dataTools.syntheticData.resultsActionReady")
-              : t("dataTools.syntheticData.resultsActionDisabled")
-          }
-          actionsClassName="w-full sm:w-auto"
-          testId="data-synthetic-results-actions"
-        >
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="w-full sm:w-auto"
-            loading={loading === "results"}
-            disabled={!hasValidResultTable}
-            onClick={onLoadSyntheticDataResults}
+          <RowLimitField
+            value={syntheticResultLimitInput}
+            onChange={onSyntheticResultLimitChange}
+            disabled={loading === "results"}
+            error={syntheticResultLimitError}
+            className="w-full max-w-[22rem]"
+            min={1}
+            max={SYNTHETIC_RESULT_MAX_LIMIT}
+            helper={t("dataTools.syntheticData.resultLimitHelper")}
+          />
+          <div
+            className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"
+            role="group"
+            aria-label={t("dataTools.syntheticData.resultsActions")}
+            data-testid="data-synthetic-results-actions"
           >
-            <Eye size={15} aria-hidden="true" />
-            <span>{t("dataTools.syntheticData.results")}</span>
-          </Button>
-        </ContentActionBar>
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              className="w-full sm:w-auto"
+              loading={loading === "results"}
+              disabled={!canLoadSyntheticDataResults}
+              onClick={onLoadSyntheticDataResults}
+            >
+              <Eye size={16} aria-hidden="true" />
+              <span>{t("dataTools.syntheticData.results")}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="lg"
+              className="w-full sm:w-auto"
+              disabled={!canClearSyntheticDataResults || loading === "results"}
+              onClick={onClearSyntheticDataResults}
+            >
+              <X size={16} aria-hidden="true" />
+              <span>{t("dataMgmt.preview.clear")}</span>
+            </Button>
+          </div>
+        </div>
 
         {loading === "results" ? (
           <DbManagementLoadingSkeleton
@@ -2092,6 +2302,8 @@ function SyntheticWorkspace({
             variant="detail"
             placement="result"
           />
+        ) : resultError ? (
+          <ErrorState message={resultError} onRetry={onLoadSyntheticDataResults} />
         ) : syntheticDataResults ? (
           <div className="grid min-w-0 gap-2">
             <div className="flex flex-wrap gap-2">
@@ -2103,7 +2315,7 @@ function SyntheticWorkspace({
                 {warning}
               </p>
             ))}
-            <QueryResultsTable results={syntheticDataResults.results} />
+            <QueryResultsTable results={syntheticDataResults.results} rowLimit={executedSyntheticResultLimit} />
           </div>
         ) : (
           <EmptyState title={t("dataTools.syntheticData.noResultsTitle")} hint={t("dataTools.syntheticData.noResultsHint")} />
