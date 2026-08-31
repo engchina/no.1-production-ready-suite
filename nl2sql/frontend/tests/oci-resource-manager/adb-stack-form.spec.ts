@@ -15,13 +15,30 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     "OCI_RESOURCE_MANAGER_ADB_FORM_URLを指定した認証済みテスト・テナンシで実行します。",
   );
 
-  test("ADBの選択順、既定値、ネットワーク項目の段階表示が契約に一致する", async ({ page }) => {
+  test("ADBの選択順、現在のコンパートメント既定値、ネットワーク項目の段階表示が契約に一致する", async ({
+    page,
+  }) => {
     await page.goto(formUrl!, { waitUntil: "domcontentloaded" });
 
+    for (const hiddenGitField of [
+      "Application Git URL",
+      "Application Git ref",
+      "Platform Git URL",
+      "Platform Git ref",
+    ]) {
+      await expect(page.getByLabel(hiddenGitField, { exact: true })).toBeHidden();
+    }
+    await expect(page.getByLabel("Application port", { exact: true })).toBeVisible();
+
+    const deploymentCompartment = page.getByLabel("Create in compartment", { exact: true });
     const adbCompartment = page.getByLabel("ADBのコンパートメント", { exact: true });
     const deploymentMode = page.getByLabel("ADBの利用方法", { exact: true });
+    await expect(deploymentCompartment).toBeVisible();
     await expect(adbCompartment).toBeVisible();
+    await expect(adbCompartment).toBeEnabled();
     await expect(deploymentMode).toBeVisible();
+    await expect(deploymentCompartment).toHaveValue(/\S+/);
+    await expect(adbCompartment).toHaveValue(await deploymentCompartment.inputValue());
     await expect(deploymentMode).toHaveValue(CREATE_NEW_MODE);
 
     const [compartmentBox, deploymentModeBox] = await Promise.all([
@@ -32,7 +49,23 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     expect(deploymentModeBox).not.toBeNull();
     expect(compartmentBox!.y).toBeLessThan(deploymentModeBox!.y);
 
-    await expect(page.getByText("ネットワーク・アクセス", { exact: true })).toBeVisible();
+    const networkSection = page.getByText("ネットワーク・アクセス", { exact: true });
+    const deepsecSection = page.getByText("Deep Data Security", { exact: true });
+    const computeSection = page.getByText("Compute", { exact: true });
+    await expect(networkSection).toBeVisible();
+    await expect(deepsecSection).toBeVisible();
+    await expect(computeSection).toBeVisible();
+
+    const [networkSectionBox, deepsecSectionBox, computeSectionBox] = await Promise.all([
+      networkSection.boundingBox(),
+      deepsecSection.boundingBox(),
+      computeSection.boundingBox(),
+    ]);
+    expect(networkSectionBox).not.toBeNull();
+    expect(deepsecSectionBox).not.toBeNull();
+    expect(computeSectionBox).not.toBeNull();
+    expect(networkSectionBox!.y).toBeLessThan(deepsecSectionBox!.y);
+    expect(deepsecSectionBox!.y).toBeLessThan(computeSectionBox!.y);
 
     const workload = page.getByLabel("Workload type", { exact: true });
     await expect(workload).toHaveValue("LH");
@@ -53,13 +86,13 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     await deploymentMode.selectOption({ label: USE_EXISTING_MODE });
     await expect(page.getByLabel("既存のAutonomous AI Database", { exact: true })).toBeVisible();
     await expect(workload).toBeHidden();
-    await expect(page.getByText("ネットワーク・アクセス", { exact: true })).toBeHidden();
+    await expect(networkSection).toBeHidden();
 
     await deploymentMode.focus();
     await deploymentMode.press("Home");
     await expect(deploymentMode).toHaveValue(CREATE_NEW_MODE);
     await expect(workload).toBeVisible();
-    await expect(page.getByText("ネットワーク・アクセス", { exact: true })).toBeVisible();
+    await expect(networkSection).toBeVisible();
 
     await accessType.selectOption({ label: EVERYWHERE_ACCESS });
     await expect(page.getByLabel("仮想クラウド・ネットワーク", { exact: true })).toBeHidden();

@@ -40,8 +40,8 @@ The default output is
 Resource Manager and create a stack. Provide the required form values:
 
 - OCI deployment/Compute compartment, region, availability domain, VCN, and
-  subnets. Select the ADB compartment separately in the Autonomous AI Database
-  section.
+  subnets. The ADB compartment defaults to the current deployment compartment
+  and remains independently selectable in the Autonomous AI Database section.
 - Application administrator password. The username is fixed to `system_admin`
   and is case-sensitive.
 - Deep Data Security DATA USER password. The stack enables
@@ -52,9 +52,10 @@ Resource Manager and create a stack. Provide the required form values:
   `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The cloud-init script
   does not install Oracle Instant Client because Deep Data Security is supported
   only by python-oracledb Thin mode in this stack.
-- Autonomous AI Database mode: first select the required `ADBのコンパートメント`,
-  then choose `ADBの利用方法`. The ADB compartment controls only the new ADB
-  destination or the existing ADB picker; it does not change the Compute
+- Autonomous AI Database mode: `ADBのコンパートメント` is initially populated
+  from Resource Manager's current `Create in compartment` selection and can be
+  changed before choosing `ADBの利用方法`. The ADB compartment controls only the
+  new ADB destination or the existing ADB picker; it does not change the Compute
   compartment or runtime `OCI_COMPARTMENT_ID`.
   - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
     license, and password fields. The default workload is `LH`. Network access
@@ -91,9 +92,15 @@ above. Legacy values `PUBLIC_ENDPOINT`,
 `SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS`, `PRIVATE_ENDPOINT_ONLY`,
 `CIDR_BLOCK`, and the legacy `adb_use_private_subnet` variable are not accepted.
 Update existing `.tfvars` before planning this stack version.
-This stack version also requires an explicit `adb_compartment_ocid`; it does not
-fall back to `compartment_ocid`. Existing ADB OCIDs must belong to the selected
-ADB compartment.
+Resource Manager initializes `adb_compartment_ocid` from `compartment_ocid`, but
+the two inputs remain independent after initialization. Direct Terraform callers
+must continue to set `adb_compartment_ocid` explicitly; the Terraform variable
+does not fall back to `compartment_ocid`. Existing ADB OCIDs must belong to the
+selected ADB compartment.
+
+[Resource Manager automatically prepopulates the reserved `compartment_ocid`
+variable](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/terraformconfigresourcemanager.htm)
+on the Console pages used to create and edit a stack.
 
 ### Optional Resource Manager Form Browser Check
 
@@ -226,6 +233,53 @@ security inputs. Direct HTTP deployments keep the internal defaults
 If you override these Terraform variables outside the form for HTTPS, use
 `app_environment=production` with `app_auth_cookie_secure=true`.
 
+## Updating an Existing Compute Deployment
+
+After manually pulling the required repositories, run the post-pull update
+script as the `ubuntu` user. Do not run it directly as root; privileged changes
+are performed through `sudo`. The script does not run Git commands and does not
+rewrite `backend/.env`, the Wallet contents, systemd units, or the Nginx
+configuration.
+
+```bash
+cd /u01/aipoc/no.1-production-ready-nl2sql
+./scripts/update-after-pull.sh --check
+./scripts/update-after-pull.sh --repair-only
+./scripts/update-after-pull.sh
+```
+
+`--check` only inspects the fixed paths, Wallet and `.env` permissions, systemd
+units, and system schema status. It does not create a lock, log, snapshot, stop a
+service, or run a migration. `--repair-only` skips dependency synchronization
+and frontend building, then snapshots and repairs the deployed instance,
+applies migrations, and restores services. With no arguments, the script first
+synchronizes and compile-checks the backend and builds the shared UI and NL2SQL
+frontend into a staging directory while the current services remain available.
+Only after those steps succeed does it enter the maintenance window.
+
+Before stopping services, mutating modes create a root-only snapshot below
+`/u01/aipoc/recovery`. They then enforce `/u01/aipoc` as `root:ubuntu 0775`,
+`/u01/aipoc/wallet` as `ubuntu:ubuntu 0700`, and Wallet files, the install lock,
+and `backend/.env` as `0600`. `ORACLE_WALLET_DIR` remains fixed at
+`/u01/aipoc/wallet`; the `.env` file is parsed without sourcing secret values.
+System and security migrations are idempotent. The script never deletes
+`.wallet.tmp-*` or `.wallet.backup-*`, never recreates the schema, and never
+applies the administrator-confirmed DeepSec foundation plan.
+
+If a migration, backend health check, or worker restart fails, all external
+workers are disabled and the script makes a best-effort attempt to restore the
+backend. The existing `frontend/dist` remains active. In a full update, the new
+frontend is promoted only after the backend is healthy and every service is
+active. If the final public/Nginx health check fails, the previous frontend is
+restored while the successfully initialized backend and workers remain running.
+The command log is appended to `/var/log/nl2sql-update.log`.
+
+The sibling shared platform checkout defaults to
+`/u01/aipoc/no.1-production-ready-platform`. For a nonstandard installation,
+override `PLATFORM_REPO_DIR`. `BACKEND_HEALTH_URL`, `PUBLIC_HEALTH_URL`,
+`HEALTHCHECK_TIMEOUT_SECONDS`, and `HEALTHCHECK_INTERVAL_SECONDS` are also
+available for nondefault ports or health-check timing.
+
 ## Troubleshooting
 
 On the Compute instance, inspect:
@@ -245,6 +299,35 @@ curl -i http://127.0.0.1:8000/api/health
 curl -i http://127.0.0.1/api/health
 curl -i http://127.0.0.1/health
 ```
+
+### Validate an updated or repaired Compute instance
+
+After a successful update or repair, validate with relative UTC time instead of
+converting the browser timestamp manually:
+
+```bash
+sudo systemctl --no-pager --full status \
+  production-ready-nl2sql-backend.service \
+  production-ready-nl2sql-schema-refresh-worker.service \
+  production-ready-nl2sql-quality-evaluation-worker.service \
+  production-ready-nl2sql-ontology-worker.service
+sudo journalctl \
+  -u production-ready-nl2sql-backend.service \
+  -u production-ready-nl2sql-schema-refresh-worker.service \
+  --since "-15 min" --no-pager -o short-iso
+```
+
+Then confirm Wallet refresh, application user management, the pending DeepSec
+V001 plan, and completion of any previously pending schema refresh job from the
+UI. Docker is not part of this recovery path, and OCI SDK circuit-breaker INFO
+messages are not failures.
+
+For the permanent Resource Manager rollout, publish the fixed application with
+an immutable `application_git_ref` and create a replacement Compute instance.
+Updating `user_data` metadata on an already booted instance does not rerun
+cloud-init. Keep the repaired old instance until the replacement passes the same
+health/UI checks, and migrate `/u01/data/production-ready-nl2sql` before cutover
+when it contains local documents or settings.
 
 The cloud-init bootstrap:
 

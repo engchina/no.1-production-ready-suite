@@ -33,6 +33,12 @@ jobs:
         with:
           terraform_version: "1.5.7"
 
+      - name: Test deployment update and recovery scripts
+        run: |
+          bash -n init_script.sh scripts/update-after-pull.sh
+          bash scripts/tests/init-script-deployment.test.sh
+          bash scripts/tests/update-after-pull.test.sh
+
       - name: Format check
         run: terraform fmt -check -recursive terraform/stack
 

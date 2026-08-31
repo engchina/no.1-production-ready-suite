@@ -9,11 +9,12 @@ import sys
 import zipfile
 from pathlib import Path
 
-
 PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスのみ"
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
 IP_OR_CIDR = "IPアドレスまたはCIDRブロック"
+APPLICATION_GIT_URL = "https://github.com/engchina/no.1-production-ready-nl2sql.git"
+PLATFORM_GIT_URL = "https://github.com/engchina/no.1-production-ready-platform.git"
 
 
 def _schema_variable(source: str, name: str) -> str:
@@ -67,7 +68,7 @@ def verify(package_path: Path) -> None:
     _require_all(
         schema,
         [
-            'version: "20260831.1"',
+            'version: "20260831.3"',
             '- title: "ネットワーク・アクセス"',
             "- adb_private_endpoint_vcn_compartment_id",
             "- adb_private_endpoint_vcn_id",
@@ -77,6 +78,90 @@ def verify(package_path: Path) -> None:
         ],
         context="Resource Manager schema",
     )
+    _require_in_order(
+        schema,
+        [
+            '- title: "ネットワーク・アクセス"',
+            "- title: Deep Data Security",
+            "- title: Compute",
+        ],
+        context="Resource Manager variable group order",
+    )
+    if not re.search(
+        r"(?m)^  - title: Deep Data Security\n"
+        r"    visible: true\n"
+        r"    variables:\n"
+        r"      - oracle_deepsec_data_user_password\n\n"
+        r"  - title: Compute$",
+        schema,
+    ):
+        raise AssertionError(
+            "Deep Data Security variable group must be immediately before Compute"
+        )
+    hidden_group = re.search(
+        r"(?ms)^  - title: Hidden\n    visible: false\n    variables:\n(.*?)(?=^  - title: )",
+        schema,
+    )
+    if hidden_group is None:
+        raise AssertionError("hidden Resource Manager variable group not found")
+    _require_all(
+        hidden_group.group(0),
+        [
+            "- application_git_url",
+            "- application_git_ref",
+            "- platform_git_url",
+            "- platform_git_ref",
+        ],
+        context="hidden Git source variables",
+    )
+    application_source_group = re.search(
+        r"(?ms)^  - title: Application Source\n"
+        r"    visible: true\n"
+        r"    variables:\n"
+        r"(.*?)(?=^  - title: )",
+        schema,
+    )
+    if application_source_group is None:
+        raise AssertionError("Application Source variable group not found")
+    _require_all(
+        application_source_group.group(0),
+        ["- application_port"],
+        context="visible Application Source variables",
+    )
+    visible_git_variables = [
+        name
+        for name in (
+            "application_git_url",
+            "application_git_ref",
+            "platform_git_url",
+            "platform_git_ref",
+        )
+        if f"- {name}" in application_source_group.group(0)
+    ]
+    if visible_git_variables:
+        raise AssertionError(
+            f"Git source variables remain in the visible group: {visible_git_variables}"
+        )
+
+    git_source_defaults = {
+        "application_git_url": APPLICATION_GIT_URL,
+        "application_git_ref": "main",
+        "platform_git_url": PLATFORM_GIT_URL,
+        "platform_git_ref": "main",
+    }
+    for name, default in git_source_defaults.items():
+        schema_block = _schema_variable(schema, name)
+        _require_all(
+            schema_block,
+            ["required: true", "visible: false", f'default: "{default}"'],
+            context=f"{name} hidden schema",
+        )
+        terraform_block = _terraform_variable(variables, name)
+        _require_all(
+            terraform_block,
+            [f'default     = "{default}"'],
+            context=f"{name} Terraform default",
+        )
     _require_in_order(
         schema,
         [
@@ -91,7 +176,11 @@ def verify(package_path: Path) -> None:
     adb_compartment_schema = _schema_variable(schema, "adb_compartment_ocid")
     _require_all(
         adb_compartment_schema,
-        ["required: true", 'title: "ADBのコンパートメント"'],
+        [
+            "required: true",
+            'title: "ADBのコンパートメント"',
+            "default: compartment_ocid",
+        ],
         context="adb_compartment_ocid schema",
     )
     deployment_mode_schema = _schema_variable(schema, "adb_deployment_mode")
@@ -209,11 +298,14 @@ def verify(package_path: Path) -> None:
             f'var.adb_network_access_type == "{ALLOWED_ACCESS}"',
             f'var.adb_network_access_type == "{EVERYWHERE_ACCESS}"',
             "is_access_control_enabled                      = local.adb_secure_acl_enabled",
-            "subnet_id                                      = local.adb_private_endpoint_enabled ? var.adb_subnet_id : null",
-            "whitelisted_ips                                = local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null",
+            "subnet_id                                      = "
+            "local.adb_private_endpoint_enabled ? var.adb_subnet_id : null",
+            "whitelisted_ips                                = "
+            "local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null",
             "compartment_id                                 = var.adb_compartment_ocid",
             "self.compartment_id == trimspace(var.adb_compartment_ocid)",
-            "選択した既存のAutonomous AI Databaseは、ADBのコンパートメントに属している必要があります。",
+            "選択した既存のAutonomous AI Databaseは、"
+            "ADBのコンパートメントに属している必要があります。",
         ],
         context="ADB network mapping",
     )
@@ -230,6 +322,10 @@ def verify(package_path: Path) -> None:
             "OCI_COMPARTMENT_ID=${var.compartment_ocid}",
             "ORACLE_WALLET_DIR=${local.wallet_dir_host}",
             'wallet_dir_host   = "/u01/aipoc/wallet"',
+            "application_git_ref = var.application_git_ref",
+            "application_git_url = var.application_git_url",
+            "platform_git_ref    = var.platform_git_ref",
+            "platform_git_url    = var.platform_git_url",
         ],
         context="runtime deployment compartment",
     )
@@ -239,6 +335,8 @@ def verify(package_path: Path) -> None:
             'APP_ROOT="/u01/aipoc"',
             'run_application_init',
             'bash "$${init_script}"',
+            'clone_or_update_repo "${application_git_url}" "${application_git_ref}"',
+            'clone_or_update_repo "${platform_git_url}" "${platform_git_ref}"',
             "Nginx listens on TCP port",
         ],
         context="direct Compute bootstrap",

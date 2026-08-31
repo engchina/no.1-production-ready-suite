@@ -2,6 +2,9 @@
 node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/.deploy-update-*/
+frontend/.dist-backup-*/
+frontend/.dist-failed-*/
 
 # --- backend (Python/uv) ---
 backend/.venv/

@@ -1,7 +1,7 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
 stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
-version: "20260831.1"
+version: "20260831.3"
 locale: "en"
 
 variableGroups:
@@ -9,6 +9,10 @@ variableGroups:
     visible: false
     variables:
       - adb_compute_model
+      - application_git_url
+      - application_git_ref
+      - platform_git_url
+      - platform_git_ref
       - app_environment
       - app_auth_cookie_secure
 
@@ -23,10 +27,6 @@ variableGroups:
   - title: Application Source
     visible: true
     variables:
-      - application_git_url
-      - application_git_ref
-      - platform_git_url
-      - platform_git_ref
       - application_port
 
   - title: Application Administrator
@@ -34,11 +34,6 @@ variableGroups:
     variables:
       - app_admin_login_user_id
       - app_admin_login_user_password
-
-  - title: Deep Data Security
-    visible: true
-    variables:
-      - oracle_deepsec_data_user_password
 
   - title: Autonomous AI Database
     visible: true
@@ -98,6 +93,11 @@ variableGroups:
       - adb_acl_cidr_blocks
       - adb_is_mtls_connection_required
 
+  - title: Deep Data Security
+    visible: true
+    variables:
+      - oracle_deepsec_data_user_password
+
   - title: Compute
     visible: true
     variables:
@@ -146,14 +146,14 @@ variables:
   application_git_url:
     type: string
     required: true
-    visible: true
+    visible: false
     title: "Application Git URL"
     default: "https://github.com/engchina/no.1-production-ready-nl2sql.git"
 
   application_git_ref:
     type: string
     required: true
-    visible: true
+    visible: false
     title: "Application Git ref"
     description: "Branch or tag to clone. The default deploys main."
     default: "main"
@@ -161,14 +161,14 @@ variables:
   platform_git_url:
     type: string
     required: true
-    visible: true
+    visible: false
     title: "Platform Git URL"
     default: "https://github.com/engchina/no.1-production-ready-platform.git"
 
   platform_git_ref:
     type: string
     required: true
-    visible: true
+    visible: false
     title: "Platform Git ref"
     description: "Branch or tag for shared backend/ui packages."
     default: "main"
@@ -235,6 +235,7 @@ variables:
     visible: true
     title: "ADBのコンパートメント"
     description: "新規Autonomous AI Databaseの作成先、または既存Autonomous AI Databaseの候補を絞り込むコンパートメントを選択します。Computeのデプロイ先には影響しません。"
+    default: compartment_ocid
 
   adb_deployment_mode:
     type: enum
