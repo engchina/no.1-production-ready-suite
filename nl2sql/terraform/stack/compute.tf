@@ -47,8 +47,43 @@ resource "oci_core_instance" "generated_oci_core_instance" {
     precondition {
       condition = (
         local.create_new_adb && local.adb_private_endpoint_enabled
+      ) ? trimspace(var.adb_private_endpoint_vcn_compartment_id) != "" : true
+      error_message = "プライベート・エンドポイントを作成する場合は、VCNのコンパートメントを選択してください。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb && local.adb_private_endpoint_enabled
+      ) ? trimspace(var.adb_private_endpoint_vcn_id) != "" : true
+      error_message = "プライベート・エンドポイントを作成する場合は、仮想クラウド・ネットワークを選択してください。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb && local.adb_private_endpoint_enabled
+      ) ? trimspace(var.adb_private_endpoint_subnet_compartment_id) != "" : true
+      error_message = "プライベート・エンドポイントを作成する場合は、サブネットのコンパートメントを選択してください。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb && local.adb_private_endpoint_enabled
       ) ? trimspace(var.adb_subnet_id) != "" : true
-      error_message = "adb_subnet_id must be configured when creating a private endpoint Autonomous AI Database."
+      error_message = "プライベート・エンドポイントを作成する場合は、サブネットを選択してください。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb
+        && local.adb_private_endpoint_enabled
+        && trimspace(var.adb_subnet_id) != ""
+        && trimspace(var.adb_private_endpoint_vcn_id) != ""
+      ) ? data.oci_core_subnet.adb_private_endpoint_subnet[0].vcn_id == trimspace(var.adb_private_endpoint_vcn_id) : true
+      error_message = "選択したサブネットは、プライベート・エンドポイント用VCNに属している必要があります。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb
+        && local.adb_secure_acl_enabled
+        && var.adb_acl_notation_type == "VCN"
+      ) ? trimspace(var.adb_acl_vcn_compartment_id) != "" : true
+      error_message = "VCNアクセス制御を使用する場合は、VCNのコンパートメントを選択してください。"
     }
     precondition {
       condition = (
@@ -56,15 +91,24 @@ resource "oci_core_instance" "generated_oci_core_instance" {
         && local.adb_secure_acl_enabled
         && var.adb_acl_notation_type == "VCN"
       ) ? trimspace(local.effective_adb_acl_vcn_id) != "" : true
-      error_message = "adb_acl_vcn_id or vcn_ai_vcn_id must be configured when creating an Autonomous AI Database with VCN ACL access."
+      error_message = "VCNアクセス制御を使用する場合は、許可する仮想クラウド・ネットワークを選択してください。"
     }
     precondition {
       condition = (
         local.create_new_adb
         && local.adb_secure_acl_enabled
-        && var.adb_acl_notation_type == "CIDR_BLOCK"
+        && var.adb_acl_notation_type == "VCN"
+        && trimspace(var.adb_acl_subnet_id) != ""
+      ) ? trimspace(var.adb_acl_subnet_compartment_id) != "" : true
+      error_message = "許可するサブネットを指定する場合は、サブネットのコンパートメントを選択してください。"
+    }
+    precondition {
+      condition = (
+        local.create_new_adb
+        && local.adb_secure_acl_enabled
+        && var.adb_acl_notation_type == "IPアドレスまたはCIDRブロック"
       ) ? length(local.adb_acl_cidr_entries) > 0 : true
-      error_message = "adb_acl_cidr_blocks must be configured when creating an Autonomous AI Database with CIDR ACL access."
+      error_message = "IPアドレスまたはCIDRブロックによるアクセス制御を使用する場合は、許可する値を入力してください。"
     }
     precondition {
       condition = local.create_new_adb || (

@@ -1,17 +1,31 @@
 data "oci_core_subnet" "adb_acl_subnet" {
   count = (
-    local.create_new_adb
-    && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+    local.adb_secure_acl_enabled
     && var.adb_acl_notation_type == "VCN"
     && trimspace(local.effective_adb_acl_subnet_id) != ""
   ) ? 1 : 0
   subnet_id = local.effective_adb_acl_subnet_id
 }
 
+data "oci_core_subnet" "adb_private_endpoint_subnet" {
+  count = (
+    local.adb_private_endpoint_enabled
+    && trimspace(var.adb_subnet_id) != ""
+  ) ? 1 : 0
+  subnet_id = var.adb_subnet_id
+}
+
 data "oci_database_autonomous_database" "selected_existing_adb" {
   count = local.use_existing_adb && trimspace(var.existing_adb_ocid) != "" ? 1 : 0
 
   autonomous_database_id = var.existing_adb_ocid
+
+  lifecycle {
+    postcondition {
+      condition     = self.compartment_id == trimspace(var.adb_compartment_ocid)
+      error_message = "選択した既存のAutonomous AI Databaseは、ADBのコンパートメントに属している必要があります。"
+    }
+  }
 }
 
 locals {
@@ -31,17 +45,20 @@ locals {
   adb_display_name = trimspace(var.adb_display_name) != "" ? var.adb_display_name : var.adb_name
   adb_private_endpoint_enabled = (
     local.create_new_adb
-    && (var.adb_network_access_type == "PRIVATE_ENDPOINT_ONLY" || var.adb_use_private_subnet)
+    && var.adb_network_access_type == "プライベート・エンドポイント・アクセスのみ"
   )
-  adb_secure_acl_enabled = local.create_new_adb && var.adb_network_access_type == "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
-  effective_adb_acl_vcn_id = (
-    trimspace(var.adb_acl_vcn_id) != "" ? trimspace(var.adb_acl_vcn_id) : trimspace(var.vcn_ai_vcn_id)
+  adb_secure_acl_enabled = (
+    local.create_new_adb
+    && var.adb_network_access_type == "許可されたIPおよびVCN限定のセキュア・アクセス"
   )
-  effective_adb_acl_subnet_id = (
-    trimspace(var.adb_acl_subnet_id) != "" ? trimspace(var.adb_acl_subnet_id) : trimspace(var.subnet_ai_subnet_id)
+  adb_public_access_enabled = (
+    local.create_new_adb
+    && var.adb_network_access_type == "すべての場所からのセキュア・アクセス"
   )
+  effective_adb_acl_vcn_id    = trimspace(var.adb_acl_vcn_id)
+  effective_adb_acl_subnet_id = trimspace(var.adb_acl_subnet_id)
 
-  adb_acl_cidr_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "CIDR_BLOCK" && trimspace(var.adb_acl_cidr_blocks) != "" ? [
+  adb_acl_cidr_entries = local.adb_secure_acl_enabled && var.adb_acl_notation_type == "IPアドレスまたはCIDRブロック" && trimspace(var.adb_acl_cidr_blocks) != "" ? [
     for cidr in split(",", var.adb_acl_cidr_blocks) : trimspace(cidr)
     if trimspace(cidr) != ""
   ] : []
@@ -73,7 +90,7 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
   autonomous_maintenance_schedule_type           = "REGULAR"
   backup_retention_period_in_days                = var.adb_backup_retention_period_in_days
   character_set                                  = "AL32UTF8"
-  compartment_id                                 = var.compartment_ocid
+  compartment_id                                 = var.adb_compartment_ocid
   compute_count                                  = var.adb_compute_count
   compute_model                                  = var.adb_compute_model
   data_storage_size_in_tbs                       = var.adb_data_storage_size_in_tbs
@@ -83,6 +100,7 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
   display_name                                   = local.adb_display_name
   is_auto_scaling_enabled                        = var.adb_is_auto_scaling_enabled
   is_auto_scaling_for_storage_enabled            = var.adb_is_auto_scaling_for_storage_enabled
+  is_access_control_enabled                      = local.adb_secure_acl_enabled
   is_dedicated                                   = "false"
   is_mtls_connection_required                    = var.adb_is_mtls_connection_required
   is_preview_version_with_service_terms_accepted = "false"
@@ -90,6 +108,13 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
   ncharacter_set                                 = "AL16UTF16"
   subnet_id                                      = local.adb_private_endpoint_enabled ? var.adb_subnet_id : null
   whitelisted_ips                                = local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null
+
+  lifecycle {
+    precondition {
+      condition     = trimspace(var.adb_compartment_ocid) != ""
+      error_message = "新規Autonomous AI Databaseを作成する場合は、ADBのコンパートメントを選択してください。"
+    }
+  }
 
   dynamic "resource_pool_summary" {
     for_each = var.adb_is_elastic_pool_enabled ? [1] : []

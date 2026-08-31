@@ -11,6 +11,7 @@
     "test:startup": "bash ../scripts/tests/start-frontend.test.sh && bash ../scripts/tests/init-script-nodejs.test.sh",
     "test:logic": "tsc -p tsconfig.test.json && node --import jiti/register --test tests/*.test.ts",
     "test:e2e": "playwright test",
+    "test:e2e:oci-resource-manager": "playwright test --config playwright.oci-resource-manager.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

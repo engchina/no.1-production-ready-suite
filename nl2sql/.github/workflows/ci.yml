@@ -47,6 +47,9 @@ jobs:
       - name: Package stack
         run: python scripts/package_terraform_stack.py --output /tmp/production-ready-nl2sql-terraform-stack.zip
 
+      - name: Verify ADB stack contract
+        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-nl2sql-terraform-stack.zip
+
       - name: Verify package contents
         run: |
           python - <<'PY'

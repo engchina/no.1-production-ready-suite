@@ -1,7 +1,7 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
 stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
-version: "20260817"
+version: "20260831.1"
 locale: "en"
 
 variableGroups:
@@ -9,7 +9,6 @@ variableGroups:
     visible: false
     variables:
       - adb_compute_model
-      - adb_use_private_subnet
       - app_environment
       - app_auth_cookie_secure
 
@@ -44,6 +43,7 @@ variableGroups:
   - title: Autonomous AI Database
     visible: true
     variables:
+      - adb_compartment_ocid
       - adb_deployment_mode
 
   - title: Existing Autonomous AI Database
@@ -78,10 +78,22 @@ variableGroups:
       - license_model
       - adb_backup_retention_period_in_days
       - adb_password
+
+  - title: "ネットワーク・アクセス"
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "新規 Autonomous AI Database の作成"
+    variables:
       - adb_network_access_type
+      - adb_private_endpoint_vcn_compartment_id
+      - adb_private_endpoint_vcn_id
+      - adb_private_endpoint_subnet_compartment_id
       - adb_subnet_id
       - adb_acl_notation_type
+      - adb_acl_vcn_compartment_id
       - adb_acl_vcn_id
+      - adb_acl_subnet_compartment_id
       - adb_acl_subnet_id
       - adb_acl_cidr_blocks
       - adb_is_mtls_connection_required
@@ -217,12 +229,19 @@ variables:
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
 
+  adb_compartment_ocid:
+    type: oci:identity:compartment:id
+    required: true
+    visible: true
+    title: "ADBのコンパートメント"
+    description: "新規Autonomous AI Databaseの作成先、または既存Autonomous AI Databaseの候補を絞り込むコンパートメントを選択します。Computeのデプロイ先には影響しません。"
+
   adb_deployment_mode:
     type: enum
     required: true
     visible: true
-    title: "Autonomous AI Database deployment mode"
-    description: "Create a new Autonomous AI Database, or connect this Compute deployment to an existing Autonomous AI Database in the selected region."
+    title: "ADBの利用方法"
+    description: "新規Autonomous AI Databaseを作成するか、選択したコンパートメント内の既存Autonomous AI Databaseを使用するかを選択します。"
     enum:
       - "新規 Autonomous AI Database の作成"
       - "既存の Autonomous AI Database を選択"
@@ -232,10 +251,10 @@ variables:
     type: oci:database:autonomousdatabase:id
     required: false
     visible: true
-    title: "Existing Autonomous AI Database"
-    description: "Select the existing ADB. Terraform will generate a wallet for this database and inject the connection settings into backend/.env."
+    title: "既存のAutonomous AI Database"
+    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をbackend/.envへ反映します。"
     dependsOn:
-      compartmentId: ${compartment_ocid}
+      compartmentId: ${adb_compartment_ocid}
 
   existing_oracle_user:
     type: string
@@ -295,7 +314,7 @@ variables:
       - "AJD"
       - "APEX"
       - "LH"
-    default: "OLTP"
+    default: "LH"
 
   adb_db_version:
     type: enum
@@ -403,32 +422,58 @@ variables:
     type: enum
     required: true
     visible: true
-    title: "ADB network access"
-    description: "Default secure mode enables the ADB access-control list. With VCN notation and no override, the stack allows the selected Compute subnet."
+    title: "アクセス・タイプ"
+    description: "すべての場所からのアクセス、許可したIP/VCN限定のアクセス、またはOCI VCN内のプライベート・エンドポイント限定のアクセスから選択します。"
     enum:
-      - "PUBLIC_ENDPOINT"
-      - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
-      - "PRIVATE_ENDPOINT_ONLY"
-    default: "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+      - "すべての場所からのセキュア・アクセス"
+      - "許可されたIPおよびVCN限定のセキュア・アクセス"
+      - "プライベート・エンドポイント・アクセスのみ"
+    default: "プライベート・エンドポイント・アクセスのみ"
 
-  adb_use_private_subnet:
-    type: boolean
+  adb_private_endpoint_vcn_compartment_id:
+    type: oci:identity:compartment:id
     required: true
-    visible: false
-    title: "Use private subnet for ADB"
-    default: false
-
-  adb_subnet_id:
-    type: oci:core:subnet:id
-    required: false
     visible:
       eq:
         - adb_network_access_type
-        - "PRIVATE_ENDPOINT_ONLY"
-    title: "ADB private endpoint subnet"
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "VCNのコンパートメント"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントを配置するVCNのコンパートメントを選択します。"
+
+  adb_private_endpoint_vcn_id:
+    type: oci:core:vcn:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "仮想クラウド・ネットワーク"
+    description: "プライベート・エンドポイントを配置するVCNを選択します。"
     dependsOn:
-      compartmentId: ${compartment_ocid}
-      vcnId: ${vcn_ai_vcn_id}
+      compartmentId: ${adb_private_endpoint_vcn_compartment_id}
+
+  adb_private_endpoint_subnet_compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "サブネットのコンパートメント"
+    description: "プライベート・エンドポイントを配置するサブネットのコンパートメントを選択します。"
+
+  adb_subnet_id:
+    type: oci:core:subnet:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "サブネット"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントを配置するサブネットを選択します。"
+    dependsOn:
+      compartmentId: ${adb_private_endpoint_subnet_compartment_id}
+      vcnId: ${adb_private_endpoint_vcn_id}
 
   adb_acl_notation_type:
     type: enum
@@ -436,54 +481,95 @@ variables:
     visible:
       eq:
         - adb_network_access_type
-        - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
-    title: "ADB ACL notation type"
+        - "許可されたIPおよびVCN限定のセキュア・アクセス"
+    title: "IP表記法タイプ"
+    description: "VCN、またはIPアドレス/CIDRブロックでアクセス制御ルールを指定します。"
     enum:
       - "VCN"
-      - "CIDR_BLOCK"
+      - "IPアドレスまたはCIDRブロック"
     default: "VCN"
+
+  adb_acl_vcn_compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "VCNのコンパートメント"
+    description: "アクセスを許可するVCNのコンパートメントを選択します。"
 
   adb_acl_vcn_id:
     type: oci:core:vcn:id
+    required: true
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "許可する仮想クラウド・ネットワーク"
+    description: "Autonomous AI Databaseへのアクセスを許可するVCNを選択します。"
+    dependsOn:
+      compartmentId: ${adb_acl_vcn_compartment_id}
+
+  adb_acl_subnet_compartment_id:
+    type: oci:identity:compartment:id
     required: false
     visible:
-      eq:
-        - adb_network_access_type
-        - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
-    title: "Allowed VCN"
-    description: "Optional override. Leave blank to reuse the deployment VCN selected above."
-    dependsOn:
-      compartmentId: ${compartment_ocid}
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "サブネットのコンパートメント"
+    description: "アクセスを許可するサブネットのコンパートメントを選択します。サブネットを指定しない場合は選択したVCN全体を許可します。"
 
   adb_acl_subnet_id:
     type: oci:core:subnet:id
     required: false
     visible:
-      eq:
-        - adb_network_access_type
-        - "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
-    title: "Allowed subnet"
-    description: "Optional override. Leave blank to reuse the Compute subnet. The subnet CIDR is added as VCN;CIDR in the ADB access list."
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "許可するサブネット（オプション）"
+    description: "選択したサブネットのCIDRをVCNアクセス制御ルールへ追加します。未選択の場合はVCN全体を許可します。"
     dependsOn:
-      compartmentId: ${compartment_ocid}
+      compartmentId: ${adb_acl_subnet_compartment_id}
       vcnId: ${adb_acl_vcn_id}
 
   adb_acl_cidr_blocks:
     type: string
     required: false
     visible:
-      eq:
-        - adb_acl_notation_type
-        - "CIDR_BLOCK"
-    title: "Allowed CIDR blocks"
-    description: "Comma-separated CIDR blocks for ADB secure access."
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "IPアドレスまたはCIDRブロック"
+    title: "許可するIPアドレスまたはCIDRブロック"
+    description: "Autonomous AI Databaseへのアクセスを許可するIPアドレスまたはCIDRブロックをカンマ区切りで入力します。"
 
   adb_is_mtls_connection_required:
     type: boolean
     required: true
     visible: true
-    title: "Require mutual TLS (mTLS)"
-    description: "Enabled by default. Thin mode uses the generated Wallet for mTLS; set false only for walletless one-way TLS ADBs."
+    title: "相互TLS (mTLS)認証が必要"
+    description: "既定では有効です。Thinモードは生成したWalletでmTLS接続します。Walletを使用しない一方向TLSのADBだけ無効にしてください。"
     default: true
 
   instance_display_name:

@@ -39,7 +39,9 @@ The default output is
 `dist/production-ready-nl2sql-terraform-stack.zip`. Upload that zip to OCI
 Resource Manager and create a stack. Provide the required form values:
 
-- OCI compartment, region, availability domain, VCN, and subnets
+- OCI deployment/Compute compartment, region, availability domain, VCN, and
+  subnets. Select the ADB compartment separately in the Autonomous AI Database
+  section.
 - Application administrator password. The username is fixed to `system_admin`
   and is case-sensitive.
 - Deep Data Security DATA USER password. The stack enables
@@ -50,22 +52,31 @@ Resource Manager and create a stack. Provide the required form values:
   `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The cloud-init script
   does not install Oracle Instant Client because Deep Data Security is supported
   only by python-oracledb Thin mode in this stack.
-- Autonomous AI Database mode:
+- Autonomous AI Database mode: first select the required `ADBのコンパートメント`,
+  then choose `ADBの利用方法`. The ADB compartment controls only the new ADB
+  destination or the existing ADB picker; it does not change the Compute
+  compartment or runtime `OCI_COMPARTMENT_ID`.
   - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
-    license, and password fields. New ADBs default to Thin-compatible Wallet
-    mTLS (`Require mutual TLS (mTLS)=true`) with the ADB access-control list
-    enabled. In VCN ACL mode, leaving the override fields blank allows the
-    selected Compute subnet by writing `VCN_OCID;SUBNET_CIDR` to
-    `whitelisted_ips`.
-    If `Require mutual TLS (mTLS)` is set to `false`, the bootstrap writes
-    `ORACLE_CONNECTION_SECURITY=walletless_tls`; use that only with an ADB
-    connection string that supports one-way TLS and an ACL that permits the
-    application host.
-    For public endpoint ACL deployments that leave the VCN ACL overrides blank,
-    ensure the Compute subnet has a valid OCI private path to ADB; otherwise use
-    CIDR ACL mode and enter the Compute/NAT public egress IP or CIDR. For
-    private endpoint deployments, select an ADB subnet reachable from the
-    application Compute subnet in the same VCN routing/security path.
+    license, and password fields. The default workload is `LH`. Network access
+    defaults to `プライベート・エンドポイント・アクセスのみ`; select the VCN
+    compartment, VCN, subnet compartment, and subnet shown by the form. The
+    selected subnet must be reachable from the application Compute subnet
+    through the configured VCN routing and security rules.
+    The other access types match the Autonomous AI Database creation screen:
+    `すべての場所からのセキュア・アクセス` creates a public endpoint without
+    an ADB access-control list, while
+    `許可されたIPおよびVCN限定のセキュア・アクセス` enables the ADB
+    access-control list and requires either a VCN or comma-separated IP/CIDR
+    entries. Selecting a VCN without a subnet allows the entire VCN; selecting
+    a subnet writes `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
+    New ADBs default to Thin-compatible Wallet mTLS
+    (`相互TLS (mTLS)認証が必要=true`). If this option is set to `false`, the
+    bootstrap writes `ORACLE_CONNECTION_SECURITY=walletless_tls`; use that only
+    with an ADB connection string that supports one-way TLS and an ACL that
+    permits the application host.
+    For public endpoint ACL deployments, ensure the Compute subnet has a valid
+    OCI private path to ADB; otherwise enter the Compute/NAT public egress IP or
+    CIDR.
   - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
     values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
     left blank; the stack uses the selected ADB `db_name` with `_high`, for
@@ -74,6 +85,35 @@ Resource Manager and create a stack. Provide the required form values:
     reads the selected ADB and generates a wallet, but does not modify its
     network access, mTLS, or access-control list settings.
 - Compute image, shape, subnet, and SSH public key
+
+The network access input contract intentionally uses the Japanese labels shown
+above. Legacy values `PUBLIC_ENDPOINT`,
+`SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS`, `PRIVATE_ENDPOINT_ONLY`,
+`CIDR_BLOCK`, and the legacy `adb_use_private_subnet` variable are not accepted.
+Update existing `.tfvars` before planning this stack version.
+This stack version also requires an explicit `adb_compartment_ocid`; it does not
+fall back to `compartment_ocid`. Existing ADB OCIDs must belong to the selected
+ADB compartment.
+
+### Optional Resource Manager Form Browser Check
+
+The Resource Manager UI is rendered by OCI and cannot be reproduced by the
+local frontend. To verify the generated form without creating an ADB, upload the
+package to a dedicated test tenancy, save an authenticated Playwright storage
+state, and stop at the Create stack form:
+
+```bash
+cd frontend
+OCI_RESOURCE_MANAGER_ADB_FORM_URL="https://cloud.oracle.com/resourcemanager/stacks/create?..." \
+OCI_RESOURCE_MANAGER_STORAGE_STATE="/absolute/path/to/oci-storage-state.json" \
+npm run test:e2e:oci-resource-manager
+```
+
+The opt-in test runs at desktop and 375px widths and verifies that the ADB
+compartment precedes the create/existing selection, plus the `LH` workload
+default, private endpoint access default, Japanese access labels, keyboard
+selection, and progressive disclosure. It does not submit the form or run an
+Apply job.
 
 After apply completes, use the `application_url` output. The default application
 port is `80`. The public entrypoint is `http://<compute-ip>/`; browser API

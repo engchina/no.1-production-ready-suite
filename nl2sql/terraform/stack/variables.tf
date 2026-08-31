@@ -16,6 +16,20 @@ variable "compartment_ocid" {
   default     = ""
 }
 
+variable "adb_compartment_ocid" {
+  description = "OCI compartment OCID used to create or select the Autonomous AI Database."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.adb_compartment_ocid) != ""
+      && can(regex("^ocid1\\.compartment\\.", trimspace(var.adb_compartment_ocid)))
+    )
+    error_message = "ADBのコンパートメントを選択し、有効なCompartment OCIDを指定してください。"
+  }
+}
+
 variable "vcn_ai_vcn_id" {
   description = "VCN OCID used by the Resource Manager form for subnet filtering."
   type        = string
@@ -132,7 +146,7 @@ variable "adb_password" {
 variable "adb_workload" {
   description = "Autonomous AI Database workload type."
   type        = string
-  default     = "OLTP"
+  default     = "LH"
 
   validation {
     condition     = contains(["OLTP", "DW", "AJD", "APEX", "LH"], var.adb_workload)
@@ -249,22 +263,34 @@ variable "adb_backup_retention_period_in_days" {
 variable "adb_network_access_type" {
   description = "Autonomous AI Database network access mode."
   type        = string
-  default     = "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS"
+  default     = "プライベート・エンドポイント・アクセスのみ"
 
   validation {
     condition = contains([
-      "PUBLIC_ENDPOINT",
-      "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS",
-      "PRIVATE_ENDPOINT_ONLY"
+      "すべての場所からのセキュア・アクセス",
+      "許可されたIPおよびVCN限定のセキュア・アクセス",
+      "プライベート・エンドポイント・アクセスのみ"
     ], var.adb_network_access_type)
-    error_message = "adb_network_access_type must be PUBLIC_ENDPOINT, SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS, or PRIVATE_ENDPOINT_ONLY."
+    error_message = "adb_network_access_typeにはAutonomous AI Database画面に準拠した日本語のアクセス・タイプを指定してください。"
   }
 }
 
-variable "adb_use_private_subnet" {
-  description = "Compatibility switch for older tfvars. Prefer adb_network_access_type."
-  type        = bool
-  default     = false
+variable "adb_private_endpoint_vcn_compartment_id" {
+  description = "Compartment OCID containing the VCN used by the Autonomous AI Database private endpoint."
+  type        = string
+  default     = ""
+}
+
+variable "adb_private_endpoint_vcn_id" {
+  description = "VCN OCID used by the Autonomous AI Database private endpoint."
+  type        = string
+  default     = ""
+}
+
+variable "adb_private_endpoint_subnet_compartment_id" {
+  description = "Compartment OCID containing the subnet used by the Autonomous AI Database private endpoint."
+  type        = string
+  default     = ""
 }
 
 variable "adb_subnet_id" {
@@ -279,13 +305,25 @@ variable "adb_acl_notation_type" {
   default     = "VCN"
 
   validation {
-    condition     = contains(["VCN", "CIDR_BLOCK"], var.adb_acl_notation_type)
-    error_message = "adb_acl_notation_type must be VCN or CIDR_BLOCK."
+    condition     = contains(["VCN", "IPアドレスまたはCIDRブロック"], var.adb_acl_notation_type)
+    error_message = "adb_acl_notation_typeにはVCNまたはIPアドレスまたはCIDRブロックを指定してください。"
   }
+}
+
+variable "adb_acl_vcn_compartment_id" {
+  description = "Compartment OCID containing the VCN allowed by the Autonomous AI Database access-control list."
+  type        = string
+  default     = ""
 }
 
 variable "adb_acl_vcn_id" {
   description = "VCN OCID allowed to access Autonomous AI Database when secure ACL mode is selected."
+  type        = string
+  default     = ""
+}
+
+variable "adb_acl_subnet_compartment_id" {
+  description = "Compartment OCID containing the optional subnet allowed by the Autonomous AI Database access-control list."
   type        = string
   default     = ""
 }
