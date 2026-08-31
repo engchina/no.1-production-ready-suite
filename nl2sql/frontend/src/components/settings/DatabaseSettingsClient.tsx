@@ -18,12 +18,11 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Link } from "react-router-dom";
 import { Spinner, toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
@@ -62,7 +61,6 @@ import {
   useUpdateDatabaseSettings,
   useUploadDatabaseWallet,
 } from "@/lib/queries";
-import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 
@@ -611,12 +609,16 @@ function SelectAiCredentialCard() {
                       t("settings.database.selectAiCredential.missing.unknown"),
                   })}
                 />
-                <Link
-                  to={APP_ROUTES.settingsOci}
-                  className={buttonVariants({ variant: "secondary", size: "sm" })}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={status.isFetching}
+                  disabled={status.isFetching}
+                  onClick={() => void status.refetch()}
                 >
-                  {t("settings.database.selectAiCredential.action.openOciSettings")}
-                </Link>
+                  <RefreshCw size={15} aria-hidden />
+                  {t("settings.database.selectAiCredential.action.refresh")}
+                </Button>
               </div>
             )}
 

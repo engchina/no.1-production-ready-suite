@@ -1216,7 +1216,7 @@ export const ja = {
   "settings.database.selectAiCredential.ociReady":
     "サーバーの OCI 認証材料を利用できます。秘密鍵は Oracle の bind variable だけで渡されます。",
   "settings.database.selectAiCredential.ociMissing":
-    "OCI 認証材料を準備できません。不足または修正が必要な項目: {fields}",
+    "OCI 認証材料を準備できません。不足または修正が必要な項目: {fields}。OCI 認証設定を確認して、修正後に状態を再取得してください。",
   "settings.database.selectAiCredential.missing.configFile": "OCI config",
   "settings.database.selectAiCredential.missing.user": "User OCID",
   "settings.database.selectAiCredential.missing.tenancy": "Tenancy OCID",
@@ -1227,6 +1227,7 @@ export const ja = {
   "settings.database.selectAiCredential.missing.keyInvalid": "有効な PEM 秘密鍵",
   "settings.database.selectAiCredential.missing.unknown": "OCI 認証設定",
   "settings.database.selectAiCredential.action.openOciSettings": "OCI 認証設定を開く",
+  "settings.database.selectAiCredential.action.refresh": "状態を再取得",
   "settings.database.selectAiCredential.action.create": "Credential を作成",
   "settings.database.selectAiCredential.action.recreate": "Credential を再作成",
   "settings.database.selectAiCredential.confirmation.createHelper":

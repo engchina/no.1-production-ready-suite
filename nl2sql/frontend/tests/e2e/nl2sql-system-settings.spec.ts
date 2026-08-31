@@ -1837,9 +1837,11 @@ test("既存 Select AI Credential の再作成は確認語だけで直接実行�
 
 test("OCI 認証材料不足を 375px で案内し、作成操作を無効化する", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
+  let statusRequests = 0;
   await page.unroute("**/api/settings/database/select-ai-credential");
-  await page.route("**/api/settings/database/select-ai-credential", (route) =>
-    fulfillJson(route, {
+  await page.route("**/api/settings/database/select-ai-credential", (route) => {
+    statusRequests += 1;
+    return fulfillJson(route, {
       credential_name: "OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
@@ -1847,8 +1849,8 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
       oci_auth_ready: false,
       missing_fields: ["fingerprint", "key_file_permissions"],
       operation: null,
-    })
-  );
+    });
+  });
 
   await page.goto("/settings/database#select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
@@ -1857,10 +1859,14 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
     .filter({ hasText: "OCI 認証材料を準備できません" });
   await expect(readinessStatus).toContainText("Fingerprint");
   await expect(readinessStatus).toContainText("秘密鍵のファイル権限 (0600)");
-  await expect(card.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveAttribute(
-    "href",
-    "/settings/oci"
+  await expect(readinessStatus).toContainText(
+    "OCI 認証設定を確認して、修正後に状態を再取得してください。"
   );
+  await expect(card.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
+  const initialStatusRequests = statusRequests;
+  expect(initialStatusRequests).toBeGreaterThan(0);
+  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await expect.poll(() => statusRequests).toBe(initialStatusRequests + 1);
   await expect(card.getByRole("button", { name: "Credential を作成" })).toBeDisabled();
   await expect(card.getByTestId("execution-confirmation-field").getByRole("textbox")).toBeDisabled();
   await expectNoHorizontalOverflow(page);
@@ -1904,6 +1910,7 @@ test("Select AI Credential API 失敗は固定 alert だけに表示し Toast �
   await card.getByRole("button", { name: "Credential を作成" }).click();
 
   await expect(card.getByRole("alert").filter({ hasText: apiError })).toBeVisible();
+  await expect(card.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
   await expect(page.getByText(apiError, { exact: true })).toHaveCount(1);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
 });
