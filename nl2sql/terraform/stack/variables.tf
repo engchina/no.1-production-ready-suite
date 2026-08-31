@@ -103,7 +103,7 @@ variable "existing_oracle_dsn" {
 }
 
 variable "existing_oracle_wallet_password" {
-  description = "Wallet password for an existing Autonomous AI Database. Leave blank to reuse existing_oracle_password."
+  description = "Deprecated compatibility input. Existing ADB wallet generation reuses existing_oracle_password."
   type        = string
   sensitive   = true
   default     = ""
@@ -149,8 +149,8 @@ variable "adb_workload" {
   default     = "LH"
 
   validation {
-    condition     = contains(["OLTP", "DW", "AJD", "APEX", "LH"], var.adb_workload)
-    error_message = "adb_workload must be one of OLTP, DW, AJD, APEX, or LH."
+    condition     = contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)
+    error_message = "adb_workload must be one of OLTP, AJD, APEX, or LH."
   }
 }
 
@@ -532,19 +532,28 @@ variable "app_admin_login_user_password" {
   }
 }
 
+variable "oracle_deepsec_enabled" {
+  description = "Enable Deep Data Security in backend/.env."
+  type        = bool
+  default     = true
+}
+
 variable "oracle_deepsec_data_user_password" {
   description = "Password for the shared DEEPSEC_DATA_USER Deep Data Security DATA USER."
   type        = string
   sensitive   = true
+  default     = ""
 
   validation {
     condition = (
-      trimspace(var.oracle_deepsec_data_user_password) != ""
-      && length(var.oracle_deepsec_data_user_password) >= 12
-      && length(var.oracle_deepsec_data_user_password) <= 256
-      && !can(regex("[\r\n]", var.oracle_deepsec_data_user_password))
-      && !can(regex("\"", var.oracle_deepsec_data_user_password))
+      trimspace(var.oracle_deepsec_data_user_password) == ""
+      || (
+        length(var.oracle_deepsec_data_user_password) >= 12
+        && length(var.oracle_deepsec_data_user_password) <= 256
+        && !can(regex("[\r\n]", var.oracle_deepsec_data_user_password))
+        && !can(regex("\"", var.oracle_deepsec_data_user_password))
+      )
     )
-    error_message = "oracle_deepsec_data_user_password must be 12-256 characters, not include double quotes, and not contain line breaks."
+    error_message = "oracle_deepsec_data_user_password must be empty or 12-256 characters without double quotes or line breaks."
   }
 }

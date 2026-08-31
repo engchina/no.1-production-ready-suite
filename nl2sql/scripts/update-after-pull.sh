@@ -4,6 +4,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 APP_REPO_DIR="${APP_REPO_DIR:-${DEFAULT_REPO_DIR}}"
@@ -23,6 +24,23 @@ PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-http://127.0.0.1/api/health}"
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-90}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-2}"
 LOCK_FILE="${LOCK_FILE:-/tmp/production-ready-nl2sql-update.lock}"
+
+SUDO_REEXEC_ENV_VARS=(
+  APP_REPO_DIR
+  APP_ROOT
+  PLATFORM_REPO_DIR
+  APP_USER
+  APP_GROUP
+  WALLET_DIR
+  RECOVERY_ROOT
+  UPDATE_LOG_PATH
+  BACKEND_HEALTH_URL
+  PUBLIC_HEALTH_URL
+  HEALTHCHECK_TIMEOUT_SECONDS
+  HEALTHCHECK_INTERVAL_SECONDS
+  LOCK_FILE
+  UPDATE_AFTER_PULL_TEST_MODE
+)
 
 BACKEND_SERVICE="production-ready-nl2sql-backend.service"
 WORKER_SERVICES=(
@@ -103,6 +121,29 @@ ensure_privileged_access() {
   fail "passwordless sudo が利用できません。パスワード入力は行わず、sudo ./scripts/update-after-pull.sh を実行してください。"
 }
 
+reexec_with_sudo_if_needed() {
+  local env_name
+  local -a env_args=()
+
+  if running_as_root || [ "${ACTION}" = "check" ] || \
+    [ "${NL2SQL_UPDATE_SUDO_REEXECED:-false}" = "true" ]; then
+    return 0
+  fi
+  if ! sudo -n -v 2>/dev/null; then
+    fail "passwordless sudo が利用できません。パスワード入力は行わず、sudo ${SCRIPT_PATH} を実行してください。"
+    return "$?"
+  fi
+  for env_name in "${SUDO_REEXEC_ENV_VARS[@]}"; do
+    if [ "${!env_name+x}" = "x" ]; then
+      env_args+=("${env_name}=${!env_name}")
+    fi
+  done
+  env_args+=("NL2SQL_UPDATE_SUDO_REEXECED=true")
+  log "passwordless sudo を使用して root として再実行します。"
+  exec sudo -n env "${env_args[@]}" "${SCRIPT_PATH}" "$@"
+  fail "sudo による再実行に失敗しました。"
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/update-after-pull.sh [--check | --repair-only]
@@ -113,7 +154,8 @@ Usage: ./scripts/update-after-pull.sh [--check | --repair-only]
 
 このスクリプト自身は Git 操作、schema --recreate、DeepSec foundation 適用を行いません。
 ubuntu 実行時は sudo -n のみを使用し、パスワード入力を要求しません。
-passwordless sudo がない環境では sudo ./scripts/update-after-pull.sh で起動できます。
+update / --repair-only は passwordless sudo があれば自動的に root で再実行します。
+passwordless sudo がない環境では sudo ./scripts/update-after-pull.sh で起動してください。
 root 起動時も build、依存同期、database CLI は ubuntu へ降権して実行します。
 
 Environment overrides:
@@ -645,6 +687,7 @@ main() {
   fi
   [ "${parse_status}" -eq 0 ] || return "${parse_status}"
 
+  reexec_with_sudo_if_needed "$@" || return "$?"
   preflight
   if [ "${ACTION}" = "check" ]; then
     run_check

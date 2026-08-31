@@ -47,6 +47,8 @@ function adbInfoFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const WALLET_PENDING_MESSAGE = "OCI から Wallet を取得し、サーバーへ安全に設定しています…";
+
 function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
   return {
     settings: {
@@ -372,12 +374,21 @@ async function expectAdbActionButtonsStableDuringOperation(
 
   await expect(saveButton).toBeDisabled();
   await expect(adbCard.getByRole("button", { name: "保存中…", exact: true })).toHaveCount(0);
+  await expectNoAdbWalletPendingStatus(page);
   await expectNoElementOverlap([
     { label: "保存ボタン", locator: saveButton },
     { label: "起動ボタン", locator: startButton },
     { label: "停止ボタン", locator: stopButton },
   ]);
   await expectNoHorizontalOverflow(page);
+}
+
+async function expectNoAdbWalletPendingStatus(page: Page) {
+  await expect(
+    page.locator("#adb-management").getByRole("status").filter({
+      hasText: WALLET_PENDING_MESSAGE,
+    })
+  ).toHaveCount(0);
 }
 
 async function expectModelPreviewPanelsAbsent(page: Page) {
@@ -907,6 +918,55 @@ test("データベース設定は Wallet ZIP の下にサービス名を置き�
   await expectAdbManagementAboveDatabaseSettings(page);
   await expectWalletAboveServiceDsn(page);
   await expectDatabaseSupplementalPanelsAbsent(page);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("DB パスワード表示ボタンの取得中 icon は上下に浮動しない StableLoadingIcon を使う", async ({
+  page,
+}) => {
+  const revealGate = createRequestGate();
+  let revealCount = 0;
+  await page.unroute("**/api/settings/database/password/reveal");
+  await page.route("**/api/settings/database/password/reveal", async (route) => {
+    revealCount += 1;
+    await revealGate.promise;
+    await fulfillJson(route, { password: "database-secret-fixture" });
+  });
+
+  await page.goto("/settings/database");
+  await expect.poll(() => revealCount).toBe(0);
+
+  const revealButton = page.locator("#oracle-password + button");
+  await expect(revealButton).toHaveAttribute("aria-label", "DB パスワードを表示");
+  await revealButton.click();
+  await expect.poll(() => revealCount).toBe(1);
+  await expect(revealButton).toHaveAttribute("aria-label", "DB パスワードを取得中");
+  await expect(revealButton).toBeDisabled();
+
+  const loadingIcon = revealButton.locator('svg[data-loading-icon="true"]');
+  await expect(loadingIcon).toBeVisible();
+  await expect(loadingIcon.locator('[data-loading-icon-active="true"]')).toHaveCount(2);
+  const metrics = await loadingIcon.evaluate((node) => {
+    const icon = node.getBoundingClientRect();
+    const button = (node.closest("button") as HTMLElement).getBoundingClientRect();
+    const computed = getComputedStyle(node);
+    return {
+      width: computed.width,
+      height: computed.height,
+      transformBox: computed.transformBox,
+      animationName: computed.animationName,
+      iconCenterY: icon.y + icon.height / 2,
+      buttonCenterY: button.y + button.height / 2,
+    };
+  });
+  expect(metrics.width).toBe("16px");
+  expect(metrics.height).toBe("16px");
+  expect(metrics.transformBox).toBe("view-box");
+  expect(metrics.animationName).not.toBe("none");
+  expect(Math.abs(metrics.iconCenterY - metrics.buttonCenterY)).toBeLessThan(0.02);
+
+  revealGate.release();
+  await expect(page.locator("#oracle-password")).toHaveAttribute("type", "text");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1586,7 +1646,9 @@ test("ADB 停止中は保存ボタンを無効化して保存表示のままに�
   await expectNoHorizontalOverflow(page);
 });
 
-test("情報を再取得は ADB 情報更新後に Wallet 取得も実行する", async ({ page }) => {
+test("情報を再取得は ADB 情報更新後に Wallet 取得も実行し進行メッセージは出さない", async ({
+  page,
+}) => {
   const walletGate = createRequestGate();
   let adbRefreshCount = 0;
   let walletDownloadCount = 0;
@@ -1612,32 +1674,11 @@ test("情報を再取得は ADB 情報更新後に Wallet 取得も実行する"
   await page.getByRole("button", { name: "情報を再取得" }).click();
   await expect.poll(() => adbRefreshCount).toBe(1);
   await expect.poll(() => walletDownloadCount).toBe(1);
-  const pendingStatus = page
-    .getByRole("status")
-    .filter({ hasText: "OCI から Wallet を取得し、サーバーへ安全に設定しています…" });
-  await expect(pendingStatus).toHaveCount(1);
-  const adbCard = page.locator("#adb-management");
-  const [pendingBox, saveBox, startBox, stopBox] = await Promise.all([
-    pendingStatus.boundingBox(),
-    adbCard.getByRole("button", { name: "保存", exact: true }).boundingBox(),
-    adbCard.getByRole("button", { name: "起動" }).boundingBox(),
-    adbCard.getByRole("button", { name: "停止" }).boundingBox(),
-  ]);
-  if (!pendingBox || !saveBox || !startBox || !stopBox) {
-    throw new Error("ADB 操作ボタンまたは Wallet 取得メッセージの位置を取得できません。");
-  }
-  const actionButtonsBottom = Math.max(
-    saveBox.y + saveBox.height,
-    startBox.y + startBox.height,
-    stopBox.y + stopBox.height
-  );
-  expect(pendingBox.y).toBeGreaterThan(
-    actionButtonsBottom
-  );
+  await expectNoAdbWalletPendingStatus(page);
 
   walletGate.release();
 
-  await expect(pendingStatus).toHaveCount(0);
+  await expectNoAdbWalletPendingStatus(page);
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
   await expect(page.getByText("設定済み", { exact: true })).toBeVisible();
   await expect(
@@ -1649,6 +1690,55 @@ test("情報を再取得は ADB 情報更新後に Wallet 取得も実行する"
   await expectNoHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoAdbWalletPendingStatus(page);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("保存は ADB 情報更新後に Wallet 取得も実行し進行メッセージは出さない", async ({
+  page,
+}) => {
+  const walletGate = createRequestGate();
+  let adbRefreshCount = 0;
+  let walletDownloadCount = 0;
+
+  await page.unroute("**/api/settings/database/adb/settings");
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    adbRefreshCount += 1;
+    await fulfillJson(route, adbInfoFixture());
+  });
+  await page.unroute("**/api/settings/database/wallet/download");
+  await page.route("**/api/settings/database/wallet/download", async (route) => {
+    walletDownloadCount += 1;
+    await walletGate.promise;
+    await fulfillJson(route, {
+      status: "downloaded",
+      settings: databaseSettingsFixture(),
+    });
+  });
+
+  await page.goto("/settings/database");
+  await expect.poll(() => walletDownloadCount).toBe(0);
+
+  const adbCard = page.locator("#adb-management");
+  await adbCard.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => adbRefreshCount).toBe(1);
+  await expect.poll(() => walletDownloadCount).toBe(1);
+  await expectNoAdbWalletPendingStatus(page);
+  await expectNoHorizontalOverflow(page);
+
+  walletGate.release();
+
+  await expectNoAdbWalletPendingStatus(page);
+  await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expect(
+    page.getByText("Oracle Wallet を OCI から取得し、サーバーへ設定しました。")
+  ).toBeVisible();
+  await expect(
+    page.getByText("Oracle Wallet を OCI から取得し、サーバーへ設定しました。")
+  ).toHaveCount(1);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoAdbWalletPendingStatus(page);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1915,30 +2005,32 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   const apiError =
     "Select AI Credential の状態を Oracle から取得できませんでした。データベース接続を確認して再試行してください。";
   let statusRequests = 0;
+  let failNextRequest = false;
   await page.unroute("**/api/settings/database/select-ai-credential");
   await page.route("**/api/settings/database/select-ai-credential", (route) => {
     statusRequests += 1;
-    if (statusRequests === 1) {
-      return fulfillJson(route, {
-        credential_name: "OCI_CRED",
-        schema_name: "ADMIN",
-        exists: false,
-        region: "ap-osaka-1",
-        oci_auth_ready: false,
-        missing_fields: ["fingerprint"],
-        operation: null,
+    if (failNextRequest) {
+      failNextRequest = false;
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: null,
+          error_messages: [apiError],
+          warning_messages: [],
+          error_code: "SELECT_AI_CREDENTIAL_STATUS_FAILED",
+          request_id: "req-select-ai-status-refresh",
+        }),
       });
     }
-    return route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({
-        data: null,
-        error_messages: [apiError],
-        warning_messages: [],
-        error_code: "SELECT_AI_CREDENTIAL_STATUS_FAILED",
-        request_id: "req-select-ai-status-refresh",
-      }),
+    return fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "ap-osaka-1",
+      oci_auth_ready: false,
+      missing_fields: ["fingerprint"],
+      operation: null,
     });
   });
 
@@ -1946,8 +2038,10 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   const card = page.getByTestId("select-ai-credential-card");
   await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
+  const initialStatusRequests = statusRequests;
+  failNextRequest = true;
   await card.getByRole("button", { name: "状態を再取得" }).click();
-  await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => statusRequests).toBeGreaterThan(initialStatusRequests);
   const alert = card.getByRole("alert");
   await expect(alert).toHaveCount(1);
   await expect(alert).toContainText(apiError);

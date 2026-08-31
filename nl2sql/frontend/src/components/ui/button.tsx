@@ -5,6 +5,8 @@ import {
   type ButtonProps as BaseButtonProps,
 } from "@engchina/production-ready-ui";
 
+import { StableLoadingIcon } from "./stable-loading-icon";
+
 export type ButtonProps = BaseButtonProps;
 
 const BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5";
@@ -37,17 +39,24 @@ export function buttonVariants(options?: Parameters<typeof sharedButtonVariants>
  * action buttons are placed inside forms. Explicit submit/reset types are kept.
  */
 export function Button({ type = "button", variant, className, ...props }: ButtonProps) {
+  const { loading, disabled, children, ...buttonProps } = props;
+
   return (
     <BaseButton
       type={type}
       variant={variant}
+      disabled={disabled || loading}
       className={cn(
         BUTTON_TEXT_LAYOUT_CLASSNAME,
         semanticVariantClass(variant),
+        loading && "[&>svg:not([data-loading-icon])]:hidden",
         "disabled:border-border disabled:bg-disabled-bg disabled:text-disabled disabled:opacity-100",
         className
       )}
-      {...props}
-    />
+      {...buttonProps}
+    >
+      {loading ? <StableLoadingIcon size={16} /> : null}
+      {children}
+    </BaseButton>
   );
 }

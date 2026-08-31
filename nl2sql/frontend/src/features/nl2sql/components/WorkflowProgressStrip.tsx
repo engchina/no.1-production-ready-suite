@@ -7,11 +7,11 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { Spinner } from "@engchina/production-ready-ui";
 
 import { useOperationTiming } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
@@ -112,7 +112,7 @@ function StepIcon({
   index: number;
 }) {
   if (status === "running") {
-    return <Spinner size={14} />;
+    return <StableLoadingIcon size={14} />;
   }
   if (status === "done") return <Check size={14} aria-hidden="true" />;
   if (status === "error") return <X size={14} aria-hidden="true" />;

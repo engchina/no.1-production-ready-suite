@@ -106,7 +106,7 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
 
-    assert "ORACLE_DEEPSEC_ENABLED=true" in locals_tf
+    assert "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" in locals_tf
     assert "ORACLE_DRIVER_MODE=thin" in locals_tf
     assert "ORACLE_CLIENT_LIB_DIR=" in locals_tf
     assert "instantclient" not in init_script

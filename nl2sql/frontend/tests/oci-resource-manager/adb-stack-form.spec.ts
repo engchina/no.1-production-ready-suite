@@ -8,6 +8,10 @@ const PRIVATE_ACCESS = "プライベート・エンドポイント・アクセ�
 const IP_OR_CIDR = "IPアドレスまたはCIDRブロック";
 const CREATE_NEW_MODE = "新規 Autonomous AI Database の作成";
 const USE_EXISTING_MODE = "既存の Autonomous AI Database を選択";
+const SSH_KEY_TITLE = "SSHキーの追加";
+const SSH_KEY_AUTO_GENERATE = "キー・ペアを自動で生成";
+const DOWNLOAD_PRIVATE_KEY = "秘密キーのダウンロード";
+const DOWNLOAD_PUBLIC_KEY = "公開キーのダウンロード";
 
 test.describe("OCI Resource Manager ADB作成フォーム", () => {
   test.skip(
@@ -55,6 +59,10 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     await expect(networkSection).toBeVisible();
     await expect(deepsecSection).toBeVisible();
     await expect(computeSection).toBeVisible();
+    await expect(page.getByText(SSH_KEY_TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(SSH_KEY_AUTO_GENERATE, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: DOWNLOAD_PRIVATE_KEY })).toBeVisible();
+    await expect(page.getByRole("button", { name: DOWNLOAD_PUBLIC_KEY })).toBeVisible();
 
     const [networkSectionBox, deepsecSectionBox, computeSectionBox] = await Promise.all([
       networkSection.boundingBox(),
@@ -69,6 +77,7 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
 
     const workload = page.getByLabel("Workload type", { exact: true });
     await expect(workload).toHaveValue("LH");
+    await expect(workload.locator("option")).toHaveText(["OLTP", "AJD", "APEX", "LH"]);
 
     const accessType = page.getByLabel("アクセス・タイプ", { exact: true });
     await expect(accessType).toHaveValue(PRIVATE_ACCESS);
@@ -82,9 +91,11 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     await expect(page.getByLabel("仮想クラウド・ネットワーク", { exact: true })).toBeVisible();
     await expect(page.getByLabel("サブネットのコンパートメント", { exact: true }).first()).toBeVisible();
     await expect(page.getByLabel("サブネット", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("相互TLS (mTLS)認証が必要", { exact: true })).toBeHidden();
 
     await deploymentMode.selectOption({ label: USE_EXISTING_MODE });
     await expect(page.getByLabel("既存のAutonomous AI Database", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Existing DB wallet password", { exact: true })).toBeHidden();
     await expect(workload).toBeHidden();
     await expect(networkSection).toBeHidden();
 

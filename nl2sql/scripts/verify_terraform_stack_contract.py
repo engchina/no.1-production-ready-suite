@@ -15,6 +15,9 @@ EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
 IP_OR_CIDR = "IPアドレスまたはCIDRブロック"
 APPLICATION_GIT_URL = "https://github.com/engchina/no.1-production-ready-nl2sql.git"
 PLATFORM_GIT_URL = "https://github.com/engchina/no.1-production-ready-platform.git"
+CHICAGO_COMPUTE_IMAGE = (
+    "ocid1.image.oc1.us-chicago-1.aaaaaaaal25tbfrlwhh27tzgiatqr3oq5y3qzz7wgpezjouvjk2cdfdr4mnq"
+)
 
 
 def _schema_variable(source: str, name: str) -> str:
@@ -68,13 +71,15 @@ def verify(package_path: Path) -> None:
     _require_all(
         schema,
         [
-            'version: "20260831.3"',
+            'version: "20260901.2"',
             '- title: "ネットワーク・アクセス"',
             "- adb_private_endpoint_vcn_compartment_id",
             "- adb_private_endpoint_vcn_id",
             "- adb_private_endpoint_subnet_compartment_id",
             "- adb_acl_vcn_compartment_id",
             "- adb_acl_subnet_compartment_id",
+            "- oracle_deepsec_enabled",
+            "- ssh_authorized_keys",
         ],
         context="Resource Manager schema",
     )
@@ -91,6 +96,7 @@ def verify(package_path: Path) -> None:
         r"(?m)^  - title: Deep Data Security\n"
         r"    visible: true\n"
         r"    variables:\n"
+        r"      - oracle_deepsec_enabled\n"
         r"      - oracle_deepsec_data_user_password\n\n"
         r"  - title: Compute$",
         schema,
@@ -111,8 +117,10 @@ def verify(package_path: Path) -> None:
             "- application_git_ref",
             "- platform_git_url",
             "- platform_git_ref",
+            "- existing_oracle_wallet_password",
+            "- adb_is_mtls_connection_required",
         ],
-        context="hidden Git source variables",
+        context="hidden Resource Manager variables",
     )
     application_source_group = re.search(
         r"(?ms)^  - title: Application Source\n"
@@ -142,6 +150,23 @@ def verify(package_path: Path) -> None:
         raise AssertionError(
             f"Git source variables remain in the visible group: {visible_git_variables}"
         )
+    compute_group = re.search(
+        r"(?ms)^  - title: Compute\n"
+        r"    visible: true\n"
+        r"    variables:\n"
+        r"(.*?)(?=^  - title: |^variables:)",
+        schema,
+    )
+    if compute_group is None:
+        raise AssertionError("Compute variable group not found")
+    _require_in_order(
+        compute_group.group(0),
+        [
+            "- subnet_ai_subnet_id",
+            "- ssh_authorized_keys",
+        ],
+        context="Compute SSH key field order",
+    )
 
     git_source_defaults = {
         "application_git_url": APPLICATION_GIT_URL,
@@ -200,9 +225,30 @@ def verify(package_path: Path) -> None:
         ["compartmentId: ${adb_compartment_ocid}"],
         context="existing ADB compartment dependency",
     )
+    existing_wallet_schema = _schema_variable(schema, "existing_oracle_wallet_password")
+    _require_all(
+        existing_wallet_schema,
+        [
+            "visible: false",
+            "Existing ADB wallet generation reuses the existing DB password.",
+        ],
+        context="existing wallet password hidden schema",
+    )
 
     workload_schema = _schema_variable(schema, "adb_workload")
-    _require_all(workload_schema, ['default: "LH"'], context="adb_workload schema")
+    _require_all(
+        workload_schema,
+        [
+            '- "OLTP"',
+            '- "AJD"',
+            '- "APEX"',
+            '- "LH"',
+            'default: "LH"',
+        ],
+        context="adb_workload schema",
+    )
+    if '- "DW"' in workload_schema:
+        raise AssertionError("Resource Manager workload options must not include DW")
 
     access_schema = _schema_variable(schema, "adb_network_access_type")
     _require_all(
@@ -228,6 +274,18 @@ def verify(package_path: Path) -> None:
             block,
             ["required: true", f'- "{PRIVATE_ACCESS}"'],
             context=f"{name} schema",
+        )
+    for name in (
+        "adb_private_endpoint_vcn_compartment_id",
+        "adb_private_endpoint_subnet_compartment_id",
+        "adb_acl_vcn_compartment_id",
+        "adb_acl_subnet_compartment_id",
+    ):
+        block = _schema_variable(schema, name)
+        _require_all(
+            block,
+            ["default: compartment_ocid"],
+            context=f"{name} current compartment default",
         )
 
     private_vcn_schema = _schema_variable(schema, "adb_private_endpoint_vcn_id")
@@ -264,9 +322,74 @@ def verify(package_path: Path) -> None:
         ["and:", f'- "{ALLOWED_ACCESS}"', '- "VCN"'],
         context="ACL VCN visibility",
     )
+    deepsec_enabled_schema = _schema_variable(schema, "oracle_deepsec_enabled")
+    _require_all(
+        deepsec_enabled_schema,
+        [
+            "type: boolean",
+            "required: true",
+            "visible: true",
+            'title: "ORACLE_DEEPSEC_ENABLED"',
+            "default: true",
+        ],
+        context="DeepSec enabled schema",
+    )
+    deepsec_password_schema = _schema_variable(schema, "oracle_deepsec_data_user_password")
+    _require_all(
+        deepsec_password_schema,
+        [
+            "type: password",
+            "required: false",
+            "visible:",
+            "eq:",
+            "- oracle_deepsec_enabled",
+            "- true",
+            'title: "DeepSec DATA USER password"',
+        ],
+        context="DeepSec password conditional schema",
+    )
+    mtls_schema = _schema_variable(schema, "adb_is_mtls_connection_required")
+    _require_all(
+        mtls_schema,
+        [
+            "type: boolean",
+            "required: true",
+            "visible: false",
+            "default: true",
+        ],
+        context="mTLS hidden schema",
+    )
+    compute_image_schema = _schema_variable(schema, "instance_image_source_id")
+    if (
+        CHICAGO_COMPUTE_IMAGE in compute_image_schema
+        or "us-chicago-1" in compute_image_schema
+    ):
+        raise AssertionError("Resource Manager Compute image options must not include Chicago")
+    ssh_schema = _schema_variable(schema, "ssh_authorized_keys")
+    _require_all(
+        ssh_schema,
+        [
+            "type: oci:core:ssh:publickey",
+            "required: true",
+            "visible: true",
+            'title: "SSHキーの追加"',
+            "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて",
+        ],
+        context="SSH public key Resource Manager schema",
+    )
 
     workload_variable = _terraform_variable(variables, "adb_workload")
-    _require_all(workload_variable, ['default     = "LH"'], context="adb_workload")
+    _require_all(
+        workload_variable,
+        [
+            'default     = "LH"',
+            'contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)',
+            "adb_workload must be one of OLTP, AJD, APEX, or LH.",
+        ],
+        context="adb_workload",
+    )
+    if '"DW"' in workload_variable:
+        raise AssertionError("Terraform adb_workload validation must not accept DW")
     access_variable = _terraform_variable(variables, "adb_network_access_type")
     _require_all(
         access_variable,
@@ -294,6 +417,8 @@ def verify(package_path: Path) -> None:
     _require_all(
         adb,
         [
+            "effective_oracle_wallet_password = local.create_new_adb ? "
+            "var.adb_password : var.existing_oracle_password",
             f'var.adb_network_access_type == "{PRIVATE_ACCESS}"',
             f'var.adb_network_access_type == "{ALLOWED_ACCESS}"',
             f'var.adb_network_access_type == "{EVERYWHERE_ACCESS}"',
@@ -309,6 +434,8 @@ def verify(package_path: Path) -> None:
         ],
         context="ADB network mapping",
     )
+    if "trimspace(var.existing_oracle_wallet_password)" in adb:
+        raise AssertionError("existing ADB wallet password must not override DB password")
     if "compartment_id                                 = var.compartment_ocid" in adb:
         raise AssertionError("new ADB still uses the deployment compartment")
     _require_all(
@@ -321,6 +448,9 @@ def verify(package_path: Path) -> None:
         [
             "OCI_COMPARTMENT_ID=${var.compartment_ocid}",
             "ORACLE_WALLET_DIR=${local.wallet_dir_host}",
+            "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}",
+            "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
+            'var.oracle_deepsec_data_user_password : ""}',
             'wallet_dir_host   = "/u01/aipoc/wallet"',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
@@ -371,6 +501,10 @@ def verify(package_path: Path) -> None:
     _require_all(
         compute,
         [
+            "!var.oracle_deepsec_enabled || "
+            'trimspace(var.oracle_deepsec_data_user_password) != ""',
+            "oracle_deepsec_data_user_password must be configured when "
+            "oracle_deepsec_enabled=true.",
             "プライベート・エンドポイントを作成する場合は、VCNのコンパートメントを選択してください。",
             "プライベート・エンドポイントを作成する場合は、仮想クラウド・ネットワークを選択してください。",
             "プライベート・エンドポイントを作成する場合は、サブネットのコンパートメントを選択してください。",
@@ -379,6 +513,27 @@ def verify(package_path: Path) -> None:
             IP_OR_CIDR,
         ],
         context="ADB network preconditions",
+    )
+    deepsec_enabled_variable = _terraform_variable(variables, "oracle_deepsec_enabled")
+    _require_all(
+        deepsec_enabled_variable,
+        [
+            "type        = bool",
+            "default     = true",
+        ],
+        context="oracle_deepsec_enabled variable",
+    )
+    deepsec_password_variable = _terraform_variable(
+        variables, "oracle_deepsec_data_user_password"
+    )
+    _require_all(
+        deepsec_password_variable,
+        [
+            'default     = ""',
+            'trimspace(var.oracle_deepsec_data_user_password) == ""',
+            "oracle_deepsec_data_user_password must be empty or 12-256 characters",
+        ],
+        context="oracle_deepsec_data_user_password variable",
     )
 
     forbidden = [

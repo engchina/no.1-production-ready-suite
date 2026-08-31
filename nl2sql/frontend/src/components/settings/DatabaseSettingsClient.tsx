@@ -18,7 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Spinner, toast } from "@engchina/production-ready-ui";
+import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -31,6 +31,7 @@ import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
@@ -988,13 +989,6 @@ function AdbManagementCard({
                 : t("settings.adb.action.stop")}
             </Button>
           </div>
-          {refreshWalletPending ? (
-            <FormStatus
-              tone="info"
-              className="text-xs"
-              message={t("settings.database.wallet.autoDownload.pending")}
-            />
-          ) : null}
           {actionError ? (
             <FormStatus tone="danger" className="text-xs" message={actionError} />
           ) : null}
@@ -1298,7 +1292,7 @@ function PasswordField({
           className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {revealPending ? (
-            <Spinner size={16} />
+            <StableLoadingIcon size={16} />
           ) : visible ? (
             <EyeOff size={16} aria-hidden />
           ) : (

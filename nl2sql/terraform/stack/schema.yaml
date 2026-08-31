@@ -1,7 +1,7 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
 stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
-version: "20260831.3"
+version: "20260901.2"
 locale: "en"
 
 variableGroups:
@@ -15,6 +15,8 @@ variableGroups:
       - platform_git_ref
       - app_environment
       - app_auth_cookie_secure
+      - existing_oracle_wallet_password
+      - adb_is_mtls_connection_required
 
   - title: Required Configuration
     visible: true
@@ -51,7 +53,6 @@ variableGroups:
       - existing_oracle_user
       - existing_oracle_password
       - existing_oracle_dsn
-      - existing_oracle_wallet_password
 
   - title: New Autonomous AI Database
     visible:
@@ -91,11 +92,11 @@ variableGroups:
       - adb_acl_subnet_compartment_id
       - adb_acl_subnet_id
       - adb_acl_cidr_blocks
-      - adb_is_mtls_connection_required
 
   - title: Deep Data Security
     visible: true
     variables:
+      - oracle_deepsec_enabled
       - oracle_deepsec_data_user_password
 
   - title: Compute
@@ -222,12 +223,23 @@ variables:
 
   oracle_deepsec_data_user_password:
     type: password
-    required: true
-    visible: true
+    required: false
+    visible:
+      eq:
+        - oracle_deepsec_enabled
+        - true
     title: "DeepSec DATA USER password"
     description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
+
+  oracle_deepsec_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "ORACLE_DEEPSEC_ENABLED"
+    description: "Deep Data Securityを有効にする場合はオンにします。オンの場合のみDeepSec DATA USER passwordが必要です。"
+    default: true
 
   adb_compartment_ocid:
     type: oci:identity:compartment:id
@@ -283,9 +295,9 @@ variables:
   existing_oracle_wallet_password:
     type: password
     required: false
-    visible: true
+    visible: false
     title: "Existing DB wallet password"
-    description: "Value written to ORACLE_WALLET_PASSWORD and used to generate the wallet. Leave blank to reuse the existing DB password."
+    description: "Hidden compatibility input. Existing ADB wallet generation reuses the existing DB password."
     confirmation: true
 
   adb_display_name:
@@ -311,7 +323,6 @@ variables:
     title: "Workload type"
     enum:
       - "OLTP"
-      - "DW"
       - "AJD"
       - "APEX"
       - "LH"
@@ -440,6 +451,7 @@ variables:
         - "プライベート・エンドポイント・アクセスのみ"
     title: "VCNのコンパートメント"
     description: "Autonomous AI Databaseのプライベート・エンドポイントを配置するVCNのコンパートメントを選択します。"
+    default: compartment_ocid
 
   adb_private_endpoint_vcn_id:
     type: oci:core:vcn:id
@@ -462,6 +474,7 @@ variables:
         - "プライベート・エンドポイント・アクセスのみ"
     title: "サブネットのコンパートメント"
     description: "プライベート・エンドポイントを配置するサブネットのコンパートメントを選択します。"
+    default: compartment_ocid
 
   adb_subnet_id:
     type: oci:core:subnet:id
@@ -503,6 +516,7 @@ variables:
             - "VCN"
     title: "VCNのコンパートメント"
     description: "アクセスを許可するVCNのコンパートメントを選択します。"
+    default: compartment_ocid
 
   adb_acl_vcn_id:
     type: oci:core:vcn:id
@@ -533,6 +547,7 @@ variables:
             - "VCN"
     title: "サブネットのコンパートメント"
     description: "アクセスを許可するサブネットのコンパートメントを選択します。サブネットを指定しない場合は選択したVCN全体を許可します。"
+    default: compartment_ocid
 
   adb_acl_subnet_id:
     type: oci:core:subnet:id
@@ -568,7 +583,7 @@ variables:
   adb_is_mtls_connection_required:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "相互TLS (mTLS)認証が必要"
     description: "既定では有効です。Thinモードは生成したWalletでmTLS接続します。Walletを使用しない一方向TLSのADBだけ無効にしてください。"
     default: true
@@ -589,7 +604,6 @@ variables:
     enum:
       - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
       - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
-      - "ocid1.image.oc1.us-chicago-1.aaaaaaaal25tbfrlwhh27tzgiatqr3oq5y3qzz7wgpezjouvjk2cdfdr4mnq"
     default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
 
   instance_shape:
@@ -644,8 +658,8 @@ variables:
     type: oci:core:ssh:publickey
     required: true
     visible: true
-    title: "SSH public key"
-    description: "Upload a public key for the ubuntu user."
+    title: "SSHキーの追加"
+    description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、ubuntuユーザーのSSH接続に使用します。"
 
 outputs:
   autonomous_database_ocid:

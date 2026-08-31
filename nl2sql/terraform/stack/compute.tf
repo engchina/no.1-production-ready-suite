@@ -123,8 +123,8 @@ resource "oci_core_instance" "generated_oci_core_instance" {
       error_message = "app_auth_cookie_secure must be true when app_environment is staging or production."
     }
     precondition {
-      condition     = trimspace(var.oracle_deepsec_data_user_password) != ""
-      error_message = "oracle_deepsec_data_user_password must be configured because ORACLE_DEEPSEC_ENABLED=true."
+      condition     = !var.oracle_deepsec_enabled || trimspace(var.oracle_deepsec_data_user_password) != ""
+      error_message = "oracle_deepsec_data_user_password must be configured when oracle_deepsec_enabled=true."
     }
   }
 }

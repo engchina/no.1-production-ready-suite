@@ -273,6 +273,79 @@ test_noninteractive_privilege_failure() (
   grep -Fxq 'sudo|-n -v' "${case_dir}/events"
 )
 
+test_passwordless_sudo_reexecs_update_actions() (
+  local case_dir="${TEST_TMP_DIR}/passwordless-reexec"
+  mkdir -p "${case_dir}"
+  export UPDATE_AFTER_PULL_TEST_MODE=true
+  export APP_ROOT="${case_dir}"
+  export APP_REPO_DIR="${case_dir}/no.1-production-ready-nl2sql"
+  export PLATFORM_REPO_DIR="${case_dir}/no.1-production-ready-platform"
+  export WALLET_DIR="${case_dir}/wallet"
+  export RECOVERY_ROOT="${case_dir}/recovery"
+  export UPDATE_LOG_PATH="${case_dir}/update.log"
+  export LOCK_FILE="${case_dir}/update.lock"
+  export SECRET_SHOULD_NOT_LEAK="do-not-forward"
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  running_as_root() { return 1; }
+  sudo() {
+    printf 'sudo|%s\n' "$*" >> "${case_dir}/events"
+    [ "$*" = "-n -v" ]
+  }
+  exec() {
+    printf 'exec|%s\n' "$*" >> "${case_dir}/events"
+    return 77
+  }
+
+  ACTION="repair-only"
+  set +e
+  reexec_with_sudo_if_needed --repair-only >"${case_dir}/stdout" 2>"${case_dir}/stderr"
+  local status=$?
+  set -e
+  [ "${status}" -ne 0 ]
+  grep -Fxq 'sudo|-n -v' "${case_dir}/events"
+  grep -Fq 'exec|sudo -n env' "${case_dir}/events"
+  grep -Fq "APP_REPO_DIR=${APP_REPO_DIR}" "${case_dir}/events"
+  grep -Fq "PLATFORM_REPO_DIR=${PLATFORM_REPO_DIR}" "${case_dir}/events"
+  grep -Fq "UPDATE_AFTER_PULL_TEST_MODE=true" "${case_dir}/events"
+  grep -Fq "NL2SQL_UPDATE_SUDO_REEXECED=true" "${case_dir}/events"
+  grep -Fq "${SCRIPT_PATH} --repair-only" "${case_dir}/events"
+  if grep -Fq "SECRET_SHOULD_NOT_LEAK" "${case_dir}/events"; then
+    fail_test "unexpected environment variable was forwarded to sudo reexec"
+  fi
+)
+
+test_auto_sudo_failure_does_not_continue() (
+  local case_dir="${TEST_TMP_DIR}/auto-sudo-failure"
+  mkdir -p "${case_dir}"
+  export UPDATE_AFTER_PULL_TEST_MODE=true
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  running_as_root() { return 1; }
+  sudo() {
+    printf 'sudo|%s\n' "$*" >> "${case_dir}/events"
+    return 1
+  }
+  preflight() {
+    printf '%s\n' preflight >> "${case_dir}/events"
+  }
+
+  set +e
+  local status
+  if main --repair-only >"${case_dir}/stdout" 2>"${case_dir}/stderr"; then
+    status=0
+  else
+    status=$?
+  fi
+  set -e
+  [ "${status}" -ne 0 ]
+  grep -Fxq 'sudo|-n -v' "${case_dir}/events"
+  grep -Fq 'passwordless sudo が利用できません' "${case_dir}/stderr"
+  if grep -Fxq preflight "${case_dir}/events"; then
+    fail_test "auto sudo failure reached preflight"
+  fi
+)
+
 test_root_privilege_dispatch() (
   local case_dir="${TEST_TMP_DIR}/root-privilege"
   mkdir -p "${case_dir}"
@@ -321,6 +394,8 @@ test_root_lock_owner_transition() (
 test_check_dispatch_is_non_mutating
 test_wallet_env_parser_does_not_source_secrets
 test_noninteractive_privilege_failure
+test_passwordless_sudo_reexecs_update_actions
+test_auto_sudo_failure_does_not_continue
 test_root_privilege_dispatch
 test_root_lock_owner_transition
 
@@ -428,7 +503,8 @@ grep -Fq 'run_privileged chown "root:${APP_GROUP}" "${APP_ROOT}"' "${UPDATE_SCRI
 grep -Fq 'chmod 0775 "${APP_ROOT}"' "${UPDATE_SCRIPT}"
 grep -Fq 'find "${WALLET_DIR}" -type f -exec chmod 0600 {} +' "${UPDATE_SCRIPT}"
 grep -Fq 'app.cli.nl2sql_system_schema --initialize' "${UPDATE_SCRIPT}"
-grep -Fq 'app.cli.app_security_migrate --apply --skip-bootstrap' "${UPDATE_SCRIPT}"
+grep -Fq 'app.cli.app_security_migrate' "${UPDATE_SCRIPT}"
+grep -Fq -- '--apply --skip-bootstrap' "${UPDATE_SCRIPT}"
 if grep -Eq '(^|[[:space:]])git([[:space:]]|$)' "${UPDATE_SCRIPT}"; then
   fail_test "update script contains a Git command"
 fi

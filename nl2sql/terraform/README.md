@@ -44,25 +44,28 @@ Resource Manager and create a stack. Provide the required form values:
   and remains independently selectable in the Autonomous AI Database section.
 - Application administrator password. The username is fixed to `system_admin`
   and is case-sensitive.
-- Deep Data Security DATA USER password. The stack enables
-  `ORACLE_DEEPSEC_ENABLED=true`, keeps `ORACLE_DEEPSEC_DATA_USER` fixed as
-  `DEEPSEC_DATA_USER`, and writes this password to
-  `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`.
-- Oracle driver mode is intentionally fixed to Thin + mTLS:
-  `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The cloud-init script
-  does not install Oracle Instant Client because Deep Data Security is supported
-  only by python-oracledb Thin mode in this stack.
+- Deep Data Security setting. `ORACLE_DEEPSEC_ENABLED` defaults to `true`; when
+  enabled, provide the DATA USER password. The stack keeps
+  `ORACLE_DEEPSEC_DATA_USER` fixed as `DEEPSEC_DATA_USER` and writes the
+  password to `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`. When
+  disabled, the form hides the password input and writes an empty password.
+- Oracle driver mode is intentionally fixed to Thin:
+  `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The Resource Manager
+  form keeps ADB mTLS required by default and hides that control. The cloud-init
+  script does not install Oracle Instant Client because Deep Data Security is
+  supported only by python-oracledb Thin mode in this stack.
 - Autonomous AI Database mode: `ADBのコンパートメント` is initially populated
   from Resource Manager's current `Create in compartment` selection and can be
   changed before choosing `ADBの利用方法`. The ADB compartment controls only the
   new ADB destination or the existing ADB picker; it does not change the Compute
   compartment or runtime `OCI_COMPARTMENT_ID`.
   - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
-    license, and password fields. The default workload is `LH`. Network access
-    defaults to `プライベート・エンドポイント・アクセスのみ`; select the VCN
-    compartment, VCN, subnet compartment, and subnet shown by the form. The
-    selected subnet must be reachable from the application Compute subnet
-    through the configured VCN routing and security rules.
+    license, and password fields. The default workload is `LH`; the form
+    exposes `OLTP`, `AJD`, `APEX`, and `LH` only. Network access defaults to
+    `プライベート・エンドポイント・アクセスのみ`; the VCN and subnet compartment
+    pickers default to the current Resource Manager `Create in compartment`
+    value. The selected subnet must be reachable from the application Compute
+    subnet through the configured VCN routing and security rules.
     The other access types match the Autonomous AI Database creation screen:
     `すべての場所からのセキュア・アクセス` creates a public endpoint without
     an ADB access-control list, while
@@ -71,21 +74,27 @@ Resource Manager and create a stack. Provide the required form values:
     entries. Selecting a VCN without a subnet allows the entire VCN; selecting
     a subnet writes `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
     New ADBs default to Thin-compatible Wallet mTLS
-    (`相互TLS (mTLS)認証が必要=true`). If this option is set to `false`, the
-    bootstrap writes `ORACLE_CONNECTION_SECURITY=walletless_tls`; use that only
-    with an ADB connection string that supports one-way TLS and an ACL that
-    permits the application host.
+    (`相互TLS (mTLS)認証が必要=true`). The Resource Manager form hides this
+    advanced control. Direct Terraform callers can set it to `false`; in that
+    case the bootstrap writes `ORACLE_CONNECTION_SECURITY=walletless_tls`. Use
+    that only with an ADB connection string that supports one-way TLS and an ACL
+    that permits the application host.
     For public endpoint ACL deployments, ensure the Compute subnet has a valid
     OCI private path to ADB; otherwise enter the Compute/NAT public egress IP or
     CIDR.
   - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
     values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
     left blank; the stack uses the selected ADB `db_name` with `_high`, for
-    example `NL2SQLADB` becomes `nl2sqladb_high`. The wallet password can be
-    supplied separately, or left blank to reuse `ORACLE_PASSWORD`. This stack
-    reads the selected ADB and generates a wallet, but does not modify its
-    network access, mTLS, or access-control list settings.
-- Compute image, shape, subnet, and SSH public key
+    example `NL2SQLADB` becomes `nl2sqladb_high`. The Resource Manager form
+    hides the wallet password input; wallet generation reuses
+    `existing_oracle_password`. This stack reads the selected ADB and generates
+    a wallet, but does not modify its network access, mTLS, or access-control
+    list settings.
+- Compute image, shape, subnet, and SSH public key. The Compute image selector
+  exposes the Tokyo and Osaka Ubuntu image OCIDs. The SSH key input uses the
+  Resource Manager native SSH key control, so operators can generate a key pair
+  and download the private/public keys, upload a `.pub` file, or paste an
+  existing public key.
 
 The network access input contract intentionally uses the Japanese labels shown
 above. Legacy values `PUBLIC_ENDPOINT`,
@@ -118,9 +127,10 @@ npm run test:e2e:oci-resource-manager
 
 The opt-in test runs at desktop and 375px widths and verifies that the ADB
 compartment precedes the create/existing selection, plus the `LH` workload
-default, private endpoint access default, Japanese access labels, keyboard
-selection, and progressive disclosure. It does not submit the form or run an
-Apply job.
+default without `DW`, private endpoint access default, Japanese access labels,
+SSH key generation/download controls, keyboard selection, hidden mTLS and wallet
+password controls, and progressive disclosure. It does not submit the form or
+run an Apply job.
 
 After apply completes, use the `application_url` output. The default application
 port is `80`. The public entrypoint is `http://<compute-ip>/`; browser API
@@ -184,9 +194,11 @@ values supplied in Resource Manager:
 - `APP_ADMIN_LOGIN_USER_ID=system_admin`
 - `APP_ADMIN_LOGIN_USER_PASSWORD`
 
-Deep Data Security is enabled by default in Terraform deployments:
+Deep Data Security is enabled by default in Terraform deployments. If
+`oracle_deepsec_enabled=false`, `ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
+password is written empty:
 
-- `ORACLE_DEEPSEC_ENABLED=true`
+- `ORACLE_DEEPSEC_ENABLED` (`true` by default)
 - `ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER`
 - `ORACLE_DEEPSEC_DATA_USER_PASSWORD`
 
@@ -225,7 +237,7 @@ database values into `backend/.env`:
   when left blank)
 - `ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
   otherwise `walletless_tls`)
-- `ORACLE_WALLET_PASSWORD`
+- `ORACLE_WALLET_PASSWORD` (reuses `existing_oracle_password`)
 - `ORACLE_ADB_OCID`
 - `ORACLE_ADB_REGION`
 

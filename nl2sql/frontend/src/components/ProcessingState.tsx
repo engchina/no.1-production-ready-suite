@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Clock3 } from "lucide-react";
-import { Spinner } from "@engchina/production-ready-ui";
 
 import { Button } from "@/components/ui/button";
+import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
 
 import {
   elapsedMsBetween,
@@ -156,7 +156,7 @@ export function ProcessingIndicator({
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
           {timing.active && showActivityIcon ? (
-            <Spinner size={16} className="shrink-0 text-primary" />
+            <StableLoadingIcon size={16} className="text-primary" />
           ) : !timing.active && showActivityIcon ? (
             <Clock3 size={16} className="shrink-0 text-muted" aria-hidden="true" />
           ) : null}

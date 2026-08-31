@@ -10,7 +10,6 @@ import {
   FileText,
   Upload,
 } from "lucide-react";
-import { Spinner } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "@/lib/file-dropzone";
@@ -18,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { ClearActionButton } from "./clear-action-button";
 import { FieldError } from "./field-error";
 import { FieldLabel } from "./required-field";
+import { StableLoadingIcon } from "./stable-loading-icon";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 
@@ -208,7 +208,7 @@ export function FileDropzone({
             aria-hidden="true"
           >
             {loading ? (
-              <Spinner size={16} />
+              <StableLoadingIcon size={16} />
             ) : (
               <Icon size={16} />
             )}

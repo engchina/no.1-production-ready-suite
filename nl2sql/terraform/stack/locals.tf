@@ -36,9 +36,9 @@ ORACLE_CONNECTION_SECURITY=${local.oracle_connection_security}
 ORACLE_CLIENT_LIB_DIR=
 ORACLE_WALLET_DIR=${local.wallet_dir_host}
 ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
-ORACLE_DEEPSEC_ENABLED=true
+ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}
 ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
-ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_data_user_password}
+ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? var.oracle_deepsec_data_user_password : ""}
 ORACLE_ADB_OCID=${local.effective_adb_ocid}
 ORACLE_ADB_REGION=${var.region}
 

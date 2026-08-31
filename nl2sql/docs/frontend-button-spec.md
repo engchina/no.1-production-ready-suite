@@ -191,12 +191,13 @@
 
 - Lucide を使用。ラベル付きは**アイコンを左**に置き(`<Button>` 既定の `gap-1.5`)、`aria-hidden` を付ける。
 - サイズ: §2 の対応(sm/md=14–15、lg=15–16)。`[&>svg]:shrink-0` 済み。
-- 非同期処理は `loading` prop を使う(Loader2 スピナーに置換し自動 disable、`loading-buttons` / `submit-feedback`)。
+- 非同期処理は `loading` prop を使う(安定した `StableLoadingIcon` に置換し自動 disable、`loading-buttons` / `submit-feedback`)。
+  - **ボタン内の loading icon は 180 度対称の `StableLoadingIcon` に統一する。** `Loader2`、共有 `Spinner`、単一の欠けた円弧など、回転角で見た目の重心が上下に動く icon をボタン内で直接使わない。
   - **同じ operation の動的 spinner は 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する
     `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的ラベル・経過時間・slow hint
     のみを表示する。
   - 結果領域の `TimedLoadingState placement="result"` は既定で iconless。主操作ボタンが唯一の動的 feedback を担う。
-  - 例外的に独自アイコンを回したい場合(更新ボタンの `RefreshCw` 回転など)は `disabled` + `className={cn(busy && "animate-spin")}` を使う。
+  - 更新・同期などの busy 表示も `<Button loading>` を使い、ボタン内アイコンへ個別に `animate-spin` を付けない。
 - emoji をアイコンに使わない(`no-emoji-icons`)。
 
 ---
