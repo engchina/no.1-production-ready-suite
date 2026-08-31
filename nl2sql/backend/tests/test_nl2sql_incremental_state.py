@@ -1159,6 +1159,30 @@ def test_oracle_refresh_job_submission_coalesces_active_job_atomically() -> None
     assert connections[0].closed is True
 
 
+def test_oracle_refresh_job_claim_uses_skip_locked_without_row_limiting_clause() -> None:
+    job = SchemaRefreshJob(
+        job_id="refresh-1",
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+    repository, connections = _oracle_repository(
+        [[("refresh-1", _LobPayload(job.model_dump_json()))], []]
+    )
+
+    claimed = repository.claim_refresh_job(
+        worker_id="schema-worker-1",
+        lease_seconds=60,
+    )
+
+    assert claimed is not None
+    assert claimed.job_id == "refresh-1"
+    assert claimed.status == SchemaRefreshJobStatus.RUNNING
+    select_sql = connections[0].executed[0][0].upper()
+    assert "FOR UPDATE SKIP LOCKED" in select_sql
+    assert "FETCH FIRST" not in select_sql
+    assert connections[0]._cursor.prefetchrows == 0  # noqa: SLF001
+    assert connections[0]._cursor.arraysize == 1  # noqa: SLF001
+
+
 def test_profile_repository_uses_cursor_summary_and_etag_conflict() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     for index in range(120):

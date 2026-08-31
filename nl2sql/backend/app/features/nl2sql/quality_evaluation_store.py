@@ -264,11 +264,15 @@ class OracleQualityEvaluationRepository:
         sql = (
             "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS WHERE "
             + predicate
-            + " ORDER BY CREATED_AT, JOB_ID FETCH FIRST 1 ROWS ONLY FOR UPDATE SKIP LOCKED"
+            + " ORDER BY CREATED_AT, JOB_ID FOR UPDATE SKIP LOCKED"
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
             try:
+                # SKIP LOCKED の lock は fetch 時に取得される。Oracle で禁止される
+                # FETCH FIRST との併用を避け、内部 fetch を 1 行へ限定する。
+                cursor.prefetchrows = 0
+                cursor.arraysize = 1
                 cursor.execute(sql, select_binds)
                 row = cursor.fetchone()
                 if row is None:

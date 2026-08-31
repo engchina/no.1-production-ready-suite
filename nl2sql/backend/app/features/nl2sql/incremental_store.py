@@ -1614,10 +1614,15 @@ class OracleIncrementalNl2SqlRepository:
         select_sql = (
             "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS WHERE "
             + predicate
-            + " ORDER BY CREATED_AT, JOB_ID FETCH FIRST 1 ROWS ONLY FOR UPDATE SKIP LOCKED"
+            + " ORDER BY CREATED_AT, JOB_ID FOR UPDATE SKIP LOCKED"
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
+                # Oracle は row_limiting_clause と FOR UPDATE の併用を許可しない。
+                # SKIP LOCKED は fetch 時に行を lock するため、driver の内部 fetch も
+                # 1 行へ絞り、先頭の claim 対象だけを lock する。
+                cursor.prefetchrows = 0
+                cursor.arraysize = 1
                 select_binds = {"job_id": job_id} if job_id is not None else {}
                 cursor.execute(select_sql, select_binds)
                 row = cursor.fetchone()

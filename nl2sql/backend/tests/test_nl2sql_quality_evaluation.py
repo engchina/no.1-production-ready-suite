@@ -1111,6 +1111,12 @@ def test_oracle_repository_materializes_quality_evaluation_lobs_before_connectio
     assert claimed.worker_id == "worker-1"
     assert claimed.status == QualityEvaluationStatus.RUNNING
     assert len(configured_cursors) == 5
+    claim_cursor = factory.connections[-1].cursors[0]
+    claim_sql = claim_cursor.executed[0][0].upper()
+    assert "FOR UPDATE SKIP LOCKED" in claim_sql
+    assert "FETCH FIRST" not in claim_sql
+    assert claim_cursor.prefetchrows == 0
+    assert claim_cursor.arraysize == 1
     assert all(connection.closed for connection in factory.connections)
 
 
