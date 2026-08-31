@@ -69,6 +69,40 @@ fail() {
   return 1
 }
 
+running_as_root() {
+  [ "${EUID}" -eq 0 ]
+}
+
+run_privileged() {
+  if running_as_root; then
+    "$@"
+    return
+  fi
+  sudo -n -- "$@"
+}
+
+run_as_app_user() {
+  if [ "$(id -un)" = "${APP_USER}" ]; then
+    "$@"
+    return
+  fi
+  if running_as_root; then
+    sudo -n -H -u "${APP_USER}" -- "$@"
+    return
+  fi
+  fail "${APP_USER} ユーザーとして実行できません。"
+}
+
+ensure_privileged_access() {
+  if running_as_root; then
+    return 0
+  fi
+  if sudo -n -v 2>/dev/null; then
+    return 0
+  fi
+  fail "passwordless sudo が利用できません。パスワード入力は行わず、sudo ./scripts/update-after-pull.sh を実行してください。"
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/update-after-pull.sh [--check | --repair-only]
@@ -78,6 +112,9 @@ Usage: ./scripts/update-after-pull.sh [--check | --repair-only]
 --repair-only  build と frontend 公開を省略し、OCI 修復、migration、再起動だけを行います。
 
 このスクリプト自身は Git 操作、schema --recreate、DeepSec foundation 適用を行いません。
+ubuntu 実行時は sudo -n のみを使用し、パスワード入力を要求しません。
+passwordless sudo がない環境では sudo ./scripts/update-after-pull.sh で起動できます。
+root 起動時も build、依存同期、database CLI は ubuntu へ降権して実行します。
 
 Environment overrides:
   PLATFORM_REPO_DIR             共有 platform リポジトリ
@@ -189,18 +226,20 @@ validate_fixed_oci_layout() {
 preflight() {
   local current_user command_name node_version
 
-  if [ "${EUID}" -eq 0 ] && ! test_mode_enabled; then
-    fail "root では実行しないでください。${APP_USER} ユーザーで実行してください。"
-  fi
   current_user="$(id -un)"
-  [ "${current_user}" = "${APP_USER}" ] || \
-    fail "実行ユーザーは ${APP_USER} である必要があります: ${current_user}"
+  if running_as_root; then
+    log "root 起動を検出しました。build と database CLI は ${APP_USER} ユーザーへ降権して実行します。"
+  else
+    [ "${current_user}" = "${APP_USER}" ] || \
+      fail "実行ユーザーは ${APP_USER} または root である必要があります: ${current_user}"
+  fi
 
   validate_non_negative_integer "HEALTHCHECK_TIMEOUT_SECONDS" "${HEALTHCHECK_TIMEOUT_SECONDS}"
   validate_non_negative_integer "HEALTHCHECK_INTERVAL_SECONDS" "${HEALTHCHECK_INTERVAL_SECONDS}"
   for command_name in awk curl find getent readlink stat systemctl tail; do
     require_command "${command_name}"
   done
+  require_command sudo
   require_command uv
   require_file "${BACKEND_DIR}/pyproject.toml"
   require_file "${BACKEND_DIR}/uv.lock"
@@ -210,10 +249,10 @@ preflight() {
     return 0
   fi
 
-  for command_name in flock install mktemp sudo tee; do
+  for command_name in flock install mktemp tee; do
     require_command "${command_name}"
   done
-  sudo -v
+  ensure_privileged_access
 
   if [ "${ACTION}" = "update" ]; then
     require_command node
@@ -281,7 +320,7 @@ verify_wallet_permissions() {
   else
     failed=true
   fi
-  if ! test -w "${APP_ROOT}"; then
+  if ! run_as_app_user test -w "${APP_ROOT}"; then
     warn "${APP_USER} は Wallet 親 directory に書き込めません。"
     failed=true
   fi
@@ -302,7 +341,7 @@ check_system_schema_status() {
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    uv run --no-sync python -m app.cli.nl2sql_system_schema --status
+    run_as_app_user uv run --no-sync python -m app.cli.nl2sql_system_schema --status
   )
 }
 
@@ -318,21 +357,26 @@ run_check() {
 
 acquire_lock() {
   [ ! -L "${LOCK_FILE}" ] || fail "更新 lock は symbolic link にできません: ${LOCK_FILE}"
+  if running_as_root; then
+    touch "${LOCK_FILE}"
+    chown "${APP_USER}:${APP_GROUP}" "${LOCK_FILE}"
+    chmod 0600 "${LOCK_FILE}"
+  fi
   exec 9>"${LOCK_FILE}"
   flock -n 9 || fail "別の更新処理が実行中です: ${LOCK_FILE}"
 }
 
 setup_update_log() {
-  if sudo test -L "${UPDATE_LOG_PATH}"; then
+  if run_privileged test -L "${UPDATE_LOG_PATH}"; then
     fail "更新ログは symbolic link にできません。"
   fi
-  if ! sudo test -e "${UPDATE_LOG_PATH}"; then
-    sudo install -m 0600 -o root -g root /dev/null "${UPDATE_LOG_PATH}"
+  if ! run_privileged test -e "${UPDATE_LOG_PATH}"; then
+    run_privileged install -m 0600 -o root -g root /dev/null "${UPDATE_LOG_PATH}"
   else
-    sudo chown root:root "${UPDATE_LOG_PATH}"
-    sudo chmod 0600 "${UPDATE_LOG_PATH}"
+    run_privileged chown root:root "${UPDATE_LOG_PATH}"
+    run_privileged chmod 0600 "${UPDATE_LOG_PATH}"
   fi
-  exec > >(sudo tee -a "${UPDATE_LOG_PATH}") 2>&1
+  exec > >(run_privileged tee -a "${UPDATE_LOG_PATH}") 2>&1
 }
 
 remove_generated_path() {
@@ -377,11 +421,11 @@ enter_degraded_mode() {
   set +e
   for service in "${WORKER_SERVICES[@]}"; do
     if service_exists "${service}"; then
-      sudo systemctl disable --now "${service}"
+      run_privileged systemctl disable --now "${service}"
     fi
   done
   if service_exists "${BACKEND_SERVICE}"; then
-    sudo systemctl start "${BACKEND_SERVICE}"
+    run_privileged systemctl start "${BACKEND_SERVICE}"
   fi
   set -e
   warn "backend を復旧し、external worker を停止した degraded mode にしました。"
@@ -404,18 +448,19 @@ on_error() {
 }
 
 sync_and_compile_backend() {
-  COMPILE_CACHE_DIR="$(mktemp -d /tmp/production-ready-nl2sql-compile.XXXXXX)"
+  COMPILE_CACHE_DIR="$(run_as_app_user mktemp -d /tmp/production-ready-nl2sql-compile.XXXXXX)"
   log "backend の production 依存を同期します。"
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    uv sync --locked --no-dev --python 3.12
+    run_as_app_user uv sync --locked --no-dev --python 3.12
   )
   log "backend の Python ソースをコンパイル検証します。"
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    PYTHONPYCACHEPREFIX="${COMPILE_CACHE_DIR}" uv run --no-sync python -m compileall -q app
+    run_as_app_user env PYTHONPYCACHEPREFIX="${COMPILE_CACHE_DIR}" \
+      uv run --no-sync python -m compileall -q app
   )
 }
 
@@ -424,16 +469,16 @@ build_frontend_staging() {
   (
     trap - ERR
     cd "${PLATFORM_REPO_DIR}"
-    npm ci
-    npm run build --workspace @engchina/production-ready-ui
+    run_as_app_user npm ci
+    run_as_app_user npm run build --workspace @engchina/production-ready-ui
   )
   log "NL2SQL frontend を型検証し、一時 directory へビルドします。"
   remove_generated_path "${FRONTEND_STAGING_DIR}"
   (
     trap - ERR
     cd "${FRONTEND_DIR}"
-    npm ci
-    npm run build -- --outDir "${FRONTEND_STAGING_DIR}" --emptyOutDir
+    run_as_app_user npm ci
+    run_as_app_user npm run build -- --outDir "${FRONTEND_STAGING_DIR}" --emptyOutDir
   )
   require_file "${FRONTEND_STAGING_DIR}/index.html"
   [ -d "${FRONTEND_STAGING_DIR}/assets" ] || \
@@ -443,44 +488,48 @@ build_frontend_staging() {
 create_recovery_snapshot() {
   local service repair_stamp
   repair_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  sudo test ! -L "${RECOVERY_ROOT}" || fail "recovery path は symbolic link にできません。"
-  sudo install -d -m 0700 -o root -g root "${RECOVERY_ROOT}"
-  RECOVERY_DIR="$(sudo mktemp -d "${RECOVERY_ROOT}/${repair_stamp}.XXXXXX")"
-  sudo chown root:root "${RECOVERY_DIR}"
-  sudo chmod 0700 "${RECOVERY_DIR}"
-  sudo install -m 0600 -o root -g root "${BACKEND_ENV_FILE}" "${RECOVERY_DIR}/backend.env"
+  run_privileged test ! -L "${RECOVERY_ROOT}" || \
+    fail "recovery path は symbolic link にできません。"
+  run_privileged install -d -m 0700 -o root -g root "${RECOVERY_ROOT}"
+  RECOVERY_DIR="$(run_privileged mktemp -d "${RECOVERY_ROOT}/${repair_stamp}.XXXXXX")"
+  run_privileged chown root:root "${RECOVERY_DIR}"
+  run_privileged chmod 0700 "${RECOVERY_DIR}"
+  run_privileged install -m 0600 -o root -g root \
+    "${BACKEND_ENV_FILE}" "${RECOVERY_DIR}/backend.env"
   for service in "${ALL_SERVICES[@]}"; do
-    sudo systemctl cat "${service}" | sudo tee "${RECOVERY_DIR}/${service}.txt" >/dev/null
+    run_privileged systemctl cat "${service}" | \
+      run_privileged tee "${RECOVERY_DIR}/${service}.txt" >/dev/null
   done
   stat -c '%U:%G %a %n' "${APP_ROOT}" "${WALLET_DIR}" "${BACKEND_ENV_FILE}" | \
-    sudo tee "${RECOVERY_DIR}/permissions-before.txt" >/dev/null
+    run_privileged tee "${RECOVERY_DIR}/permissions-before.txt" >/dev/null
   log "復旧 snapshot: ${RECOVERY_DIR}"
 }
 
 enter_maintenance() {
   MAINTENANCE_STARTED=true
   log "external worker を停止します。"
-  sudo systemctl stop "${WORKER_SERVICES[@]}"
+  run_privileged systemctl stop "${WORKER_SERVICES[@]}"
   log "backend を停止します。"
-  sudo systemctl stop "${BACKEND_SERVICE}"
+  run_privileged systemctl stop "${BACKEND_SERVICE}"
 }
 
 repair_wallet_permissions() {
   local lock_path="${APP_ROOT}/.wallet.install.lock" test_path
   log "Wallet 親 directory、Wallet、lock、backend/.env の権限を修復します。"
-  sudo chown "root:${APP_GROUP}" "${APP_ROOT}"
-  sudo chmod 0775 "${APP_ROOT}"
-  sudo chown -R "${APP_USER}:${APP_GROUP}" "${WALLET_DIR}"
-  sudo find "${WALLET_DIR}" -type d -exec chmod 0700 {} +
-  sudo find "${WALLET_DIR}" -type f -exec chmod 0600 {} +
-  sudo test ! -L "${lock_path}" || fail "Wallet install lock は symbolic link にできません。"
-  sudo install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" /dev/null "${lock_path}"
-  sudo chown "${APP_USER}:${APP_GROUP}" "${BACKEND_ENV_FILE}"
-  sudo chmod 0600 "${BACKEND_ENV_FILE}"
+  run_privileged chown "root:${APP_GROUP}" "${APP_ROOT}"
+  run_privileged chmod 0775 "${APP_ROOT}"
+  run_privileged chown -R "${APP_USER}:${APP_GROUP}" "${WALLET_DIR}"
+  run_privileged find "${WALLET_DIR}" -type d -exec chmod 0700 {} +
+  run_privileged find "${WALLET_DIR}" -type f -exec chmod 0600 {} +
+  run_privileged test ! -L "${lock_path}" || \
+    fail "Wallet install lock は symbolic link にできません。"
+  run_privileged install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" /dev/null "${lock_path}"
+  run_privileged chown "${APP_USER}:${APP_GROUP}" "${BACKEND_ENV_FILE}"
+  run_privileged chmod 0600 "${BACKEND_ENV_FILE}"
   test_path="${APP_ROOT}/.wallet.permission-test.$$"
   trap 'rm -f -- "${test_path}"' RETURN
-  : > "${test_path}"
-  rm -f -- "${test_path}"
+  run_as_app_user touch "${test_path}"
+  run_as_app_user rm -f -- "${test_path}"
   trap - RETURN
   verify_wallet_permissions
 }
@@ -491,19 +540,20 @@ run_database_migrations() {
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    uv run --no-sync python -m app.cli.nl2sql_system_schema --initialize
+    run_as_app_user uv run --no-sync python -m app.cli.nl2sql_system_schema --initialize
   )
   log "security/RBAC migration を preview します。"
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    uv run --no-sync python -m app.cli.app_security_migrate
+    run_as_app_user uv run --no-sync python -m app.cli.app_security_migrate
   )
   log "security/RBAC migration を適用します。"
   (
     trap - ERR
     cd "${BACKEND_DIR}"
-    uv run --no-sync python -m app.cli.app_security_migrate --apply --skip-bootstrap
+    run_as_app_user uv run --no-sync python -m app.cli.app_security_migrate \
+      --apply --skip-bootstrap
   )
 }
 
@@ -525,14 +575,15 @@ wait_for_health() {
 restart_services() {
   local service
   log "backend を enable/restart します。"
-  sudo systemctl enable "${BACKEND_SERVICE}"
-  sudo systemctl restart "${BACKEND_SERVICE}"
+  run_privileged systemctl enable "${BACKEND_SERVICE}"
+  run_privileged systemctl restart "${BACKEND_SERVICE}"
   wait_for_health "backend" "${BACKEND_HEALTH_URL}"
   log "worker を enable/restart します。"
-  sudo systemctl enable "${WORKER_SERVICES[@]}"
-  sudo systemctl restart "${WORKER_SERVICES[@]}"
+  run_privileged systemctl enable "${WORKER_SERVICES[@]}"
+  run_privileged systemctl restart "${WORKER_SERVICES[@]}"
   for service in "${ALL_SERVICES[@]}"; do
-    sudo systemctl is-active --quiet "${service}" || fail "systemd service が active ではありません: ${service}"
+    run_privileged systemctl is-active --quiet "${service}" || \
+      fail "systemd service が active ではありません: ${service}"
   done
   MAINTENANCE_STARTED=false
 }

@@ -236,8 +236,13 @@ If you override these Terraform variables outside the form for HTTPS, use
 ## Updating an Existing Compute Deployment
 
 After manually pulling the required repositories, run the post-pull update
-script as the `ubuntu` user. Do not run it directly as root; privileged changes
-are performed through `sudo`. The script does not run Git commands and does not
+script as the `ubuntu` user when passwordless sudo is available. The script uses
+only non-interactive `sudo -n` and never prompts for the `ubuntu` password. If
+the instance does not grant passwordless sudo, start the script through an
+existing root-capable path with `sudo ./scripts/update-after-pull.sh`. In root
+mode, dependency synchronization, frontend builds, and database CLIs are still
+executed as `ubuntu`; only systemd, snapshots, logging, and permission repair
+retain root privileges. The script does not run Git commands and does not
 rewrite `backend/.env`, the Wallet contents, systemd units, or the Nginx
 configuration.
 
@@ -246,6 +251,15 @@ cd /u01/aipoc/no.1-production-ready-nl2sql
 ./scripts/update-after-pull.sh --check
 ./scripts/update-after-pull.sh --repair-only
 ./scripts/update-after-pull.sh
+```
+
+Without passwordless sudo, use the root-launch form instead; these commands do
+not make the build output root-owned:
+
+```bash
+sudo ./scripts/update-after-pull.sh --check
+sudo ./scripts/update-after-pull.sh --repair-only
+sudo ./scripts/update-after-pull.sh
 ```
 
 `--check` only inspects the fixed paths, Wallet and `.env` permissions, systemd

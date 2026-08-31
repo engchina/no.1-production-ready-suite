@@ -93,24 +93,27 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sudo|%s\n' "$*" >> "${COMMAND_LOG}"
-if [ "${1:-}" = "-v" ]; then
-  exit 0
-fi
-if [ "${1:-}" = "chown" ]; then
+if [ "${1:-}" = "-n" ] && [ "${2:-}" = "-v" ]; then
   exit 0
 fi
 filtered=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -o|-g)
+    -n|-H|--)
+      shift
+      ;;
+    -u|-o|-g)
       shift 2
       ;;
     *)
       filtered+=("$1")
       shift
       ;;
-  esac
+    esac
 done
+if [ "${filtered[0]:-}" = "chown" ]; then
+  exit 0
+fi
 exec "${filtered[@]}"
 EOF
 
@@ -252,8 +255,49 @@ test_wallet_env_parser_does_not_source_secrets() (
   test ! -e "${case_dir}/must-not-run"
 )
 
+test_noninteractive_privilege_failure() (
+  local case_dir="${TEST_TMP_DIR}/noninteractive-privilege"
+  mkdir -p "${case_dir}"
+  export UPDATE_AFTER_PULL_TEST_MODE=true
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  running_as_root() { return 1; }
+  sudo() {
+    printf 'sudo|%s\n' "$*" >> "${case_dir}/events"
+    return 1
+  }
+
+  if ensure_privileged_access; then
+    fail_test "interactive sudo requirement was accepted"
+  fi
+  grep -Fxq 'sudo|-n -v' "${case_dir}/events"
+)
+
+test_root_privilege_dispatch() (
+  local case_dir="${TEST_TMP_DIR}/root-privilege"
+  mkdir -p "${case_dir}"
+  export UPDATE_AFTER_PULL_TEST_MODE=true
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  running_as_root() { return 0; }
+  record_command() { printf 'command|%s\n' "$*" >> "${case_dir}/events"; }
+  sudo() { printf 'sudo|%s\n' "$*" >> "${case_dir}/events"; }
+
+  run_privileged record_command privileged
+  grep -Fxq 'command|privileged' "${case_dir}/events"
+  if grep -q '^sudo|' "${case_dir}/events"; then
+    fail_test "root privileged command unexpectedly called sudo"
+  fi
+
+  APP_USER=deployment-user
+  run_as_app_user true
+  grep -Fxq 'sudo|-n -H -u deployment-user -- true' "${case_dir}/events"
+)
+
 test_check_dispatch_is_non_mutating
 test_wallet_env_parser_does_not_source_secrets
+test_noninteractive_privilege_failure
+test_root_privilege_dispatch
 
 check_case="$(make_case check)"
 run_case "${check_case}" --check
@@ -300,10 +344,10 @@ grep -Fq 'curl|-fsS --max-time 5 http://backend.test/api/health' "${success_log}
 grep -Fq 'curl|-fsS --max-time 5 http://public.test/api/health' "${success_log}"
 assert_before '^uv\|.*sync --locked --no-dev' '^uv\|.*compileall -q app' "${success_log}"
 assert_before 'compileall -q app' '^npm\|.*no.1-production-ready-platform.*\|ci$' "${success_log}"
-assert_before '^npm\|.*no.1-production-ready-nl2sql/frontend.*run build' '^sudo\|mktemp -d .*/recovery/' "${success_log}"
-assert_before '^sudo\|mktemp -d .*/recovery/' '^systemctl\|stop .*worker' "${success_log}"
+assert_before '^npm\|.*no.1-production-ready-nl2sql/frontend.*run build' '^sudo\|-n -- mktemp -d .*/recovery/' "${success_log}"
+assert_before '^sudo\|-n -- mktemp -d .*/recovery/' '^systemctl\|stop .*worker' "${success_log}"
 assert_before '^systemctl\|stop production-ready-nl2sql-backend.service' \
-  "^sudo\\|chown root:$(id -gn) ${success_case}$" "${success_log}"
+  "^sudo\\|-n -- chown root:$(id -gn) ${success_case}$" "${success_log}"
 assert_before 'nl2sql_system_schema --initialize' 'systemctl\|restart production-ready-nl2sql-backend.service' "${success_log}"
 assert_before 'curl\|.*backend.test' 'systemctl\|restart .*worker' "${success_log}"
 assert_before 'systemctl\|is-active --quiet production-ready-nl2sql-ontology-worker.service' 'curl\|.*public.test' "${success_log}"
@@ -355,7 +399,7 @@ if grep -q '^sudo|' "${wallet_override_case}/commands.log"; then
 fi
 
 grep -Fq '[ "${WALLET_DIR}" = "/u01/aipoc/wallet" ]' "${UPDATE_SCRIPT}"
-grep -Fq 'chown "root:${APP_GROUP}" "${APP_ROOT}"' "${UPDATE_SCRIPT}"
+grep -Fq 'run_privileged chown "root:${APP_GROUP}" "${APP_ROOT}"' "${UPDATE_SCRIPT}"
 grep -Fq 'chmod 0775 "${APP_ROOT}"' "${UPDATE_SCRIPT}"
 grep -Fq 'find "${WALLET_DIR}" -type f -exec chmod 0600 {} +' "${UPDATE_SCRIPT}"
 grep -Fq 'app.cli.nl2sql_system_schema --initialize' "${UPDATE_SCRIPT}"
