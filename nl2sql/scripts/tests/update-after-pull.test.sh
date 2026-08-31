@@ -294,10 +294,35 @@ test_root_privilege_dispatch() (
   grep -Fxq 'sudo|-n -H -u deployment-user -- true' "${case_dir}/events"
 )
 
+test_root_lock_owner_transition() (
+  local case_dir="${TEST_TMP_DIR}/root-lock"
+  mkdir -p "${case_dir}"
+  export UPDATE_AFTER_PULL_TEST_MODE=true
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  running_as_root() { return 0; }
+  chown() { printf 'chown|%s\n' "$*" >> "${case_dir}/events"; }
+  chmod() {
+    printf 'chmod|%s\n' "$*" >> "${case_dir}/events"
+    command chmod "$@"
+  }
+  APP_USER="$(id -un)"
+  APP_GROUP="$(id -gn)"
+  LOCK_FILE="${case_dir}/update.lock"
+
+  acquire_lock
+  assert_before '^chown\|root:root ' "^chown\|${APP_USER}:${APP_GROUP} " \
+    "${case_dir}/events"
+  test "$(stat -c %a "${LOCK_FILE}")" = 600
+  flock -u 9
+  exec 9>&-
+)
+
 test_check_dispatch_is_non_mutating
 test_wallet_env_parser_does_not_source_secrets
 test_noninteractive_privilege_failure
 test_root_privilege_dispatch
+test_root_lock_owner_transition
 
 check_case="$(make_case check)"
 run_case "${check_case}" --check

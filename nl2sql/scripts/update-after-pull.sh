@@ -359,11 +359,21 @@ acquire_lock() {
   [ ! -L "${LOCK_FILE}" ] || fail "更新 lock は symbolic link にできません: ${LOCK_FILE}"
   if running_as_root; then
     touch "${LOCK_FILE}"
-    chown "${APP_USER}:${APP_GROUP}" "${LOCK_FILE}"
+    chown root:root "${LOCK_FILE}"
     chmod 0600 "${LOCK_FILE}"
   fi
   exec 9>"${LOCK_FILE}"
-  flock -n 9 || fail "別の更新処理が実行中です: ${LOCK_FILE}"
+  if ! flock -n 9; then
+    if running_as_root; then
+      chown "${APP_USER}:${APP_GROUP}" "${LOCK_FILE}" || true
+      chmod 0600 "${LOCK_FILE}" || true
+    fi
+    fail "別の更新処理が実行中です: ${LOCK_FILE}"
+  fi
+  if running_as_root; then
+    chown "${APP_USER}:${APP_GROUP}" "${LOCK_FILE}"
+    chmod 0600 "${LOCK_FILE}"
+  fi
 }
 
 setup_update_log() {
