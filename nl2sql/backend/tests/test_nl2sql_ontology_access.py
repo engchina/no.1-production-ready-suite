@@ -43,9 +43,7 @@ class TestAssertProfileAccess:
         assert_profile_access(_request_with(None), "profile-a")
 
     def test_system_admin_is_allowed(self) -> None:
-        assert_profile_access(
-            _request_with(_principal(set(), system_admin=True)), "profile-a"
-        )
+        assert_profile_access(_request_with(_principal(set(), system_admin=True)), "profile-a")
 
     def test_allowed_profile_is_allowed(self) -> None:
         assert_profile_access(_request_with(_principal({"profile-a"})), "profile-a")
@@ -116,9 +114,7 @@ class TestPublishedMarkdownProfileIsolation:
             markdown="# profile B の業務オントロジー",
         )
         # profile A として取得すると B の内容は返らない
-        markdown = runtime.published_markdown_for_revision(
-            revision_id, profile_id="profile-a"
-        )
+        markdown = runtime.published_markdown_for_revision(revision_id, profile_id="profile-a")
         assert "profile B" not in markdown
 
 

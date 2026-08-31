@@ -1009,13 +1009,15 @@ class OntologyApiRuntime:
                 node_map[node.id] = node.model_copy(
                     deep=True,
                     update={
-                        "provenance": node.provenance.model_copy(deep=True)
-                        if node.provenance.source_id
-                        else node.provenance.model_copy(
-                            update={
-                                "source_kind": OntologySourceKind.MANUAL,
-                                "source_id": base.revision.id,
-                            }
+                        "provenance": (
+                            node.provenance.model_copy(deep=True)
+                            if node.provenance.source_id
+                            else node.provenance.model_copy(
+                                update={
+                                    "source_kind": OntologySourceKind.MANUAL,
+                                    "source_id": base.revision.id,
+                                }
+                            )
                         )
                     },
                 )
@@ -2048,9 +2050,7 @@ class OntologyApiRuntime:
                 {
                     "profile_id": profile_id,
                     "revision_id": ontology.revision.id,
-                    "question_hash": hashlib.sha256(
-                        request.question.encode("utf-8")
-                    ).hexdigest(),
+                    "question_hash": hashlib.sha256(request.question.encode("utf-8")).hexdigest(),
                     "node_ids": [node.id for node in nodes],
                     "edge_ids": [edge.id for edge in edges],
                     "artifact_hashes": artifacts.hashes,
@@ -3988,9 +3988,7 @@ class OntologyApiRuntime:
                     "payload": ontology.revision,
                 },
             )
-            self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(
-                deep=True
-            )
+            self._revision_headers[ontology.revision.id] = ontology.revision.model_copy(deep=True)
 
         if not include_graph:
             save_revision_header()

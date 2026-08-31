@@ -1714,9 +1714,7 @@ class _OntologyBuildLlmTask:
                     context=_dump_text_context(self.schema_payload, text_half),
                     progress_ja=self.progress_ja,
                     source_evidence=[
-                        evidence
-                        for unit in text_half
-                        if (evidence := unit.evidence()) is not None
+                        evidence for unit in text_half if (evidence := unit.evidence()) is not None
                     ],
                     text_batch=text_half,
                     schema_payload=self.schema_payload,
@@ -2108,9 +2106,7 @@ class OntologyBuildService:
                     extra={"profile_id": profile_id},
                 )
         return int(
-            self._runtime.store.delete_documents(
-                "source_documents", {"profile_id": profile_id}
-            )
+            self._runtime.store.delete_documents("source_documents", {"profile_id": profile_id})
         )
 
     def cancel_profile_jobs(self, profile_id: str) -> int:
@@ -2271,11 +2267,7 @@ class OntologyBuildService:
 
     def _prune_finished_jobs_locked(self) -> None:
         """lock 保持中に呼ぶ。完了 job が上限を超えたら古い順に破棄する(queued/running は保護)。"""
-        finished = [
-            job
-            for job in self._jobs.values()
-            if job.status in _TERMINAL_STATUSES
-        ]
+        finished = [job for job in self._jobs.values() if job.status in _TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
@@ -2823,10 +2815,7 @@ class OntologyBuildService:
                         # ページ単位のスキップ等は警告として残し、資料全体は成功扱いにする
                         self._add_warnings(
                             job_id,
-                            [
-                                f"{source.filename}: {warning}"
-                                for warning in extracted.warnings_ja
-                            ],
+                            [f"{source.filename}: {warning}" for warning in extracted.warnings_ja],
                         )
                     for chunk in extracted.chunks:
                         if not chunk.text.strip():
@@ -2893,9 +2882,11 @@ class OntologyBuildService:
             self._set_step(
                 job_id,
                 OntologyBuildStepName.SOURCE_EXTRACTION,
-                OntologyBuildStepStatus.FAILED
-                if extracted_source_count == 0
-                else OntologyBuildStepStatus.SUCCEEDED,
+                (
+                    OntologyBuildStepStatus.FAILED
+                    if extracted_source_count == 0
+                    else OntologyBuildStepStatus.SUCCEEDED
+                ),
                 f"資料 {extracted_source_count}/{len(job.source_document_ids)} 件、"
                 f"証拠 {source_evidence_count} 件、Q/A {len(extracted_pairs)} 件を抽出しました。"
                 + (f" 失敗 {len(failed_source_names)} 件。" if failed_source_names else ""),
@@ -2913,8 +2904,7 @@ class OntologyBuildService:
                 if not has_other_inputs:
                     self._fail(
                         job_id,
-                        "すべての資料の抽出に失敗しました。 "
-                        + " / ".join(failed_source_errors),
+                        "すべての資料の抽出に失敗しました。 " + " / ".join(failed_source_errors),
                         failed_step=OntologyBuildStepName.SOURCE_EXTRACTION,
                         failed_step_detail_ja="資料の抽出に失敗しました。",
                         error_code="SOURCE_EXTRACTION_FAILED",
@@ -3151,9 +3141,11 @@ class OntologyBuildService:
                 self._set_step(
                     job_id,
                     task.name,
-                    OntologyBuildStepStatus.FAILED
-                    if not task_extractions
-                    else OntologyBuildStepStatus.RUNNING,
+                    (
+                        OntologyBuildStepStatus.FAILED
+                        if not task_extractions
+                        else OntologyBuildStepStatus.RUNNING
+                    ),
                     "一部の LLM 抽出に失敗しました(成功分で継続します)。",
                     code="BATCH_EXTRACTION_FAILED",
                 )

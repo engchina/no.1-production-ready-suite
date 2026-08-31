@@ -499,16 +499,12 @@ def _extract_pdf(
                 text = normalize_source_text(vlm_page_runner(image_buffer.getvalue(), index))
             except Exception:
                 # 1 ページの OCR 失敗で資料全体を失敗させない(警告してスキップ)
-                warnings.append(
-                    f"PDF page:{index} の VLM OCR に失敗したためスキップしました。"
-                )
+                warnings.append(f"PDF page:{index} の VLM OCR に失敗したためスキップしました。")
                 skipped_pages.append(f"page:{index}")
                 continue
         if not text:
             # テキスト無しページ(画像のみ等)は警告してスキップ。全ページ空のときだけ失敗
-            warnings.append(
-                f"PDF page:{index} はテキストを抽出できないためスキップしました。"
-            )
+            warnings.append(f"PDF page:{index} はテキストを抽出できないためスキップしました。")
             skipped_pages.append(f"page:{index}")
             continue
         chunks.append(ExtractedSourceChunk(text, OntologyEvidenceLocatorKind.PAGE, f"page:{index}"))

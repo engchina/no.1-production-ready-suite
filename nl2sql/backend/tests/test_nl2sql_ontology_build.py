@@ -2130,9 +2130,7 @@ def test_partial_source_failure_continues_with_warnings(
     )
     assert source_step.code == "SOURCE_PARTIAL_FAILED"
     assert any("broken.xlsx" in warning for warning in finished.warnings_ja)
-    broken_progress = next(
-        item for item in finished.sources if item.filename == "broken.xlsx"
-    )
+    broken_progress = next(item for item in finished.sources if item.filename == "broken.xlsx")
     assert broken_progress.status == OntologySourceStatus.FAILED
 
 
@@ -2142,9 +2140,7 @@ def test_batch_max_chars_limits_content_per_call(
     from app.features.nl2sql.ontology_build import _batch_text_units, _BuildTextUnit
     from app.features.nl2sql.ontology_models import OntologyEvidenceLocatorKind
 
-    monkeypatch.setattr(
-        get_settings(), "nl2sql_ontology_extraction_batch_max_chars", 1000
-    )
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_batch_max_chars", 1000)
     schema_payload = {"objects": []}
     units = [
         _BuildTextUnit(

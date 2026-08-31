@@ -436,9 +436,11 @@ def build_logical_structure_items(
         items.append(
             Nl2SqlLogicalStructureItem(
                 kind="statement",
-                business="データを取り出すだけの参照 SQL です"
-                if statement_type.upper() in {"SELECT", "WITH"}
-                else "データを変更する可能性のある SQL です",
+                business=(
+                    "データを取り出すだけの参照 SQL です"
+                    if statement_type.upper() in {"SELECT", "WITH"}
+                    else "データを変更する可能性のある SQL です"
+                ),
                 technical=statement_type,
             )
         )

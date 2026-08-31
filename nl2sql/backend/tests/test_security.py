@@ -1851,9 +1851,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 "/auth/logout",
                 "/auth/password/change",
             }:
-                assert not (permission and UNCLASSIFIED_PERMISSION in permission), (
-                    f"unclassified route: {method.upper()} {path}"
-                )
+                assert not (
+                    permission and UNCLASSIFIED_PERMISSION in permission
+                ), f"unclassified route: {method.upper()} {path}"
 
     assert permission_for_route("POST", "/nl2sql/execute") == frozenset({SQL_EXECUTE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})
