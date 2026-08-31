@@ -35,9 +35,10 @@ jobs:
 
       - name: Test deployment update and recovery scripts
         run: |
-          bash -n init_script.sh scripts/update-after-pull.sh
+          bash -n init_script.sh scripts/update-after-pull.sh scripts/tail-logs.sh
           bash scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/update-after-pull.test.sh
+          bash scripts/tests/tail-logs.test.sh
 
       - name: Format check
         run: terraform fmt -check -recursive terraform/stack

@@ -298,7 +298,28 @@ available for nondefault ports or health-check timing.
 
 ## Troubleshooting
 
-On the Compute instance, inspect:
+### Live application logs
+
+`scripts/tail-logs.sh` is a read-only viewer that merges the four
+`production-ready-nl2sql-*` units and the `/var/log` files into one stream and
+renders the backend's JSON log lines in human-readable form. It never restarts
+or otherwise mutates a service. Run it on the Compute instance:
+
+```bash
+cd /u01/aipoc/no.1-production-ready-nl2sql
+./scripts/tail-logs.sh --status          # unit state + backend/public health check
+./scripts/tail-logs.sh                   # follow the four application units
+./scripts/tail-logs.sh --backend         # backend only
+./scripts/tail-logs.sh --all             # units + Nginx + init/update logs
+./scripts/tail-logs.sh --level ERROR --since "-15 min" --no-follow
+```
+
+`--help` lists every option (`--workers`, `--unit`, `--nginx`, `--init`,
+`--update`, `--lines`, `--grep`, `--raw`). It falls back to `sudo` automatically
+when journald is not readable as the current user; if that fails, rerun with
+`sudo ./scripts/tail-logs.sh`.
+
+The equivalent manual commands, and everything the script does not cover:
 
 ```bash
 sudo tail -f /var/log/cloud-init-custom.log

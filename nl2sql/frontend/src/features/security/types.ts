@@ -54,12 +54,13 @@ export interface DeepSecTargetObject {
   owner: string;
   qualified_name?: string;
   object_type: string;
+  row_count?: number | null;
   comment: string;
 }
 
 export interface DeepSecTargetObjectPage {
   items: DeepSecTargetObject[];
-  total: number;
+  total: number | null;
   table_count?: number;
   view_count?: number;
   counts_included?: boolean;

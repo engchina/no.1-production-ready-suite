@@ -14,11 +14,11 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
-import { EmptyState, toast } from "@engchina/production-ready-ui";
+import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
-import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { ObjectActionBar } from "@/components/ObjectActions";
 import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
@@ -28,6 +28,7 @@ import { SelectField, type SelectFieldOption } from "@/components/ui/select-fiel
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { toastError } from "@/lib/toast";
 import { useSchemaOwners, useSelectAiCredential } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
@@ -342,8 +343,6 @@ function ProfileList({
   onSearchChange,
   onSortChange,
   onSelect,
-  onDelete,
-  deletingId,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -359,8 +358,6 @@ function ProfileList({
   onSearchChange: (value: string) => void;
   onSortChange: (key: ProfileListSortKey) => void;
   onSelect: (profile: ProfileSummary) => void;
-  onDelete: (profile: ProfileSummary) => void;
-  deletingId: string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
   loadMoreError: string;
@@ -399,41 +396,35 @@ function ProfileList({
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className="max-h-[42rem] overflow-auto" data-testid="profile-management-list">
-            <table className="w-full min-w-[38rem] table-fixed divide-y divide-border text-left text-sm" data-testid="profile-management-grid">
+          <div
+            className={`max-h-[20rem] max-w-full overflow-x-hidden overflow-y-auto md:max-h-[30.5rem] ${INFORMATION_TABLE_FOCUS_CLASS}`}
+            role="region"
+            tabIndex={0}
+            aria-label={t("profiles.list.scrollLabel")}
+            data-testid="profile-management-list"
+          >
+            <table className="w-full max-w-[34rem] table-fixed divide-y divide-border text-left text-sm" data-testid="profile-management-grid">
               <colgroup>
                 <col />
-                <col className="w-[5rem]" />
-                <col className="w-[5rem]" />
-                <col className="w-[12rem]" />
+                <col className="w-[6.5rem]" />
+                <col className="w-[6.5rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>
                   <th className="px-3 py-2">
                     <SortButton label={t("profiles.field.name")} sortKey="name" sort={sort} onToggle={onSortChange} />
                   </th>
-                  <th className="px-3 py-2">
+                  <th className="px-3 py-2 text-right">
                     <SortButton label={t("profiles.field.allowedTables")} sortKey="tables" sort={sort} onToggle={onSortChange} />
                   </th>
-                  <th className="px-3 py-2">
+                  <th className="px-3 py-2 text-right">
                     <SortButton label={t("profiles.field.allowedViews")} sortKey="views" sort={sort} onToggle={onSortChange} />
                   </th>
-                  <th className="px-3 py-2 text-right">{t("tableMgmt.grid.actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
                 {profiles.map((profile) => {
                   const selected = profile.id === selectedProfileId;
-                  const rowActions: EntityAction[] = [
-                    {
-                      id: "delete",
-                      label: t("profiles.action.delete"),
-                      icon: Trash2,
-                      tone: "danger",
-                      loading: deletingId === profile.id,
-                      onSelect: () => onDelete(profile),
-                    },
-                  ];
                   return (
                     <tr
                       key={profile.id}
@@ -460,15 +451,8 @@ function ProfileList({
                           <span className="line-clamp-2 text-xs leading-5 text-muted">{profile.category || "-"}</span>
                         </button>
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_table_count}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-foreground">{profile.allowed_view_count}</td>
-                      <td className="px-3 py-2 text-right">
-                        <RowActionMenu
-                          actions={rowActions}
-                          ariaLabel={`${t("tableMgmt.grid.actions")}: ${profile.name}`}
-                          testId={`profile-management-row-actions-${profile.id}`}
-                        />
-                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-xs text-foreground">{profile.allowed_table_count}</td>
+                      <td className="px-3 py-2 text-right font-mono text-xs text-foreground">{profile.allowed_view_count}</td>
                     </tr>
                   );
                 })}
@@ -477,18 +461,40 @@ function ProfileList({
           </div>
         </div>
       )}
-      {!loading && profiles.length > 0 && (
-        <DbObjectSelectorFooter
-          visibleCount={profiles.length}
-          totalCount={totalCount}
-          hasNextPage={hasNextPage}
-          loadingNextPage={loadingNextPage}
-          loadMoreError={loadMoreError}
-          loadMoreLabel={t("profiles.action.loadMore")}
-          dataTestId="profile-management-footer"
-          onLoadMore={onLoadMore}
-          onRetryLoadMore={onRetryLoadMore}
-        />
+      {!loading && profiles.length > 0 && (hasNextPage || loadMoreError) && (
+        <div className="grid justify-items-end gap-2" data-testid="profile-management-load-more">
+          {loadMoreError ? (
+            <Banner
+              severity="danger"
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  loading={loadingNextPage}
+                  onClick={onRetryLoadMore}
+                >
+                  <RefreshCw size={15} aria-hidden="true" />
+                  <span>{t("common.retry")}</span>
+                </Button>
+              }
+            >
+              {loadMoreError}
+            </Banner>
+          ) : (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={loadingNextPage}
+              onClick={onLoadMore}
+            >
+              {t("profiles.action.loadMore")}
+            </Button>
+          )}
+        </div>
       )}
     </section>
   );
@@ -2119,8 +2125,6 @@ export function ProfileManagementPage() {
                 onSearchChange={setProfileSearch}
                 onSortChange={toggleSort}
                 onSelect={selectProfile}
-                onDelete={(profile) => void deleteProfile(profile)}
-                deletingId={loading.startsWith("delete-profile-") ? loading.replace("delete-profile-", "") : ""}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
                 loadMoreError={profileLoadMoreError}

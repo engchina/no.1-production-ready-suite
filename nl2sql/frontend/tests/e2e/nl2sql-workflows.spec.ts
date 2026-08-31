@@ -1375,6 +1375,15 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       rating,
       saved: true,
       feedback_content: content,
+      similar_history_publish: {
+        history_id: state.adminFeedbackPayload.history_id ?? "hist-001",
+        status: rating === "good" ? "published" : "unpublished",
+        runtime: "deterministic",
+        executed: false,
+        table_name: "",
+        index_name: "",
+        warnings: [],
+      },
       select_ai_feedback: registerSelectAi
         ? {
             runtime: "oracle",
@@ -4170,7 +4179,7 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
   await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
 });
 
-test("参考履歴は API が空の場合に表示しない", async ({ page }) => {
+test("参考履歴は API が空の場合も表示し、空状態を展開できる", async ({ page }) => {
   await mockNl2SqlApi(page);
   let requested = false;
   await page.unroute("**/api/nl2sql/similar-history");
@@ -4185,7 +4194,22 @@ test("参考履歴は API が空の場合に表示しない", async ({ page }) =
   await nl2sqlQuestionInput(page).fill('対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：');
 
   await expect.poll(() => requested).toBe(true);
-  await expect(page.getByRole("button", { name: /参考履歴/ })).toHaveCount(0);
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toBeVisible();
+  await expect(header).toContainText("管理者レビュー結果: 良いのみ");
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+
+  const panel = page.getByTestId("nl2sql-similar-history");
+  await expect(panel).toBeAttached();
+  await expect(panel).toBeHidden();
+  await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
+
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("参考履歴はありません");
+  await expect(panel).toContainText("管理者レビュー結果が良い履歴は見つかりませんでした。");
+  await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
 });
 
 test("参考履歴の「検索中」は SQL 生成の実行中に固まって残らない", async ({ page }) => {
@@ -6844,7 +6868,8 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
   await expect(page.getByRole("link", { name: /テーブルの管理/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /ビューの管理/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /データの管理/ }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: /検証用サンプルデータ/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /サンプルデータ管理/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /検証用サンプルデータ/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /業務プロファイル/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /用語・同義語/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /SQL 生成/ }).first()).toBeVisible();
@@ -7226,6 +7251,89 @@ test("feedback management defaults to app feedback and keeps explicit tab deep l
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
 });
 
+test("feedback management refresh replaces the active workspace with the shared skeleton", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockNl2SqlApi(page);
+  const refreshGate = createRequestGate();
+  let holdNextRefresh = false;
+  let markRefreshStarted: () => void = () => undefined;
+  const refreshStarted = new Promise<void>((resolve) => {
+    markRefreshStarted = resolve;
+  });
+
+  await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET" && holdNextRefresh) {
+      holdNextRefresh = false;
+      markRefreshStarted();
+      await refreshGate.promise;
+    }
+    await route.fallback();
+  });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const panel = page.locator("#feedback-management-panel-appFeedback");
+  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
+  await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
+
+  holdNextRefresh = true;
+  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await refreshStarted;
+
+  const skeleton = page.getByTestId("feedback-management-workspace-refresh-skeleton");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute("aria-busy", "true");
+  await expect(skeleton).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(skeleton).toContainText("表示を更新しています");
+  await expect(skeleton.getByTestId("feedback-management-workspace-refresh-skeleton-processing")).toHaveAttribute(
+    "data-processing-activity-icon",
+    "none"
+  );
+  await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
+  await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
+    "animation-name",
+    "none"
+  );
+  await expect(panel.getByTestId("feedback-history-pane")).toHaveCount(0);
+  await expect(panel.getByTestId("app-feedback-editor-pane")).toHaveCount(0);
+  await expect(panel.getByText("生成 SQL", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("履歴から再実行したい請求金額")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(skeleton).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  refreshGate.release();
+  await expect(skeleton).toHaveCount(0);
+  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
+});
+
+test("admin good feedback is available as similar history without manual index rebuild", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let rebuildRequested = false;
+  await page.route("**/api/nl2sql/feedback-index/rebuild", async (route) => {
+    rebuildRequested = true;
+    await route.fallback();
+  });
+
+  await page.goto("/feedback-management?tab=appFeedback");
+  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("good");
+  await page.getByRole("button", { name: "フィードバック保存" }).click();
+  await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
+  expect(rebuildRequested).toBe(false);
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("履歴から再実行したい請求金額");
+  const similarHistoryHeader = page.getByRole("button", { name: /参考履歴/ });
+  await expect(similarHistoryHeader).toBeVisible();
+  await similarHistoryHeader.click();
+  await expect(page.getByTestId("nl2sql-similar-history-item")).toContainText(historySql);
+  expect(rebuildRequested).toBe(false);
+});
+
 test("feedback management page mirrors Select AI feedback operations", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
@@ -7362,7 +7470,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("管理者レビューを保存しました。")).toBeVisible();
+  await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
   expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
     rating: "good",
@@ -7458,27 +7566,23 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   await expect(page.getByRole("heading", { name: "類似検索インデックス" })).toBeVisible();
-  await expect(page.locator("summary").filter({ hasText: "oracle_26ai" })).toBeVisible();
+  await expect(page.getByText("SQL 実行画面に出す類似履歴候補の絞り込み条件を管理します。")).toBeVisible();
   await expect(page.getByLabel("Oracle 26ai DDL plan")).toHaveCount(0);
   await expect(page.getByText("CREATE TABLE NL2SQL_FEEDBACK_VECTORS", { exact: false })).toHaveCount(0);
   await expect(page.getByText("CREATE VECTOR INDEX NL2SQL_FEEDBACK_VEC_IDX", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("現在の状態", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("索引候補", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("対象外履歴", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("更新待ち", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("技術詳細", { exact: true })).toHaveCount(0);
   const similarityConfigSave = page.getByRole("button", { name: "設定保存" });
   const similarityIndexActions = page.getByTestId("feedback-similarity-index-actions");
-  const rebuildFeedbackIndexButton = similarityIndexActions.getByRole("button", {
-    name: "インデックスを更新",
-  });
-  const similarityIndexMoreButton = similarityIndexActions.getByRole("button", { name: "その他の操作" });
   await expect(similarityConfigSave).toHaveClass(/\bh-10\b/);
-  await expect(similarityConfigSave).toHaveClass(/\bbg-card\b/);
+  await expect(similarityConfigSave).toHaveClass(/\bbg-primary\b/);
   await expect(similarityIndexActions).toHaveClass(/\bborder-t\b/);
-  await expect(rebuildFeedbackIndexButton).toHaveClass(/\bh-10\b/);
-  await expect(rebuildFeedbackIndexButton).toHaveClass(/\bbg-primary\b/);
-  await expect(similarityIndexMoreButton).toHaveClass(/\bh-10\b/);
-  await expect(similarityIndexMoreButton).toHaveClass(/\bbg-card\b/);
+  await expect(similarityIndexActions.getByRole("button", { name: "インデックスを更新" })).toHaveCount(0);
   await expect(similarityIndexActions.getByRole("button", { name: "インデックスを削除" })).toHaveCount(0);
-  await expect(page.getByText("更新が必要")).toBeVisible();
-  await expect(page.getByText("索引候補", { exact: true })).toBeVisible();
-  await expect(page.getByText("反映待ち", { exact: true })).toBeVisible();
+  await expect(similarityIndexActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
   await page.getByLabel("最低スコア", { exact: true }).fill("0.85");
   await page.getByLabel("最大候補数", { exact: true }).fill("4");
   await similarityConfigSave.click();
@@ -7487,32 +7591,12 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     similarity_threshold: 0.85,
     match_limit: 4,
   });
-  await rebuildFeedbackIndexButton.click();
-  const rebuildDialog = page.getByRole("alertdialog", { name: "類似検索インデックス更新の確認" });
-  await expect(rebuildDialog).toBeVisible();
-  await rebuildDialog.getByRole("button", { name: "インデックスを更新" }).click();
-  await expect(page.getByText(/NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
-  await expect(page.getByText("利用可能", { exact: true })).toBeVisible();
-  await clickRowAction(page, "feedback-vector-entry-actions-hist-001", "削除");
-  const deleteEntryDialog = page.getByRole("alertdialog", { name: "類似検索候補の履歴を削除しますか" });
-  await expect(deleteEntryDialog).toBeVisible();
-  await deleteEntryDialog.getByRole("button", { name: "削除" }).click();
-  await expect(page.getByText("Feedback entry を削除しました。")).toBeVisible();
-  expect(api.feedbackEntriesDeletePayload).toEqual({ history_ids: ["hist-001"] });
-  await similarityIndexMoreButton.click();
-  const clearFeedbackIndexMenuItem = page.getByRole("menuitem", { name: "インデックスを削除" });
-  await expect(clearFeedbackIndexMenuItem).toHaveAttribute("data-form-action-tone", "danger");
-  await clearFeedbackIndexMenuItem.click();
-  const clearDialog = page.getByRole("alertdialog", { name: "類似検索インデックス削除の確認" });
-  await expect(clearDialog).toBeVisible();
-  await clearDialog.getByRole("button", { name: "インデックスを削除" }).click();
-  await expect(page.getByText(/clear 実行には NL2SQL_RUNTIME_MODE=oracle/)).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expectNoHorizontalScroll(page);
 });
 
-test("feedback management keeps long query text contained in app feedback and similarity entries", async ({ page }, testInfo) => {
+test("feedback management keeps long query text contained in app feedback and similarity settings", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop project covers split-pane resizing and mobile stacking");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await mockNl2SqlApi(page);
@@ -7530,29 +7614,6 @@ test("feedback management keeps long query text contained in app feedback and si
       next_cursor: "",
     });
   });
-  await page.route("**/api/nl2sql/feedback-entries", (route) =>
-    fulfillJson(route, {
-      items: [
-        {
-          history_id: longHistoryItem.id,
-          question: longHistoryItem.question,
-          generated_sql: longHistoryItem.generated_sql,
-          profile_id: "default",
-          profile_name: "既定プロファイル",
-          profile_category: "既定プロファイル",
-          feedback_rating: "good",
-          feedback_comment: longHistoryItem.feedback_comment,
-          admin_feedback_rating: "good",
-          admin_feedback_content: longHistoryItem.admin_feedback_content,
-          admin_feedback_updated_at: longHistoryItem.admin_feedback_updated_at,
-          indexed: false,
-          created_at: longHistoryItem.created_at,
-        },
-      ],
-      total: 1,
-      indexed_count: 0,
-    })
-  );
 
   await page.goto("/feedback-management?tab=appFeedback");
   const historyPane = page.getByTestId("feedback-history-pane");
@@ -7583,15 +7644,16 @@ test("feedback management keeps long query text contained in app feedback and si
   await expectNoHorizontalScroll(page);
 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
-  const vectorEntry = page.getByTestId("feedback-vector-entry").first();
-  const vectorQuestion = vectorEntry.getByTestId("feedback-vector-question");
-  await expect(vectorQuestion).toContainText("対象テーブル");
-  await expectQuestionClamp(vectorQuestion, longHistoryItem.question, 1);
-  await expectHorizontallyContained(vectorQuestion, vectorEntry);
+  const similarityPanel = page.locator("#feedback-management-panel-similarityIndex");
+  await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toBeVisible();
+  await expect(similarityPanel.getByLabel("最大候補数", { exact: true })).toBeVisible();
+  await expect(similarityPanel.getByText("索引候補", { exact: true })).toHaveCount(0);
+  await expect(similarityPanel.getByTestId("feedback-vector-entry")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
-  await expectHorizontallyContained(vectorQuestion, vectorEntry);
+  await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toBeVisible();
+  await expect(similarityPanel.getByLabel("最大候補数", { exact: true })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -7640,11 +7702,12 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
 
   await page.goto("/feedback-management?tab=entries");
 
-  await expect(page.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
-  await expect(page.getByTestId("feedback-management-entry-detail-skeleton")).toBeVisible();
+  const skeleton = page.getByTestId("feedback-management-workspace-refresh-skeleton");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute("aria-busy", "true");
   releaseConfig?.();
   await expect(page.getByTestId("feedback-management-entries-table")).toBeVisible();
-  await expect(page.getByTestId("feedback-management-entries-list-skeleton")).toHaveCount(0);
+  await expect(skeleton).toHaveCount(0);
 });
 
 test("Select AI feedback stacks its workspace and keeps controls usable at 375px", async ({ page }, testInfo) => {
@@ -9948,10 +10011,10 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await page.keyboard.press("ArrowLeft");
   await expect(dataPreviewTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "テーブル・ビューデータの表示" })).toBeVisible();
-  await expect(page.getByText("Excel/CSV 取込(新規テーブル)", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("サンプルデータ管理", { exact: true })).toHaveCount(0);
-
   const dataPreviewPanel = page.locator("#data-management-panel-preview");
+  await expect(page.getByText("Excel/CSV 取込(新規テーブル)", { exact: true })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByText("サンプルデータ管理", { exact: true })).toHaveCount(0);
+
   await expect(dataPreviewPanel.getByText("全4件")).toBeVisible();
   await expect(dataPreviewPanel.getByText("テーブル3")).toBeVisible();
   await expect(dataPreviewPanel.getByText("ビュー1")).toBeVisible();
@@ -10207,6 +10270,79 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(api.syntheticDataPayload?.sample_rows).toBe(5);
   expect(api.syntheticDataPayload?.use_comments).toBe(true);
   await expectNoHorizontalScroll(page);
+});
+
+test("sample data refresh replaces the whole workspace with the shared skeleton", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockNl2SqlApi(page);
+  const refreshGate = createRequestGate();
+  let holdNextRefresh = false;
+  let markRefreshStarted: () => void = () => undefined;
+  const refreshStarted = new Promise<void>((resolve) => {
+    markRefreshStarted = resolve;
+  });
+  const sampleDataResponse = {
+    runtime: "deterministic",
+    profile_id: "",
+    confirmation: "SQL_ASSIST_SAMPLE",
+    objects: ["DEPARTMENT", "EMPLOYEE", "PROJECT"],
+    imported_objects: ["DEPARTMENT"],
+    sql: {
+      tables: ["CREATE TABLE DEPARTMENT (DEPARTMENT_ID NUMBER PRIMARY KEY)"],
+      views: ["CREATE OR REPLACE VIEW V_EMP_DEPT AS SELECT 1 AS ID FROM DUAL"],
+      data: ["INSERT INTO DEPARTMENT (DEPARTMENT_ID) VALUES (10)"],
+      delete: ["DROP TABLE DEPARTMENT PURGE"],
+    },
+    warnings: [],
+  };
+
+  await page.route("**/api/nl2sql/sample-data", async (route) => {
+    if (holdNextRefresh) {
+      holdNextRefresh = false;
+      markRefreshStarted();
+      await refreshGate.promise;
+    }
+    await fulfillJson(route, sampleDataResponse);
+  });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/sample-data");
+  const panel = page.locator("#sample-data-panel-import");
+  await expect(page.getByRole("heading", { name: "検証用サンプルデータ管理" })).toBeVisible();
+  await expect(panel.getByText("対象オブジェクト", { exact: true })).toBeVisible();
+  await expect(panel.getByText("SQL プレビュー", { exact: true })).toBeVisible();
+
+  holdNextRefresh = true;
+  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await refreshStarted;
+
+  const skeleton = page.getByTestId("sample-data-workspace-refresh-skeleton");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute("aria-busy", "true");
+  await expect(skeleton).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(skeleton).toContainText("表示を更新しています");
+  await expect(skeleton.getByTestId("sample-data-workspace-refresh-skeleton-processing")).toHaveAttribute(
+    "data-processing-activity-icon",
+    "none"
+  );
+  await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
+  await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
+    "animation-name",
+    "none"
+  );
+  await expect(panel.getByText("対象オブジェクト", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("SQL プレビュー", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("DEPARTMENT", { exact: true })).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(skeleton).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  refreshGate.release();
+  await expect(skeleton).toHaveCount(0);
+  await expect(panel.getByText("対象オブジェクト", { exact: true })).toBeVisible();
+  await expect(panel.getByText("SQL プレビュー", { exact: true })).toBeVisible();
 });
 
 test("SampleData schema refresh recovery disables CTA while workspace processing is visible", async ({ page }) => {

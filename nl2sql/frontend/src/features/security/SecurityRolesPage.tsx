@@ -30,7 +30,7 @@ import {
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
-import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
@@ -693,23 +693,6 @@ export function SecurityRolesPage() {
           count: effectivePermissionCodes(role.permissions, permissionByCode).size,
         }),
     },
-    ...(canManage
-      ? [
-          {
-            key: "actions",
-            header: t("security.common.actions"),
-            align: "right" as const,
-            className: "w-14",
-            render: (role: SecurityRole) => (
-              <RowActionMenu
-                actions={roleActions(role)}
-                ariaLabel={`${t("security.common.actions")}: ${role.display_name}`}
-                testId={`security-roles-row-actions-${role.role_id}`}
-              />
-            ),
-          },
-        ]
-      : []),
   ];
 
   return (

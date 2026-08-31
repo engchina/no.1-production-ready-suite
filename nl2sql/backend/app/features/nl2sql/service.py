@@ -240,6 +240,7 @@ from .models import (
     SelectAiRequestOverrides,
     SimilarHistoryData,
     SimilarHistoryItem,
+    SimilarHistoryPublishData,
     SimilarHistoryRequest,
     StageTiming,
     SyntheticDataGenerateRequest,
@@ -5507,6 +5508,7 @@ class Nl2SqlService:
                 updated if item.id == request.history_id else item for item in self._history
             ]
         self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
+        similar_history_publish = self._publish_admin_feedback_to_similar_history(updated)
 
         select_ai_feedback: SelectAiFeedbackAddData | None = None
         if request.register_select_ai_feedback:
@@ -5544,6 +5546,121 @@ class Nl2SqlService:
             saved=True,
             feedback_content=feedback_content,
             select_ai_feedback=select_ai_feedback,
+            similar_history_publish=similar_history_publish,
+        )
+
+    def _publish_admin_feedback_to_similar_history(
+        self, item: HistoryItem
+    ) -> SimilarHistoryPublishData:
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        if item.admin_feedback_rating != FeedbackRating.GOOD:
+            return self._unpublish_similar_history_entry(item.id, runtime=runtime)
+        if not item.safety_is_safe:
+            with self._lock:
+                self._feedback_indexed_ids.discard(item.id)
+            self._persist_state(collections=("singletons",))
+            return SimilarHistoryPublishData(
+                history_id=item.id,
+                status="skipped",
+                runtime=runtime,
+                warnings=["安全チェックで unsafe の履歴は類似検索に公開しません。"],
+            )
+        if not self._use_oracle_runtime():
+            return SimilarHistoryPublishData(
+                history_id=item.id,
+                status="published",
+                runtime=runtime,
+            )
+
+        settings = get_settings()
+        if not settings.nl2sql_feedback_embedding_enabled:
+            return SimilarHistoryPublishData(
+                history_id=item.id,
+                status="warning",
+                runtime=runtime,
+                table_name=settings.nl2sql_feedback_vector_table,
+                index_name=settings.nl2sql_feedback_vector_index,
+                warnings=[
+                    "NL2SQL_FEEDBACK_EMBEDDING_ENABLED が無効なため、"
+                    "Oracle feedback vector table への公開をスキップしました。"
+                ],
+            )
+        if not self._embedding_client.is_configured():
+            return SimilarHistoryPublishData(
+                history_id=item.id,
+                status="warning",
+                runtime=runtime,
+                table_name=settings.nl2sql_feedback_vector_table,
+                index_name=settings.nl2sql_feedback_vector_index,
+                warnings=[
+                    "OCI GenAI embedding 設定が不足しているため、"
+                    "類似検索公開をスキップしました。"
+                ],
+            )
+
+        try:
+            embedding = self._embedding_client.embed_texts([self._feedback_embedding_text(item)])[0]
+            meta = self._oracle_adapter.upsert_feedback_vector_entry(
+                table_name=settings.nl2sql_feedback_vector_table,
+                index_name=settings.nl2sql_feedback_vector_index,
+                row={
+                    "history_id": item.id,
+                    "profile_id": item.profile_id,
+                    "question": item.question,
+                    "generated_sql": item.generated_sql,
+                    "feedback_rating": item.admin_feedback_rating.value,
+                    "embedding": embedding,
+                },
+            )
+        except (EmbeddingClientError, OracleAdapterError, IndexError, ValueError) as exc:
+            logger.warning("feedback similar-history publish warning: %s", exc)
+            return SimilarHistoryPublishData(
+                history_id=item.id,
+                status="warning",
+                runtime=runtime,
+                table_name=settings.nl2sql_feedback_vector_table,
+                index_name=settings.nl2sql_feedback_vector_index,
+                warnings=[str(exc)],
+            )
+        with self._lock:
+            self._feedback_indexed_ids.add(item.id)
+        self._persist_state(collections=("singletons",))
+        return SimilarHistoryPublishData(
+            history_id=item.id,
+            status="published",
+            runtime=str(meta.get("runtime") or runtime),
+            executed=bool(meta.get("executed", True)),
+            table_name=str(meta.get("table_name") or settings.nl2sql_feedback_vector_table),
+            index_name=str(meta.get("index_name") or settings.nl2sql_feedback_vector_index),
+        )
+
+    def _unpublish_similar_history_entry(
+        self, history_id: str, *, runtime: str
+    ) -> SimilarHistoryPublishData:
+        settings = get_settings()
+        warnings: list[str] = []
+        executed = False
+        if self._use_oracle_runtime():
+            try:
+                meta = self._oracle_adapter.delete_feedback_vector_entry(
+                    table_name=settings.nl2sql_feedback_vector_table,
+                    history_id=history_id,
+                )
+                executed = bool(meta.get("executed", True))
+            except OracleAdapterError as exc:
+                logger.warning("feedback similar-history unpublish warning: %s", exc)
+                warnings.append(str(exc))
+        with self._lock:
+            self._feedback_indexed_ids.discard(history_id)
+        self._persist_state(collections=("singletons",))
+        return SimilarHistoryPublishData(
+            history_id=history_id,
+            status="warning" if warnings else "unpublished",
+            runtime=runtime,
+            executed=executed,
+            table_name=settings.nl2sql_feedback_vector_table,
+            index_name=settings.nl2sql_feedback_vector_index,
+            warnings=warnings,
         )
 
     def clear_feedback(
@@ -13329,15 +13446,35 @@ class Nl2SqlService:
             limit=10,
             target_objects=target_objects,
         )
-        if vector_ranked:
-            return vector_ranked
-        return self._rank_similar_history(
+        deterministic_ranked = self._rank_similar_history(
             question=question,
             profile_id=profile_id,
             history=history,
             include_bad=include_bad,
             target_objects=target_objects,
         )
+        return self._merge_similar_history_rankings(vector_ranked, deterministic_ranked)
+
+    def _merge_similar_history_rankings(
+        self,
+        vector_ranked: list[SimilarHistoryItem],
+        deterministic_ranked: list[SimilarHistoryItem],
+    ) -> list[SimilarHistoryItem]:
+        by_history_id: dict[str, SimilarHistoryItem] = {}
+        for candidate in [*vector_ranked, *deterministic_ranked]:
+            history_id = candidate.item.id
+            current = by_history_id.get(history_id)
+            if current is None or candidate.score > current.score:
+                by_history_id[history_id] = candidate
+        merged = list(by_history_id.values())
+        merged.sort(
+            key=lambda candidate: (
+                candidate.score,
+                candidate.item.admin_feedback_updated_at or candidate.item.created_at,
+            ),
+            reverse=True,
+        )
+        return merged
 
     def _similar_history_query_target_objects(self, question: str) -> set[str]:
         """構造化質問の対象テーブルを catalog 上の canonical object 名へ解決する。"""

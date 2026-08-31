@@ -37,9 +37,11 @@ export function LoadingState({
 export function ErrorState({
   message,
   onRetry,
+  retryLabel = t("common.retry"),
 }: {
   message: string;
   onRetry?: () => void;
+  retryLabel?: string;
 }) {
-  return <UiErrorState message={message} onRetry={onRetry} retryLabel={t("common.retry")} />;
+  return <UiErrorState message={message} onRetry={onRetry} retryLabel={retryLabel} />;
 }

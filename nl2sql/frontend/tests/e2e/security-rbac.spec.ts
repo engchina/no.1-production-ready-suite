@@ -638,13 +638,17 @@ function deepSecPlan(
         step_no: 1,
         key: "principals_and_roles",
         title: "共有 DATA USER とロール",
-        description: "共有 DATA USER と最小権限ロールを構成します。",
+        description: "DATA USER に関連付ける最小 DB role と local DATA ROLE を準備します。",
         checksum: "a".repeat(64),
         status: applied ? "APPLIED" : "PENDING",
         error_message: "",
         executed_at: applied ? "2026-07-19T00:00:00Z" : null,
         sql: [
-          "CREATE END USER DEEPSEC_DATA_USER IDENTIFIED BY <secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>",
+          "CREATE ROLE NL2SQL_APP_DB_ROLE",
+          "GRANT CREATE SESSION TO NL2SQL_APP_DB_ROLE",
+          "CREATE DATA ROLE IF NOT EXISTS NL2SQL_APP_DATA_ROLE",
+          "GRANT NL2SQL_APP_DB_ROLE TO NL2SQL_APP_DATA_ROLE",
+          "GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER",
         ],
       },
       {
@@ -668,22 +672,18 @@ async function mockDeepSecDataEntitlements(page: Page, rows: unknown[] = [system
 }
 
 async function mockDeepSecTargetObjects(page: Page) {
-  await page.route("**/api/nl2sql/db-admin/objects**", (route) =>
+  await page.route("**/api/security/deepsec/target-objects?*", (route) =>
     fulfill(route, {
       runtime: "oracle",
       owner: "",
       items: [deepSecTargetObject],
-      total: 1,
-      table_count: 1,
-      view_count: 0,
+      total: null,
       counts_included: false,
       next_cursor: null,
-      refreshed_at: "2026-07-19T00:00:00Z",
-      catalog_version: 1,
       warnings: [],
     })
   );
-  await page.route("**/api/nl2sql/db-admin/tables/EMPLOYEES**", (route) =>
+  await page.route("**/api/security/deepsec/target-objects/HR/EMPLOYEES**", (route) =>
     fulfill(route, deepSecTargetObjectDetail)
   );
 }
@@ -2032,16 +2032,9 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
 
   await page.goto("/settings/security/users");
   const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   const adminRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
-  const adminRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
-  await adminRowAction.click();
-  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
-  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(adminRowAction).toBeFocused();
-
   await adminRow.locator("td").first().click();
   const detailActions = page.getByTestId("security-users-detail-actions");
   await expect(page.getByRole("heading", { name: "システム管理者", exact: true })).toBeVisible();
@@ -2049,19 +2042,26 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
   await expect(
     detailActions.getByRole("button", { name: "パスワードをリセット" })
   ).toHaveCount(0);
-  await expect(detailActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
+  const adminMoreButton = detailActions.getByRole("button", { name: "その他の操作" });
+  await expect(adminMoreButton).toBeVisible();
+  await adminMoreButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(adminMoreButton).toBeFocused();
   await expectNoPageHorizontalScroll(page);
 
   const salesRow = grid.locator("tbody tr").filter({ hasText: "営業ユーザー" });
-  const salesRowAction = page.getByTestId("security-users-row-actions-sales-user-trigger");
-  await salesRowAction.click();
-  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
+  await salesRow.locator("td").first().click();
+  const salesDetailActions = page.getByTestId("security-users-detail-actions");
+  const salesResetButton = salesDetailActions.getByRole("button", { name: "パスワードをリセット" });
+  await expect(salesDetailActions.getByRole("button", { name: "編集" })).toBeVisible();
+  await expect(salesResetButton).toBeVisible();
+  await salesDetailActions.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
-  await page.keyboard.press("Home");
-  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Escape");
+  await salesResetButton.focus();
   await page.keyboard.press("Enter");
   await page
     .getByRole("alertdialog", { name: "パスワードをリセット" })
@@ -2081,7 +2081,6 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
 
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await salesRow.locator("td").first().click();
-  const salesDetailActions = page.getByTestId("security-users-detail-actions");
   await expect(salesDetailActions.getByRole("button", { name: "編集" })).toBeVisible();
   await expect(salesDetailActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
   await expect(salesDetailActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
@@ -2195,8 +2194,15 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
 
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/settings/security/users");
-  await page.getByTestId("security-users-row-actions-sales-user-trigger").click();
-  await page.getByRole("menuitem", { name: "編集" }).click();
+  const salesRow = page
+    .getByTestId("security-users-grid")
+    .locator("tbody tr")
+    .filter({ hasText: "営業ユーザー" });
+  await salesRow.locator("td").first().click();
+  await page
+    .getByTestId("security-users-detail-actions")
+    .getByRole("button", { name: "編集" })
+    .click();
 
   const editPanel = page.locator("#security-users-panel-edit");
   const editActions = page.getByRole("group", { name: "ユーザー編集操作" });
@@ -2396,16 +2402,19 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/settings/security/users");
 
-  const activeTrigger = page.getByTestId(
-    "security-users-row-actions-active-delete-user-trigger"
-  );
-  await activeTrigger.click();
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  const activeRow = grid.locator("tbody tr").filter({ hasText: "有効ユーザー" });
+  await activeRow.locator("td").first().click();
+  const detailActions = page.getByTestId("security-users-detail-actions");
+  await detailActions.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  const deleteTrigger = page.getByTestId(
-    "security-users-row-actions-disabled-delete-user-trigger"
-  );
+  const disabledRow = grid.locator("tbody tr").filter({ hasText: "削除対象ユーザー" });
+  await disabledRow.locator("td").first().click();
+  const deleteTrigger = detailActions.getByRole("button", { name: "その他の操作" });
   await deleteTrigger.focus();
   await page.keyboard.press("Enter");
   await page.keyboard.press("End");
@@ -2445,7 +2454,7 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("行アクションメニューを閉じた直後に別要素へフォーカスしても奪い返さない", async ({
+test("詳細アクションメニューを閉じた直後に別要素へフォーカスしても奪い返さない", async ({
   page,
 }) => {
   await mockDatabaseGateReady(page);
@@ -2484,33 +2493,29 @@ test("行アクションメニューを閉じた直後に別要素へフォー�
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/settings/security/users");
 
-  const firstTrigger = page.getByTestId("security-users-row-actions-focus-first-user-trigger");
-  const secondTrigger = page.getByTestId("security-users-row-actions-focus-second-user-trigger");
-  await firstTrigger.focus();
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  const firstRow = grid.locator("tbody tr").filter({ hasText: "先のユーザー" });
+  await firstRow.locator("td").first().click();
+  const search = page.getByTestId("security-users-search");
+  const trigger = page
+    .getByTestId("security-users-detail-actions")
+    .getByRole("button", { name: "その他の操作" });
+  await trigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
 
-  // Escape で閉じた直後（フォーカス復帰の rAF が走る前）に別の行へフォーカスを移す。
+  // Escape で閉じた直後（フォーカス復帰の rAF が走る前）に検索欄へフォーカスを移す。
   await page.evaluate(() => {
     document.activeElement?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
     );
-    document
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="security-users-row-actions-focus-second-user-trigger"]'
-      )
-      ?.focus();
+    document.querySelector<HTMLInputElement>('[data-testid="security-users-search"]')?.focus();
   });
 
   await expect(page.getByRole("menu")).toHaveCount(0);
-  await expect(secondTrigger).toBeFocused();
-  await expect(firstTrigger).not.toBeFocused();
-
-  // 移した先の行でそのままメニューを開ける（開くのは後のユーザーの行）。
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
-  await expect(secondTrigger).toHaveAttribute("aria-expanded", "true");
-  await expect(firstTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(search).toBeFocused();
+  await expect(trigger).not.toBeFocused();
 });
 
 test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", async ({ page }) => {
@@ -2563,36 +2568,36 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(usersSplitPane).toHaveAttribute("data-split-layout", "split");
   await expectSplitPaneReservedTrack(usersSplitPane);
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
-  await expect(page.getByTestId("security-users-grid").locator("tbody tr")).toHaveCount(2);
-  const salesUserRow = page.getByTestId("security-users-grid").locator("tbody tr").filter({ hasText: "営業ユーザー" });
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.locator("tbody tr")).toHaveCount(2);
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  const salesUserRow = grid.locator("tbody tr").filter({ hasText: "営業ユーザー" });
   await expect(salesUserRow).toHaveAttribute("data-selected", "true");
   await expect(page.getByRole("region", { name: "あ営業ユーザー" })).toBeVisible();
-  const adminUserRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
-  await expect(adminUserRowAction).toBeVisible();
-  await expect(page.getByTestId("security-users-grid").getByRole("button", { name: "編集" })).toHaveCount(0);
-  await adminUserRowAction.focus();
+  const adminUserRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
+  await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
+  await adminUserRow.locator("td").first().click();
+  const adminUserDetailActions = page.getByTestId("security-users-detail-actions");
+  const adminMoreButton = adminUserDetailActions.getByRole("button", { name: "その他の操作" });
+  await adminMoreButton.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "編集" })).toBeFocused();
   await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
-  await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
   await page.keyboard.press("End");
   await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
-  await expect(adminUserRowAction).toBeFocused();
-  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
-  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
-  await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "その他の操作" })).toBeVisible();
+  await expect(adminMoreButton).toBeFocused();
+  await expect(adminUserDetailActions.getByRole("button", { name: "編集" })).toBeVisible();
+  await expect(adminUserDetailActions.getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
+  await expect(adminMoreButton).toBeVisible();
   await salesUserRow.locator("td").nth(1).click();
   await expect(salesUserRow).toHaveAttribute("data-selected", "true");
   await expect(page.locator("dl").getByText("ロック中", { exact: true })).toBeVisible();
   await expect(page.getByText("ロック期限", { exact: true })).toHaveCount(0);
   const salesUserDetailActions = page.getByTestId("security-users-detail-actions");
-  const salesUserRowAction = page.getByTestId("security-users-row-actions-sales-user-trigger");
-  await salesUserRowAction.click();
   await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
-  await page.keyboard.press("Escape");
   await expect(
     salesUserDetailActions.getByRole("button", { name: "パスワードをリセット" })
   ).toHaveCount(0);
@@ -2630,19 +2635,15 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
 
-  await page.getByTestId("security-users-row-actions-admin-user-trigger").click();
-  await page.getByRole("menuitem", { name: "編集" }).click();
+  await adminUserRow.locator("td").first().click();
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(listStyle);
   await expect(page.getByLabel("システム管理者")).toBeEnabled();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
-  const mobileAdminUserRowAction = page.getByTestId("security-users-row-actions-admin-user-trigger");
-  await expect(mobileAdminUserRowAction).toBeVisible();
-  await mobileAdminUserRowAction.click();
-  await expect(page.getByRole("menuitem", { name: "パスワードをリセット" })).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
   await expectNoPageHorizontalScroll(page);
 });
@@ -2813,14 +2814,14 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "機能権限" })).toHaveCount(0);
   await expect(page.getByText("構造化データ権限", { exact: true })).toHaveCount(0);
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const viewerRoleRow = grid.locator("tbody tr").filter({ hasText: "アプリ閲覧" });
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
   await expect(page.getByRole("region", { name: "あアプリ閲覧" })).toBeVisible();
-  const systemRoleAction = page.getByTestId("security-roles-row-actions-role-system-trigger");
-  await expect(systemRoleAction).toBeVisible();
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
   await viewerRoleRow.locator("td").nth(2).click();
@@ -2874,8 +2875,9 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 
-  await page.getByTestId("security-roles-row-actions-role-system-trigger").click();
-  await page.getByRole("menuitem", { name: "編集" }).click();
+  const systemRoleRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
+  await systemRoleRow.locator("td").first().click();
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(listStyle);
   const roleEditActions = page.getByRole("group", { name: "ロール編集操作" });
   await expect(roleEditActions.getByRole("button", { name: "保存" })).toHaveCount(0);
@@ -2886,7 +2888,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
-  await expect(page.getByTestId("security-roles-row-actions-role-system-trigger")).toBeVisible();
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
 });
 
 test("ロールコード競合はコード欄へ結び付き、403 は安全なページ通知と request ID で示す", async ({ page }) => {
@@ -3411,6 +3413,8 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   await page.goto("/settings/security/roles");
 
   const grid = page.getByTestId("security-roles-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   const archivedRow = grid.locator("tbody tr").filter({ hasText: "データ管理者" });
   await archivedRow.locator("td").first().click();
   await expect(archivedRow.getByText("アーカイブ済み・権限無効", { exact: true })).toBeVisible();
@@ -3424,9 +3428,6 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   const archivedDetail = page.locator("section", { has: page.getByRole("heading", { name: "データ管理者" }) });
   await expect(archivedDetail.getByText("SQL 生成", { exact: true })).toHaveCount(0);
 
-  await page.getByTestId("security-roles-row-actions-role-archived-data-trigger").click();
-  await expect(page.getByRole("menuitem", { name: "復元" })).toBeVisible();
-  await page.keyboard.press("Escape");
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toBeVisible();
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   const archivedEditPanel = page.locator("#security-roles-panel-edit");
@@ -3584,14 +3585,19 @@ test("アーカイブ済みカスタムロールの削除は409を保持し再�
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/settings/security/roles");
 
-  await page.getByTestId("security-roles-row-actions-role-active-delete-trigger").click();
+  const grid = page.getByTestId("security-roles-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  const activeRow = grid.locator("tbody tr").filter({ hasText: "有効カスタムロール" });
+  await activeRow.locator("td").first().click();
+  const detailActions = page.getByTestId("security-roles-detail-actions");
+  await detailActions.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  const archivedTrigger = page.getByTestId(
-    "security-roles-row-actions-role-archived-delete-trigger"
-  );
-  await archivedTrigger.click();
+  const archivedRow = grid.locator("tbody tr").filter({ hasText: "削除対象ロール" });
+  await archivedRow.locator("td").first().click();
+  await detailActions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除" }).click();
   const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
   await expect(deleteDialog).toContainText(
@@ -3817,11 +3823,14 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await page.goto("/settings/security/deepsec");
   await expect(page.getByText("構成状態を確認中", { exact: true }).first()).toBeVisible();
   await page.getByRole("tab", { name: "基盤構成" }).click();
+  const step1 = page.getByTestId("security-deepsec-step-1");
   await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
   await expect(page.locator("pre:visible")).toHaveCount(0);
   await page.getByText("SQL とチェックサムを表示", { exact: true }).first().click();
-  await expect(page.locator("pre:visible")).toHaveCount(1);
-  await expect(page.getByText("CREATE END USER DEEPSEC_DATA_USER", { exact: false })).toBeVisible();
+  await expect(step1.locator("pre:visible")).toHaveCount(5);
+  await expect(step1.getByText("CREATE END USER", { exact: false })).toHaveCount(0);
+  await expect(step1.getByText("ALTER END USER", { exact: false })).toHaveCount(0);
+  await expect(step1.getByText("GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER", { exact: false })).toBeVisible();
   await page.getByRole("tab", { name: "データ権限" }).click();
   await expect(page.getByText("Data Grant を適用する前に", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "基盤構成へ" })).toBeVisible();
@@ -4074,20 +4083,26 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   const configActions = dataUserPanel.getByTestId("security-deepsec-config-actions");
   const password = page.getByLabel("DATA USER パスワード");
   const saveButton = configActions.getByRole("button", { name: "保存", exact: true });
+  const syncButton = configActions.getByRole("button", { name: "Oracle へ同期", exact: true });
   await expect(saveButton).toBeDisabled();
   await expect(saveButton).toHaveAttribute("type", "submit");
+  await expect(syncButton).toBeDisabled();
+  await expect(syncButton).toHaveAttribute("type", "button");
 
   await password.fill("DeepSecret!789");
   await expect(saveButton).toBeEnabled();
+  await expect(syncButton).toBeDisabled();
 
-  const [fieldsBox, actionsBox, saveButtonBox] = await Promise.all([
+  const [fieldsBox, actionsBox, saveButtonBox, syncButtonBox] = await Promise.all([
     configFields.boundingBox(),
     configActions.boundingBox(),
     saveButton.boundingBox(),
+    syncButton.boundingBox(),
   ]);
   expect(fieldsBox).not.toBeNull();
   expect(actionsBox).not.toBeNull();
   expect(saveButtonBox).not.toBeNull();
+  expect(syncButtonBox).not.toBeNull();
   expect(actionsBox!.y).toBeGreaterThanOrEqual(fieldsBox!.y + fieldsBox!.height - 1);
   expect(Math.abs(actionsBox!.x - fieldsBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(saveButtonBox!.x - actionsBox!.x)).toBeLessThanOrEqual(1);
@@ -4095,10 +4110,14 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   const viewportWidth = page.viewportSize()?.width ?? 0;
   if (viewportWidth < 640) {
     expect(Math.abs(saveButtonBox!.width - actionsBox!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(syncButtonBox!.width - actionsBox!.width)).toBeLessThanOrEqual(1);
     expect(saveButtonBox!.height).toBeGreaterThanOrEqual(44);
+    expect(syncButtonBox!.height).toBeGreaterThanOrEqual(44);
   } else {
     expect(saveButtonBox!.width).toBeLessThan(actionsBox!.width);
+    expect(syncButtonBox!.width).toBeLessThan(actionsBox!.width);
     expect(saveButtonBox!.height).toBeLessThanOrEqual(40);
+    expect(syncButtonBox!.height).toBeLessThanOrEqual(40);
   }
   await expectNoPageHorizontalScroll(page);
 
@@ -4109,6 +4128,7 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   expect(savedPassword).toBe("DeepSecret!789");
   await expect(password).toHaveValue("");
   await expect(page.getByText("保存済み", { exact: true })).toBeVisible();
+  await expect(syncButton).toBeEnabled();
   await expect(page.getByText("API を再起動")).toHaveCount(0);
   await page.getByRole("tab", { name: "基盤構成" }).click();
   await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。", { exact: true })).toHaveCount(0);
@@ -4120,6 +4140,125 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   await expect(applyButton).toBeDisabled();
   await confirmationInput.fill("ADMIN_EXECUTE");
   await expect(applyButton).toBeEnabled();
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("DeepSec は保存済み DATA USER password を変更なしで Oracle へ同期できる", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  let syncCalls = 0;
+  let syncPostData: string | null = "not-called";
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: {},
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) =>
+    fulfill(route, deepSecPlan(false, "thin", true, true))
+  );
+  await page.route("**/api/security/deepsec/config/sync-password", async (route) => {
+    syncCalls += 1;
+    syncPostData = route.request().postData();
+    await fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: {},
+      message: "構成済みです。",
+    });
+  });
+  await mockDeepSecDataEntitlements(page);
+
+  await page.goto("/settings/security/deepsec");
+
+  const dataUserPanel = page.locator("#security-deepsec-panel-data-user");
+  const configActions = dataUserPanel.getByTestId("security-deepsec-config-actions");
+  const password = page.getByLabel("DATA USER パスワード");
+  const saveButton = configActions.getByRole("button", { name: "保存", exact: true });
+  const syncButton = configActions.getByRole("button", { name: "Oracle へ同期", exact: true });
+  await expect(saveButton).toBeDisabled();
+  await expect(syncButton).toBeEnabled();
+
+  await syncButton.click();
+
+  await expect.poll(() => syncCalls).toBe(1);
+  expect(syncPostData).toBeNull();
+  await expect(
+    page.getByText("保存済み DATA USER パスワードを Oracle END USER へ同期しました。", {
+      exact: true,
+    })
+  ).toBeVisible();
+
+  await password.fill("DeepSecret!789");
+  await expect(saveButton).toBeEnabled();
+  await expect(syncButton).toBeDisabled();
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表示しない", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const emptyRole = {
+    ...systemRole,
+    role_id: "role-empty",
+    role_code: "EMPTY_DATA_ROLE",
+    display_name: "空データロール",
+    is_built_in: false,
+    permissions: ["menu.security_deepsec"],
+    data_entitlements: [],
+  };
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 0 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await page.route("**/api/security/deepsec/data-entitlements", (route) =>
+    fulfill(route, [emptyRole])
+  );
+  await page.route("**/api/security/deepsec/target-objects?*", (route) =>
+    fulfill(route, {
+      runtime: "oracle",
+      owner: "",
+      items: [],
+      total: null,
+      counts_included: false,
+      next_cursor: null,
+      warnings: [],
+    })
+  );
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限" }).click();
+  const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+  await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  const objectPicker = entitlementForm.getByTestId("security-deepsec-object-picker-0");
+
+  await expect(objectPicker.getByText("0 / 0 件", { exact: true })).toHaveCount(0);
+  await expect(objectPicker.getByText("0 件", { exact: true })).toBeVisible();
+  await expect(objectPicker.getByText("参照可能な対象 object がありません。")).toBeVisible();
+  await expect(
+    objectPicker.getByText("Oracle 接続ユーザーの参照権限、所有者、NL2SQL_SCHEMA_OWNER_ALLOWLIST を確認してください。")
+  ).toBeVisible();
+
+  await objectPicker.getByRole("searchbox", { name: "検索" }).fill("ORDERS");
+  await expect(objectPicker.getByText("条件に一致する object はありません。")).toBeVisible();
+  await expect(objectPicker.getByText("参照可能な対象 object がありません。")).toHaveCount(0);
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -4265,10 +4404,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     limit: string | null;
     cursor: string | null;
     ownerPrefix: string | null;
-    queryScope: string | null;
     q: string | null;
   }> = [];
-  await page.route("**/api/nl2sql/db-admin/objects**", async (route) => {
+  await page.route("**/api/security/deepsec/target-objects?*", async (route) => {
     const url = new URL(route.request().url());
     const cursor = url.searchParams.get("cursor");
     const ownerPrefix = url.searchParams.get("owner_prefix");
@@ -4277,7 +4415,6 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       limit: url.searchParams.get("limit"),
       cursor,
       ownerPrefix,
-      queryScope: url.searchParams.get("query_scope"),
       q,
     });
     const items =
@@ -4290,20 +4427,16 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       runtime: "oracle",
       owner: ownerPrefix ?? "",
       items,
-      total: scrollableSalesObjects.length + 1,
-      table_count: scrollableSalesObjects.length + 1,
-      view_count: 0,
+      total: null,
       counts_included: false,
       next_cursor: ownerPrefix || q || cursor ? null : "deepsec-page-2",
-      refreshed_at: "2026-07-19T00:00:00Z",
-      catalog_version: 1,
       warnings: [],
     });
   });
-  await page.route("**/api/nl2sql/db-admin/tables/EMPLOYEES**", (route) =>
+  await page.route("**/api/security/deepsec/target-objects/HR/EMPLOYEES**", (route) =>
     fulfill(route, deepSecTargetObjectDetail)
   );
-  await page.route("**/api/nl2sql/db-admin/tables/ORDERS**", (route) =>
+  await page.route("**/api/security/deepsec/target-objects/SALES/ORDERS**", (route) =>
     fulfill(route, salesObjectDetail)
   );
   await page.route("**/api/security/deepsec/data-entitlements", (route) =>
@@ -4400,7 +4533,6 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     limit: "50",
     cursor: null,
     ownerPrefix: null,
-    queryScope: "name_comment",
   });
   const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
   await expect(page.getByTestId("security-deepsec-entitlement-role-role-query")).toHaveAttribute(
@@ -4916,23 +5048,19 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
     version: number;
     data_entitlements: Array<Record<string, unknown>>;
   } | null = null;
-  await page.route("**/api/nl2sql/db-admin/objects**", (route) => {
+  await page.route("**/api/security/deepsec/target-objects?*", (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     fulfill(route, {
       runtime: "oracle",
       owner: "",
       items: [deepSecTargetObject],
-      total: 2,
-      table_count: 2,
-      view_count: 0,
+      total: null,
       counts_included: false,
       next_cursor: cursor ? null : "deepsec-page-2",
-      refreshed_at: "2026-07-19T00:00:00Z",
-      catalog_version: 1,
       warnings: [],
     });
   });
-  await page.route("**/api/nl2sql/db-admin/tables/EMPLOYEES**", (route) =>
+  await page.route("**/api/security/deepsec/target-objects/HR/EMPLOYEES**", (route) =>
     fulfill(route, deepSecTargetObjectDetail)
   );
   await page.route("**/api/security/deepsec/status", (route) =>

@@ -1881,6 +1881,18 @@ class AdminFeedbackReviewRequest(BaseModel):
     select_ai_profile_name: str = ""
 
 
+class SimilarHistoryPublishData(BaseModel):
+    """管理者 review に連動した類似履歴公開状態。"""
+
+    history_id: str = ""
+    status: Literal["published", "unpublished", "skipped", "warning"] = "skipped"
+    runtime: str = "deterministic"
+    executed: bool = False
+    table_name: str = ""
+    index_name: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AdminFeedbackReviewData(BaseModel):
     """管理者 feedback review response."""
 
@@ -1889,6 +1901,7 @@ class AdminFeedbackReviewData(BaseModel):
     saved: bool
     feedback_content: str = ""
     select_ai_feedback: SelectAiFeedbackAddData | None = None
+    similar_history_publish: SimilarHistoryPublishData | None = None
 
 
 class SelectAiFeedbackMutationData(BaseModel):

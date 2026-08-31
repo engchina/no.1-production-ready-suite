@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -80,6 +83,133 @@ def _principal() -> Principal:
 def _data_grant_checksum_for_test(statements: tuple[str, ...]) -> str:
     payload = "\n-- statement --\n".join(statement.strip() for statement in statements)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class _TargetObjectCursor:
+    def __init__(self, pool: _TargetObjectPools) -> None:
+        self._pool = pool
+        self._rows: list[tuple[Any, ...]] = []
+        self._index = 0
+
+    def __enter__(self) -> _TargetObjectCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
+        binds = dict(params or {})
+        self._pool.executed.append((sql, binds))
+        upper_sql = sql.upper()
+        self._index = 0
+        if "SELECT COUNT(*)" in upper_sql:
+            self._rows = [(self._pool.count_result,)]
+            return
+        if "FROM ALL_TAB_COLUMNS" in upper_sql:
+            self._rows = list(self._pool.column_rows)
+            return
+
+        rows = list(self._pool.object_rows)
+        if "NVL(U.ORACLE_MAINTAINED, 'N') = 'N'" in upper_sql:
+            rows = [
+                row
+                for row in rows
+                if str(row[0] or "").upper() not in self._pool.oracle_maintained_owners
+            ]
+        allowed_owners = {
+            str(value).upper()
+            for key, value in binds.items()
+            if key.startswith("owner_") and key.removeprefix("owner_").isdigit()
+        }
+        if allowed_owners:
+            rows = [row for row in rows if str(row[0] or "").upper() in allowed_owners]
+        exact_owner = str(binds.get("owner") or "").upper()
+        if exact_owner:
+            rows = [row for row in rows if str(row[0] or "").upper() == exact_owner]
+        exact_object = str(binds.get("object_name") or "").upper()
+        if exact_object:
+            rows = [row for row in rows if str(row[1] or "").upper() == exact_object]
+        exact_type = str(binds.get("object_type") or "").upper()
+        if exact_type:
+            rows = [row for row in rows if str(row[2] or "").upper() == exact_type]
+        owner_prefix = str(binds.get("owner_prefix") or "").upper().rstrip("%")
+        if owner_prefix:
+            rows = [row for row in rows if str(row[0] or "").upper().startswith(owner_prefix)]
+        query = str(binds.get("object_query") or "").upper().strip("%")
+        if query:
+            rows = [
+                row
+                for row in rows
+                if query in str(row[1] or "").upper() or query in str(row[4] or "").upper()
+            ]
+        cursor_owner = str(binds.get("cursor_owner") or "").upper()
+        cursor_name = str(binds.get("cursor_name") or "").upper()
+        if cursor_owner and cursor_name:
+            rows = [
+                row
+                for row in rows
+                if (str(row[0] or "").upper(), str(row[1] or "").upper())
+                > (cursor_owner, cursor_name)
+            ]
+        fetch_limit_value = binds.get("fetch_limit")
+        fetch_limit = (
+            int(fetch_limit_value)
+            if isinstance(fetch_limit_value, int | str)
+            else len(rows)
+        )
+        self._rows = rows[:fetch_limit]
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        rows = self._rows[self._index :]
+        self._index = len(self._rows)
+        return rows
+
+
+class _TargetObjectConnection:
+    def __init__(self, pool: _TargetObjectPools) -> None:
+        self._pool = pool
+
+    def cursor(self) -> _TargetObjectCursor:
+        return _TargetObjectCursor(self._pool)
+
+
+class _TargetObjectPools:
+    def __init__(
+        self,
+        *,
+        object_rows: list[tuple[Any, ...]],
+        column_rows: list[tuple[Any, ...]] | None = None,
+        oracle_maintained_owners: set[str] | None = None,
+        count_result: int | None = None,
+    ) -> None:
+        self.object_rows = object_rows
+        self.column_rows = column_rows or []
+        self.oracle_maintained_owners = {
+            owner.upper() for owner in (oracle_maintained_owners or set())
+        }
+        self.count_result = count_result if count_result is not None else len(object_rows)
+        self.executed: list[tuple[str, dict[str, object]]] = []
+
+    @contextmanager
+    def control_connection(self) -> Iterator[Any]:
+        yield _TargetObjectConnection(self)
+
+
+def _target_object_service(
+    settings: Settings,
+    pool: _TargetObjectPools,
+) -> DeepSecService:
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    return DeepSecService(settings, security, cast(OraclePoolManager, pool))
 
 
 def test_data_entitlement_apply_request_requires_full_snapshot() -> None:
@@ -168,7 +298,7 @@ def test_v001_registry_is_stable_and_preview_never_contains_secret() -> None:
     second = build_v001_plan(settings)
     assert [step.checksum for step in first] == [step.checksum for step in second]
     preview = "\n".join(statement for step in first for statement in step.statements)
-    assert PASSWORD_PLACEHOLDER in preview
+    assert PASSWORD_PLACEHOLDER not in preview
     assert settings.oracle_deepsec_data_user_password not in preview
 
 
@@ -183,8 +313,123 @@ def test_v001_plan_contains_foundation_only_without_probe_flow() -> None:
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS TO NL2SQL_APP_DB_ROLE" in preview
+    assert "CREATE END USER" not in preview
+    assert "ALTER END USER" not in preview
+    assert PASSWORD_PLACEHOLDER not in preview
     assert "GRANT NL2SQL_APP_DB_ROLE TO NL2SQL_APP_DATA_ROLE" in preview
     assert "GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER" in preview
+
+
+def test_target_objects_read_live_metadata_and_filter_owner_search() -> None:
+    pool = _TargetObjectPools(
+        object_rows=[
+            ("HR", "EMPLOYEES", "TABLE", 12, "Employees master"),
+            ("HR", "V_EMPLOYEES", "VIEW", None, "Employee view"),
+            ("SALES", "ORDERS", "TABLE", 34, "Sales orders"),
+            ("SALES", "MV_ORDER_SUMMARY", "MATERIALIZED VIEW", 8, "Order summary"),
+        ],
+    )
+    service = _target_object_service(_settings(), pool)
+
+    page = service.target_objects(limit=10)
+    items = cast(list[dict[str, object]], page["items"])
+    assert [item["object_type"] for item in items] == [
+        "TABLE",
+        "VIEW",
+        "TABLE",
+        "MATERIALIZED VIEW",
+    ]
+
+    filtered = service.target_objects(limit=10, owner_prefix="sal", q="summary")
+    filtered_items = cast(list[dict[str, object]], filtered["items"])
+    assert filtered_items == [
+        {
+            "name": "MV_ORDER_SUMMARY",
+            "owner": "SALES",
+            "qualified_name": "SALES.MV_ORDER_SUMMARY",
+            "object_type": "MATERIALIZED VIEW",
+            "row_count": 8,
+            "comment": "Order summary",
+        }
+    ]
+    first_sql, first_binds = pool.executed[0]
+    _second_sql, second_binds = pool.executed[1]
+    assert "ALL_OBJECTS" in first_sql
+    assert "NL2SQL_SCHEMA_OBJECTS" not in first_sql
+    assert first_binds["fetch_limit"] == 11
+    assert second_binds["owner_prefix"] == "SAL%"
+    assert second_binds["object_query"] == "%SUMMARY%"
+
+
+def test_target_objects_exclude_system_objects_and_allowlist_owners() -> None:
+    settings = _settings().model_copy(
+        update={"nl2sql_schema_owner_allowlist": ["app_owner", "sales", "mdsys"]}
+    )
+    pool = _TargetObjectPools(
+        object_rows=[
+            ("SYS", "DUAL", "TABLE", None, "Oracle maintained"),
+            ("MDSYS", "SPATIAL_TABLE", "TABLE", None, "Oracle maintained"),
+            ("APP_OWNER", "NL2SQL_APP_USERS", "TABLE", 3, "internal table"),
+            ("APP_OWNER", "BUSINESS_VIEW", "VIEW", None, "business view"),
+            ("OTHER", "CUSTOMERS", "TABLE", 4, "not allowlisted"),
+            ("SALES", "ORDERS", "TABLE", 7, "orders"),
+        ],
+        oracle_maintained_owners={"MDSYS"},
+    )
+    service = _target_object_service(settings, pool)
+
+    page = service.target_objects(limit=10)
+    items = cast(list[dict[str, object]], page["items"])
+
+    assert [item["qualified_name"] for item in items] == [
+        "APP_OWNER.BUSINESS_VIEW",
+        "SALES.ORDERS",
+    ]
+    sql = pool.executed[0][0]
+    assert "JOIN ALL_USERS u" in sql
+    assert "NVL(u.oracle_maintained, 'N') = 'N'" in sql
+    assert "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'" in sql
+    assert "o.owner IN (:owner_0, :owner_1, :owner_2)" in sql
+
+
+def test_target_object_detail_returns_columns_from_live_metadata() -> None:
+    pool = _TargetObjectPools(
+        object_rows=[("SALES", "ORDERS", "TABLE", 34, "Sales orders")],
+        column_rows=[
+            ("ORDER_ID", "NUMBER(10)", "N", "注文ID"),
+            ("CUSTOMER_NAME", "VARCHAR2(128)", "Y", "顧客名"),
+        ],
+    )
+    service = _target_object_service(_settings(), pool)
+
+    detail = service.target_object_detail(
+        owner="sales",
+        object_name="orders",
+        object_type="table",
+    )
+    columns = cast(list[dict[str, object]], detail["columns"])
+
+    assert detail["qualified_name"] == "SALES.ORDERS"
+    assert detail["object_type"] == "TABLE"
+    assert columns == [
+        {
+            "column_name": "ORDER_ID",
+            "logical_name": "注文ID",
+            "data_type": "NUMBER(10)",
+            "nullable": False,
+            "comment": "注文ID",
+            "sample_values": [],
+        },
+        {
+            "column_name": "CUSTOMER_NAME",
+            "logical_name": "顧客名",
+            "data_type": "VARCHAR2(128)",
+            "nullable": True,
+            "comment": "顧客名",
+            "sample_values": [],
+        },
+    ]
+    assert "FROM ALL_TAB_COLUMNS" in pool.executed[-1][0]
 
 
 def test_verify_fails_when_predicate_table_grants_are_missing(
@@ -1967,6 +2212,536 @@ def test_update_config_persists_runtime_settings_and_closes_pools(
     assert env_file.stat().st_mode & 0o777 == 0o600
 
 
+def test_update_config_syncs_existing_data_user_password(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ORACLE_USER=APP_OWNER\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+    calls: list[tuple[str, object | None]] = []
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object | None = None) -> None:
+            calls.append((sql, params))
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="OldSecret!123")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(
+        service,
+        "status",
+        lambda: {
+            "deepsec_enabled": True,
+            "data_user": "DEEPSEC_DATA_USER",
+            "has_data_user_password": True,
+        },
+    )
+
+    status = service.update_config("DeepSecret!456")
+
+    executed_sql = "\n".join(sql for sql, _params in calls)
+    assert status["has_data_user_password"] is True
+    assert "SELECT COUNT(*) FROM DBA_END_USERS" in executed_sql
+    assert "ALTER END USER IF EXISTS DEEPSEC_DATA_USER" in executed_sql
+    assert 'IDENTIFIED BY "DeepSecret!456"' in executed_sql
+    assert PASSWORD_PLACEHOLDER not in executed_sql
+    assert closed == [True]
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
+
+
+def test_sync_saved_config_password_uses_saved_password_and_closes_pools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    calls: list[tuple[str, object | None]] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object | None = None) -> None:
+            calls.append((sql, params))
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="DeepSecret!Saved")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(
+        service,
+        "status",
+        lambda: {
+            "deepsec_enabled": True,
+            "data_user": "DEEPSEC_DATA_USER",
+            "has_data_user_password": True,
+        },
+    )
+
+    status = service.sync_saved_data_user_password()
+
+    executed_sql = "\n".join(sql for sql, _params in calls)
+    assert status["has_data_user_password"] is True
+    assert "SELECT COUNT(*) FROM DBA_END_USERS" in executed_sql
+    assert "ALTER END USER IF EXISTS DEEPSEC_DATA_USER" in executed_sql
+    assert 'IDENTIFIED BY "DeepSecret!Saved"' in executed_sql
+    assert PASSWORD_PLACEHOLDER not in executed_sql
+    assert closed == [True]
+
+
+def test_sync_saved_config_password_treats_ora28007_as_success_when_saved_login_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    calls: list[str] = []
+    login_probes: list[str] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            calls.append(sql)
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: The password cannot be reused.")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="DeepSecret!Saved")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    monkeypatch.setattr(
+        manager,
+        "validate_data_user_login",
+        lambda: login_probes.append(settings.oracle_deepsec_data_user_password),
+    )
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(service, "status", lambda: {"has_data_user_password": True})
+
+    status = service.sync_saved_data_user_password()
+
+    assert status["has_data_user_password"] is True
+    assert any("ALTER END USER" in sql for sql in calls)
+    assert login_probes == ["DeepSecret!Saved"]
+    assert closed == [True]
+
+
+def test_sync_saved_config_password_keeps_409_when_ora28007_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: password=DeepSecret!Saved cannot be reused")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="DeepSecret!Saved")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+
+    def fail_login_probe() -> None:
+        raise RuntimeError("ORA-01017: invalid credential password=DeepSecret!Saved")
+
+    monkeypatch.setattr(manager, "validate_data_user_login", fail_login_probe)
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError, match="新しい DATA USER パスワード") as exc_info:
+        service.sync_saved_data_user_password()
+
+    message = str(exc_info.value)
+    assert exc_info.value.status_code == 409
+    assert "DeepSecret!Saved" not in message
+    assert "[REDACTED]" in message
+    assert closed == [True]
+
+
+def test_sync_saved_config_password_requires_saved_password() -> None:
+    settings = _settings(deepsec_enabled=True, data_user_password="")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    with pytest.raises(SecurityApiError, match="保存済み DATA USER パスワード") as exc_info:
+        service.sync_saved_data_user_password()
+
+    assert exc_info.value.status_code == 409
+
+
+def test_sync_saved_config_password_creates_end_user_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    calls: list[str] = []
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            calls.append(sql)
+
+        def fetchone(self) -> tuple[int]:
+            return (0,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="DeepSecret!Saved")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(service, "status", lambda: {"has_data_user_password": True})
+
+    status = service.sync_saved_data_user_password()
+
+    assert status["has_data_user_password"] is True
+    assert any("DBA_END_USERS" in sql for sql in calls)
+    assert any("CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER" in sql for sql in calls)
+    assert not any("ALTER END USER" in sql for sql in calls)
+    assert 'IDENTIFIED BY "DeepSecret!Saved"' in "\n".join(calls)
+    assert closed == [True]
+
+
+def test_update_config_skips_password_sync_when_data_user_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ORACLE_USER=APP_OWNER\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: None)
+    calls: list[str] = []
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            calls.append(sql)
+
+        def fetchone(self) -> tuple[int]:
+            return (0,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=False, data_user_password="")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(service, "status", lambda: {"has_data_user_password": True})
+
+    service.update_config("DeepSecret!456")
+
+    assert any("DBA_END_USERS" in sql for sql in calls)
+    assert not any("ALTER END USER" in sql for sql in calls)
+    assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
+
+
+def test_update_config_rolls_back_when_password_sync_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    original_env = (
+        "ORACLE_USER=APP_OWNER\n"
+        "ORACLE_DEEPSEC_ENABLED=true\n"
+        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+    )
+    env_file.write_text(original_env, encoding="utf-8")
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-01031 password=DeepSecret!456")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="OldSecret!123")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError) as exc_info:
+        service.update_config("DeepSecret!456")
+
+    assert exc_info.value.status_code == 409
+    assert "DeepSec DATA USER パスワードを Oracle END USER へ同期できませんでした" in str(
+        exc_info.value
+    )
+    assert "DeepSecret!456" not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
+    assert settings.oracle_deepsec_enabled is True
+    assert settings.oracle_deepsec_data_user_password == "OldSecret!123"
+    assert env_file.read_text(encoding="utf-8") == original_env
+    assert closed == [True]
+
+
+def test_update_config_keeps_password_when_ora28007_probe_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ORACLE_USER=APP_OWNER\n"
+        "ORACLE_DEEPSEC_ENABLED=true\n"
+        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    login_probes: list[str] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: The password cannot be reused.")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="OldSecret!123")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+    monkeypatch.setattr(
+        manager,
+        "validate_data_user_login",
+        lambda: login_probes.append(settings.oracle_deepsec_data_user_password),
+    )
+    service = DeepSecService(settings, security, manager)
+    monkeypatch.setattr(service, "status", lambda: {"has_data_user_password": True})
+
+    status = service.update_config("DeepSecret!456")
+
+    assert status["has_data_user_password"] is True
+    assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
+    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_file.read_text(
+        encoding="utf-8"
+    )
+    assert login_probes == ["DeepSecret!456"]
+    assert closed == [True]
+
+
+def test_update_config_rolls_back_when_ora28007_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    original_env = (
+        "ORACLE_USER=APP_OWNER\n"
+        "ORACLE_DEEPSEC_ENABLED=true\n"
+        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+    )
+    env_file.write_text(original_env, encoding="utf-8")
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: password=DeepSecret!456 cannot be reused")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    settings = _settings(deepsec_enabled=True, data_user_password="OldSecret!123")
+    security = SecurityService(InMemorySecurityStore(), settings)
+    security.bootstrap()
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "control_connection", lambda: SyncConnection())
+
+    def fail_login_probe() -> None:
+        raise RuntimeError("ORA-01017: invalid credential password=DeepSecret!456")
+
+    monkeypatch.setattr(manager, "validate_data_user_login", fail_login_probe)
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError, match="新しい DATA USER パスワード") as exc_info:
+        service.update_config("DeepSecret!456")
+
+    message = str(exc_info.value)
+    assert exc_info.value.status_code == 409
+    assert "DeepSecret!456" not in message
+    assert "[REDACTED]" in message
+    assert settings.oracle_deepsec_data_user_password == "OldSecret!123"
+    assert env_file.read_text(encoding="utf-8") == original_env
+    assert closed == [True]
+
+
 @pytest.mark.parametrize(
     "password",
     ["short", "Invalid\nPass123", "Invalid\x7fPass123", 'Invalid"Pass123'],
@@ -2045,12 +2820,16 @@ class _FakePool:
     def __init__(self, connection: _FakeConnection) -> None:
         self.connection = connection
         self.dropped: list[_FakeConnection] = []
+        self.closed_force_values: list[bool] = []
 
     def acquire(self) -> _FakeConnection:
         return self.connection
 
     def drop(self, connection: _FakeConnection) -> None:
         self.dropped.append(connection)
+
+    def close(self, *, force: bool = False) -> None:
+        self.closed_force_values.append(force)
 
 
 class _FakeOracleDb:
@@ -2094,6 +2873,39 @@ def test_deepsec_configuration_requires_data_user_password() -> None:
         manager.validate_deepsec_configuration()
 
 
+def test_data_user_login_probe_uses_data_credentials_without_context_calls() -> None:
+    calls: list[tuple[str, list[str]]] = []
+    connection = _FakeConnection(calls)
+    pool = _FakePool(connection)
+
+    class ProbeOracleDb(_FakeOracleDb):
+        def create_pool(self, **kwargs: object) -> _FakePool:
+            self.pool_kwargs.append(kwargs)
+            return pool
+
+    manager = OraclePoolManager(_settings(driver_mode="thin", deepsec_enabled=False))
+    fake_oracledb = ProbeOracleDb()
+    manager._oracledb = fake_oracledb
+
+    manager.validate_data_user_login()
+
+    assert fake_oracledb.pool_kwargs == [
+        {
+            "user": "DEEPSEC_DATA_USER",
+            "password": "DeepSecret!123",
+            "dsn": "test",
+            "tcp_connect_timeout": 5,
+            "min": 1,
+            "max": 1,
+            "increment": 1,
+        }
+    ]
+    assert calls == []
+    assert connection.closed == 1
+    assert pool.closed_force_values == [True]
+    assert manager._data_pool is None
+
+
 def test_data_pool_uses_thin_driver_and_data_user_credentials() -> None:
     manager = OraclePoolManager(_settings(driver_mode="thin"))
     fake_oracledb = _FakeOracleDb()
@@ -2113,6 +2925,26 @@ def test_data_pool_uses_thin_driver_and_data_user_credentials() -> None:
             "increment": 1,
         }
     ]
+
+
+def test_data_pool_invalid_credentials_points_to_data_user_password_sync() -> None:
+    class FailingOracleDb(_FakeOracleDb):
+        def create_pool(self, **kwargs: object) -> _FakePool:
+            self.pool_kwargs.append(kwargs)
+            raise RuntimeError("ORA-01017 invalid credential password=DeepSecret!123")
+
+    manager = OraclePoolManager(_settings(driver_mode="thin"))
+    fake_oracledb = FailingOracleDb()
+    manager._oracledb = fake_oracledb
+
+    with pytest.raises(OracleAdapterError) as exc_info:
+        manager._get_pool(data_plane=True)
+
+    message = str(exc_info.value)
+    assert "DeepSec DATA USER の Oracle ログインに失敗しました" in message
+    assert "DATA USER パスワードを保存し直し" in message
+    assert "DeepSecret!123" not in message
+    assert fake_oracledb.pool_kwargs[0]["user"] == "DEEPSEC_DATA_USER"
 
 
 def test_deepsec_pool_rejects_thick_before_driver_initialization() -> None:

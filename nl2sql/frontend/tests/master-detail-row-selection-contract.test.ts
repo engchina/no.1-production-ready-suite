@@ -90,5 +90,18 @@ test("行メニューには純粋な詳細/編集選択を置かず、実操作�
 
   assert.doesNotMatch(profileManagementSource, /profiles\.action\.select"\)\}<\/span>/u);
   assert.match(profileManagementSource, /id:\s*"delete"/u);
-  assert.match(profileManagementSource, /RowActionMenu/u);
+});
+
+test("セキュリティとプロファイルの一覧は操作列を持たず詳細アクションへ集約する", () => {
+  assert.doesNotMatch(securityUsersSource, /RowActionMenu/u);
+  assert.doesNotMatch(securityUsersSource, /key:\s*"actions"/u);
+  assert.match(securityUsersSource, /testId="security-users-detail-actions"/u);
+
+  assert.doesNotMatch(securityRolesSource, /RowActionMenu/u);
+  assert.doesNotMatch(securityRolesSource, /key:\s*"actions"/u);
+  assert.match(securityRolesSource, /testId="security-roles-detail-actions"/u);
+
+  assert.doesNotMatch(profileManagementSource, /RowActionMenu/u);
+  assert.doesNotMatch(profileManagementSource, /profile-management-row-actions/u);
+  assert.match(profileManagementSource, /testId="profile-editor-actions"/u);
 });

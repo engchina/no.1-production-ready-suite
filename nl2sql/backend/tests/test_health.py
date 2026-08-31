@@ -152,7 +152,8 @@ class _FakeOracleCursor:
             if self.db.create_team_calls <= self.db.create_team_profile_exists_failures:
                 raise RuntimeError("ORA-20046: Profile AGENT$NL2SQL_DEFAULT_TEAM already exists.")
         if normalized_sql.startswith("MERGE INTO"):
-            self.db.state_json = str((params or {})["state_json"])
+            if params is not None and "state_json" in params:
+                self.db.state_json = str(params["state_json"])
         elif normalized_sql.startswith("SELECT state_json"):
             self._row = (self.db.state_json,) if self.db.state_json else None
         elif "FROM all_tab_columns" in normalized_sql:
@@ -2505,26 +2506,10 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
             },
         )
         assert admin_feedback_resp.status_code == 200
-        assert admin_feedback_resp.json()["data"]["feedback_content"] == "管理者確認済み"
-
-        index_status_resp = await client.get("/api/nl2sql/feedback-index")
-        assert index_status_resp.status_code == 200
-        index_status = index_status_resp.json()["data"]
-        assert index_status["vector_dimension"] == 1536
-        assert index_status["vector_backend"] == "oracle_26ai"
-        assert index_status["indexable_count"] >= 1
-
-        legacy_rebuild_resp = await client.post(
-            "/api/nl2sql/feedback-index/rebuild", json={"execute": False}
-        )
-        assert legacy_rebuild_resp.status_code == 422
-
-        rebuild_resp = await client.post("/api/nl2sql/feedback-index/rebuild", json={})
-        assert rebuild_resp.status_code == 200
-        rebuild_data = rebuild_resp.json()["data"]
-        assert rebuild_data["executed"] is False
-        assert rebuild_data["status"] == "stale"
-        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(rebuild_data["warnings"])
+        admin_data = admin_feedback_resp.json()["data"]
+        assert admin_data["feedback_content"] == "管理者確認済み"
+        assert admin_data["similar_history_publish"]["status"] == "published"
+        assert admin_data["similar_history_publish"]["runtime"] == "deterministic"
 
         similar_resp = await client.post(
             "/api/nl2sql/similar-history",
@@ -2548,12 +2533,6 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert preview_resp.status_code == 200
         examples = preview_resp.json()["data"]["engine_meta"]["similar_history_examples"]
         assert examples[0]["history_id"] == history_item["id"]
-
-        clear_resp = await client.post("/api/nl2sql/feedback-index/clear", json={})
-        assert clear_resp.status_code == 200
-        clear_data = clear_resp.json()["data"]
-        assert clear_data["executed"] is False
-        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(clear_data["warnings"])
 
 
 async def test_demo_learning_seed_no_longer_creates_fixed_business_history() -> None:
@@ -3171,6 +3150,135 @@ def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table()
     assert str(rows[0]["embedding_json"]).startswith("[0.01")
 
 
+def test_admin_good_feedback_publishes_single_oracle_feedback_vector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+    service._history.append(
+        HistoryItem(
+            id="hist-publish-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-06-21T10:00:00+00:00",
+            feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+        )
+    )
+
+    data = service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id="hist-publish-001",
+            rating=FeedbackRating.GOOD,
+            feedback_content="管理者確認済み",
+        )
+    )
+
+    assert data.saved is True
+    assert data.similar_history_publish is not None
+    assert data.similar_history_publish.status == "published"
+    assert data.similar_history_publish.executed is True
+    assert any('CREATE TABLE "NL2SQL_FEEDBACK_VECTORS"' in sql for sql in fake_db.executed)
+    assert any('MERGE INTO "NL2SQL_FEEDBACK_VECTORS"' in sql for sql in fake_db.executed)
+    assert any('CREATE VECTOR INDEX "NL2SQL_FEEDBACK_VEC_IDX"' in sql for sql in fake_db.executed)
+    assert service.list_feedback_entries().items[0].indexed is True
+
+
+def test_admin_bad_feedback_unpublishes_oracle_feedback_vector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+    service._history.append(
+        HistoryItem(
+            id="hist-unpublish-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-06-21T10:00:00+00:00",
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+        )
+    )
+    service._feedback_indexed_ids.add("hist-unpublish-001")
+
+    data = service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id="hist-unpublish-001",
+            rating=FeedbackRating.BAD,
+            feedback_content="条件が違う",
+        )
+    )
+
+    assert data.saved is True
+    assert data.similar_history_publish is not None
+    assert data.similar_history_publish.status == "unpublished"
+    assert data.similar_history_publish.executed is True
+    assert any('DELETE FROM "NL2SQL_FEEDBACK_VECTORS"' in sql for sql in fake_db.executed)
+    assert service.list_feedback_entries().items[0].indexed is False
+    similar = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id="default")
+    )
+    assert similar.items == []
+
+
+def test_admin_good_feedback_publish_warning_keeps_deterministic_similar_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+
+    class _FailingPublishOracleAdapter(_QuestionCaptureOracleAdapter):
+        def upsert_feedback_vector_entry(
+            self,
+            *,
+            table_name: str,
+            index_name: str,
+            row: dict[str, Any],
+        ) -> dict[str, Any]:
+            del table_name, index_name, row
+            raise OracleAdapterError("feedback vector publish failed")
+
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FailingPublishOracleAdapter(fake_db))
+    service._history.append(
+        HistoryItem(
+            id="hist-warning-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-06-21T10:00:00+00:00",
+            feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+        )
+    )
+
+    data = service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id="hist-warning-001",
+            rating=FeedbackRating.GOOD,
+            feedback_content="管理者確認済み",
+        )
+    )
+
+    assert data.saved is True
+    assert data.similar_history_publish is not None
+    assert data.similar_history_publish.status == "warning"
+    assert "feedback vector publish failed" in " ".join(data.similar_history_publish.warnings)
+    similar = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を見たい", profile_id="default")
+    )
+    assert [item.item.id for item in similar.items] == ["hist-warning-001"]
+
+
 def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
     fake_db = _FakeOracleDb()
     fake_db.select_ai_feedback_rows = [
@@ -3392,7 +3500,17 @@ def test_service_similar_history_uses_oracle_vector_search(
             admin_feedback_rating=FeedbackRating.GOOD,
             profile_id="default",
             profile_name="既定プロファイル",
-        )
+        ),
+        HistoryItem(
+            id="hist-deterministic-001",
+            question="請求金額の明細を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT, INVOICE_ID FROM INVOICES",
+            created_at="2026-06-21T10:01:00+00:00",
+            admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+        ),
     ]
 
     similar = service.similar_history(
@@ -3403,6 +3521,7 @@ def test_service_similar_history_uses_oracle_vector_search(
     assert similar.items[0].item.id == "hist-vector-001"
     assert similar.items[0].score == 0.92
     assert "Oracle 26ai vector search" in similar.items[0].reason
+    assert "hist-deterministic-001" in [item.item.id for item in similar.items]
     assert any("VECTOR_DISTANCE" in sql for sql in fake_db.executed)
     vector_queries = [sql for sql in fake_db.executed if "VECTOR_DISTANCE" in sql]
     assert vector_queries

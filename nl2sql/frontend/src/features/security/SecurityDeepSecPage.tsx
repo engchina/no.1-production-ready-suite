@@ -448,10 +448,16 @@ function DeepSecTargetObjectPicker({
   onLoadMore: () => void;
 }) {
   const titleId = `deepsec-entitlement-resource-${index}`;
-  const loadedLabel = t("security.deepsec.entitlements.objectCount", {
-    loaded: objects.length,
-    total: total ?? objects.length,
-  });
+  const loadedLabel =
+    typeof total === "number"
+      ? t("security.deepsec.entitlements.objectCount", {
+          loaded: objects.length,
+          total,
+        })
+      : t("security.deepsec.entitlements.objectLoadedCount", {
+          loaded: objects.length,
+        });
+  const hasObjectFilter = Boolean(search.trim() || ownerPrefix.trim());
   return (
     <div className="grid gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
       <span id={titleId}>
@@ -505,9 +511,20 @@ function DeepSecTargetObjectPicker({
             </p>
           ) : null}
           {!loading && objects.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-muted">
-              {t("security.deepsec.entitlements.objectEmpty")}
-            </p>
+            <div className="grid gap-1 px-2 py-3 text-sm text-muted">
+              <p>
+                {t(
+                  hasObjectFilter
+                    ? "security.deepsec.entitlements.objectEmpty"
+                    : "security.deepsec.entitlements.objectEmptyUnfiltered"
+                )}
+              </p>
+              {!hasObjectFilter ? (
+                <p className="text-[11px] leading-5">
+                  {t("security.deepsec.entitlements.objectEmptyHint")}
+                </p>
+              ) : null}
+            </div>
           ) : null}
           {objects.map((object) => {
             const qualifiedName = targetQualifiedName(object);
@@ -709,6 +726,7 @@ export function SecurityDeepSecPage() {
   const [entitlementApplying, setEntitlementApplying] = useState(false);
   const [dataUserPassword, setDataUserPassword] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
+  const [configSyncing, setConfigSyncing] = useState(false);
   const [configError, setConfigError] = useState("");
   const [statusLoadError, setStatusLoadError] = useState("");
   const [planLoadError, setPlanLoadError] = useState("");
@@ -857,6 +875,10 @@ export function SecurityDeepSecPage() {
     plan?.steps.some((step) => step.status === "APPLIED" || step.status === "FAILED")
   );
   const resetConfirmed = resetConfirmation.trim() === ADMIN_RESET_CONFIRMATION;
+  const hasSavedDataUserPassword = Boolean(status?.has_data_user_password ?? plan?.has_data_user_password);
+  const passwordSyncDisabled = Boolean(
+    !hasSavedDataUserPassword || dataUserPassword || configSaving || configSyncing
+  );
 
   const loadStatus = async () => {
     const sequence = statusLoadSequence.current + 1;
@@ -971,7 +993,7 @@ export function SecurityDeepSecPage() {
           append ? mergeTargetObjectPages(current, page.items) : page.items
         );
         setTargetObjectNextCursor(page.next_cursor ?? null);
-        setTargetObjectTotal(typeof page.total === "number" ? page.total : page.items.length);
+        setTargetObjectTotal(typeof page.total === "number" ? page.total : null);
         completed = true;
       });
     } catch (cause) {
@@ -1110,6 +1132,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleSaveConfig = async () => {
+    if (configSaving || configSyncing) return;
     const validationError = validateConfigForm();
     if (validationError) {
       setConfigError(validationError);
@@ -1128,6 +1151,28 @@ export function SecurityDeepSecPage() {
       setConfigError(cause instanceof Error ? cause.message : t("security.common.saveError"));
     } finally {
       setConfigSaving(false);
+    }
+  };
+
+  const handleSyncConfig = async () => {
+    if (configSaving || configSyncing) return;
+    if (!hasSavedDataUserPassword) {
+      setConfigError(t("security.deepsec.config.syncMissing"));
+      return;
+    }
+    if (dataUserPassword) return;
+    setConfigSyncing(true);
+    setConfigError("");
+    setActionError("");
+    try {
+      const nextStatus = await securityApi.syncDeepSecConfigPassword();
+      setStatus(nextStatus);
+      toast.success(t("security.deepsec.config.synced"));
+      await loadPlan();
+    } catch (cause) {
+      setConfigError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setConfigSyncing(false);
     }
   };
 
@@ -1652,7 +1697,7 @@ export function SecurityDeepSecPage() {
                       setConfigError("");
                     }}
                     placeholder={
-                      (status?.has_data_user_password ?? plan?.has_data_user_password)
+                      hasSavedDataUserPassword
                         ? t("security.deepsec.config.passwordPlaceholderSaved")
                         : t("security.deepsec.config.passwordPlaceholderNew")
                     }
@@ -1660,7 +1705,7 @@ export function SecurityDeepSecPage() {
                     aria-invalid={Boolean(configError)}
                   />
                   <p id="deepsec-data-user-password-state" className="text-xs text-muted">
-                    {(status?.has_data_user_password ?? plan?.has_data_user_password)
+                    {hasSavedDataUserPassword
                       ? t("security.deepsec.config.secretSaved")
                       : t("security.deepsec.config.secretMissing")}
                   </p>
@@ -1675,11 +1720,23 @@ export function SecurityDeepSecPage() {
                   type="submit"
                   size="lg"
                   loading={configSaving}
-                  disabled={!dataUserPassword || configSaving}
+                  disabled={!dataUserPassword || configSaving || configSyncing}
                   className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
                 >
                   <Save size={15} aria-hidden />
                   {t("security.deepsec.config.save")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  loading={configSyncing}
+                  disabled={passwordSyncDisabled}
+                  className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
+                  onClick={() => void handleSyncConfig()}
+                >
+                  <RefreshCw size={15} aria-hidden />
+                  {t("security.deepsec.config.sync")}
                 </Button>
               </div>
             </form>

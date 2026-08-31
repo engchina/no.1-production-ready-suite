@@ -37,6 +37,8 @@ test("database settings exposes create, explicit recreate, readiness and fixed f
   assert.doesNotMatch(databaseSettingsSource, /useConfirm/u);
   assert.doesNotMatch(databaseSettingsSource, /successNextStep/u);
   assert.doesNotMatch(databaseSettingsSource, /action\.openProfiles/u);
+  assert.match(databaseSettingsSource, /<ErrorState[\s\S]*retryLabel/u);
+  assert.match(databaseSettingsSource, /<Banner[\s\S]*severity="danger"/u);
   assert.match(databaseSettingsSource, /<ExecutionConfirmationField/u);
   assert.match(databaseSettingsSource, /<FormStatus[\s\S]*tone="danger"/u);
   assert.match(databaseSettingsSource, /data-testid="select-ai-credential-success"/u);

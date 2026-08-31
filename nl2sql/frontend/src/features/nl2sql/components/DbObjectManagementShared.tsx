@@ -30,7 +30,11 @@ import {
   type EntityAction,
   type EntityActionTone,
 } from "@/components/ObjectActions";
-import { TimedLoadingState, type ProcessingPlacement } from "@/components/ProcessingState";
+import {
+  TimedLoadingState,
+  type ProcessingActivityIcon,
+  type ProcessingPlacement,
+} from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -220,6 +224,7 @@ export function DbManagementLoadingSkeleton({
   onCancel,
   placement = "panel",
   testId,
+  activityIcon,
 }: {
   idPrefix: string;
   ariaLabel: string;
@@ -229,6 +234,7 @@ export function DbManagementLoadingSkeleton({
   onCancel?: () => void;
   placement?: ProcessingPlacement;
   testId?: string;
+  activityIcon?: ProcessingActivityIcon;
 }) {
   if (variant === "list") {
     return (
@@ -238,6 +244,7 @@ export function DbManagementLoadingSkeleton({
         onCancel={onCancel}
         placement={placement}
         testId={testId ?? `${idPrefix}-list-skeleton`}
+        activityIcon={activityIcon}
       >
         <div className="grid gap-2">
           <SkeletonBlock className="h-11" />
@@ -257,6 +264,7 @@ export function DbManagementLoadingSkeleton({
         onCancel={onCancel}
         placement={placement}
         testId={testId ?? `${idPrefix}-compact-skeleton`}
+        activityIcon={activityIcon}
       >
         <SkeletonBlock className="h-10" />
         <SkeletonBlock className="h-24" />
@@ -271,6 +279,7 @@ export function DbManagementLoadingSkeleton({
       onCancel={onCancel}
       placement={placement}
       testId={testId ?? `${idPrefix}-detail-skeleton`}
+      activityIcon={activityIcon}
     >
       <SkeletonBlock className="h-[64px]" />
       <SkeletonBlock className="h-[40px]" />

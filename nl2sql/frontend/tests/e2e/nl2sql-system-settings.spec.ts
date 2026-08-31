@@ -1872,6 +1872,93 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
   await expectNoHorizontalOverflow(page);
 });
 
+test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で再取得できる", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const apiError =
+    "Select AI Credential の状態を Oracle から取得できませんでした。データベース接続を確認して再試行してください。";
+  let statusRequests = 0;
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", (route) => {
+    statusRequests += 1;
+    return route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: [apiError],
+        warning_messages: [],
+        error_code: "SELECT_AI_CREDENTIAL_STATUS_FAILED",
+        request_id: "req-select-ai-status-initial",
+      }),
+    });
+  });
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  const alert = card.getByRole("alert");
+  await expect(alert).toHaveCount(1);
+  await expect(alert).toContainText(apiError);
+  await expect(alert).toContainText("req-select-ai-status-initial");
+  const retry = card.getByRole("button", { name: "状態を再取得" });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ、旧データを保持する", async ({
+  page,
+}) => {
+  const apiError =
+    "Select AI Credential の状態を Oracle から取得できませんでした。データベース接続を確認して再試行してください。";
+  let statusRequests = 0;
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", (route) => {
+    statusRequests += 1;
+    if (statusRequests === 1) {
+      return fulfillJson(route, {
+        credential_name: "OCI_CRED",
+        schema_name: "ADMIN",
+        exists: false,
+        region: "ap-osaka-1",
+        oci_auth_ready: false,
+        missing_fields: ["fingerprint"],
+        operation: null,
+      });
+    }
+    return route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: [apiError],
+        warning_messages: [],
+        error_code: "SELECT_AI_CREDENTIAL_STATUS_FAILED",
+        request_id: "req-select-ai-status-refresh",
+      }),
+    });
+  });
+
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
+  const alert = card.getByRole("alert");
+  await expect(alert).toHaveCount(1);
+  await expect(alert).toContainText(apiError);
+  await expect(alert).toContainText("req-select-ai-status-refresh");
+  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "状態を再取得" })).toHaveCount(1);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("Select AI Credential API 失敗は固定 alert だけに表示し Toast を重複させない", async ({
   page,
 }) => {

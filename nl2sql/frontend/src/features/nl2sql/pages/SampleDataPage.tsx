@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
@@ -14,6 +13,7 @@ import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { DbAdminExecutionResult, ExecutionConfirmationField } from "../components/DbAdminShared";
 import {
+  DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
@@ -286,6 +286,7 @@ export function SampleDataPage() {
         title={t("sampleData.title")}
         subtitle={t("sampleData.subtitle")}
         status={<SchemaRefreshHeaderStatus testId="sample-data-schema-refresh-status" />}
+        actionsTestId="sample-data-actions"
         actions={[
           {
             id: "refresh",
@@ -353,92 +354,96 @@ export function SampleDataPage() {
           processing={
             schemaRefreshing ? (
               <SchemaRefreshProcessing testId="sample-data-workspace-processing" />
-            ) : loading === "load" ? (
-              <ProcessingIndicator
-                active
-                label={t("common.processing.refreshing")}
-                operationKey="sample-data-refresh"
-                placement="workspace"
-                className="rounded-md border border-border bg-background px-3 py-2"
-                testId="sample-data-workspace-processing"
-                activityIcon="none"
-              />
             ) : undefined
           }
         >
-          <section className="grid min-w-0 content-start gap-4" aria-labelledby="sample-data-action-heading">
-            <DbObjectPanelHeader
-              headingId="sample-data-action-heading"
-              icon={isDeleteAction ? Trash2 : FileSpreadsheet}
-              title={actionTitle}
-              description={actionDescription}
+          {loading === "load" ? (
+            <DbManagementLoadingSkeleton
+              idPrefix="sample-data-workspace-refresh"
+              ariaLabel={t("common.processing.refreshing")}
+              variant="detail"
+              operationKey="sample-data-refresh"
+              placement="workspace"
+              testId="sample-data-workspace-refresh-skeleton"
+              activityIcon="none"
             />
-
-            {!isDeleteAction && (
-              <label className="grid gap-1 text-sm font-medium text-foreground">
-                <span>{t("dataTools.sample.step")}</span>
-                <select
-                  value={sampleStep}
-                  onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
-                  className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
-                >
-                  {SAMPLE_STEPS.map((step) => (
-                    <option key={step} value={step}>
-                      {sampleStepLabel(step)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <ExecutionConfirmationField
-              value={sampleConfirmation}
-              onChange={setSampleConfirmation}
-              confirmed={confirmationMatched}
-              placeholder={expectedConfirmation}
-              expectedLabel={expectedConfirmation}
-              helper={t("dataTools.sample.confirmationHelper", { phrase: expectedConfirmation })}
-              tone={isDeleteAction ? "danger" : "neutral"}
-              actions={
-                <Button
-                  type="button"
-                  variant={isDeleteAction ? "danger" : "primary"}
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
-                  disabled={!confirmationMatched}
-                  onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
-                >
-                  {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}
-                  <span>{actionTitle}</span>
-                </Button>
-              }
-            />
-          </section>
-
-          <section className="grid min-w-0 content-start gap-4">
-            <DbObjectPanelHeader
-              icon={Database}
-              title={t("dataTools.sample.previewTitle")}
-              description={t("dataTools.sample.previewHint")}
-            />
-            <SampleObjectSummary sampleInfo={sampleInfo} />
-            <SampleSqlPreview sql={sampleSqlPreview} />
-            {sampleResult && (
-              <DbAdminExecutionResult
-                result={{
-                  executed: sampleResult.executed,
-                  runtime: sampleResult.runtime,
-                  select_result: null,
-                  statements: sampleResult.statements,
-                  committed: false,
-                  rolled_back: false,
-                  warnings: sampleResult.warnings,
-                  timing: sampleResult.timing,
-                }}
+          ) : (
+            <section className="grid min-w-0 content-start gap-4" aria-labelledby="sample-data-action-heading">
+              <DbObjectPanelHeader
+                headingId="sample-data-action-heading"
+                icon={isDeleteAction ? Trash2 : FileSpreadsheet}
+                title={actionTitle}
+                description={actionDescription}
               />
-            )}
-          </section>
+
+              {!isDeleteAction && (
+                <label className="grid gap-1 text-sm font-medium text-foreground">
+                  <span>{t("dataTools.sample.step")}</span>
+                  <select
+                    value={sampleStep}
+                    onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
+                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  >
+                    {SAMPLE_STEPS.map((step) => (
+                      <option key={step} value={step}>
+                        {sampleStepLabel(step)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <ExecutionConfirmationField
+                value={sampleConfirmation}
+                onChange={setSampleConfirmation}
+                confirmed={confirmationMatched}
+                placeholder={expectedConfirmation}
+                expectedLabel={expectedConfirmation}
+                helper={t("dataTools.sample.confirmationHelper", { phrase: expectedConfirmation })}
+                tone={isDeleteAction ? "danger" : "neutral"}
+                actions={
+                  <Button
+                    type="button"
+                    variant={isDeleteAction ? "danger" : "primary"}
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
+                    disabled={!confirmationMatched}
+                    onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
+                  >
+                    {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}
+                    <span>{actionTitle}</span>
+                  </Button>
+                }
+              />
+            </section>
+          )}
+
+          {loading !== "load" && (
+            <section className="grid min-w-0 content-start gap-4">
+              <DbObjectPanelHeader
+                icon={Database}
+                title={t("dataTools.sample.previewTitle")}
+                description={t("dataTools.sample.previewHint")}
+              />
+              <SampleObjectSummary sampleInfo={sampleInfo} />
+              <SampleSqlPreview sql={sampleSqlPreview} />
+              {sampleResult && (
+                <DbAdminExecutionResult
+                  result={{
+                    executed: sampleResult.executed,
+                    runtime: sampleResult.runtime,
+                    select_result: null,
+                    statements: sampleResult.statements,
+                    committed: false,
+                    rolled_back: false,
+                    warnings: sampleResult.warnings,
+                    timing: sampleResult.timing,
+                  }}
+                />
+              )}
+            </section>
+          )}
         </DbObjectManagementPanelShell>
       </main>
     </>

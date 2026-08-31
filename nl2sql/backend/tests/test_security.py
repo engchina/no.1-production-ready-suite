@@ -1923,6 +1923,15 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("GET", "/security/profile-access/profiles") == frozenset(
         {"menu.security_roles"}
     )
+    assert permission_for_route("GET", "/security/deepsec/target-objects") == frozenset(
+        {"menu.security_deepsec"}
+    )
+    assert permission_for_route(
+        "GET", "/security/deepsec/target-objects/{owner}/{object_name}"
+    ) == frozenset({"menu.security_deepsec"})
+    assert permission_for_route("POST", "/security/deepsec/config/sync-password") == frozenset(
+        {"menu.security_deepsec"}
+    )
 
 
 def test_security_audit_permission_and_api_are_removed() -> None:
@@ -2573,6 +2582,290 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
     assert "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER" in env_text
     assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
     assert "ORACLE_DEEPSEC_END_USER" not in env_text
+
+
+def test_deepsec_config_sync_password_endpoint_uses_saved_secret_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_security_threadpools(monkeypatch)
+    calls: list[str] = []
+
+    def sync_saved(_service: object) -> dict[str, object]:
+        settings = get_settings()
+        calls.append(settings.oracle_deepsec_data_user_password)
+        return {
+            "configured": True,
+            "driver_mode": "thin",
+            "connection_security": "walletless_tls",
+            "deepsec_enabled": True,
+            "data_user": "DEEPSEC_DATA_USER",
+            "has_data_user_password": True,
+            "objects": {},
+            "message": "同期しました。",
+        }
+
+    monkeypatch.setattr(
+        "app.security.deepsec.DeepSecService.sync_saved_data_user_password",
+        sync_saved,
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_dsn", "test")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_connection_security", "walletless_tls")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", True)
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user", "DEEPSEC_DATA_USER")
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user_password", "DeepSecret!Stored")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/security/deepsec/config/sync-password")
+            assert response.status_code == 200
+            assert response.json()["data"]["has_data_user_password"] is True
+            assert "DeepSecret!Stored" not in response.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    assert calls == ["DeepSecret!Stored"]
+    operation = app.openapi()["paths"]["/api/security/deepsec/config/sync-password"]["post"]
+    assert "requestBody" not in operation
+
+
+def test_deepsec_config_sync_password_endpoint_treats_ora28007_as_success_when_login_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_security_threadpools(monkeypatch)
+    login_probes: list[str] = []
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: The password cannot be reused.")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    def control_connection(_manager: object) -> SyncConnection:
+        return SyncConnection()
+
+    def validate_data_user_login(manager) -> None:
+        login_probes.append(manager.settings.oracle_deepsec_data_user_password)
+
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.OraclePoolManager.control_connection",
+        control_connection,
+    )
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.OraclePoolManager.validate_data_user_login",
+        validate_data_user_login,
+    )
+    monkeypatch.setattr(
+        "app.security.deepsec.DeepSecService.status",
+        lambda _service: {
+            "configured": True,
+            "driver_mode": "thin",
+            "connection_security": "walletless_tls",
+            "deepsec_enabled": True,
+            "data_user": "DEEPSEC_DATA_USER",
+            "has_data_user_password": True,
+            "objects": {},
+            "message": "同期しました。",
+        },
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_dsn", "test")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_connection_security", "walletless_tls")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", True)
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user", "DEEPSEC_DATA_USER")
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user_password", "DeepSecret!Stored")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/security/deepsec/config/sync-password")
+            assert response.status_code == 200
+            assert response.json()["data"]["has_data_user_password"] is True
+            assert "DeepSecret!Stored" not in response.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    assert login_probes == ["DeepSecret!Stored"]
+
+
+def test_deepsec_config_sync_password_endpoint_keeps_409_when_ora28007_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_security_threadpools(monkeypatch)
+
+    class SyncCursor:
+        def __enter__(self) -> SyncCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, _params: object | None = None) -> None:
+            if "ALTER END USER" in sql:
+                raise RuntimeError("ORA-28007: password=DeepSecret!Stored cannot be reused")
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class SyncConnection:
+        def __enter__(self) -> SyncConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> SyncCursor:
+            return SyncCursor()
+
+    def control_connection(_manager: object) -> SyncConnection:
+        return SyncConnection()
+
+    def fail_data_user_login(_manager: object) -> None:
+        raise RuntimeError("ORA-01017: invalid credential password=DeepSecret!Stored")
+
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.OraclePoolManager.control_connection",
+        control_connection,
+    )
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.OraclePoolManager.validate_data_user_login",
+        fail_data_user_login,
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_dsn", "test")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_connection_security", "walletless_tls")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", True)
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user", "DEEPSEC_DATA_USER")
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user_password", "DeepSecret!Stored")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/security/deepsec/config/sync-password")
+            assert response.status_code == 409
+            body = response.json()
+            assert "新しい DATA USER パスワード" in body["problem"]["detail"]
+            assert "DeepSecret!Stored" not in response.text
+            assert "[REDACTED]" in response.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def test_deepsec_config_patch_sync_failure_returns_409_without_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_security_threadpools(monkeypatch)
+    env_file = tmp_path / ".env"
+    original_env = (
+        "ORACLE_DEEPSEC_ENABLED=false\n"
+        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+    )
+    env_file.write_text(original_env, encoding="utf-8")
+    env_file.chmod(0o600)
+    closed: list[bool] = []
+    monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
+
+    def fail_sync(_service: object) -> bool:
+        raise SecurityApiError(
+            409,
+            "DeepSec DATA USER パスワードを Oracle END USER へ同期できませんでした: "
+            "ORA-01031 [REDACTED]",
+        )
+
+    monkeypatch.setattr(
+        "app.security.deepsec.DeepSecService._sync_existing_data_user_password",
+        fail_sync,
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "oracle_user", "ADMIN")
+    monkeypatch.setattr(settings, "oracle_dsn", "test")
+    monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
+    monkeypatch.setattr(settings, "oracle_connection_security", "walletless_tls")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user", "DEEPSEC_DATA_USER")
+    monkeypatch.setattr(settings, "oracle_deepsec_data_user_password", "OldSecret!123")
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.patch(
+                "/api/security/deepsec/config",
+                json={"data_user_password": "DeepSecret!456"},
+            )
+            assert response.status_code == 409
+            body = response.json()
+            assert "DeepSec DATA USER パスワードを Oracle END USER へ同期" in body[
+                "problem"
+            ]["detail"]
+            assert "DeepSecret!456" not in response.text
+            assert "[REDACTED]" in response.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    assert settings.oracle_deepsec_enabled is False
+    assert settings.oracle_deepsec_data_user_password == "OldSecret!123"
+    assert env_file.read_text(encoding="utf-8") == original_env
+    assert closed == [True]
 
 
 def test_api_enforces_menu_permissions(

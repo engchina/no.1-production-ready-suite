@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import json
 import re
 from collections.abc import Mapping
 from contextlib import suppress
@@ -19,6 +22,7 @@ from app.clients.oracle_runtime import (
     get_oracle_pool_manager,
 )
 from app.clients.oracle_statement_executor import oracle_statement_executor
+from app.features.nl2sql.object_visibility import is_user_visible_schema_object
 from app.settings import Settings, get_settings
 
 from .domain import (
@@ -103,6 +107,7 @@ _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT = 5
 _DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
 _DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
 _DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"
+_ORACLE_PASSWORD_REUSE_RE = re.compile(r"\bORA-28007\b", re.IGNORECASE)
 _REMOVED_DEEPSEC_KEYS = frozenset(
     {
         "ORACLE_DEEPSEC_END_USER",
@@ -148,6 +153,10 @@ def _validate_data_user_password(value: str) -> str:
             "二重引用符と制御文字を含めずに指定してください。",
         )
     return value
+
+
+def _is_oracle_password_reuse_error(exc: Exception) -> bool:
+    return bool(_ORACLE_PASSWORD_REUSE_RE.search(str(exc)))
 
 
 def _looks_like_missing_scope_filters_column(exc: Exception) -> bool:
@@ -304,6 +313,35 @@ def _scope_value_type(data_type: str) -> str:
 def _like_pattern(value: str, *, prefix: str, suffix: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{prefix}{escaped}{suffix}"
+
+
+def _encode_target_object_cursor(owner: str, object_name: str) -> str:
+    payload = json.dumps([owner, object_name], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_target_object_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        value = json.loads(raw.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise SecurityApiError(400, "対象 object の cursor が不正です。") from exc
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not all(isinstance(item, str) and item.strip() for item in value)
+    ):
+        raise SecurityApiError(400, "対象 object の cursor が不正です。")
+    return _strict_identifier(value[0]), _strict_identifier(value[1])
+
+
+def _deepsec_target_visible(owner: str, object_name: str) -> bool:
+    normalized_owner = str(owner or "").strip().upper()
+    return normalized_owner not in _DEEPSEC_INTERNAL_OWNER_NAMES and is_user_visible_schema_object(
+        normalized_owner,
+        str(object_name or ""),
+    )
 
 
 def _non_empty_value(value: str, label: str) -> str:
@@ -657,6 +695,51 @@ def _preview_statement(statement: str) -> str:
     return re.sub(r"\s+$", "", statement.strip())
 
 
+def _data_user_password_sync_statement(settings: Settings) -> str:
+    data_user = _strict_identifier(settings.oracle_deepsec_data_user)
+    owner = _strict_identifier(settings.oracle_user)
+    return (
+        f"ALTER END USER IF EXISTS {data_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
+        f"ACCOUNT UNLOCK SCHEMA {owner}"
+    )
+
+
+def _data_user_create_statement(settings: Settings) -> str:
+    data_user = _strict_identifier(settings.oracle_deepsec_data_user)
+    owner = _strict_identifier(settings.oracle_user)
+    return (
+        f"CREATE END USER IF NOT EXISTS {data_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
+        f"SCHEMA {owner}"
+    )
+
+
+def _deepsec_env_snapshot() -> tuple[bool, str]:
+    try:
+        if not _BACKEND_ENV_FILE.exists():
+            return False, ""
+        return True, _BACKEND_ENV_FILE.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SecurityApiError(
+            500,
+            "DeepSec DATA USER 認証情報を backend/.env から読み取れませんでした。",
+        ) from exc
+
+
+def _restore_deepsec_env_snapshot(snapshot: tuple[bool, str]) -> None:
+    existed, content = snapshot
+    try:
+        if existed:
+            _replace_deepsec_env_file(_BACKEND_ENV_FILE, content)
+            return
+        with suppress(FileNotFoundError):
+            _BACKEND_ENV_FILE.unlink()
+    except OSError as exc:
+        raise SecurityApiError(
+            500,
+            "DeepSec DATA USER 認証情報を backend/.env へ復元できませんでした。",
+        ) from exc
+
+
 def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
     owner = _strict_identifier(settings.oracle_user)
     data_user = _strict_identifier(settings.oracle_deepsec_data_user)
@@ -667,7 +750,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
         step_no=1,
         key="principals_and_roles",
         title="共有 DATA USER とロール",
-        description="共有 DATA USER、最小 DB role、local DATA ROLE を作成して関連付けます。",
+        description="DATA USER に関連付ける最小 DB role と local DATA ROLE を準備します。",
         statements=(
             f"CREATE ROLE {role}",
             f"GRANT CREATE SESSION TO {role}",
@@ -676,10 +759,6 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
                 for _key, table_name in _DEEPSEC_PREDICATE_TABLE_GRANTS
             ),
             f"CREATE DATA ROLE IF NOT EXISTS {data_role}",
-            (
-                f"CREATE END USER IF NOT EXISTS {data_user} IDENTIFIED BY {PASSWORD_PLACEHOLDER} "
-                f"SCHEMA {owner}"
-            ),
             f"GRANT {role} TO {data_role}",
             f"GRANT DATA ROLE {data_role} TO {data_user}",
         ),
@@ -953,6 +1032,272 @@ class DeepSecService:
 
     def role_entitlements(self, role: RoleRecord) -> dict[str, object]:
         return self._role_entitlements_payload(role)
+
+    def target_objects(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        q: str = "",
+        owner_prefix: str = "",
+        include_counts: bool = False,
+    ) -> dict[str, object]:
+        normalized_limit = min(max(limit, 1), 100)
+        owner_filter, owner_binds = self._target_object_owner_filter("o.owner")
+        filters = [
+            owner_filter,
+            "o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')",
+            "o.status = 'VALID'",
+            "NVL(u.oracle_maintained, 'N') = 'N'",
+            "o.owner NOT IN ('SYS', 'SYSTEM')",
+            "o.owner NOT LIKE '%$%'",
+            "o.owner NOT LIKE '%#%'",
+            "o.object_name NOT LIKE '%$%'",
+            "o.object_name NOT LIKE '%#%'",
+            "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+        ]
+        binds: dict[str, object] = dict(owner_binds)
+        normalized_owner_prefix = owner_prefix.strip().upper()
+        if normalized_owner_prefix:
+            filters.append("UPPER(o.owner) LIKE :owner_prefix ESCAPE '\\'")
+            binds["owner_prefix"] = _like_pattern(
+                normalized_owner_prefix,
+                prefix="",
+                suffix="%",
+            )
+        normalized_query = q.strip().upper()
+        if normalized_query:
+            filters.append(
+                "(UPPER(o.object_name) LIKE :object_query ESCAPE '\\' "
+                "OR UPPER(NVL(tc.comments, '')) LIKE :object_query ESCAPE '\\')"
+            )
+            binds["object_query"] = _like_pattern(normalized_query, prefix="%", suffix="%")
+        base_filter_sql = " AND ".join(filters)
+        page_filters = list(filters)
+        if cursor:
+            cursor_owner, cursor_name = _decode_target_object_cursor(cursor)
+            page_filters.append(
+                "(o.owner > :cursor_owner OR "
+                "(o.owner = :cursor_owner AND o.object_name > :cursor_name))"
+            )
+            binds["cursor_owner"] = cursor_owner
+            binds["cursor_name"] = cursor_name
+        binds["fetch_limit"] = normalized_limit + 1
+        sql = f"""
+            SELECT owner_name, object_name, object_type, row_count, comments
+              FROM (
+                SELECT o.owner AS owner_name,
+                       o.object_name,
+                       o.object_type,
+                       t.num_rows AS row_count,
+                       NVL(tc.comments, '') AS comments
+                  FROM ALL_OBJECTS o
+                  JOIN ALL_USERS u
+                    ON u.username = o.owner
+                  LEFT JOIN ALL_TABLES t
+                    ON t.owner = o.owner
+                   AND t.table_name = o.object_name
+                  LEFT JOIN ALL_TAB_COMMENTS tc
+                    ON tc.owner = o.owner
+                   AND tc.table_name = o.object_name
+                 WHERE {" AND ".join(page_filters)}
+                 ORDER BY o.owner, o.object_name
+              )
+             WHERE ROWNUM <= :fetch_limit
+        """
+        count_sql = f"""
+            SELECT COUNT(*)
+              FROM ALL_OBJECTS o
+              JOIN ALL_USERS u
+                ON u.username = o.owner
+              LEFT JOIN ALL_TAB_COMMENTS tc
+                ON tc.owner = o.owner
+               AND tc.table_name = o.object_name
+             WHERE {base_filter_sql}
+        """
+        with self.pools.control_connection() as conn, conn.cursor() as db_cursor:
+            db_cursor.execute(sql, binds)
+            rows = list(db_cursor.fetchall())
+            total: int | None = None
+            if include_counts:
+                count_binds = {
+                    key: value
+                    for key, value in binds.items()
+                    if key not in {"cursor_owner", "cursor_name", "fetch_limit"}
+                }
+                db_cursor.execute(count_sql, count_binds)
+                total = int((db_cursor.fetchone() or (0,))[0] or 0)
+
+        page_rows = rows[:normalized_limit]
+        items = [
+            {
+                "name": object_name,
+                "owner": owner,
+                "qualified_name": f"{owner}.{object_name}",
+                "object_type": object_type,
+                "row_count": int(row_count) if row_count is not None else None,
+                "comment": comment,
+            }
+            for row in page_rows
+            for owner, object_name, object_type, row_count, comment in [
+                (
+                    str(row[0] or "").upper(),
+                    str(row[1] or "").upper(),
+                    str(row[2] or "").upper(),
+                    row[3],
+                    str(row[4] or ""),
+                )
+            ]
+            if _deepsec_target_visible(owner, object_name)
+        ]
+        next_cursor = None
+        if len(rows) > normalized_limit and items:
+            last_item = items[-1]
+            next_cursor = _encode_target_object_cursor(
+                str(last_item["owner"]),
+                str(last_item["name"]),
+            )
+        return {
+            "runtime": "oracle",
+            "owner": normalized_owner_prefix,
+            "items": items,
+            "total": total,
+            "counts_included": include_counts,
+            "next_cursor": next_cursor,
+            "warnings": [],
+        }
+
+    def target_object_detail(
+        self,
+        *,
+        owner: str,
+        object_name: str,
+        object_type: str = "",
+    ) -> dict[str, object]:
+        target_owner = _strict_identifier(owner)
+        target_object = _strict_identifier(object_name)
+        if not _deepsec_target_visible(target_owner, target_object):
+            raise SecurityApiError(404, "対象 object が見つかりません。")
+        requested_type = object_type.strip().replace("_", " ").upper()
+        if requested_type and requested_type not in _DEEPSEC_MANAGED_TARGET_TYPES:
+            raise SecurityApiError(400, "対象は TABLE / VIEW / MATERIALIZED VIEW のみです。")
+
+        owner_filter, owner_binds = self._target_object_owner_filter("o.owner")
+        filters = [
+            owner_filter,
+            "o.owner = :owner",
+            "o.object_name = :object_name",
+            "o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')",
+            "o.status = 'VALID'",
+            "NVL(u.oracle_maintained, 'N') = 'N'",
+            "o.owner NOT IN ('SYS', 'SYSTEM')",
+            "o.owner NOT LIKE '%$%'",
+            "o.owner NOT LIKE '%#%'",
+            "o.object_name NOT LIKE '%$%'",
+            "o.object_name NOT LIKE '%#%'",
+            "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+        ]
+        binds: dict[str, object] = {
+            **owner_binds,
+            "owner": target_owner,
+            "object_name": target_object,
+        }
+        if requested_type:
+            filters.append("o.object_type = :object_type")
+            binds["object_type"] = requested_type
+        with self.pools.control_connection() as conn, conn.cursor() as db_cursor:
+            db_cursor.execute(
+                f"""
+                SELECT o.owner,
+                       o.object_name,
+                       o.object_type,
+                       t.num_rows,
+                       NVL(tc.comments, '')
+                  FROM ALL_OBJECTS o
+                  JOIN ALL_USERS u
+                    ON u.username = o.owner
+                  LEFT JOIN ALL_TABLES t
+                    ON t.owner = o.owner
+                   AND t.table_name = o.object_name
+                  LEFT JOIN ALL_TAB_COMMENTS tc
+                    ON tc.owner = o.owner
+                   AND tc.table_name = o.object_name
+                 WHERE {" AND ".join(filters)}
+                 ORDER BY CASE o.object_type
+                            WHEN 'TABLE' THEN 1
+                            WHEN 'VIEW' THEN 2
+                            ELSE 3
+                          END
+                """,
+                binds,
+            )
+            object_row = db_cursor.fetchone()
+            if object_row is None:
+                raise SecurityApiError(404, "対象 object が見つかりません。")
+            db_cursor.execute(
+                """
+                SELECT c.column_name,
+                       c.data_type ||
+                       CASE
+                         WHEN c.data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR')
+                         THEN '(' || c.data_length || ')'
+                         WHEN c.data_type = 'NUMBER' AND c.data_precision IS NOT NULL
+                         THEN '(' || c.data_precision ||
+                              CASE WHEN c.data_scale > 0 THEN ',' || c.data_scale ELSE '' END || ')'
+                         ELSE ''
+                       END AS data_type,
+                       c.nullable,
+                       NVL(cc.comments, '')
+                  FROM ALL_TAB_COLUMNS c
+                  LEFT JOIN ALL_COL_COMMENTS cc
+                    ON cc.owner = c.owner
+                   AND cc.table_name = c.table_name
+                   AND cc.column_name = c.column_name
+                 WHERE c.owner = :owner
+                   AND c.table_name = :object_name
+                 ORDER BY c.column_id
+                """,
+                {"owner": target_owner, "object_name": target_object},
+            )
+            column_rows = list(db_cursor.fetchall())
+
+        actual_owner = str(object_row[0] or "").upper()
+        actual_name = str(object_row[1] or "").upper()
+        actual_type = str(object_row[2] or "").upper()
+        row_count = object_row[3]
+        comment = str(object_row[4] or "")
+        return {
+            "name": actual_name,
+            "owner": actual_owner,
+            "qualified_name": f"{actual_owner}.{actual_name}",
+            "object_type": actual_type,
+            "row_count": int(row_count) if row_count is not None else None,
+            "comment": comment,
+            "columns": [
+                {
+                    "column_name": str(column_name or "").upper(),
+                    "logical_name": str(column_comment or column_name or ""),
+                    "data_type": str(data_type or ""),
+                    "nullable": str(nullable or "Y").upper() == "Y",
+                    "comment": str(column_comment or ""),
+                    "sample_values": [],
+                }
+                for column_name, data_type, nullable, column_comment in column_rows
+            ],
+            "warnings": [],
+        }
+
+    def _target_object_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
+        owners = {
+            owner.strip().upper()
+            for owner in getattr(self.settings, "nl2sql_schema_owner_allowlist", [])
+            if owner.strip()
+        }
+        if not owners:
+            return "1 = 1", {}
+        binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(owners))}
+        placeholders = ", ".join(f":{key}" for key in binds)
+        return f"{column_sql} IN ({placeholders})", binds
 
     def preview_data_entitlements(
         self,
@@ -1371,19 +1716,110 @@ class DeepSecService:
         previous_enabled = self.settings.oracle_deepsec_enabled
         previous_data_user = self.settings.oracle_deepsec_data_user
         previous_password = self.settings.oracle_deepsec_data_user_password
+        env_snapshot: tuple[bool, str] | None = None
         self.settings.oracle_deepsec_enabled = True
         self.settings.oracle_deepsec_data_user = DEEPSEC_DATA_USER
         self.settings.oracle_deepsec_data_user_password = password
         try:
             self.pools.validate_deepsec_configuration()
+            env_snapshot = _deepsec_env_snapshot()
             _write_deepsec_config_env(self.settings)
+            self._sync_existing_data_user_password()
         except Exception as exc:
+            safe_error = self._safe_error(exc)
             self.settings.oracle_deepsec_enabled = previous_enabled
             self.settings.oracle_deepsec_data_user = previous_data_user
             self.settings.oracle_deepsec_data_user_password = previous_password
-            raise SecurityApiError(409, self._safe_error(exc)) from exc
+            if env_snapshot is not None:
+                _restore_deepsec_env_snapshot(env_snapshot)
+            close_oracle_pools()
+            if isinstance(exc, SecurityApiError):
+                raise SecurityApiError(
+                    exc.status_code,
+                    safe_error,
+                    code=exc.code,
+                    title=exc.title,
+                    retryable=exc.retryable,
+                    field_errors=exc.field_errors,
+                ) from exc
+            raise SecurityApiError(409, safe_error) from exc
         close_oracle_pools()
         return self.status()
+
+    def sync_saved_data_user_password(self) -> dict[str, object]:
+        if not self.settings.oracle_deepsec_data_user_password:
+            raise SecurityApiError(
+                409,
+                "保存済み DATA USER パスワードがありません。Deep Data Security 画面で "
+                "DATA USER パスワードを保存してから Oracle END USER へ同期してください。",
+            )
+        if not self.settings.oracle_user.strip() or not self.settings.oracle_dsn.strip():
+            raise SecurityApiError(
+                409,
+                "Oracle END USER への同期には ORACLE_USER と ORACLE_DSN の設定が必要です。",
+            )
+        try:
+            synced = self._sync_existing_data_user_password()
+        except SecurityApiError:
+            close_oracle_pools()
+            raise
+        except Exception as exc:
+            safe_error = self._safe_error(exc)
+            close_oracle_pools()
+            raise SecurityApiError(409, safe_error) from exc
+        close_oracle_pools()
+        if not synced:
+            raise SecurityApiError(
+                409,
+                "Oracle END USER への同期が完了していません。DATA USER 認証の"
+                "「Oracle へ同期」を再実行してください。",
+            )
+        return self.status()
+
+    def _confirm_data_user_login_after_password_reuse_error(self, exc: Exception) -> None:
+        try:
+            self.pools.validate_data_user_login()
+        except Exception as login_exc:
+            login_error = self._safe_error(login_exc)
+            raise SecurityApiError(
+                409,
+                "Oracle の password reuse policy により、保存済み DATA USER パスワードを"
+                "再設定できませんでした。さらに保存済みパスワードで DATA USER ログインを"
+                "確認できなかったため、同期済みとは判断できません。Deep Data Security 画面で"
+                f"新しい DATA USER パスワードを保存してから同期してください: {login_error}",
+            ) from exc
+
+    def _sync_existing_data_user_password(self) -> bool:
+        if not self.settings.oracle_user.strip() or not self.settings.oracle_dsn.strip():
+            return False
+        self.pools.validate_deepsec_control_configuration()
+        data_user = _strict_identifier(self.settings.oracle_deepsec_data_user)
+        try:
+            with self.pools.control_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM DBA_END_USERS WHERE USERNAME = :name",
+                    {"name": data_user},
+                )
+                row = cursor.fetchone()
+                exists = bool(row and int(row[0]) > 0)
+                statement = (
+                    _data_user_password_sync_statement(self.settings)
+                    if exists
+                    else _data_user_create_statement(self.settings)
+                )
+                cursor.execute(self._execution_sql(statement))
+        except Exception as exc:
+            safe_error = self._safe_error(exc)
+            if _is_oracle_password_reuse_error(exc):
+                self._confirm_data_user_login_after_password_reuse_error(exc)
+                return True
+            raise SecurityApiError(
+                409,
+                "DeepSec DATA USER パスワードを Oracle END USER へ同期できませんでした。"
+                "ORACLE_USER に CREATE END USER / ALTER END USER 権限があるか確認してください: "
+                f"{safe_error}",
+            ) from exc
+        return True
 
     def apply_step(
         self,

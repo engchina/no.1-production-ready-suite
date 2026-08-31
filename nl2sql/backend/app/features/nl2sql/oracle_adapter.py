@@ -2676,6 +2676,27 @@ class OracleNl2SqlAdapter:
             + "; ".join(errors)
         )
 
+    def _feedback_vector_create_table_sql(self, quoted_table: str) -> str:
+        return (
+            f"CREATE TABLE {quoted_table} ("  # nosec B608
+            "HISTORY_ID VARCHAR2(64) PRIMARY KEY, "
+            "PROFILE_ID VARCHAR2(128), "
+            "QUESTION CLOB, "
+            "GENERATED_SQL CLOB, "
+            "FEEDBACK_RATING VARCHAR2(32), "
+            "EMBEDDING VECTOR(1536, FLOAT32), "
+            "CREATED_AT TIMESTAMP WITH TIME ZONE)"
+        )
+
+    def _feedback_vector_create_index_sql(
+        self, *, quoted_table: str, quoted_index: str
+    ) -> str:
+        return (
+            f"CREATE VECTOR INDEX {quoted_index} "  # nosec B608
+            f"ON {quoted_table} (EMBEDDING) "
+            "ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE"
+        )
+
     def rebuild_feedback_vector_index(
         self,
         *,
@@ -2688,16 +2709,7 @@ class OracleNl2SqlAdapter:
         safe_index = _strict_sql_name(index_name)
         quoted_table = _quote_identifier(safe_table)
         quoted_index = _quote_identifier(safe_index)
-        create_table = (
-            f"CREATE TABLE {quoted_table} ("  # nosec B608
-            "HISTORY_ID VARCHAR2(64) PRIMARY KEY, "
-            "PROFILE_ID VARCHAR2(128), "
-            "QUESTION CLOB, "
-            "GENERATED_SQL CLOB, "
-            "FEEDBACK_RATING VARCHAR2(32), "
-            "EMBEDDING VECTOR(1536, FLOAT32), "
-            "CREATED_AT TIMESTAMP WITH TIME ZONE)"
-        )
+        create_table = self._feedback_vector_create_table_sql(quoted_table)
         insert_sql = (
             f"INSERT INTO {quoted_table} "  # nosec B608
             "(HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, "
@@ -2705,10 +2717,9 @@ class OracleNl2SqlAdapter:
             "VALUES (:history_id, :profile_id, :question, :generated_sql, :feedback_rating, "
             "TO_VECTOR(:embedding_json), SYSTIMESTAMP)"
         )
-        create_index = (
-            f"CREATE VECTOR INDEX {quoted_index} "  # nosec B608
-            f"ON {quoted_table} (EMBEDDING) "
-            "ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE"
+        create_index = self._feedback_vector_create_index_sql(
+            quoted_table=quoted_table,
+            quoted_index=quoted_index,
         )
         bind_rows = [
             {
@@ -2734,6 +2745,97 @@ class OracleNl2SqlAdapter:
             "table_name": safe_table,
             "index_name": safe_index,
             "row_count": len(bind_rows),
+        }
+
+    def upsert_feedback_vector_entry(
+        self,
+        *,
+        table_name: str,
+        index_name: str,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Upsert one approved NL2SQL feedback item into the VECTOR table."""
+        safe_table = _strict_sql_name(table_name)
+        safe_index = _strict_sql_name(index_name)
+        quoted_table = _quote_identifier(safe_table)
+        quoted_index = _quote_identifier(safe_index)
+        merge_sql = (
+            f"MERGE INTO {quoted_table} target "  # nosec B608
+            "USING (SELECT :history_id AS HISTORY_ID FROM DUAL) src "
+            "ON (target.HISTORY_ID = src.HISTORY_ID) "
+            "WHEN MATCHED THEN UPDATE SET "
+            "PROFILE_ID = :profile_id, "
+            "QUESTION = :question, "
+            "GENERATED_SQL = :generated_sql, "
+            "FEEDBACK_RATING = :feedback_rating, "
+            "EMBEDDING = TO_VECTOR(:embedding_json), "
+            "CREATED_AT = SYSTIMESTAMP "
+            "WHEN NOT MATCHED THEN INSERT "
+            "(HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, FEEDBACK_RATING, "
+            "EMBEDDING, CREATED_AT) "
+            "VALUES (:history_id, :profile_id, :question, :generated_sql, :feedback_rating, "
+            "TO_VECTOR(:embedding_json), SYSTIMESTAMP)"
+        )
+        params = {
+            "history_id": str(row["history_id"]),
+            "profile_id": str(row.get("profile_id") or ""),
+            "question": str(row.get("question") or ""),
+            "generated_sql": str(row.get("generated_sql") or ""),
+            "feedback_rating": str(row.get("feedback_rating") or ""),
+            "embedding_json": json.dumps(row.get("embedding") or []),
+        }
+        with self.connection() as conn, conn.cursor() as cursor:
+            self._execute_ddl_allow_existing(
+                cursor,
+                self._feedback_vector_create_table_sql(quoted_table),
+                {},
+            )
+            self._execute_plsql_like(cursor, merge_sql, params)
+            self._execute_ddl_allow_existing(
+                cursor,
+                self._feedback_vector_create_index_sql(
+                    quoted_table=quoted_table,
+                    quoted_index=quoted_index,
+                ),
+                {},
+            )
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "index_name": safe_index,
+            "history_id": params["history_id"],
+            "executed": True,
+        }
+
+    def delete_feedback_vector_entry(
+        self, *, table_name: str, history_id: str
+    ) -> dict[str, Any]:
+        """Remove one NL2SQL feedback item from the VECTOR table if it exists."""
+        safe_table = _strict_sql_name(table_name)
+        quoted_table = _quote_identifier(safe_table)
+        delete_sql = f"DELETE FROM {quoted_table} WHERE HISTORY_ID = :history_id"  # nosec B608
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(delete_sql, {"history_id": history_id})
+                conn.commit()
+            except Exception as exc:
+                message = str(exc)
+                if "ORA-00942" in message or "ORA-04043" in message:
+                    return {
+                        "runtime": "oracle",
+                        "table_name": safe_table,
+                        "history_id": history_id,
+                        "executed": False,
+                    }
+                raise OracleAdapterError(
+                    f"Feedback vector entry の削除に失敗しました: {exc}"
+                ) from exc
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "history_id": history_id,
+            "executed": True,
         }
 
     def clear_feedback_vector_index(self, *, table_name: str, index_name: str) -> dict[str, Any]:
@@ -3404,6 +3506,18 @@ class OracleNl2SqlAdapter:
             cursor.execute(sql, params)
         except Exception as exc:
             raise OracleAdapterError(f"Oracle SQL 実行に失敗しました: {exc}") from exc
+
+    def _execute_ddl_allow_existing(
+        self, cursor: Any, sql: str, params: dict[str, Any]
+    ) -> bool:
+        try:
+            cursor.execute(sql, params)
+        except Exception as exc:
+            message = str(exc)
+            if "ORA-00955" in message or "ORA-01408" in message:
+                return False
+            raise OracleAdapterError(f"Oracle SQL 実行に失敗しました: {exc}") from exc
+        return True
 
     def _drop_best_effort(self, cursor: Any, sql: str, params: dict[str, Any]) -> bool:
         try:

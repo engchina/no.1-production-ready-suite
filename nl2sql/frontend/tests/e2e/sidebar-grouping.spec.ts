@@ -131,7 +131,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     "データの管理",
     "コメント管理",
     "アノテーション管理",
-    "検証用サンプルデータ",
+    "サンプルデータ管理",
     "業務プロファイル",
     "用語・同義語",
     "共通ルール",
@@ -376,7 +376,8 @@ test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リ
   await expect(sidebar.getByRole("button", { name: "AI 活用 を折りたたむ" })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "SQL から質問を生成" })).toBeVisible();
-  await expect(sidebar.getByRole("link", { name: "検証用サンプルデータ" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "サンプルデータ管理" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "検証用サンプルデータ" })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "SQL生成評価" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "安全境界" })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "ユーザー管理" })).toBeVisible();

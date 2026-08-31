@@ -23,6 +23,7 @@ import { Spinner, toast } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
+import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
@@ -516,6 +517,7 @@ function SelectAiCredentialCard() {
     status.error instanceof ApiError
       ? status.error.message
       : t("settings.database.selectAiCredential.error.load");
+  const hasStatusError = Boolean(status.error);
   const missingLabels = (data?.missing_fields ?? []).map((field) =>
     t(SELECT_AI_MISSING_FIELD_KEYS[field] ?? "settings.database.selectAiCredential.missing.unknown")
   );
@@ -558,16 +560,34 @@ function SelectAiCredentialCard() {
             <Skeleton className="h-20 w-full rounded-md" />
             <Skeleton className="h-20 w-full rounded-md" />
           </div>
-        ) : status.isError || !data ? (
-          <div className="space-y-3">
-            <FormStatus tone="danger" message={statusError} />
-            <Button size="sm" variant="secondary" onClick={() => void status.refetch()}>
-              <RefreshCw size={15} aria-hidden />
-              {t("common.retry")}
-            </Button>
-          </div>
+        ) : !data ? (
+          <ErrorState
+            message={statusError}
+            onRetry={() => void status.refetch()}
+            retryLabel={t("settings.database.selectAiCredential.action.refresh")}
+          />
         ) : (
           <>
+            {hasStatusError ? (
+              <Banner
+                severity="danger"
+                action={
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={status.isFetching}
+                    disabled={status.isFetching}
+                    onClick={() => void status.refetch()}
+                  >
+                    <RefreshCw size={15} aria-hidden />
+                    {t("settings.database.selectAiCredential.action.refresh")}
+                  </Button>
+                }
+              >
+                {statusError}
+              </Banner>
+            ) : null}
+
             <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
               <CredentialSummary
                 label={t("settings.database.selectAiCredential.field.name")}
@@ -609,16 +629,18 @@ function SelectAiCredentialCard() {
                       t("settings.database.selectAiCredential.missing.unknown"),
                   })}
                 />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  loading={status.isFetching}
-                  disabled={status.isFetching}
-                  onClick={() => void status.refetch()}
-                >
-                  <RefreshCw size={15} aria-hidden />
-                  {t("settings.database.selectAiCredential.action.refresh")}
-                </Button>
+                {!hasStatusError ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={status.isFetching}
+                    disabled={status.isFetching}
+                    onClick={() => void status.refetch()}
+                  >
+                    <RefreshCw size={15} aria-hidden />
+                    {t("settings.database.selectAiCredential.action.refresh")}
+                  </Button>
+                ) : null}
               </div>
             )}
 

@@ -157,26 +157,21 @@ export const securityApi = {
   }: DeepSecTargetObjectsQuery = {}) => {
     const params = new URLSearchParams({
       limit: String(limit),
-      type: "all",
-      row_state: "all",
-      include_counts: "false",
-      query_scope: "name_comment",
     });
     if (q.trim()) params.set("q", q.trim());
     if (ownerPrefix.trim()) params.set("owner_prefix", ownerPrefix.trim());
     if (cursor) params.set("cursor", cursor);
     return apiGet<DeepSecTargetObjectPage>(
-      `/api/nl2sql/db-admin/objects?${params.toString()}`,
+      `/api/security/deepsec/target-objects?${params.toString()}`,
       options
     );
   },
   deepSecTargetObjectDetail: (object: DeepSecTargetObject, options: ApiRequestOptions = {}) => {
-    const collectionPath = object.object_type.toUpperCase().includes("VIEW")
-      ? "/api/nl2sql/db-admin/views"
-      : "/api/nl2sql/db-admin/tables";
-    const params = new URLSearchParams({ include_ddl: "0", owner: object.owner });
+    const params = new URLSearchParams({ object_type: object.object_type });
     return apiGet<DeepSecTargetObjectDetail>(
-      `${collectionPath}/${encodeURIComponent(object.name)}?${params.toString()}`,
+      `/api/security/deepsec/target-objects/${encodeURIComponent(
+        object.owner
+      )}/${encodeURIComponent(object.name)}?${params.toString()}`,
       options
     );
   },
@@ -214,6 +209,8 @@ export const securityApi = {
     apiPatch<DeepSecStatus>("/api/security/deepsec/config", {
       data_user_password: dataUserPassword,
     }),
+  syncDeepSecConfigPassword: () =>
+    apiPost<DeepSecStatus>("/api/security/deepsec/config/sync-password"),
   applyDeepSecStep: (version: string, step: DeepSecStep, confirmation: string) =>
     apiPost<{ version: string; step_no: number; status: string }>(
       `/api/security/deepsec/plan/${version}/steps/${step.step_no}/apply`,

@@ -25,6 +25,7 @@ import { TimedLoadingState } from "@/components/ProcessingState";
 import { ActionResultRegion } from "@/components/ActionResultRegion";
 import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
+import { EmptyState } from "@/components/StateViews";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FieldLabel } from "@/components/ui/required-field";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -158,6 +159,7 @@ function ExecutableNl2SqlWorkbench() {
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
+  const [similarHistorySearchCompleted, setSimilarHistorySearchCompleted] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
@@ -444,6 +446,8 @@ function ExecutableNl2SqlWorkbench() {
   const jobActive = isJobInFlight(job?.status) || submitting;
   const active = jobActive;
   const actionBusy = submitting;
+  const showSimilarHistoryPanel =
+    similarHistoryLoading || similarHistorySearchCompleted || similarHistory.length > 0;
   const beginActionFeedback = useCallback(() => {
     setActionError("");
     setActionOperationKey((current) => current + 1);
@@ -546,6 +550,7 @@ function ExecutableNl2SqlWorkbench() {
     const trimmed = question.trim();
     if (trimmed.length < 4 || active || profiles.length === 0) {
       setSimilarHistory([]);
+      setSimilarHistorySearchCompleted(false);
       // 実行開始・質問クリア時は in-flight を abort するため .finally が走らない。
       // loading フラグを明示的に落とさないと「参考履歴を検索中」が固まって残る。
       setSimilarHistoryLoading(false);
@@ -560,11 +565,15 @@ function ExecutableNl2SqlWorkbench() {
         limit: 3,
       }, { signal: controller.signal })
         .then((data) => {
-          if (!controller.signal.aborted) setSimilarHistory(goodFeedbackSimilarHistory(data.items));
+          if (!controller.signal.aborted) {
+            setSimilarHistory(goodFeedbackSimilarHistory(data.items));
+            setSimilarHistorySearchCompleted(true);
+          }
         })
         .catch((cause: unknown) => {
           if (!controller.signal.aborted && !isAbortError(cause)) {
             setSimilarHistory([]);
+            setSimilarHistorySearchCompleted(false);
           }
         })
         .finally(() => {
@@ -1224,7 +1233,7 @@ function ExecutableNl2SqlWorkbench() {
                     </div>
                   )}
 
-                  {(similarHistory.length > 0 || similarHistoryLoading) && (
+                  {showSimilarHistoryPanel && (
                     <section className="w-full min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-card">
                       <Button
                         type="button"
@@ -1258,7 +1267,13 @@ function ExecutableNl2SqlWorkbench() {
                         hidden={!similarHistoryOpen}
                         className="grid gap-3 border-t border-border p-3 text-sm text-foreground"
                       >
-                          {similarHistory.slice(0, 2).map((entry) => (
+                        {similarHistory.length === 0 && !similarHistoryLoading ? (
+                          <EmptyState
+                            title={t("nl2sql.similar.emptyTitle")}
+                            hint={t("nl2sql.similar.emptyHint")}
+                          />
+                        ) : (
+                          similarHistory.slice(0, 2).map((entry) => (
                             <article
                               key={entry.item.id}
                               data-testid="nl2sql-similar-history-item"
@@ -1291,7 +1306,8 @@ function ExecutableNl2SqlWorkbench() {
                                 <code>{entry.item.executable_sql || entry.item.generated_sql}</code>
                               </pre>
                             </article>
-                          ))}
+                          ))
+                        )}
                       </div>
                     </section>
                   )}

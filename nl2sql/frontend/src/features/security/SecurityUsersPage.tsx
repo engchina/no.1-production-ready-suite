@@ -32,7 +32,7 @@ import {
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
-import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
+import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -674,23 +674,6 @@ export function SecurityUsersPage() {
       className: "min-w-28",
       render: (user) => <UserStatusBadges user={user} />,
     },
-    ...(canManage
-      ? [
-          {
-            key: "actions",
-            header: t("security.common.actions"),
-            align: "right" as const,
-            className: "w-14",
-            render: (user: SecurityUser) => (
-              <RowActionMenu
-                actions={userActions(user)}
-                ariaLabel={`${t("security.common.actions")}: ${user.display_name}`}
-                testId={`security-users-row-actions-${user.user_uuid}`}
-              />
-            ),
-          },
-        ]
-      : []),
   ];
 
   const initialLoadFailed = Boolean(loadError) && users.length === 0 && roles.length === 0;

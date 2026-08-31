@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -18,6 +19,12 @@ from app.features.nl2sql.oracle_adapter import (
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+_ORACLE_INVALID_CREDENTIAL_RE = re.compile(r"\bORA-01017\b", re.IGNORECASE)
+DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE = (
+    "DeepSec DATA USER の Oracle ログインに失敗しました。Deep Data Security 画面で "
+    "DATA USER パスワードを保存し直し、Oracle END USER へ同期してください。"
+    "解消しない場合は DATA USER 認証の「Oracle へ同期」を再実行してください。"
+)
 
 
 class OraclePoolManager:
@@ -40,6 +47,37 @@ class OraclePoolManager:
     def validate_deepsec_control_configuration(self) -> None:
         """DeepSec 管理 DDL 用の control-plane 設定を検証する。"""
         ensure_deepsec_thin_mode(self.settings)
+
+    def validate_data_user_login(self) -> None:
+        """保存済み DATA USER 認証情報で direct logon できることだけを検証する。"""
+        ensure_deepsec_thin_mode(self.settings)
+        if not self.settings.oracle_deepsec_data_user_password:
+            raise OracleAdapterError("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
+        connection: Any | None = None
+        pool: Any | None = None
+        try:
+            with self._lock:
+                oracledb = self._load_oracledb()
+                self._initialize_driver(oracledb)
+                kwargs = oracle_connect_kwargs(
+                    self.settings,
+                    user=self.settings.oracle_deepsec_data_user,
+                    password=self.settings.oracle_deepsec_data_user_password,
+                )
+                kwargs.update(min=1, max=1, increment=1)
+                pool = oracledb.create_pool(**kwargs)
+            connection = pool.acquire()
+        except Exception as exc:
+            if _is_invalid_data_user_credential_error(exc):
+                raise OracleAdapterError(DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE) from exc
+            raise
+        finally:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.close()
+            if pool is not None:
+                with suppress(Exception):
+                    pool.close(force=True)
 
     @contextmanager
     def control_connection(self) -> Iterator[Any]:
@@ -111,7 +149,12 @@ class OraclePoolManager:
             else:
                 kwargs = oracle_connect_kwargs(self.settings)
             kwargs.update(min=1, max=4, increment=1)
-            pool = oracledb.create_pool(**kwargs)
+            try:
+                pool = oracledb.create_pool(**kwargs)
+            except Exception as exc:
+                if data_plane and _is_invalid_data_user_credential_error(exc):
+                    raise OracleAdapterError(DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE) from exc
+                raise
             if data_plane:
                 self._data_pool = pool
             else:
@@ -153,6 +196,10 @@ class OraclePoolManager:
             setattr(connection, marker, True)
         with suppress(Exception):
             pool.drop(connection)
+
+
+def _is_invalid_data_user_credential_error(exc: Exception) -> bool:
+    return bool(_ORACLE_INVALID_CREDENTIAL_RE.search(str(exc)))
 
 
 @lru_cache

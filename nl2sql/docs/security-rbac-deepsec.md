@@ -116,7 +116,17 @@ timeout に拡張できる。これは production 既定値ではない。
 DeepSec は python-oracledb Thin mode のみ対応する。`ORACLE_DEEPSEC_ENABLED=true` の場合、
 `ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
 fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
-次の適用・検証・data-plane query から使用される。
+次の適用・検証・data-plane query から使用される。`DATA USER 認証` の保存 / `Oracle へ同期` は
+`DEEPSEC_DATA_USER` が未作成なら `CREATE END USER IF NOT EXISTS ...`、作成済みなら
+`ALTER END USER IF EXISTS ... IDENTIFIED BY ...` で DB 側の password / account unlock / schema association
+も同期する。同期に失敗した場合、backend `.env` と runtime 設定は保存前へ戻す。
+
+DeepSec V001 と `DATA USER 認証` の同期を実行する `ORACLE_USER` には少なくとも `CREATE ROLE`、
+`CREATE END USER`、`ALTER END USER`、`CREATE DATA ROLE`、`GRANT ANY ROLE` / Data Role grant、`CREATE CONTEXT`、
+`CREATE PROCEDURE`、対象 object への `GRANT SELECT`、および DeepSec metadata view 参照権限が必要。
+`ORA-01017` が通常ユーザーの SELECT 実行時だけ発生する場合は、application RBAC ではなく
+DATA USER password の漂移を疑い、Deep Data Security 画面で password を保存し直すか、
+`Oracle へ同期` を再実行する。
 
 共通設定:
 
@@ -142,10 +152,12 @@ DeepSec 無効の非標準運用で Thick 専用機能が必要な場合のみ�
 管理画面の `システム設定 > Deep Data Security` で以下を行う。
 
 1. status の driver mode、前提権限、既存 object 名を確認する。
-2. V001 の SQL preview と SHA-256 checksum を確認する。password は placeholder のみ表示される。
-3. 各 step は `ADMIN_EXECUTE` 実行確認語を入力して順番に適用する。API は version、step、checksum、confirmation だけを受け付け、SQL 本文は受け付けない。
-4. 失敗した場合は ledger の完了 step を保持し、原因を解消して失敗 step から再開する。
-5. `データ権限` tab で実 table/view/materialized view、許可列、必要な row scope を role ごとに設定し、SQL preview と checksum を確認してから `ADMIN_EXECUTE` で Data Grant を適用する。適用は現在保存済みの role policy への同期であり、新規作成・更新・削除・全削除を反映する。
+2. `DATA USER 認証` tab で DATA USER password を保存し、必要に応じて `Oracle へ同期` で DB 側へ反映する。
+3. V001 の SQL preview と SHA-256 checksum を確認する。V001.1 は END USER 作成・password 変更を含まない。
+4. 各 step は `ADMIN_EXECUTE` 実行確認語を入力して順番に適用する。API は version、step、checksum、confirmation だけを
+   受け付け、SQL 本文は受け付けない。
+5. 失敗した場合は ledger の完了 step を保持し、原因を解消して失敗 step から再開する。
+6. `データ権限` tab で実 table/view/materialized view、許可列、必要な row scope を role ごとに設定し、SQL preview と checksum を確認してから `ADMIN_EXECUTE` で Data Grant を適用する。適用は現在保存済みの role policy への同期であり、新規作成・更新・削除・全削除を反映する。
 
 Oracle DDL は暗黙 commit を含むため、V001 全体を一括 rollback したようには表示しない。既存の無関係な
 END USER、DATA ROLE、context、Data Grant は DROP/上書きしない。

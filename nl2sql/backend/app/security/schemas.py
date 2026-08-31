@@ -453,6 +453,50 @@ class RoleDeleteData(BaseModel):
     role_code: str
 
 
+class DeepSecTargetObjectData(BaseModel):
+    """DeepSec Data Grant picker 用の live Oracle object summary。"""
+
+    name: str
+    owner: str = ""
+    qualified_name: str = ""
+    object_type: str
+    row_count: int | None = None
+    comment: str = ""
+
+    @model_validator(mode="after")
+    def fill_qualified_name(self) -> DeepSecTargetObjectData:
+        if self.qualified_name or not self.owner:
+            return self
+        self.qualified_name = f"{self.owner}.{self.name}"
+        return self
+
+
+class DeepSecTargetObjectPageData(BaseModel):
+    """DeepSec Data Grant picker 用の keyset page。"""
+
+    runtime: str = "oracle"
+    owner: str = ""
+    items: list[DeepSecTargetObjectData] = Field(default_factory=list)
+    total: int | None = None
+    counts_included: bool = False
+    next_cursor: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DeepSecTargetColumnData(BaseModel):
+    column_name: str
+    logical_name: str = ""
+    data_type: str = ""
+    nullable: bool = True
+    comment: str = ""
+    sample_values: list[str] = Field(default_factory=list)
+
+
+class DeepSecTargetObjectDetailData(DeepSecTargetObjectData):
+    columns: list[DeepSecTargetColumnData] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class DeepSecDataEntitlementUpdateRequest(BaseModel):
     version: int = Field(ge=1)
     data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)

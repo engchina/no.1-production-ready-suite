@@ -102,14 +102,64 @@ test("DeepSec object picker footer は helper と load more を狭い幅で詰�
   );
 });
 
-test("DeepSec target objects wrapper は cursor paging と所有者 prefix・検索 scope を渡す", () => {
+test("DeepSec target objects wrapper は専用 endpoint に cursor paging と所有者 prefix・検索を渡す", () => {
   assert.match(apiSource, /limit = 50/u);
+  assert.match(apiSource, /\/api\/security\/deepsec\/target-objects/u);
+  assert.doesNotMatch(apiSource, /\/api\/nl2sql\/db-admin\/objects/u);
   assert.match(apiSource, /params\.set\("q", q\.trim\(\)\)/u);
-  assert.match(apiSource, /query_scope: "name_comment"/u);
+  assert.doesNotMatch(apiSource, /query_scope/u);
+  assert.doesNotMatch(apiSource, /row_state/u);
   assert.match(apiSource, /params\.set\("owner_prefix", ownerPrefix\.trim\(\)\)/u);
   assert.doesNotMatch(apiSource, /params\.set\("owner", ownerPrefix\.trim\(\)\)/u);
   assert.match(apiSource, /params\.set\("cursor", cursor\)/u);
   assert.doesNotMatch(apiSource, /limit=100&type=all&row_state=all/u);
+});
+
+test("DeepSec DATA USER password sync wrapper は body なしで専用 endpoint を呼ぶ", () => {
+  const syncBlock = sliceBetween(apiSource, "syncDeepSecConfigPassword", "applyDeepSecStep");
+
+  assert.match(
+    syncBlock,
+    /apiPost<DeepSecStatus>\("\/api\/security\/deepsec\/config\/sync-password"\)/u
+  );
+  assert.doesNotMatch(syncBlock, /data_user_password/u);
+});
+
+test("DeepSec DATA USER password sync button は保存 action と独立している", () => {
+  const dataUserPanel = sliceBetween(
+    pageSource,
+    'id="security-deepsec-panel-data-user"',
+    '{activeView === "foundation"'
+  );
+
+  assert.match(dataUserPanel, /security\.deepsec\.config\.sync/u);
+  assert.match(dataUserPanel, /<RefreshCw size=\{15\} aria-hidden \/>/u);
+  assert.match(
+    dataUserPanel,
+    /type="button"[\s\S]*variant="secondary"[\s\S]*loading=\{configSyncing\}[\s\S]*disabled=\{passwordSyncDisabled\}/u
+  );
+  assert.match(
+    pageSource,
+    /!hasSavedDataUserPassword \|\| dataUserPassword \|\| configSaving \|\| configSyncing/u
+  );
+  assert.equal(t("security.deepsec.config.sync"), "Oracle へ同期");
+  assert.equal(
+    t("security.deepsec.config.synced"),
+    "保存済み DATA USER パスワードを Oracle END USER へ同期しました。"
+  );
+});
+
+test("DeepSec object picker は総件数未取得時に loaded 件数のみ表示する", () => {
+  assert.match(objectPicker, /security\.deepsec\.entitlements\.objectLoadedCount/u);
+  assert.match(
+    pageSource,
+    /setTargetObjectTotal\(typeof page\.total === "number" \? page\.total : null\)/u
+  );
+  assert.equal(t("security.deepsec.entitlements.objectLoadedCount", { loaded: 3 }), "3 件");
+  assert.equal(
+    t("security.deepsec.entitlements.objectEmptyUnfiltered"),
+    "参照可能な対象 object がありません。"
+  );
 });
 
 test("DeepSec Data Grant editor は必須表示を shared required-field components で統一する", () => {

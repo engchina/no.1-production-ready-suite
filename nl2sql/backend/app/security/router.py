@@ -25,6 +25,8 @@ from .schemas import (
     DeepSecDataEntitlementUpdateRequest,
     DeepSecResetRequest,
     DeepSecRoleEntitlementsData,
+    DeepSecTargetObjectDetailData,
+    DeepSecTargetObjectPageData,
     LoginRequest,
     PasswordChangeRequest,
     PasswordResetData,
@@ -533,6 +535,46 @@ def list_deepsec_data_entitlements() -> ApiResponse[list[DeepSecRoleEntitlements
     return ApiResponse(data=get_deepsec_service().data_entitlements())
 
 
+@router.get(
+    "/security/deepsec/target-objects",
+    response_model=ApiResponse[DeepSecTargetObjectPageData],
+)
+def list_deepsec_target_objects(
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    q: Annotated[str, Query(max_length=128)] = "",
+    owner_prefix: Annotated[str, Query(max_length=128)] = "",
+    include_counts: bool = False,
+) -> ApiResponse[DeepSecTargetObjectPageData]:
+    return ApiResponse(
+        data=get_deepsec_service().target_objects(
+            cursor=cursor,
+            limit=limit,
+            q=q,
+            owner_prefix=owner_prefix,
+            include_counts=include_counts,
+        )
+    )
+
+
+@router.get(
+    "/security/deepsec/target-objects/{owner}/{object_name}",
+    response_model=ApiResponse[DeepSecTargetObjectDetailData],
+)
+def get_deepsec_target_object(
+    owner: str,
+    object_name: str,
+    object_type: Annotated[str, Query(max_length=32)] = "",
+) -> ApiResponse[DeepSecTargetObjectDetailData]:
+    return ApiResponse(
+        data=get_deepsec_service().target_object_detail(
+            owner=owner,
+            object_name=object_name,
+            object_type=object_type,
+        )
+    )
+
+
 @router.patch(
     "/security/deepsec/data-entitlements/{role_id}",
     response_model=ApiResponse[DeepSecRoleEntitlementsData],
@@ -613,6 +655,15 @@ def update_deepsec_config(
 ) -> ApiResponse[dict[str, object]]:
     current_principal(request)
     return ApiResponse(data=get_deepsec_service().update_config(payload.data_user_password))
+
+
+@router.post(
+    "/security/deepsec/config/sync-password",
+    response_model=ApiResponse[dict[str, object]],
+)
+def sync_deepsec_config_password(request: Request) -> ApiResponse[dict[str, object]]:
+    current_principal(request)
+    return ApiResponse(data=get_deepsec_service().sync_saved_data_user_password())
 
 
 @router.post(

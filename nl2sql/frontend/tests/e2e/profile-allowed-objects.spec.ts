@@ -491,8 +491,21 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
   await page.goto("/profiles");
 
   const listPanel = page.locator("#profile-management-panel-list");
+  const profileList = page.getByTestId("profile-management-list");
+  const expectedListMaxHeight = (page.viewportSize()?.width ?? 0) >= 768 ? "427px" : "280px";
   await expect(listPanel.getByText("128 件", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("profile-management-footer")).toContainText("2 / 128 件を表示");
+  await expect(profileList).toHaveAttribute("role", "region");
+  await expect(profileList).toHaveAttribute(
+    "aria-label",
+    "プロファイル一覧。必要に応じて縦方向にスクロールできます。"
+  );
+  await expect(profileList).toHaveAttribute("tabindex", "0");
+  await expect(profileList).toHaveCSS("max-height", expectedListMaxHeight);
+  await expect(page.getByText("2 / 128 件を表示")).toHaveCount(0);
+  await expect(
+    page.getByTestId("profile-management-load-more").getByRole("button", { name: "さらに読み込む" })
+  ).toBeVisible();
+  await expect(page.getByTestId("profile-management-load-more")).not.toContainText("件を表示");
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toBeVisible();
   await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toBeVisible();
   await expectNoDocumentHorizontalOverflow(page);
@@ -503,16 +516,18 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toBeVisible();
   await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toHaveCount(0);
   await expect(listPanel.getByText("1 件", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("profile-management-footer")).toContainText("1 / 1 件を表示");
+  await expect(page.getByText("1 / 1 件を表示")).toHaveCount(0);
+  await expect(page.getByTestId("profile-management-load-more")).toHaveCount(0);
 
   await search.fill("NO_MATCH_PROFILE");
   await expect(listPanel.getByText("一致するプロファイルがありません")).toBeVisible();
-  await expect(page.getByTestId("profile-management-footer")).toHaveCount(0);
+  await expect(page.getByTestId("profile-management-load-more")).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await search.fill("PROFILE_EMP");
   await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toBeVisible();
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toHaveCount(0);
+  await expect(profileList).toHaveCSS("max-height", "280px");
   await expectNoDocumentHorizontalOverflow(page);
 });
 

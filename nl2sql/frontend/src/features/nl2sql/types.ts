@@ -1331,6 +1331,17 @@ export interface AdminFeedbackReviewData {
   saved: boolean;
   feedback_content: string;
   select_ai_feedback?: SelectAiFeedbackAddData | null;
+  similar_history_publish?: SimilarHistoryPublishData | null;
+}
+
+export interface SimilarHistoryPublishData {
+  history_id: string;
+  status: "published" | "unpublished" | "skipped" | "warning";
+  runtime: string;
+  executed: boolean;
+  table_name: string;
+  index_name: string;
+  warnings: string[];
 }
 
 export interface SelectAiFeedbackMutationData {

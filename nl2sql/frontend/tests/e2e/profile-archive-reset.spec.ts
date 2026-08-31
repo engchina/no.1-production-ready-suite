@@ -21,6 +21,57 @@ async function expectUnifiedConfirmDialogSurface(dialog: Locator) {
   await expect(dialog.getByRole("button", { name: "閉じる", exact: true })).toHaveCount(0);
 }
 
+async function expectProfileListNoHorizontalOverflow(page: Page) {
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  const metrics = await page.getByTestId("profile-management-list").evaluate((node) => {
+    const list = node as HTMLElement;
+    const grid = list.querySelector('[data-testid="profile-management-grid"]') as HTMLElement | null;
+    const lastHeader = grid?.querySelector("thead th:last-child") as HTMLElement | null;
+    const listRect = list.getBoundingClientRect();
+    const gridRect = grid?.getBoundingClientRect();
+    const lastHeaderRect = lastHeader?.getBoundingClientRect();
+    const listStyle = window.getComputedStyle(list);
+    return {
+      overflowX: listStyle.overflowX,
+      overflowY: listStyle.overflowY,
+      listOffsetWidth: list.offsetWidth,
+      listScrollWidth: list.scrollWidth,
+      listLeft: listRect.left,
+      listRight: listRect.right,
+      gridOffsetWidth: grid?.offsetWidth ?? 0,
+      gridScrollWidth: grid?.scrollWidth ?? 0,
+      gridLeft: gridRect?.left ?? 0,
+      gridRight: gridRect?.right ?? 0,
+      gridWidth: gridRect?.width ?? 0,
+      lastHeaderRight: lastHeaderRect?.right ?? 0,
+      pageHorizontal:
+        document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
+        document.body.scrollWidth > document.body.clientWidth + 1,
+    };
+  });
+  expect(metrics.overflowX).toBe("hidden");
+  expect(metrics.overflowY).toBe("auto");
+  expect(metrics.pageHorizontal).toBe(false);
+  expect(metrics.listScrollWidth).toBeLessThanOrEqual(metrics.listOffsetWidth + 1);
+  expect(metrics.gridScrollWidth).toBeLessThanOrEqual(metrics.gridOffsetWidth + 1);
+  expect(metrics.gridLeft).toBeGreaterThanOrEqual(metrics.listLeft - 1);
+  expect(metrics.gridRight).toBeLessThanOrEqual(metrics.listRight + 1);
+  if (viewportWidth >= 768) {
+    expect(metrics.gridWidth).toBeLessThanOrEqual(34 * 16 + 1);
+    expect(Math.abs(metrics.gridLeft - metrics.listLeft)).toBeLessThanOrEqual(1);
+    expect(metrics.listRight - metrics.lastHeaderRight).toBeGreaterThan(80);
+  }
+}
+
+async function expectNoPageHorizontalOverflow(page: Page) {
+  const hasPageHorizontalScroll = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
+      document.body.scrollWidth > document.body.clientWidth + 1
+  );
+  expect(hasPageHorizontalScroll).toBe(false);
+}
+
 const selectAiConfig = {
   profile_name: "NL2SQL_ACCOUNTING_PROFILE",
   region: "ap-osaka-1",
@@ -355,16 +406,21 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   const api = await mockProfileManagement(page);
   await page.goto("/profiles");
 
+  const grid = page.getByTestId("profile-management-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作", exact: true })).toHaveCount(0);
+  await expect(grid.locator("thead th").last()).toContainText("許可ビュー");
+  await expect(grid.getByRole("button", { name: /操作:/ })).toHaveCount(0);
+  await expectProfileListNoHorizontalOverflow(page);
+
   const defaultRow = page.getByRole("row").filter({ hasText: "標準プロファイル" });
   await expect(defaultRow).toBeVisible();
   await expect(defaultRow.getByRole("button", { name: "編集", exact: true })).toHaveCount(0);
   await expect(defaultRow.getByRole("button", { name: "削除", exact: true })).toHaveCount(0);
-  await expect(defaultRow.getByRole("button", { name: /操作:/ })).toBeVisible();
 
   const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await expect(salesRow.getByRole("button", { name: /操作:/ })).toBeVisible();
+  await expect(salesRow.getByRole("button", { name: /操作:/ })).toHaveCount(0);
 
-  await defaultRow.locator("td").nth(1).click();
+  await defaultRow.locator("td").nth(0).click();
   await expect(page).toHaveURL(/\/profiles\?profile=default$/);
   const editor = page.locator("#profile-management-panel-editor");
   await expect(
@@ -405,19 +461,23 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 900 });
-  const viewport = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
+  await expectNoPageHorizontalOverflow(page);
 });
 
-test("一覧と編集画面からプロファイルを確認付きで削除できる", async ({ page }) => {
+test("編集画面からプロファイルを確認付きで削除できる", async ({ page }) => {
   const api = await mockProfileManagement(page);
   await page.goto("/profiles");
 
-  const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  const grid = page.getByTestId("profile-management-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作", exact: true })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /操作:/ })).toHaveCount(0);
+  await expectProfileListNoHorizontalOverflow(page);
+
+  await page.getByRole("row").filter({ hasText: "営業プロファイル" }).locator("td").nth(0).click();
+  await expect(
+    page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
+  ).toBeVisible();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expectUnifiedConfirmDialogSurface(dialog);
@@ -429,9 +489,9 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   ).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   expect(api.deleteRequests()).toBe(0);
-  await expect(page.getByText("営業プロファイル")).toBeVisible();
+  await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
 
-  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
@@ -442,7 +502,7 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await expect(page.getByRole("row").filter({ hasText: "営業プロファイル" })).toHaveCount(0);
 
   const accountingRow = page.getByRole("row").filter({ hasText: "経理プロファイル" });
-  await accountingRow.locator("td").nth(1).click();
+  await accountingRow.locator("td").nth(0).click();
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
@@ -460,19 +520,23 @@ test("一覧と編集画面からプロファイルを確認付きで削除で�
   await expect(page.getByRole("row").filter({ hasText: "経理プロファイル" })).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
-  const bodyWidth = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(bodyWidth.scrollWidth).toBeLessThanOrEqual(bodyWidth.clientWidth + 1);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("プロファイル削除時に Oracle 資産 cleanup の警告を表示する", async ({ page }) => {
   await mockProfileManagement(page, { oracleCleanupWarning: true });
   await page.goto("/profiles");
 
-  const salesRow = page.getByRole("row").filter({ hasText: "営業プロファイル" });
-  await salesRow.getByRole("button", { name: /操作:/ }).click();
+  const grid = page.getByTestId("profile-management-grid");
+  await expect(grid.getByRole("columnheader", { name: "操作", exact: true })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /操作:/ })).toHaveCount(0);
+  await expectProfileListNoHorizontalOverflow(page);
+
+  await page.getByRole("row").filter({ hasText: "営業プロファイル" }).locator("td").nth(0).click();
+  await expect(
+    page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
+  ).toBeVisible();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
