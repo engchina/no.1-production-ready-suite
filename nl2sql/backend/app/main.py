@@ -25,9 +25,11 @@ from app.features.nl2sql.service import (
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
+from app.features.settings.errors import DatabaseWalletOperationError
 from app.readiness import readiness_checks
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.security.service import SecurityApiError
+from app.security.store import SecurityMigrationRequired
 from app.settings import get_settings
 
 settings = get_settings()
@@ -182,6 +184,15 @@ async def security_api_error_handler(
     request: Request,
     exc: SecurityApiError,
 ) -> JSONResponse:
+    if exc.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED":
+        logger.error(
+            "security_schema_migration_request_failed",
+            extra={
+                "request_id": request_id_for(request),
+                "error_code": exc.code,
+                "path": request.url.path,
+            },
+        )
     return api_problem_response(
         request,
         status_code=exc.status_code,
@@ -190,6 +201,64 @@ async def security_api_error_handler(
         title=exc.title,
         retryable=exc.retryable,
         field_errors=exc.field_errors,
+    )
+
+
+@app.exception_handler(SecurityMigrationRequired)
+async def security_migration_required_handler(
+    request: Request,
+    exc: SecurityMigrationRequired,
+) -> JSONResponse:
+    """Oracle store から直接伝播した schema 未適用も同じ 409 契約へ変換する。"""
+
+    raw_message = str(exc.__cause__ or "").upper()
+    code_match = re.search(r"\bORA-\d{5}\b", raw_message)
+    logger.error(
+        "security_schema_migration_required",
+        extra={
+            "request_id": request_id_for(request),
+            "database_object": exc.object_name,
+            "oracle_error_code": code_match.group(0) if code_match else "ORA-00942",
+            "error_code": "SECURITY_SCHEMA_MIGRATION_REQUIRED",
+            "path": request.url.path,
+        },
+    )
+    return api_problem_response(
+        request,
+        status_code=409,
+        title="セキュリティ初期化が必要です",
+        detail=(
+            "アプリケーション認証/RBAC の schema migration が未適用です。"
+            "`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` "
+            "を実行してから再試行してください。"
+        ),
+        code="SECURITY_SCHEMA_MIGRATION_REQUIRED",
+        retryable=False,
+    )
+
+
+@app.exception_handler(DatabaseWalletOperationError)
+async def database_wallet_operation_error_handler(
+    request: Request,
+    exc: DatabaseWalletOperationError,
+) -> JSONResponse:
+    """Wallet install の 500 を安全な理由・復旧手順・問題コードで返す。"""
+
+    logger.error(
+        "database_wallet_operation_failed",
+        extra={
+            "request_id": request_id_for(request),
+            "error_code": exc.code,
+            "wallet_stage": exc.stage,
+            "exception_type": type(exc.__cause__).__name__ if exc.__cause__ else None,
+        },
+    )
+    return api_problem_response(
+        request,
+        status_code=500,
+        detail=exc.public_message,
+        code=exc.code,
+        retryable=exc.retryable,
     )
 
 

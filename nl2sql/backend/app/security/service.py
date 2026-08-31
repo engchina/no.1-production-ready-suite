@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import threading
@@ -54,6 +55,7 @@ from .store import (
 )
 
 DataEntitlementDraft = tuple[str, str, str] | DataEntitlementRecord
+logger = logging.getLogger(__name__)
 
 
 _SECURITY_ERROR_CODES = {
@@ -157,6 +159,19 @@ def _looks_like_missing_security_schema(exc: Exception) -> bool:
     )
 
 
+def _security_migration_diagnostic(exc: Exception) -> tuple[str, str]:
+    object_name = exc.object_name if isinstance(exc, SecurityMigrationRequired) else "UNKNOWN"
+    raw = exc.__cause__ if isinstance(exc, SecurityMigrationRequired) and exc.__cause__ else exc
+    message = str(raw).upper()
+    if object_name == "UNKNOWN":
+        object_name = next(
+            (name for name in _SECURITY_SCHEMA_OBJECT_NAMES if name in message),
+            "UNKNOWN",
+        )
+    code_match = re.search(r"\bORA-\d{5}\b", message)
+    return object_name, code_match.group(0) if code_match else "ORA-00942"
+
+
 def _b64url_encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -241,12 +256,7 @@ class SecurityService:
         try:
             user = self.store.get_user_by_login_user_id(normalized_login_user_id.casefold())
         except Exception as exc:
-            if _looks_like_missing_security_schema(exc):
-                raise SecurityApiError(
-                    503,
-                    "認証テーブルが初期化されていません。"
-                    "構成管理者でログインして初期設定を完了してください。",
-                ) from exc
+            self._raise_security_migration_if_needed(exc)
             raise
         now = _now()
         if user is None:
@@ -371,7 +381,11 @@ class SecurityService:
         return principal
 
     def list_users(self) -> list[UserRecord]:
-        return self.store.list_users()
+        try:
+            return self.store.list_users()
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
 
     def create_user(
         self,
@@ -887,7 +901,7 @@ class SecurityService:
     def _configured_system_admin_token_key(self) -> bytes:
         configured_login_user_id, configured_password = self._ensure_configured_system_admin_ready()
         configured_secret = (
-            f"{self.settings.service_name}:" f"{configured_login_user_id}:" f"{configured_password}"
+            f"{self.settings.service_name}:{configured_login_user_id}:{configured_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 
@@ -1240,7 +1254,21 @@ class SecurityService:
     @staticmethod
     def _raise_security_migration_if_needed(exc: Exception) -> None:
         if _looks_like_missing_security_schema(exc):
-            raise SecurityApiError(409, _SECURITY_MIGRATION_REQUIRED_MESSAGE) from exc
+            object_name, oracle_code = _security_migration_diagnostic(exc)
+            logger.error(
+                "security_schema_migration_required",
+                extra={
+                    "database_object": object_name,
+                    "oracle_error_code": oracle_code,
+                    "error_code": "SECURITY_SCHEMA_MIGRATION_REQUIRED",
+                },
+            )
+            raise SecurityApiError(
+                409,
+                _SECURITY_MIGRATION_REQUIRED_MESSAGE,
+                code="SECURITY_SCHEMA_MIGRATION_REQUIRED",
+                title="セキュリティ初期化が必要です",
+            ) from exc
 
     @staticmethod
     def _store_error(exc: Exception) -> SecurityApiError:

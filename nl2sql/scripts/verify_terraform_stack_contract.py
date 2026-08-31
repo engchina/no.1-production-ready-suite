@@ -58,6 +58,11 @@ def verify(package_path: Path) -> None:
         adb = archive.read("adb.tf").decode()
         compute = archive.read("compute.tf").decode()
         locals_source = archive.read("locals.tf").decode()
+        bootstrap = archive.read("cloud_init/bootstrap.template.yaml").decode()
+
+    init_source = (Path(__file__).resolve().parents[1] / "init_script.sh").read_text(
+        encoding="utf-8"
+    )
 
     _require_all(
         schema,
@@ -221,8 +226,49 @@ def verify(package_path: Path) -> None:
     )
     _require_all(
         locals_source,
-        ["OCI_COMPARTMENT_ID=${var.compartment_ocid}"],
+        [
+            "OCI_COMPARTMENT_ID=${var.compartment_ocid}",
+            "ORACLE_WALLET_DIR=${local.wallet_dir_host}",
+            'wallet_dir_host   = "/u01/aipoc/wallet"',
+        ],
         context="runtime deployment compartment",
+    )
+    _require_all(
+        bootstrap,
+        [
+            'APP_ROOT="/u01/aipoc"',
+            'run_application_init',
+            'bash "$${init_script}"',
+            "Nginx listens on TCP port",
+        ],
+        context="direct Compute bootstrap",
+    )
+    _require_all(
+        init_source,
+        [
+            'WALLET_DIR="${APP_ROOT}/wallet"',
+            'chown "root:${APP_GROUP}" "${APP_ROOT}"',
+            'chmod 0775 "${APP_ROOT}"',
+            'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
+            'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
+            "app.cli.nl2sql_system_schema --initialize",
+            "app.cli.app_security_migrate --apply --skip-bootstrap",
+            'if [ "${DATABASE_INITIALIZATION_READY}" = "true" ]; then',
+            "systemctl enable --now \\",
+            "systemctl disable --now \\",
+            "production-ready-nl2sql-schema-refresh-worker.service",
+            "production-ready-nl2sql-quality-evaluation-worker.service",
+            "production-ready-nl2sql-ontology-worker.service",
+        ],
+        context="application deployment initialization",
+    )
+    _require_in_order(
+        init_source,
+        [
+            "app.cli.nl2sql_system_schema --initialize",
+            "app.cli.app_security_migrate --apply --skip-bootstrap",
+        ],
+        context="database initialization order",
     )
     _require_all(
         compute,
@@ -244,10 +290,14 @@ def verify(package_path: Path) -> None:
         "CIDR_BLOCK",
         "adb_use_private_subnet",
     ]
-    stack_contract = "\n".join([schema, variables, adb, compute, locals_source])
+    stack_contract = "\n".join(
+        [schema, variables, adb, compute, locals_source, bootstrap, init_source]
+    )
     found = [value for value in forbidden if value in stack_contract]
     if found:
         raise AssertionError(f"legacy ADB network inputs remain: {found}")
+    if re.search(r"(?im)^\s*(?:docker|docker-compose)\b", bootstrap + "\n" + init_source):
+        raise AssertionError("direct Compute deployment unexpectedly requires Docker")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

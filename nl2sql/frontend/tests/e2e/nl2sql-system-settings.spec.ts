@@ -1479,7 +1479,7 @@ test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバッ�
   let adbRefreshCount = 0;
   let walletDownloadCount = 0;
   const walletError =
-    "OCI から Wallet を取得できませんでした。IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。";
+    "Wallet 保存領域を使用できません。管理者に保存領域の書き込み権限を確認するよう依頼してから再試行してください。";
 
   await page.unroute("**/api/settings/database/adb/settings");
   await page.route("**/api/settings/database/adb/settings", async (route) => {
@@ -1490,9 +1490,25 @@ test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバッ�
   await page.route("**/api/settings/database/wallet/download", async (route) => {
     walletDownloadCount += 1;
     await route.fulfill({
-      status: 502,
+      status: 500,
       contentType: "application/json",
-      body: JSON.stringify({ detail: walletError }),
+      headers: { "X-Request-ID": "wallet-storage-unavailable-request" },
+      body: JSON.stringify({
+        data: null,
+        error_messages: [walletError],
+        warning_messages: [],
+        error_code: "WALLET_STORAGE_UNAVAILABLE",
+        problem: {
+          type: "urn:nl2sql:problem:wallet-storage-unavailable",
+          title: "サーバー内部でエラーが発生しました",
+          status: 500,
+          detail: walletError,
+          code: "WALLET_STORAGE_UNAVAILABLE",
+          request_id: "wallet-storage-unavailable-request",
+          retryable: true,
+          field_errors: [],
+        },
+      }),
     });
   });
 
@@ -1504,11 +1520,12 @@ test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバッ�
   const adbAlert = page
     .locator("#adb-management")
     .getByRole("alert")
-    .filter({ hasText: /IAM 権限を確認して再試行/ });
+    .filter({ hasText: /保存領域の書き込み権限を確認/ });
   await expect(adbAlert).toBeVisible();
   await expect(
-    page.getByRole("alert").filter({ hasText: /IAM 権限を確認して再試行/ })
+    page.getByRole("alert").filter({ hasText: /保存領域の書き込み権限を確認/ })
   ).toHaveCount(1);
+  await expect(adbAlert).toContainText("リクエストID: wallet-storage-unavailable-request");
   await expect(page.getByRole("button", { name: "OCI から Wallet を再取得" })).toHaveCount(
     0
   );

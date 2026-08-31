@@ -12,6 +12,7 @@ from zipfile import ZipFile, ZipInfo
 import httpx
 import pytest
 from dotenv import dotenv_values
+from fastapi import HTTPException
 from pytest import MonkeyPatch
 
 from app.clients.oci_database import (
@@ -806,6 +807,36 @@ def test_database_wallet_install_lock_returns_conflict(
     assert "処理中" in resp.text
 
 
+def test_database_wallet_install_lock_permission_error_is_structured(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_wallet_download(monkeypatch, tmp_path)
+    original_open = Path.open
+
+    def deny_lock_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path.name == ".wallet.install.lock":
+            raise PermissionError("/secret/wallet-parent is not writable")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_lock_open)
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        headers={"X-Request-ID": "wallet-storage-request"},
+        files={"file": ("wallet.zip", _wallet_zip_bytes(), "application/zip")},
+    )
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error_code"] == "WALLET_STORAGE_UNAVAILABLE"
+    assert body["problem"]["code"] == "WALLET_STORAGE_UNAVAILABLE"
+    assert body["problem"]["request_id"] == "wallet-storage-request"
+    assert body["problem"]["retryable"] is True
+    assert "書き込み権限" in body["problem"]["detail"]
+    assert "/secret/wallet-parent" not in resp.text
+
+
 def test_database_wallet_install_failure_restores_existing_wallet(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -829,6 +860,63 @@ def test_database_wallet_install_failure_restores_existing_wallet(
     )
 
     assert resp.status_code == 500
+    assert resp.json()["error_code"] == "WALLET_INSTALL_FAILED"
+    assert resp.json()["problem"]["retryable"] is True
+    assert "simulated chmod failure" not in resp.text
+    assert (wallet_dir / "tnsnames.ora").read_bytes() == old_tnsnames
+    assert not list(wallet_dir.parent.glob(f".{wallet_dir.name}.backup-*"))
+
+
+def test_database_wallet_config_persist_failure_rolls_back_existing_wallet(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _configure_wallet_download(monkeypatch, tmp_path)
+    wallet_dir = settings_router._install_database_wallet(
+        settings,
+        _wallet_zip_bytes(),
+        "old-wallet.zip",
+    )
+    old_tnsnames = (wallet_dir / "tnsnames.ora").read_bytes()
+    (wallet_dir / "ewallet.pem").unlink()
+
+    def fail_persist(_settings: Settings) -> None:
+        raise HTTPException(
+            status_code=500,
+            detail="/secret/backend/.env contains SuperSecret123",
+        )
+
+    monkeypatch.setattr(settings_router, "_persist_database_settings", fail_persist)
+
+    class FakeDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            return _adb_info(adb_ocid, is_dedicated=False)
+
+        async def download_autonomous_database_wallet(
+            self,
+            adb_ocid: str,
+            password: str,
+            generate_type: str | None,
+            max_bytes: int,
+        ) -> bytes:
+            return _wallet_zip_bytes()
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+
+    resp = client.post(
+        "/api/settings/database/wallet/download",
+        headers={"X-Request-ID": "wallet-persist-request"},
+    )
+
+    assert resp.status_code == 500
+    assert resp.json()["error_code"] == "WALLET_INSTALL_FAILED"
+    assert resp.json()["problem"]["request_id"] == "wallet-persist-request"
+    assert "変更前の状態" in resp.text
+    assert "/secret/backend/.env" not in resp.text
+    assert "SuperSecret123" not in resp.text
     assert (wallet_dir / "tnsnames.ora").read_bytes() == old_tnsnames
     assert not list(wallet_dir.parent.glob(f".{wallet_dir.name}.backup-*"))
 

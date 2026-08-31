@@ -9,6 +9,7 @@ fi
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 APP_USER="${APP_USER:-ubuntu}"
+APP_GROUP="${APP_GROUP:-${APP_USER}}"
 APP_REPO_DIR="${APP_ROOT}/no.1-production-ready-nl2sql"
 PLATFORM_REPO_DIR="${APP_ROOT}/no.1-production-ready-platform"
 BACKEND_DIR="${APP_REPO_DIR}/backend"
@@ -26,6 +27,8 @@ NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
 NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://nodejs.org/download/release/latest-v24.x}"
 NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
 NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
+SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+DATABASE_INITIALIZATION_READY=false
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
 
@@ -386,21 +389,25 @@ prepare_filesystem() {
     return 1
   fi
 
-  install -d -m 0755 -o "${APP_USER}" -g "${APP_USER}" "${DATA_DIR}"
+  # Wallet の lock/tmp/backup は Wallet 自身ではなく APP_ROOT 直下に作る。
+  # root 所有を維持しつつ app group にだけ書き込みを許可する。
+  chown "root:${APP_GROUP}" "${APP_ROOT}"
+  chmod 0775 "${APP_ROOT}"
+  install -d -m 0755 -o "${APP_USER}" -g "${APP_GROUP}" "${DATA_DIR}"
   migrate_legacy_data_dir
-  install -d -m 0700 -o "${APP_USER}" -g "${APP_USER}" "${WALLET_DIR}"
-  chown -R "${APP_USER}:${APP_USER}" "${APP_REPO_DIR}" "${PLATFORM_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
-  chown -h "${APP_USER}:${APP_USER}" "${LEGACY_DATA_DIR}" 2>/dev/null || true
+  install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
+  chown -R "${APP_USER}:${APP_GROUP}" "${APP_REPO_DIR}" "${PLATFORM_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
+  chown -h "${APP_USER}:${APP_GROUP}" "${LEGACY_DATA_DIR}" 2>/dev/null || true
 }
 
 install_runtime_env() {
   log "Installing backend environment and wallet."
-  install -m 0600 -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"
+  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"
 
   rm -rf "${WALLET_DIR}"
-  install -d -m 0700 -o "${APP_USER}" -g "${APP_USER}" "${WALLET_DIR}"
+  install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
   unzip -oq "${APP_ROOT}/props/wallet.zip" -d "${WALLET_DIR}"
-  chown -R "${APP_USER}:${APP_USER}" "${WALLET_DIR}"
+  chown -R "${APP_USER}:${APP_GROUP}" "${WALLET_DIR}"
   find "${WALLET_DIR}" -type d -exec chmod 0700 {} \;
   find "${WALLET_DIR}" -type f -exec chmod 0600 {} \;
 }
@@ -409,6 +416,40 @@ install_backend() {
   log "Installing backend dependencies with uv."
   run_as_app_user_in_dir "${BACKEND_DIR}" "uv python install 3.12"
   run_as_app_user_in_dir "${BACKEND_DIR}" "uv sync --locked --no-dev --python 3.12"
+}
+
+initialize_database_schema() {
+  local security_ready=false
+  local system_ready=false
+
+  log "Initializing NL2SQL system schema with an idempotent migration."
+  if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
+    "uv run python -m app.cli.nl2sql_system_schema --initialize"; then
+    system_ready=true
+  else
+    log "WARNING: NL2SQL system schema initialization is incomplete."
+  fi
+
+  log "Applying application security/RBAC migrations without bootstrapping users."
+  if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
+    "uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap"; then
+    security_ready=true
+  else
+    log "WARNING: Application security/RBAC migration is incomplete."
+  fi
+
+  if [ "${system_ready}" = "true" ] && [ "${security_ready}" = "true" ]; then
+    DATABASE_INITIALIZATION_READY=true
+    log "Database initialization completed; external workers will be enabled."
+    return 0
+  fi
+
+  DATABASE_INITIALIZATION_READY=false
+  log "WARNING: Continuing in degraded mode so the web application remains available."
+  log "WARNING: External workers remain stopped until both schema commands succeed."
+  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize"
+  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap"
+  return 0
 }
 
 build_frontend() {
@@ -435,7 +476,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${APP_USER}
-Group=${APP_USER}
+Group=${APP_GROUP}
 WorkingDirectory=${BACKEND_DIR}
 Environment=HOME=/home/${APP_USER}
 Environment=PYTHONUNBUFFERED=1
@@ -452,32 +493,39 @@ EOF
 configure_systemd() {
   log "Writing systemd units."
   write_systemd_unit \
-    /etc/systemd/system/production-ready-nl2sql-backend.service \
+    "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-backend.service" \
     "/usr/local/bin/uv run gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind ${BACKEND_HOST}:${BACKEND_PORT} --workers 2 --timeout 300" \
     "Production Ready NL2SQL backend"
 
   write_systemd_unit \
-    /etc/systemd/system/production-ready-nl2sql-schema-refresh-worker.service \
+    "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-schema-refresh-worker.service" \
     "/usr/local/bin/uv run python -m app.cli.nl2sql_schema_refresh_worker --poll-seconds 1" \
     "Production Ready NL2SQL schema refresh worker"
 
   write_systemd_unit \
-    /etc/systemd/system/production-ready-nl2sql-quality-evaluation-worker.service \
+    "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-quality-evaluation-worker.service" \
     "/usr/local/bin/uv run python -m app.cli.nl2sql_quality_evaluation_worker" \
     "Production Ready NL2SQL quality evaluation worker"
 
   write_systemd_unit \
-    /etc/systemd/system/production-ready-nl2sql-ontology-worker.service \
+    "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-ontology-worker.service" \
     "/usr/local/bin/uv run python -m app.features.nl2sql.ontology_worker" \
     "Production Ready NL2SQL ontology worker"
 
   systemctl daemon-reload
   systemctl enable production-ready-nl2sql-backend.service
-  systemctl disable --now \
-    production-ready-nl2sql-schema-refresh-worker.service \
-    production-ready-nl2sql-quality-evaluation-worker.service \
-    production-ready-nl2sql-ontology-worker.service || true
   systemctl restart production-ready-nl2sql-backend.service
+  if [ "${DATABASE_INITIALIZATION_READY}" = "true" ]; then
+    systemctl enable --now \
+      production-ready-nl2sql-schema-refresh-worker.service \
+      production-ready-nl2sql-quality-evaluation-worker.service \
+      production-ready-nl2sql-ontology-worker.service
+  else
+    systemctl disable --now \
+      production-ready-nl2sql-schema-refresh-worker.service \
+      production-ready-nl2sql-quality-evaluation-worker.service \
+      production-ready-nl2sql-ontology-worker.service || true
+  fi
 }
 
 configure_nginx() {
@@ -561,6 +609,7 @@ main() {
   prepare_filesystem
   install_runtime_env
   install_backend
+  initialize_database_schema
   build_frontend
   configure_systemd
   configure_nginx

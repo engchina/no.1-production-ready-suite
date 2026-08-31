@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -78,6 +79,7 @@ from app.security.store import (
     InMemorySecurityStore,
     OracleSecurityStore,
     SecurityConflict,
+    SecurityMigrationRequired,
     SecurityStore,
 )
 from app.settings import Settings, get_settings
@@ -232,6 +234,9 @@ class _MissingSecuritySchemaStore:
     def get_user_by_login_user_id(self, _normalized_login_user_id: str) -> UserRecord | None:
         raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
 
+    def list_users(self) -> list[UserRecord]:
+        raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
+
 
 class _MissingRoleProfilesStore(InMemorySecurityStore):
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
@@ -257,6 +262,46 @@ class _RecordingCursor:
 
     def fetchone(self) -> tuple[int]:
         return self._fetchone_rows.pop(0) if self._fetchone_rows else (0,)
+
+
+class _BareMissingTableCursor:
+    def __enter__(self) -> _BareMissingTableCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, *_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("ORA-00942: table or view does not exist")
+
+
+class _BareMissingTableConnection:
+    def cursor(self) -> _BareMissingTableCursor:
+        return _BareMissingTableCursor()
+
+
+class _BareMissingTableAdapter:
+    @contextmanager
+    def connection(self) -> Iterator[_BareMissingTableConnection]:
+        yield _BareMissingTableConnection()
+
+
+def test_oracle_store_maps_bare_ora_00942_to_operation_security_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = OracleSecurityStore(_settings())
+    monkeypatch.setattr(store, "_adapter", _BareMissingTableAdapter())
+    operations = [
+        (store.list_users, "NL2SQL_APP_USERS"),
+        (store.list_roles, "NL2SQL_APP_ROLES"),
+        (lambda: store.get_session_by_token_hash("missing"), "NL2SQL_AUTH_SESSIONS"),
+        (store.get_deepsec_states, "NL2SQL_DEEPSEC_MIGRATIONS"),
+    ]
+
+    for operation, expected_object in operations:
+        with pytest.raises(SecurityMigrationRequired) as exc_info:
+            operation()
+        assert exc_info.value.object_name == expected_object
 
 
 def test_debug_auth_bypass_is_local_only_and_has_system_admin_permissions() -> None:
@@ -600,17 +645,30 @@ def test_database_credentials_no_longer_bypass_auth_tables() -> None:
 
     with pytest.raises(SecurityApiError) as error:
         service.login("DBADMIN", "DbAdminPass!123")
-    assert error.value.status_code == 503
-    assert "認証テーブル" in error.value.public_message
+    assert error.value.status_code == 409
+    assert error.value.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    assert "app_security_migrate" in error.value.public_message
 
 
-def test_table_user_login_reports_503_when_auth_table_is_missing() -> None:
+def test_table_user_login_reports_migration_required_when_auth_table_is_missing() -> None:
     service = SecurityService(cast(SecurityStore, _MissingSecuritySchemaStore()), _settings())
 
     with pytest.raises(SecurityApiError) as error:
         service.login("app.user", "AppUserPass!123")
-    assert error.value.status_code == 503
-    assert "認証テーブル" in error.value.public_message
+    assert error.value.status_code == 409
+    assert error.value.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    assert "app_security_migrate" in error.value.public_message
+
+
+def test_list_users_reports_security_migration_required() -> None:
+    service = SecurityService(cast(SecurityStore, _MissingSecuritySchemaStore()), _settings())
+
+    with pytest.raises(SecurityApiError) as error:
+        service.list_users()
+
+    assert error.value.status_code == 409
+    assert error.value.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    assert "NL2SQL_APP_USERS" not in error.value.public_message
 
 
 def test_missing_role_profiles_table_reports_security_migration_required() -> None:
@@ -1793,9 +1851,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 "/auth/logout",
                 "/auth/password/change",
             }:
-                assert not (
-                    permission and UNCLASSIFIED_PERMISSION in permission
-                ), f"unclassified route: {method.upper()} {path}"
+                assert not (permission and UNCLASSIFIED_PERMISSION in permission), (
+                    f"unclassified route: {method.upper()} {path}"
+                )
 
     assert permission_for_route("POST", "/nl2sql/execute") == frozenset({SQL_EXECUTE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})
@@ -3028,6 +3086,54 @@ def test_security_conflicts_and_validation_use_problem_contract(
                 "/login_user_id",
                 "/display_name",
             }
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+def test_missing_users_table_uses_409_problem_contract_without_oracle_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin_user = service.store.get_user_by_login_user_id("admin")
+    assert admin_user is not None
+    service.store.set_password(
+        admin_user.user_uuid,
+        hash_password("BootstrapPass!123"),
+        force_change=False,
+    )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            login_response = await client.post(
+                "/api/auth/login",
+                json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
+            )
+            assert login_response.status_code == 200
+
+            def missing_users() -> list[UserRecord]:
+                raise RuntimeError(
+                    'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
+                )
+
+            monkeypatch.setattr(service.store, "list_users", missing_users)
+            response = await client.get(
+                "/api/security/users",
+                headers={"X-Request-ID": "security-migration-request"},
+            )
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error_code"] == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+        assert body["problem"]["code"] == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+        assert body["problem"]["request_id"] == "security-migration-request"
+        assert body["problem"]["retryable"] is False
+        assert "app_security_migrate" in body["problem"]["detail"]
+        assert "ORA-00942" not in response.text
+        assert "NL2SQL_APP_USERS" not in response.text
 
     try:
         asyncio.run(exercise())

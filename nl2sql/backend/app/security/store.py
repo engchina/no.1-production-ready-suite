@@ -59,10 +59,38 @@ class SecurityMigrationRequired(SecurityStoreError):
         super().__init__(f"{object_name} security migration is required.")
 
 
-def _raise_missing_security_migration_if_needed(exc: Exception, object_name: str) -> None:
+_SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
+    {
+        "NL2SQL_APP_USERS",
+        "NL2SQL_APP_ROLES",
+        "NL2SQL_APP_USER_ROLES",
+        "NL2SQL_APP_ROLE_PERMISSIONS",
+        "NL2SQL_APP_ROLE_PROFILES",
+        "NL2SQL_APP_DATA_ENTITLEMENTS",
+        "NL2SQL_AUTH_SESSIONS",
+        "NL2SQL_DEEPSEC_MIGRATIONS",
+    }
+)
+
+
+def _missing_security_migration_object(exc: Exception) -> str | None:
+    if isinstance(exc, SecurityMigrationRequired):
+        return exc.object_name
     message = str(exc).upper()
-    if "ORA-00942" in message and object_name.upper() in message:
-        raise SecurityMigrationRequired(object_name) from exc
+    if "ORA-00942" not in message:
+        return None
+    return next(
+        (object_name for object_name in _SECURITY_SCHEMA_OBJECT_NAMES if object_name in message),
+        None,
+    )
+
+
+def _raise_missing_security_migration_if_needed(exc: Exception, object_name: str) -> None:
+    missing_object = _missing_security_migration_object(exc)
+    if missing_object == object_name.upper() or (
+        missing_object is None and "ORA-00942" in str(exc).upper()
+    ):
+        raise SecurityMigrationRequired(object_name.upper()) from exc
 
 
 class SecurityStore(Protocol):
@@ -513,12 +541,22 @@ class OracleSecurityStore:
         self._adapter = OracleNl2SqlAdapter(settings)
 
     @contextmanager
-    def connection(self) -> Iterator[Any]:
-        with self._adapter.connection() as connection:
-            yield connection
+    def connection(self, migration_object: str | None = None) -> Iterator[Any]:
+        try:
+            with self._adapter.connection() as connection:
+                yield connection
+        except SecurityMigrationRequired:
+            raise
+        except Exception as exc:
+            object_name = _missing_security_migration_object(exc)
+            if object_name is None and migration_object and "ORA-00942" in str(exc).upper():
+                object_name = migration_object.upper()
+            if object_name is not None:
+                raise SecurityMigrationRequired(object_name) from exc
+            raise
 
     def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             # 初回 user 判定から INSERT までを DB lock で直列化し、複数 worker の
             # 同時 startup でも管理者を一度だけ作成する。
             cursor.execute("LOCK TABLE NL2SQL_APP_USERS IN EXCLUSIVE MODE")
@@ -571,7 +609,7 @@ class OracleSecurityStore:
             return True
 
     def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 self._user_select() + " WHERE LOGIN_USER_ID_NORMALIZED = :login",
                 {"login": normalized_login_user_id.casefold()},
@@ -580,7 +618,7 @@ class OracleSecurityStore:
             return self._user_from_row(cursor, row) if row else None
 
     def get_user(self, user_uuid: str) -> UserRecord | None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 self._user_select() + " WHERE USER_UUID = :user_uuid",
                 {"user_uuid": user_uuid},
@@ -589,7 +627,7 @@ class OracleSecurityStore:
             return self._user_from_row(cursor, row) if row else None
 
     def list_users(self) -> list[UserRecord]:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(self._user_select() + " ORDER BY LOGIN_USER_ID_NORMALIZED")
             rows = cursor.fetchall()
             return [self._user_from_row(cursor, row) for row in rows]
@@ -630,7 +668,7 @@ class OracleSecurityStore:
 
     def create_user(self, user: UserRecord) -> UserRecord:
         try:
-            with self.connection() as conn, conn.cursor() as cursor:
+            with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
                 self._assert_role_ids(cursor, user.role_ids)
                 cursor.execute(
                     """
@@ -674,7 +712,7 @@ class OracleSecurityStore:
         status: str,
         role_ids: list[str],
     ) -> UserRecord:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             # 最後の管理者判定と更新を一つの DB critical section に置く。
             # 複数 API worker が同時に別の管理者を無効化しても 0 人にはならない。
             cursor.execute("LOCK TABLE NL2SQL_APP_USERS IN SHARE ROW EXCLUSIVE MODE")
@@ -741,7 +779,7 @@ class OracleSecurityStore:
         return updated
 
     def delete_user(self, user_uuid: str, *, expected_version: int) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT STATUS, VERSION_NO
@@ -798,7 +836,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def set_password(self, user_uuid: str, password_hash: str, *, force_change: bool) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_USERS
@@ -820,7 +858,7 @@ class OracleSecurityStore:
     def record_login_failure(
         self, user_uuid: str, *, failed_count: int, locked_until: datetime | None
     ) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_USERS SET FAILED_LOGIN_COUNT = :failed_count,
@@ -836,7 +874,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def record_login_success(self, user_uuid: str, *, password_hash: str | None = None) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             if password_hash:
                 cursor.execute(
                     """
@@ -857,7 +895,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             sql = self._role_select()
             if not include_archived:
                 sql += " WHERE ARCHIVED = 0"
@@ -866,7 +904,7 @@ class OracleSecurityStore:
             return [self._role_from_row(cursor, row) for row in cursor.fetchall()]
 
     def get_role(self, role_id: str) -> RoleRecord | None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             cursor.execute(self._role_select() + " WHERE ROLE_ID = :role_id", {"role_id": role_id})
             row = cursor.fetchone()
             return self._role_from_row(cursor, row) if row else None
@@ -957,7 +995,7 @@ class OracleSecurityStore:
 
     def create_role(self, role: RoleRecord) -> RoleRecord:
         try:
-            with self.connection() as conn, conn.cursor() as cursor:
+            with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
                 cursor.execute(
                     """
                     INSERT INTO NL2SQL_APP_ROLES
@@ -990,7 +1028,7 @@ class OracleSecurityStore:
         return self.get_role(role.role_id) or role
 
     def update_role(self, role: RoleRecord, *, expected_version: int) -> RoleRecord:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_ROLES
@@ -1017,7 +1055,7 @@ class OracleSecurityStore:
         return updated
 
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_ROLES SET ARCHIVED = 1, VERSION_NO = VERSION_NO + 1,
@@ -1040,7 +1078,7 @@ class OracleSecurityStore:
             raise SecurityNotFound("ロールが見つかりません。")
         if not current.archived:
             raise SecurityConflict("ロールはアーカイブされていません。")
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_ROLES SET ARCHIVED = 0, VERSION_NO = VERSION_NO + 1,
@@ -1058,7 +1096,7 @@ class OracleSecurityStore:
         return role
 
     def delete_role(self, role_id: str, *, expected_version: int) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_ROLES") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT IS_BUILT_IN, ARCHIVED, VERSION_NO
@@ -1134,7 +1172,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def count_active_system_admins(self) -> int:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
             cursor.execute("""
                 SELECT COUNT(*)
                   FROM NL2SQL_APP_USERS u
@@ -1145,7 +1183,7 @@ class OracleSecurityStore:
             return int(cursor.fetchone()[0])
 
     def create_session(self, session: SessionRecord) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_AUTH_SESSIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO NL2SQL_AUTH_SESSIONS
@@ -1168,7 +1206,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_AUTH_SESSIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT SESSION_ID, USER_UUID, TOKEN_HASH, CSRF_TOKEN_HASH, IDLE_EXPIRES_AT,
@@ -1194,7 +1232,7 @@ class OracleSecurityStore:
     def touch_session(
         self, session_id: str, *, last_seen_at: datetime, idle_expires_at: datetime
     ) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_AUTH_SESSIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_AUTH_SESSIONS SET LAST_SEEN_AT = :last_seen,
@@ -1210,7 +1248,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def revoke_session(self, session_id: str) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_AUTH_SESSIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE NL2SQL_AUTH_SESSIONS SET REVOKED_AT = SYSTIMESTAMP "
                 "WHERE SESSION_ID = :session_id AND REVOKED_AT IS NULL",
@@ -1219,7 +1257,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def revoke_user_sessions(self, user_uuid: str) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_AUTH_SESSIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE NL2SQL_AUTH_SESSIONS SET REVOKED_AT = SYSTIMESTAMP "
                 "WHERE USER_UUID = :user_uuid AND REVOKED_AT IS NULL",
@@ -1228,7 +1266,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_DEEPSEC_MIGRATIONS") as conn, conn.cursor() as cursor:
             cursor.execute("""
                 SELECT PLAN_VERSION, STEP_NO, STEP_KEY, CHECKSUM, STATUS,
                        ERROR_MESSAGE, EXECUTED_BY_USER_UUID, EXECUTED_AT
@@ -1257,7 +1295,7 @@ class OracleSecurityStore:
         error_message: str,
         executed_by_user_uuid: str | None,
     ) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_DEEPSEC_MIGRATIONS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 MERGE INTO NL2SQL_DEEPSEC_MIGRATIONS m
@@ -1292,7 +1330,7 @@ class OracleSecurityStore:
     def clear_deepsec_states(self, *, version: str, step_numbers: list[int]) -> None:
         if not step_numbers:
             return
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_DEEPSEC_MIGRATIONS") as conn, conn.cursor() as cursor:
             cursor.executemany(
                 """
                 DELETE FROM NL2SQL_DEEPSEC_MIGRATIONS
@@ -1393,7 +1431,7 @@ class OracleSecurityStore:
         sql_checksum: str = "",
         error_message: str = "",
     ) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_DATA_ENTITLEMENTS") as conn, conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE NL2SQL_APP_DATA_ENTITLEMENTS
@@ -1421,7 +1459,7 @@ class OracleSecurityStore:
             conn.commit()
 
     def clear_deepsec_entitlement_apply_states(self) -> None:
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.connection("NL2SQL_APP_DATA_ENTITLEMENTS") as conn, conn.cursor() as cursor:
             cursor.execute("""
                 UPDATE NL2SQL_APP_DATA_ENTITLEMENTS
                    SET APPLY_STATUS = 'PENDING',

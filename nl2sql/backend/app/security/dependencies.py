@@ -84,6 +84,8 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         if permissions is not None and not principal.has_any_permission(permissions):
             raise SecurityApiError(403, "この機能を利用する権限がありません。")
     except SecurityApiError as exc:
+        if exc.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED":
+            raise
         raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
     actor_token = set_actor_context(
         principal.user_uuid,

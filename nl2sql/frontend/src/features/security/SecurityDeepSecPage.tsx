@@ -30,6 +30,7 @@ import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ProcessingIndicator } from "@/components/ProcessingState";
+import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, FieldLegend, RequiredIndicator } from "@/components/ui/required-field";
@@ -566,26 +567,16 @@ function DeepSecPlanSteps({
   stepNumbers,
   loading,
   loadError,
-  onReload,
+  onRetry,
 }: {
   plan: DeepSecPlan | null;
   stepNumbers: readonly number[];
   loading: boolean;
   loadError: string;
-  onReload: () => void;
+  onRetry: () => void;
 }) {
   if (loadError) {
-    return (
-      <Card>
-        <CardContent className="space-y-3">
-          <Banner severity="danger">{loadError}</Banner>
-          <Button variant="secondary" size="sm" onClick={onReload}>
-            <RefreshCw size={14} aria-hidden />
-            {t("security.common.reload")}
-          </Button>
-        </CardContent>
-      </Card>
-    );
+    return <ErrorState message={loadError} onRetry={onRetry} />;
   }
 
   if (loading && !plan) {
@@ -1630,53 +1621,62 @@ export function SecurityDeepSecPage() {
               icon={KeyRound}
             />
             <form
-              className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_auto]"
+              className="grid gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
                 void handleSaveConfig();
               }}
             >
-              <dl className="rounded-md border border-border bg-background p-3 text-sm">
-                <dt className="text-muted">{t("security.deepsec.dataUser")}</dt>
-                <dd className="mt-1 break-all font-mono">
-                  {status?.data_user ?? plan?.data_user ?? "DEEPSEC_DATA_USER"}
-                </dd>
-              </dl>
-              <div className="space-y-2">
-                <label htmlFor="deepsec-data-user-password" className="block text-sm font-medium">
-                  {t("security.deepsec.config.password")}
-                </label>
-                <input
-                  id="deepsec-data-user-password"
-                  type="password"
-                  autoComplete="new-password"
-                  className={INPUT_CLASS}
-                  value={dataUserPassword}
-                  onChange={(event) => {
-                    setDataUserPassword(event.target.value);
-                    setConfigError("");
-                  }}
-                  placeholder={
-                    (status?.has_data_user_password ?? plan?.has_data_user_password)
-                      ? t("security.deepsec.config.passwordPlaceholderSaved")
-                      : t("security.deepsec.config.passwordPlaceholderNew")
-                  }
-                  aria-describedby="deepsec-data-user-password-state"
-                  aria-invalid={Boolean(configError)}
-                />
-                <p id="deepsec-data-user-password-state" className="text-xs text-muted">
-                  {(status?.has_data_user_password ?? plan?.has_data_user_password)
-                    ? t("security.deepsec.config.secretSaved")
-                    : t("security.deepsec.config.secretMissing")}
-                </p>
-                {configError ? <FormStatus tone="danger" message={configError} /> : null}
+              <div
+                className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
+                data-testid="security-deepsec-config-fields"
+              >
+                <dl className="rounded-md border border-border bg-background p-3 text-sm">
+                  <dt className="text-muted">{t("security.deepsec.dataUser")}</dt>
+                  <dd className="mt-1 break-all font-mono">
+                    {status?.data_user ?? plan?.data_user ?? "DEEPSEC_DATA_USER"}
+                  </dd>
+                </dl>
+                <div className="space-y-2">
+                  <label htmlFor="deepsec-data-user-password" className="block text-sm font-medium">
+                    {t("security.deepsec.config.password")}
+                  </label>
+                  <input
+                    id="deepsec-data-user-password"
+                    type="password"
+                    autoComplete="new-password"
+                    className={INPUT_CLASS}
+                    value={dataUserPassword}
+                    onChange={(event) => {
+                      setDataUserPassword(event.target.value);
+                      setConfigError("");
+                    }}
+                    placeholder={
+                      (status?.has_data_user_password ?? plan?.has_data_user_password)
+                        ? t("security.deepsec.config.passwordPlaceholderSaved")
+                        : t("security.deepsec.config.passwordPlaceholderNew")
+                    }
+                    aria-describedby="deepsec-data-user-password-state"
+                    aria-invalid={Boolean(configError)}
+                  />
+                  <p id="deepsec-data-user-password-state" className="text-xs text-muted">
+                    {(status?.has_data_user_password ?? plan?.has_data_user_password)
+                      ? t("security.deepsec.config.secretSaved")
+                      : t("security.deepsec.config.secretMissing")}
+                  </p>
+                  {configError ? <FormStatus tone="danger" message={configError} /> : null}
+                </div>
               </div>
-              <div className="flex items-end">
+              <div
+                className="flex flex-wrap items-center gap-2 border-t border-border pt-4"
+                data-testid="security-deepsec-config-actions"
+              >
                 <Button
                   type="submit"
+                  size="lg"
                   loading={configSaving}
                   disabled={!dataUserPassword || configSaving}
-                  className="w-full lg:w-auto"
+                  className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
                 >
                   <Save size={15} aria-hidden />
                   {t("security.deepsec.config.save")}
@@ -1706,9 +1706,9 @@ export function SecurityDeepSecPage() {
                 <Button type="button" variant="secondary" size="sm" onClick={() => setActiveView("data-user")}>
                   {t("security.deepsec.actions.openDataUser")}
                 </Button>
-                                      </div>
-                                    ) : null}
-            <section className="grid gap-4" aria-labelledby="security-deepsec-foundation-plan-title">
+              </div>
+            ) : null}
+            <section className="grid gap-[16px]" aria-labelledby="security-deepsec-foundation-plan-title">
               <h3 id="security-deepsec-foundation-plan-title" className="text-base font-semibold">
                 {t("security.deepsec.plan")}
               </h3>
@@ -1717,7 +1717,7 @@ export function SecurityDeepSecPage() {
                 stepNumbers={[1, 2]}
                 loading={planLoading}
                 loadError={planLoadError}
-                onReload={() => void loadPlan()}
+                onRetry={() => void loadPlan()}
               />
               {foundationApplyVisible ? (
                 <WorkSection

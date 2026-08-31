@@ -907,7 +907,11 @@ class DeepSecService:
         self.pools = pools
 
     def plan(self) -> dict[str, object]:
-        states = self.security.store.get_deepsec_states()
+        try:
+            states = self.security.store.get_deepsec_states()
+        except Exception as exc:
+            self.security._raise_security_migration_if_needed(exc)  # noqa: SLF001
+            raise
         steps = []
         for step in build_v001_plan(self.settings):
             state = self._state_for_step(states, step)

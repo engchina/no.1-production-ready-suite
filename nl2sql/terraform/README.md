@@ -155,10 +155,15 @@ Only TCP `80` needs to be opened publicly for the application. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.
 
-Worker systemd units are installed but not started by the bootstrap, so the
-application can boot even when the database is not reachable yet or tables do
-not exist. After database connectivity and schema initialization are ready,
-operators can enable them with:
+The bootstrap applies the core system schema and application security/RBAC
+migrations idempotently. When both commands succeed, it enables and starts the
+schema refresh, quality evaluation, and ontology workers. If either command
+still fails after retries, the backend and Nginx remain available in degraded
+mode and all three workers stay stopped. The affected settings/security page
+shows a recoverable initialization error instead of an unhandled Oracle error.
+
+After completing the manual recovery commands in the troubleshooting section,
+operators can enable the workers with:
 
 ```bash
 sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
@@ -248,9 +253,18 @@ The cloud-init bootstrap:
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
 4. Writes the runtime `backend/.env`.
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
-6. Builds the shared UI package and `frontend/dist`.
-7. Starts the backend service with systemd.
-8. Configures Nginx to serve the SPA and same-origin `/api/` path.
+6. Keeps `/u01/aipoc/wallet` at `ubuntu:ubuntu 0700` with files at `0600`, and
+   sets `/u01/aipoc` to `root:ubuntu 0775` for Wallet install locks and atomic
+   temporary/backup directories.
+7. Runs `nl2sql_system_schema --initialize` and
+   `app_security_migrate --apply --skip-bootstrap` with retries.
+8. Builds the shared UI package and `frontend/dist`.
+9. Starts the backend service with systemd and starts external workers only
+   when both schema commands succeeded.
+10. Configures Nginx to serve the SPA and same-origin `/api/` path.
+
+This Resource Manager deployment is a direct systemd + Nginx installation.
+Docker is not installed or required on the Compute instance.
 
 Node.js installation uses the NodeSource apt repository first. If apt candidate
 inspection, installation, or post-install validation fails, the init script
@@ -260,17 +274,24 @@ falls back to the official Node.js `latest-v24.x` Linux tarball with
 `NODEJS_OFFICIAL_BIN_DIR` is also available when the symlink target must be
 isolated.
 
-Backend startup is intentionally independent of database reachability and table
-existence. If the database is not ready yet, the application still starts; run
-schema initialization from the System Settings UI or, for operators who prefer
-CLI recovery after DB connectivity is available:
+Backend startup remains independent of database reachability and table
+existence. The bootstrap tries both migrations first, but if the database is not
+ready yet the application still starts in degraded mode. Check
+`/var/log/nl2sql-init.log` for `WARNING: Continuing in degraded mode`, then run:
 
 ```bash
 cd /u01/aipoc/no.1-production-ready-nl2sql/backend
 sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
 sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 sudo systemctl restart production-ready-nl2sql-backend
+sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
+sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
+sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 ```
+
+The security migration creates `NL2SQL_DEEPSEC_MIGRATIONS`, allowing the Deep
+Data Security page to show the pending V001 foundation plan. The bootstrap does
+not apply those administrator-confirmed DeepSec foundation steps automatically.
 
 ## Stack Boundaries
 

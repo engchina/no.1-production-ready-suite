@@ -666,7 +666,7 @@ export interface OciPrivateKeyUploadData {
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
 export class ApiError extends Error {
   readonly status: number;
-  /** 表示用メッセージ。401/403/429/5xx ではリクエスト ID を末尾に付与する */
+  /** 表示用メッセージ。認証・rate limit・5xx・migration 未適用では request ID を付与する */
   readonly messages: string[];
   /** リクエスト ID を付与していない元メッセージ(利用者向けに ID を出したくない画面で使う) */
   readonly baseMessages: string[];
@@ -689,7 +689,8 @@ export class ApiError extends Error {
     const displayMessages = errorMessagesWithRequestId(
       status,
       baseMessages,
-      problem?.request_id || requestId
+      problem?.request_id || requestId,
+      problem?.code ?? errorCode
     );
     super(displayMessages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
@@ -747,9 +748,19 @@ function isApiFieldProblem(value: unknown): value is ApiFieldProblem {
 function errorMessagesWithRequestId(
   status: number,
   messages: string[],
-  requestId?: string | null
+  requestId?: string | null,
+  errorCode?: string
 ): string[] {
-  if (!requestId || !(status === 401 || status === 403 || status === 429 || status >= 500)) {
+  if (
+    !requestId ||
+    !(
+      status === 401 ||
+      status === 403 ||
+      status === 429 ||
+      status >= 500 ||
+      errorCode === "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    )
+  ) {
     return messages;
   }
   const [first, ...rest] = messages;

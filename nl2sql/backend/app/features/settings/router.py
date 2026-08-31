@@ -10,12 +10,13 @@ import fcntl
 import importlib
 import io
 import json
+import logging
 import re
 import shutil
 import stat
 import time
 from base64 import b64decode
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -41,6 +42,7 @@ from app.clients.oci_database import (
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.features.settings.errors import DatabaseWalletOperationError
 from app.features.settings.system_schema import (
     SystemSchemaError,
     oracle_error_code,
@@ -93,6 +95,7 @@ from app.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+logger = logging.getLogger(__name__)
 run_in_threadpool = run_sync_io
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_FILE_MODE = 0o600
@@ -1181,12 +1184,20 @@ def _database_wallet_install_lock(settings: Settings) -> Iterator[None]:
         lock_file = lock_path.open("a+b")
         lock_path.chmod(ORACLE_WALLET_FILE_MODE)
     except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Wallet 保存先のロックファイルを作成できませんでした。"
-                "保存先のパスと書き込み権限を確認してください。"
+        logger.exception(
+            "database_wallet_install_stage_failed",
+            extra={
+                "wallet_stage": "lock_open",
+                "wallet_error_code": "WALLET_STORAGE_UNAVAILABLE",
+            },
+        )
+        raise DatabaseWalletOperationError(
+            code="WALLET_STORAGE_UNAVAILABLE",
+            public_message=(
+                "Wallet 保存領域を使用できません。"
+                "管理者に保存領域の書き込み権限を確認するよう依頼してから再試行してください。"
             ),
+            stage="lock_open",
         ) from exc
 
     try:
@@ -1200,6 +1211,10 @@ def _database_wallet_install_lock(settings: Settings) -> Iterator[None]:
                     "完了後にもう一度お試しください。"
                 ),
             ) from exc
+        logger.info(
+            "database_wallet_install_stage_completed",
+            extra={"wallet_stage": "lock_acquired"},
+        )
         yield
     finally:
         with suppress(OSError):
@@ -1243,11 +1258,45 @@ def _install_downloaded_database_wallet(
     wallet_zip: bytes,
     wallet_password: str,
 ) -> DatabaseSettingsData:
+    candidate = settings.model_copy(
+        update={
+            "oracle_wallet_dir": str(_wallet_storage_root(settings)),
+            "oracle_wallet_password": wallet_password,
+        }
+    )
+
+    def persist_settings(_wallet_dir: Path) -> None:
+        try:
+            _persist_database_settings(candidate)
+        except HTTPException as exc:
+            if exc.status_code != 500:
+                raise
+            logger.exception(
+                "database_wallet_install_stage_failed",
+                extra={
+                    "wallet_stage": "configuration_persist",
+                    "wallet_error_code": "WALLET_INSTALL_FAILED",
+                },
+            )
+            raise DatabaseWalletOperationError(
+                code="WALLET_INSTALL_FAILED",
+                public_message=(
+                    "Wallet の設定を安全に保存できませんでした。"
+                    "Wallet は変更前の状態に戻されています。"
+                    "管理者に設定保存領域の権限を確認するよう依頼してから再試行してください。"
+                ),
+                stage="configuration_persist",
+            ) from exc
+
     with _database_wallet_install_lock(settings):
-        wallet_dir = _install_database_wallet(settings, wallet_zip, "wallet.zip")
+        wallet_dir = _install_database_wallet(
+            settings,
+            wallet_zip,
+            "wallet.zip",
+            post_install=persist_settings,
+        )
     settings.oracle_wallet_dir = str(wallet_dir)
     settings.oracle_wallet_password = wallet_password
-    _persist_database_settings(settings)
     close_oracle_pool()
     return _database_settings_data(settings)
 
@@ -1709,7 +1758,13 @@ def _validate_private_key_pem(data: bytes) -> None:
         )
 
 
-def _install_database_wallet(settings: Settings, data: bytes, file_name: str | None) -> Path:
+def _install_database_wallet(
+    settings: Settings,
+    data: bytes,
+    file_name: str | None,
+    *,
+    post_install: Callable[[Path], None] | None = None,
+) -> Path:
     """Wallet ZIP を解決済み ORACLE_WALLET_DIR へ展開する。"""
     safe_name = _safe_wallet_filename(file_name)
     if not safe_name.lower().endswith(".zip"):
@@ -1721,11 +1776,12 @@ def _install_database_wallet(settings: Settings, data: bytes, file_name: str | N
         raise HTTPException(status_code=400, detail="空の Wallet ZIP はアップロードできません。")
 
     target = _wallet_storage_root(settings)
-    target.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
     backup = target.parent / f".{target.name}.backup-{uuid4().hex}"
     previous_moved = False
+    target_installed = False
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
         wallet_dir = _extract_wallet_zip(
             data,
             tmp_dir,
@@ -1735,25 +1791,77 @@ def _install_database_wallet(settings: Settings, data: bytes, file_name: str | N
             target.replace(backup)
             previous_moved = True
         wallet_dir.replace(target)
+        target_installed = True
         _secure_database_wallet(target)
+        if post_install is not None:
+            post_install(target)
         _remove_wallet_path(backup)
+        logger.info(
+            "database_wallet_install_stage_completed",
+            extra={"wallet_stage": "atomic_replace"},
+        )
         return target
-    except HTTPException:
+    except (HTTPException, DatabaseWalletOperationError):
+        _rollback_database_wallet_install(
+            target,
+            backup,
+            previous_moved=previous_moved,
+            target_installed=target_installed,
+        )
         raise
     except OSError as exc:
-        _remove_wallet_path(target)
-        if previous_moved and backup.exists():
-            with suppress(OSError):
-                backup.replace(target)
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Wallet ZIP をバックエンドの保存先へ安全に設置できませんでした。"
-                "保存先の空き容量と書き込み権限を確認してください。"
+        _rollback_database_wallet_install(
+            target,
+            backup,
+            previous_moved=previous_moved,
+            target_installed=target_installed,
+        )
+        logger.exception(
+            "database_wallet_install_stage_failed",
+            extra={
+                "wallet_stage": "atomic_replace",
+                "wallet_error_code": "WALLET_INSTALL_FAILED",
+            },
+        )
+        raise DatabaseWalletOperationError(
+            code="WALLET_INSTALL_FAILED",
+            public_message=(
+                "Wallet を安全に設置できませんでした。"
+                "Wallet は変更前の状態に戻されています。"
+                "管理者に保存領域の空き容量と書き込み権限を確認するよう依頼してから再試行してください。"
             ),
+            stage="atomic_replace",
         ) from exc
     finally:
         _remove_tmp_wallet_dir(tmp_dir)
+
+
+def _rollback_database_wallet_install(
+    target: Path,
+    backup: Path,
+    *,
+    previous_moved: bool,
+    target_installed: bool,
+) -> None:
+    """atomic install 失敗時だけ今回の変更を戻す。rollback 失敗は server log に残す。"""
+
+    try:
+        if target_installed:
+            _remove_wallet_path(target)
+        if previous_moved and backup.exists():
+            backup.replace(target)
+        logger.info(
+            "database_wallet_install_stage_completed",
+            extra={"wallet_stage": "rollback"},
+        )
+    except OSError:
+        logger.exception(
+            "database_wallet_install_rollback_failed",
+            extra={
+                "wallet_stage": "rollback",
+                "wallet_error_code": "WALLET_INSTALL_FAILED",
+            },
+        )
 
 
 def _secure_database_wallet(wallet_dir: Path) -> None:

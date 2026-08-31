@@ -127,6 +127,30 @@ test("401 keeps the request id out of baseMessages so the login banner can hide 
   }
 });
 
+test("security migration 409 includes request id in recovery UI message", () => {
+  const migrationProblem: ApiProblem = {
+    type: "urn:nl2sql:problem:security-schema-migration-required",
+    title: "セキュリティ初期化が必要です",
+    status: 409,
+    detail: "アプリケーション認証/RBAC の schema migration が未適用です。",
+    code: "SECURITY_SCHEMA_MIGRATION_REQUIRED",
+    request_id: "security-migration-request",
+    retryable: false,
+    field_errors: [],
+  };
+
+  const cause = new ApiError(
+    409,
+    [migrationProblem.detail],
+    undefined,
+    undefined,
+    migrationProblem
+  );
+
+  assert.ok(cause.message.includes("リクエストID: security-migration-request"));
+  assert.equal(cause.baseMessages[0], migrationProblem.detail);
+});
+
 test("field mapping, de-duplication, and local clear are deterministic", () => {
   const cause = new ApiError(409, [conflictProblem.detail], undefined, undefined, conflictProblem);
   const pointerMap = { "/login_user_id": "loginUserId", "/display_name": "displayName" } as const;

@@ -549,7 +549,7 @@ def test_data_entitlement_sql_builds_login_user_id_scope_filter() -> None:
     sql = "\n".join(statements)
 
     assert (
-        "HR.ORDERS.APP_OWNER_USER_ID = " "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')"
+        "HR.ORDERS.APP_OWNER_USER_ID = SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')"
     ) in sql
     assert "HR.ORDERS.APP_OWNER_USER_ID = 'ignored'" not in sql
 
@@ -945,6 +945,27 @@ def test_data_entitlements_reports_missing_scope_filters_migration(
     assert exc_info.value.status_code == 409
     assert "SCOPE_FILTERS" in exc_info.value.public_message
     assert "migration" in exc_info.value.public_message
+
+
+def test_plan_reports_missing_deepsec_migration_table_as_409() -> None:
+    class MissingDeepSecMigrationStore(InMemorySecurityStore):
+        def get_deepsec_states(self) -> dict[tuple[str, int], dict[str, object]]:
+            raise RuntimeError(
+                'ORA-00942: table or view "ADMIN"."NL2SQL_DEEPSEC_MIGRATIONS" does not exist'
+            )
+
+    settings = _settings()
+    security = SecurityService(MissingDeepSecMigrationStore(), settings)
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    with pytest.raises(SecurityApiError) as exc_info:
+        service.plan()
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    assert "app_security_migrate" in exc_info.value.public_message
+    assert "ORA-00942" not in exc_info.value.public_message
+    assert "NL2SQL_DEEPSEC_MIGRATIONS" not in exc_info.value.public_message
 
 
 def test_v001_application_context_sets_login_user_id_and_clears_context() -> None:

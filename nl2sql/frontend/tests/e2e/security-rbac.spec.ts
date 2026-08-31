@@ -380,6 +380,100 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
 });
 
+test("ユーザー管理の migration 未適用は初回 ErrorState、再取得失敗は既存データ保持で示す", async ({
+  page,
+}, testInfo) => {
+  await mockDatabaseGateReady(page);
+  await page.route("**/api/security/roles?include_archived=false", (route) =>
+    fulfill(route, [systemRole])
+  );
+  const recoveredUser = {
+    user_uuid: "migration-recovered-user",
+    login_user_id: "migration.recovered",
+    display_name: "復旧確認ユーザー",
+    status: "ACTIVE",
+    force_password_change: false,
+    locked_until: null,
+    version: 1,
+    role_ids: [systemRole.role_id],
+    is_bootstrap_admin: false,
+  };
+  let userRequests = 0;
+  let allowUsersSuccess = false;
+  let backgroundFailure = false;
+  await page.route("**/api/security/users", async (route) => {
+    userRequests += 1;
+    if (allowUsersSuccess && !backgroundFailure) {
+      await fulfill(route, [recoveredUser]);
+      return;
+    }
+    const requestId = backgroundFailure
+      ? "users-migration-refresh-request"
+      : "users-migration-initial-request";
+    const response = problemEnvelope({
+      status: 409,
+      code: "SECURITY_SCHEMA_MIGRATION_REQUIRED",
+      title: "セキュリティ初期化が必要です",
+      detail:
+        "アプリケーション認証/RBAC の schema migration が未適用です。`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` を実行してから再試行してください。",
+      requestId,
+    });
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      headers: { "X-Request-ID": requestId },
+      body: JSON.stringify(response),
+    });
+  });
+
+  await page.goto("/settings/security/users");
+
+  const initialError = page.locator("main").getByRole("alert");
+  await expect(initialError).toHaveCount(1);
+  await expect(initialError).toContainText(
+    "アプリケーション認証/RBAC の schema migration が未適用です。"
+  );
+  await expect(initialError).toContainText("リクエストID: users-migration-initial-request");
+  await expect(page.getByTestId("security-users-grid")).toHaveCount(0);
+  await expect(page.getByText("データがありません", { exact: true })).toHaveCount(0);
+  await expectNoPageHorizontalScroll(page);
+  await page.screenshot({
+    path: testInfo.outputPath(`security-users-migration-error-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+
+  const retry = initialError.getByRole("button", { name: "再試行" });
+  await retry.focus();
+  await expect(retry).toBeFocused();
+  allowUsersSuccess = true;
+  await retry.press("Enter");
+
+  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
+  await expect(initialError).toHaveCount(0);
+  expect(userRequests).toBeGreaterThanOrEqual(2);
+
+  backgroundFailure = true;
+  const userActions = page.getByTestId("security-users-actions");
+  const directRefresh = userActions.getByRole("button", { name: "表示を更新" });
+  if ((await directRefresh.count()) > 0) {
+    await directRefresh.click();
+  } else {
+    await userActions.getByTestId("page-actions-more").click();
+    await page.getByRole("menuitem", { name: "表示を更新" }).click();
+  }
+  const refreshError = page
+    .locator("main")
+    .getByRole("alert")
+    .filter({ hasText: "users-migration-refresh-request" });
+  await expect(refreshError).toBeVisible();
+  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
+  await expect(page.getByTestId("security-users-grid")).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(refreshError).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
+});
+
 test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行で固定表頭の内部スクロールになる", async ({
   page,
 }, testInfo) => {
@@ -3759,6 +3853,97 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
 });
 
+test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試行導線を示す", async ({
+  page,
+}, testInfo) => {
+  await mockDatabaseGateReady(page);
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: false,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: {},
+      message: "未適用です。",
+    })
+  );
+  let planRequests = 0;
+  let allowPlanSuccess = false;
+  await page.route("**/api/security/deepsec/plan", async (route) => {
+    planRequests += 1;
+    if (!allowPlanSuccess) {
+      const response = problemEnvelope({
+        status: 409,
+        code: "SECURITY_SCHEMA_MIGRATION_REQUIRED",
+        title: "セキュリティ初期化が必要です",
+        detail:
+          "アプリケーション認証/RBAC の schema migration が未適用です。`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` を実行してから再試行してください。",
+        requestId: "deepsec-plan-error-request",
+      });
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        headers: { "X-Request-ID": response.problem.request_id },
+        body: JSON.stringify(response),
+      });
+      return;
+    }
+    await fulfill(route, deepSecPlan());
+  });
+  await mockDeepSecDataEntitlements(page);
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "基盤構成" }).click();
+
+  const planSection = page.locator(
+    'section[aria-labelledby="security-deepsec-foundation-plan-title"]'
+  );
+  const planTitle = planSection.getByRole("heading", { name: "実行計画", exact: true });
+  const errorState = planSection.locator(':scope > [role="alert"]');
+  await expect(errorState).toHaveCount(1);
+  await expect(errorState).toContainText(
+    "アプリケーション認証/RBAC の schema migration が未適用です。"
+  );
+  await expect(errorState).toContainText("リクエストID: deepsec-plan-error-request");
+  await expect
+    .poll(async () => {
+      const [titleBox, errorBox] = await Promise.all([
+        planTitle.boundingBox(),
+        errorState.boundingBox(),
+      ]);
+      if (!titleBox || !errorBox) return -1;
+      return errorBox.y - (titleBox.y + titleBox.height);
+    })
+    .toBeGreaterThanOrEqual(15);
+  const errorStateLayout = await errorState.evaluate((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      parentLabelledBy: node.parentElement?.getAttribute("aria-labelledby"),
+      paddingTop: Number.parseFloat(style.paddingTop),
+    };
+  });
+  expect(errorStateLayout.parentLabelledBy).toBe("security-deepsec-foundation-plan-title");
+  expect(errorStateLayout.paddingTop).toBeGreaterThanOrEqual(24);
+  await expectNoPageHorizontalScroll(page);
+  await page.screenshot({
+    path: testInfo.outputPath(`deepsec-plan-error-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+
+  const retryButton = errorState.getByRole("button", { name: "再試行" });
+  await retryButton.focus();
+  await expect(retryButton).toBeFocused();
+  const planRequestsBeforeRetry = planRequests;
+  allowPlanSuccess = true;
+  await page.keyboard.press("Enter");
+
+  await expect(errorState).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
+  expect(planRequests).toBe(planRequestsBeforeRetry + 1);
+});
+
 test("DeepSec は Thick mode でも SQL step をキーボード操作できる", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockDatabaseGateReady(page);
@@ -3884,9 +4069,42 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   await expect(page.getByTestId("security-deepsec-foundation-apply-section").getByRole("button", { name: "基盤構成を適用" })).toBeDisabled();
   await page.getByRole("button", { name: "DATA USER 認証へ" }).click();
 
+  const dataUserPanel = page.locator("#security-deepsec-panel-data-user");
+  const configFields = dataUserPanel.getByTestId("security-deepsec-config-fields");
+  const configActions = dataUserPanel.getByTestId("security-deepsec-config-actions");
   const password = page.getByLabel("DATA USER パスワード");
+  const saveButton = configActions.getByRole("button", { name: "保存", exact: true });
+  await expect(saveButton).toBeDisabled();
+  await expect(saveButton).toHaveAttribute("type", "submit");
+
   await password.fill("DeepSecret!789");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(saveButton).toBeEnabled();
+
+  const [fieldsBox, actionsBox, saveButtonBox] = await Promise.all([
+    configFields.boundingBox(),
+    configActions.boundingBox(),
+    saveButton.boundingBox(),
+  ]);
+  expect(fieldsBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(saveButtonBox).not.toBeNull();
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(fieldsBox!.y + fieldsBox!.height - 1);
+  expect(Math.abs(actionsBox!.x - fieldsBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(saveButtonBox!.x - actionsBox!.x)).toBeLessThanOrEqual(1);
+
+  const viewportWidth = page.viewportSize()?.width ?? 0;
+  if (viewportWidth < 640) {
+    expect(Math.abs(saveButtonBox!.width - actionsBox!.width)).toBeLessThanOrEqual(1);
+    expect(saveButtonBox!.height).toBeGreaterThanOrEqual(44);
+  } else {
+    expect(saveButtonBox!.width).toBeLessThan(actionsBox!.width);
+    expect(saveButtonBox!.height).toBeLessThanOrEqual(40);
+  }
+  await expectNoPageHorizontalScroll(page);
+
+  await saveButton.focus();
+  await expect(saveButton).toBeFocused();
+  await saveButton.press("Enter");
 
   expect(savedPassword).toBe("DeepSecret!789");
   await expect(password).toHaveValue("");

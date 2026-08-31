@@ -34,6 +34,7 @@ import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
+import { ErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FieldError } from "@/components/ui/field-error";
@@ -692,6 +693,8 @@ export function SecurityUsersPage() {
       : []),
   ];
 
+  const initialLoadFailed = Boolean(loadError) && users.length === 0 && roles.length === 0;
+
   return (
     <>
       <PageHeader
@@ -700,7 +703,7 @@ export function SecurityUsersPage() {
         actions={
           activeView === "list"
             ? [
-                ...(canManage
+                ...(canManage && !initialLoadFailed
                   ? [
                       {
                         id: "create-user",
@@ -726,12 +729,14 @@ export function SecurityUsersPage() {
         actionsTestId="security-users-actions"
       />
       <main className="grid gap-4 p-4 lg:p-8">
-        {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
+        {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
         {activeView === "list" && actionError ? (
           <Banner severity="danger">{actionError}</Banner>
         ) : null}
 
-        {activeView === "list" ? (
+        {initialLoadFailed ? (
+          <ErrorState message={loadError} onRetry={() => void load()} />
+        ) : activeView === "list" ? (
           <SecurityManagementPanelShell
               id="security-users-panel-list"
               idPrefix="security-users"
