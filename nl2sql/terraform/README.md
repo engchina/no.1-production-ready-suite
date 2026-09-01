@@ -69,10 +69,11 @@ Resource Manager and create a stack. Provide the required form values:
     The other access types match the Autonomous AI Database creation screen:
     `すべての場所からのセキュア・アクセス` creates a public endpoint without
     an ADB access-control list, while
-    `許可されたIPおよびVCN限定のセキュア・アクセス` enables the ADB
-    access-control list and requires either a VCN or comma-separated IP/CIDR
-    entries. Selecting a VCN without a subnet allows the entire VCN; selecting
-    a subnet writes `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
+    `許可されたIPおよびVCN限定のセキュア・アクセス` configures the
+    serverless ADB access-control list through `whitelisted_ips` and requires
+    either a VCN or comma-separated IP/CIDR entries. Selecting a VCN without a
+    subnet allows the entire VCN; selecting a subnet writes
+    `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
     New ADBs default to Thin-compatible Wallet mTLS
     (`相互TLS (mTLS)認証が必要=true`). The Resource Manager form hides this
     advanced control. Direct Terraform callers can set it to `false`; in that

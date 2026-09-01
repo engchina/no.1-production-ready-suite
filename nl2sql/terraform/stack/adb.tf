@@ -98,7 +98,6 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
   display_name                                   = local.adb_display_name
   is_auto_scaling_enabled                        = var.adb_is_auto_scaling_enabled
   is_auto_scaling_for_storage_enabled            = var.adb_is_auto_scaling_for_storage_enabled
-  is_access_control_enabled                      = local.adb_secure_acl_enabled
   is_dedicated                                   = "false"
   is_mtls_connection_required                    = var.adb_is_mtls_connection_required
   is_preview_version_with_service_terms_accepted = "false"

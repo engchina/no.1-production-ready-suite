@@ -426,7 +426,6 @@ def verify(package_path: Path) -> None:
             f'var.adb_network_access_type == "{PRIVATE_ACCESS}"',
             f'var.adb_network_access_type == "{ALLOWED_ACCESS}"',
             f'var.adb_network_access_type == "{EVERYWHERE_ACCESS}"',
-            "is_access_control_enabled                      = local.adb_secure_acl_enabled",
             "subnet_id                                      = "
             "local.adb_private_endpoint_enabled ? var.adb_subnet_id : null",
             "whitelisted_ips                                = "
@@ -438,6 +437,10 @@ def verify(package_path: Path) -> None:
         ],
         context="ADB network mapping",
     )
+    if "is_access_control_enabled" in adb:
+        raise AssertionError(
+            "serverless Autonomous AI Database must not configure is_access_control_enabled",
+        )
     if "trimspace(var.existing_oracle_wallet_password)" in adb:
         raise AssertionError("existing ADB wallet password must not override DB password")
     if "compartment_id                                 = var.compartment_ocid" in adb:
