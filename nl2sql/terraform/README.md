@@ -21,11 +21,11 @@ The default application source is:
 Click the button below to open OCI Resource Manager with the Osaka region
 (`ap-osaka-1`) selected by default.
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/latest/download/production-ready-nl2sql-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/download/v0.1.31/production-ready-nl2sql-terraform-stack.zip)
 
-The button uses the latest GitHub Release asset named
-`production-ready-nl2sql-terraform-stack.zip`. Publish at least one release with
-that asset before using the one-click deploy URL.
+The button uses the v0.1.31 GitHub Release asset named
+`production-ready-nl2sql-terraform-stack.zip`. Publish that release with the
+asset before using the one-click deploy URL.
 
 ### Manual Package and Upload
 

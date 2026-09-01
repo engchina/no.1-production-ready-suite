@@ -1,7 +1,7 @@
 title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
 stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
 schemaVersion: 1.1.0
-version: "20260901.2"
+version: "20260901.3"
 locale: "en"
 
 variableGroups:
@@ -435,7 +435,7 @@ variables:
     required: true
     visible: true
     title: "アクセス・タイプ"
-    description: "すべての場所からのアクセス、許可したIP/VCN限定のアクセス、またはOCI VCN内のプライベート・エンドポイント限定のアクセスから選択します。"
+    description: "Autonomous AI Databaseのネットワーク・アクセスを選択します。すべての場所からのセキュア・アクセスはパブリック・エンドポイントを使用し、許可されたIPおよびVCN限定のセキュア・アクセスはACLで接続元を制限し、プライベート・エンドポイント・アクセスのみは指定したVCN内のプライベート・エンドポイントを使用します。"
     enum:
       - "すべての場所からのセキュア・アクセス"
       - "許可されたIPおよびVCN限定のセキュア・アクセス"
@@ -450,7 +450,7 @@ variables:
         - adb_network_access_type
         - "プライベート・エンドポイント・アクセスのみ"
     title: "VCNのコンパートメント"
-    description: "Autonomous AI Databaseのプライベート・エンドポイントを配置するVCNのコンパートメントを選択します。"
+    description: "プライベート・エンドポイントで使用するVCNが存在するコンパートメントを選択します。"
     default: compartment_ocid
 
   adb_private_endpoint_vcn_id:
@@ -461,7 +461,7 @@ variables:
         - adb_network_access_type
         - "プライベート・エンドポイント・アクセスのみ"
     title: "仮想クラウド・ネットワーク"
-    description: "プライベート・エンドポイントを配置するVCNを選択します。"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントで使用するVCNを選択します。"
     dependsOn:
       compartmentId: ${adb_private_endpoint_vcn_compartment_id}
 
@@ -473,7 +473,7 @@ variables:
         - adb_network_access_type
         - "プライベート・エンドポイント・アクセスのみ"
     title: "サブネットのコンパートメント"
-    description: "プライベート・エンドポイントを配置するサブネットのコンパートメントを選択します。"
+    description: "Autonomous AI Databaseをアタッチするサブネットが存在するコンパートメントを選択します。"
     default: compartment_ocid
 
   adb_subnet_id:
@@ -484,7 +484,7 @@ variables:
         - adb_network_access_type
         - "プライベート・エンドポイント・アクセスのみ"
     title: "サブネット"
-    description: "Autonomous AI Databaseのプライベート・エンドポイントを配置するサブネットを選択します。"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントをアタッチするサブネットを選択します。"
     dependsOn:
       compartmentId: ${adb_private_endpoint_subnet_compartment_id}
       vcnId: ${adb_private_endpoint_vcn_id}
@@ -497,7 +497,7 @@ variables:
         - adb_network_access_type
         - "許可されたIPおよびVCN限定のセキュア・アクセス"
     title: "IP表記法タイプ"
-    description: "VCN、またはIPアドレス/CIDRブロックでアクセス制御ルールを指定します。"
+    description: "ACLで許可する接続元を、VCNまたはIPアドレス/CIDRブロックから選択します。"
     enum:
       - "VCN"
       - "IPアドレスまたはCIDRブロック"
@@ -530,7 +530,7 @@ variables:
             - adb_acl_notation_type
             - "VCN"
     title: "許可する仮想クラウド・ネットワーク"
-    description: "Autonomous AI Databaseへのアクセスを許可するVCNを選択します。"
+    description: "Service Gateway経由でAutonomous AI Databaseへのアクセスを許可するVCNを選択します。"
     dependsOn:
       compartmentId: ${adb_acl_vcn_compartment_id}
 
@@ -578,7 +578,7 @@ variables:
             - adb_acl_notation_type
             - "IPアドレスまたはCIDRブロック"
     title: "許可するIPアドレスまたはCIDRブロック"
-    description: "Autonomous AI Databaseへのアクセスを許可するIPアドレスまたはCIDRブロックをカンマ区切りで入力します。"
+    description: "パブリック・インターネットからの接続を許可するクライアントのパブリックIPアドレスまたはパブリックCIDRブロックをカンマ区切りで入力します。"
 
   adb_is_mtls_connection_required:
     type: boolean

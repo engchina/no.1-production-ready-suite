@@ -12,6 +12,22 @@ const SSH_KEY_TITLE = "SSHキーの追加";
 const SSH_KEY_AUTO_GENERATE = "キー・ペアを自動で生成";
 const DOWNLOAD_PRIVATE_KEY = "秘密キーのダウンロード";
 const DOWNLOAD_PUBLIC_KEY = "公開キーのダウンロード";
+const NETWORK_ACCESS_DESCRIPTION =
+  "Autonomous AI Databaseのネットワーク・アクセスを選択します。すべての場所からのセキュア・アクセスはパブリック・エンドポイントを使用し、許可されたIPおよびVCN限定のセキュア・アクセスはACLで接続元を制限し、プライベート・エンドポイント・アクセスのみは指定したVCN内のプライベート・エンドポイントを使用します。";
+const PRIVATE_ENDPOINT_VCN_COMPARTMENT_DESCRIPTION =
+  "プライベート・エンドポイントで使用するVCNが存在するコンパートメントを選択します。";
+const PRIVATE_ENDPOINT_VCN_DESCRIPTION =
+  "Autonomous AI Databaseのプライベート・エンドポイントで使用するVCNを選択します。";
+const PRIVATE_ENDPOINT_SUBNET_COMPARTMENT_DESCRIPTION =
+  "Autonomous AI Databaseをアタッチするサブネットが存在するコンパートメントを選択します。";
+const PRIVATE_ENDPOINT_SUBNET_DESCRIPTION =
+  "Autonomous AI Databaseのプライベート・エンドポイントをアタッチするサブネットを選択します。";
+const ACL_NOTATION_DESCRIPTION =
+  "ACLで許可する接続元を、VCNまたはIPアドレス/CIDRブロックから選択します。";
+const ACL_VCN_DESCRIPTION =
+  "Service Gateway経由でAutonomous AI Databaseへのアクセスを許可するVCNを選択します。";
+const ACL_CIDR_DESCRIPTION =
+  "パブリック・インターネットからの接続を許可するクライアントのパブリックIPアドレスまたはパブリックCIDRブロックをカンマ区切りで入力します。";
 
 test.describe("OCI Resource Manager ADB作成フォーム", () => {
   test.skip(
@@ -86,11 +102,20 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
       ALLOWED_ACCESS,
       PRIVATE_ACCESS,
     ]);
+    await expect(page.getByText(NETWORK_ACCESS_DESCRIPTION, { exact: true })).toBeVisible();
 
     await expect(page.getByLabel("VCNのコンパートメント", { exact: true }).first()).toBeVisible();
     await expect(page.getByLabel("仮想クラウド・ネットワーク", { exact: true })).toBeVisible();
     await expect(page.getByLabel("サブネットのコンパートメント", { exact: true }).first()).toBeVisible();
     await expect(page.getByLabel("サブネット", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(PRIVATE_ENDPOINT_VCN_COMPARTMENT_DESCRIPTION, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(PRIVATE_ENDPOINT_VCN_DESCRIPTION, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(PRIVATE_ENDPOINT_SUBNET_COMPARTMENT_DESCRIPTION, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(PRIVATE_ENDPOINT_SUBNET_DESCRIPTION, { exact: true })).toBeVisible();
     await expect(page.getByLabel("相互TLS (mTLS)認証が必要", { exact: true })).toBeHidden();
 
     await deploymentMode.selectOption({ label: USE_EXISTING_MODE });
@@ -113,12 +138,15 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     const notationType = page.getByLabel("IP表記法タイプ", { exact: true });
     await expect(notationType).toBeVisible();
     await expect(notationType).toHaveValue("VCN");
+    await expect(page.getByText(ACL_NOTATION_DESCRIPTION, { exact: true })).toBeVisible();
     await expect(page.getByLabel("許可する仮想クラウド・ネットワーク", { exact: true })).toBeVisible();
+    await expect(page.getByText(ACL_VCN_DESCRIPTION, { exact: true })).toBeVisible();
 
     await notationType.selectOption({ label: IP_OR_CIDR });
     await expect(
       page.getByLabel("許可するIPアドレスまたはCIDRブロック", { exact: true }),
     ).toBeVisible();
+    await expect(page.getByText(ACL_CIDR_DESCRIPTION, { exact: true })).toBeVisible();
     await expect(
       page.getByLabel("許可する仮想クラウド・ネットワーク", { exact: true }),
     ).toBeHidden();

@@ -9,16 +9,16 @@ Generative AI.
 Click the button below to open OCI Resource Manager with the Osaka region
 (`ap-osaka-1`) selected by default.
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/latest/download/production-ready-nl2sql-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/download/v0.1.31/production-ready-nl2sql-terraform-stack.zip)
 
-The button downloads the latest Terraform Resource Manager stack release asset:
+The button downloads the v0.1.31 Terraform Resource Manager stack release asset:
 
 `production-ready-nl2sql-terraform-stack.zip`
 
 Latest release:
-[v0.1.30](https://github.com/engchina/no.1-production-ready-nl2sql/releases/tag/v0.1.30).
-To pin a specific version instead of `latest`, replace `releases/latest/download`
-with `releases/download/v0.1.30` in the deploy URL.
+[v0.1.31](https://github.com/engchina/no.1-production-ready-nl2sql/releases/tag/v0.1.31).
+To use the moving latest release instead of this pinned version, replace
+`releases/download/v0.1.31` with `releases/latest/download` in the deploy URL.
 
 The Compute deployment serves the frontend through Nginx on HTTP port `80` and
 proxies API calls through the same origin at `/api/...`.

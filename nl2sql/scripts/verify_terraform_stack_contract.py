@@ -13,6 +13,34 @@ PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスの�
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
 IP_OR_CIDR = "IPアドレスまたはCIDRブロック"
+NETWORK_ACCESS_DESCRIPTION = (
+    "Autonomous AI Databaseのネットワーク・アクセスを選択します。"
+    "すべての場所からのセキュア・アクセスはパブリック・エンドポイントを使用し、"
+    "許可されたIPおよびVCN限定のセキュア・アクセスはACLで接続元を制限し、"
+    "プライベート・エンドポイント・アクセスのみは指定したVCN内の"
+    "プライベート・エンドポイントを使用します。"
+)
+PRIVATE_ENDPOINT_VCN_COMPARTMENT_DESCRIPTION = (
+    "プライベート・エンドポイントで使用するVCNが存在するコンパートメントを" "選択します。"
+)
+PRIVATE_ENDPOINT_VCN_DESCRIPTION = (
+    "Autonomous AI Databaseのプライベート・エンドポイントで使用するVCNを選択します。"
+)
+PRIVATE_ENDPOINT_SUBNET_COMPARTMENT_DESCRIPTION = (
+    "Autonomous AI Databaseをアタッチするサブネットが存在するコンパートメントを" "選択します。"
+)
+PRIVATE_ENDPOINT_SUBNET_DESCRIPTION = (
+    "Autonomous AI Databaseのプライベート・エンドポイントをアタッチする" "サブネットを選択します。"
+)
+ACL_NOTATION_DESCRIPTION = "ACLで許可する接続元を、VCNまたはIPアドレス/CIDRブロックから選択します。"
+ACL_VCN_DESCRIPTION = (
+    "Service Gateway経由でAutonomous AI Databaseへのアクセスを許可するVCNを" "選択します。"
+)
+ACL_CIDR_DESCRIPTION = (
+    "パブリック・インターネットからの接続を許可するクライアントの"
+    "パブリックIPアドレスまたはパブリックCIDRブロックをカンマ区切りで"
+    "入力します。"
+)
 APPLICATION_GIT_URL = "https://github.com/engchina/no.1-production-ready-nl2sql.git"
 PLATFORM_GIT_URL = "https://github.com/engchina/no.1-production-ready-platform.git"
 CHICAGO_COMPUTE_IMAGE = (
@@ -71,7 +99,7 @@ def verify(package_path: Path) -> None:
     _require_all(
         schema,
         [
-            'version: "20260901.2"',
+            'version: "20260901.3"',
             '- title: "ネットワーク・アクセス"',
             "- adb_private_endpoint_vcn_compartment_id",
             "- adb_private_endpoint_vcn_id",
@@ -101,9 +129,7 @@ def verify(package_path: Path) -> None:
         r"  - title: Compute$",
         schema,
     ):
-        raise AssertionError(
-            "Deep Data Security variable group must be immediately before Compute"
-        )
+        raise AssertionError("Deep Data Security variable group must be immediately before Compute")
     hidden_group = re.search(
         r"(?ms)^  - title: Hidden\n    visible: false\n    variables:\n(.*?)(?=^  - title: )",
         schema,
@@ -255,6 +281,7 @@ def verify(package_path: Path) -> None:
         access_schema,
         [
             'title: "アクセス・タイプ"',
+            f'description: "{NETWORK_ACCESS_DESCRIPTION}"',
             f'- "{EVERYWHERE_ACCESS}"',
             f'- "{ALLOWED_ACCESS}"',
             f'- "{PRIVATE_ACCESS}"',
@@ -274,6 +301,21 @@ def verify(package_path: Path) -> None:
             block,
             ["required: true", f'- "{PRIVATE_ACCESS}"'],
             context=f"{name} schema",
+        )
+    private_description_expectations = {
+        "adb_private_endpoint_vcn_compartment_id": PRIVATE_ENDPOINT_VCN_COMPARTMENT_DESCRIPTION,
+        "adb_private_endpoint_vcn_id": PRIVATE_ENDPOINT_VCN_DESCRIPTION,
+        "adb_private_endpoint_subnet_compartment_id": (
+            PRIVATE_ENDPOINT_SUBNET_COMPARTMENT_DESCRIPTION
+        ),
+        "adb_subnet_id": PRIVATE_ENDPOINT_SUBNET_DESCRIPTION,
+    }
+    for name, description in private_description_expectations.items():
+        block = _schema_variable(schema, name)
+        _require_all(
+            block,
+            [f'description: "{description}"'],
+            context=f"{name} Oracle-aligned description",
         )
     for name in (
         "adb_private_endpoint_vcn_compartment_id",
@@ -307,19 +349,33 @@ def verify(package_path: Path) -> None:
     notation_schema = _schema_variable(schema, "adb_acl_notation_type")
     _require_all(
         notation_schema,
-        [f'- "{ALLOWED_ACCESS}"', f'- "{IP_OR_CIDR}"'],
+        [
+            f'- "{ALLOWED_ACCESS}"',
+            f'- "{IP_OR_CIDR}"',
+            f'description: "{ACL_NOTATION_DESCRIPTION}"',
+        ],
         context="ACL notation schema",
     )
     cidr_schema = _schema_variable(schema, "adb_acl_cidr_blocks")
     _require_all(
         cidr_schema,
-        ["and:", f'- "{ALLOWED_ACCESS}"', f'- "{IP_OR_CIDR}"'],
+        [
+            "and:",
+            f'- "{ALLOWED_ACCESS}"',
+            f'- "{IP_OR_CIDR}"',
+            f'description: "{ACL_CIDR_DESCRIPTION}"',
+        ],
         context="ACL IP/CIDR visibility",
     )
     acl_vcn_schema = _schema_variable(schema, "adb_acl_vcn_id")
     _require_all(
         acl_vcn_schema,
-        ["and:", f'- "{ALLOWED_ACCESS}"', '- "VCN"'],
+        [
+            "and:",
+            f'- "{ALLOWED_ACCESS}"',
+            '- "VCN"',
+            f'description: "{ACL_VCN_DESCRIPTION}"',
+        ],
         context="ACL VCN visibility",
     )
     deepsec_enabled_schema = _schema_variable(schema, "oracle_deepsec_enabled")
@@ -360,10 +416,7 @@ def verify(package_path: Path) -> None:
         context="mTLS hidden schema",
     )
     compute_image_schema = _schema_variable(schema, "instance_image_source_id")
-    if (
-        CHICAGO_COMPUTE_IMAGE in compute_image_schema
-        or "us-chicago-1" in compute_image_schema
-    ):
+    if CHICAGO_COMPUTE_IMAGE in compute_image_schema or "us-chicago-1" in compute_image_schema:
         raise AssertionError("Resource Manager Compute image options must not include Chicago")
     ssh_schema = _schema_variable(schema, "ssh_authorized_keys")
     _require_all(
@@ -470,7 +523,7 @@ def verify(package_path: Path) -> None:
         bootstrap,
         [
             'APP_ROOT="/u01/aipoc"',
-            'run_application_init',
+            "run_application_init",
             'bash "$${init_script}"',
             'clone_or_update_repo "${application_git_url}" "${application_git_ref}"',
             'clone_or_update_repo "${platform_git_url}" "${platform_git_ref}"',
@@ -530,9 +583,7 @@ def verify(package_path: Path) -> None:
         ],
         context="oracle_deepsec_enabled variable",
     )
-    deepsec_password_variable = _terraform_variable(
-        variables, "oracle_deepsec_data_user_password"
-    )
+    deepsec_password_variable = _terraform_variable(variables, "oracle_deepsec_data_user_password")
     _require_all(
         deepsec_password_variable,
         [
