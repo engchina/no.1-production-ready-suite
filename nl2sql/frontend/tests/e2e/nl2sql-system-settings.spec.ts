@@ -429,6 +429,39 @@ async function getSavedSecretBadgeStyle(page: Page, fieldId: string) {
   });
 }
 
+async function getActionButtonStyle(button: Locator) {
+  await expect(button).toBeVisible();
+
+  return button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderColor: style.borderColor,
+      className: element.getAttribute("class") ?? "",
+      color: style.color,
+    };
+  });
+}
+
+async function expectModelSaveButtonsUsePrimaryStyle(page: Page) {
+  const buttons = [
+    page.getByRole("button", { name: "OCI Enterprise AI: 保存" }),
+    page.getByRole("button", { name: "登録モデル: 保存" }),
+    page.getByRole("button", { name: "OCI Generative AI: 保存" }),
+  ];
+  const styles = await Promise.all(buttons.map((button) => getActionButtonStyle(button)));
+  const baseline = styles[0];
+
+  for (const style of styles) {
+    expect(style.className).toContain("bg-primary-fill");
+    expect(style.className).toContain("text-primary-fill-foreground");
+    expect(style.className).not.toContain("border-control-border");
+    expect(style.backgroundColor).toBe(baseline.backgroundColor);
+    expect(style.borderColor).toBe(baseline.borderColor);
+    expect(style.color).toBe(baseline.color);
+  }
+}
+
 async function expectNoOperationsMemoOrReadiness(page: Page) {
   await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
   await expect(page.getByText(/readiness/i)).toHaveCount(0);
@@ -674,6 +707,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeVisible();
+  await expectModelSaveButtonsUsePrimaryStyle(page);
   await expect(page.locator("#enterprise-api-path")).toHaveCount(0);
   await expect(page.locator("#enterprise-vlm-input-mode")).toHaveCount(0);
   await expect(page.locator("#enterprise-timeout")).toHaveCount(0);
@@ -1313,6 +1347,7 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeVisible();
+  await expectModelSaveButtonsUsePrimaryStyle(page);
 });
 
 test("モデル API Key を .env に新規保存して削除でき、プレビュー欄を表示しない", async ({

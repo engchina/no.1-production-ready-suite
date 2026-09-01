@@ -387,7 +387,6 @@ export function ModelSettingsClient() {
                   saving={activeSaveSection === "enterprise_connection"}
                   disabled={saveInProgress}
                   errorText={saveErrors.enterprise_connection}
-                  variant="secondary"
                 />
               </CardContent>
             </Card>
@@ -424,7 +423,6 @@ export function ModelSettingsClient() {
                   saving={activeSaveSection === "enterprise_models"}
                   disabled={saveInProgress}
                   errorText={saveErrors.enterprise_models}
-                  variant="secondary"
                 />
               </CardContent>
             </Card>
@@ -509,14 +507,12 @@ function ModelFormActions({
   saving,
   disabled,
   errorText,
-  variant = "primary",
 }: {
   sectionLabel: string;
   canSubmit: boolean;
   saving: boolean;
   disabled: boolean;
   errorText?: string;
-  variant?: "primary" | "secondary";
 }) {
   const saveLabel = saving ? t("settings.model.saving") : t("settings.model.save");
 
@@ -524,7 +520,6 @@ function ModelFormActions({
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
       <Button
         type="submit"
-        variant={variant}
         size="lg"
         className="whitespace-nowrap"
         aria-label={`${sectionLabel}: ${saveLabel}`}
