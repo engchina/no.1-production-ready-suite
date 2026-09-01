@@ -153,9 +153,7 @@ class _TargetObjectCursor:
             ]
         fetch_limit_value = binds.get("fetch_limit")
         fetch_limit = (
-            int(fetch_limit_value)
-            if isinstance(fetch_limit_value, int | str)
-            else len(rows)
+            int(fetch_limit_value) if isinstance(fetch_limit_value, int | str) else len(rows)
         )
         self._rows = rows[:fetch_limit]
 

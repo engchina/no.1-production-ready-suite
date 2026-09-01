@@ -1995,9 +1995,13 @@ def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -
     assert imported.executed is True
     assert imported.runtime == "deterministic"
     assert imported.profile_id == ""
-    assert {
-        table.table_name for table in service.get_catalog().tables
-    } >= {"DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"}
+    assert {table.table_name for table in service.get_catalog().tables} >= {
+        "DEPARTMENT",
+        "EMPLOYEE",
+        "PROJECT",
+        "V_EMP_DEPT",
+        "V_DEPT_PROJECT",
+    }
     with pytest.raises(ValueError, match="profile"):
         service.get_profile("sql_assist_sample")
     assert service.sample_data_info().profile_id == ""

@@ -1873,9 +1873,7 @@ def _oci_settings_data(settings: Settings) -> OciSettingsData:
 
 def _select_ai_region(settings: Settings) -> Literal["ap-osaka-1", "us-chicago-1"]:
     candidate = (
-        settings.nl2sql_select_ai_region.strip()
-        or settings.oci_region.strip()
-        or "ap-osaka-1"
+        settings.nl2sql_select_ai_region.strip() or settings.oci_region.strip() or "ap-osaka-1"
     )
     return "us-chicago-1" if candidate == "us-chicago-1" else "ap-osaka-1"
 
@@ -2004,9 +2002,7 @@ def _select_ai_credential_error_response(
 def _request_actor(request: Request) -> str:
     principal = getattr(request.state, "principal", None)
     return str(
-        getattr(principal, "login_user_id", "")
-        or getattr(principal, "user_uuid", "")
-        or "system"
+        getattr(principal, "login_user_id", "") or getattr(principal, "user_uuid", "") or "system"
     )[:256]
 
 

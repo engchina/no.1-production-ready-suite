@@ -2851,9 +2851,9 @@ def test_deepsec_config_patch_sync_failure_returns_409_without_secret(
             )
             assert response.status_code == 409
             body = response.json()
-            assert "DeepSec DATA USER パスワードを Oracle END USER へ同期" in body[
-                "problem"
-            ]["detail"]
+            assert (
+                "DeepSec DATA USER パスワードを Oracle END USER へ同期" in body["problem"]["detail"]
+            )
             assert "DeepSecret!456" not in response.text
             assert "[REDACTED]" in response.text
 

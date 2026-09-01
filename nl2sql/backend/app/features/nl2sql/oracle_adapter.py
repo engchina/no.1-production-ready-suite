@@ -2688,9 +2688,7 @@ class OracleNl2SqlAdapter:
             "CREATED_AT TIMESTAMP WITH TIME ZONE)"
         )
 
-    def _feedback_vector_create_index_sql(
-        self, *, quoted_table: str, quoted_index: str
-    ) -> str:
+    def _feedback_vector_create_index_sql(self, *, quoted_table: str, quoted_index: str) -> str:
         return (
             f"CREATE VECTOR INDEX {quoted_index} "  # nosec B608
             f"ON {quoted_table} (EMBEDDING) "
@@ -2808,9 +2806,7 @@ class OracleNl2SqlAdapter:
             "executed": True,
         }
 
-    def delete_feedback_vector_entry(
-        self, *, table_name: str, history_id: str
-    ) -> dict[str, Any]:
+    def delete_feedback_vector_entry(self, *, table_name: str, history_id: str) -> dict[str, Any]:
         """Remove one NL2SQL feedback item from the VECTOR table if it exists."""
         safe_table = _strict_sql_name(table_name)
         quoted_table = _quote_identifier(safe_table)
@@ -3507,9 +3503,7 @@ class OracleNl2SqlAdapter:
         except Exception as exc:
             raise OracleAdapterError(f"Oracle SQL 実行に失敗しました: {exc}") from exc
 
-    def _execute_ddl_allow_existing(
-        self, cursor: Any, sql: str, params: dict[str, Any]
-    ) -> bool:
+    def _execute_ddl_allow_existing(self, cursor: Any, sql: str, params: dict[str, Any]) -> bool:
         try:
             cursor.execute(sql, params)
         except Exception as exc:
