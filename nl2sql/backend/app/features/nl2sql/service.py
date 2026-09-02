@@ -636,6 +636,9 @@ _SAMPLE_OBJECTS = [
     "V_EMP_DEPT",
     "V_DEPT_PROJECT",
 ]
+_SAMPLE_IMPORT_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00955", "ORA-00001"})
+_SAMPLE_DELETE_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00942"})
+_SAMPLE_EXECUTED_STATUSES = frozenset({"success", "skipped"})
 _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES = {
     "BFILE",
     "BLOB",
@@ -4077,24 +4080,81 @@ class Nl2SqlService:
                 error_message=confirmation_error,
             )
         elif self._use_oracle_runtime():
-            execution = self.execute_db_admin_sql(
-                DbAdminExecuteRequest(
-                    sql=";\n".join(statements),
-                    confirmation="ADMIN_EXECUTE",
-                    reason=request.reason or "sql-assist-sample-import",
+            try:
+                results = [
+                    DbAdminStatementResult.model_validate(item)
+                    for item in self._oracle_adapter.execute_admin_statements(
+                        statements,
+                        atomic=False,
+                        ignored_error_codes=_SAMPLE_IMPORT_IDEMPOTENT_ERROR_CODES,
+                    )
+                ]
+            except OracleAdapterError as exc:
+                warning = str(exc)
+                warnings.append(warning)
+                results = self._statement_results(
+                    statements,
+                    status="error",
+                    error_message=warning,
                 )
-            )
-            results = execution.statements
-            warnings.extend(execution.warnings)
-            executed = execution.executed
-            schema_refresh_job_id = execution.schema_refresh_job_id
-            schema_refresh_required = execution.schema_refresh_required
-            schema_refresh_reason_code = execution.schema_refresh_reason_code
+            else:
+                skipped_count = sum(1 for item in results if item.status == "skipped")
+                if skipped_count:
+                    warnings.append(
+                        "既存の sample object / data と重複した "
+                        f"{skipped_count} 件の statement は skip しました。"
+                    )
+                for message in self._sample_statement_error_messages(results):
+                    warnings.append(message)
+                executed = any(item.status in _SAMPLE_EXECUTED_STATUSES for item in results)
+                has_successful_statement = any(item.status == "success" for item in results)
+                if executed:
+                    try:
+                        self._record_admin_audit(
+                            operation="sample_data_import",
+                            target=",".join(_SAMPLE_OBJECTS),
+                            executed=True,
+                            reason=request.reason or "sql-assist-sample-import",
+                            detail={
+                                "step": step.value,
+                                "statement_count": len(statements),
+                                "success_count": sum(
+                                    1
+                                    for item in results
+                                    if item.status in _SAMPLE_EXECUTED_STATUSES
+                                ),
+                            },
+                        )
+                    except (
+                        Nl2SqlPersistenceUnavailable,
+                        Nl2SqlRepositoryOperationFailed,
+                    ) as exc:
+                        warnings.append(f"Sample data import の監査保存に失敗しました: {exc}")
+                if has_successful_statement:
+                    (
+                        schema_refresh_job_id,
+                        schema_refresh_required,
+                        schema_refresh_reason_code,
+                    ) = self._submit_sample_schema_refresh(
+                        step=step,
+                        expected_state="present",
+                        source="sample_data_import",
+                        warnings=warnings,
+                    )
         else:
-            self._apply_sample_import_to_catalog(step)
-            results = self._statement_results(statements, status="applied_to_local_state")
-            executed = True
-            self._persist_local_catalog()
+            blocker = self._sample_deterministic_import_blocker(step)
+            if blocker:
+                warnings.append(blocker)
+                results = self._statement_results(
+                    statements,
+                    status="missing_sample_tables",
+                    error_message=blocker,
+                )
+            else:
+                self._apply_sample_import_to_catalog(step)
+                results = self._statement_results(statements, status="applied_to_local_state")
+                executed = True
+                self._persist_local_catalog()
         return SampleDataMutationData(
             operation="import",
             step=step,
@@ -4129,29 +4189,56 @@ class Nl2SqlService:
                 error_message=confirmation_error,
             )
         elif self._use_oracle_runtime():
-            execution = self.execute_db_admin_sql(
-                DbAdminExecuteRequest(
-                    sql=";\n".join(statements),
-                    confirmation="ADMIN_EXECUTE",
-                    reason=request.reason or "sql-assist-sample-delete",
+            try:
+                results = [
+                    DbAdminStatementResult.model_validate(item)
+                    for item in self._oracle_adapter.execute_admin_statements(
+                        statements,
+                        atomic=False,
+                        ignored_error_codes=_SAMPLE_DELETE_IDEMPOTENT_ERROR_CODES,
+                    )
+                ]
+            except OracleAdapterError as exc:
+                warning = str(exc)
+                warnings.append(warning)
+                results = self._statement_results(
+                    statements,
+                    status="error",
+                    error_message=warning,
                 )
-            )
-            warnings.extend(execution.warnings)
-            schema_refresh_job_id = execution.schema_refresh_job_id
-            schema_refresh_required = execution.schema_refresh_required
-            schema_refresh_reason_code = execution.schema_refresh_reason_code
-            results = []
-            for index, item in enumerate(execution.statements):
-                if item.status == "error" and self._is_missing_object_error(item.error_message):
-                    statement = item.sql or (statements[index] if index < len(statements) else "")
-                    warnings.append(f"{statement}: 対象が存在しないため skip しました。")
-                    item = item.model_copy(update={"status": "skipped_missing_object"})
-                results.append(item)
-            executed = bool(results) and all(
-                item.status in {"success", "skipped_missing_object"} for item in results
-            )
+            else:
+                mapped_results: list[DbAdminStatementResult] = []
+                for item in results:
+                    if item.status == "skipped" or (
+                        item.status == "error" and self._is_missing_object_error(item.error_message)
+                    ):
+                        warnings.append(f"{item.sql}: 対象が存在しないため skip しました。")
+                        item = item.model_copy(update={"status": "skipped_missing_object"})
+                    mapped_results.append(item)
+                results = mapped_results
+                for message in self._sample_statement_error_messages(results):
+                    warnings.append(message)
+                successful_drop = any(item.status == "success" for item in results)
+                executed = bool(results) and all(
+                    item.status in {"success", "skipped_missing_object"} for item in results
+                )
+                if successful_drop:
+                    (
+                        schema_refresh_job_id,
+                        schema_refresh_required,
+                        schema_refresh_reason_code,
+                    ) = self._submit_sample_schema_refresh(
+                        step=SampleDataStep.ALL,
+                        expected_state="absent",
+                        source="sample_data_delete",
+                        warnings=warnings,
+                    )
             if executed:
                 self._remove_sample_from_state()
+                try:
+                    self._persist_local_catalog()
+                except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+                    warnings.append(f"Sample data 削除後の catalog 保存に失敗しました: {exc}")
         else:
             self._remove_sample_from_state()
             results = self._statement_results(statements, status="applied_to_local_state")
@@ -4184,6 +4271,82 @@ class Nl2SqlService:
     ) -> list[str]:
         names = ["tables", "views", "data"] if step == SampleDataStep.ALL else [step.value]
         return [statement for name in names for statement in sql_sections[name]]
+
+    def _sample_statement_error_messages(
+        self, results: Sequence[DbAdminStatementResult]
+    ) -> list[str]:
+        messages: list[str] = []
+        seen: set[str] = set()
+        for item in results:
+            if item.status != "error" or not item.error_message:
+                continue
+            if item.error_message in seen:
+                continue
+            seen.add(item.error_message)
+            messages.append(item.error_message)
+        return messages
+
+    def _submit_sample_schema_refresh(
+        self,
+        *,
+        step: SampleDataStep,
+        expected_state: Literal["present", "absent"],
+        source: str,
+        warnings: list[str],
+    ) -> tuple[str, bool, str]:
+        object_names: list[tuple[str, Literal["table", "view"]]] = []
+        if step in {SampleDataStep.TABLES, SampleDataStep.DATA, SampleDataStep.ALL}:
+            object_names.extend((name, "table") for name in _SAMPLE_TABLES)
+        if step in {SampleDataStep.VIEWS, SampleDataStep.ALL}:
+            object_names.extend((name, "view") for name in _SAMPLE_VIEWS)
+        targets: list[SchemaRefreshTargetObject] = []
+        for name, object_type in object_names:
+            target = self._schema_refresh_target_for_object_name(
+                name,
+                object_type=object_type,
+                expected_state=expected_state,
+            )
+            if target is not None:
+                targets.append(target)
+        try:
+            sync = self._submit_schema_refresh_after_admin_mutation(
+                target_objects=targets,
+                source=source,
+            )
+        except Nl2SqlPersistenceUnavailable as exc:
+            warnings.append(f"Sample data 後の Schema job 投入に失敗しました: {exc}")
+            return "", False, ""
+        if sync.required:
+            warnings.append(_schema_refresh_required_warning(sync.reason_code))
+        return sync.job_id, sync.required, sync.reason_code
+
+    def _sample_deterministic_import_blocker(self, step: SampleDataStep) -> str:
+        if step not in {SampleDataStep.DATA, SampleDataStep.VIEWS}:
+            return ""
+        existing_tables = self._sample_existing_table_names()
+        missing_tables = [name for name in _SAMPLE_TABLES if name not in existing_tables]
+        if not missing_tables:
+            return ""
+        missing_text = ", ".join(missing_tables)
+        if step == SampleDataStep.DATA:
+            return (
+                "Sample data の data scope は sample table が存在する場合のみ実行できます。"
+                f"不足 table: {missing_text}。先に tables または all を実行してください。"
+            )
+        return (
+            "Sample data の views scope は sample table が存在する場合のみ実行できます。"
+            f"不足 table: {missing_text}。先に tables または all を実行してください。"
+        )
+
+    def _sample_existing_table_names(self) -> set[str]:
+        current_owner = self._current_schema_owner()
+        return {
+            table.table_name.upper()
+            for table in self._catalog.tables
+            if (table.owner or current_owner).upper() == current_owner
+            and table.table_type.lower() != "view"
+            and table.table_name.upper() in _SAMPLE_TABLES
+        }
 
     def _sample_imported_objects(self, *, warnings: list[str] | None = None) -> list[str]:
         current_owner = self._current_schema_owner()
@@ -4402,22 +4565,32 @@ class Nl2SqlService:
         return tables
 
     def _sample_tables_from_ddl(self) -> list[SchemaTable]:
-        sql = "\n".join(self._sample_sql_sections()["tables"])
-        row_counts = self._sample_row_counts()
         current_owner = self._current_schema_owner()
         result: list[SchemaTable] = []
-        for match in re.finditer(
-            r"CREATE\s+TABLE\s+([A-Z0-9_]+)\s*\((.*?)\)\s*$",
-            sql,
-            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
-        ):
+        for statement in self._sample_sql_sections()["tables"]:
+            match = re.search(
+                r"CREATE\s+TABLE\s+([A-Z0-9_]+)\s*\(",
+                statement,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                continue
             table_name = _normalize_identifier(match.group(1))
-            body = match.group(2)
+            body_end = statement.rfind(")")
+            if body_end <= match.end():
+                continue
+            body = statement[match.end() : body_end]
             columns: list[SchemaColumn] = []
             constraints: list[str] = []
             for raw_line in body.splitlines():
                 line = raw_line.strip().rstrip(",")
                 if not line:
+                    continue
+                if line.upper().startswith("REFERENCES "):
+                    if constraints:
+                        constraints[-1] = f"{constraints[-1]} {line}"
+                    else:
+                        constraints.append(line)
                     continue
                 if re.match(r"^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\b", line, re.I):
                     constraints.append(line)
@@ -4443,7 +4616,7 @@ class Nl2SqlService:
                     logical_name=table_name,
                     owner=current_owner,
                     comment="SQL Assist sample table",
-                    row_count=row_counts.get(table_name),
+                    row_count=0,
                     constraints=constraints,
                     columns=columns,
                 )
@@ -9621,11 +9794,17 @@ class Nl2SqlService:
                     "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には "
                     "NL2SQL_RUNTIME_MODE=oracle が必要です。"
                 )
+            elif not profile_name:
+                raise ValueError(
+                    "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には "
+                    "Select AI profile 名が必要です。"
+                )
             else:
                 try:
+                    use_object_list = not request.table_name.strip() and len(safe_objects) > 1
                     raw_engine_meta = self._oracle_adapter.generate_synthetic_data(
-                        table_name=safe_table_name,
-                        object_list=safe_objects if len(safe_objects) > 1 else [],
+                        table_name="" if use_object_list else safe_table_name,
+                        object_list=safe_objects if use_object_list else [],
                         row_count=row_count,
                         profile_name=profile_name,
                         user_prompt=prompt,

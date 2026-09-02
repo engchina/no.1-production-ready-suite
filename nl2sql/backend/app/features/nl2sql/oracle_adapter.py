@@ -1478,7 +1478,11 @@ class OracleNl2SqlAdapter:
         }
 
     def execute_admin_statements(
-        self, statements: list[str], *, atomic: bool = True
+        self,
+        statements: list[str],
+        *,
+        atomic: bool = True,
+        ignored_error_codes: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """Execute non-SELECT admin SQL statements.
 
@@ -1496,6 +1500,7 @@ class OracleNl2SqlAdapter:
                 statement_type=self._admin_statement_type,
                 output_reader=self._fetch_dbms_output,
                 success_message=self._admin_success_message,
+                ignored_error_codes=ignored_error_codes,
             )
 
     def import_tabular_table(
@@ -2584,6 +2589,11 @@ class OracleNl2SqlAdapter:
         use_comments: bool = True,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
+        normalized_profile_name = profile_name.strip()
+        if not normalized_profile_name:
+            raise OracleAdapterError(
+                "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には profile_name が必要です。"
+            )
         table_identity = self._db_admin_identity(table_name) if table_name.strip() else None
         object_identities = [
             self._db_admin_identity(item) for item in object_list or [] if item.strip()
@@ -2592,9 +2602,6 @@ class OracleNl2SqlAdapter:
             raise OracleAdapterError("synthetic data 対象 table/object_list が空です。")
         target_identity = table_identity or object_identities[0]
         safe_objects = [identity.qualified_name for identity in object_identities]
-        function_table_name = (
-            table_identity.qualified_name if table_identity is not None else safe_objects[0]
-        )
         params_json = json.dumps(
             {
                 "comments": bool(use_comments),
@@ -2602,111 +2609,64 @@ class OracleNl2SqlAdapter:
             },
             ensure_ascii=False,
         )
-        candidates = [
-            (
-                """
-                SELECT DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
-                    table_name => :table_name,
-                    row_count => :row_count,
-                    profile_name => :profile_name
-                )
-                FROM DUAL
-                """,
-                {
-                    "table_name": function_table_name,
-                    "row_count": int(row_count),
-                    "profile_name": profile_name or None,
-                },
-            ),
-            (
-                """
-                SELECT DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
-                    table_name => :table_name,
-                    row_count => :row_count
-                )
-                FROM DUAL
-                """,
-                {"table_name": function_table_name, "row_count": int(row_count)},
-            ),
-        ]
         procedure_candidates: list[tuple[str, dict[str, Any]]] = []
-        if profile_name.strip():
-            if object_identities and table_identity is None:
-                procedure_candidates.append(
-                    (
-                        """
-                        BEGIN
-                            DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
-                                profile_name => :profile_name,
-                                object_list => :object_list,
-                                params => :params
-                            );
-                        END;
-                        """,
-                        {
-                            "profile_name": profile_name,
-                            "object_list": json.dumps(
-                                [
-                                    {
-                                        "owner": identity.owner,
-                                        "name": identity.object_name,
-                                        "record_count": int(row_count),
-                                    }
-                                    for identity in object_identities
-                                ],
-                                ensure_ascii=False,
-                            ),
-                            "params": params_json,
-                        },
-                    )
+        if object_identities and table_identity is None:
+            procedure_candidates.append(
+                (
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                            profile_name => :profile_name,
+                            object_list => :object_list,
+                            params => :params
+                        );
+                    END;
+                    """,
+                    {
+                        "profile_name": normalized_profile_name,
+                        "object_list": json.dumps(
+                            [
+                                {
+                                    "owner": identity.owner,
+                                    "name": identity.object_name,
+                                    "record_count": int(row_count),
+                                    "user_prompt": user_prompt or None,
+                                }
+                                for identity in object_identities
+                            ],
+                            ensure_ascii=False,
+                        ),
+                        "params": params_json,
+                    },
                 )
-            else:
-                procedure_candidates.append(
-                    (
-                        """
-                        BEGIN
-                            DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
-                                profile_name => :profile_name,
-                                object_name => :object_name,
-                                owner_name => :owner_name,
-                                record_count => :row_count,
-                                user_prompt => :user_prompt,
-                                params => :params
-                            );
-                        END;
-                        """,
-                        {
-                            "profile_name": profile_name,
-                            "object_name": target_identity.object_name,
-                            "owner_name": target_identity.owner,
-                            "row_count": int(row_count),
-                            "user_prompt": user_prompt or None,
-                            "params": params_json,
-                        },
-                    )
+            )
+        else:
+            procedure_candidates.append(
+                (
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                            profile_name => :profile_name,
+                            object_name => :object_name,
+                            owner_name => :owner_name,
+                            record_count => :row_count,
+                            user_prompt => :user_prompt,
+                            params => :params
+                        );
+                    END;
+                    """,
+                    {
+                        "profile_name": normalized_profile_name,
+                        "object_name": target_identity.object_name,
+                        "owner_name": target_identity.owner,
+                        "row_count": int(row_count),
+                        "user_prompt": user_prompt or None,
+                        "params": params_json,
+                    },
                 )
+            )
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
-            for sql, params in candidates:
-                try:
-                    cursor.execute(sql, params)
-                    cursor.fetchone()
-                    conn.commit()
-                    return {
-                        "runtime": "oracle",
-                        "package": "DBMS_CLOUD_AI",
-                        "table_name": target_identity.qualified_name,
-                        "object_list": safe_objects,
-                        "row_count": int(row_count),
-                    }
-                except Exception as exc:
-                    message = str(exc)
-                    if self._looks_like_signature_error(message):
-                        errors.append(message)
-                        continue
-                    raise OracleAdapterError(
-                        f"DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA に失敗しました: {message}"
-                    ) from exc
             for sql, params in procedure_candidates:
                 try:
                     cursor.execute(sql, params)
@@ -3645,7 +3605,6 @@ class OracleNl2SqlAdapter:
             or "PLS-306" in normalized
             or "PLS-00302" in normalized
             or "ORA-00904" in normalized
-            or "ORA-06550" in normalized
         )
 
     def _looks_like_profile_already_exists(self, message: str) -> bool:

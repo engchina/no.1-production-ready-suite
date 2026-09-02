@@ -1,6 +1,7 @@
 """health / NL2SQL preview の疎通テスト（Oracle 不要）。"""
 
 import asyncio
+import json
 import logging
 import re
 import threading
@@ -371,13 +372,19 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
         self.missing_objects = missing_objects
         self.admin_statements: list[str] = []
         self.admin_execute_calls = 0
+        self.ignored_error_codes: list[frozenset[str]] = []
 
     def execute_admin_statements(
-        self, statements: list[str], *, atomic: bool = True
+        self,
+        statements: list[str],
+        *,
+        atomic: bool = True,
+        ignored_error_codes: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         _ = atomic
         self.admin_execute_calls += 1
         self.admin_statements.extend(statements)
+        self.ignored_error_codes.append(ignored_error_codes)
         results: list[dict[str, Any]] = []
         for index, statement in enumerate(statements, start=1):
             statement_type = statement.split(None, 1)[0].upper()
@@ -1945,6 +1952,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     assert imported.runtime == "oracle"
     assert imported.profile_id == ""
     assert adapter.admin_execute_calls == 1
+    assert adapter.ignored_error_codes == [frozenset({"ORA-00955", "ORA-00001"})]
     assert any("CREATE TABLE DEPARTMENT" in statement for statement in adapter.admin_statements)
     assert len(adapter.admin_statements) > 5
     assert adapter.admin_statements[0].startswith("CREATE TABLE DEPARTMENT")
@@ -1978,12 +1986,97 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     assert {statement.status for statement in deleted.statements} == {"skipped_missing_object"}
     assert deleted.warnings
     assert missing_adapter.admin_execute_calls == 1
+    assert missing_adapter.ignored_error_codes == [frozenset({"ORA-00942"})]
     assert all("DROP" in statement for statement in missing_adapter.admin_statements)
 
     rejected = service.import_sample_data(SampleDataMutationRequest(confirmation="WRONG"))
 
     assert rejected.executed is False
     assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
+
+
+def test_sample_data_oracle_import_treats_existing_objects_as_idempotent() -> None:
+    class ExistingSampleAdapter(_SampleAdminOracleAdapter):
+        def execute_admin_statements(
+            self,
+            statements: list[str],
+            *,
+            atomic: bool = True,
+            ignored_error_codes: frozenset[str] = frozenset(),
+        ) -> list[dict[str, Any]]:
+            self.admin_execute_calls += 1
+            self.admin_statements.extend(statements)
+            self.ignored_error_codes.append(ignored_error_codes)
+            return [
+                {
+                    "index": index,
+                    "statement_type": statement.split(None, 1)[0].upper(),
+                    "status": "skipped",
+                    "sql": statement,
+                    "message": "既存オブジェクトを確認しました。",
+                }
+                for index, statement in enumerate(statements, start=1)
+            ]
+
+    adapter = ExistingSampleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+
+    imported = service.import_sample_data(
+        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert imported.executed is True
+    assert {statement.status for statement in imported.statements} == {"skipped"}
+    assert adapter.ignored_error_codes == [frozenset({"ORA-00955", "ORA-00001"})]
+    assert any("重複" in warning and "skip" in warning for warning in imported.warnings)
+    assert imported.schema_refresh_job_id == ""
+
+
+def test_sample_data_deterministic_scopes_require_base_tables_and_keep_table_counts_empty() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    data_only = service.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="SQL_ASSIST_SAMPLE")
+    )
+    views_only = service.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.VIEWS, confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert data_only.executed is False
+    assert views_only.executed is False
+    assert {statement.status for statement in data_only.statements} == {"missing_sample_tables"}
+    assert {statement.status for statement in views_only.statements} == {"missing_sample_tables"}
+    assert service.get_catalog().tables == []
+
+    tables_only = service.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.TABLES, confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert tables_only.executed is True
+    table_lookup = {table.table_name: table for table in service.get_catalog().tables}
+    assert {
+        name: table_lookup[name].row_count for name in ("DEPARTMENT", "EMPLOYEE", "PROJECT")
+    } == {
+        "DEPARTMENT": 0,
+        "EMPLOYEE": 0,
+        "PROJECT": 0,
+    }
+    assert "REFERENCES" not in {
+        column.column_name for table in table_lookup.values() for column in table.columns
+    }
+    assert any(
+        "REFERENCES DEPARTMENT" in constraint for constraint in table_lookup["EMPLOYEE"].constraints
+    )
+
+    loaded = service.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert loaded.executed is True
+    refreshed_lookup = {table.table_name: table for table in service.get_catalog().tables}
+    employee_row_count = refreshed_lookup["EMPLOYEE"].row_count
+    assert employee_row_count is not None
+    assert employee_row_count > 0
 
 
 def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -> None:
@@ -3957,7 +4050,6 @@ def test_service_run_agent_team_uses_runtime_team_name() -> None:
 
 def test_oracle_adapter_generate_synthetic_data_blocks_nl2sql_system_namespace() -> None:
     fake_db = _FakeOracleDb()
-    fake_db.synthetic_function_signature_failures = 2
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
     with pytest.raises(OracleAdapterError, match="システムテーブル管理"):
@@ -3967,6 +4059,66 @@ def test_oracle_adapter_generate_synthetic_data_blocks_nl2sql_system_namespace()
             profile_name="NL2SQL_SMOKE_PROFILE",
         )
     assert fake_db.synthetic_procedure_calls == 0
+
+
+def test_oracle_adapter_generate_synthetic_data_uses_object_list_payload() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    result = adapter.generate_synthetic_data(
+        table_name="",
+        object_list=["APP.INVOICES", "APP.CUSTOMERS"],
+        row_count=3,
+        profile_name="NL2SQL_SAMPLE_PROFILE",
+        user_prompt="日本語の顧客名を含める",
+    )
+
+    assert result["mode"] == "procedure"
+    assert result["table_name"] == "APP.INVOICES"
+    assert result["object_list"] == ["APP.INVOICES", "APP.CUSTOMERS"]
+    assert fake_db.synthetic_procedure_calls == 1
+    assert not any(
+        sql.startswith("SELECT DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA") for sql in fake_db.executed
+    )
+    object_list_params = [
+        params
+        for sql, params in zip(fake_db.executed, fake_db.executed_params, strict=True)
+        if params is not None and "object_list => :object_list" in sql
+    ]
+    assert object_list_params
+    payload = json.loads(str(object_list_params[0]["object_list"]))
+    assert payload == [
+        {
+            "owner": "APP",
+            "name": "INVOICES",
+            "record_count": 3,
+            "user_prompt": "日本語の顧客名を含める",
+        },
+        {
+            "owner": "APP",
+            "name": "CUSTOMERS",
+            "record_count": 3,
+            "user_prompt": "日本語の顧客名を含める",
+        },
+    ]
+
+
+def test_oracle_adapter_generate_synthetic_data_requires_profile_name() -> None:
+    adapter = _FakeRuntimeOracleAdapter(_FakeOracleDb())
+
+    with pytest.raises(OracleAdapterError, match="profile_name"):
+        adapter.generate_synthetic_data(
+            table_name="APP.INVOICES",
+            row_count=1,
+            profile_name="",
+        )
+
+
+def test_oracle_adapter_signature_detection_does_not_mask_ora_06550_only() -> None:
+    adapter = _FakeRuntimeOracleAdapter(_FakeOracleDb())
+
+    assert adapter._looks_like_signature_error("ORA-06550: insufficient privileges") is False
+    assert adapter._looks_like_signature_error("ORA-06550: PLS-00306: wrong number") is True
 
 
 def test_service_refresh_agent_cleans_previous_versioned_team() -> None:

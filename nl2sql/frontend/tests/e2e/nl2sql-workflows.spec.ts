@@ -5982,6 +5982,98 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   await expectNoHorizontalScroll(page);
 });
 
+test("Workbench のサンプルデータ投入は executed=false を成功表示にしない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/schema/catalog");
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(route, { refreshed_at: "2026-06-21T10:00:00.000Z", tables: [] })
+  );
+  await page.unroute("**/api/schema/objects?*");
+  await page.route("**/api/schema/objects?*", (route) =>
+    fulfillJson(route, {
+      items: [],
+      next_cursor: null,
+      total: 0,
+      catalog_version: 1,
+    })
+  );
+  await page.unroute("**/api/nl2sql/profiles");
+  await page.route("**/api/nl2sql/profiles", (route) =>
+    fulfillJson(route, [{ ...profiles[0], allowed_tables: [], allowed_views: [] }])
+  );
+  await page.unroute("**/api/nl2sql/sample-data/import");
+  await page.route("**/api/nl2sql/sample-data/import", (route) =>
+    fulfillJson(route, {
+      operation: "import",
+      step: "all",
+      runtime: "deterministic",
+      executed: false,
+      objects: [],
+      statements: [],
+      warnings: ["Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"],
+      profile_id: "",
+      timing,
+    })
+  );
+
+  const createdAt = "2026-06-21T10:00:00.000Z";
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "job-empty-failed-import",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-empty-failed-import", (route) =>
+    fulfillJson(route, {
+      job_id: "job-empty-failed-import",
+      status: "error",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: createdAt,
+      elapsed_ms: 30,
+      result: null,
+      error_message:
+        "NL2SQL ジョブに失敗しました: Schema catalog が空です。Oracle schema を refresh するか、Data Tools から sample data を明示的に import してください。",
+      timing: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 10 },
+        { stage: "generate_sql", status: "error", elapsed_ms: 5 },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("すべてプロジェクトを教えてください。");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const progress = page.getByTestId("nl2sql-job-progress");
+  await expect(progress).toHaveAttribute("data-job-status", "error");
+  await progress.getByRole("button", { name: "サンプルデータを投入" }).click();
+
+  await expect(
+    page.getByLabel("メイン領域").getByText(
+      "Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
+      {
+        exact: false,
+      }
+    )
+  ).toBeVisible();
+  await expect(page.getByText("サンプルデータを投入しました。")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "請求 を開閉" })).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
 test("Select AI の今回だけの生成条件を job に渡し、reset で消去できる", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 375, height: 900 });

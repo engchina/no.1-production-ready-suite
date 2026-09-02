@@ -877,6 +877,117 @@ def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
     assert any("DENPYO_FILES" in warning and "BLOB" in warning for warning in synthetic.warnings)
 
 
+def test_synthetic_data_requires_profile_name_before_oracle_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-06-21T10:00:00Z",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                columns=[
+                    SchemaColumn(
+                        column_name="INVOICE_ID",
+                        logical_name="請求ID",
+                        data_type="NUMBER",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    class FailIfCalledAdapter:
+        def generate_synthetic_data(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("Oracle should not be called without profile_name")
+
+    service._oracle_adapter = cast(Any, FailIfCalledAdapter())
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    with pytest.raises(ValueError, match="Select AI profile"):
+        service.generate_synthetic_data(
+            SyntheticDataGenerateRequest(
+                table_name="INVOICES",
+                row_count=1,
+                confirmation="INVOICES",
+            )
+        )
+
+
+def test_synthetic_data_generates_multiple_supported_tables_with_object_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-06-21T10:00:00Z",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                columns=[
+                    SchemaColumn(
+                        column_name="INVOICE_ID",
+                        logical_name="請求ID",
+                        data_type="NUMBER",
+                    ),
+                ],
+            ),
+            SchemaTable(
+                table_name="CUSTOMERS",
+                logical_name="顧客",
+                columns=[
+                    SchemaColumn(
+                        column_name="CUSTOMER_ID",
+                        logical_name="顧客ID",
+                        data_type="NUMBER",
+                    ),
+                ],
+            ),
+        ],
+    )
+    calls: list[dict[str, Any]] = []
+
+    class RecordingAdapter:
+        def generate_synthetic_data(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {
+                "runtime": "oracle",
+                "table_name": "APP.INVOICES",
+                "object_list": kwargs["object_list"],
+                "row_count": kwargs["row_count"],
+            }
+
+    service._oracle_adapter = cast(Any, RecordingAdapter())
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    synthetic = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            object_list=["INVOICES", "CUSTOMERS"],
+            row_count=3,
+            confirmation="ADMIN_EXECUTE",
+            profile_name="NL2SQL_PROFILE",
+            user_prompt="日本語の顧客名",
+        )
+    )
+
+    assert synthetic.status == "executed"
+    assert synthetic.executed
+    assert synthetic.table_name == "APP.INVOICES"
+    assert synthetic.object_list == ["APP.INVOICES", "APP.CUSTOMERS"]
+    assert calls == [
+        {
+            "table_name": "",
+            "object_list": ["APP.INVOICES", "APP.CUSTOMERS"],
+            "row_count": 3,
+            "profile_name": "NL2SQL_PROFILE",
+            "user_prompt": "日本語の顧客名",
+            "sample_rows": 0,
+            "use_comments": True,
+        }
+    ]
+
+
 def test_profile_learning_material_imports_xlsx_and_exports_xlsx() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     imported = service.import_profile_learning_material(
