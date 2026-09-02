@@ -5259,7 +5259,14 @@ class Nl2SqlService:
         sql: str,
         allowed: AllowedObjects,
         row_limit: int | None,
+        *,
+        analysis: AnalyzeData | None = None,
     ) -> tuple[SafetyReport, str, QueryResults]:
+        """安全判定を通った SELECT だけを実行する。
+
+        `analysis` に呼び出し側で済ませた `analyze_sql` の結果を渡すと再解析を省略する
+        (job は safety_check 段階で同じ SQL を解析済みなので、sqlglot の再パースを避ける)。
+        """
         executable = normalize_executable_sql(sql)
         if not self._use_oracle_runtime() and not self._catalog.tables:
             return (
@@ -5272,7 +5279,8 @@ class Nl2SqlService:
                 executable,
                 QueryResults(columns=[], rows=[], total=0),
             )
-        analysis = self.analyze_sql(executable, allowed, row_limit)
+        if analysis is None:
+            analysis = self.analyze_sql(executable, allowed, row_limit)
         if not analysis.safety.is_safe:
             return analysis.safety, executable, QueryResults(columns=[], rows=[], total=0)
         if self._use_oracle_runtime():
@@ -5399,15 +5407,8 @@ class Nl2SqlService:
             catalog=catalog,
         )
         structure = self._sql_structure(sql, referenced)
-        risk_findings = [
-            item
-            for item in [
-                blocked_reason,
-                *warnings,
-                *self._optimization_hints(safety=safety, sql=sql, row_limit=row_limit),
-            ]
-            if item
-        ]
+        optimization_hints = self._optimization_hints(safety=safety, sql=sql, row_limit=row_limit)
+        risk_findings = [item for item in [blocked_reason, *warnings, *optimization_hints] if item]
         repair_candidates = [repaired_sql] if repaired_sql else []
         data = AnalyzeData(
             safety=safety,
@@ -5423,9 +5424,7 @@ class Nl2SqlService:
             ),
             executable_sql=executable_sql,
             repaired_sql=repaired_sql,
-            optimization_hints=self._optimization_hints(
-                safety=safety, sql=sql, row_limit=row_limit
-            ),
+            optimization_hints=optimization_hints,
             structure_summary=structure["summary"],
             risk_level="low" if safety.is_safe else "high",
             statement_type=str(structure["statement_type"]),
@@ -14284,7 +14283,7 @@ class Nl2SqlService:
         stage_started = time.monotonic()
         if analysis.safety.is_safe:
             safety, executable, results = self.execute_sql(
-                generated.generated_sql, allowed, row_limit
+                generated.generated_sql, allowed, row_limit, analysis=analysis
             )
         else:
             safety = analysis.safety
