@@ -22,7 +22,7 @@ import threading
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -641,6 +641,8 @@ JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
 # incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
 _JOB_RETENTION_LIMIT = 200
 _HISTORY_RETENTION_LIMIT = 1000
+# 類似履歴 / few-shot の母集団上限(管理者 GOOD の履歴を新しい順にこの件数まで読む)。
+_SIMILAR_HISTORY_POOL_LIMIT = 1000
 # 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
 # owner の _persist_job が job 本体を丸ごと上書きしても失われない別ドキュメントにする。
 _JOB_CANCEL_COLLECTION = "job_cancel_requests"
@@ -2132,6 +2134,15 @@ def _restore_job_steps(
                     update={"status": JobStepStatus.ERROR}
                 )
     return restored
+
+
+def _history_item_matches_payload_filters(item: HistoryItem, filters: Mapping[str, str]) -> bool:
+    """memory 実装向けに repository の payload filter(top-level key の文字列一致)を再現する。"""
+
+    if not filters:
+        return True
+    payload = item.model_dump(mode="json")
+    return all(str(payload.get(key) or "") == value for key, value in filters.items())
 
 
 class Nl2SqlService:
@@ -5465,7 +5476,11 @@ class Nl2SqlService:
         status: str = "",
         query: str = "",
         actor_user_uuid: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> tuple[list[HistoryItem], str, int]:
+        filters = {key: value for key, value in (payload_filters or {}).items() if value}
+        if actor_user_uuid:
+            filters["actor_user_uuid"] = actor_user_uuid
         repository = self._incremental_repository
         if repository is not None:
             try:
@@ -5476,9 +5491,7 @@ class Nl2SqlService:
                     profile_id=profile_id,
                     status=status,
                     query=query,
-                    payload_filters=(
-                        {"actor_user_uuid": actor_user_uuid} if actor_user_uuid else None
-                    ),
+                    payload_filters=filters or None,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -5507,7 +5520,7 @@ class Nl2SqlService:
                     or query_key
                     in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
                 )
-                and (not actor_user_uuid or item.actor_user_uuid == actor_user_uuid)
+                and _history_item_matches_payload_filters(item, filters)
             ]
         total = len(items)
         selected = items[offset : offset + limit]
@@ -13616,6 +13629,36 @@ class Nl2SqlService:
                 add_match(column.logical_name, 0.9)
         return score, matched_terms
 
+    def _similar_history_pool(self) -> list[HistoryItem]:
+        """類似履歴 / few-shot の母集団。
+
+        ランキングは管理者 GOOD かつ安全な履歴しか使わないため、全履歴を読んで捨てる
+        代わりに DB 側で `admin_feedback_rating=good` に絞り、新しい順に上限件数までで止める
+        (呼び出しは質問入力のデバウンスごと・job ごとに発生する)。
+        """
+
+        good = FeedbackRating.GOOD.value
+        if self._incremental_repository is None:
+            with self._lock:
+                items = [
+                    item.model_copy(deep=True)
+                    for item in reversed(self._history)
+                    if item.admin_feedback_rating == FeedbackRating.GOOD
+                ]
+            return items[:_SIMILAR_HISTORY_POOL_LIMIT]
+        pool: list[HistoryItem] = []
+        cursor = ""
+        while len(pool) < _SIMILAR_HISTORY_POOL_LIMIT:
+            page, cursor, _total = self._history_page(
+                cursor=cursor or None,
+                limit=min(500, _SIMILAR_HISTORY_POOL_LIMIT - len(pool)),
+                payload_filters={"admin_feedback_rating": good},
+            )
+            pool.extend(page)
+            if not cursor or not page:
+                break
+        return pool
+
     def _similar_history_candidates(
         self,
         *,
@@ -13623,7 +13666,7 @@ class Nl2SqlService:
         profile_id: str | None,
         include_bad: bool,
     ) -> list[SimilarHistoryItem]:
-        history = self._history_snapshot()
+        history = self._similar_history_pool()
         target_objects = self._similar_history_query_target_objects(question)
         vector_ranked = self._rank_oracle_vector_history(
             question=question,
