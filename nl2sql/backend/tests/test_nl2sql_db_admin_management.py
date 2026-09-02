@@ -9,7 +9,7 @@ import io
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -2031,6 +2031,14 @@ def test_preview_data_builds_guarded_select() -> None:
             DbAdminDataPreviewRequest(object_name="DBTOOLS$EXECUTION_HISTORY")
         )
 
+    with pytest.raises(ValueError, match="システムテーブル管理"):
+        service.preview_db_admin_data(
+            DbAdminDataPreviewRequest(
+                object_name="INVOICES",
+                where_clause="1=0 UNION ALL SELECT STATE_KEY FROM NL2SQL_STATE",
+            )
+        )
+
     with pytest.raises(ValueError, match="Oracle 識別子"):
         service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET'))
 
@@ -2611,6 +2619,45 @@ def test_preview_data_exports_xlsx() -> None:
     assert workbook["query"]["A2"].value == 'SELECT * FROM "APP"."INVOICES" WHERE STATUS = \'A\''
 
 
+def test_preview_data_normalizes_special_values_for_api_and_xlsx() -> None:
+    adapter = _FakeAdminSqlAdapter(
+        select_result=QueryResults(
+            columns=["RAW_VALUE", "META", "FORMULA", "CREATED_AT", "CONTROL_TEXT"],
+            rows=[
+                {
+                    "RAW_VALUE": b"\x0f\xff",
+                    "META": {"status": "ok"},
+                    "FORMULA": "=1+1",
+                    "CREATED_AT": datetime(2026, 1, 31, 9, 30, tzinfo=UTC),
+                    "CONTROL_TEXT": "A\x01B",
+                }
+            ],
+            total=1,
+            execution_context="oracle_data_plane",
+            vpd_context_enforced=False,
+        )
+    )
+    service = _OracleRuntimeService(adapter)
+    request = DbAdminDataPreviewRequest(object_name="INVOICES", limit=10)
+
+    preview = service.preview_db_admin_data(request)
+
+    assert preview.results.rows[0] == {
+        "RAW_VALUE": "0FFF",
+        "META": '{"status": "ok"}',
+        "FORMULA": "=1+1",
+        "CREATED_AT": "2026-01-31T09:30:00+00:00",
+        "CONTROL_TEXT": "AB",
+    }
+
+    _filename, content = service.export_db_admin_preview_xlsx(request)
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
+
+    assert workbook["data"]["C2"].value == "=1+1"
+    assert workbook["data"]["C2"].data_type == "s"
+
+
 def test_cross_schema_management_resolves_duplicate_object_names() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service._catalog = SchemaCatalog(
@@ -3154,6 +3201,151 @@ def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
     assert result.sample_rows[1]["ORDER_NAME"] == "北海物産"
 
 
+def test_upload_csv_decodes_cp932_and_reports_encoding_warning() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    content = "商品名,単価\n鉛筆,100\n".encode("cp932")
+
+    text, sheet_name, warnings = service._tabular_content_to_csv_text(  # noqa: SLF001
+        filename="products.csv",
+        content=content,
+    )
+
+    assert sheet_name == ""
+    assert "商品名,単価" in text
+    assert "鉛筆" in text
+    assert any("CP932" in warning for warning in warnings)
+
+
+def test_upload_csv_forces_doublequote_escaping_after_delimiter_sniff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BadDialect(csv.excel):
+        delimiter = ","
+        quotechar = "'"
+        doublequote = False
+        skipinitialspace = False
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    def fake_sniff(
+        _self: csv.Sniffer,
+        _sample: str,
+        delimiters: str | None = None,
+    ) -> type[csv.Dialect]:
+        del delimiters
+        return _BadDialect
+
+    monkeypatch.setattr(csv.Sniffer, "sniff", fake_sniff)
+
+    columns, rows, warnings = service._parse_csv_sample(  # noqa: SLF001
+        table_name="ORDERS",
+        csv_text='ID,NOTE\n1,"He said ""hi"", ok"\n',
+        max_rows=10,
+        max_columns=10,
+    )
+
+    assert warnings == []
+    assert [column.column_name for column in columns] == ["ID", "NOTE"]
+    assert rows == [{"ID": "1", "NOTE": 'He said "hi", ok'}]
+
+
+def test_upload_csv_allows_long_text_for_existing_table_upload() -> None:
+    long_text = "あ" * 4001
+    adapter = _FakeCsvUploadAdapter(
+        {
+            "matched_columns": ["NOTE"],
+            "unmatched_csv_columns": [],
+            "success_count": 1,
+            "error_count": 0,
+            "row_errors": [],
+            "hint": "",
+        }
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.upload_db_admin_csv(
+        DbAdminCsvUploadRequest(
+            table_name="TEST_TABLE",
+            content_base64=base64.b64encode(f"NOTE\n{long_text}\n".encode()).decode(),
+            filename="long.csv",
+            confirmation="TEST_TABLE",
+        )
+    )
+
+    assert result.executed is True
+    assert adapter.calls[0]["columns"][0].data_type == "CLOB"
+    assert adapter.calls[0]["rows"] == [{"NOTE": long_text}]
+
+
+def test_import_tabular_append_allows_long_text_for_existing_clob() -> None:
+    class _ImportAdapter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def import_tabular_table(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {}
+
+    long_text = "あ" * 4001
+    adapter = _ImportAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.import_db_admin_tabular(
+        DbAdminImportTabularRequest(
+            table_name="TEST_TABLE",
+            content_base64=base64.b64encode(f"NOTE\n{long_text}\n".encode()).decode(),
+            filename="long.csv",
+            mode="append",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is True
+    assert adapter.calls[0]["columns"][0].data_type == "CLOB"
+    assert adapter.calls[0]["rows"] == [{"NOTE": long_text}]
+
+
+def test_import_tabular_replace_requires_target_confirmation() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    result = service.import_db_admin_tabular(
+        DbAdminImportTabularRequest(
+            table_name="IMPORTED_ORDERS",
+            content_base64=base64.b64encode(b"ID\n1\n").decode(),
+            filename="orders.csv",
+            mode="replace",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is False
+    assert any("confirmation=IMPORTED_ORDERS" in warning for warning in result.warnings)
+
+
+def test_import_tabular_keeps_leading_zero_codes_as_text() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    columns, rows, warnings = service._parse_csv_sample(  # noqa: SLF001
+        table_name="ORDERS",
+        csv_text="CODE\n00123\n",
+        max_rows=10,
+        max_columns=10,
+    )
+
+    assert warnings == []
+    assert columns[0].data_type == "VARCHAR2(5 CHAR)"
+    assert rows == [{"CODE": "00123"}]
+
+
+def test_import_tabular_dedupe_csv_column_names_avoids_suffix_collision() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    assert service._dedupe_csv_column_names(["A", "A", "A_2"]) == [  # noqa: SLF001
+        "A",
+        "A_2",
+        "A_2_2",
+    ]
+
+
 def test_upload_csv_parse_error_returns_http_400() -> None:
     """csv.Error を API 境界で利用者向け 400 応答へ正規化する。"""
     import base64
@@ -3174,6 +3366,30 @@ def test_upload_csv_parse_error_returns_http_400() -> None:
     )
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert isinstance(exc_info.value.__cause__.__cause__, csv.Error)
+
+
+def test_upload_csv_validation_error_returns_http_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    class _FailingService:
+        def upload_db_admin_csv(self, _request: DbAdminCsvUploadRequest) -> None:
+            raise TabularImportValidationError("CSV の文字エンコーディングを判定できません。")
+
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _FailingService())
+    request = DbAdminCsvUploadRequest(
+        table_name="ORDERS",
+        content_base64="YQ==",
+        confirmation="ORDERS",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        db_admin_upload_csv(request)
+
+    assert exc_info.value.status_code == 422
+    assert "文字エンコーディング" in str(exc_info.value.detail)
+    assert isinstance(exc_info.value.__cause__, TabularImportValidationError)
 
 
 def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
@@ -3461,6 +3677,165 @@ def test_import_tabular_truncate_mode_uses_transactional_delete(
     assert not any("TRUNCATE TABLE" in sql for sql in cursor.executed)
     assert cursor.batch_rows == [{"c0": 1, "c1": "株式会社青山"}]
     assert connection.committed is True
+
+
+def test_import_tabular_create_drops_new_table_when_insert_batch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BatchError(Exception):
+        offset = 0
+
+        def __str__(self) -> str:
+            return (
+                'ORA-12899: value too large for column "APP"."TEST_TABLE"."NAME" '
+                "(actual: 16, maximum: 6)"
+            )
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, _binds: dict[str, object]) -> None:
+            self.executed.append(sql)
+
+        def executemany(
+            self,
+            _sql: str,
+            _rows: list[dict[str, object]],
+            *,
+            batcherrors: bool,
+        ) -> None:
+            assert batcherrors is True
+
+        def getbatcherrors(self) -> list[Exception]:
+            return [_BatchError()]
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+            self.committed = False
+            self.rolled_back = False
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    cursor = _Cursor()
+    connection = _Connection(cursor)
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield connection
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+
+    with pytest.raises(TabularImportValidationError, match="ファイル2行目"):
+        adapter.import_tabular_table(
+            table_name="TEST_TABLE",
+            columns=[
+                CsvImportColumn(
+                    source_name="NAME",
+                    column_name="NAME",
+                    data_type="VARCHAR2(6 CHAR)",
+                    nullable=False,
+                )
+            ],
+            rows=[{"NAME": "株式会社青山"}],
+            mode="create",
+        )
+
+    assert any('CREATE TABLE "TEST_TABLE"' in sql for sql in cursor.executed)
+    assert any('DROP TABLE "TEST_TABLE" PURGE' in sql for sql in cursor.executed)
+    assert connection.rolled_back is True
+    assert connection.committed is False
+
+
+def test_upload_csv_truncate_insert_uses_delete_and_rolls_back_on_insert_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CsvRow(dict[str, str | None]):
+        def __init__(self, value: str, *, file_row_number: int) -> None:
+            super().__init__({"ID": value})
+            self.file_row_number = file_row_number
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+            self._metadata = [("ID", "VARCHAR2")]
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, binds: dict[str, object]) -> None:
+            self.executed.append(sql)
+            if sql.strip().upper().startswith("INSERT") and binds.get("c0") == "bad":
+                raise Exception("ORA-00001: unique constraint violated")
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return self._metadata  # type: ignore[return-value]
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+            self.committed = False
+            self.rolled_back = False
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    cursor = _Cursor()
+    connection = _Connection(cursor)
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield connection
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+
+    result = adapter.upload_csv_to_existing_table(
+        table_name="TEST_TABLE",
+        columns=[
+            CsvImportColumn(
+                source_name="ID",
+                column_name="ID",
+                data_type="VARCHAR2(10 CHAR)",
+                nullable=False,
+            )
+        ],
+        rows=[_CsvRow("ok", file_row_number=2), _CsvRow("bad", file_row_number=5)],
+        truncate=True,
+    )
+
+    assert any('DELETE FROM "APP"."TEST_TABLE"' in sql for sql in cursor.executed)
+    assert not any("TRUNCATE TABLE" in sql for sql in cursor.executed)
+    assert result["success_count"] == 0
+    assert result["error_count"] == 2
+    assert "既存データは保持されています" in result["row_errors"][0]
+    assert any("行5" in row_error for row_error in result["row_errors"])
+    assert connection.rolled_back is True
+    assert connection.committed is False
 
 
 def test_import_tabular_validation_error_returns_http_422(

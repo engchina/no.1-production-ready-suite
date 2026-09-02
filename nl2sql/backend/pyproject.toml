@@ -14,6 +14,7 @@ dependencies = [
   "python-multipart>=0.0.20",
   "httpx==0.28.1",
   "python-json-logger>=4.0",
+  "charset-normalizer>=3.4",
   "prometheus-client>=0.24",
   "production-ready-backend-core",
   "oci>=2.160",

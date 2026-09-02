@@ -109,6 +109,12 @@ def _coerce_result_value(value: Any) -> Any:
     read = getattr(value, "read", None)
     if callable(read):
         return _coerce_text(value)
+    if isinstance(value, bytes | bytearray | memoryview):
+        return bytes(value).hex().upper()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict | list | tuple):
+        return json.dumps(value, ensure_ascii=False, default=str)
     return value
 
 
@@ -1532,10 +1538,24 @@ class OracleNl2SqlAdapter:
                 }
                 for row in rows
             ]
+            file_row_numbers = [
+                int(getattr(row, "file_row_number", index + 2)) for index, row in enumerate(rows)
+            ]
+            created_table = False
+
+            def cleanup_created_table() -> None:
+                if not created_table:
+                    return
+                rollback = getattr(conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+
             if normalized_mode in {"replace", "create"}:
                 if normalized_mode == "replace":
                     self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
                 self._execute_plsql_like(cursor, ddl, {})
+                created_table = True
             elif normalized_mode == "truncate":
                 # TRUNCATE は暗黙 commit されるため、後続 INSERT 失敗時に既存行を戻せない。
                 # DELETE と INSERT を同一 transaction に置き、全件成功時だけ commit する。
@@ -1545,23 +1565,34 @@ class OracleNl2SqlAdapter:
                     cursor.executemany(insert_sql, bind_rows, batcherrors=True)
                     batch_errors = list(cursor.getbatcherrors())
                 except TabularImportValidationError:
+                    cleanup_created_table()
                     raise
                 except Exception as exc:
                     if "ORA-12899" in str(exc):
+                        cleanup_created_table()
                         raise self._tabular_import_batch_error(
                             exc,
                             table_name=safe_table,
                             row_offset=None,
                         ) from exc
+                    cleanup_created_table()
                     raise OracleAdapterError(
                         "Excel/CSV 取込の Oracle INSERT に失敗しました。"
                     ) from exc
                 if batch_errors:
                     first_error = batch_errors[0]
+                    row_offset = getattr(first_error, "offset", None)
+                    file_row_number = (
+                        file_row_numbers[row_offset]
+                        if isinstance(row_offset, int) and 0 <= row_offset < len(file_row_numbers)
+                        else None
+                    )
+                    cleanup_created_table()
                     raise self._tabular_import_batch_error(
                         first_error,
                         table_name=safe_table,
-                        row_offset=getattr(first_error, "offset", None),
+                        row_offset=row_offset,
+                        row_number=file_row_number,
                     )
             conn.commit()
         return {
@@ -1694,7 +1725,7 @@ class OracleNl2SqlAdapter:
         for start in range(0, len(rows), chunk_size):
             payload_rows = [
                 {
-                    "__file_row": start + offset + 2,
+                    "__file_row": int(getattr(row, "file_row_number", start + offset + 2)),
                     **{
                         column.column_name: row.get(column.column_name)
                         for column, _metadata in text_columns
@@ -1719,11 +1750,16 @@ class OracleNl2SqlAdapter:
         *,
         table_name: str,
         row_offset: int | None,
+        row_number: int | None = None,
     ) -> OracleAdapterError:
         """batch DML error を安全な import エラーへ正規化する。"""
         message = str(exc)
+        file_row = (
+            row_number
+            if row_number is not None
+            else (row_offset + 2 if isinstance(row_offset, int) else None)
+        )
         if "ORA-12899" not in message:
-            file_row = row_offset + 2 if isinstance(row_offset, int) else None
             row_detail = f"ファイル{file_row}行目の" if file_row is not None else ""
             return OracleAdapterError(
                 f"{row_detail}Excel/CSV データを Oracle に投入できませんでした。"
@@ -1737,7 +1773,6 @@ class OracleNl2SqlAdapter:
         column_name = match.group(1) if match else "文字列"
         actual = match.group(2) if match else "許容値超過"
         maximum = match.group(3) if match else "列定義"
-        file_row = row_offset + 2 if isinstance(row_offset, int) else None
         row_detail = f"ファイル{file_row}行目の" if file_row is not None else ""
         return TabularImportValidationError(
             f"{table_name}.{column_name}: {row_detail}値の長さ({actual})が"
@@ -1757,7 +1792,8 @@ class OracleNl2SqlAdapter:
         """既存テーブルへ CSV 行を投入する(SQL Assist upload_csv_data の再マップ)。
 
         CSV 列名とテーブル列名を大文字比較でマッチングし、行ごとに INSERT して
-        エラー先頭 5 件を収集する。成功 1 件以上で commit。
+        エラー先頭 5 件を収集する。追記は成功 1 件以上で commit、全置換は全件成功時だけ
+        DELETE と INSERT を commit する。
         """
         identity = self._db_admin_identity(table_name, owner)
         safe_table = identity.object_name
@@ -1798,7 +1834,7 @@ class OracleNl2SqlAdapter:
                 if column.column_name not in matched_csv_names
             ]
             if truncate:
-                self._execute_plsql_like(cursor, f"TRUNCATE TABLE {quoted_table}", {})
+                self._execute_plsql_like(cursor, f"DELETE FROM {quoted_table}", {})  # nosec B608
             bind_names = [f"c{index}" for index in range(len(matched))]
             insert_sql = (
                 f"INSERT INTO {quoted_table} "  # nosec B608
@@ -1823,8 +1859,21 @@ class OracleNl2SqlAdapter:
                     if "ORA-01861" in message or "ORA-01843" in message:
                         date_error = True
                     if len(row_errors) < 5:
-                        row_errors.append(f"行{row_index}: {message}")
-            if success_count > 0:
+                        file_row_number = int(getattr(row, "file_row_number", row_index))
+                        row_errors.append(f"行{file_row_number}: {message}")
+            if truncate:
+                if success_count == len(rows) and rows:
+                    conn.commit()
+                else:
+                    conn.rollback()
+                    if row_errors:
+                        row_errors.insert(
+                            0,
+                            "全置換モードは INSERT エラーのため rollback しました。"
+                            "既存データは保持されています。",
+                        )
+                    success_count = 0
+            elif success_count > 0:
                 conn.commit()
             else:
                 conn.rollback()

@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
+from charset_normalizer import from_bytes
 from dotenv import dotenv_values
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
@@ -266,6 +267,7 @@ from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 from .tabular_files import (
     WORKBOOK_SUFFIXES,
     normalize_workbook_scalar,
+    read_workbook_sheet,
     read_workbook_sheets,
     select_workbook_sheet,
     validate_tabular_text_signature,
@@ -1836,6 +1838,67 @@ def _qualified_display_name(owner: str, object_name: str) -> str:
 
 def _quote_sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+_WORKBOOK_ILLEGAL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
+
+
+def _clean_workbook_text(value: str) -> str:
+    return _WORKBOOK_ILLEGAL_CHARACTERS.sub("", value)
+
+
+def _normalize_db_admin_preview_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bytes | bytearray | memoryview):
+        return bytes(value).hex().upper()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Mapping | list | tuple):
+        return _clean_workbook_text(json.dumps(value, ensure_ascii=False, default=str))
+    if isinstance(value, str):
+        return _clean_workbook_text(value)
+    return value
+
+
+def _normalize_db_admin_preview_results(results: QueryResults) -> QueryResults:
+    rows = [
+        {column: _normalize_db_admin_preview_value(row.get(column)) for column in results.columns}
+        for row in results.rows
+    ]
+    return results.model_copy(update={"rows": rows})
+
+
+def _write_workbook_cell(sheet: Any, *, row: int, column: int, value: Any) -> None:
+    cell = sheet.cell(row=row, column=column)
+    normalized = _normalize_db_admin_preview_value(value)
+    cell.value = normalized
+    if isinstance(normalized, str):
+        cell.data_type = "s"
+
+
+class _CsvRow(dict[str, str | None]):
+    """Oracle row error を元ファイル行へ戻すため、dict の等価性は保ったまま行番号を持つ。"""
+
+    def __init__(self, values: Mapping[str, str | None], *, file_row_number: int) -> None:
+        super().__init__(values)
+        self.file_row_number = file_row_number
+
+
+def _decode_tabular_text_content(content: bytes) -> tuple[str, str]:
+    for encoding, label in (("utf-8-sig", "UTF-8"), ("cp932", "CP932")):
+        try:
+            return content.decode(encoding), label
+        except UnicodeDecodeError:
+            continue
+    detected = from_bytes(content).best()
+    if detected is None:
+        raise TabularImportValidationError(
+            "CSV の文字エンコーディングを判定できません。"
+            "UTF-8 または CP932 の CSV として保存し直して再試行してください。"
+        )
+    encoding = str(detected.encoding or "unknown").upper()
+    return str(detected), encoding
 
 
 def _similarity_tokens(value: str) -> set[str]:
@@ -10843,6 +10906,7 @@ class Nl2SqlService:
             csv_text=csv_text,
             max_rows=min(row_limit, settings.nl2sql_csv_import_max_rows),
             max_columns=settings.nl2sql_csv_import_max_columns,
+            infer_data_types=mode in {"create", "replace"},
         )
         warnings.extend(parse_warnings)
         table_name = self._sanitize_import_table_name(request.table_name)
@@ -10852,9 +10916,10 @@ class Nl2SqlService:
         schema_refresh_job_id = ""
         schema_refresh_required = False
         schema_refresh_reason_code = ""
+        confirmation_target = table_name if mode == "replace" else "ADMIN_EXECUTE"
         confirmation_error = self._admin_confirmation_error(
             confirmation=request.confirmation,
-            target="ADMIN_EXECUTE",
+            target=confirmation_target,
         )
         if confirmation_error:
             warnings.append(confirmation_error)
@@ -11247,11 +11312,17 @@ class Nl2SqlService:
                 results = self._oracle_adapter.execute_select(sql, request.limit)
             except OracleAdapterError as exc:
                 raise ValueError(str(exc)) from exc
-            return DbAdminDataPreviewData(runtime="oracle", sql=sql, results=results)
+            return DbAdminDataPreviewData(
+                runtime="oracle",
+                sql=sql,
+                results=_normalize_db_admin_preview_results(results),
+            )
         return DbAdminDataPreviewData(
             runtime="deterministic",
             sql=sql,
-            results=self._mock_execute(sql, min(request.limit, 20)),
+            results=_normalize_db_admin_preview_results(
+                self._mock_execute(sql, min(request.limit, 20))
+            ),
         )
 
     def export_db_admin_preview_xlsx(self, request: DbAdminDataPreviewRequest) -> tuple[str, bytes]:
@@ -11261,12 +11332,19 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         data_sheet = workbook.active
         data_sheet.title = "data"
-        data_sheet.append(data.results.columns)
-        for row in data.results.rows:
-            data_sheet.append([row.get(column) for column in data.results.columns])
+        for column_index, column_name in enumerate(data.results.columns, start=1):
+            _write_workbook_cell(data_sheet, row=1, column=column_index, value=column_name)
+        for row_index, result_row in enumerate(data.results.rows, start=2):
+            for column_index, column_name in enumerate(data.results.columns, start=1):
+                _write_workbook_cell(
+                    data_sheet,
+                    row=row_index,
+                    column=column_index,
+                    value=result_row.get(column_name),
+                )
         query_sheet = workbook.create_sheet("query")
-        query_sheet.append(["SQL"])
-        query_sheet.append([data.sql])
+        _write_workbook_cell(query_sheet, row=1, column=1, value="SQL")
+        _write_workbook_cell(query_sheet, row=2, column=1, value=data.sql)
         buffer = io.BytesIO()
         workbook.save(buffer)
         identity = self._db_admin_object_identity(request.object_name, request.owner)
@@ -11280,12 +11358,18 @@ class Nl2SqlService:
         sql = f"SELECT * FROM {_quote_object_identity(identity)}"  # nosec B608
         where_clause = request.where_clause.strip()
         if where_clause:
-            if ";" in where_clause:
+            if ";" in _mask_sql_literals_and_comments(where_clause):
                 raise ValueError("WHERE 句に複数 statement は指定できません。")
             where_body = re.sub(r"^where\s+", "", where_clause, flags=re.IGNORECASE)
             sql += f" WHERE {where_body}"
         if len(_split_sql_statements(sql)) != 1 or not is_select_only(sql):
             raise ValueError("WHERE 句が不正です。単一の SELECT になる条件のみ指定できます。")
+        system_object_error = _db_admin_system_object_error(
+            sql,
+            current_owner=self._current_schema_owner(),
+        )
+        if system_object_error:
+            raise ValueError(system_object_error)
         # 行数上限は SQL へ書き足さず、取得時の fetch 上限だけで効かせる。
         return sql
 
@@ -11310,6 +11394,7 @@ class Nl2SqlService:
             csv_text=csv_text,
             max_rows=min(row_limit, settings.nl2sql_csv_import_max_rows),
             max_columns=settings.nl2sql_csv_import_max_columns,
+            infer_data_types=False,
         )
         warnings.extend(parse_warnings)
         identity = self._db_admin_object_identity(request.table_name, request.owner)
@@ -11698,8 +11783,9 @@ class Nl2SqlService:
         suffix = Path(filename).suffix.lower()
         warnings: list[str] = []
         if suffix in WORKBOOK_SUFFIXES:
-            sheet, sheet_warnings = select_workbook_sheet(
-                read_workbook_sheets(filename, content),
+            sheet, sheet_warnings = read_workbook_sheet(
+                filename,
+                content,
                 sheet_name,
                 require_requested_name=require_sheet_name,
             )
@@ -11714,7 +11800,10 @@ class Nl2SqlService:
                 f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。"
             )
         validate_tabular_text_signature(content)
-        return content.decode("utf-8-sig", errors="replace"), "", warnings
+        decoded, encoding_label = _decode_tabular_text_content(content)
+        if encoding_label != "UTF-8":
+            warnings.append(f"CSV の文字エンコーディングは {encoding_label} として読み込みました。")
+        return decoded, "", warnings
 
     def _admin_confirmation_error(self, *, confirmation: str, target: str) -> str:
         # 対象名 target を要求する操作は対象名の完全一致のみ受理する。
@@ -11827,18 +11916,29 @@ class Nl2SqlService:
         csv_text: str,
         max_rows: int,
         max_columns: int,
+        infer_data_types: bool = True,
     ) -> tuple[list[CsvImportColumn], list[dict[str, str | None]], list[str]]:
         self._sanitize_import_table_name(table_name)
         warnings: list[str] = []
         text = csv_text.lstrip("\ufeff")
+        delimiter = ","
+        skipinitialspace = False
         try:
-            dialect = csv.Sniffer().sniff(text[:2048])
+            dialect = csv.Sniffer().sniff(text[:2048], delimiters=",\t;|")
+            delimiter = dialect.delimiter
+            skipinitialspace = dialect.skipinitialspace
         except csv.Error:
-            dialect = csv.excel
+            pass
         # csv.reader は newline="" で開いた text stream を前提とする。
         # これにより LF / CRLF / CR をすべて record separator として扱いつつ、
         # quote 内の改行は cell 値として保持できる。
-        reader = csv.reader(io.StringIO(text, newline=""), dialect)
+        reader = csv.reader(
+            io.StringIO(text, newline=""),
+            delimiter=delimiter,
+            quotechar='"',
+            doublequote=True,
+            skipinitialspace=skipinitialspace,
+        )
         try:
             raw_header = next(reader)
         except StopIteration as exc:
@@ -11855,14 +11955,14 @@ class Nl2SqlService:
             )
             raw_header = raw_header[:max_columns]
         column_names = self._dedupe_csv_column_names(raw_header)
-        raw_rows: list[list[str]] = []
+        raw_rows: list[tuple[int, list[str]]] = []
         truncated = False
         try:
-            for index, row in enumerate(reader):
-                if index >= max_rows:
+            for file_row_number, row in enumerate(reader, start=2):
+                if len(raw_rows) >= max_rows:
                     truncated = True
                     break
-                raw_rows.append(row[: len(column_names)])
+                raw_rows.append((file_row_number, row[: len(column_names)]))
         except csv.Error as exc:
             raise ValueError(
                 "CSV の解析に失敗しました。改行形式・引用符・セルの長さを確認してください。"
@@ -11876,20 +11976,27 @@ class Nl2SqlService:
                 source_name=raw_header[index].strip() or f"column_{index + 1}",
                 column_name=column_name,
                 data_type=self._infer_csv_data_type(
-                    [row[index] if index < len(row) else "" for row in raw_rows]
+                    [row[index] if index < len(row) else "" for _file_row, row in raw_rows],
+                    enforce_varchar2_limit=infer_data_types,
                 ),
                 nullable=any(
-                    (row[index] if index < len(row) else "").strip() == "" for row in raw_rows
+                    (row[index] if index < len(row) else "").strip() == ""
+                    for _file_row, row in raw_rows
                 ),
             )
             for index, column_name in enumerate(column_names)
         ]
-        rows = [
-            {
-                column.column_name: self._normalize_csv_cell(row[index] if index < len(row) else "")
-                for index, column in enumerate(columns)
-            }
-            for row in raw_rows
+        rows: list[dict[str, str | None]] = [
+            _CsvRow(
+                {
+                    column.column_name: self._normalize_csv_cell(
+                        row[index] if index < len(row) else ""
+                    )
+                    for index, column in enumerate(columns)
+                },
+                file_row_number=file_row_number,
+            )
+            for file_row_number, row in raw_rows
             if any(cell.strip() for cell in row)
         ]
         if not rows:
@@ -11914,20 +12021,40 @@ class Nl2SqlService:
 
     def _dedupe_csv_column_names(self, raw_header: list[str]) -> list[str]:
         seen: dict[str, int] = {}
+        used: set[str] = set()
         names: list[str] = []
         for index, source_name in enumerate(raw_header):
             base = _csv_identifier(source_name, f"COLUMN_{index + 1}")
             count = seen.get(base, 0)
-            seen[base] = count + 1
-            names.append(base if count == 0 else f"{base}_{count + 1}"[:128])
+            if count == 0 and base not in used:
+                candidate = base
+                seen[base] = 1
+            else:
+                suffix_number = max(count + 1, 2)
+                while True:
+                    suffix = f"_{suffix_number}"
+                    candidate = f"{base[: 128 - len(suffix)]}{suffix}"
+                    if candidate not in used:
+                        break
+                    suffix_number += 1
+                seen[base] = suffix_number
+            used.add(candidate)
+            names.append(candidate)
         return names
 
-    def _infer_csv_data_type(self, values: list[str]) -> str:
+    def _infer_csv_data_type(
+        self,
+        values: list[str],
+        *,
+        enforce_varchar2_limit: bool = True,
+    ) -> str:
         normalized = [value.strip() for value in values if value.strip()]
         if normalized and all(self._is_csv_number(value) for value in normalized):
             return "NUMBER"
         max_len = max((len(value) for value in normalized), default=1)
         if max_len > 4000:
+            if not enforce_varchar2_limit:
+                return "CLOB"
             raise ValueError(
                 "4000 文字を超えるセルは自動 VARCHAR2 取込できません。"
                 "値を短くするか、CLOB 列を持つ既存テーブルへ取り込んでください。"
@@ -11935,7 +12062,12 @@ class Nl2SqlService:
         return f"VARCHAR2({max(max_len, 1)} CHAR)"
 
     def _is_csv_number(self, value: str) -> bool:
-        return bool(re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)", value.strip()))
+        stripped = value.strip()
+        if not re.fullmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)", stripped):
+            return False
+        unsigned = stripped[1:] if stripped[:1] in {"+", "-"} else stripped
+        integer_part = unsigned.split(".", 1)[0]
+        return not (len(integer_part) > 1 and integer_part.startswith("0"))
 
     def _normalize_csv_cell(self, value: str) -> str | None:
         stripped = value.strip()

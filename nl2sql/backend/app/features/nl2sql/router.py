@@ -1918,6 +1918,8 @@ def db_admin_upload_csv(
     """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)。"""
     try:
         return ApiResponse(data=nl2sql_service.upload_db_admin_csv(req))
+    except TabularImportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
