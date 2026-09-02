@@ -19,17 +19,17 @@ jobs:
         working-directory: no.1-production-ready-nl2sql
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: no.1-production-ready-nl2sql
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.5.7"
 
@@ -199,12 +199,12 @@ jobs:
       # （GitHub Packages へ切替後はこの sibling checkout / build を削除し、npm ci のみにする。
       #  docs: no.1-production-ready-platform/docs/consume-in-ci.md）
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: no.1-production-ready-nl2sql
 
       - name: Checkout shared UI package
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: engchina/no.1-production-ready-platform
           ref: main
@@ -212,7 +212,7 @@ jobs:
           token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
@@ -247,12 +247,12 @@ jobs:
     steps:
       # backend は共有 production-ready-backend-core（platform repo の sibling パス）に依存する。
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: no.1-production-ready-nl2sql
 
       - name: Checkout shared platform packages
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: engchina/no.1-production-ready-platform
           ref: main
@@ -260,13 +260,13 @@ jobs:
           token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: no.1-production-ready-nl2sql/backend/uv.lock
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
