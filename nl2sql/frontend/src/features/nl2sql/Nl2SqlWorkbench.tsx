@@ -167,6 +167,7 @@ function ExecutableNl2SqlWorkbench() {
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [similarHistorySearchCompleted, setSimilarHistorySearchCompleted] = useState(false);
+  const [similarHistoryPanelVisible, setSimilarHistoryPanelVisible] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
@@ -455,7 +456,10 @@ function ExecutableNl2SqlWorkbench() {
   const active = jobActive;
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
-    similarHistoryLoading || similarHistorySearchCompleted || similarHistory.length > 0;
+    similarHistoryPanelVisible ||
+    similarHistoryLoading ||
+    similarHistorySearchCompleted ||
+    similarHistory.length > 0;
   const beginActionFeedback = useCallback(() => {
     setActionError("");
     setActionOperationKey((current) => current + 1);
@@ -561,16 +565,22 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     const trimmed = question.trim();
-    if (trimmed.length < 4 || active || profiles.length === 0) {
+    if (trimmed.length < 4 || profiles.length === 0) {
       setSimilarHistory([]);
       setSimilarHistorySearchCompleted(false);
-      // 実行開始・質問クリア時は in-flight を abort するため .finally が走らない。
-      // loading フラグを明示的に落とさないと「参考履歴を検索中」が固まって残る。
+      setSimilarHistoryPanelVisible(false);
+      setSimilarHistoryLoading(false);
+      return undefined;
+    }
+    if (active) {
+      // 実行開始時は in-flight を abort するため .finally が走らない。
+      // 履歴パネル自体は残し、検索中ラベルだけを解除する。
       setSimilarHistoryLoading(false);
       return undefined;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
+      setSimilarHistoryPanelVisible(true);
       setSimilarHistoryLoading(true);
       void apiPost<SimilarHistoryData>("/api/nl2sql/similar-history", {
         question: trimmed,
@@ -581,12 +591,14 @@ function ExecutableNl2SqlWorkbench() {
           if (!controller.signal.aborted) {
             setSimilarHistory(goodFeedbackSimilarHistory(data.items));
             setSimilarHistorySearchCompleted(true);
+            setSimilarHistoryPanelVisible(true);
           }
         })
         .catch((cause: unknown) => {
           if (!controller.signal.aborted && !isAbortError(cause)) {
             setSimilarHistory([]);
             setSimilarHistorySearchCompleted(false);
+            setSimilarHistoryPanelVisible(false);
           }
         })
         .finally(() => {
@@ -1265,6 +1277,7 @@ function ExecutableNl2SqlWorkbench() {
                         aria-expanded={similarHistoryOpen}
                         aria-controls="nl2sql-similar-history"
                         onClick={() => setSimilarHistoryOpen((current) => !current)}
+                        disabled={active}
                       >
                         <span className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="flex min-w-0 items-center gap-2">

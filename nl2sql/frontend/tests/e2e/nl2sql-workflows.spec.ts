@@ -4288,6 +4288,22 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByText("類似度 90%")).toBeVisible();
   await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
+
+  const jobsGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    await jobsGate.promise;
+    return fulfillJson(route, { job_id: "job-default-001", status: "running", steps: [] });
+  });
+
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(nl2sqlQuestionInput(page)).toBeDisabled();
+  await expect(header).toBeVisible();
+  await expect(header).toBeDisabled();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("類似度 90%")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  jobsGate.release();
 });
 
 test("参考履歴は API が空の場合も表示し、空状態を展開できる", async ({ page }) => {
@@ -4321,6 +4337,22 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
   await expect(panel).toContainText("参考履歴はありません");
   await expect(panel).toContainText("管理者レビュー結果が良い履歴は見つかりませんでした。");
   await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
+
+  const jobsGate = createRequestGate();
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    await jobsGate.promise;
+    return fulfillJson(route, { job_id: "job-default-001", status: "running", steps: [] });
+  });
+
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect(nl2sqlQuestionInput(page)).toBeDisabled();
+  await expect(header).toBeVisible();
+  await expect(header).toBeDisabled();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("参考履歴はありません");
+  jobsGate.release();
 });
 
 test("参考履歴の「検索中」は SQL 生成の実行中に固まって残らない", async ({ page }) => {
@@ -4346,10 +4378,14 @@ test("参考履歴の「検索中」は SQL 生成の実行中に固まって残
   await expect(header).toContainText("参考履歴を検索中");
 
   await page.getByRole("button", { name: "検索を実行" }).click();
-  // 実行中は入力系が無効化される。参考履歴は「検索中」のまま残らず消える。
+  // 実行中は入力系が無効化される。参考履歴は「検索中」のまま残らず、非活性で表示を維持する。
   await expect(nl2sqlQuestionInput(page)).toBeDisabled();
   await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
-  await expect(header).toHaveCount(0);
+  await expect(header).toBeVisible();
+  await expect(header).toBeDisabled();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
 
   similarGate.release();
   jobsGate.release();
