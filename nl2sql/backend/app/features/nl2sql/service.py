@@ -1035,6 +1035,82 @@ def _strip_leading_sql_comments(sql: str) -> str:
         return text
 
 
+_Q_QUOTE_CLOSERS = {"[": "]", "(": ")", "{": "}", "<": ">"}
+
+
+def _mask_sql_literals_and_comments(sql: str) -> str:
+    """文字列リテラル・引用識別子・コメントの中身を空白へ置き換える。
+
+    危険語 / `;` の判定を SQL の構造だけに向けるための前処理。業務データの値
+    (`'delete'` 等)や列コメントに含まれる語で正当な SELECT を弾かないようにする。
+    文字数は保つ(位置を参照する呼び出しがあっても壊れない)。
+
+    閉じ引用符 / `*/` が見つからない(構文的に壊れた)場合は残りをマスクせず
+    そのまま返し、後段の判定が保守的(拒否側)に働くようにする。
+    """
+    text = str(sql or "")
+    length = len(text)
+    out: list[str] = []
+    index = 0
+    while index < length:
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < length else ""
+        if char == "-" and next_char == "-":
+            end = text.find("\n", index)
+            end = length if end < 0 else end
+            out.append(" " * (end - index))
+            index = end
+            continue
+        if char == "/" and next_char == "*":
+            end = text.find("*/", index + 2)
+            if end < 0:
+                out.append(text[index:])
+                break
+            end += 2
+            out.append(" " * (end - index))
+            index = end
+            continue
+        previous = text[index - 1] if index > 0 else ""
+        if (
+            char in {"q", "Q"}
+            and next_char == "'"
+            and index + 2 < length
+            and not (previous.isalnum() or previous in {"_", "$", "#"})
+        ):
+            opener = text[index + 2]
+            closer = _Q_QUOTE_CLOSERS.get(opener, opener)
+            end = text.find(f"{closer}'", index + 3)
+            if end < 0:
+                out.append(text[index:])
+                break
+            end += 2
+            out.append(" " * (end - index))
+            index = end
+            continue
+        if char in {"'", '"'}:
+            end = index + 1
+            closed = False
+            while end < length:
+                if text[end] != char:
+                    end += 1
+                    continue
+                if char == "'" and end + 1 < length and text[end + 1] == "'":
+                    end += 2
+                    continue
+                closed = True
+                break
+            if not closed:
+                out.append(text[index:])
+                break
+            end += 1
+            out.append(" " * (end - index))
+            index = end
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def _admin_statement_type(sql: str) -> str:
     stripped = _strip_leading_sql_comments(sql).strip()
     if _COMMENT_TARGET.match(stripped):
@@ -1673,16 +1749,21 @@ def _profile_recommendation_tokens(value: str) -> set[str]:
 
 
 def is_select_only(sql: str) -> bool:
-    """SELECT/WITH のみを許可し、DDL/DML/PLSQL と複数 statement を拒否する。"""
-    stripped = sql.strip()
+    """SELECT/WITH のみを許可し、DDL/DML/PLSQL と複数 statement を拒否する。
+
+    先頭コメントは読み飛ばし、文字列リテラル・引用識別子・コメントの中身は
+    危険語 / `;` の判定対象から外す(値に `'delete'` が入った SELECT は実行可)。
+    """
+    stripped = _strip_leading_sql_comments(sql).strip()
     if not stripped:
         return False
-    head = stripped.lstrip("(").lower()
+    masked = _mask_sql_literals_and_comments(stripped)
+    head = masked.lstrip("(").lstrip().lower()
     if head.startswith(_FORBIDDEN_PREFIXES):
         return False
-    if ";" in stripped.rstrip(";"):
+    if ";" in masked.rstrip().rstrip(";"):
         return False
-    if _DANGEROUS_TOKENS.search(stripped):
+    if _DANGEROUS_TOKENS.search(masked):
         return False
     return head.startswith("select") or head.startswith("with")
 
