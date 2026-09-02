@@ -2145,6 +2145,40 @@ def _history_item_matches_payload_filters(item: HistoryItem, filters: Mapping[st
     return all(str(payload.get(key) or "") == value for key, value in filters.items())
 
 
+# reverse deep で LLM から受け取る処理手順の上限(長大な配列をそのまま保持しない)。
+_REVERSE_DEEP_MAX_STEPS = 20
+
+
+def _reverse_deep_steps(raw: object) -> list[str]:
+    """LLM 応答の logical_steps を空要素除去・件数上限付きの文字列 list に正規化する。"""
+
+    if not isinstance(raw, list):
+        return []
+    steps = [str(item).strip() for item in raw if str(item).strip()]
+    return steps[:_REVERSE_DEEP_MAX_STEPS]
+
+
+def _reverse_deep_step_details(
+    steps: Sequence[str],
+    deterministic_details: Sequence[Nl2SqlLogicalStep],
+) -> list[Nl2SqlLogicalStep]:
+    """LLM の手順を業務行にした details を作る。
+
+    件数が決定論版と一致するときだけ technical(技術行)と kind を対応付け、一致しない
+    ときは業務行だけにする(位置のずれた技術行を並べて誤解させない)。
+    """
+
+    aligned = len(deterministic_details) == len(steps)
+    return [
+        Nl2SqlLogicalStep(
+            kind=deterministic_details[index].kind if aligned else "llm",
+            business=step,
+            technical=deterministic_details[index].technical if aligned else "",
+        )
+        for index, step in enumerate(steps)
+    ]
+
+
 class Nl2SqlService:
     """NL2SQL orchestration with pluggable state store."""
 
@@ -7615,17 +7649,21 @@ class Nl2SqlService:
             logical_structure = str(
                 payload.get("logical_structure") or deterministic.logical_structure
             ).strip()
-            steps_raw = payload.get("logical_steps")
-            steps = [str(item) for item in steps_raw] if isinstance(steps_raw, list) else []
-            return deterministic.model_copy(
-                update={
-                    "question": question,
-                    "explanation": explanation,
-                    "logical_structure": logical_structure,
-                    "logical_steps": steps or deterministic.logical_steps,
-                    "source": "oci_enterprise_ai",
-                }
-            )
+            steps = _reverse_deep_steps(payload.get("logical_steps"))
+            update: dict[str, Any] = {
+                "question": question,
+                "explanation": explanation,
+                "logical_structure": logical_structure,
+                "source": "oci_enterprise_ai",
+            }
+            if steps:
+                # UI は logical_step_details を優先して描画するため、文字列だけ差し替えると
+                # LLM の手順が表示されない。details にも写す(技術行は決定論版を対応付け)。
+                update["logical_steps"] = steps
+                update["logical_step_details"] = _reverse_deep_step_details(
+                    steps, deterministic.logical_step_details
+                )
+            return deterministic.model_copy(update=update)
         except (EnterpriseAiDirectError, ValueError) as exc:
             return deterministic.model_copy(
                 update={
