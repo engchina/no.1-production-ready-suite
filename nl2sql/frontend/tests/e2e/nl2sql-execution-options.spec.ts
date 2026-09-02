@@ -336,14 +336,17 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
   await expect(page.getByLabel("Ontology を使う")).toBeChecked();
   await expect(page.getByLabel("処理手順を表示")).toBeChecked();
-  await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
+  // Show Prompt は追加の Select AI 呼び出しを伴うため既定 off。
+  const showPromptOption = page.getByLabel("Show Prompt を表示");
+  await expect(showPromptOption).not.toBeChecked();
   await expect(executionOptionsDisclosure).not.toContainText("条件あり");
   await glossaryOption.check();
   await expect(executionOptionsDisclosure).toContainText("条件あり");
   await glossaryOption.uncheck();
   await expect(executionOptionsDisclosure).not.toContainText("条件あり");
-  // 以降の rewrite 呼び出し検証のため ON に戻す。
+  // 以降の rewrite / Show Prompt 呼び出し検証のため ON にする。
   await glossaryOption.check();
+  await showPromptOption.check();
   await expect(page.getByTestId("nl2sql-execution-options")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
@@ -441,7 +444,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
   await expect(page.getByLabel("処理手順を表示")).toBeChecked();
-  await expect(page.getByLabel("Show Prompt を表示")).toBeChecked();
+  await expect(page.getByLabel("Show Prompt を表示")).not.toBeChecked();
   await expectNoHorizontalOverflow(page);
 });
 

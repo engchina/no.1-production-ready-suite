@@ -85,13 +85,11 @@ import {
   type SchemaSelection,
 } from "./workbenchState";
 
+// history_id が一致するものだけを結果の履歴とみなす。generated_sql の一致で代用すると、
+// 履歴永続化に失敗した回のフィードバックが同じ SQL の別の履歴へ付いてしまう。
 function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null) {
-  if (!result) return null;
-  if (result.history_id) {
-    const byId = history.find((item) => item.id === result.history_id);
-    if (byId) return byId;
-  }
-  return history.find((item) => item.generated_sql === result.generated_sql) ?? null;
+  if (!result?.history_id) return null;
+  return history.find((item) => item.id === result.history_id) ?? null;
 }
 
 function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistoryItem[] {
@@ -165,7 +163,8 @@ function ExecutableNl2SqlWorkbench() {
   const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [useOntologyContext, setUseOntologyContext] = useState(true);
   const [includeInterpretation, setIncludeInterpretation] = useState(true);
-  const [includeShowPrompt, setIncludeShowPrompt] = useState(true);
+  // Show Prompt は Select AI への追加 round-trip を伴うため既定 OFF(必要な人だけ ON にする)。
+  const [includeShowPrompt, setIncludeShowPrompt] = useState(false);
   const [executionOptionsOpen, setExecutionOptionsOpen] = useState(false);
   const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
   const [selectAiRoleAdvancedOpen, setSelectAiRoleAdvancedOpen] = useState(false);
@@ -518,15 +517,20 @@ function ExecutableNl2SqlWorkbench() {
     selectedProfileQuery.isSuccess,
   ]);
 
+  // 実行中かどうかは ref で参照し、effect の再実行トリガーにしない。
+  // active を依存に入れると job 完了(active: true → false)のたびに同じ質問で推薦 API が再実行される。
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(() => {
     const trimmed = question.trim();
     setAutoDetectLowConfidence(false);
-    if (trimmed.length < 4 || active || profiles.length === 0) {
+    if (trimmed.length < 4 || profiles.length === 0) {
       setRecommendation(null);
       return undefined;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
+      if (activeRef.current) return;
       void apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
         question: trimmed,
         current_profile_id: profileId || null,
@@ -544,7 +548,7 @@ function ExecutableNl2SqlWorkbench() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [active, profileId, profiles.length, question]);
+  }, [profileId, profiles.length, question]);
 
   useEffect(() => {
     const trimmed = question.trim();
@@ -1340,7 +1344,7 @@ function ExecutableNl2SqlWorkbench() {
                         setRewriteExtraPrompt("");
                         setUseOntologyContext(true);
                         setIncludeInterpretation(true);
-                        setIncludeShowPrompt(true);
+                        setIncludeShowPrompt(false);
                         setExecutionOptionsOpen(false);
                         clearTrackedJob();
                         setSelectAiRoleOverride("");

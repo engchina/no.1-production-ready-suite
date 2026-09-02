@@ -48,7 +48,7 @@ test("execution options default to showing interpretation and show prompt artifa
   );
   assert.match(
     workbenchSource,
-    /const \[includeShowPrompt, setIncludeShowPrompt\] = useState\(true\);/
+    /const \[includeShowPrompt, setIncludeShowPrompt\] = useState\(false\);/
   );
   assert.match(
     workbenchSource,
