@@ -2463,6 +2463,7 @@ const nl2sqlJa = {
     "このファイルは読み込めません。.sql または .txt ファイルを選択してください。",
   "dbAdmin.runner.fileErrorMultiple":
     "一度に読み込めるファイルは 1 件です。.sql または .txt ファイルを 1 件だけドロップしてください。",
+  "dbAdmin.runner.fileErrorTooLarge": "ファイルサイズが上限 {size} MB を超えています。",
   "dbAdmin.runner.fileErrorRead":
     "ファイルを読み込めませんでした。ファイルの内容とアクセス権を確認して、もう一度選択してください。",
   "dbAdmin.runner.previewHint": "Oracle には送信せず、SQL 分割・許可ポリシー・実行対象だけ確認します。構文・権限・依存関係は実行時に確認されます。",

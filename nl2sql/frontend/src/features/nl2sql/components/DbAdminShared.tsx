@@ -786,6 +786,9 @@ export function SelectionListPanel({
 }
 
 /** .sql/.txt ファイルを読み込んで textarea へ流し込むボタン。 */
+/** SQL ファイルの読込上限。textarea へそのまま流し込むため、巨大ファイルは受け付けない。 */
+export const MAX_SQL_FILE_BYTES = 2 * 1024 * 1024;
+
 export function SqlFileInput({
   onLoad,
   resetSignal = 0,
@@ -825,6 +828,12 @@ export function SqlFileInput({
       }}
       onFiles={async ([file]) => {
         setErrorText("");
+        if (file.size > MAX_SQL_FILE_BYTES) {
+          setErrorText(
+            t("dbAdmin.runner.fileErrorTooLarge", { size: MAX_SQL_FILE_BYTES / (1024 * 1024) })
+          );
+          return;
+        }
         try {
           const text = await readTextFileSmart(file);
           onLoad(text);
