@@ -3638,6 +3638,9 @@ class OracleNl2SqlAdapter:
             "drop",
             "alter",
             "truncate",
+            "rename",
+            "flashback",
+            "purge",
             "grant",
             "revoke",
         ):

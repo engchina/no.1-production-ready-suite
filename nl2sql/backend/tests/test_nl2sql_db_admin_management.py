@@ -55,9 +55,13 @@ from app.features.nl2sql.oracle_adapter import (
 from app.features.nl2sql.router import db_admin_import_tabular, db_admin_upload_csv
 from app.features.nl2sql.service import (
     DbAdminOperationFailed,
+    Nl2SqlPersistenceUnavailable,
     Nl2SqlService,
     SchemaRefreshMutationSync,
+    _admin_statement_type,
     _db_admin_error,
+    _split_sql_statements,
+    _statements_change_schema,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.request_actor import actor_scope
@@ -1049,6 +1053,61 @@ def test_annotation_comment_name_is_blocked_before_oracle_execution() -> None:
     assert all("UI_Display" in item.error_message for item in result.statements)
 
 
+def test_admin_sql_splitter_handles_comments_literals_and_plsql_blocks() -> None:
+    assert _split_sql_statements("BEGIN NULL; END;") == ["BEGIN NULL; END;"]
+    assert _split_sql_statements(
+        "UPDATE T SET X = 1 WHERE period_begin = 1; UPDATE T SET X = 2;"
+    ) == [
+        "UPDATE T SET X = 1 WHERE period_begin = 1",
+        "UPDATE T SET X = 2",
+    ]
+
+    commented = _split_sql_statements(
+        "CREATE TABLE T1 (MEMO VARCHAR2(100)); -- ok; done\n"
+        "INSERT INTO T1 VALUES ('a;b', q'[c;d]');"
+    )
+    assert len(commented) == 2
+    assert commented[0] == "CREATE TABLE T1 (MEMO VARCHAR2(100))"
+    assert "-- ok; done" in commented[1]
+    assert "INSERT INTO T1 VALUES ('a;b', q'[c;d]')" in commented[1]
+
+    procedure_and_table = _split_sql_statements(
+        "CREATE OR REPLACE PROCEDURE P1 IS\n"
+        "  X NUMBER;\n"
+        "BEGIN\n"
+        "  NULL;\n"
+        "END;\n"
+        "/\n"
+        "CREATE TABLE T2 (ID NUMBER);"
+    )
+    assert procedure_and_table == [
+        "CREATE OR REPLACE PROCEDURE P1 IS\n  X NUMBER;\nBEGIN\n  NULL;\nEND;",
+        "CREATE TABLE T2 (ID NUMBER)",
+    ]
+
+    assert _split_sql_statements("BEGIN X := CASE WHEN 1 = 1 THEN 'END;' ELSE 'N' END; END;") == [
+        "BEGIN X := CASE WHEN 1 = 1 THEN 'END;' ELSE 'N' END; END;"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sql", "statement_type"),
+    [
+        ("RENAME OLD_TABLE TO NEW_TABLE", "RENAME"),
+        ("FLASHBACK TABLE OLD_TABLE TO BEFORE DROP", "FLASHBACK"),
+        ("PURGE TABLE OLD_TABLE", "PURGE"),
+    ],
+)
+def test_admin_statement_type_marks_schema_mutation_for_recovery_sql(
+    sql: str,
+    statement_type: str,
+) -> None:
+    assert _admin_statement_type(sql) == statement_type
+    assert _statements_change_schema([sql]) is True
+    adapter = object.__new__(OracleNl2SqlAdapter)
+    assert adapter._admin_statement_type(sql) == statement_type
+
+
 def test_statements_execute_requires_confirmation_and_oracle_runtime() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     missing_confirmation = service.execute_db_admin_statements(
@@ -1327,7 +1386,9 @@ def test_admin_sql_rolls_back_when_all_data_dml_statements_fail() -> None:
     assert result.execution_context == "admin_control_plane"
 
 
-def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
+def test_admin_sql_reports_implicit_ddl_commit_when_atomic_batch_partially_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = _FakeStatementsAdapter(
         [
             {
@@ -1347,6 +1408,18 @@ def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
         ]
     )
     service = _OracleRuntimeService(adapter)
+    submitted_targets: list[list[tuple[str, str, str]]] = []
+
+    def submit(**kwargs: Any) -> SchemaRefreshMutationSync:
+        submitted_targets.append(
+            [
+                (target.owner, target.object_name, target.expected_state)
+                for target in kwargs["target_objects"]
+            ]
+        )
+        return SchemaRefreshMutationSync(job_id="refresh-job-34")
+
+    monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
 
     result = service.execute_db_admin_sql(
         DbAdminExecuteRequest(
@@ -1356,11 +1429,82 @@ def test_admin_sql_keeps_mixed_admin_statements_atomic() -> None:
     )
 
     assert adapter.calls[0][1] is True
-    assert result.executed is False
-    assert result.committed is False
-    assert result.rolled_back is True
+    assert result.executed is True
+    assert result.committed is True
+    assert result.rolled_back is False
     assert result.execution_context == "admin_control_plane"
+    assert result.schema_refresh_job_id == "refresh-job-34"
+    assert submitted_targets == [[("APP", "T1", "present")]]
+    assert any("暗黙 commit" in warning for warning in result.warnings)
     assert not any("部分的に成功" in warning for warning in result.warnings)
+
+
+def test_admin_sql_rename_requires_manual_schema_refresh() -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "RENAME",
+                "status": "success",
+                "sql": "RENAME OLD_TABLE TO NEW_TABLE",
+                "message": "OK",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="RENAME OLD_TABLE TO NEW_TABLE",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.committed is True
+    assert result.schema_refresh_job_id == ""
+    assert result.schema_refresh_required is True
+    assert result.schema_refresh_reason_code == "schema_refresh_target_unresolved"
+    assert any("DB 構造を再取得" in warning for warning in result.warnings)
+
+
+def test_admin_sql_returns_result_when_audit_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "CREATE",
+                "status": "success",
+                "sql": "CREATE TABLE T1 (ID NUMBER)",
+                "message": "OK",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    def fail_audit(**_kwargs: Any) -> None:
+        raise Nl2SqlPersistenceUnavailable()
+
+    monkeypatch.setattr(service, "_record_admin_audit", fail_audit)
+    monkeypatch.setattr(
+        service,
+        "_submit_schema_refresh_after_admin_mutation",
+        lambda **_kwargs: SchemaRefreshMutationSync(job_id="refresh-job-34"),
+    )
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="CREATE TABLE T1 (ID NUMBER)",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is True
+    assert result.committed is True
+    assert result.schema_refresh_job_id == "refresh-job-34"
+    assert any("監査保存に失敗" in warning for warning in result.warnings)
 
 
 def test_admin_sql_keeps_plsql_and_with_dml_atomic() -> None:
@@ -3537,6 +3681,28 @@ def test_extract_join_where_defaults_to_sql_structure_and_falls_back() -> None:
     assert fallback.warnings
     assert "JOIN" in fallback.join_text.upper() or fallback.join_text == "None"
     assert fallback.where_text != ""
+
+
+def test_extract_join_where_limits_view_ddl_to_first_statement_and_uses_semantic_joins() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+    ddl = (
+        "CREATE OR REPLACE VIEW V_ORDER_CUSTOMER AS "
+        "SELECT o.ORDER_ID, c.CUSTOMER_NAME FROM ORDERS o "
+        "JOIN CUSTOMERS c ON c.CUSTOMER_ID = o.CUSTOMER_ID "
+        "WHERE c.STATUS = 'ACTIVE';\n"
+        "COMMENT ON VIEW V_ORDER_CUSTOMER IS '受注明細';\n"
+        "COMMENT ON COLUMN V_ORDER_CUSTOMER.CUSTOMER_NAME IS '顧客名';"
+    )
+
+    extracted = service.extract_db_admin_join_where(DbAdminJoinWhereRequest(ddl=ddl))
+
+    assert extracted.source == "deterministic"
+    assert "CUSTOMERS" in extracted.join_text.upper()
+    assert " ON " in extracted.join_text.upper()
+    assert "C.CUSTOMER_ID = O.CUSTOMER_ID" in extracted.join_text.upper()
+    assert "C.STATUS = 'ACTIVE'" in extracted.where_text.upper()
+    assert "COMMENT ON" not in extracted.where_text.upper()
 
 
 def test_extract_join_where_uses_sql_structure_prompt_profile() -> None:

@@ -36,6 +36,12 @@ import type { DbAdminExecuteData, SchemaRefreshJob } from "../types";
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const MUTATING_SQL_TOKEN =
   /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i;
+const Q_QUOTE_CLOSERS: Record<string, string> = {
+  "[": "]",
+  "(": ")",
+  "{": "}",
+  "<": ">",
+};
 
 function stripLeadingSqlComments(sql: string): string {
   let rest = sql.trim();
@@ -58,10 +64,87 @@ function stripLeadingSqlComments(sql: string): string {
 }
 
 function isSingleSelectSql(sql: string): boolean {
-  const normalized = sql.trim().replace(/;+$/g, "").trim();
+  const stripped = stripLeadingSqlComments(sql);
+  const masked = maskSqlLiteralsAndComments(stripped);
+  const normalized = masked.trim().replace(/;+$/g, "").trim();
   if (!normalized || normalized.includes(";")) return false;
   if (MUTATING_SQL_TOKEN.test(normalized)) return false;
-  return /^(select|with)\b/i.test(stripLeadingSqlComments(normalized));
+  const head = normalized.replace(/^\(+/u, "").trimStart();
+  return /^(select|with)\b/i.test(head);
+}
+
+function maskSqlLiteralsAndComments(sql: string): string {
+  const text = String(sql || "");
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    const nextChar = text[index + 1] ?? "";
+    if (char === "-" && nextChar === "-") {
+      const newline = text.indexOf("\n", index);
+      const end = newline >= 0 ? newline : text.length;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (char === "/" && nextChar === "*") {
+      const close = text.indexOf("*/", index + 2);
+      if (close < 0) {
+        out += text.slice(index);
+        break;
+      }
+      const end = close + 2;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    const previous = index > 0 ? text[index - 1] ?? "" : "";
+    if (
+      (char === "q" || char === "Q") &&
+      nextChar === "'" &&
+      index + 2 < text.length &&
+      !/[A-Za-z0-9_$#]/u.test(previous)
+    ) {
+      const opener = text[index + 2] ?? "";
+      const closer = Q_QUOTE_CLOSERS[opener] ?? opener;
+      const close = text.indexOf(`${closer}'`, index + 3);
+      if (close < 0) {
+        out += text.slice(index);
+        break;
+      }
+      const end = close + 2;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      let end = index + 1;
+      let closed = false;
+      while (end < text.length) {
+        if (text[end] !== char) {
+          end += 1;
+          continue;
+        }
+        if (char === "'" && text[end + 1] === "'") {
+          end += 2;
+          continue;
+        }
+        closed = true;
+        break;
+      }
+      if (!closed) {
+        out += text.slice(index);
+        break;
+      }
+      end += 1;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 interface ExecutionRunState {

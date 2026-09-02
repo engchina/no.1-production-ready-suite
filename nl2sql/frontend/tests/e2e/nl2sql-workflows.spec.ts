@@ -120,6 +120,118 @@ function adminSqlInput(scope: Page | Locator) {
   return scope.locator("#admin-sql-input");
 }
 
+const ADMIN_SQL_MUTATION_TOKEN =
+  /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i;
+const ADMIN_SQL_Q_QUOTE_CLOSERS: Record<string, string> = {
+  "[": "]",
+  "(": ")",
+  "{": "}",
+  "<": ">",
+};
+
+function stripAdminSqlLeadingComments(sql: string): string {
+  let rest = sql.trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    if (rest.startsWith("--")) {
+      const nextLine = rest.indexOf("\n");
+      rest = nextLine >= 0 ? rest.slice(nextLine + 1).trimStart() : "";
+      changed = true;
+    }
+    if (rest.startsWith("/*")) {
+      const close = rest.indexOf("*/");
+      if (close < 0) return rest;
+      rest = rest.slice(close + 2).trimStart();
+      changed = true;
+    }
+  }
+  return rest;
+}
+
+function maskAdminSqlLiteralsAndComments(sql: string): string {
+  const text = String(sql || "");
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    const nextChar = text[index + 1] ?? "";
+    if (char === "-" && nextChar === "-") {
+      const newline = text.indexOf("\n", index);
+      const end = newline >= 0 ? newline : text.length;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (char === "/" && nextChar === "*") {
+      const close = text.indexOf("*/", index + 2);
+      if (close < 0) {
+        out += text.slice(index);
+        break;
+      }
+      const end = close + 2;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    const previous = index > 0 ? text[index - 1] ?? "" : "";
+    if (
+      (char === "q" || char === "Q") &&
+      nextChar === "'" &&
+      index + 2 < text.length &&
+      !/[A-Za-z0-9_$#]/u.test(previous)
+    ) {
+      const opener = text[index + 2] ?? "";
+      const closer = ADMIN_SQL_Q_QUOTE_CLOSERS[opener] ?? opener;
+      const close = text.indexOf(`${closer}'`, index + 3);
+      if (close < 0) {
+        out += text.slice(index);
+        break;
+      }
+      const end = close + 2;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      let end = index + 1;
+      let closed = false;
+      while (end < text.length) {
+        if (text[end] !== char) {
+          end += 1;
+          continue;
+        }
+        if (char === "'" && text[end + 1] === "'") {
+          end += 2;
+          continue;
+        }
+        closed = true;
+        break;
+      }
+      if (!closed) {
+        out += text.slice(index);
+        break;
+      }
+      end += 1;
+      out += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+function isMockAdminSqlSelect(sql: string): boolean {
+  const stripped = stripAdminSqlLeadingComments(sql);
+  const masked = maskAdminSqlLiteralsAndComments(stripped);
+  const normalized = masked.trim().replace(/;+$/g, "").trim();
+  if (!normalized || normalized.includes(";")) return false;
+  if (ADMIN_SQL_MUTATION_TOKEN.test(normalized)) return false;
+  return /^(select|with)\b/i.test(normalized.replace(/^\(+/u, "").trimStart());
+}
+
 function sqlToQuestionInput(scope: Page | Locator) {
   return scope.locator("#sql-to-question-sql-input");
 }
@@ -1038,9 +1150,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.adminExecutePayload = route.request().postDataJSON() as Record<string, unknown>;
     const sql = String(state.adminExecutePayload.sql ?? "");
     const confirmation = String(state.adminExecutePayload.confirmation ?? "");
-    const hasMutation =
-      /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i.test(sql);
-    const isSelect = !hasMutation && /^\s*(?:--[^\n]*\n\s*)*(?:select|with)\b/i.test(sql);
+    const isSelect = isMockAdminSqlSelect(sql);
     const isPartialDml = /\bMISSING_TABLE\b/i.test(sql);
     if (!isSelect && confirmation !== "ADMIN_EXECUTE") {
       return fulfillJson(route, {
@@ -6270,6 +6380,23 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   expect(api.adminExecutePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
     row_limit: 0,
+    confirmation: "",
+    reason: "admin-sql-select",
+  });
+
+  await adminSql.getByRole("button", { name: "クリア" }).click();
+  const literalSelectSql =
+    "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES " +
+    "WHERE MEMO = 'a;b' AND STATUS = 'delete'";
+  await sqlInput.fill(literalSelectSql);
+  await expect(adminSql.getByLabel("実行確認語")).toHaveCount(0);
+  await expect(rowLimitInput).toBeVisible();
+  await rowLimitInput.fill("250");
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 250 件");
+  expect(api.adminExecutePayload).toEqual({
+    sql: literalSelectSql,
+    row_limit: 250,
     confirmation: "",
     reason: "admin-sql-select",
   });
