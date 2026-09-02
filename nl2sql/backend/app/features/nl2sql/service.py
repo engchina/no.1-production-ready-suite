@@ -641,6 +641,12 @@ JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
 # incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
 _JOB_RETENTION_LIMIT = 200
 _HISTORY_RETENTION_LIMIT = 1000
+# 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
+# owner の _persist_job が job 本体を丸ごと上書きしても失われない別ドキュメントにする。
+_JOB_CANCEL_COLLECTION = "job_cancel_requests"
+_IN_FLIGHT_JOB_STATUSES = frozenset({JobStatus.PENDING, JobStatus.RUNNING})
+JOB_INTERRUPTED_ERROR_CODE = "JOB_INTERRUPTED"
+_JOB_INTERRUPTED_MESSAGE = "サーバ再起動前に完了しなかったため、ジョブを終了扱いにしました。"
 
 
 class JobCancelledError(RuntimeError):
@@ -2034,6 +2040,9 @@ class StoredJob:
     steps: list[JobStepData] = field(default_factory=list)
     # 協調キャンセル要求。worker が stage 境界で検出して JobCancelledError を送出する。
     cancel_requested: bool = False
+    # 自プロセスの worker スレッドが実行している job か。False は他 worker / 再起動前の
+    # snapshot 由来で、in-flight の間は repository を正本として読み直す(永続化しない)。
+    owned: bool = False
 
 
 _NL2SQL_JOB_STAGES = (
@@ -2626,19 +2635,9 @@ class Nl2SqlService:
         return profile.model_copy(update={"sql_rules": [], "select_ai_config": config})
 
     def _recover_interrupted_jobs(self) -> None:
-        now = _utc_now()
         for job in self._jobs.values():
-            if job.status in {JobStatus.PENDING, JobStatus.RUNNING}:
-                job.status = JobStatus.ERROR
-                job.finished_at = job.finished_at or now
-                job.error_message = (
-                    "サーバ再起動前に完了しなかったため、ジョブを終了扱いにしました。"
-                )
-                failure_index = _job_failure_step_index(job.steps)
-                if failure_index is not None:
-                    job.steps[failure_index] = job.steps[failure_index].model_copy(
-                        update={"status": JobStepStatus.ERROR}
-                    )
+            if job.status in _IN_FLIGHT_JOB_STATUSES:
+                self._mark_job_interrupted(job)
 
     def _persist_state(
         self,
@@ -2873,10 +2872,85 @@ class Nl2SqlService:
             "elapsed_ms": job.elapsed_ms,
             "result": job.result.model_dump(mode="json") if job.result else None,
             "error_message": job.error_message,
+            "error_code": job.error_code,
             "warning_message": job.warning_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
             "steps": [step.model_dump(mode="json") for step in job.steps],
+            # 他 worker / 再起動後の読込側が「更新が途絶えた in-flight job」を判定する基準。
+            "updated_at": _utc_now(),
         }
+
+    def _job_snapshot_is_stale(self, data: dict[str, Any]) -> bool:
+        """in-flight のまま更新が途絶えた snapshot(再起動などで孤児化した job)か。"""
+
+        status = str(data.get("status") or "")
+        if status not in {JobStatus.PENDING.value, JobStatus.RUNNING.value}:
+            return False
+        stamp = str(
+            data.get("updated_at") or data.get("started_at") or data.get("created_at") or ""
+        )
+        try:
+            updated = datetime.fromisoformat(stamp)
+        except ValueError:
+            return True
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=UTC)
+        age_seconds = (datetime.now(UTC) - updated).total_seconds()
+        return age_seconds > get_settings().nl2sql_job_stale_after_seconds
+
+    @staticmethod
+    def _mark_job_interrupted(job: StoredJob) -> None:
+        """完了せず終わった in-flight job を error として閉じる(表示文言は共通)。"""
+
+        job.status = JobStatus.ERROR
+        job.finished_at = job.finished_at or _utc_now()
+        job.error_message = _JOB_INTERRUPTED_MESSAGE
+        job.error_code = JOB_INTERRUPTED_ERROR_CODE
+        failure_index = _job_failure_step_index(job.steps)
+        if failure_index is not None:
+            job.steps[failure_index] = job.steps[failure_index].model_copy(
+                update={"status": JobStepStatus.ERROR}
+            )
+
+    def _load_job_record(self, job_id: str) -> StoredJob | None:
+        """job をプロセス内 cache と repository から解決する。
+
+        自プロセスが実行していない(owned=False)in-flight job は cache があっても
+        repository を読み直す。gunicorn の複数 worker 構成で別 worker が進めた状態を
+        取りこぼさないため。in-flight のまま更新が途絶えた snapshot は error へ
+        正規化して書き戻し、永久 running を防ぐ。
+        """
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+            refresh = job is not None and not job.owned and job.status in _IN_FLIGHT_JOB_STATUSES
+        repository = self._incremental_repository
+        if (job is None or refresh) and repository is not None:
+            try:
+                document = repository.get_document("jobs", job_id)
+            except Exception as exc:
+                self._raise_incremental_repository_failure(
+                    operation="job_load",
+                    exc=exc,
+                    operation_error_code="job_query_failed",
+                )
+            if document is not None:
+                stale = self._job_snapshot_is_stale(document)
+                job = self._job_from_snapshot(document)
+                if stale:
+                    self._mark_job_interrupted(job)
+                with self._lock:
+                    self._jobs[job_id] = job
+                if stale:
+                    try:
+                        self._persist_job(job_id)
+                    except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed):
+                        logger.warning(
+                            "nl2sql_interrupted_job_persist_failed",
+                            extra={"job_id": job_id},
+                            exc_info=True,
+                        )
+        return job
 
     def _job_from_snapshot(self, data: dict[str, Any]) -> StoredJob:
         status = JobStatus(data.get("status", JobStatus.PENDING))
@@ -2894,6 +2968,7 @@ class Nl2SqlService:
             elapsed_ms=data.get("elapsed_ms"),
             result=result,
             error_message=data.get("error_message"),
+            error_code=data.get("error_code"),
             warning_message=data.get("warning_message"),
             timing=timing,
             steps=_restore_job_steps(
@@ -4965,6 +5040,7 @@ class Nl2SqlService:
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
+            owned=True,
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -5023,10 +5099,38 @@ class Nl2SqlService:
             del self._jobs[job_id]
 
     def _raise_if_job_cancelled(self, job_id: str) -> None:
+        """stage 境界の協調キャンセル判定。
+
+        ローカルフラグに加えて repository 上のキャンセル要求も確認する。gunicorn の
+        複数 worker 構成では cancel API が別プロセスへ届くため、ローカルフラグだけでは
+        止まらない。repository の確認失敗は job を落とさず無視する(次の境界で再確認)。
+        """
+
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is not None and job.cancel_requested:
+            if job is None:
+                return
+            if job.cancel_requested:
                 raise JobCancelledError()
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        try:
+            document = repository.get_document(_JOB_CANCEL_COLLECTION, job_id)
+        except Exception:
+            logger.warning(
+                "nl2sql_job_cancel_probe_failed",
+                extra={"job_id": job_id},
+                exc_info=True,
+            )
+            return
+        if document is None:
+            return
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.cancel_requested = True
+        raise JobCancelledError()
 
     def request_job_cancel(
         self,
@@ -5037,19 +5141,35 @@ class Nl2SqlService:
     ) -> JobData | None:
         """実行中 job の協調キャンセルを要求する(stage 境界で停止)。
 
-        terminal な job には no-op。アクセス制御は get_job と同一。
+        terminal な job には no-op。アクセス制御は get_job と同一。job を実行している
+        worker が別プロセスでも届くよう、要求は repository の専用ドキュメントにも書く。
         """
+        job = self._load_job_record(job_id)
+        if job is None:
+            return None
+        self._assert_job_actor_access(
+            job,
+            actor_user_uuid=actor_user_uuid,
+            actor_can_manage=actor_can_manage,
+        )
         with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                return None
-            self._assert_job_actor_access(
-                job,
-                actor_user_uuid=actor_user_uuid,
-                actor_can_manage=actor_can_manage,
-            )
-            if job.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+            in_flight = job.status in _IN_FLIGHT_JOB_STATUSES
+            if in_flight:
                 job.cancel_requested = True
+        if in_flight and self._incremental_repository is not None:
+            self._persist_entities(
+                [
+                    (
+                        _JOB_CANCEL_COLLECTION,
+                        job_id,
+                        {
+                            "job_id": job_id,
+                            "requested_at": _utc_now(),
+                            "actor_user_uuid": actor_user_uuid,
+                        },
+                    )
+                ]
+            )
         return self.get_job(
             job_id,
             actor_user_uuid=actor_user_uuid,
@@ -5063,21 +5183,7 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         actor_can_manage: bool = False,
     ) -> JobData | None:
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job is None and self._incremental_repository is not None:
-            try:
-                document = self._incremental_repository.get_document("jobs", job_id)
-            except Exception as exc:
-                self._raise_incremental_repository_failure(
-                    operation="job_load",
-                    exc=exc,
-                    operation_error_code="job_query_failed",
-                )
-            if document is not None:
-                job = self._job_from_snapshot(document)
-                with self._lock:
-                    self._jobs[job_id] = job
+        job = self._load_job_record(job_id)
         if job is None:
             return None
         self._assert_job_actor_access(
@@ -13796,13 +13902,24 @@ class Nl2SqlService:
     def _run_job_safely(self, job_id: str) -> None:
         try:
             with self._lock:
-                actor_user_uuid = self._jobs[job_id].actor_user_uuid
-                actor_is_system_admin = self._jobs[job_id].actor_is_system_admin
+                pending = self._jobs.get(job_id)
+                if pending is None:
+                    logger.warning("nl2sql_job_missing_before_run", extra={"job_id": job_id})
+                    return
+                actor_user_uuid = pending.actor_user_uuid
+                actor_is_system_admin = pending.actor_is_system_admin
             with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
                 self._run_job(job_id)
         except Exception as exc:  # pragma: no cover - defensive boundary
             with self._lock:
-                job = self._jobs[job_id]
+                job = self._jobs.get(job_id)
+                if job is None:
+                    # 例外ハンドラ内で KeyError を起こすと worker スレッドごと落ちる。
+                    logger.exception(
+                        "nl2sql_job_failed_without_record",
+                        extra={"job_id": job_id, "exception_type": type(exc).__name__},
+                    )
+                    return
                 job.status = JobStatus.ERROR
                 if isinstance(exc, JobCancelledError):
                     job.error_message = str(exc)

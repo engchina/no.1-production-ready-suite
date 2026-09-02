@@ -138,6 +138,9 @@ class Settings(BaseServiceSettings):
     # 同時に実行する NL2SQL job worker 数の上限(超過分は pending のまま待機)。
     # job 毎の裸スレッドが Oracle セッションを食い潰さないための安全弁。
     nl2sql_job_max_concurrency: int = Field(default=4, ge=1, le=64)
+    # in-flight のまま snapshot の更新がこの秒数途絶えた job は、再起動などで孤児化した
+    # とみなし読込時に error へ正規化する(複数 worker / 再起動後に永久 running を防ぐ)。
+    nl2sql_job_stale_after_seconds: float = Field(default=1800.0, ge=60.0)
     # deterministic: local/CI 用 mock, oracle: python-oracledb 経由で Oracle / Select AI を呼ぶ。
     nl2sql_runtime_mode: str = "deterministic"
     # oracle が既定。memory は local/CI で明示指定する非永続モード。
