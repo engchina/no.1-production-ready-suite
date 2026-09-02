@@ -5,9 +5,10 @@ from __future__ import annotations
 import io
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
@@ -337,7 +338,7 @@ def test_feedback_and_training_candidate_api_contract(
     item = _history("history-api", "API から請求金額を確認したい")
     _append_history(service, item)
 
-    anon_request = SimpleNamespace(state=SimpleNamespace(principal=None))
+    anon_request = cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
     with pytest.raises(HTTPException) as missing:
         nl2sql_router.feedback(
             FeedbackRequest(history_id="missing", rating=FeedbackRating.GOOD, comment=""),
@@ -357,7 +358,7 @@ def test_feedback_and_training_candidate_api_contract(
         ),
         anon_request,
     )
-    example_id = imported.data.results[0].training_example_id
+    example_id = imported.data.results[0].training_example_id  # type: ignore[union-attr]
     updated = nl2sql_router.update_classifier_training_example(
         example_id,
         ClassifierTrainingExampleUpdateRequest(
@@ -373,14 +374,14 @@ def test_feedback_and_training_candidate_api_contract(
         nl2sql_router.clear_feedback("missing", anon_request)
 
     assert missing.value.status_code == 404
-    assert saved.data.history_id == item.id
-    assert feedback.data.items[0].training_status == "pending"
-    assert candidates.data.items[0].status == "pending"
-    assert candidates.data.items[0].profile_category == ""
-    assert imported.data.results[0].profile_id == "default"
-    assert updated.data.text == "API から請求合計を確認したい"
-    assert deleted.data.total_examples == 0
+    assert saved.data.history_id == item.id  # type: ignore[union-attr]
+    assert feedback.data.items[0].training_status == "pending"  # type: ignore[union-attr]
+    assert candidates.data.items[0].status == "pending"  # type: ignore[union-attr]
+    assert candidates.data.items[0].profile_category == ""  # type: ignore[union-attr]
+    assert imported.data.results[0].profile_id == "default"  # type: ignore[union-attr]
+    assert updated.data.text == "API から請求合計を確認したい"  # type: ignore[union-attr]
+    assert deleted.data.total_examples == 0  # type: ignore[union-attr]
     assert delete_missing.value.status_code == 404
-    assert cleared.data.history_id == item.id
-    assert cleared.data.cleared is True
+    assert cleared.data.history_id == item.id  # type: ignore[union-attr]
+    assert cleared.data.cleared is True  # type: ignore[union-attr]
     assert clear_missing.value.status_code == 404

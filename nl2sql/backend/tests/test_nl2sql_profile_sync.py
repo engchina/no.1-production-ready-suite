@@ -289,7 +289,7 @@ def test_select_ai_credential_preflight_happens_before_profile_drop(
 
     adapter = OracleNl2SqlAdapter(Settings())
 
-    @contextmanager
+    @contextmanager  # type: ignore[arg-type]
     def fake_connection() -> object:
         yield Connection()
 

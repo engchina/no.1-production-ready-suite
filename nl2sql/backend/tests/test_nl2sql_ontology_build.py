@@ -1065,7 +1065,7 @@ def test_build_job_fails_gracefully_when_final_status_save_times_out(
     ) -> dict[str, Any]:
         if collection == "jobs" and document.get("status") == OntologyBuildStatus.SUCCEEDED.value:
             raise TimeoutError("Oracle final job timeout")
-        return original_save_document(collection, document, expected_etag=expected_etag)
+        return original_save_document(collection, document, expected_etag=expected_etag)  # type: ignore[arg-type]
 
     monkeypatch.setattr(store, "save_document", fail_final_status_save)
     service = OntologyBuildService(runtime)
@@ -2141,7 +2141,7 @@ def test_batch_max_chars_limits_content_per_call(
     from app.features.nl2sql.ontology_models import OntologyEvidenceLocatorKind
 
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_batch_max_chars", 1000)
-    schema_payload = {"objects": []}
+    schema_payload = {"objects": []}  # type: ignore[var-annotated]
     units = [
         _BuildTextUnit(
             source_document=None,

@@ -63,9 +63,9 @@ def _install_test_threadpool_for_asgi_tests() -> None:
     import fastapi.routing as fastapi_routing
     import starlette.concurrency as starlette_concurrency
 
-    fastapi_dependency_utils.run_in_threadpool = _run_sync_in_test_thread
-    fastapi_routing.run_in_threadpool = _run_sync_in_test_thread
-    starlette_concurrency.run_in_threadpool = _run_sync_in_test_thread
+    fastapi_dependency_utils.run_in_threadpool = _run_sync_in_test_thread  # type: ignore[attr-defined, assignment]
+    fastapi_routing.run_in_threadpool = _run_sync_in_test_thread  # type: ignore[attr-defined, assignment]
+    starlette_concurrency.run_in_threadpool = _run_sync_in_test_thread  # type: ignore[assignment]
 
 
 _install_test_threadpool_for_asgi_tests()

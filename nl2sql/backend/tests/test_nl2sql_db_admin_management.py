@@ -83,6 +83,7 @@ class FakeEnterpriseAiClient:
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
@@ -3148,7 +3149,7 @@ def test_import_tabular_rejects_oversized_existing_byte_column_before_mutation(
                 self._violation = (2, "NAME", 16, 6, "バイト")
 
         def fetchall(self) -> list[tuple[object, ...]]:
-            return self._metadata
+            return self._metadata  # type: ignore[return-value]
 
         def fetchone(self) -> tuple[object, ...] | None:
             return self._violation
@@ -3245,7 +3246,7 @@ def test_import_tabular_truncate_mode_uses_transactional_delete(
                 assert "LENGTHB(c0)" not in sql
 
         def fetchall(self) -> list[tuple[object, ...]]:
-            return self._metadata
+            return self._metadata  # type: ignore[return-value]
 
         def fetchone(self) -> None:
             return None

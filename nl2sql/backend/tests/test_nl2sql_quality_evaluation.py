@@ -163,6 +163,7 @@ class _FakeEnterpriseAiClient:
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -217,6 +218,8 @@ class _QualityEvaluationOracleCursor:
         self._connection = connection
         self._result_sets = result_sets
         self._current: _ResultSet = []
+        self.prefetchrows: int | None = None
+        self.arraysize: int | None = None
         self.executed: list[tuple[str, Any]] = []
 
     def __enter__(self) -> _QualityEvaluationOracleCursor:
