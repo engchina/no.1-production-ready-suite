@@ -1118,15 +1118,31 @@ def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
 
 
 @router.get("/history", response_model=ApiResponse[HistoryData])
-def history(request: Request) -> ApiResponse[HistoryData]:
-    """NL2SQL 検索履歴。"""
+def history(
+    request: Request,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> ApiResponse[HistoryData]:
+    """NL2SQL 検索履歴(新しい順の cursor page)。
+
+    非 system admin は自分の履歴だけ。`next_cursor` が非空なら続きがある。
+    """
     principal = getattr(request.state, "principal", None)
-    if principal is None or bool(getattr(principal, "is_system_admin", False)):
-        return ApiResponse(data=nl2sql_service.list_history())
-    actor_user_uuid = str(getattr(principal, "user_uuid", ""))
-    if not actor_user_uuid:
-        return ApiResponse(data=HistoryData(items=[]))
-    return ApiResponse(data=nl2sql_service.list_history(actor_user_uuid=actor_user_uuid))
+    actor_user_uuid = ""
+    if principal is not None and not bool(getattr(principal, "is_system_admin", False)):
+        actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+        if not actor_user_uuid:
+            return ApiResponse(data=HistoryData(items=[], total=0))
+    try:
+        return ApiResponse(
+            data=nl2sql_service.list_history(
+                actor_user_uuid=actor_user_uuid,
+                cursor=cursor,
+                limit=max(1, min(limit, 200)),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])

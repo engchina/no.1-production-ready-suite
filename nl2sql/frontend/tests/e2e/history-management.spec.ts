@@ -541,3 +541,22 @@ test("実行履歴は読込失敗を既存データなしでも再試行でき�
   await alert.getByRole("button", { name: "履歴更新" }).click();
   await expect(historyRows(page)).toHaveCount(3);
 });
+
+test("実行履歴は続きがあるとき「さらに読み込む」で追加取得する", async ({ page }) => {
+  const extra = { ...historyItems[0], id: "hist-extra", question: "追加で読み込んだ履歴" };
+  await page.route("**/api/nl2sql/history**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("cursor") === "next-1") {
+      return fulfillJson(route, { items: [extra], next_cursor: "", total: 4 });
+    }
+    return fulfillJson(route, { items: historyItems, next_cursor: "next-1", total: 4 });
+  });
+  await page.goto("/history");
+
+  await expect(historyRows(page)).toHaveCount(3);
+  await expect(page.getByTestId("history-load-more")).toContainText("3 / 4 件を読込済み");
+  await page.getByRole("button", { name: "さらに読み込む" }).click();
+  await expect(historyRows(page)).toHaveCount(4);
+  await expect(page.getByTestId("history-load-more")).toContainText("4 / 4 件を読込済み");
+  await expect(page.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
+});

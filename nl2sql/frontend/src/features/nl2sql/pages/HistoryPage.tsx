@@ -151,6 +151,11 @@ function HistoryGrid({
   onSortChange,
   onSelect,
   onClearFilters,
+  loadedCount,
+  total,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   items: HistoryItem[];
   selectedId: string;
@@ -164,6 +169,13 @@ function HistoryGrid({
   onSortChange: (key: HistorySortKey) => void;
   onSelect: (item: HistoryItem) => void;
   onClearFilters: () => void;
+  /** サーバから読込済みの件数(フィルタ前)。 */
+  loadedCount: number;
+  /** サーバ側の総件数(数えられないときは null)。 */
+  total: number | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   const { page, setPage, totalPages, pageItems, range } = usePagination(items, DEFAULT_PAGE_SIZE);
   return (
@@ -303,6 +315,22 @@ function HistoryGrid({
           />
         </div>
       )}
+      {/* サーバ側の続き。検索・絞り込みは読込済み分にしか効かないことを明示する。 */}
+      <div
+        className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
+        data-testid="history-load-more"
+      >
+        <p className="text-xs leading-5 text-muted">
+          {total === null
+            ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
+            : t("history.list.loaded", { loaded: loadedCount, total })}
+        </p>
+        {hasMore && (
+          <Button type="button" variant="secondary" size="sm" loading={loadingMore} onClick={onLoadMore}>
+            {t("history.action.loadMore")}
+          </Button>
+        )}
+      </div>
     </section>
   );
 }
@@ -516,6 +544,9 @@ export function HistoryPage() {
   const [sort, setSort] = useState<HistorySortState>({ key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useState("");
   const [detailTab, setDetailTab] = useState<HistoryDetailTab>("overview");
+  const [nextCursor, setNextCursor] = useState("");
+  const [total, setTotal] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
@@ -529,6 +560,8 @@ export function HistoryPage() {
         const data = await apiGet<HistoryData>("/api/nl2sql/history", { signal });
         if (signal.aborted || sequence !== loadSequence.current) return;
         setItems(data.items);
+        setNextCursor(data.next_cursor ?? "");
+        setTotal(data.total ?? null);
         setSelectedId((current) => selectedVisibleHistoryId(data.items, current));
       });
       if (announce && sequence === loadSequence.current) {
@@ -541,6 +574,31 @@ export function HistoryPage() {
       setMessage(err instanceof Error ? err.message : t("history.error.load"));
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
+    }
+  };
+
+  // 続きページを読込済みの末尾へ追加する(再読込は load() で先頭からやり直す)。
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    const sequence = loadSequence.current;
+    setLoadingMore(true);
+    try {
+      await runScopedRequest(async (signal) => {
+        const params = new URLSearchParams({ cursor: nextCursor });
+        const data = await apiGet<HistoryData>(`/api/nl2sql/history?${params}`, { signal });
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        setItems((current) => {
+          const seen = new Set(current.map((item) => item.id));
+          return [...current, ...data.items.filter((item) => !seen.has(item.id))];
+        });
+        setNextCursor(data.next_cursor ?? "");
+        setTotal(data.total ?? null);
+      });
+    } catch (err) {
+      if (isAbortError(err)) return;
+      toast.warning(t("history.error.loadMore"));
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -663,6 +721,11 @@ export function HistoryPage() {
               onSortChange={toggleSort}
               onSelect={selectItem}
               onClearFilters={clearFilters}
+              loadedCount={items.length}
+              total={total}
+              hasMore={Boolean(nextCursor)}
+              loadingMore={loadingMore}
+              onLoadMore={() => void loadMore()}
             />
             <HistoryDetailPanel
               item={selectedItem}

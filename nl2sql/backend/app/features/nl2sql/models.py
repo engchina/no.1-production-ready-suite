@@ -1139,9 +1139,13 @@ class HistoryItem(BaseModel):
 
 
 class HistoryData(BaseModel):
-    """検索履歴 response."""
+    """検索履歴 response(cursor pagination)。"""
 
     items: list[HistoryItem]
+    # 続きがあるときだけ非空。UI は「さらに読み込む」でこの cursor を渡す。
+    next_cursor: str = ""
+    # フィルタ適用後の総件数(read model が数えられないときは None)。
+    total: int | None = None
 
 
 class FeedbackRequest(BaseModel):

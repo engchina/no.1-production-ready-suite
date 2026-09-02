@@ -641,6 +641,9 @@ JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
 # incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
 _JOB_RETENTION_LIMIT = 200
 _HISTORY_RETENTION_LIMIT = 1000
+# GET /nl2sql/history の 1 ページ件数(既定 / 上限)。旧実装は 50 件固定で続きが取れなかった。
+_HISTORY_PAGE_DEFAULT_LIMIT = 50
+_HISTORY_PAGE_MAX_LIMIT = 200
 # 類似履歴 / few-shot の母集団上限(管理者 GOOD の履歴を新しい順にこの件数まで読む)。
 _SIMILAR_HISTORY_POOL_LIMIT = 1000
 # 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
@@ -5619,21 +5622,22 @@ class Nl2SqlService:
             self._classifier_examples = examples
             self._classifier_artifact = artifact
 
-    def list_history(self, *, actor_user_uuid: str = "") -> HistoryData:
-        if self._incremental_repository is not None:
-            items, _cursor, _total = self._history_page(
-                cursor=None,
-                limit=50,
-                actor_user_uuid=actor_user_uuid,
-            )
-            return HistoryData(items=items)
-        with self._lock:
-            items = [
-                item
-                for item in reversed(self._history)
-                if not actor_user_uuid or item.actor_user_uuid == actor_user_uuid
-            ]
-            return HistoryData(items=items[:50])
+    def list_history(
+        self,
+        *,
+        actor_user_uuid: str = "",
+        cursor: str | None = None,
+        limit: int = _HISTORY_PAGE_DEFAULT_LIMIT,
+    ) -> HistoryData:
+        """検索履歴を新しい順に cursor page で返す(actor 制限は呼び出し側が決める)。"""
+
+        page_limit = max(1, min(int(limit), _HISTORY_PAGE_MAX_LIMIT))
+        items, next_cursor, total = self._history_page(
+            cursor=cursor or None,
+            limit=page_limit,
+            actor_user_uuid=actor_user_uuid,
+        )
+        return HistoryData(items=items, next_cursor=next_cursor, total=total)
 
     def record_ontology_history(
         self,

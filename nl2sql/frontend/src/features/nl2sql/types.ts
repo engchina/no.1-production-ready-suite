@@ -608,6 +608,10 @@ export interface HistoryItem {
 
 export interface HistoryData {
   items: HistoryItem[];
+  /** 続きがあるときだけ非空。「さらに読み込む」でこの cursor を渡す。 */
+  next_cursor?: string;
+  /** フィルタ適用後の総件数(数えられないときは null)。 */
+  total?: number | null;
 }
 
 export type FeedbackRating = "good" | "bad";
