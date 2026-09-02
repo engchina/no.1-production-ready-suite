@@ -278,9 +278,9 @@ def _plausible_select_statement(statement: str) -> bool:
     from_index: int | None = None
     for match in re.finditer(r"\(|\)|\bfrom\b", masked, flags=re.IGNORECASE):
         token = match.group(0)
-        if token == "(":
+        if token == "(":  # nosec B105
             depth += 1
-        elif token == ")":
+        elif token == ")":  # nosec B105
             depth -= 1
         elif depth == 0:
             from_index = match.start()
@@ -626,38 +626,39 @@ class OracleNl2SqlAdapter:
                 target_binds[owner_key] = owner.upper()
                 target_binds[name_key] = object_name.upper()
             target_filter = " AND (" + " OR ".join(target_parts) + ")"
-        sql = f"""
-            SELECT
-                c.owner,
-                c.table_name,
-                NVL(tc.comments, c.table_name) AS table_comment,
-                c.column_name,
-                NVL(cc.comments, c.column_name) AS column_comment,
-                c.data_type,
-                c.nullable,
-                c.column_id,
-                t.num_rows,
-                NVL(o.object_type, 'TABLE') AS object_type
-            FROM all_tab_columns c
-            LEFT JOIN all_tables t ON t.owner = c.owner AND t.table_name = c.table_name
-            LEFT JOIN all_objects o
-              ON o.owner = c.owner
-             AND o.object_name = c.table_name
-             AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
-            LEFT JOIN all_tab_comments tc ON tc.owner = c.owner AND tc.table_name = c.table_name
-            LEFT JOIN all_col_comments cc
-              ON cc.owner = c.owner
-             AND cc.table_name = c.table_name
-             AND cc.column_name = c.column_name
-            WHERE {owner_filter}
-              AND c.owner NOT LIKE '%$%'
-              AND c.owner NOT LIKE '%#%'
-              AND c.table_name NOT LIKE '%$%'
-              AND c.table_name NOT LIKE '%#%'
-              AND c.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-              {target_filter}
-            ORDER BY c.owner, c.table_name, c.column_id
-        """
+        # owner_filter / target_filter は固定 fragment と bind だけで組み立てる。
+        sql = (
+            "SELECT\n"  # nosec B608
+            "    c.owner,\n"
+            "    c.table_name,\n"
+            "    NVL(tc.comments, c.table_name) AS table_comment,\n"
+            "    c.column_name,\n"
+            "    NVL(cc.comments, c.column_name) AS column_comment,\n"
+            "    c.data_type,\n"
+            "    c.nullable,\n"
+            "    c.column_id,\n"
+            "    t.num_rows,\n"
+            "    NVL(o.object_type, 'TABLE') AS object_type\n"
+            "FROM all_tab_columns c\n"
+            "LEFT JOIN all_tables t ON t.owner = c.owner AND t.table_name = c.table_name\n"
+            "LEFT JOIN all_objects o\n"
+            "  ON o.owner = c.owner\n"
+            " AND o.object_name = c.table_name\n"
+            " AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
+            "LEFT JOIN all_tab_comments tc ON tc.owner = c.owner AND tc.table_name = c.table_name\n"
+            "LEFT JOIN all_col_comments cc\n"
+            "  ON cc.owner = c.owner\n"
+            " AND cc.table_name = c.table_name\n"
+            " AND cc.column_name = c.column_name\n"
+            f"WHERE {owner_filter}\n"
+            "  AND c.owner NOT LIKE '%$%'\n"
+            "  AND c.owner NOT LIKE '%#%'\n"
+            "  AND c.table_name NOT LIKE '%$%'\n"
+            "  AND c.table_name NOT LIKE '%#%'\n"
+            "  AND c.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  {target_filter}\n"
+            "ORDER BY c.owner, c.table_name, c.column_id"
+        )
         tables: dict[str, SchemaTable] = {}
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {**owner_binds, **target_binds})
@@ -805,20 +806,21 @@ class OracleNl2SqlAdapter:
         target_filter, target_binds = self._object_key_filter(
             "o.owner", "o.object_name", object_keys, prefix="manifest_target"
         )
-        sql = f"""
-            SELECT o.owner, o.object_name, o.last_ddl_time
-            FROM all_objects o
-            WHERE {owner_filter}
-              AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
-              AND o.status = 'VALID'
-              AND o.owner NOT LIKE '%$%'
-              AND o.owner NOT LIKE '%#%'
-              AND o.object_name NOT LIKE '%$%'
-              AND o.object_name NOT LIKE '%#%'
-              AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-              {target_filter}
-            ORDER BY o.owner, o.object_name
-        """
+        # owner_filter / target_filter は固定 fragment と bind だけで組み立てる。
+        sql = (
+            "SELECT o.owner, o.object_name, o.last_ddl_time\n"  # nosec B608
+            "FROM all_objects o\n"
+            f"WHERE {owner_filter}\n"
+            "  AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
+            "  AND o.status = 'VALID'\n"
+            "  AND o.owner NOT LIKE '%$%'\n"
+            "  AND o.owner NOT LIKE '%#%'\n"
+            "  AND o.object_name NOT LIKE '%$%'\n"
+            "  AND o.object_name NOT LIKE '%#%'\n"
+            "  AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  {target_filter}\n"
+            "ORDER BY o.owner, o.object_name"
+        )
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {**owner_binds, **target_binds})
             return {
@@ -846,7 +848,7 @@ class OracleNl2SqlAdapter:
     def _schema_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
         owners = self._configured_schema_owner_allowlist()
         business_owner_filter = (
-            "EXISTS (SELECT 1 FROM all_users nl2sql_owner "
+            "EXISTS (SELECT 1 FROM all_users nl2sql_owner "  # nosec B608
             f"WHERE nl2sql_owner.username = {column_sql} "
             "AND NVL(nl2sql_owner.oracle_maintained, 'N') = 'N')"
         )
@@ -885,44 +887,43 @@ class OracleNl2SqlAdapter:
         target_filter, target_binds = self._object_key_filter(
             "uc.owner", "uc.table_name", object_keys, prefix="constraint_target"
         )
-        cursor.execute(
-            f"""
-            SELECT
-                uc.table_name,
-                uc.constraint_name,
-                uc.constraint_type,
-                LISTAGG(ucc.column_name, ', ') WITHIN GROUP (ORDER BY ucc.position) AS columns,
-                uc.owner AS owner_name,
-                ruc.owner AS referenced_owner,
-                ruc.table_name AS referenced_table,
-                LISTAGG(rucc.column_name, ', ') WITHIN GROUP (ORDER BY rucc.position)
-                    AS referenced_columns,
-                uc.delete_rule,
-                uc.status,
-                uc.deferrable
-            FROM all_constraints uc
-            LEFT JOIN all_cons_columns ucc
-              ON ucc.owner = uc.owner
-             AND ucc.constraint_name = uc.constraint_name
-             AND ucc.table_name = uc.table_name
-            LEFT JOIN all_constraints ruc
-              ON ruc.owner = uc.r_owner
-             AND ruc.constraint_name = uc.r_constraint_name
-            LEFT JOIN all_cons_columns rucc
-              ON rucc.owner = ruc.owner
-             AND rucc.constraint_name = ruc.constraint_name
-             AND rucc.table_name = ruc.table_name
-             AND rucc.position = ucc.position
-            WHERE {owner_filter}
-              {target_filter}
-              AND uc.constraint_type IN ('P', 'R', 'U', 'C')
-            GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type,
-                     uc.owner, ruc.owner, ruc.table_name,
-                     uc.delete_rule, uc.status, uc.deferrable
-            ORDER BY uc.table_name, uc.constraint_name
-            """,
-            {**owner_binds, **target_binds},
+        # owner_filter / target_filter は固定 fragment と bind だけで組み立てる。
+        constraint_sql = (
+            "SELECT\n"  # nosec B608
+            "    uc.table_name,\n"
+            "    uc.constraint_name,\n"
+            "    uc.constraint_type,\n"
+            "    LISTAGG(ucc.column_name, ', ') WITHIN GROUP (ORDER BY ucc.position) AS columns,\n"
+            "    uc.owner AS owner_name,\n"
+            "    ruc.owner AS referenced_owner,\n"
+            "    ruc.table_name AS referenced_table,\n"
+            "    LISTAGG(rucc.column_name, ', ') WITHIN GROUP (ORDER BY rucc.position)\n"
+            "        AS referenced_columns,\n"
+            "    uc.delete_rule,\n"
+            "    uc.status,\n"
+            "    uc.deferrable\n"
+            "FROM all_constraints uc\n"
+            "LEFT JOIN all_cons_columns ucc\n"
+            "  ON ucc.owner = uc.owner\n"
+            " AND ucc.constraint_name = uc.constraint_name\n"
+            " AND ucc.table_name = uc.table_name\n"
+            "LEFT JOIN all_constraints ruc\n"
+            "  ON ruc.owner = uc.r_owner\n"
+            " AND ruc.constraint_name = uc.r_constraint_name\n"
+            "LEFT JOIN all_cons_columns rucc\n"
+            "  ON rucc.owner = ruc.owner\n"
+            " AND rucc.constraint_name = ruc.constraint_name\n"
+            " AND rucc.table_name = ruc.table_name\n"
+            " AND rucc.position = ucc.position\n"
+            f"WHERE {owner_filter}\n"
+            f"  {target_filter}\n"
+            "  AND uc.constraint_type IN ('P', 'R', 'U', 'C')\n"
+            "GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type,\n"
+            "         uc.owner, ruc.owner, ruc.table_name,\n"
+            "         uc.delete_rule, uc.status, uc.deferrable\n"
+            "ORDER BY uc.table_name, uc.constraint_name"
         )
+        cursor.execute(constraint_sql, {**owner_binds, **target_binds})
         for row in cursor:
             table_name, constraint_name, constraint_type, columns = row[:4]
             owner = str(row[4]) if len(row) > 4 and row[4] else "APP"
@@ -965,33 +966,32 @@ class OracleNl2SqlAdapter:
         target_filter, target_binds = self._object_key_filter(
             "d.owner", "d.name", object_keys, prefix="dependency_target"
         )
-        cursor.execute(
-            f"""
-            SELECT
-                d.owner AS owner_name,
-                d.name AS view_name,
-                d.referenced_owner,
-                d.referenced_name,
-                d.referenced_type
-            FROM all_dependencies d
-            WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')
-              AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
-              AND {owner_filter}
-              AND d.owner NOT LIKE '%$%'
-              AND d.owner NOT LIKE '%#%'
-              AND d.name NOT LIKE '%$%'
-              AND d.name NOT LIKE '%#%'
-              AND d.name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-              AND d.referenced_owner NOT LIKE '%$%'
-              AND d.referenced_owner NOT LIKE '%#%'
-              AND d.referenced_name NOT LIKE '%$%'
-              AND d.referenced_name NOT LIKE '%#%'
-              AND d.referenced_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-              {target_filter}
-            ORDER BY d.name, d.referenced_owner, d.referenced_name
-            """,
-            {**owner_binds, **target_binds},
+        # owner_filter / target_filter は固定 fragment と bind だけで組み立てる。
+        dependency_sql = (
+            "SELECT\n"  # nosec B608
+            "    d.owner AS owner_name,\n"
+            "    d.name AS view_name,\n"
+            "    d.referenced_owner,\n"
+            "    d.referenced_name,\n"
+            "    d.referenced_type\n"
+            "FROM all_dependencies d\n"
+            "WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')\n"
+            "  AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
+            f"  AND {owner_filter}\n"
+            "  AND d.owner NOT LIKE '%$%'\n"
+            "  AND d.owner NOT LIKE '%#%'\n"
+            "  AND d.name NOT LIKE '%$%'\n"
+            "  AND d.name NOT LIKE '%#%'\n"
+            "  AND d.name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            "  AND d.referenced_owner NOT LIKE '%$%'\n"
+            "  AND d.referenced_owner NOT LIKE '%#%'\n"
+            "  AND d.referenced_name NOT LIKE '%$%'\n"
+            "  AND d.referenced_name NOT LIKE '%#%'\n"
+            "  AND d.referenced_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  {target_filter}\n"
+            "ORDER BY d.name, d.referenced_owner, d.referenced_name"
         )
+        cursor.execute(dependency_sql, {**owner_binds, **target_binds})
         return [
             SchemaViewDependency(
                 owner=str(owner),
@@ -1539,7 +1539,7 @@ class OracleNl2SqlAdapter:
             elif normalized_mode == "truncate":
                 # TRUNCATE は暗黙 commit されるため、後続 INSERT 失敗時に既存行を戻せない。
                 # DELETE と INSERT を同一 transaction に置き、全件成功時だけ commit する。
-                self._execute_plsql_like(cursor, f"DELETE FROM {quoted_table}", {})
+                self._execute_plsql_like(cursor, f"DELETE FROM {quoted_table}", {})  # nosec B608
             if bind_rows:
                 try:
                     cursor.executemany(insert_sql, bind_rows, batcherrors=True)
@@ -1671,7 +1671,7 @@ class OracleNl2SqlAdapter:
             )
             unit = "文字" if char_semantics else "バイト"
             violation_queries.append(
-                "SELECT file_row, "
+                "SELECT file_row, "  # nosec B608
                 f"'{column.column_name}' AS column_name, "
                 f"{length_function}({alias}) AS actual_length, "
                 f"{maximum} AS maximum_length, "
@@ -1681,9 +1681,9 @@ class OracleNl2SqlAdapter:
             )
 
         sql = (
-            "WITH input_rows AS ("
+            "WITH input_rows AS ("  # nosec B608
             "SELECT * FROM JSON_TABLE("
-            ":payload, '$[*]' COLUMNS (" + ", ".join(json_column_defs) + "))) "
+            ":payload, '$[*]' COLUMNS (" + ", ".join(json_column_defs) + "))) "  # nosec B608
             "SELECT file_row, column_name, actual_length, maximum_length, length_unit "
             "FROM ("
             + " UNION ALL ".join(violation_queries)
@@ -1944,7 +1944,7 @@ class OracleNl2SqlAdapter:
                 placeholders.append(f":{bind_name}")
                 binds[bind_name] = name
             target_filter = f"WHERE UPPER(PROFILE_NAME) IN ({', '.join(placeholders)})"
-        sql = f"SELECT PROFILE_NAME FROM USER_CLOUD_AI_PROFILES {target_filter}"
+        sql = f"SELECT PROFILE_NAME FROM USER_CLOUD_AI_PROFILES {target_filter}"  # nosec B608
         with self.connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute(sql, binds)

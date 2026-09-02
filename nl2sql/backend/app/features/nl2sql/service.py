@@ -8959,7 +8959,8 @@ class Nl2SqlService:
     def synthetic_data_results(self, table_name: str, limit: int = 100) -> SyntheticDataResultsData:
         identity = self._db_admin_object_identity(table_name)
         safe_table_name = identity.qualified_name
-        sql = normalize_executable_sql(f"SELECT * FROM {_quote_object_identity(identity)}")
+        quoted_table_name = _quote_object_identity(identity)
+        sql = normalize_executable_sql(f"SELECT * FROM {quoted_table_name}")  # nosec B608
         warnings: list[str] = []
         if self._use_oracle_runtime():
             try:
@@ -11871,7 +11872,7 @@ class Nl2SqlService:
         for document in documents:
             try:
                 profiles.append(SelectAiDbProfile.model_validate(document))
-            except Exception:
+            except Exception:  # nosec B112
                 continue
         return sorted(profiles, key=lambda item: item.name.upper())
 

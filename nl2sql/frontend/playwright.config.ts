@@ -21,11 +21,9 @@ export default defineConfig({
     url: playwrightBaseUrl,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    // e2e は全 API を page.route で mock する前提(hermetic)。未モックの API が
-    // ローカルで起動中の実バックエンドへ proxy されると 401 が返り AuthProvider が
-    // ログイン画面へ戻してしまうため、proxy 先を必ず接続不能な port に固定して
-    // CI(バックエンド無し)と同じ失敗挙動に揃える。
-    env: { ...process.env, BACKEND_URL: "http://127.0.0.1:9" },
+    // e2e は全 API を page.route で mock する前提(hermetic)。未モック API は
+    // Vite 側の 404 middleware で終端し、実 backend / Oracle 環境へ接続しない。
+    env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1" },
   },
   projects: [
     {

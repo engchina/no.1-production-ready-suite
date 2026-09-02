@@ -36,7 +36,7 @@ def local_debug_principal() -> Principal:
         data_entitlements=[],
         allowed_profile_ids=set(),
         session_id="local-debug",
-        csrf_token_hash="",
+        csrf_token_hash="",  # nosec B106
         password_change_allowed=False,
     )
 

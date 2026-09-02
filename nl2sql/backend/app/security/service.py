@@ -136,12 +136,12 @@ _SECURITY_MIGRATION_REQUIRED_MESSAGE = (
 
 _CONFIGURED_SYSTEM_ADMIN_USER_UUID = "00000000-0000-0000-0000-000000000002"
 _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
-_CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"
+_CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"  # nosec B105
 _FIXED_APP_ADMIN_LOGIN_USER_ID = "system_admin"
 _APP_ADMIN_LOGIN_USER_ID_KEY = "APP_ADMIN_LOGIN_USER_ID"
 _LEGACY_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
-_APP_ADMIN_LOGIN_USER_PASSWORD_KEY = "APP_ADMIN_LOGIN_USER_PASSWORD"
-_LEGACY_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"
+_APP_ADMIN_LOGIN_USER_PASSWORD_KEY = "APP_ADMIN_LOGIN_USER_PASSWORD"  # nosec B105
+_LEGACY_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"  # nosec B105
 _APP_AUTH_ENABLED_KEY = "APP_AUTH_ENABLED"
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 _ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -932,7 +932,7 @@ class SecurityService:
     @staticmethod
     def _validate_configured_system_admin_password(password: str) -> None:
         if (
-            password == "TODO"
+            password == "TODO"  # nosec B105
             or "\r" in password
             or "\n" in password
             or not _APP_ADMIN_PASSWORD_PATTERN.match(password)
@@ -946,7 +946,7 @@ class SecurityService:
     @staticmethod
     def _validate_configured_system_admin_password_for_change(password: str) -> None:
         if (
-            password == "TODO"
+            password == "TODO"  # nosec B105
             or "\r" in password
             or "\n" in password
             or not _APP_ADMIN_PASSWORD_PATTERN.match(password)

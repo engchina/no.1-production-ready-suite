@@ -3,9 +3,30 @@ import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
 const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8010";
+const hermeticApi = process.env.PLAYWRIGHT_HERMETIC_API === "1";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "nl2sql-playwright-hermetic-api",
+      configureServer(server) {
+        if (!hermeticApi) return;
+        server.middlewares.use("/api", (req, res) => {
+          const path = `/api${req.url ?? ""}`;
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(
+            JSON.stringify({
+              data: null,
+              error_messages: [`e2e unmocked API: ${req.method ?? "GET"} ${path}`],
+              warning_messages: [],
+            })
+          );
+        });
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

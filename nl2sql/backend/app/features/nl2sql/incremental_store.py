@@ -939,7 +939,7 @@ class OracleIncrementalNl2SqlRepository:
             )
             binds.update(after_name=after[0].upper(), after_id=after[1])
         sql = (
-            "SELECT PROFILE_ID, NAME, CATEGORY, DESCRIPTION, ARCHIVED, "
+            "SELECT PROFILE_ID, NAME, CATEGORY, DESCRIPTION, ARCHIVED, "  # nosec B608
             "ALLOWED_TABLE_COUNT, ALLOWED_VIEW_COUNT, GLOSSARY_COUNT, FEW_SHOT_COUNT, "
             "VERSION_NO, ETAG, UPDATED_AT FROM NL2SQL_PROFILES WHERE "
             + " AND ".join(where)
@@ -957,7 +957,8 @@ class OracleIncrementalNl2SqlRepository:
                 )
                 count_binds["query"] = binds["query"]
             db_cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_PROFILES WHERE " + " AND ".join(count_where),
+                "SELECT COUNT(*) FROM NL2SQL_PROFILES WHERE "
+                + " AND ".join(count_where),  # nosec B608
                 count_binds,
             )
             count_row = db_cursor.fetchone()
@@ -1006,7 +1007,7 @@ class OracleIncrementalNl2SqlRepository:
         where = "" if include_archived else " WHERE ARCHIVED = 0"
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT PAYLOAD_JSON, VERSION_NO, ETAG, UPDATED_AT FROM NL2SQL_PROFILES"
+                "SELECT PAYLOAD_JSON, VERSION_NO, ETAG, UPDATED_AT FROM NL2SQL_PROFILES"  # nosec B608
                 + where
                 + " ORDER BY UPPER(NAME), PROFILE_ID"
             )
@@ -1293,7 +1294,7 @@ class OracleIncrementalNl2SqlRepository:
             binds["allowed_names_json"] = json.dumps(normalized, ensure_ascii=False)
         base_where = " AND ".join(where)
         sql = (
-            "SELECT o.OWNER_NAME, o.OBJECT_NAME, o.OBJECT_TYPE, o.LOGICAL_NAME, "
+            "SELECT o.OWNER_NAME, o.OBJECT_NAME, o.OBJECT_TYPE, o.LOGICAL_NAME, "  # nosec B608
             "o.COMMENTS, o.ROW_COUNT, o.COLUMN_COUNT, o.LAST_DDL_AT "
             "FROM NL2SQL_SCHEMA_OBJECTS o WHERE "
             + base_where
@@ -1315,7 +1316,7 @@ class OracleIncrementalNl2SqlRepository:
                 # Oracle は aggregate と scalar subquery を同じ SELECT level に混在させると
                 # ORA-00937 を返す。件数を一行の derived table に確定してから head を結合する。
                 db_cursor.execute(
-                    "SELECT stats.TOTAL_COUNT, stats.TABLE_COUNT, stats.VIEW_COUNT, "
+                    "SELECT stats.TOTAL_COUNT, stats.TABLE_COUNT, stats.VIEW_COUNT, "  # nosec B608
                     "h.CATALOG_VERSION, h.REFRESHED_AT "
                     "FROM (SELECT COUNT(*) TOTAL_COUNT, "
                     "SUM(CASE WHEN o.OBJECT_TYPE IN ('VIEW', 'MATERIALIZED VIEW') "
@@ -1612,7 +1613,7 @@ class OracleIncrementalNl2SqlRepository:
             predicate += " AND JOB_ID = :job_id"
             binds["job_id"] = job_id
         select_sql = (
-            "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS WHERE "
+            "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS WHERE "  # nosec B608
             + predicate
             + " ORDER BY CREATED_AT, JOB_ID FOR UPDATE SKIP LOCKED"
         )
@@ -1735,7 +1736,7 @@ class OracleIncrementalNl2SqlRepository:
             where.append("STATUS = :status")
             binds["status"] = status
         sql = (
-            "SELECT PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS WHERE "
+            "SELECT PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
             + " AND ".join(where)
             + " ORDER BY UPDATED_AT DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"
         )
@@ -1786,7 +1787,9 @@ class OracleIncrementalNl2SqlRepository:
             )
             filter_binds[bind_name] = value
         count_predicate = " AND ".join(where)
-        count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"
+        count_sql = (
+            f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
+        )
         page_binds = dict(filter_binds)
         if decoded:
             where.append(
@@ -1797,7 +1800,7 @@ class OracleIncrementalNl2SqlRepository:
             page_binds["after_entity_id"] = decoded[1]
         page_predicate = " AND ".join(where)
         page_sql = (
-            "SELECT PAYLOAD_JSON, UPDATED_AT, ENTITY_ID FROM NL2SQL_STATE_DOCUMENTS WHERE "
+            "SELECT PAYLOAD_JSON, UPDATED_AT, ENTITY_ID FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
             + page_predicate
             + " ORDER BY UPDATED_AT DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"
         )
