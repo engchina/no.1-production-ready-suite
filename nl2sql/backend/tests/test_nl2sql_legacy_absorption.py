@@ -18,6 +18,7 @@ from app.features.nl2sql.models import (
     CommentSuggestionRequest,
     DbAdminExecuteRequest,
     ExecuteRequest,
+    LegacyLearningMaterialData,
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
@@ -909,7 +910,8 @@ def test_profile_learning_material_imports_xlsx_and_exports_xlsx() -> None:
     assert filename.endswith("_learning_material.xlsx")
     openpyxl = importlib.import_module("openpyxl")
     workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True)
-    assert {"terms", "few_shot"}.issubset(set(workbook.sheetnames))
+    assert "terms" in workbook.sheetnames
+    assert "few_shot" not in workbook.sheetnames
     assert "rules" not in workbook.sheetnames
 
 
@@ -1051,6 +1053,145 @@ def test_global_learning_material_imports_exports_and_applies_all_rules() -> Non
     assert terms_export.active["A1"].value == "TERM"
     assert rules_export.active["A1"].value == "RULE"
     assert rules_export.active["B1"].value is None
+
+
+def test_learning_material_header_matching_keeps_japanese_and_empty_columns_distinct() -> None:
+    term_cases: list[tuple[list[list[Any]], dict[str, str]]] = [
+        (
+            [["No.", "用語", "定義"], [1, "売上", "INVOICES.TOTAL_AMOUNT"]],
+            {"売上": "INVOICES.TOTAL_AMOUNT"},
+        ),
+        (
+            [["備考", "TERM", "DEFINITION"], ["メモ1", "粗利", "INVOICES.PROFIT"]],
+            {"粗利": "INVOICES.PROFIT"},
+        ),
+        (
+            [["", "TERM", "DEFINITION"], ["", "税額", "INVOICES.TAX_AMOUNT"]],
+            {"税額": "INVOICES.TAX_AMOUNT"},
+        ),
+    ]
+    for rows, expected in term_cases:
+        service = Nl2SqlService(store=MemoryNl2SqlStore())
+        material = service.import_legacy_terms(
+            filename="terms.xlsx",
+            content=_single_sheet_workbook_bytes("terms", rows),
+        )
+        assert material.glossary == expected
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    rules = service.import_legacy_rules(
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "rules",
+            [["カテゴリ", "RULE"], ["共通", "SELECT のみ"]],
+        ),
+    )
+    assert rules.rules == ["SELECT のみ"]
+
+    profile_import = service.import_profile_learning_material(
+        profile_id="default",
+        filename="learning_material.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["No.", "用語", "定義"], [1, "売上", "INVOICES.TOTAL_AMOUNT"]],
+        ),
+    )
+    assert profile_import.imported_terms == 1
+    assert profile_import.profile.glossary == {"売上": "INVOICES.TOTAL_AMOUNT"}
+
+
+def test_legacy_learning_material_rejects_unrecognized_empty_import_without_clearing() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_legacy_terms(
+        filename="terms.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "terms",
+            [["TERM", "DEFINITION"], ["既存", "APP.EXISTING_COLUMN"]],
+        ),
+    )
+    service.import_legacy_rules(
+        filename="rules.xlsx",
+        content=_single_sheet_workbook_bytes("rules", [["RULE"], ["既存ルール"]]),
+    )
+
+    with pytest.raises(ValueError, match="TERM/DEFINITION"):
+        service.import_legacy_terms(
+            filename="terms.xlsx",
+            content=_single_sheet_workbook_bytes("terms", [["備考"], ["メモ"]]),
+        )
+    with pytest.raises(ValueError, match="RULE"):
+        service.import_legacy_rules(
+            filename="rules.xlsx",
+            content=_single_sheet_workbook_bytes("rules", [["カテゴリ"], ["共通"]]),
+        )
+
+    material = service.get_legacy_learning_material()
+    assert material.glossary == {"既存": "APP.EXISTING_COLUMN"}
+    assert material.rules == ["既存ルール"]
+
+
+def test_profile_learning_material_rejects_empty_parse_without_replacing_profile() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="billing-learning",
+            name="請求学習",
+            glossary={"既存": "APP.EXISTING_COLUMN"},
+            few_shot_examples=[{"question": "既存質問", "sql": "SELECT 1 FROM DUAL"}],
+        )
+    )
+
+    with pytest.raises(ValueError, match="TERM/DEFINITION"):
+        service.import_profile_learning_material(
+            profile_id="billing-learning",
+            filename="learning_material.xlsx",
+            content=_single_sheet_workbook_bytes("terms", [["備考"], ["メモ"]]),
+            mode="replace",
+        )
+
+    profile = service.get_profile("billing-learning")
+    assert profile.glossary == {"既存": "APP.EXISTING_COLUMN"}
+    assert profile.few_shot_examples == [{"question": "既存質問", "sql": "SELECT 1 FROM DUAL"}]
+
+
+def test_learning_material_exports_formula_like_and_control_character_values_as_text() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._legacy_learning_material = LegacyLearningMaterialData(
+        glossary={"=SUM(1,1)": "A\x01B", "粗利": "=INVOICES.PROFIT"},
+        rules=["=DELETE()", "A\x02B"],
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="formula-profile",
+            name="式検証",
+            glossary={"=TERM": "C\x03D"},
+            few_shot_examples=[{"question": "=Q", "sql": "SELECT '\x04' FROM DUAL"}],
+        )
+    )
+
+    openpyxl = importlib.import_module("openpyxl")
+    _, legacy_terms_bytes = service.export_legacy_terms_xlsx()
+    legacy_terms = openpyxl.load_workbook(io.BytesIO(legacy_terms_bytes), data_only=False)
+    assert legacy_terms.active["A2"].value == "=SUM(1,1)"
+    assert legacy_terms.active["A2"].data_type == "s"
+    assert legacy_terms.active["B2"].value == "AB"
+    assert legacy_terms.active["B2"].data_type == "s"
+    assert legacy_terms.active["B3"].value == "=INVOICES.PROFIT"
+    assert legacy_terms.active["B3"].data_type == "s"
+
+    _, legacy_rules_bytes = service.export_legacy_rules_xlsx()
+    legacy_rules = openpyxl.load_workbook(io.BytesIO(legacy_rules_bytes), data_only=False)
+    assert legacy_rules.active["A2"].value == "=DELETE()"
+    assert legacy_rules.active["A2"].data_type == "s"
+    assert legacy_rules.active["A3"].value == "AB"
+
+    _, profile_bytes = service.export_profile_learning_material_xlsx("formula-profile")
+    profile_book = openpyxl.load_workbook(io.BytesIO(profile_bytes), data_only=False)
+    assert profile_book["terms"]["A2"].value == "=TERM"
+    assert profile_book["terms"]["A2"].data_type == "s"
+    assert profile_book["terms"]["B2"].value == "CD"
+    assert profile_book["few_shot"]["A2"].value == "=Q"
+    assert profile_book["few_shot"]["A2"].data_type == "s"
 
 
 @pytest.mark.parametrize("suffix", [".csv", ".xls", ".xlsm", ".txt", ".tsv"])
@@ -1605,6 +1746,41 @@ def test_reverse_logical_step_details_apply_glossary_to_business_text() -> None:
     assert filters
     assert filters[0].business == "請求金額が1000以上の行に絞り込みます"
     assert "請求金額" in filters[0].technical
+
+
+def test_reverse_glossary_replaces_sql_identifiers_without_corrupting_larger_tokens() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="profit-glossary",
+            name="利益検証",
+            glossary={"利益": "INVOICES.PROFIT"},
+        )
+    )
+    profile = service.get_profile("profit-glossary")
+
+    rewritten = cast(Any, service)._apply_reverse_glossary(
+        "NET_PROFIT_RATE, GROSS_PROFIT, INVOICES.PROFIT, PROFIT",
+        profile=profile,
+        enabled=True,
+    )
+
+    assert rewritten == "NET_PROFIT_RATE, GROSS_PROFIT, 利益, 利益"
+
+
+def test_rewrite_question_uses_original_question_for_glossary_annotations() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="rewrite-chain",
+            name="注釈検証",
+            glossary={"売上": "SALES_AMOUNT 列", "列": "COLUMN"},
+        )
+    )
+
+    rewritten = service.rewrite_question("売上を表示", service.get_profile("rewrite-chain"))
+
+    assert rewritten == "売上を表示（売上=SALES_AMOUNT 列）"
 
 
 def test_reverse_deep_uses_profile_context_and_glossary() -> None:

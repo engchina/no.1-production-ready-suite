@@ -199,15 +199,27 @@ async function uploadLegacyLearningMaterialFile(
     body: form,
     headers: { Accept: "application/json" },
   });
-  const payload = (await response.json()) as {
+  const payload = (await response.json().catch(() => ({}))) as {
     data?: LegacyLearningMaterialData;
-    error?: string;
-    detail?: string;
+    error?: unknown;
+    detail?: unknown;
+    error_messages?: unknown;
   };
   if (!response.ok || !payload.data) {
-    throw new Error(payload.error || payload.detail || t("glossary.error.importMaterial"));
+    throw new Error(importErrorMessage(payload, t("glossary.error.importMaterial")));
   }
   return payload.data;
+}
+
+function importErrorMessage(
+  payload: { error?: unknown; detail?: unknown; error_messages?: unknown },
+  fallback: string
+): string {
+  if (Array.isArray(payload.error_messages) && payload.error_messages.length > 0) {
+    return payload.error_messages.map(String).join(" ");
+  }
+  const message = payload.error ?? payload.detail;
+  return typeof message === "string" && message.trim() ? message : fallback;
 }
 
 function GlobalMaterialPanel({

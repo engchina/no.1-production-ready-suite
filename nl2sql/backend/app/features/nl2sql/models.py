@@ -7,6 +7,7 @@ service 層の adapter に閉じ込め、API と UI は同じ shape を使い続
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -14,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 
 from .object_identity import qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
+
+_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 
 
 class Nl2SqlEngine(StrEnum):
@@ -412,6 +415,24 @@ class SchemaRefreshActiveJobData(BaseModel):
     active_job: SchemaRefreshJob | None = None
 
 
+def _normalize_glossary_payload(value: Any) -> Any:
+    """Profile API から受ける glossary は空キーと制御文字を保存前に拒否する。"""
+
+    if value is None or not isinstance(value, Mapping):
+        return value
+    normalized: dict[str, str] = {}
+    for raw_key, raw_definition in value.items():
+        key = str(raw_key or "").strip()
+        definition = str(raw_definition or "").strip()
+        if not key:
+            raise ValueError("用語キーは空にできません。")
+        if _CONTROL_CHARACTER_RE.search(key) or _CONTROL_CHARACTER_RE.search(definition):
+            raise ValueError("用語キーと定義に制御文字は使用できません。")
+        if definition:
+            normalized[key] = definition
+    return normalized
+
+
 class ProfileUpsertRequest(BaseModel):
     """Profile 作成/更新 request."""
 
@@ -438,6 +459,11 @@ class ProfileUpsertRequest(BaseModel):
     @classmethod
     def validate_name(cls, value: str) -> str:
         return validate_profile_identifier(value)
+
+    @field_validator("glossary", mode="before")
+    @classmethod
+    def normalize_glossary(cls, value: Any) -> Any:
+        return _normalize_glossary_payload(value)
 
     @model_validator(mode="after")
     def align_select_ai_profile_name(self) -> ProfileUpsertRequest:
@@ -471,6 +497,11 @@ class ProfilePatchRequest(BaseModel):
     @classmethod
     def validate_name(cls, value: str | None) -> str | None:
         return validate_profile_identifier(value) if value is not None else value
+
+    @field_validator("glossary", mode="before")
+    @classmethod
+    def normalize_glossary(cls, value: Any) -> Any:
+        return _normalize_glossary_payload(value)
 
 
 class StrictMutationRequest(BaseModel):
@@ -511,6 +542,7 @@ class LegacyLearningMaterialData(BaseModel):
 
     glossary: dict[str, str] = Field(default_factory=dict)
     rules: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

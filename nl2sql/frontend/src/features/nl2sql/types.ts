@@ -271,6 +271,7 @@ export interface ProfileLearningMaterialImportData {
 export interface LegacyLearningMaterialData {
   glossary: Record<string, string>;
   rules: string[];
+  warnings?: string[];
 }
 
 export interface ProfileRecommendationCandidate {

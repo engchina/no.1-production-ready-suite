@@ -174,6 +174,27 @@ from .service import (
 )
 
 logger = logging.getLogger(__name__)
+LEARNING_MATERIAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL = (
+    "学習資材 .xlsx ファイルのサイズが上限 5 MB を超えています。"
+)
+
+
+async def _read_learning_material_upload(file: UploadFile) -> bytes:
+    file_size = getattr(file, "size", None)
+    if isinstance(file_size, int) and file_size > LEARNING_MATERIAL_UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > LEARNING_MATERIAL_UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _require_persistence() -> None:
@@ -612,7 +633,7 @@ async def import_profile_learning_material(
 ) -> ApiResponse[ProfileLearningMaterialImportData]:
     """旧版 terms/rules/few-shot .xlsx テンプレートを取り込む。rules は追加指示へ吸収する。"""
     _assert_profile_access(request, profile_id)
-    content = await file.read()
+    content = await _read_learning_material_upload(file)
     try:
         return ApiResponse(
             data=await run_sync_io(
@@ -665,7 +686,7 @@ async def import_legacy_terms(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 terms.xlsx 互換の用語集を取り込む。"""
-    content = await file.read()
+    content = await _read_learning_material_upload(file)
     try:
         return ApiResponse(
             data=await run_sync_io(
@@ -686,7 +707,7 @@ async def import_legacy_rules(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[LegacyLearningMaterialData]:
     """旧版 rules.xlsx 互換のグローバルルールを取り込む。"""
-    content = await file.read()
+    content = await _read_learning_material_upload(file)
     try:
         return ApiResponse(
             data=await run_sync_io(

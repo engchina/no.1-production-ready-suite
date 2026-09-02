@@ -437,6 +437,7 @@ def _safe_oracle_error_code(exc: Exception) -> str:
 _TEMPLATE_XLSX_UPLOAD_MESSAGE = (
     "ダウンロードした .xlsx テンプレートファイルをアップロードしてください。"
 )
+_EXCEL_ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 
 
 def _require_xlsx_template_upload(filename: str) -> None:
@@ -444,6 +445,18 @@ def _require_xlsx_template_upload(filename: str) -> None:
 
     if Path(filename).suffix.lower() != ".xlsx":
         raise ValueError(_TEMPLATE_XLSX_UPLOAD_MESSAGE)
+
+
+def _excel_safe_text(value: Any) -> str:
+    """Excel 書き出し時に式評価と不正制御文字を避ける文字列へ寄せる。"""
+
+    return _EXCEL_ILLEGAL_CHARACTERS_RE.sub("", str(value or ""))
+
+
+def _append_excel_text_row(sheet: Any, values: Sequence[Any]) -> None:
+    sheet.append([_excel_safe_text(value) for value in values])
+    for cell in sheet[sheet.max_row]:
+        cell.data_type = "s"
 
 
 def _db_admin_error(
@@ -4989,6 +5002,8 @@ class Nl2SqlService:
             content,
             warnings,
         )
+        if not any(parsed.values()) and warnings:
+            raise ValueError(" ".join(warnings))
 
         def patch(current: Nl2SqlProfile) -> Nl2SqlProfile:
             if normalized_mode == "replace":
@@ -5017,7 +5032,12 @@ class Nl2SqlService:
                 }
             )
 
-        updated = self.update_profile(profile_id, patch)
+        try:
+            updated = self.update_profile(profile_id, patch)
+        except ValueError as exc:
+            if "profile" in str(exc).lower() and "見つ" in str(exc):
+                raise KeyError(profile_id) from exc
+            raise
         return ProfileLearningMaterialImportData(
             profile_id=updated.id,
             profile_name=updated.name,
@@ -5036,13 +5056,17 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         terms_sheet = workbook.active
         terms_sheet.title = "terms"
-        terms_sheet.append(["TERM", "DEFINITION"])
+        _append_excel_text_row(terms_sheet, ["TERM", "DEFINITION"])
         for term, definition in profile.glossary.items():
-            terms_sheet.append([term, definition])
-        examples_sheet = workbook.create_sheet("few_shot")
-        examples_sheet.append(["QUESTION", "SQL"])
-        for example in profile.few_shot_examples:
-            examples_sheet.append([example.get("question", ""), example.get("sql", "")])
+            _append_excel_text_row(terms_sheet, [term, definition])
+        if profile.few_shot_examples:
+            examples_sheet = workbook.create_sheet("few_shot")
+            _append_excel_text_row(examples_sheet, ["QUESTION", "SQL"])
+            for example in profile.few_shot_examples:
+                _append_excel_text_row(
+                    examples_sheet,
+                    [example.get("question", ""), example.get("sql", "")],
+                )
         buffer = io.BytesIO()
         workbook.save(buffer)
         safe_profile = _csv_identifier(profile.id or profile.name, "PROFILE").lower()
@@ -5129,9 +5153,11 @@ class Nl2SqlService:
         _require_xlsx_template_upload(filename)
         warnings: list[str] = []
         glossary = self._parse_legacy_terms_file(filename, content, warnings)
+        if not glossary and warnings:
+            raise ValueError(" ".join(warnings))
         with self._legacy_learning_material_io_lock:
             previous = self._load_legacy_learning_material(force_reload=True)
-            updated = previous.model_copy(update={"glossary": glossary})
+            updated = previous.model_copy(update={"glossary": glossary, "warnings": []})
             with self._lock:
                 self._legacy_learning_material = updated
             try:
@@ -5142,15 +5168,17 @@ class Nl2SqlService:
                     self._legacy_learning_material_loaded = True
                     self._legacy_learning_material_checked_at = time.monotonic()
                 raise
-            return updated.model_copy(deep=True)
+            return updated.model_copy(update={"warnings": warnings}, deep=True)
 
     def import_legacy_rules(self, *, filename: str, content: bytes) -> LegacyLearningMaterialData:
         _require_xlsx_template_upload(filename)
         warnings: list[str] = []
         rules = self._parse_legacy_rules_file(filename, content, warnings)
+        if not rules and warnings:
+            raise ValueError(" ".join(warnings))
         with self._legacy_learning_material_io_lock:
             previous = self._load_legacy_learning_material(force_reload=True)
-            updated = previous.model_copy(update={"rules": rules})
+            updated = previous.model_copy(update={"rules": rules, "warnings": []})
             with self._lock:
                 self._legacy_learning_material = updated
             try:
@@ -5161,7 +5189,7 @@ class Nl2SqlService:
                     self._legacy_learning_material_loaded = True
                     self._legacy_learning_material_checked_at = time.monotonic()
                 raise
-            return updated.model_copy(deep=True)
+            return updated.model_copy(update={"warnings": warnings}, deep=True)
 
     def export_legacy_terms_xlsx(self) -> tuple[str, bytes]:
         material = self.get_legacy_learning_material()
@@ -5169,9 +5197,9 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "terms"
-        sheet.append(["TERM", "DEFINITION"])
+        _append_excel_text_row(sheet, ["TERM", "DEFINITION"])
         for term, definition in material.glossary.items():
-            sheet.append([term, definition])
+            _append_excel_text_row(sheet, [term, definition])
         buffer = io.BytesIO()
         workbook.save(buffer)
         return "terms.xlsx", buffer.getvalue()
@@ -5182,9 +5210,9 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "rules"
-        sheet.append(["RULE"])
+        _append_excel_text_row(sheet, ["RULE"])
         for rule in material.rules:
-            sheet.append([rule])
+            _append_excel_text_row(sheet, [rule])
         buffer = io.BytesIO()
         workbook.save(buffer)
         return "rules.xlsx", buffer.getvalue()
@@ -7170,7 +7198,9 @@ class Nl2SqlService:
         return rows, skipped
 
     def _classifier_header_keys(self, headers: Sequence[str]) -> tuple[str, str, str]:
-        normalized = {self._normalize_training_header(header): header for header in headers}
+        normalized = {
+            key: header for header in headers if (key := self._normalize_training_header(header))
+        }
         category = (
             normalized.get("CATEGORY") or normalized.get("PROFILE") or normalized.get("LABEL")
         )
@@ -7386,12 +7416,16 @@ class Nl2SqlService:
         return ""
 
     def _learning_header_index(self, headers: Sequence[str], names: set[str]) -> int | None:
-        normalized_names = {self._normalize_training_header(name) for name in names}
-        raw_names = {name.strip().upper() for name in names}
+        normalized_names = {
+            normalized for name in names if (normalized := self._normalize_training_header(name))
+        }
+        raw_names = {name.strip().upper() for name in names if name.strip()}
         for index, header in enumerate(headers):
             raw = header.strip()
+            if not raw:
+                continue
             normalized = self._normalize_training_header(raw)
-            if normalized in normalized_names or raw.upper() in raw_names:
+            if (normalized and normalized in normalized_names) or raw.upper() in raw_names:
                 return index
         return None
 
@@ -8238,15 +8272,28 @@ class Nl2SqlService:
         if not enabled or not glossary:
             return text
         result = text
+        replacements: list[tuple[str, str]] = []
         for term, definition in glossary.items():
+            term_text = str(term or "").strip()
             normalized_definition = str(definition).strip()
+            if not term_text or not normalized_definition:
+                continue
             candidates = [normalized_definition]
             if "." in normalized_definition:
                 candidates.append(normalized_definition.rsplit(".", 1)[-1])
             for candidate in candidates:
+                candidate = candidate.strip()
                 if candidate:
-                    result = result.replace(candidate, term)
+                    replacements.append((candidate, term_text))
+        for candidate, term in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+            result = self._replace_reverse_glossary_candidate(result, candidate, term)
         return result
+
+    @staticmethod
+    def _replace_reverse_glossary_candidate(text: str, candidate: str, term: str) -> str:
+        boundary = r"A-Za-z0-9_$#\""
+        pattern = re.compile(rf"(?<![{boundary}]){re.escape(candidate)}(?![{boundary}])")
+        return pattern.sub(term, text)
 
     def _sql_structure(self, sql: str, referenced: list[str]) -> dict[str, Any]:
         normalized = " ".join(sql.strip().split())
@@ -13997,11 +14044,21 @@ class Nl2SqlService:
         return f"{question.rstrip()}\n\n=== Rules ===\n" + "\n\n".join(rules)
 
     def rewrite_question(self, question: str, profile: Nl2SqlProfile) -> str:
-        rewritten = question.strip()
+        base_question = question.strip()
+        annotations: list[str] = []
         for term, replacement in self._effective_glossary(profile).items():
-            if term in rewritten and replacement not in rewritten:
-                rewritten = f"{rewritten}（{term}={replacement}）"
-        return rewritten
+            term_text = str(term or "").strip()
+            replacement_text = str(replacement or "").strip()
+            if (
+                term_text
+                and replacement_text
+                and term_text in base_question
+                and replacement_text not in base_question
+            ):
+                annotations.append(f"{term_text}={replacement_text}")
+        if not annotations:
+            return base_question
+        return f"{base_question}{''.join(f'（{annotation}）' for annotation in annotations)}"
 
     def _rewrite_question_preserving_empty_filter(
         self, question: str, profile: Nl2SqlProfile

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request, Response
@@ -56,6 +57,32 @@ def test_profile_upsert_request_rejects_invalid_name() -> None:
 
     with pytest.raises(ValidationError):
         ProfileUpsertRequest(name="新プロファイル")
+
+
+def test_profile_requests_reject_blank_glossary_keys_and_control_characters() -> None:
+    with pytest.raises(ValidationError, match="用語キー"):
+        ProfileUpsertRequest(name="sales_profile", glossary={"  ": "INVOICES.TOTAL_AMOUNT"})
+
+    with pytest.raises(ValidationError, match="制御文字"):
+        ProfilePatchRequest(glossary={"売上": "INVOICES.\x01TOTAL_AMOUNT"})
+
+    request = ProfilePatchRequest(glossary={" 売上 ": " INVOICES.TOTAL_AMOUNT "})
+
+    assert request.glossary == {"売上": "INVOICES.TOTAL_AMOUNT"}
+
+
+def test_learning_material_upload_rejects_large_file_before_read() -> None:
+    class TooLargeUpload:
+        filename = "terms.xlsx"
+        size = nl2sql_router.LEARNING_MATERIAL_UPLOAD_MAX_BYTES + 1
+
+        async def read(self, _size: int = -1) -> bytes:
+            raise AssertionError("oversized learning material must be rejected before read")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(nl2sql_router.import_legacy_terms(cast(Any, TooLargeUpload())))
+
+    assert exc_info.value.status_code == 413
 
 
 def test_profile_patch_ignores_separate_select_ai_profile_name(

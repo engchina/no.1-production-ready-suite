@@ -8755,6 +8755,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 2, name: "用語・同義語", exact: true })).toBeVisible();
   await expect(page.getByText("用語・同義語 21", { exact: true })).toBeVisible();
+  await expect(page.getByText(/取込は既存データを全置換します/)).toBeVisible();
   await expect(page.locator("main").getByText(/グローバル用語(?:集)?/)).toHaveCount(0);
   await expect(page.locator("main").getByText(/語彙/)).toHaveCount(0);
   // 「グローバルルール」は独立ナビ/専用ページ(/global-rules)として存在するため、
@@ -8892,6 +8893,55 @@ test("glossary global data shows empty, loading, and server error states", async
   releaseReload();
   await reloadClick;
   await expect(page.getByRole("alert")).toContainText("サーバー読込エラー");
+  await expectNoHorizontalScroll(page);
+});
+
+test("glossary and global rules imports use stable errors for non JSON responses", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/legacy-learning-material/terms/import");
+  await page.route("**/api/nl2sql/legacy-learning-material/terms/import", (route) =>
+    route.fulfill({
+      status: 413,
+      contentType: "text/plain",
+      body: "payload too large",
+    })
+  );
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/glossary-rules");
+  await dropFiles(page, page.getByTestId("glossary-rules-panel-heading-file-dropzone"), [
+    {
+      name: "terms.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock",
+    },
+  ]);
+  const glossaryAlert = page.getByRole("alert");
+  await expect(glossaryAlert).toContainText("用語・同義語データの取込に失敗しました。");
+  await expect(glossaryAlert).not.toContainText("Unexpected");
+  await expectNoHorizontalScroll(page);
+
+  await page.unroute("**/api/nl2sql/legacy-learning-material/rules/import");
+  await page.route("**/api/nl2sql/legacy-learning-material/rules/import", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "server error",
+    })
+  );
+
+  await page.goto("/global-rules");
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+    {
+      name: "rules.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock rules",
+    },
+  ]);
+  const rulesAlert = page.getByRole("alert");
+  await expect(rulesAlert).toContainText("共通ルールの取込に失敗しました。");
+  await expect(rulesAlert).not.toContainText("Unexpected");
+  await page.setViewportSize({ width: 375, height: 900 });
   await expectNoHorizontalScroll(page);
 });
 
@@ -9973,6 +10023,7 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   });
 
   await page.goto("/global-rules");
+  await expect(page.getByText(/取込は既存データを全置換します/)).toBeVisible();
   await expect(page.getByTestId("global-rules-file-input")).toHaveAttribute(
     "accept",
     ".xlsx"

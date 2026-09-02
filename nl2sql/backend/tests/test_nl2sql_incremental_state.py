@@ -280,6 +280,21 @@ def test_incremental_legacy_learning_material_is_restored_lazily_after_restart()
     assert material.rules == ["SELECT のみ"]
 
 
+def test_incremental_profile_learning_material_missing_profile_maps_to_key_error() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+
+    with pytest.raises(KeyError):
+        service.import_profile_learning_material(
+            profile_id="missing-profile",
+            filename="terms.xlsx",
+            content=_single_sheet_workbook_bytes(
+                "terms",
+                [["TERM", "DEFINITION"], ["売上", "INVOICES.TOTAL_AMOUNT"]],
+            ),
+        )
+
+
 def test_incremental_legacy_import_preserves_counterpart_and_other_singletons() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     repository.put_document(
