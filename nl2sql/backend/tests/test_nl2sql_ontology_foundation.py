@@ -21,7 +21,7 @@ from app.features.nl2sql.oracle_adapter import OracleAdapterError, OracleNl2SqlA
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.sql_semantics import parse_oracle_sql
 from app.features.nl2sql.store import MemoryNl2SqlStore
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 
 
 class _RowsCursor:
@@ -275,7 +275,15 @@ def test_connection_wraps_connect_failure_as_oracle_adapter_error(
         def connect(self, **_kwargs: Any) -> Any:
             raise RuntimeError("ORA-12541: TNS:no listener")
 
-    adapter = OracleNl2SqlAdapter(get_settings())
+    # CI には .env / Wallet が無いため、接続情報は明示して wallet 不要モードで組み立てる。
+    adapter = OracleNl2SqlAdapter(
+        Settings(
+            oracle_user="APP",
+            oracle_password="password",
+            oracle_dsn="localhost/FREEPDB1",
+            oracle_connection_security="walletless_tls",
+        )
+    )
     monkeypatch.setattr(adapter, "_load_oracledb", lambda: _FailingOracledb())
     monkeypatch.setattr(adapter, "_init_client", lambda _oracledb: None)
     monkeypatch.setattr(adapter, "is_configured", lambda: True)

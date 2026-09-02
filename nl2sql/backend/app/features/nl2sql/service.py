@@ -23,7 +23,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn
@@ -14197,7 +14197,7 @@ class Nl2SqlService:
         result = result.model_copy(update={"timing": timing})
         with self._lock:
             job = self._jobs[job_id]
-            job.steps = [
+            final_steps = [
                 (
                     step.model_copy(
                         update={"status": JobStepStatus.DONE, "elapsed_ms": stage_elapsed}
@@ -14207,59 +14207,71 @@ class Nl2SqlService:
                 )
                 for step in job.steps
             ]
-            job.status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
-            job.error_message = None if safety.is_safe else safety.blocked_reason
-            job.warning_message = None
-            job.result = result
-            job.finished_at = finished
-            job.elapsed_ms = timing.elapsed_ms
-            job.timing = timing
-            history_item = HistoryItem(
-                id=history_id,
-                question=request.question,
-                engine=result.engine,
-                generated_sql=result.generated_sql,
-                created_at=finished,
-                elapsed_ms=timing.elapsed_ms,
-                profile_id=profile.id,
-                profile_name=profile.name,
-                profile_category=profile.category,
-                rewritten_question=rewritten,
-                executable_sql=result.executable_sql,
-                safety_is_safe=result.safety.is_safe,
-                result_row_count=result.results.total,
-                result_columns=result.results.columns,
-                actor_user_uuid=job.actor_user_uuid,
-            )
-            self._history.append(history_item)
-            self._prune_history_locked()
+            actor_user_uuid = job.actor_user_uuid
+        final_status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
+        final_error_message = None if safety.is_safe else safety.blocked_reason
+        history_item = HistoryItem(
+            id=history_id,
+            question=request.question,
+            engine=result.engine,
+            generated_sql=result.generated_sql,
+            created_at=finished,
+            elapsed_ms=timing.elapsed_ms,
+            profile_id=profile.id,
+            profile_name=profile.name,
+            profile_category=profile.category,
+            rewritten_question=rewritten,
+            executable_sql=result.executable_sql,
+            safety_is_safe=result.safety.is_safe,
+            result_row_count=result.results.total,
+            result_columns=result.results.columns,
+            actor_user_uuid=actor_user_uuid,
+        )
+        # terminal 状態を公開する前に job snapshot と履歴を永続化する。先に公開すると、
+        # ポーリングが DONE を見た直後の履歴取得(UI の履歴更新 / 他 worker)に新しい履歴が
+        # まだ無い取りこぼしが起きる。永続化失敗は結果を捨てず warning として公開する。
+        published = replace(
+            job,
+            steps=final_steps,
+            status=final_status,
+            error_message=final_error_message,
+            warning_message=None,
+            result=result,
+            finished_at=finished,
+            elapsed_ms=timing.elapsed_ms,
+            timing=timing,
+        )
+        persistence_warning: str | None = None
         try:
             self._persist_entities(
                 [
-                    ("jobs", job_id, self._job_to_snapshot(job)),
+                    ("jobs", job_id, self._job_to_snapshot(published)),
                     ("history", history_item.id, history_item.model_dump(mode="json")),
                 ]
             )
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
-            with self._lock:
-                current_job = self._jobs[job_id]
-                has_result = current_job.result is not None
-                if has_result:
-                    current_job.warning_message = _JOB_RESULT_PERSISTENCE_WARNING
-                    if current_job.status == JobStatus.DONE:
-                        current_job.error_message = None
-            if has_result:
-                logger.exception(
-                    "nl2sql_job_result_persist_failed",
-                    extra={
-                        "job_id": job_id,
-                        "engine": request.engine.value,
-                        "profile_id": request.profile_id or "",
-                        "exception_type": type(exc).__name__,
-                    },
-                )
-                return
-            raise
+            persistence_warning = _JOB_RESULT_PERSISTENCE_WARNING
+            logger.exception(
+                "nl2sql_job_result_persist_failed",
+                extra={
+                    "job_id": job_id,
+                    "engine": request.engine.value,
+                    "profile_id": request.profile_id or "",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        with self._lock:
+            job = self._jobs[job_id]
+            job.steps = final_steps
+            job.status = final_status
+            job.error_message = final_error_message
+            job.warning_message = persistence_warning
+            job.result = result
+            job.finished_at = finished
+            job.elapsed_ms = timing.elapsed_ms
+            job.timing = timing
+            self._history.append(history_item)
+            self._prune_history_locked()
 
     def _generate_with_fallback(
         self,

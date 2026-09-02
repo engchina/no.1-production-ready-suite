@@ -224,6 +224,8 @@ def test_oracle_connection_applies_round_trip_timeout_and_closes(
             oracle_user="APP",
             oracle_password="password",
             oracle_dsn="localhost/FREEPDB1",
+            # CI には Wallet が無いため wallet 不要モードで接続 kwargs を組み立てる。
+            oracle_connection_security="walletless_tls",
             nl2sql_oracle_call_timeout_seconds=12.5,
         )
     )
