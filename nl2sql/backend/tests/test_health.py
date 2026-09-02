@@ -2081,7 +2081,13 @@ async def test_execute_oracle_adapter_error_returns_http_502(
         def ensure_persistence_available(self) -> None:
             return None
 
-        def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
+        def resolve_direct_sql_allowed_objects(
+            self,
+            requested: AllowedObjects,
+            *,
+            profile_ids: set[str] | None = None,
+        ) -> AllowedObjects:
+            del profile_ids
             return requested
 
         def execute_sql(
@@ -2118,7 +2124,14 @@ def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.Monkey
         ) -> AllowedObjects:
             raise AssertionError("Direct SQL must not resolve profile-scoped objects")
 
-        def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
+        def resolve_direct_sql_allowed_objects(
+            self,
+            requested: AllowedObjects,
+            *,
+            profile_ids: set[str] | None = None,
+        ) -> AllowedObjects:
+            # 認証無効(principal なし)の Direct SQL は profile 制限を受けない。
+            assert profile_ids is None
             self.resolved_allowed = requested
             return requested
 
@@ -2156,7 +2169,8 @@ def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.Monkey
         }
     )
 
-    response = nl2sql_router.execute(request)
+    unauthenticated_request = SimpleNamespace(state=SimpleNamespace())
+    response = nl2sql_router.execute(request, unauthenticated_request)  # type: ignore[arg-type]
 
     assert "profile_id" not in request.model_dump()
     assert fake_service.resolved_allowed == AllowedObjects(table_names=["EMPLOYEE"])

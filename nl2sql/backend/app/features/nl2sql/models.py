@@ -1028,15 +1028,27 @@ class PreviewData(BaseModel):
     timing: TimingEnvelope | None = None
 
 
+DIRECT_SQL_DEFAULT_ROW_LIMIT = 100
+
+
 class ExecuteRequest(BaseModel):
-    """Profile と独立した SQL execution request."""
+    """Profile と独立した SQL execution request.
+
+    実行スコープは route 側で principal に許可された業務プロファイル群へ強制される。
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     # Direct SQL execute は 1..100000。0(無制限)は db-admin 専用(DbAdminExecuteRequest)。
-    row_limit: int | None = Field(default=100, ge=1, le=100000)
+    # null は「未指定」として既定値へ倒す(None のまま adapter へ渡すと fetchall になる)。
+    row_limit: int = Field(default=DIRECT_SQL_DEFAULT_ROW_LIMIT, ge=1, le=100000)
+
+    @field_validator("row_limit", mode="before")
+    @classmethod
+    def _default_row_limit_when_null(cls, value: object) -> object:
+        return DIRECT_SQL_DEFAULT_ROW_LIMIT if value is None else value
 
 
 class JobCreateRequest(BaseModel):

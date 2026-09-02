@@ -280,14 +280,19 @@ def preview(req: PreviewRequest, request: Request) -> ApiResponse[PreviewData]:
 
 
 @router.post("/execute", response_model=ApiResponse[QueryResults])
-def execute(req: ExecuteRequest) -> ApiResponse[QueryResults]:
+def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
     """SELECT/WITH のみを安全に実行する。
 
+    実行スコープは principal に許可された業務プロファイル群の許可オブジェクトへ強制する
+    (system admin / 認証無効時は request の allowed_objects のみ)。
     local skeleton は deterministic mock result を返す。
     実運用では Oracle 実行 adapter へ差し替える。
     """
     try:
-        allowed = nl2sql_service.resolve_direct_sql_allowed_objects(req.allowed_objects)
+        allowed = nl2sql_service.resolve_direct_sql_allowed_objects(
+            req.allowed_objects,
+            profile_ids=_allowed_profile_ids_for_request(request),
+        )
         safety, _executable, results = nl2sql_service.execute_sql(
             sql=req.sql,
             allowed=allowed,

@@ -15198,8 +15198,19 @@ class Nl2SqlService:
 
         return self._resolve_allowed_objects(profile_id, requested)
 
-    def resolve_direct_sql_allowed_objects(self, requested: AllowedObjects) -> AllowedObjects:
-        """手書き SELECT SQL 実行用に request scope だけを解決する。"""
+    def resolve_direct_sql_allowed_objects(
+        self,
+        requested: AllowedObjects,
+        *,
+        profile_ids: set[str] | None = None,
+    ) -> AllowedObjects:
+        """手書き SELECT SQL 実行用の scope を解決する。
+
+        `profile_ids` が与えられた(= principal に業務プロファイル制限がある)場合は、
+        その profile 群が許可する table/view の和集合を上限とし、request の table_names は
+        和集合との積として解釈する(和集合が空なら全ての表参照が拒否される)。
+        `None`(system admin / 認証無効)のときは従来どおり request scope だけを使う。
+        """
 
         current_owner = self._current_schema_owner()
         requested_names: list[str] = []
@@ -15215,6 +15226,23 @@ class Nl2SqlService:
                 continue
             seen.add(normalized)
             requested_names.append(normalized)
+        profile_scope: set[str] | None = None
+        if profile_ids is not None:
+            profile_scope = set()
+            for profile_id in profile_ids:
+                try:
+                    profile = self.get_profile(profile_id)
+                except ValueError:
+                    continue
+                profile_scope.update(
+                    parse_object_identity(name, default_owner=current_owner).qualified_name
+                    for name in self.profile_allowed_object_names(profile)
+                )
+            requested_names = (
+                [name for name in requested_names if name in profile_scope]
+                if requested_names
+                else sorted(profile_scope)
+            )
         requested_scope = set(requested_names)
         resolved_columns: dict[str, list[str]] = {}
         for table_name, columns in requested.columns.items():
@@ -15234,7 +15262,7 @@ class Nl2SqlService:
         return AllowedObjects(
             table_names=requested_names,
             columns=resolved_columns,
-            enforce_table_scope=requested.enforce_table_scope,
+            enforce_table_scope=requested.enforce_table_scope or profile_scope is not None,
         )
 
     def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int:
