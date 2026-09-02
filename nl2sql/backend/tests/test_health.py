@@ -3574,6 +3574,10 @@ def test_service_preview_marks_oracle_vector_few_shot_source(
     ]
     service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
+    # oracle runtime では deterministic fallback が無いので、生成器を明示的に用意する。
+    service._enterprise_ai_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES","explanation":"請求金額を取得します。"}'
+    )
     service._history = [
         HistoryItem(
             id="hist-vector-001",

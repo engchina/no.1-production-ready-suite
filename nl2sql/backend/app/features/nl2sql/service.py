@@ -14537,6 +14537,12 @@ class Nl2SqlService:
         # 本番(oracle runtime)ではユーザ入力に反応させない。
         if not self._use_oracle_runtime() and f"{engine.value}_fail" in question.lower():
             raise RuntimeError("明示的な fallback テスト要求")
+        # 本番(oracle runtime)では、エンジン失敗時に質問を無視したテンプレート SQL を
+        # 「生成結果」として返さない(deterministic fallback は local/CI デモ専用)。
+        # これにより auto も失敗した候補から次のエンジンへ進める。
+        allow_deterministic_fallback = (
+            allow_deterministic_fallback and not self._use_oracle_runtime()
+        )
         is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
         effective_question = (
             question.strip()
