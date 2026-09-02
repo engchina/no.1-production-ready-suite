@@ -840,6 +840,13 @@ _COMMENT_TARGET = re.compile(
     r"^comment\s+on\s+([a-zA-Z_]+(?:\s+[a-zA-Z_]+)?(?:\s+[a-zA-Z_]+)?)\b",
     re.IGNORECASE,
 )
+_SCHEMA_MUTATION_STATEMENT_TYPES = frozenset(
+    {"CREATE", "ALTER", "DROP", "COMMENT", "RENAME", "FLASHBACK", "PURGE"}
+)
+_IMPLICIT_COMMIT_STATEMENT_TYPES = frozenset(
+    {"CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT", "RENAME", "FLASHBACK", "PURGE"}
+)
+_ROLLBACKABLE_DML_STATEMENT_TYPES = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE"})
 _SQL_RESERVED_OR_FUNCTIONS = {
     "AS",
     "CASE",
@@ -966,69 +973,156 @@ class _SqlAnalysisLlmPayload(BaseModel):
     logical_steps: list[str] = PydanticField(default_factory=list)
 
 
+_SQL_WORD_TOKEN = re.compile(r"[A-Za-z_][\w$#]*")
+_CREATE_PLSQL_BLOCK_START = re.compile(
+    r"create\s+(?:or\s+replace\s+)?(?:(?:editionable|noneditionable)\s+)?"
+    r"(?:procedure|function|package(?:\s+body)?|trigger|type(?:\s+body)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _statement_slice_has_sql(text: str) -> bool:
+    return bool(_strip_leading_sql_comments(text).strip())
+
+
+def _is_sqlplus_slash_terminator(masked_sql: str, index: int) -> bool:
+    if masked_sql[index] != "/":
+        return False
+    line_start = masked_sql.rfind("\n", 0, index) + 1
+    line_end = masked_sql.find("\n", index + 1)
+    if line_end < 0:
+        line_end = len(masked_sql)
+    return (
+        masked_sql[line_start:index].strip() == ""
+        and masked_sql[index + 1 : line_end].strip() == ""
+    )
+
+
+def _end_clause_keyword(masked_sql: str, index: int) -> str:
+    length = len(masked_sql)
+    cursor = index
+    while cursor < length and masked_sql[cursor].isspace():
+        cursor += 1
+    match = _SQL_WORD_TOKEN.match(masked_sql, cursor)
+    if not match:
+        return ""
+    after_word = match.end()
+    cursor = after_word
+    while cursor < length and masked_sql[cursor].isspace():
+        cursor += 1
+    if cursor < length and masked_sql[cursor] == ";":
+        return match.group(0).lower()
+    return ""
+
+
 def _split_sql_statements(sql: str) -> list[str]:
-    """Split SQL while keeping quoted strings and PL/SQL blocks intact enough for admin use."""
+    """SQL を線形走査で分割し、literal/comment と PL/SQL block を壊さない。"""
+
     text = str(sql or "")
+    masked = _mask_sql_literals_and_comments(text)
     statements: list[str] = []
-    buffer: list[str] = []
-    in_single = False
-    in_double = False
-    block_depth = 0
+    statement_start = 0
+    statement_has_code = False
+    block_mode: Literal["anonymous", "slash"] | None = None
+    plsql_depth = 0
+    case_depth = 0
+    pending_declare_begins = 0
+    anonymous_close_pending = False
     index = 0
-    while index < len(text):
-        char = text[index]
-        next_char = text[index + 1] if index + 1 < len(text) else ""
-        if in_single:
-            buffer.append(char)
-            if char == "'" and next_char == "'":
-                buffer.append(next_char)
-                index += 2
-                continue
-            if char == "'":
-                in_single = False
+    length = len(masked)
+
+    def reset_state(next_start: int) -> None:
+        nonlocal statement_start
+        nonlocal statement_has_code
+        nonlocal block_mode
+        nonlocal plsql_depth
+        nonlocal case_depth
+        nonlocal pending_declare_begins
+        nonlocal anonymous_close_pending
+        statement_start = next_start
+        statement_has_code = False
+        block_mode = None
+        plsql_depth = 0
+        case_depth = 0
+        pending_declare_begins = 0
+        anonymous_close_pending = False
+
+    def append_statement(end: int) -> None:
+        statement = text[statement_start:end].strip()
+        if statement and _statement_slice_has_sql(statement):
+            statements.append(statement)
+
+    while index < length:
+        char = masked[index]
+        if _is_sqlplus_slash_terminator(masked, index):
+            append_statement(index)
+            reset_state(index + 1)
             index += 1
             continue
-        if in_double:
-            buffer.append(char)
-            if char == '"':
-                in_double = False
+        if char.isspace():
             index += 1
             continue
-        if char == "'":
-            in_single = True
-            buffer.append(char)
-            index += 1
+        match = _SQL_WORD_TOKEN.match(masked, index)
+        if match:
+            token = match.group(0)
+            lowered = token.lower()
+            if not statement_has_code:
+                if lowered in {"begin", "declare"}:
+                    block_mode = "anonymous"
+                elif _CREATE_PLSQL_BLOCK_START.match(masked, index):
+                    block_mode = "slash"
+            statement_has_code = True
+            if block_mode == "anonymous":
+                if lowered == "declare":
+                    plsql_depth += 1
+                    pending_declare_begins += 1
+                    anonymous_close_pending = False
+                elif lowered == "begin":
+                    if pending_declare_begins:
+                        pending_declare_begins -= 1
+                    else:
+                        plsql_depth += 1
+                    anonymous_close_pending = False
+                elif lowered == "case":
+                    case_depth += 1
+                    anonymous_close_pending = False
+                elif lowered == "end":
+                    end_kind = _end_clause_keyword(masked, match.end())
+                    if case_depth > 0 or end_kind == "case":
+                        case_depth = max(case_depth - 1, 0)
+                        anonymous_close_pending = False
+                    elif end_kind in {"if", "loop"}:
+                        anonymous_close_pending = False
+                    else:
+                        plsql_depth = max(plsql_depth - 1, 0)
+                        anonymous_close_pending = plsql_depth == 0
+                elif anonymous_close_pending and lowered not in {"if", "loop", "case"}:
+                    # END label; の label は終端の一部なので close_pending を維持する。
+                    pass
+                else:
+                    anonymous_close_pending = False
+            index = match.end()
             continue
-        if char == '"':
-            in_double = True
-            buffer.append(char)
-            index += 1
-            continue
-        ahead = text[index:].lower()
-        if re.match(r"^\s*(begin|declare)\b", ahead):
-            block_depth = max(block_depth, 1)
-        if char == ";" and block_depth > 0:
-            joined = "".join(buffer).lower()
-            if re.search(r"\bend\s*$", joined):
-                block_depth = 0
-                statement = "".join(buffer).strip()
-                if statement:
-                    statements.append(statement)
-                buffer = []
+        statement_has_code = True
+        if char == ";":
+            if block_mode == "slash":
                 index += 1
                 continue
-        if char == ";" and block_depth == 0:
-            statement = "".join(buffer).strip()
-            if statement:
-                statements.append(statement)
-            buffer = []
+            if block_mode == "anonymous":
+                if anonymous_close_pending and plsql_depth == 0 and case_depth == 0:
+                    append_statement(index + 1)
+                    reset_state(index + 1)
+                index += 1
+                continue
+            append_statement(index)
+            reset_state(index + 1)
             index += 1
             continue
-        buffer.append(char)
+        if anonymous_close_pending and not char.isspace():
+            anonymous_close_pending = False
         index += 1
-    tail = "".join(buffer).strip()
-    if tail:
-        statements.append(tail)
+
+    append_statement(length)
     return statements
 
 
@@ -1139,6 +1233,9 @@ def _admin_statement_type(sql: str) -> str:
         "drop",
         "alter",
         "truncate",
+        "rename",
+        "flashback",
+        "purge",
         "grant",
         "revoke",
     ):
@@ -1151,7 +1248,7 @@ def _statements_change_schema(statements: Sequence[str]) -> bool:
     """Read model の再取得が必要な構造・metadata 変更だけを判定する。"""
 
     return any(
-        _admin_statement_type(statement) in {"CREATE", "ALTER", "DROP", "COMMENT"}
+        _admin_statement_type(statement) in _SCHEMA_MUTATION_STATEMENT_TYPES
         for statement in statements
     )
 
@@ -1321,7 +1418,7 @@ def _schema_refresh_targets_for_statements(
 ) -> list[SchemaRefreshTargetObject] | None:
     targets: list[SchemaRefreshTargetObject] = []
     for statement in statements:
-        if _admin_statement_type(statement) not in {"CREATE", "ALTER", "DROP", "COMMENT"}:
+        if _admin_statement_type(statement) not in _SCHEMA_MUTATION_STATEMENT_TYPES:
             continue
         target = _schema_refresh_target_for_statement(
             statement,
@@ -7962,6 +8059,25 @@ class Nl2SqlService:
             return int(match.group(1))
         return None
 
+    @staticmethod
+    def _semantic_join_lines(joins: Sequence[Any]) -> list[str]:
+        lines: list[str] = []
+        for join in joins:
+            join_type = str(getattr(join, "join_type", "") or "inner").replace("_", " ").upper()
+            left_source = str(getattr(join, "left_source", "") or "").strip()
+            right_source = str(getattr(join, "right_source", "") or "").strip()
+            if not right_source:
+                continue
+            line = f"{join_type}: {left_source} JOIN {right_source}".strip()
+            condition_sql = str(getattr(join, "condition_sql", "") or "").strip()
+            using_columns = list(getattr(join, "using_columns", []) or [])
+            if condition_sql:
+                line = f"{line} ON {condition_sql}"
+            elif using_columns:
+                line = f"{line} USING ({', '.join(str(column) for column in using_columns)})"
+            lines.append(line)
+        return lines
+
     def _apply_reverse_glossary(self, text: str, *, profile: Nl2SqlProfile, enabled: bool) -> str:
         glossary = self._effective_glossary(profile)
         if not enabled or not glossary:
@@ -7991,8 +8107,24 @@ class Nl2SqlService:
             operations.append("GROUP BY")
         if re.search(r"\border\s+by\b", sql, re.IGNORECASE):
             operations.append("ORDER BY")
-        filters = self._extract_sql_clauses(normalized, "where", ["group by", "order by", "fetch"])
-        joins = [
+        semantic = parse_oracle_sql(sql)
+        graph = semantic.graph
+        semantic_filters = (
+            [
+                predicate.expression_sql
+                for predicate in graph.filters
+                if predicate.clause == "where" and predicate.expression_sql
+            ]
+            if graph is not None
+            else []
+        )
+        fallback_filters = self._extract_sql_clauses(
+            normalized,
+            "where",
+            ["group by", "order by", "fetch"],
+        )
+        filters = semantic_filters or fallback_filters
+        fallback_joins = [
             match.group(0).strip()
             for match in re.finditer(
                 rf"\b(?:left|right|inner|outer|cross)?\s*join\s+{_SQL_OBJECT_REF}(?:\s+on\s+.*?)(?=\s+(?:left|right|inner|outer|cross)?\s*join\s+|\s+where\s+|\s+group\s+by\s+|\s+order\s+by\s+|$)",
@@ -8000,6 +8132,9 @@ class Nl2SqlService:
                 re.IGNORECASE,
             )
         ]
+        joins = self._semantic_join_lines(graph.joins) if graph is not None else []
+        if not joins:
+            joins = fallback_joins
         group_by = self._extract_sql_clauses(
             normalized,
             "group by",
@@ -10563,27 +10698,76 @@ class Nl2SqlService:
                 for item in self._oracle_adapter.execute_admin_statements(statements)
             ]
             ok = all(item.status == "success" for item in statement_results)
-            self._record_admin_audit(
-                operation="db_admin_execute",
-                target="ADMIN_EXECUTE",
-                executed=ok,
-                reason=request.reason,
-                detail={"statement_count": len(statements), "types": statement_types},
+            successful_statement_indexes = [
+                index
+                for index, item in enumerate(statement_results)
+                if item.status == "success" and index < len(statements)
+            ]
+            successful_types = [
+                str(statement_results[index].statement_type or statement_types[index]).upper()
+                for index in successful_statement_indexes
+            ]
+            successful_implicit_commit_statements = [
+                statements[index]
+                for index, statement_type in zip(
+                    successful_statement_indexes,
+                    successful_types,
+                    strict=False,
+                )
+                if statement_type in _IMPLICIT_COMMIT_STATEMENT_TYPES
+            ]
+            successful_rollbackable_dml = any(
+                statement_type in _ROLLBACKABLE_DML_STATEMENT_TYPES
+                for statement_type in successful_types
             )
+            committed = ok or bool(successful_implicit_commit_statements)
+            rolled_back = not ok and successful_rollbackable_dml and not committed
+            if successful_implicit_commit_statements and not ok:
+                warnings.append(
+                    "DDL/metadata 系 statement は Oracle の暗黙 commit により、"
+                    "成功した文が rollback されていません。失敗した SQL を修正し、"
+                    "必要に応じて DB 構造を再取得してください。"
+                )
+            try:
+                self._record_admin_audit(
+                    operation="db_admin_execute",
+                    target="ADMIN_EXECUTE",
+                    executed=ok,
+                    reason=request.reason,
+                    detail={
+                        "statement_count": len(statements),
+                        "success_count": len(successful_statement_indexes),
+                        "types": statement_types,
+                    },
+                )
+            except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+                warnings.append(f"Admin SQL の監査保存に失敗しました: {exc}")
             schema_refresh_job_id = ""
             schema_refresh_required = False
             schema_refresh_reason_code = ""
             has_unresolved_schema_side_effect = any(
-                _admin_statement_type(statement) == "PLSQL" for statement in statements
+                (statement_results[index].statement_type or statement_types[index]) == "PLSQL"
+                for index in successful_statement_indexes
             )
-            if ok and (has_unresolved_schema_side_effect or _statements_change_schema(statements)):
+            successful_schema_statements = [
+                statements[index]
+                for index, statement_type in zip(
+                    successful_statement_indexes,
+                    successful_types,
+                    strict=False,
+                )
+                if statement_type in _SCHEMA_MUTATION_STATEMENT_TYPES
+            ]
+            if has_unresolved_schema_side_effect or _statements_change_schema(
+                successful_schema_statements
+            ):
                 try:
                     if has_unresolved_schema_side_effect:
                         sync = self._manual_schema_refresh_sync()
                     else:
                         sync = self._submit_schema_refresh_after_admin_mutation(
                             target_objects=_schema_refresh_targets_for_statements(
-                                statements,
+                                successful_schema_statements,
                                 current_owner=self._current_schema_owner(),
                             ),
                             source="db_admin_execute",
@@ -10596,12 +10780,12 @@ class Nl2SqlService:
                 except Nl2SqlPersistenceUnavailable as exc:
                     warnings.append(f"Admin SQL 後の Schema job 投入に失敗しました: {exc}")
             return DbAdminExecuteData(
-                executed=ok,
+                executed=ok or committed,
                 runtime="oracle",
                 execution_context="admin_control_plane",
                 statements=statement_results,
-                committed=ok,
-                rolled_back=not ok,
+                committed=committed,
+                rolled_back=rolled_back,
                 schema_refresh_job_id=schema_refresh_job_id,
                 schema_refresh_required=schema_refresh_required,
                 schema_refresh_reason_code=schema_refresh_reason_code,
@@ -10962,17 +11146,20 @@ class Nl2SqlService:
             )
         success_count = sum(1 for item in statement_results if item.status == "success")
         committed = success_count > 0
-        self._record_admin_audit(
-            operation=f"db_admin_statements_{request.policy}",
-            target="ADMIN_EXECUTE",
-            executed=committed,
-            reason=request.reason,
-            detail={
-                "statement_count": len(statements),
-                "success_count": success_count,
-                "types": statement_types,
-            },
-        )
+        try:
+            self._record_admin_audit(
+                operation=f"db_admin_statements_{request.policy}",
+                target="ADMIN_EXECUTE",
+                executed=committed,
+                reason=request.reason,
+                detail={
+                    "statement_count": len(statements),
+                    "success_count": success_count,
+                    "types": statement_types,
+                },
+            )
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+            warnings.append(f"実行監査の保存に失敗しました: {exc}")
         schema_refresh_job_id = ""
         schema_refresh_required = False
         schema_refresh_reason_code = ""
@@ -11325,10 +11512,14 @@ class Nl2SqlService:
             ),
         )
 
+    def _view_query_sql_from_ddl(self, ddl: str) -> str:
+        first_statement = (_split_sql_statements(ddl) or [str(ddl or "")])[0]
+        match = re.search(r"\b(SELECT|WITH)\b[\s\S]*", first_statement, re.IGNORECASE)
+        return (match.group(0) if match else first_statement).strip()
+
     def extract_db_admin_join_where(self, request: DbAdminJoinWhereRequest) -> DbAdminJoinWhereData:
         """ビュー DDL から JOIN/WHERE 条件を抽出する(SQL Assist の AI 抽出再マップ)。"""
-        match = re.search(r"\b(SELECT|WITH)\b[\s\S]*", request.ddl, re.IGNORECASE)
-        view_sql = match.group(0) if match else request.ddl
+        view_sql = self._view_query_sql_from_ddl(request.ddl)
         prompt_profile: _JoinWherePromptProfile = "sql_structure"
         deterministic = self._deterministic_join_where(view_sql, prompt_profile)
         if not self._enterprise_ai_client.is_configured():
