@@ -68,6 +68,7 @@ import type {
   Nl2SqlResult,
   ProfileRecommendationData,
   RewriteData,
+  SampleDataMutationData,
   SchemaCatalog,
   SchemaObjectDetail,
   SchemaTable,
@@ -96,7 +97,7 @@ function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistory
   return items.filter((entry) => entry.item.admin_feedback_rating === "good");
 }
 
-type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh";
+type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh" | "sample-import";
 type PageError = { source: PageErrorSource; message: string; code?: string } | null;
 
 const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
@@ -117,6 +118,14 @@ function messageWithRetryHint(message: string) {
 
 function actionErrorMessage(error: unknown, fallback: string) {
   return messageWithRetryHint(messageFromError(error, fallback));
+}
+
+function sampleDataMutationFailureMessage(result: SampleDataMutationData) {
+  return (
+    result.warnings.find((message) => message.trim()) ||
+    result.statements.find((statement) => statement.error_message.trim())?.error_message ||
+    t("nl2sql.sample.importFailed")
+  );
 }
 
 function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
@@ -700,7 +709,16 @@ function ExecutableNl2SqlWorkbench() {
   const importSampleData = useCallback(async () => {
     setImportingSample(true);
     try {
-      await apiPost("/api/nl2sql/sample-data/import", { step: "all", confirmation: "SQL_ASSIST_SAMPLE" });
+      const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
+        step: "all",
+        confirmation: "SQL_ASSIST_SAMPLE",
+      });
+      if (!result.executed) {
+        const message = sampleDataMutationFailureMessage(result);
+        toastError(message);
+        setPageError({ source: "sample-import", message });
+        return;
+      }
       toast.success(t("nl2sql.sample.importSuccess"));
       setPageError(null);
       setSchemaDetailError("");

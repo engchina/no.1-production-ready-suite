@@ -108,8 +108,13 @@ class _FakeStatementsAdapter:
         self.calls: list[tuple[list[str], bool]] = []
 
     def execute_admin_statements(
-        self, statements: list[str], *, atomic: bool = True
+        self,
+        statements: list[str],
+        *,
+        atomic: bool = True,
+        ignored_error_codes: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
+        _ = ignored_error_codes
         self.calls.append((statements, atomic))
         return self.results
 
