@@ -47,6 +47,8 @@ import {
 
 // タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
 const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
+const METADATA_TARGET_LIMIT = 100;
+const METADATA_DETAIL_FETCH_BATCH_SIZE = 10;
 import type {
   DbAdminObjectDetail,
   DbAdminExecuteData,
@@ -81,11 +83,12 @@ interface MetadataTargetItem extends MetadataSqlTarget {
 const ANNOTATION_EXTRA_TEXT =
   "ANNOTATIONSの安全な適用ガイド:\n" +
   "- DROPとADDは同一文で混在させず、別々のALTER文に分割\n" +
-  "- 重複名を避けるため、可能ならADD IF NOT EXISTSを使う\n" +
+  "- 既存値を更新する場合はADD OR REPLACEを使う\n" +
+  "- 新規のみ追加したい場合はADD IF NOT EXISTSを使う\n" +
   "- COMMENT: は入力項目名であり、説明用annotation名にはUI_Displayを使う\n" +
   "- 値内の'は''へエスケープし、予約語や空白を含むannotation名は二重引用符で囲む\n" +
-  "例(表): ALTER TABLE USERS ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Users');\n" +
-  "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'ID'));";
+  "例(表): ALTER TABLE USERS ANNOTATIONS (ADD OR REPLACE UI_Display 'Users');\n" +
+  "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD OR REPLACE UI_Display 'ID'));";
 
 const useDebouncedValue = <T,>(value: T, delayMs: number) => {
   const [debounced, setDebounced] = useState(value);
@@ -155,6 +158,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
   const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
+  const [generationResetSignal, setGenerationResetSignal] = useState(0);
   const [targetSearch, setTargetSearch] = useState("");
   const [targetOwnerPrefix, setTargetOwnerPrefix] = useState("");
   const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
@@ -206,7 +210,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     return allTargets
       .filter((item) => {
         if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
-        if (targetFilter !== "all" && item.object_type !== targetFilter) return false;
+        if (targetFilter === "view" && !isViewLikeTarget(item.object_type)) return false;
+        if (targetFilter === "table" && item.object_type !== "table") return false;
         if (!q) return true;
         return (
           item.object_name.toLowerCase().includes(q) ||
@@ -289,6 +294,11 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
   const toggleTarget = (target: MetadataSqlTarget) => {
     const key = targetKey(target);
+    if (!selectedKeys.includes(key) && selectedKeys.length >= METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
+    setMessage("");
     setSelectedKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
@@ -300,11 +310,21 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const bulkSelectTargets = (targets: MetadataTargetItem[], selected: boolean) => {
     const targetKeys = targets.map((target) => target.key);
     const targetKeySet = new Set(targetKeys);
-    setSelectedKeys((current) =>
-      selected
-        ? [...new Set([...current, ...targetKeys])]
-        : current.filter((key) => !targetKeySet.has(key))
-    );
+    if (selected) {
+      const currentSet = new Set(selectedKeys);
+      const additions = targetKeys.filter((key) => !currentSet.has(key));
+      const available = Math.max(0, METADATA_TARGET_LIMIT - selectedKeys.length);
+      const limitedAdditions = additions.slice(0, available);
+      setSelectedKeys([...selectedKeys, ...limitedAdditions]);
+      setMessage(
+        additions.length > available
+          ? t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT })
+          : ""
+      );
+    } else {
+      setSelectedKeys(selectedKeys.filter((key) => !targetKeySet.has(key)));
+      setMessage("");
+    }
     setDetails([]);
     setRefreshedSampleText(null);
     setGenerated(null);
@@ -322,21 +342,28 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.noTarget"));
       return;
     }
+    if (selectedTargets.length > METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
     setLoading("details");
     setMessage("");
     try {
-      const nextDetails = await Promise.all(
-        selectedTargets.map((target) => {
+      const nextDetails: DbAdminObjectDetail[] = [];
+      for (let index = 0; index < selectedTargets.length; index += METADATA_DETAIL_FETCH_BATCH_SIZE) {
+        const batch = selectedTargets.slice(index, index + METADATA_DETAIL_FETCH_BATCH_SIZE);
+        const batchDetails = await Promise.all(batch.map((target) => {
           const params = new URLSearchParams();
           if (target.owner) params.set("owner", target.owner);
           const suffix = params.toString() ? `?${params.toString()}` : "";
           return apiGet<DbAdminObjectDetail>(
-            target.object_type === "view"
+            isViewLikeTarget(target.object_type)
               ? `/api/nl2sql/db-admin/views/${encodeURIComponent(target.object_name)}${suffix}`
               : `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.object_name)}${suffix}`
           );
-        })
-      );
+        }));
+        nextDetails.push(...batchDetails);
+      }
       setDetails(nextDetails);
       setRefreshedSampleText(null);
       setGenerated(null);
@@ -353,6 +380,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.noTarget"));
       return;
     }
+    if (selectedTargets.length > METADATA_TARGET_LIMIT || details.length > METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
     setLoading("generate");
     setMessage("");
     try {
@@ -360,7 +391,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         targets: details.map((detail) => ({
           owner: detail.owner,
           object_name: detail.name,
-          object_type: detail.object_type === "view" ? "view" : "table",
+          object_type: normalizeMetadataTargetType(detail.object_type),
           columns: detail.columns.map((column) => column.column_name),
         })),
         sample_limit: sampleLimit,
@@ -381,6 +412,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           : "/api/nl2sql/annotations/generate-sql";
       const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
       setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
+      setGenerationResetSignal((value) => value + 1);
       toast.success(t("metadataSql.toast.generated"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
@@ -544,6 +576,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             generated={generated}
             loading={loading === "generate"}
             policy={policy}
+            resetSignal={generationResetSignal}
             onExecuted={reloadAfterMutation}
           />
         </section>
@@ -912,6 +945,7 @@ function MetadataExecutePanel({
   generated,
   loading,
   policy,
+  resetSignal,
   onExecuted,
 }: {
   pageId: string;
@@ -919,6 +953,7 @@ function MetadataExecutePanel({
   generated: MetadataSqlGenerateData | null;
   loading: boolean;
   policy: DbAdminStatementPolicy;
+  resetSignal: number;
   onExecuted: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   return (
@@ -962,6 +997,7 @@ function MetadataExecutePanel({
                 : "metadataSql.annotation.placeholder"
             )}
             initialSql={generated?.sql ?? ""}
+            resetSignal={resetSignal}
             executeOnly
             framed={false}
             onExecuted={onExecuted}
@@ -1013,7 +1049,7 @@ function TargetSortButton({
 
 function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
   return items.map((item): MetadataTargetItem => {
-    const objectType: MetadataSqlTarget["object_type"] = item.object_type === "view" ? "view" : "table";
+    const objectType = normalizeMetadataTargetType(item.object_type);
     const qualifiedName = dbAdminObjectQualifiedName(item);
     const target: MetadataSqlTarget = {
       owner: item.owner,
@@ -1038,6 +1074,7 @@ function targetSortValue(item: MetadataTargetItem, key: TargetSortKey) {
 }
 
 function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {
+  if (objectType === "materialized_view") return t("metadataSql.targets.type.materializedView");
   return objectType === "view" ? t("metadataSql.targets.type.view") : t("metadataSql.targets.type.table");
 }
 
@@ -1049,7 +1086,23 @@ function targetKey(target: MetadataSqlTarget) {
 function targetFromKey(key: string): MetadataSqlTarget | null {
   const [objectType, ...nameParts] = key.split(":");
   const qualifiedName = nameParts.join(":");
-  if ((objectType !== "table" && objectType !== "view") || !qualifiedName) return null;
+  if (!isMetadataTargetType(objectType) || !qualifiedName) return null;
   const target = parseDbAdminObjectTarget(qualifiedName);
   return { owner: target.owner, object_name: target.name, object_type: objectType };
+}
+
+function normalizeMetadataTargetType(value: string): MetadataSqlTarget["object_type"] {
+  const normalized = value.replace(/[\s_-]+/gu, "_").toLowerCase();
+  if (normalized === "materialized_view" || normalized === "materializedview" || normalized === "mview") {
+    return "materialized_view";
+  }
+  return normalized === "view" ? "view" : "table";
+}
+
+function isMetadataTargetType(value: string): value is MetadataSqlTarget["object_type"] {
+  return value === "table" || value === "view" || value === "materialized_view";
+}
+
+function isViewLikeTarget(value: MetadataSqlTarget["object_type"]) {
+  return value === "view" || value === "materialized_view";
 }

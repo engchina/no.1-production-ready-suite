@@ -557,9 +557,17 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed(SCHEMA_READ_PERMISSION)
     if route_path.startswith("/nl2sql/db-admin"):
         if route_path.startswith("/nl2sql/db-admin/tables"):
-            return _allowed("menu.table_management")
+            return _allowed(
+                "menu.table_management",
+                "menu.comment_management",
+                "menu.annotation_management",
+            )
         if route_path.startswith("/nl2sql/db-admin/views"):
-            return _allowed("menu.view_management")
+            return _allowed(
+                "menu.view_management",
+                "menu.comment_management",
+                "menu.annotation_management",
+            )
         if route_path.endswith("/drop-table") or route_path.endswith("/truncate-table"):
             return _allowed("menu.table_management")
         if route_path.endswith("/drop-view"):
@@ -575,7 +583,11 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.annotation_management",
             )
         if route_path.endswith("/execute") or route_path.endswith("/statements"):
-            return _allowed("menu.admin_sql")
+            return _allowed(
+                "menu.admin_sql",
+                "menu.comment_management",
+                "menu.annotation_management",
+            )
         if method == "GET":
             return DATA_PREP_MENUS
         return _allowed("menu.admin_sql")

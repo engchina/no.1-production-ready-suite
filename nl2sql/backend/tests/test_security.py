@@ -1859,7 +1859,18 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/rewrite") == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/analyze") == frozenset({SQL_EXECUTE_PERMISSION})
-    assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
+    assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset(
+        {"menu.admin_sql", "menu.comment_management", "menu.annotation_management"}
+    )
+    assert permission_for_route("POST", "/nl2sql/db-admin/statements") == frozenset(
+        {"menu.admin_sql", "menu.comment_management", "menu.annotation_management"}
+    )
+    assert permission_for_route("GET", "/nl2sql/db-admin/tables/{table_name}") == frozenset(
+        {"menu.table_management", "menu.comment_management", "menu.annotation_management"}
+    )
+    assert permission_for_route("GET", "/nl2sql/db-admin/views/{view_name}") == frozenset(
+        {"menu.view_management", "menu.comment_management", "menu.annotation_management"}
+    )
     assert permission_for_route("GET", "/nl2sql/profiles/search") == frozenset(
         {PROFILE_READ_PERMISSION}
     )

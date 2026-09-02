@@ -2066,7 +2066,7 @@ class CommentApplyItem(BaseModel):
     """Table / column comment apply request item."""
 
     object_name: str = Field(min_length=1, max_length=260)
-    object_type: str = Field(default="column", min_length=1, max_length=16)
+    object_type: str = Field(default="column", min_length=1, max_length=32)
     comment: str = Field(min_length=1, max_length=4000)
 
 
@@ -2121,7 +2121,7 @@ class AnnotationApplyItem(BaseModel):
     """Annotation apply request item."""
 
     object_name: str = Field(min_length=1, max_length=260)
-    object_type: str = Field(default="table", min_length=1, max_length=16)
+    object_type: str = Field(default="table", min_length=1, max_length=32)
     annotation_name: str = Field(default="Display", min_length=1, max_length=64)
     annotation_value: str = Field(min_length=1, max_length=4000)
 
@@ -2162,7 +2162,16 @@ class MetadataSqlTarget(BaseModel):
 
     owner: str = ""
     object_name: str = Field(min_length=1, max_length=260)
-    object_type: Literal["table", "view", "TABLE", "VIEW"] = "table"
+    object_type: Literal[
+        "table",
+        "view",
+        "materialized_view",
+        "materialized view",
+        "TABLE",
+        "VIEW",
+        "MATERIALIZED_VIEW",
+        "MATERIALIZED VIEW",
+    ] = "table"
 
     @field_validator("object_type", mode="before")
     @classmethod

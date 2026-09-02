@@ -1141,7 +1141,7 @@ export type DbAdminStatementPolicy =
 export interface MetadataSqlTarget {
   owner?: string;
   object_name: string;
-  object_type: "table" | "view";
+  object_type: "table" | "view" | "materialized_view";
 }
 
 export interface MetadataSqlSampleTarget extends MetadataSqlTarget {

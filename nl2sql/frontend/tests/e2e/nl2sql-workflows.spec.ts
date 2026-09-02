@@ -9316,8 +9316,16 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.goto("/comment-management");
   const commentFooter = page.getByTestId("comment-management-target-footer");
   await expect(commentFooter).toContainText("100 / 101 件を表示");
+  const commentBulkActions = page.getByTestId("comment-management-target-selection-actions");
+  await commentBulkActions.getByRole("button", { name: "表示中をすべて選択" }).click();
+  await expect(commentFooter).toContainText("選択 100 件");
   await commentFooter.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(commentFooter).toContainText("101 / 101 件を表示");
+  await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).click();
+  await expect(page.getByText("一度に選択できる対象は 100 件までです。")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /PAGE_101_TABLE/ })).not.toBeChecked();
+  await commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
+  await expect(commentFooter).toContainText("選択 0 件");
   await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
@@ -9350,6 +9358,38 @@ test("metadata management target lists load more tables and views before SQL gen
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
+});
+
+test("metadata SQL regeneration resets the edited execution SQL", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  const generatedSql = 'COMMENT ON TABLE "APP"."INVOICES" IS \'請求情報\';';
+  let generationCount = 0;
+  await page.unroute("**/api/nl2sql/comments/generate-sql");
+  await page.route("**/api/nl2sql/comments/generate-sql", (route) => {
+    generationCount += 1;
+    return fulfillJson(route, {
+      sql: generatedSql,
+      source: "deterministic",
+      warnings: [],
+      timing,
+    });
+  });
+
+  await page.goto("/comment-management");
+  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "SQL 生成" }).click();
+
+  const sqlTextarea = page.locator("#comment-management-panel-execute").getByLabel(
+    "SQL(セミコロン区切りで複数文を入力可能)"
+  );
+  await expect(sqlTextarea).toHaveValue(generatedSql);
+  await sqlTextarea.fill("COMMENT ON TABLE BROKEN IS '手編集';");
+  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await expect.poll(() => generationCount).toBe(2);
+  await expect(sqlTextarea).toHaveValue(generatedSql);
 });
 
 test("table and view management object lists load more and find unloaded objects", async ({ page }) => {

@@ -6,7 +6,6 @@ import base64
 import csv
 import importlib
 import io
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -19,7 +18,9 @@ from pydantic import ValidationError
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
     AllowedObjects,
+    AnnotationApplyRequest,
     AssetRefreshData,
+    CommentApplyRequest,
     CsvImportColumn,
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadRequest,
@@ -988,13 +989,18 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
             sql=(
                 "COMMENT ON TABLE T1 IS 'テーブル';\n"
                 "COMMENT ON COLUMN T1.ID IS 'ID';\n"
-                "COMMENT ON VIEW V1 IS 'ビュー';\n"
+                "COMMENT ON TABLE V1 IS 'ビュー';\n"
                 "COMMENT ON MATERIALIZED VIEW MV1 IS 'MV'"
             ),
             policy="comment_sql",
         )
     )
     assert [item.status for item in comment_ok.statements] == ["confirmation_required"] * 4
+
+    comment_view_ng = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(sql="COMMENT ON VIEW V1 IS 'ビュー'", policy="comment_sql")
+    )
+    assert comment_view_ng.statements[0].status == "blocked"
 
     comment_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="CREATE TABLE T1 (ID NUMBER)", policy="comment_sql")
@@ -1009,12 +1015,13 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
                 "ALTER TABLE T1 MODIFY ID ANNOTATIONS (UI_Display 'ID');\n"
                 "ALTER VIEW V1 ANNOTATIONS (UI_Display 'V1');\n"
                 "ALTER TABLE T1 ANNOTATIONS (Business_Label '業務名');\n"
-                "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS \"COMMENT\" '説明')"
+                "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS \"COMMENT\" '説明');\n"
+                "ALTER MATERIALIZED VIEW MV1 ANNOTATIONS (UI_Display 'MV1')"
             ),
             policy="annotation_sql",
         )
     )
-    assert [item.status for item in annotation_ok.statements] == ["confirmation_required"] * 6
+    assert [item.status for item in annotation_ok.statements] == ["confirmation_required"] * 7
 
     annotation_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="ALTER TABLE T1 ADD C1 NUMBER", policy="annotation_sql")
@@ -1589,7 +1596,7 @@ def test_metadata_sql_generation_fallback_and_fence_cleanup() -> None:
         )
     )
     assert comment_ai.source == "oci_enterprise_ai"
-    assert comment_ai.sql == "COMMENT ON VIEW V_EMP IS '社員ビュー';"
+    assert comment_ai.sql == "COMMENT ON TABLE V_EMP IS '社員ビュー';"
 
     service._enterprise_ai_client = FakeEnterpriseAiClient(
         "```sql\n"
@@ -1666,17 +1673,17 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
     )
 
     assert result.source == "deterministic"
-    assert "ADD IF NOT EXISTS UI_Display" in result.sql
+    assert "ADD OR REPLACE UI_Display" in result.sql
     assert "ADD IF NOT EXISTS COMMENT" not in result.sql
     assert any("ORA-11548" in warning for warning in result.warnings)
 
 
-def test_multi_annotation_generation_makes_every_add_idempotent() -> None:
-    # ADD IF NOT EXISTS が後続 annotation に伝播せず素の ADD になる ORA-11560 を防ぐ。
+def test_multi_annotation_generation_preserves_explicit_add_and_normalizes_omitted_items() -> None:
+    # 操作句省略だけを ADD IF NOT EXISTS に補い、明示 ADD は no-op 化しない。
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service._enterprise_ai_client = FakeEnterpriseAiClient(
         "ALTER TABLE EMPLOYEE MODIFY (EMPLOYEE_ID ANNOTATIONS "
-        "(ADD IF NOT EXISTS UI_Display '従業員ID', data_type 'NUMBER', nullable 'N'));"
+        "(ADD UI_Display '従業員ID', data_type 'NUMBER', nullable 'N'));"
     )
 
     result = service.generate_annotation_sql(
@@ -1689,11 +1696,11 @@ def test_multi_annotation_generation_makes_every_add_idempotent() -> None:
         )
     )
 
-    assert result.sql.count("ADD IF NOT EXISTS") == 3
+    assert "ADD UI_Display '従業員ID'" in result.sql
+    assert result.sql.count("ADD IF NOT EXISTS") == 2
     assert "data_type 'NUMBER'" in result.sql
-    assert "ANNOTATIONS (ADD IF NOT EXISTS UI_Display" in result.sql
-    # 素の ADD(IF NOT EXISTS 無し)が残っていないこと。
-    assert re.search(r"(?<!EXISTS )\bdata_type\b", result.sql) is None
+    assert "ADD IF NOT EXISTS data_type 'NUMBER'" in result.sql
+    assert "ADD IF NOT EXISTS nullable 'N'" in result.sql
 
 
 def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None:
@@ -1722,8 +1729,361 @@ def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None
         'ALTER TABLE "APP"."B_TABLE"'
     )
     assert "O''Brien" in result.sql
-    assert "ADD IF NOT EXISTS UI_Display" in result.sql
+    assert "ADD OR REPLACE UI_Display" in result.sql
     assert 'MODIFY ("V_ID"' not in result.sql
+
+
+def test_metadata_sql_uses_oracle_view_and_materialized_view_syntax() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="SALES_V",
+                logical_name="売上ビュー",
+                table_type="view",
+                comment="売上ビュー",
+                columns=[
+                    SchemaColumn(
+                        column_name="SALES_ID",
+                        logical_name="売上ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+            SchemaTable(
+                table_name="SALES_MV",
+                logical_name="売上MV",
+                table_type="materialized view",
+                comment="売上MV",
+                columns=[
+                    SchemaColumn(
+                        column_name="SALES_ID",
+                        logical_name="売上ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+        ],
+    )
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    comments = service.generate_comment_sql(
+        MetadataSqlGenerateRequest(
+            targets=[
+                {"object_name": "SALES_V", "object_type": "view"},
+                {"object_name": "SALES_MV", "object_type": "view"},
+            ],
+            structure_text=(
+                "OBJECT: SALES_V\nTYPE: view\n\n" "OBJECT: SALES_MV\nTYPE: materialized view"
+            ),
+        )
+    )
+    annotations = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[
+                {"object_name": "SALES_V", "object_type": "view"},
+                {"object_name": "SALES_MV", "object_type": "view"},
+            ],
+            structure_text=(
+                "OBJECT: SALES_V\nTYPE: view\n\n" "OBJECT: SALES_MV\nTYPE: materialized view"
+            ),
+        )
+    )
+
+    assert 'COMMENT ON TABLE "APP"."SALES_V"' in comments.sql
+    assert 'COMMENT ON MATERIALIZED VIEW "APP"."SALES_MV"' in comments.sql
+    assert "COMMENT ON VIEW" not in comments.sql
+    assert 'ALTER VIEW "APP"."SALES_V"' in annotations.sql
+    assert 'ALTER MATERIALIZED VIEW "APP"."SALES_MV"' in annotations.sql
+    assert "ADD OR REPLACE UI_Display" in annotations.sql
+    assert "MODIFY" not in annotations.sql
+
+
+def test_comment_apply_reports_partial_oracle_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {"index": 1, "status": "success", "message": "RowsAffected=0"},
+            {"index": 2, "status": "error", "error_message": "ORA-00942: missing object"},
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(table_name="EMPLOYEE", logical_name="社員"),
+            SchemaTable(table_name="DEPARTMENT", logical_name="部署"),
+        ],
+    )
+    submitted: list[tuple[list[Any] | None, str]] = []
+
+    def submit(
+        *,
+        target_objects: list[Any] | None,
+        source: str,
+    ) -> SchemaRefreshMutationSync:
+        submitted.append((target_objects, source))
+        return SchemaRefreshMutationSync(job_id="refresh-comment")
+
+    monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    result = service.apply_comments(
+        CommentApplyRequest(
+            items=[
+                {
+                    "object_name": "EMPLOYEE",
+                    "object_type": "table",
+                    "comment": "社員",
+                },
+                {
+                    "object_name": "DEPARTMENT",
+                    "object_type": "table",
+                    "comment": "部署",
+                },
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.calls == [
+        (
+            [
+                'COMMENT ON TABLE "APP"."EMPLOYEE" IS \'社員\';',
+                'COMMENT ON TABLE "APP"."DEPARTMENT" IS \'部署\';',
+            ],
+            False,
+        )
+    ]
+    assert result.executed is True
+    assert [statement.status for statement in result.statements] == ["applied", "error"]
+    assert result.statements[1].error_message == "ORA-00942: missing object"
+    assert result.schema_refresh_job_id == "refresh-comment"
+    assert submitted[0][1] == "comments_apply"
+    assert submitted[0][0] is not None
+    assert [target.object_name for target in submitted[0][0]] == ["EMPLOYEE"]
+    assert any("部分的に成功" in warning for warning in result.warnings)
+
+
+def test_annotation_apply_reports_partial_oracle_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _FakeStatementsAdapter(
+        [
+            {"index": 1, "status": "success", "message": "RowsAffected=0"},
+            {"index": 2, "status": "error", "error_message": "ORA-11560: annotation exists"},
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(table_name="EMPLOYEE", logical_name="社員"),
+            SchemaTable(table_name="DEPARTMENT", logical_name="部署"),
+        ],
+    )
+
+    def submit(
+        *,
+        target_objects: list[Any] | None,
+        source: str,
+    ) -> SchemaRefreshMutationSync:
+        assert source == "annotations_apply"
+        assert target_objects is not None
+        assert [target.object_name for target in target_objects] == ["EMPLOYEE"]
+        return SchemaRefreshMutationSync(job_id="refresh-annotation")
+
+    monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    result = service.apply_annotations(
+        AnnotationApplyRequest(
+            items=[
+                {
+                    "object_name": "EMPLOYEE",
+                    "object_type": "table",
+                    "annotation_name": "Display",
+                    "annotation_value": "社員",
+                },
+                {
+                    "object_name": "DEPARTMENT",
+                    "object_type": "table",
+                    "annotation_name": "Display",
+                    "annotation_value": "部署",
+                },
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert adapter.calls == [
+        (
+            [
+                'ALTER TABLE "APP"."EMPLOYEE" ANNOTATIONS (ADD OR REPLACE DISPLAY \'社員\');',
+                'ALTER TABLE "APP"."DEPARTMENT" ANNOTATIONS (ADD OR REPLACE DISPLAY \'部署\');',
+            ],
+            False,
+        )
+    ]
+    assert result.executed is True
+    assert [statement.status for statement in result.statements] == ["applied", "error"]
+    assert result.statements[1].error_message == "ORA-11560: annotation exists"
+    assert result.schema_refresh_job_id == "refresh-annotation"
+    assert any("部分的に成功" in warning for warning in result.warnings)
+
+
+def test_annotation_candidates_normalize_mv_and_skip_view_columns() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="SALES_V",
+                logical_name="売上ビュー",
+                table_type="view",
+                columns=[
+                    SchemaColumn(
+                        column_name="SALES_ID",
+                        logical_name="売上ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+            SchemaTable(
+                table_name="SALES_MV",
+                logical_name="売上MV",
+                table_type="materialized view",
+                columns=[
+                    SchemaColumn(
+                        column_name="SALES_ID",
+                        logical_name="売上ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    suggestions = service.suggest_annotations().suggestions
+    assert [(item.object_name, item.object_type) for item in suggestions] == [
+        ("SALES_V", "view"),
+        ("SALES_MV", "materialized_view"),
+    ]
+
+    mv_apply = service.apply_annotations(
+        AnnotationApplyRequest(
+            items=[
+                {
+                    "object_name": "SALES_MV",
+                    "object_type": "materialized view",
+                    "annotation_name": "Display",
+                    "annotation_value": "売上MV",
+                }
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert mv_apply.statements[0].object_type == "materialized_view"
+    assert 'ALTER MATERIALIZED VIEW "APP"."SALES_MV"' in mv_apply.statements[0].sql
+
+
+def test_annotation_statement_prefers_catalog_object_type_over_request() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[SchemaTable(table_name="EMPLOYEE", logical_name="社員", table_type="table")],
+    )
+
+    result = service.apply_annotations(
+        AnnotationApplyRequest(
+            items=[
+                {
+                    "object_name": "EMPLOYEE",
+                    "object_type": "view",
+                    "annotation_name": "Display",
+                    "annotation_value": "社員",
+                }
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.statements[0].object_type == "table"
+    assert 'ALTER TABLE "APP"."EMPLOYEE"' in result.statements[0].sql
+
+
+def test_comment_apply_rejects_over_4000_byte_comment() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    result = service.apply_comments(
+        CommentApplyRequest(
+            items=[
+                {
+                    "object_name": "EMPLOYEE",
+                    "object_type": "table",
+                    "comment": "あ" * 1334,
+                }
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.statements == []
+    assert any("4000 バイト" in warning for warning in result.warnings)
+
+
+def test_metadata_sql_target_preservation_uses_object_boundaries() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "COMMENT ON TABLE APP.EMPLOYEE IS '社員';"
+    )
+
+    result = service.generate_comment_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"owner": "APP", "object_name": "EMP", "object_type": "table"}],
+            structure_text="OBJECT: APP.EMP\nTYPE: table\nCOMMENT: EMP",
+        )
+    )
+
+    assert result.source == "deterministic"
+    assert 'COMMENT ON TABLE "APP"."EMP"' in result.sql
+    assert any("owner 修飾を保持しなかった" in warning for warning in result.warnings)
+
+
+def test_metadata_sql_router_returns_400_for_invalid_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    class _FailingMetadataSqlService:
+        def generate_comment_sql(self, _request: MetadataSqlGenerateRequest) -> None:
+            raise ValueError("識別子が不正です。")
+
+        def get_metadata_samples(self, _request: MetadataSqlSampleRequest) -> None:
+            raise ValueError("識別子が不正です。")
+
+        def generate_annotation_sql(self, _request: MetadataSqlGenerateRequest) -> None:
+            raise ValueError("識別子が不正です。")
+
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _FailingMetadataSqlService())
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.generate_comment_sql(
+            MetadataSqlGenerateRequest(targets=[{"object_name": "EMP", "object_type": "table"}])
+        )
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as samples_exc_info:
+        nl2sql_router.metadata_samples(
+            MetadataSqlSampleRequest(targets=[{"object_name": "EMP", "object_type": "table"}])
+        )
+    assert samples_exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as annotation_exc_info:
+        nl2sql_router.generate_annotation_sql(
+            MetadataSqlGenerateRequest(targets=[{"object_name": "EMP", "object_type": "table"}])
+        )
+    assert annotation_exc_info.value.status_code == 400
 
 
 def test_metadata_samples_use_requested_limit_and_generation_context() -> None:

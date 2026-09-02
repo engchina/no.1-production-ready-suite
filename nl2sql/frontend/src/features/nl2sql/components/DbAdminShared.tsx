@@ -866,6 +866,7 @@ export function StatementRunnerCard({
   title,
   description,
   initialSql,
+  resetSignal,
   placeholder,
   progress,
   confirmationTitle,
@@ -878,6 +879,7 @@ export function StatementRunnerCard({
   title: string;
   description?: string;
   initialSql?: string;
+  resetSignal?: string | number;
   placeholder?: string;
   progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
   confirmationTitle?: string;
@@ -896,7 +898,7 @@ export function StatementRunnerCard({
 
   useEffect(() => {
     if (initialSql !== undefined) setSql(initialSql);
-  }, [initialSql]);
+  }, [initialSql, resetSignal]);
 
   const run = async () => {
     if (!sql.trim()) return;

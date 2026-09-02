@@ -1360,7 +1360,6 @@ def _schema_refresh_target_for_statement(
         (rf"^alter\s+table\s+{object_ref}{object_end}", "table", "present"),
         (rf"^alter\s+view\s+{object_ref}{object_end}", "view", "present"),
         (rf"^comment\s+on\s+table\s+{object_ref}\s+is\b", "table", "present"),
-        (rf"^comment\s+on\s+view\s+{object_ref}\s+is\b", "view", "present"),
     )
     for pattern, object_type, expected_state in patterns:
         match = re.match(pattern, stripped, flags=re.IGNORECASE)
@@ -1379,6 +1378,18 @@ def _schema_refresh_target_for_statement(
     if materialized:
         return _schema_refresh_target_from_ref(
             materialized.group(1),
+            current_owner=current_owner,
+            object_type="materialized_view",
+            expected_state="present",
+        )
+    materialized_alter = re.match(
+        rf"^alter\s+materialized\s+view\s+{object_ref}{object_end}",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if materialized_alter:
+        return _schema_refresh_target_from_ref(
+            materialized_alter.group(1),
             current_owner=current_owner,
             object_type="materialized_view",
             expected_state="present",
@@ -1537,23 +1548,106 @@ _DB_ADMIN_STATEMENT_POLICIES: dict[str, tuple[re.Pattern[str], ...]] = {
     ),
     "data_dml": (re.compile(r"^(insert|update|delete|merge|truncate)\b", re.IGNORECASE),),
     "comment_sql": (
-        re.compile(
-            r"^comment\s+on\s+(table|column|materialized\s+view|view)\b",
-            re.IGNORECASE,
-        ),
+        re.compile(r"^comment\s+on\s+(table|column|materialized\s+view)\b", re.IGNORECASE),
     ),
-    "annotation_sql": (re.compile(r"^alter\s+(table|view)\b", re.IGNORECASE),),
+    "annotation_sql": (re.compile(r"^alter\s+(table|view|materialized\s+view)\b", re.IGNORECASE),),
 }
 
 _DB_ADMIN_POLICY_LABELS = {
     "table_ddl": "CREATE TABLE / COMMENT ON / DROP TABLE",
     "view_ddl": "CREATE [OR REPLACE] VIEW / COMMENT ON / DROP VIEW",
     "data_dml": "INSERT / UPDATE / DELETE / MERGE / TRUNCATE",
-    "comment_sql": "COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW/VIEW",
+    "comment_sql": "COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW",
     "annotation_sql": (
-        "ALTER TABLE MODIFY ... ANNOTATIONS / ALTER TABLE ANNOTATIONS / ALTER VIEW ANNOTATIONS"
+        "ALTER TABLE MODIFY ... ANNOTATIONS / ALTER TABLE ANNOTATIONS / "
+        "ALTER VIEW ANNOTATIONS / ALTER MATERIALIZED VIEW ANNOTATIONS"
     ),
 }
+
+
+def _metadata_object_kind(value: str | None) -> Literal["table", "view", "materialized_view"]:
+    normalized = re.sub(r"[\s_-]+", "_", str(value or "").strip().lower())
+    if normalized in {"materialized_view", "materializedview", "mview"}:
+        return "materialized_view"
+    if "materialized" in normalized and "view" in normalized:
+        return "materialized_view"
+    if normalized == "view":
+        return "view"
+    return "table"
+
+
+def _catalog_metadata_object_kind(
+    table: SchemaTable | None,
+    requested_type: str | None = None,
+) -> Literal["table", "view", "materialized_view"]:
+    if table is not None:
+        return _metadata_object_kind(table.table_type)
+    return _metadata_object_kind(requested_type)
+
+
+def _comment_ddl_kind_for_metadata(
+    kind: Literal["table", "view", "materialized_view"],
+) -> str:
+    return "MATERIALIZED VIEW" if kind == "materialized_view" else "TABLE"
+
+
+def _annotation_ddl_kind_for_metadata(
+    kind: Literal["table", "view", "materialized_view"],
+) -> str:
+    if kind == "materialized_view":
+        return "MATERIALIZED VIEW"
+    if kind == "view":
+        return "VIEW"
+    return "TABLE"
+
+
+def _validate_oracle_metadata_literal_bytes(
+    value: str,
+    *,
+    target: str,
+    label: str,
+) -> None:
+    if len(value.encode("utf-8")) > 4000:
+        raise ValueError(f"{target}: {label} は Oracle の 4000 バイト以内で指定してください。")
+
+
+def _rewrite_comment_on_view_statement(statement: str) -> str:
+    return re.sub(
+        r"^(\s*)comment\s+on\s+view\b",
+        r"\1COMMENT ON TABLE",
+        statement,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def _admin_statement_result_succeeded(result: Mapping[str, Any] | None) -> bool:
+    if not result:
+        return False
+    status = str(result.get("status") or "").strip().lower()
+    return status in {"success", "applied", "executed", "applied_to_local_state"}
+
+
+def _admin_statement_result_error_message(result: Mapping[str, Any] | None) -> str:
+    if not result:
+        return ""
+    return str(result.get("error_message") or result.get("message") or "").strip()
+
+
+def _align_admin_statement_results(
+    results: Sequence[Mapping[str, Any]],
+    statement_count: int,
+) -> list[Mapping[str, Any] | None]:
+    aligned: list[Mapping[str, Any] | None] = [None] * statement_count
+    for fallback_index, result in enumerate(results):
+        raw_index = result.get("index", fallback_index + 1)
+        try:
+            index = int(raw_index) - 1
+        except (TypeError, ValueError):
+            index = fallback_index
+        if 0 <= index < statement_count:
+            aligned[index] = result
+    return aligned
 
 
 def _db_admin_policy_error(statement: str, policy: str) -> str:
@@ -1580,6 +1674,7 @@ def _annotation_statement_error(statement: str) -> str:
         rf"^alter\s+table\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
         rf"^alter\s+table\s+{object_ref}\s+modify\s+.+\s+annotations\s*\(.+\)\s*$",
         rf"^alter\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
+        rf"^alter\s+materialized\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
     )
     if any(re.match(pattern, norm, flags=re.IGNORECASE) for pattern in allowed_patterns):
         return _annotation_clause_error(statement)
@@ -1725,10 +1820,6 @@ def _without_sample_annotations(statement: str) -> str:
     return filtered
 
 
-_ANNOTATION_ADD_OPERATION_RE = re.compile(
-    r"^\s*add(?!\s+(?:if\s+not\s+exists|or\s+replace)\b)\s+",
-    flags=re.IGNORECASE,
-)
 _ANNOTATION_ANY_OPERATION_RE = re.compile(
     r"^\s*(?:add(?:\s+(?:if\s+not\s+exists|or\s+replace))?|drop(?:\s+if\s+exists)?|replace)\s+",
     flags=re.IGNORECASE,
@@ -1736,23 +1827,19 @@ _ANNOTATION_ANY_OPERATION_RE = re.compile(
 
 
 def _normalize_annotation_add_operations(statement: str) -> str:
-    """ANNOTATIONS 句の各 annotation を再実行可能(冪等)にする。
+    """ANNOTATIONS 句で操作句が省略された annotation だけを明示 ADD にする。
 
     Oracle の annotations_clause では操作句(ADD 等)が後続 annotation へ伝播しない。
     ``ANNOTATIONS (ADD IF NOT EXISTS UI_Display '...', data_type 'NUMBER')`` の
     data_type は操作句省略で既定の素の ADD になり、既存 annotation では
-    ORA-11560 になる。素の ADD / 操作句省略をすべて ``ADD IF NOT EXISTS`` へ
-    正規化する(DROP / REPLACE / ADD OR REPLACE は変更しない)。
+    ORA-11560 になる。操作句省略だけを ``ADD IF NOT EXISTS`` へ補い、
+    ユーザーが明示した ADD / DROP / REPLACE / ADD OR REPLACE は変更しない。
     """
     normalized = statement
     for start, end, content in reversed(_annotation_clause_contents(statement)):
         rewritten: list[str] = []
         for item in _split_annotation_items(content):
-            if _ANNOTATION_ADD_OPERATION_RE.match(item):
-                rewritten.append(
-                    _ANNOTATION_ADD_OPERATION_RE.sub("ADD IF NOT EXISTS ", item, count=1)
-                )
-            elif _ANNOTATION_ANY_OPERATION_RE.match(item):
+            if _ANNOTATION_ANY_OPERATION_RE.match(item):
                 rewritten.append(item)
             else:
                 rewritten.append(f"ADD IF NOT EXISTS {item.strip()}")
@@ -8339,13 +8426,16 @@ class Nl2SqlService:
             )
         try:
             raw = self._enterprise_ai_client.generate(
-                prompt="表・列・ビューの COMMENT ON 候補を日本語で生成してください。",
+                prompt=(
+                    "表・列・ビュー・マテリアライズドビューの COMMENT ON 候補を"
+                    "日本語で生成してください。"
+                ),
                 context=self._comment_generation_context(options.max_items),
                 system_prompt=(
                     "Oracle schema metadata を読み、業務利用者が理解しやすい日本語 comment "
                     "を生成してください。JSON object で suggestions 配列だけを返してください。"
                     "各要素は object_name, object_type, suggested_comment を持ち、"
-                    "object_type は table/view/column のいずれかです。"
+                    "object_type は table/view/materialized_view/column のいずれかです。"
                 ),
             )
             payload = self._json_object_from_text(raw)
@@ -8371,10 +8461,11 @@ class Nl2SqlService:
     def _deterministic_comment_suggestions(self, max_items: int) -> list[CommentSuggestion]:
         suggestions: list[CommentSuggestion] = []
         for table in self._management_catalog_tables():
+            object_type = _catalog_metadata_object_kind(table)
             suggestions.append(
                 CommentSuggestion(
                     object_name=table.table_name,
-                    object_type="table",
+                    object_type=object_type,
                     suggested_comment=table.comment or f"{table.logical_name} に関する業務データ",
                 )
             )
@@ -8424,7 +8515,12 @@ class Nl2SqlService:
             object_name = str(raw_item.get("object_name") or "").strip()
             object_type = str(raw_item.get("object_type") or "").strip().lower()
             comment = str(raw_item.get("suggested_comment") or "").strip()
-            if not object_name or object_type not in {"table", "view", "column"} or not comment:
+            if (
+                not object_name
+                or object_type
+                not in {"table", "view", "materialized_view", "materialized view", "column"}
+                or not comment
+            ):
                 continue
             try:
                 statement = self._comment_statement(
@@ -8450,15 +8546,18 @@ class Nl2SqlService:
     def suggest_annotations(self) -> AnnotationSuggestionData:
         suggestions: list[AnnotationSuggestion] = []
         for table in self._management_catalog_tables():
+            object_type = _catalog_metadata_object_kind(table)
             table_value = table.comment or table.logical_name or table.table_name
             suggestions.append(
                 AnnotationSuggestion(
                     object_name=table.table_name,
-                    object_type=table.table_type or "table",
+                    object_type=object_type,
                     annotation_name="Display",
                     annotation_value=table_value,
                 )
             )
+            if object_type != "table":
+                continue
             for column in table.columns:
                 suggestions.append(
                     AnnotationSuggestion(
@@ -8503,7 +8602,8 @@ class Nl2SqlService:
                 context=self._metadata_generation_context(request),
                 system_prompt=(
                     "あなたはOracleデータベース専門家です。純粋なCOMMENT ON "
-                    "TABLE/COLUMN/VIEW/MATERIALIZED VIEW ステートメントのみを出力してください。"
+                    "TABLE/COLUMN/MATERIALIZED VIEW ステートメントのみを出力してください。"
+                    "通常ビューへのコメントは COMMENT ON TABLE を使用してください。"
                     "対象は必ず OWNER.OBJECT の owner 修飾を保持してください。"
                     "表・ビューはA-Z順、列は定義順、各説明文は200字以内です。"
                 ),
@@ -8638,10 +8738,12 @@ class Nl2SqlService:
             has_samples = bool(request.sample_text.strip())
             raw = self._enterprise_ai_client.generate(
                 prompt=(
-                    "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW の ANNOTATIONS 文のみを"
+                    "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW/"
+                    "ALTER MATERIALIZED VIEW の ANNOTATIONS 文のみを"
                     "生成してください。\n\n"
                     "出力ルール:\n"
-                    "- 純粋な ALTER TABLE/ALTER VIEW ANNOTATIONS ステートメントのみを出力\n"
+                    "- 純粋な ALTER TABLE/ALTER VIEW/ALTER MATERIALIZED VIEW "
+                    "ANNOTATIONS ステートメントのみを出力\n"
                     "- Markdown 記号、説明文、前置きは出力しない\n"
                     "- テーブル・ビューは A-Z 順、列は定義順で出力\n"
                     "- ビュー列の annotation は生成しない\n\n"
@@ -8656,11 +8758,13 @@ class Nl2SqlService:
                     )
                     + "- annotation 名 COMMENT は生成しない\n\n"
                     "参考例:\n"
-                    "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Table 1');\n"
+                    "ALTER TABLE T1 ANNOTATIONS (ADD OR REPLACE UI_Display 'Table 1');\n"
                     "ALTER TABLE T1 MODIFY (ID ANNOTATIONS "
-                    "(ADD IF NOT EXISTS UI_Display 'ID', ADD IF NOT EXISTS data_type 'NUMBER', "
-                    "ADD IF NOT EXISTS nullable 'N'));\n"
-                    "ALTER VIEW SALES_V ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'Sales View');"
+                    "(ADD OR REPLACE UI_Display 'ID', ADD OR REPLACE data_type 'NUMBER', "
+                    "ADD OR REPLACE nullable 'N'));\n"
+                    "ALTER VIEW SALES_V ANNOTATIONS (ADD OR REPLACE UI_Display 'Sales View');\n"
+                    "ALTER MATERIALIZED VIEW SALES_MV ANNOTATIONS "
+                    "(ADD OR REPLACE UI_Display 'Sales MV');"
                 ),
                 context=self._metadata_generation_context(request),
                 system_prompt=(
@@ -8669,9 +8773,12 @@ class Nl2SqlService:
                     "テーブル: ALTER TABLE <表> ANNOTATIONS (<annotation>);\n"
                     "列: ALTER TABLE <表> MODIFY (<列> ANNOTATIONS (<annotation>));\n"
                     "ビュー: ALTER VIEW <ビュー> ANNOTATIONS (<annotation>);\n"
+                    "マテリアライズドビュー: ALTER MATERIALIZED VIEW <MV> "
+                    "ANNOTATIONS (<annotation>);\n"
+                    "ビュー/MV 列への annotation は生成しないでください。\n"
                     "対象は必ず OWNER.OBJECT の owner 修飾を保持してください。"
-                    "ADD / DROP / REPLACE を使用できます。再実行可能な追加には "
-                    "ADD IF NOT EXISTS を使用してください。annotation 名は Oracle 識別子です。"
+                    "更新を反映する生成 SQL では ADD OR REPLACE を使用してください。"
+                    "ADD / DROP / REPLACE も使用できます。annotation 名は Oracle 識別子です。"
                     "予約語や空白を含む名前は二重引用符で囲み、未引用の COMMENT は禁止します。"
                     "値は最大4000文字で、値内の単一引用符は '' にエスケープしてください。"
                     "複数 annotation は同じ括弧内へカンマ区切りで指定できます。"
@@ -8746,7 +8853,12 @@ class Nl2SqlService:
         ):
             return True
         normalized_sql = re.sub(r"\s*\.\s*", ".", sql.replace('"', "")).upper()
-        return all(identity.qualified_name in normalized_sql for identity in identities)
+        for identity in identities:
+            expected = re.sub(r"\s*\.\s*", ".", identity.qualified_name.replace('"', "")).upper()
+            pattern = rf"(?<![A-Z0-9_$#]){re.escape(expected)}(?![A-Z0-9_$#])"
+            if not re.search(pattern, normalized_sql):
+                return False
+        return True
 
     def _selected_metadata_tables(self, request: MetadataSqlGenerateRequest) -> list[SchemaTable]:
         if not request.targets:
@@ -8761,13 +8873,15 @@ class Nl2SqlService:
         return selected
 
     def _metadata_target_types(self, request: MetadataSqlGenerateRequest) -> dict[str, str]:
-        return {
-            self._db_admin_object_identity(
-                target.object_name,
-                target.owner,
-            ).qualified_name: target.object_type
-            for target in request.targets
-        }
+        target_types: dict[str, str] = {}
+        for target in request.targets:
+            identity = self._db_admin_object_identity(target.object_name, target.owner)
+            table = self._find_catalog_table(identity.qualified_name)
+            target_types[identity.qualified_name] = _catalog_metadata_object_kind(
+                table,
+                target.object_type,
+            )
+        return target_types
 
     def _metadata_input_objects(self, request: MetadataSqlGenerateRequest) -> list[dict[str, Any]]:
         objects: list[dict[str, Any]] = []
@@ -8805,11 +8919,8 @@ class Nl2SqlService:
         selected_tables = self._selected_metadata_tables(request)
         for table in selected_tables:
             identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
-            object_kind = (
-                "VIEW"
-                if target_types.get(identity.qualified_name) == "view"
-                or table.table_type.lower() == "view"
-                else "TABLE"
+            object_kind = _comment_ddl_kind_for_metadata(
+                _metadata_object_kind(target_types.get(identity.qualified_name, table.table_type))
             )
             object_comment = table.comment or table.logical_name or table.table_name
             if object_comment:
@@ -8829,7 +8940,7 @@ class Nl2SqlService:
             return "\n".join(statements)
         for item in self._metadata_input_objects(request):
             identity = self._db_admin_object_identity(str(item["name"]))
-            object_kind = "VIEW" if item["type"] == "view" else "TABLE"
+            object_kind = _comment_ddl_kind_for_metadata(_metadata_object_kind(str(item["type"])))
             object_comment = item["comment"] or item["name"]
             statements.append(
                 f"COMMENT ON {object_kind} {_quote_object_identity(identity)} "
@@ -8854,19 +8965,20 @@ class Nl2SqlService:
         for table in selected_tables:
             identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
             object_value = table.comment or table.logical_name or table.table_name
-            if (
-                target_types.get(identity.qualified_name) == "view"
-                or table.table_type.lower() == "view"
-            ):
+            object_type = _metadata_object_kind(
+                target_types.get(identity.qualified_name, table.table_type)
+            )
+            if object_type != "table":
                 statements.append(
-                    f"ALTER VIEW {_quote_object_identity(identity)} "
-                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
+                    f"{_quote_object_identity(identity)} "
+                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
                     f"{_quote_sql_string(object_value)});"
                 )
                 continue
             statements.append(
                 f"ALTER TABLE {_quote_object_identity(identity)} "
-                "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                "ANNOTATIONS (ADD OR REPLACE UI_Display "
                 f"{_quote_sql_string(object_value)});"
             )
             for column in table.columns:
@@ -8874,7 +8986,7 @@ class Nl2SqlService:
                 statements.append(
                     f"ALTER TABLE {_quote_object_identity(identity)} "
                     f"MODIFY ({_quote_identifier(column.column_name)} "
-                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
                     f"{_quote_sql_string(column_value)}));"
                 )
         if selected_tables:
@@ -8885,16 +8997,18 @@ class Nl2SqlService:
         ):
             identity = self._db_admin_object_identity(str(item["name"]))
             object_value = item["comment"] or item["name"]
-            if item["type"] == "view":
+            object_type = _metadata_object_kind(str(item["type"]))
+            if object_type != "table":
                 statements.append(
-                    f"ALTER VIEW {_quote_object_identity(identity)} "
-                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
+                    f"{_quote_object_identity(identity)} "
+                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
                     f"{_quote_sql_string(object_value)});"
                 )
                 continue
             statements.append(
                 f"ALTER TABLE {_quote_object_identity(identity)} "
-                "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                "ANNOTATIONS (ADD OR REPLACE UI_Display "
                 f"{_quote_sql_string(object_value)});"
             )
             for column in item["columns"]:
@@ -8902,7 +9016,7 @@ class Nl2SqlService:
                 statements.append(
                     f"ALTER TABLE {_quote_object_identity(identity)} "
                     f"MODIFY ({_quote_identifier(column['name'])} "
-                    "ANNOTATIONS (ADD IF NOT EXISTS UI_Display "
+                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
                     f"{_quote_sql_string(column_value)}));"
                 )
         return "\n".join(statements)
@@ -8918,6 +9032,8 @@ class Nl2SqlService:
         statements = []
         for statement in _split_sql_statements(cleaned):
             candidate = statement
+            if policy == "comment_sql":
+                candidate = _rewrite_comment_on_view_statement(candidate)
             if policy == "annotation_sql" and not has_annotation_samples:
                 candidate = _without_sample_annotations(candidate)
                 if not candidate:
@@ -8970,36 +9086,81 @@ class Nl2SqlService:
             else:
                 runtime = "oracle"
                 try:
-                    self._oracle_adapter.apply_comment_statements(
-                        [statement.sql for statement in statements]
+                    oracle_results = _align_admin_statement_results(
+                        self._oracle_adapter.execute_admin_statements(
+                            [statement.sql for statement in statements],
+                            atomic=False,
+                        ),
+                        len(statements),
                     )
-                    executed = True
-                    statements = [
-                        statement.model_copy(update={"status": "applied"})
-                        for statement in statements
-                    ]
-                    self._record_admin_audit(
-                        operation="comments_apply",
-                        target="ADMIN_EXECUTE",
-                        executed=True,
-                        reason=request.reason,
-                        detail={"statement_count": len(statements)},
-                    )
-                    try:
-                        sync = self._submit_schema_refresh_after_admin_mutation(
-                            target_objects=_schema_refresh_targets_for_statements(
-                                [statement.sql for statement in statements],
-                                current_owner=self._current_schema_owner(),
-                            ),
-                            source="comments_apply",
+                    applied_sql: list[str] = []
+                    updated_statements: list[CommentApplyStatement] = []
+                    for index, statement in enumerate(statements):
+                        result = oracle_results[index]
+                        if _admin_statement_result_succeeded(result):
+                            applied_sql.append(statement.sql)
+                            updated_statements.append(
+                                statement.model_copy(
+                                    update={"status": "applied", "error_message": ""}
+                                )
+                            )
+                            continue
+                        error_message = (
+                            _admin_statement_result_error_message(result)
+                            or "COMMENT ON の適用に失敗しました。"
                         )
-                        schema_refresh_job_id = sync.job_id
-                        schema_refresh_required = sync.required
-                        schema_refresh_reason_code = sync.reason_code
-                        if sync.required:
-                            warnings.append(_schema_refresh_required_warning(sync.reason_code))
-                    except Nl2SqlPersistenceUnavailable as exc:
-                        warnings.append(f"COMMENT 適用後の Schema job 投入に失敗しました: {exc}")
+                        updated_statements.append(
+                            statement.model_copy(
+                                update={
+                                    "status": "error",
+                                    "error_message": error_message,
+                                }
+                            )
+                        )
+                    statements = updated_statements
+                    executed = bool(applied_sql)
+                    if applied_sql:
+                        try:
+                            self._record_admin_audit(
+                                operation="comments_apply",
+                                target="ADMIN_EXECUTE",
+                                executed=True,
+                                reason=request.reason,
+                                detail={
+                                    "statement_count": len(statements),
+                                    "success_count": len(applied_sql),
+                                    "error_count": len(statements) - len(applied_sql),
+                                },
+                            )
+                        except (
+                            Nl2SqlPersistenceUnavailable,
+                            Nl2SqlRepositoryOperationFailed,
+                        ) as exc:
+                            warnings.append(f"COMMENT 適用監査の保存に失敗しました: {exc}")
+                        try:
+                            sync = self._submit_schema_refresh_after_admin_mutation(
+                                target_objects=_schema_refresh_targets_for_statements(
+                                    applied_sql,
+                                    current_owner=self._current_schema_owner(),
+                                ),
+                                source="comments_apply",
+                            )
+                            schema_refresh_job_id = sync.job_id
+                            schema_refresh_required = sync.required
+                            schema_refresh_reason_code = sync.reason_code
+                            if sync.required:
+                                warnings.append(_schema_refresh_required_warning(sync.reason_code))
+                        except Nl2SqlPersistenceUnavailable as exc:
+                            warnings.append(
+                                f"COMMENT 適用後の Schema job 投入に失敗しました: {exc}"
+                            )
+                    if 0 < len(applied_sql) < len(statements):
+                        warnings.append(
+                            "COMMENT は部分的に成功しました"
+                            f"({len(applied_sql)}/{len(statements)} 件)。"
+                        )
+                    elif not applied_sql:
+                        warnings.append("COMMENT は Oracle へ適用されませんでした。")
                 except OracleAdapterError as exc:
                     warnings.append(str(exc))
                     statements = [
@@ -9035,17 +9196,24 @@ class Nl2SqlService:
         comment = item.comment.strip()
         if not comment:
             raise ValueError(f"{item.object_name}: コメントが空です。")
-        if object_type == "table":
+        _validate_oracle_metadata_literal_bytes(
+            comment,
+            target=item.object_name,
+            label="コメント",
+        )
+        if object_type in {"table", "view", "materialized_view", "materialized view"}:
             table = self._find_catalog_table(item.object_name)
             if table is None:
-                raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
+                raise ValueError(f"{item.object_name}: catalog に存在しない object です。")
             identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
+            catalog_object_type = _catalog_metadata_object_kind(table, object_type)
             return CommentApplyStatement(
                 object_name=identity.qualified_name,
-                object_type="table",
+                object_type=catalog_object_type,
                 comment=comment,
                 sql=(
-                    f"COMMENT ON TABLE {_quote_object_identity(identity)} "
+                    f"COMMENT ON {_comment_ddl_kind_for_metadata(catalog_object_type)} "
+                    f"{_quote_object_identity(identity)} "
                     f"IS {_quote_sql_string(comment)};"
                 ),
             )
@@ -9068,7 +9236,8 @@ class Nl2SqlService:
                 ),
             )
         raise ValueError(
-            f"{item.object_name}: object_type は table または column のみ指定できます。"
+            f"{item.object_name}: object_type は table/view/materialized_view/column "
+            "のみ指定できます。"
         )
 
     def apply_annotations(self, request: AnnotationApplyRequest) -> AnnotationApplyData:
@@ -9107,36 +9276,81 @@ class Nl2SqlService:
             else:
                 runtime = "oracle"
                 try:
-                    self._oracle_adapter.apply_safe_statements(
-                        [statement.sql for statement in statements]
+                    oracle_results = _align_admin_statement_results(
+                        self._oracle_adapter.execute_admin_statements(
+                            [statement.sql for statement in statements],
+                            atomic=False,
+                        ),
+                        len(statements),
                     )
-                    executed = True
-                    statements = [
-                        statement.model_copy(update={"status": "applied"})
-                        for statement in statements
-                    ]
-                    self._record_admin_audit(
-                        operation="annotations_apply",
-                        target="ADMIN_EXECUTE",
-                        executed=True,
-                        reason=request.reason,
-                        detail={"statement_count": len(statements)},
-                    )
-                    try:
-                        sync = self._submit_schema_refresh_after_admin_mutation(
-                            target_objects=_schema_refresh_targets_for_statements(
-                                [statement.sql for statement in statements],
-                                current_owner=self._current_schema_owner(),
-                            ),
-                            source="annotations_apply",
+                    applied_sql: list[str] = []
+                    updated_statements: list[AnnotationApplyStatement] = []
+                    for index, statement in enumerate(statements):
+                        result = oracle_results[index]
+                        if _admin_statement_result_succeeded(result):
+                            applied_sql.append(statement.sql)
+                            updated_statements.append(
+                                statement.model_copy(
+                                    update={"status": "applied", "error_message": ""}
+                                )
+                            )
+                            continue
+                        error_message = (
+                            _admin_statement_result_error_message(result)
+                            or "ANNOTATIONS の適用に失敗しました。"
                         )
-                        schema_refresh_job_id = sync.job_id
-                        schema_refresh_required = sync.required
-                        schema_refresh_reason_code = sync.reason_code
-                        if sync.required:
-                            warnings.append(_schema_refresh_required_warning(sync.reason_code))
-                    except Nl2SqlPersistenceUnavailable as exc:
-                        warnings.append(f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}")
+                        updated_statements.append(
+                            statement.model_copy(
+                                update={
+                                    "status": "error",
+                                    "error_message": error_message,
+                                }
+                            )
+                        )
+                    statements = updated_statements
+                    executed = bool(applied_sql)
+                    if applied_sql:
+                        try:
+                            self._record_admin_audit(
+                                operation="annotations_apply",
+                                target="ADMIN_EXECUTE",
+                                executed=True,
+                                reason=request.reason,
+                                detail={
+                                    "statement_count": len(statements),
+                                    "success_count": len(applied_sql),
+                                    "error_count": len(statements) - len(applied_sql),
+                                },
+                            )
+                        except (
+                            Nl2SqlPersistenceUnavailable,
+                            Nl2SqlRepositoryOperationFailed,
+                        ) as exc:
+                            warnings.append(f"ANNOTATION 適用監査の保存に失敗しました: {exc}")
+                        try:
+                            sync = self._submit_schema_refresh_after_admin_mutation(
+                                target_objects=_schema_refresh_targets_for_statements(
+                                    applied_sql,
+                                    current_owner=self._current_schema_owner(),
+                                ),
+                                source="annotations_apply",
+                            )
+                            schema_refresh_job_id = sync.job_id
+                            schema_refresh_required = sync.required
+                            schema_refresh_reason_code = sync.reason_code
+                            if sync.required:
+                                warnings.append(_schema_refresh_required_warning(sync.reason_code))
+                        except Nl2SqlPersistenceUnavailable as exc:
+                            warnings.append(
+                                f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}"
+                            )
+                    if 0 < len(applied_sql) < len(statements):
+                        warnings.append(
+                            "ANNOTATIONS は部分的に成功しました"
+                            f"({len(applied_sql)}/{len(statements)} 件)。"
+                        )
+                    elif not applied_sql:
+                        warnings.append("ANNOTATIONS は Oracle へ適用されませんでした。")
                 except OracleAdapterError as exc:
                     warnings.append(str(exc))
                     statements = [
@@ -9173,22 +9387,26 @@ class Nl2SqlService:
         annotation_value = item.annotation_value.strip()
         if not annotation_value:
             raise ValueError(f"{item.object_name}: annotation value が空です。")
-        if object_type in {"table", "view"}:
+        _validate_oracle_metadata_literal_bytes(
+            annotation_value,
+            target=item.object_name,
+            label="annotation value",
+        )
+        if object_type in {"table", "view", "materialized_view", "materialized view"}:
             table = self._find_catalog_table(item.object_name)
             if table is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない object です。")
             identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
-            ddl_kind = (
-                "VIEW" if object_type == "view" or table.table_type.lower() == "view" else "TABLE"
-            )
+            catalog_object_type = _catalog_metadata_object_kind(table, object_type)
             return AnnotationApplyStatement(
                 object_name=identity.qualified_name,
-                object_type=object_type,
+                object_type=catalog_object_type,
                 annotation_name=annotation_name,
                 annotation_value=annotation_value,
                 sql=(
-                    f"ALTER {ddl_kind} {_quote_object_identity(identity)} "
-                    f"ANNOTATIONS (ADD IF NOT EXISTS {annotation_name} "
+                    f"ALTER {_annotation_ddl_kind_for_metadata(catalog_object_type)} "
+                    f"{_quote_object_identity(identity)} "
+                    f"ANNOTATIONS (ADD OR REPLACE {annotation_name} "
                     f"{_quote_sql_string(annotation_value)});"
                 ),
             )
@@ -9197,6 +9415,11 @@ class Nl2SqlService:
             table = self._find_catalog_table(table_name)
             if table is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
+            catalog_object_type = _catalog_metadata_object_kind(table)
+            if catalog_object_type != "table":
+                raise ValueError(
+                    f"{item.object_name}: ビュー/MV の列 annotation は生成できません。"
+                )
             column = self._find_catalog_column(table, column_name)
             if column is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない column です。")
@@ -9208,12 +9431,15 @@ class Nl2SqlService:
                 annotation_value=annotation_value,
                 sql=(
                     f"ALTER TABLE {_quote_object_identity(identity)} "
-                    f"MODIFY {_quote_identifier(column.column_name)} "
-                    f"ANNOTATIONS (ADD IF NOT EXISTS {annotation_name} "
-                    f"{_quote_sql_string(annotation_value)});"
+                    f"MODIFY ({_quote_identifier(column.column_name)} "
+                    f"ANNOTATIONS (ADD OR REPLACE {annotation_name} "
+                    f"{_quote_sql_string(annotation_value)}));"
                 ),
             )
-        raise ValueError(f"{item.object_name}: object_type は table/view/column のみ指定できます。")
+        raise ValueError(
+            f"{item.object_name}: object_type は table/view/materialized_view/column "
+            "のみ指定できます。"
+        )
 
     def _annotation_name(self, value: str) -> str:
         normalized = value.strip().replace('"', "").upper()
@@ -9222,7 +9448,7 @@ class Nl2SqlService:
         return normalized
 
     def _split_comment_column_name(self, object_name: str) -> tuple[str, str]:
-        parts = [part.strip() for part in object_name.split(".") if part.strip()]
+        parts = _split_object_ref_parts(object_name)
         if len(parts) == 2:
             return parts[0], parts[1]
         if len(parts) == 3:
@@ -11092,7 +11318,7 @@ class Nl2SqlService:
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
         if request.policy == "annotation_sql":
-            # 素の ADD を ADD IF NOT EXISTS へ正規化し、再実行時の ORA-11560 を防ぐ。
+            # 操作句省略だけを補い、ユーザーが明示した ADD/REPLACE は尊重する。
             statements = [_normalize_annotation_add_operations(stmt) for stmt in statements]
         statement_types = [_admin_statement_type(statement) for statement in statements]
         policy_errors = [

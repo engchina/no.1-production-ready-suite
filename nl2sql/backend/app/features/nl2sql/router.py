@@ -1719,7 +1719,10 @@ def generate_comment_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist コメント管理互換の COMMENT ON SQL を生成する。"""
-    return ApiResponse(data=nl2sql_service.generate_comment_sql(req))
+    try:
+        return ApiResponse(data=nl2sql_service.generate_comment_sql(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/metadata-samples", response_model=ApiResponse[MetadataSqlSampleData])
@@ -1727,7 +1730,10 @@ def metadata_samples(
     req: MetadataSqlSampleRequest,
 ) -> ApiResponse[MetadataSqlSampleData]:
     """コメント/アノテーション SQL 生成向けの列代表値を再取得する。"""
-    return ApiResponse(data=nl2sql_service.get_metadata_samples(req))
+    try:
+        return ApiResponse(data=nl2sql_service.get_metadata_samples(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/comments/apply", response_model=ApiResponse[CommentApplyData])
@@ -1747,7 +1753,10 @@ def generate_annotation_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist アノテーション管理互換の ALTER ... ANNOTATIONS SQL を生成する。"""
-    return ApiResponse(data=nl2sql_service.generate_annotation_sql(req))
+    try:
+        return ApiResponse(data=nl2sql_service.generate_annotation_sql(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/annotations/apply", response_model=ApiResponse[AnnotationApplyData])
