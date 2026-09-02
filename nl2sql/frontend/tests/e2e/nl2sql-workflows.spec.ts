@@ -278,6 +278,7 @@ async function expectCsvUploadLayout(csvPanel: Locator) {
   await expectSameVisualWidth(modeField, fileField);
   await expectSameVisualWidth(executionFieldset, fileField);
   await expectTopToBottomOrder(tableSection, fileField, modeField, executionFieldset);
+  await expect(modeField.getByText("DELETE & INSERT(全置換)", { exact: true })).toHaveCount(1);
 }
 
 function mainScroller(page: Page) {

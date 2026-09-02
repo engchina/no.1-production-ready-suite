@@ -2740,7 +2740,7 @@ const nl2sqlJa = {
   "dataMgmt.csv.clearFile": "取込ファイルをクリア",
   "dataMgmt.csv.mode": "アップロードモード",
   "dataMgmt.csv.mode.insert": "INSERT(追記)",
-  "dataMgmt.csv.mode.truncateInsert": "TRUNCATE & INSERT(全置換)",
+  "dataMgmt.csv.mode.truncateInsert": "DELETE & INSERT(全置換)",
   "dataMgmt.csv.executeTitle": "Oracle へのアップロード実行",
   "dataMgmt.csv.confirmation": "実行確認語",
   "dataMgmt.csv.upload": "アップロード実行",

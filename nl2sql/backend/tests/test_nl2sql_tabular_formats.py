@@ -26,6 +26,7 @@ from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.features.nl2sql.tabular_files import (
     TabularFileReadError,
     TabularSheetSelectionError,
+    read_workbook_sheet,
     read_workbook_sheets,
     select_workbook_sheet,
 )
@@ -74,6 +75,56 @@ def test_real_xls_reader_preserves_sheets_and_scalar_types_case_insensitively() 
         select_workbook_sheet(sheets, "Missing", require_requested_name=True)
     with pytest.raises(TabularSheetSelectionError, match="Sheet 名は必須"):
         select_workbook_sheet(sheets, require_requested_name=True)
+
+
+def test_read_workbook_sheet_loads_only_requested_openxml_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Sheet:
+        def __init__(self, title: str, rows: list[list[object]], *, fail: bool = False) -> None:
+            self.title = title
+            self._rows = rows
+            self._fail = fail
+            self.iterated = False
+
+        def iter_rows(self, *, values_only: bool) -> list[list[object]]:
+            assert values_only is True
+            self.iterated = True
+            if self._fail:
+                raise AssertionError("unrequested sheet should not be read")
+            return self._rows
+
+    class _Workbook:
+        def __init__(self) -> None:
+            self.first = _Sheet("First", [["SHOULD_NOT_READ"]], fail=True)
+            self.second = _Sheet("Second", [["ID"], [1]])
+            self.active = self.first
+            self.sheetnames = ["First", "Second"]
+            self.closed = False
+
+        def __getitem__(self, name: str) -> _Sheet:
+            return {"First": self.first, "Second": self.second}[name]
+
+        def close(self) -> None:
+            self.closed = True
+
+    workbook = _Workbook()
+    openpyxl = importlib.import_module("openpyxl")
+    monkeypatch.setattr(openpyxl, "load_workbook", lambda *_args, **_kwargs: workbook)
+
+    sheet, warnings = read_workbook_sheet(
+        "import.xlsx",
+        b"placeholder",
+        "Second",
+        require_requested_name=True,
+    )
+
+    assert sheet.title == "Second"
+    assert sheet.rows == [["ID"], [1]]
+    assert warnings == []
+    assert workbook.first.iterated is False
+    assert workbook.second.iterated is True
+    assert workbook.closed is True
 
 
 @pytest.mark.parametrize(
