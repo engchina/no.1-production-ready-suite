@@ -3,6 +3,14 @@
 > このファイルは **Claude Code と Codex の両方が参照する正本(single source of truth)** です。
 > `CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイルを編集**してください。
 
+## 開発ワークフロー / GitHub 運用
+
+- **`main` ブランチへ直接 commit / push / 変更しない。** すべての変更は GitHub Issue を先に作成し、Issue に紐づく作業ブランチで行う。
+- 作業ブランチ名は既定で `codex/<issue-number>-<short-topic>` とする。既存 ref との衝突などで使用できない場合も、Issue 番号と作業内容が分かる名前を使う。
+- 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。
+- merge は CI/checks が成功したことを確認してから行う。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、実行した代替検証を明記してから merge 判断する。
+- docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
+
 ## プロジェクト概要
 
 > **製品名と固有 namespace は `Production Ready NL2SQL` / `NL2SQL` を正とする。**
