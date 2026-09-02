@@ -2091,6 +2091,110 @@ def test_oracle_adapter_execute_select_normalizes_driver_error(
         adapter.execute_select('SELECT * FROM "MISSING_TABLE"', 100)
 
 
+def test_oracle_adapter_lists_quoted_catalog_objects(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str, _binds: dict[str, object]) -> None:
+            return None
+
+        def fetchall(self) -> list[tuple[str, str, int | None, str]]:
+            return [
+                ("lower", "APP", 2, "小文字テーブル"),
+                ("売上", "APP", None, "売上ビュー"),
+            ]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield _Connection()
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+
+    objects = adapter.list_db_admin_objects("table")
+
+    assert [item["qualified_name"] for item in objects] == ['APP."lower"', 'APP."売上"']
+
+
+@pytest.mark.parametrize(
+    ("actual_type", "expected_comment_object_type", "expected_ddl_type"),
+    [
+        ("VIEW", "TABLE", "VIEW"),
+        ("MATERIALIZED VIEW", "MATERIALIZED VIEW", "MATERIALIZED_VIEW"),
+    ],
+)
+def test_oracle_adapter_uses_oracle_comment_syntax_for_view_ddl(
+    monkeypatch: pytest.MonkeyPatch,
+    actual_type: str,
+    expected_comment_object_type: str,
+    expected_ddl_type: str,
+) -> None:
+    class _Cursor:
+        def __init__(self) -> None:
+            self.rows: list[tuple[Any, ...]] = []
+            self.ddl_binds: dict[str, object] = {}
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, binds: dict[str, object] | None = None) -> None:
+            if "FROM all_tab_columns" in sql:
+                self.rows = [("ID", "NUMBER", "N", "識別子")]
+            elif "FROM all_tab_comments" in sql:
+                self.rows = [("ビューコメント",)]
+            elif "FROM all_objects" in sql:
+                self.rows = [(actual_type,)]
+            elif "DBMS_METADATA.GET_DDL" in sql:
+                self.ddl_binds = dict(binds or {})
+                self.rows = [('CREATE OR REPLACE VIEW "APP"."V1" AS SELECT 1 ID FROM DUAL',)]
+            else:
+                self.rows = []
+
+        def __iter__(self) -> Iterator[tuple[Any, ...]]:
+            return iter(self.rows)
+
+        def fetchone(self) -> tuple[Any, ...] | None:
+            return self.rows[0] if self.rows else None
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+    cursor = _Cursor()
+
+    @contextmanager
+    def fake_connection() -> Iterator[_Connection]:
+        yield _Connection(cursor)
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", fake_connection)
+
+    detail = adapter.get_db_admin_object_detail(
+        object_name="V1",
+        owner="APP",
+        object_type="view",
+        include_ddl=True,
+    )
+
+    assert cursor.ddl_binds["object_type"] == expected_ddl_type
+    assert f"COMMENT ON {expected_comment_object_type}" in detail["ddl"]
+    assert "COMMENT ON VIEW" not in detail["ddl"]
+
+
 def test_oracle_adapter_system_admin_select_uses_normal_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2743,6 +2847,63 @@ def test_cross_schema_management_resolves_duplicate_object_names() -> None:
     assert preview.sql == 'SELECT * FROM "SH"."ORDERS"'
 
 
+def test_db_admin_quoted_catalog_objects_remain_actionable() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        current_owner="APP",
+        tables=[
+            SchemaTable(
+                table_name="lower",
+                logical_name="小文字テーブル",
+                owner="APP",
+                row_count=2,
+                columns=[
+                    SchemaColumn(
+                        column_name="ID",
+                        logical_name="ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+            SchemaTable(
+                table_name="売上",
+                logical_name="売上",
+                owner="APP",
+                row_count=3,
+                columns=[
+                    SchemaColumn(
+                        column_name="ID",
+                        logical_name="ID",
+                        data_type="NUMBER",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    tables = service.list_db_admin_tables()
+    assert [item.qualified_name for item in tables.items] == ['APP."lower"', 'APP."売上"']
+
+    detail = service.get_db_admin_object('APP."lower"', "table")
+    assert detail.name == "lower"
+    assert detail.owner == "APP"
+    assert detail.qualified_name == 'APP."lower"'
+    assert 'CREATE TABLE "APP"."lower"' in detail.ddl
+
+    preview = service.preview_db_admin_data(
+        DbAdminDataPreviewRequest(object_name='APP."売上"', limit=5)
+    )
+    assert preview.sql == 'SELECT * FROM "APP"."売上"'
+
+    dropped = service.drop_db_admin_table(
+        DbAdminDropTableRequest(table_name='APP."lower"', confirmation='APP."lower"')
+    )
+    assert dropped.executed is False
+    assert dropped.statements[0].status == "requires_oracle"
+    assert dropped.statements[0].sql == 'DROP TABLE "APP"."lower" PURGE'
+
+
 def test_cross_schema_mutations_and_metadata_sql_use_qualified_targets() -> None:
     adapter = _FakeStatementsAdapter(
         [
@@ -3145,7 +3306,8 @@ def test_upload_csv_oracle_empty_unmatched_overrides_stale_catalog() -> None:
     assert result.unmatched_csv_columns == []
     assert result.success_count == 2
     assert result.error_count == 0
-    assert adapter.calls[0]["table_name"] == "TEST_TABLE"
+    assert adapter.calls[0]["table_name"] == "APP.TEST_TABLE"
+    assert adapter.calls[0]["owner"] == "APP"
     assert [column.column_name for column in adapter.calls[0]["columns"]] == ["ID", "NAME"]
 
 

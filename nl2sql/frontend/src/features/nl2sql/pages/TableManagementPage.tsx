@@ -31,6 +31,7 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
   DropDbObjectDialog,
+  dbAdminExecuteFailureMessage,
   dbAdminObjectQualifiedName,
   dbObjectSortValue,
   parseDbAdminObjectTarget,
@@ -333,6 +334,7 @@ export function TableManagementPage() {
   const [tableSort, setTableSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
+  const [dropError, setDropError] = useState("");
   const [importTable, setImportTable] = useState("");
   const [importFilename, setImportFilename] = useState("");
   const [importBase64, setImportBase64] = useState("");
@@ -679,16 +681,19 @@ export function TableManagementPage() {
   const openDropDialog = (name: string) => {
     setDropTargetName(name);
     setDropConfirmation("");
+    setDropError("");
   };
 
   const dropTable = async () => {
     if (!dropTargetName) return;
+    const target = parseDbAdminObjectTarget(dropTargetName);
     setLoading("drop");
     setMessage("");
+    setDropError("");
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-table", {
-        table_name: parseDbAdminObjectTarget(dropTargetName).name,
-        owner: parseDbAdminObjectTarget(dropTargetName).owner,
+        table_name: target.name,
+        owner: target.owner,
         confirmation: dropConfirmation,
         reason: "ui-table-management-drop",
       });
@@ -696,11 +701,14 @@ export function TableManagementPage() {
         const dropped = dropTargetName;
         setDropTargetName("");
         setDropConfirmation("");
+        setDropError("");
         toast.success(t("tableMgmt.drop.success", { name: dropped }));
         await reloadAfterMutation(result);
+        return;
       }
+      setDropError(dbAdminExecuteFailureMessage(result, t("tableMgmt.error.drop")));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("tableMgmt.error.drop"));
+      setDropError(err instanceof Error ? err.message : t("tableMgmt.error.drop"));
     } finally {
       setLoading("");
     }
@@ -989,6 +997,7 @@ export function TableManagementPage() {
           objectName={dropTargetName}
           confirmation={dropConfirmation}
           loading={loading === "drop"}
+          error={dropError}
           labels={{
             title: t("tableMgmt.dropDialog.title"),
             subtitle: t("tableMgmt.dropDialog.subtitle"),
@@ -999,9 +1008,15 @@ export function TableManagementPage() {
             cancel: t("tableMgmt.dropDialog.cancel"),
             run: t("tableMgmt.drop.run"),
           }}
-          onConfirmationChange={setDropConfirmation}
+          onConfirmationChange={(value) => {
+            setDropConfirmation(value);
+            if (dropError) setDropError("");
+          }}
           onExecute={() => void dropTable()}
-          onClose={() => setDropTargetName("")}
+          onClose={() => {
+            setDropTargetName("");
+            setDropError("");
+          }}
         />
       )}
     </>

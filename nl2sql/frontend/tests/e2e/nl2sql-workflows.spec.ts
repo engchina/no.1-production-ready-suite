@@ -12079,6 +12079,137 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expectNoHorizontalScroll(page);
 });
 
+test("table and view management show DROP failures in the confirmation dialog", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const objectType = new URL(route.request().url()).searchParams.get("type") ?? "table";
+    const items =
+      objectType === "view"
+        ? [
+            {
+              name: "V_EMP_DEPT",
+              owner: "APP",
+              qualified_name: "APP.V_EMP_DEPT",
+              object_type: "view",
+              row_count: null,
+              comment: "社員と部署",
+            },
+          ]
+        : [
+            {
+              name: "lower",
+              owner: "APP",
+              qualified_name: 'APP."lower"',
+              object_type: "table",
+              row_count: 2,
+              comment: "小文字テーブル",
+            },
+          ];
+    return fulfillJson(route, {
+      runtime: "deterministic",
+      owner: "APP",
+      items,
+      total: items.length,
+      table_count: objectType === "view" ? 0 : items.length,
+      view_count: objectType === "view" ? items.length : 0,
+      next_cursor: null,
+      refreshed_at: schemaCatalog.refreshed_at,
+      catalog_version: 1,
+      warnings: [],
+    });
+  });
+  await page.route("**/api/nl2sql/db-admin/tables/%22lower%22**", (route) =>
+    fulfillJson(route, {
+      name: "lower",
+      owner: "APP",
+      qualified_name: 'APP."lower"',
+      object_type: "table",
+      row_count: 2,
+      comment: "小文字テーブル",
+      columns: schemaCatalog.tables[0].columns,
+      ddl: 'CREATE TABLE "APP"."lower" ("CUSTOMER_NAME" VARCHAR2(120), "TOTAL_AMOUNT" NUMBER);',
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/db-admin/drop-table", (route) => {
+    api.dropTablePayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      executed: false,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "DROP",
+          status: "error",
+          sql: 'DROP TABLE "APP"."lower" PURGE',
+          row_count: null,
+          message: "",
+          elapsed_ms: 0,
+          error_message: "ORA-02449: 表の一意/主キーが外部キーに参照されています。",
+        },
+      ],
+      committed: false,
+      rolled_back: true,
+      warnings: ["ORA-02449: 表の一意/主キーが外部キーに参照されています。"],
+      timing,
+    });
+  });
+
+  await page.goto("/table-management");
+  await expect(page.getByTestId("table-management-grid")).toBeVisible();
+  await expect(page.getByTestId("table-management-grid")).toContainText('APP."lower"');
+  await page.getByRole("button", { name: 'APP."lower" を表示' }).click();
+  await clickObjectDetailAction(page, "table-management-detail-actions", "削除");
+  const dropTableDialog = page.getByRole("dialog", { name: "DROP TABLE の確認" });
+  await dropTableDialog.getByLabel("実行確認語").fill('APP."lower"');
+  await dropTableDialog.getByRole("button", { name: "Drop 実行" }).click();
+
+  await expect.poll(() => api.dropTablePayload?.confirmation).toBe('APP."lower"');
+  expect(api.dropTablePayload?.table_name).toBe('"lower"');
+  expect(api.dropTablePayload?.owner).toBe("APP");
+  await expect(dropTableDialog.getByText(/ORA-02449/)).toBeVisible();
+  await expect(dropTableDialog).toBeVisible();
+
+  await page.route("**/api/nl2sql/db-admin/drop-view", (route) => {
+    api.dropViewPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      executed: false,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "DROP",
+          status: "error",
+          sql: 'DROP VIEW "APP"."V_EMP_DEPT"',
+          row_count: null,
+          message: "",
+          elapsed_ms: 0,
+          error_message: "ORA-04043: オブジェクト APP.V_EMP_DEPT は存在しません。",
+        },
+      ],
+      committed: false,
+      rolled_back: true,
+      warnings: [],
+      timing,
+    });
+  });
+
+  await page.goto("/view-management");
+  await expect(page.getByTestId("view-management-grid")).toBeVisible();
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
+  await clickObjectDetailAction(page, "view-management-detail-actions", "削除");
+  const dropViewDialog = page.getByRole("dialog", { name: "DROP VIEW の確認" });
+  await dropViewDialog.getByLabel("実行確認語").fill("APP.V_EMP_DEPT");
+  await dropViewDialog.getByRole("button", { name: "Drop 実行" }).click();
+
+  await expect.poll(() => api.dropViewPayload?.confirmation).toBe("APP.V_EMP_DEPT");
+  await expect(dropViewDialog.getByText(/ORA-04043/)).toBeVisible();
+  await expect(dropViewDialog).toBeVisible();
+});
+
 test("annotation management explains ORA-11548 before Oracle execution", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });

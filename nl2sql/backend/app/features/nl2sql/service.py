@@ -249,7 +249,12 @@ from .models import (
     SyntheticDataResultsData,
     TimingEnvelope,
 )
-from .object_identity import OracleObjectIdentity, parse_object_identity, qualified_object_name
+from .object_identity import (
+    OracleObjectIdentity,
+    normalize_object_part,
+    parse_object_identity,
+    qualified_object_name,
+)
 from .object_visibility import (
     filter_user_visible_catalog,
     filter_user_visible_object_page,
@@ -1833,7 +1838,7 @@ def _qualified_display_name(owner: str, object_name: str) -> str:
     try:
         return qualified_object_name(owner, object_name)
     except ValueError:
-        return object_name.strip().strip('"').upper()
+        return object_name.strip()
 
 
 def _quote_sql_string(value: str) -> str:
@@ -9229,21 +9234,16 @@ class Nl2SqlService:
 
     def _find_catalog_table(self, table_name: str) -> SchemaTable | None:
         current_owner = self._current_schema_owner()
-        raw = table_name.replace('"', "").strip()
-        if "." in raw:
-            identity = parse_object_identity(raw, default_owner=current_owner)
-            normalized_owner = identity.owner
-            normalized = identity.object_name
-        else:
-            normalized_owner = current_owner
-            normalized = _normalize_identifier(raw)
+        identity = parse_object_identity(table_name.strip(), default_owner=current_owner)
+        normalized_owner = identity.owner
+        normalized = identity.object_name
         if not is_user_visible_schema_object(normalized_owner, normalized):
             return None
         return next(
             (
                 table
                 for table in self._catalog.tables
-                if table.owner.upper() == normalized_owner and table.table_name == normalized
+                if table.owner == normalized_owner and table.table_name == normalized
             ),
             None,
         )
@@ -10223,7 +10223,7 @@ class Nl2SqlService:
     def _db_admin_object_identity(self, object_name: str, owner: str = "") -> OracleObjectIdentity:
         """管理画面の既存 object 参照を owner-aware に正規化する。"""
 
-        requested_owner = owner.strip().strip('"').upper()
+        requested_owner = normalize_object_part(owner) if owner.strip() else ""
         try:
             identity = parse_object_identity(
                 object_name,
@@ -10417,7 +10417,7 @@ class Nl2SqlService:
             try:
                 detail = DbAdminObjectDetail.model_validate(
                     self._oracle_adapter.get_db_admin_object_detail(
-                        object_name=identity.object_name,
+                        object_name=identity.qualified_name,
                         owner=identity.owner,
                         object_type=normalized_type,
                         include_ddl=include_ddl,
@@ -10579,7 +10579,7 @@ class Nl2SqlService:
         if not self._use_oracle_runtime() or not callable(finder):
             return ""
         try:
-            return str(finder(identity.object_name, owner=identity.owner) or "").lower()
+            return str(finder(identity.qualified_name) or "").lower()
         except OracleAdapterError:
             return ""
 
@@ -11011,7 +11011,7 @@ class Nl2SqlService:
         normalized_type = "view" if object_type.lower() == "view" else "table"
         identity = self._db_admin_object_identity(object_name, owner)
         detail = self.get_db_admin_object(
-            identity.object_name,
+            identity.qualified_name,
             normalized_type,
             owner=identity.owner,
         )
@@ -11424,7 +11424,7 @@ class Nl2SqlService:
         elif self._use_oracle_runtime():
             try:
                 result = self._oracle_adapter.upload_csv_to_existing_table(
-                    table_name=table_name,
+                    table_name=identity.qualified_name,
                     owner=identity.owner,
                     columns=columns,
                     rows=rows,
@@ -15954,16 +15954,27 @@ class Nl2SqlService:
         if table is None:
             return QueryResults(columns=["MESSAGE"], rows=[{"MESSAGE": "mock result"}], total=1)
         columns = [column.column_name for column in table.columns[:4]]
+        if not columns:
+            return QueryResults(columns=["MESSAGE"], rows=[{"MESSAGE": "mock result"}], total=1)
+
+        def column_value(column_index: int, row_index: int) -> object:
+            if column_index == 0:
+                return f"{table.table_name}-{row_index + 1}"
+            if column_index == 1:
+                column = table.columns[column_index]
+                if column.sample_values:
+                    return column.sample_values[row_index % len(column.sample_values)]
+                return f"値{row_index + 1}"
+            if column_index == 2:
+                return (row_index + 1) * 1000
+            if column_index == 3:
+                return "2026-06-21"
+            return ""
+
         rows = [
             {
-                columns[0]: f"{table.table_name}-{index + 1}",
-                columns[1]: (
-                    table.columns[1].sample_values[index % len(table.columns[1].sample_values)]
-                    if len(table.columns) > 1 and table.columns[1].sample_values
-                    else f"値{index + 1}"
-                ),
-                columns[2]: (index + 1) * 1000 if len(columns) > 2 else "",
-                columns[3]: "2026-06-21" if len(columns) > 3 else "",
+                column: column_value(column_index, index)
+                for column_index, column in enumerate(columns)
             }
             for index in range(min(row_limit or 5, 5))
         ]

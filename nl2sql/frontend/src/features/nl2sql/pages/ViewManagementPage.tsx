@@ -23,6 +23,7 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
   DropDbObjectDialog,
+  dbAdminExecuteFailureMessage,
   dbAdminObjectQualifiedName,
   dbObjectSortValue,
   parseDbAdminObjectTarget,
@@ -323,6 +324,7 @@ export function ViewManagementPage() {
   const [viewSort, setViewSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
+  const [dropError, setDropError] = useState("");
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
@@ -561,16 +563,19 @@ export function ViewManagementPage() {
   const openDropDialog = (name: string) => {
     setDropTargetName(name);
     setDropConfirmation("");
+    setDropError("");
   };
 
   const dropView = async () => {
     if (!dropTargetName) return;
+    const target = parseDbAdminObjectTarget(dropTargetName);
     setLoading("drop");
     setMessage("");
+    setDropError("");
     try {
       const result = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-view", {
-        view_name: parseDbAdminObjectTarget(dropTargetName).name,
-        owner: parseDbAdminObjectTarget(dropTargetName).owner,
+        view_name: target.name,
+        owner: target.owner,
         confirmation: dropConfirmation,
         reason: "ui-view-management-drop",
       });
@@ -578,11 +583,14 @@ export function ViewManagementPage() {
         const dropped = dropTargetName;
         setDropTargetName("");
         setDropConfirmation("");
+        setDropError("");
         toast.success(t("viewMgmt.drop.success", { name: dropped }));
         await reloadAfterMutation(result);
+        return;
       }
+      setDropError(dbAdminExecuteFailureMessage(result, t("viewMgmt.error.drop")));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("viewMgmt.error.drop"));
+      setDropError(err instanceof Error ? err.message : t("viewMgmt.error.drop"));
     } finally {
       setLoading("");
     }
@@ -857,6 +865,7 @@ export function ViewManagementPage() {
           objectName={dropTargetName}
           confirmation={dropConfirmation}
           loading={loading === "drop"}
+          error={dropError}
           labels={{
             title: t("viewMgmt.dropDialog.title"),
             subtitle: t("viewMgmt.dropDialog.subtitle"),
@@ -867,9 +876,15 @@ export function ViewManagementPage() {
             cancel: t("viewMgmt.dropDialog.cancel"),
             run: t("viewMgmt.drop.run"),
           }}
-          onConfirmationChange={setDropConfirmation}
+          onConfirmationChange={(value) => {
+            setDropConfirmation(value);
+            if (dropError) setDropError("");
+          }}
           onExecute={() => void dropView()}
-          onClose={() => setDropTargetName("")}
+          onClose={() => {
+            setDropTargetName("");
+            setDropError("");
+          }}
         />
       )}
     </>

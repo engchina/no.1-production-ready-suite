@@ -31,7 +31,12 @@ from .models import (
     SchemaTable,
     SchemaViewDependency,
 )
-from .object_identity import OracleObjectIdentity, parse_object_identity, qualified_object_name
+from .object_identity import (
+    OracleObjectIdentity,
+    normalize_object_part,
+    parse_object_identity,
+    qualified_object_name,
+)
 from .object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_object_name,
@@ -865,7 +870,7 @@ class OracleNl2SqlAdapter:
         return f"{business_owner_filter} AND {column_sql} IN ({placeholders})", binds
 
     def _db_admin_identity(self, object_name: str, owner: str = "") -> OracleObjectIdentity:
-        requested_owner = owner.strip().strip('"').upper()
+        requested_owner = normalize_object_part(owner) if owner.strip() else ""
         try:
             identity = parse_object_identity(
                 object_name,
@@ -1406,6 +1411,7 @@ class OracleNl2SqlAdapter:
                     row_count = int(row[0] or 0) if row else None
                 except Exception as exc:
                     warnings.append(f"row count の取得に失敗しました: {exc}")
+            comment_object_type = "TABLE"
             if include_ddl:
                 ddl_type = normalized_type
                 if normalized_type == "VIEW":
@@ -1425,6 +1431,7 @@ class OracleNl2SqlAdapter:
                         actual = str(row[0] or "").upper() if row else ""
                         if actual == "MATERIALIZED VIEW":
                             ddl_type = "MATERIALIZED_VIEW"
+                            comment_object_type = "MATERIALIZED VIEW"
                         elif actual == "TABLE":
                             ddl_type = "TABLE"
                 try:
@@ -1449,7 +1456,7 @@ class OracleNl2SqlAdapter:
                 ddl += ";"
             if comment:
                 escaped_comment = comment.replace("'", "''")
-                ddl += f"\nCOMMENT ON {normalized_type} {quoted_object} IS '{escaped_comment}';"
+                ddl += f"\nCOMMENT ON {comment_object_type} {quoted_object} IS '{escaped_comment}';"
             for column in columns:
                 if column.comment:
                     escaped_column_comment = column.comment.replace("'", "''")

@@ -50,7 +50,12 @@ import {
   INFORMATION_TABLE_SCROLL_CLASS,
 } from "@/lib/list-density";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
-import type { DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
+import {
+  dbAdminObjectQualifiedName,
+  parseDbAdminObjectTarget,
+  type DbAdminObjectTarget,
+} from "../dbObjectIdentity";
+import type { DbAdminExecuteData, DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
 export {
@@ -66,6 +71,8 @@ export type DbObjectSortKey = "name" | "row_count" | "owner";
 export type DbObjectSortDirection = "asc" | "desc";
 export type DbObjectPickerSortKey = "name" | "kind" | "row_count" | "owner";
 export type DbObjectPickerSortDirection = "asc" | "desc";
+export { dbAdminObjectQualifiedName, parseDbAdminObjectTarget };
+export type { DbAdminObjectTarget };
 
 export interface DbObjectSortState {
   key: DbObjectSortKey;
@@ -153,42 +160,12 @@ export function rowCountLabel(rowCount?: number | null) {
   return rowCount == null ? "-" : t("dbAdmin.list.rows", { count: rowCount });
 }
 
-export interface DbAdminObjectTarget {
-  owner: string;
-  name: string;
-  qualifiedName: string;
-}
-
-export function dbAdminObjectQualifiedName(item: {
-  name: string;
-  owner?: string;
-  qualified_name?: string;
-}) {
-  const qualifiedName = (item.qualified_name ?? "").trim();
-  if (qualifiedName) return qualifiedName.toUpperCase();
-  const owner = (item.owner ?? "").trim().toUpperCase();
-  const name = item.name.trim().toUpperCase();
-  return owner ? `${owner}.${name}` : name;
-}
-
-export function parseDbAdminObjectTarget(value: string, owner = ""): DbAdminObjectTarget {
-  const normalizedOwner = owner.trim().replaceAll('"', "").toUpperCase();
-  const raw = value.trim().replaceAll('"', "").toUpperCase();
-  const dotIndex = raw.indexOf(".");
-  if (dotIndex >= 0) {
-    const parsedOwner = raw.slice(0, dotIndex);
-    const name = raw.slice(dotIndex + 1);
-    return {
-      owner: parsedOwner,
-      name,
-      qualifiedName: parsedOwner && name ? `${parsedOwner}.${name}` : raw,
-    };
-  }
-  return {
-    owner: normalizedOwner,
-    name: raw,
-    qualifiedName: normalizedOwner ? `${normalizedOwner}.${raw}` : raw,
-  };
+export function dbAdminExecuteFailureMessage(result: DbAdminExecuteData, fallback: string) {
+  const warning = result.warnings.find((item) => item.trim());
+  if (warning) return warning;
+  const statementError = result.statements.find((statement) => statement.error_message.trim());
+  if (statementError) return statementError.error_message;
+  return fallback;
 }
 
 export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";

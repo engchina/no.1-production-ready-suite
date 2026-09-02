@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  dbAdminObjectQualifiedName,
+  parseDbAdminObjectTarget,
+} from "../src/features/nl2sql/dbObjectIdentity.ts";
+import {
   filterUserVisibleCatalog,
   filterUserVisibleDbAdminObjectPage,
   filterUserVisibleSchemaObjectPage,
@@ -165,4 +169,24 @@ test("DB admin pages remove dollar and hash objects defensively", () => {
   assert.equal(page.total, 3);
   assert.equal(page.table_count, 3);
   assert.equal(page.view_count, 0);
+});
+
+test("DB admin object identity preserves quoted and non-ASCII identifiers", () => {
+  assert.equal(parseDbAdminObjectTarget("app.orders").qualifiedName, "APP.ORDERS");
+  assert.equal(dbAdminObjectQualifiedName({ name: "lower", owner: "APP" }), 'APP."lower"');
+  assert.equal(
+    dbAdminObjectQualifiedName({ name: "ignored", qualified_name: 'APP."売上"' }),
+    'APP."売上"'
+  );
+  assert.deepEqual(parseDbAdminObjectTarget('APP."lower"'), {
+    owner: "APP",
+    name: '"lower"',
+    qualifiedName: 'APP."lower"',
+  });
+  assert.deepEqual(parseDbAdminObjectTarget('"Mixed Owner"."売上.2026"'), {
+    owner: '"Mixed Owner"',
+    name: '"売上.2026"',
+    qualifiedName: '"Mixed Owner"."売上.2026"',
+  });
+  assert.throws(() => parseDbAdminObjectTarget('APP."BROKEN'), /Oracle 識別子が不正です。/u);
 });

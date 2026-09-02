@@ -51,7 +51,8 @@ def _sample_tables(owner: str) -> list[SchemaTable]:
 
 
 def test_schema_table_exposes_canonical_qualified_name() -> None:
-    assert _table("sh", "orders").model_dump()["qualified_name"] == "SH.ORDERS"
+    assert _table("SH", "ORDERS").model_dump()["qualified_name"] == "SH.ORDERS"
+    assert _table("APP", "lower").model_dump()["qualified_name"] == 'APP."lower"'
 
 
 def test_empty_owner_allowlist_discovers_non_maintained_visible_scope() -> None:
