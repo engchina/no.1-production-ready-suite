@@ -644,7 +644,6 @@ function deepSecPlan(
         error_message: "",
         executed_at: applied ? "2026-07-19T00:00:00Z" : null,
         sql: [
-          "CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER IDENTIFIED BY <secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD> PROFILE DEFAULT",
           "CREATE ROLE NL2SQL_APP_DB_ROLE",
           "GRANT CREATE SESSION TO NL2SQL_APP_DB_ROLE",
           "CREATE DATA ROLE IF NOT EXISTS NL2SQL_APP_DATA_ROLE",
@@ -5463,7 +5462,6 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   await expect(page.locator("pre:visible")).toHaveCount(step1SqlCount);
   await expect(page.getByTestId("security-deepsec-step-1").locator("pre:visible")).toHaveCount(step1SqlCount);
   await expect(page.getByTestId("security-deepsec-step-2").locator("pre:visible")).toHaveCount(0);
-  await expect(page.getByText("<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>", { exact: false })).toBeVisible();
   await expect(page.getByTestId("security-deepsec-step-1").getByTestId("execution-confirmation-field")).toHaveCount(0);
   await expect(page.getByTestId("security-deepsec-step-2").getByTestId("execution-confirmation-field")).toHaveCount(0);
   const applySection = page.getByTestId("security-deepsec-foundation-apply-section");
