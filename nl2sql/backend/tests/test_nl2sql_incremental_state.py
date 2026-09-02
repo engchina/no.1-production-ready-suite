@@ -14,10 +14,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from app.cli.nl2sql_migrate_state import (
     _decode_snapshot_value,
@@ -100,7 +100,16 @@ class _FakeEnterpriseAiClient:
     def model_id(self) -> str:
         return "enterprise-nl2sql-model"
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        del timeout_seconds, max_output_tokens
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         return self.text
 
@@ -132,6 +141,8 @@ class _ScriptedOracleCursor:
         self._connection = connection
         self._result_sets = result_sets
         self._current: list[tuple[Any, ...]] = []
+        self.prefetchrows: int | None = None
+        self.arraysize: int | None = None
 
     def __enter__(self) -> _ScriptedOracleCursor:
         return self
@@ -1058,7 +1069,7 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     similar_response = nl2sql_router.similar_history(
         SimilarHistoryRequest(question="部署名を検索", profile_id="default", limit=3),
-        SimpleNamespace(state=SimpleNamespace(principal=None)),
+        cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None))),
     )
     persistence_after_similar = service.persistence_status()
     job_response = nl2sql_router.create_job(
@@ -1067,12 +1078,12 @@ async def test_similar_history_lob_read_does_not_block_following_job(
             engine="select_ai",
             profile_id="default",
         ),
-        SimpleNamespace(state=SimpleNamespace(principal=None)),
+        cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None))),
     )
 
-    assert len(similar_response.data.items) == 1
+    assert len(similar_response.data.items) == 1  # type: ignore[union-attr]
     assert persistence_after_similar.ready is True
-    assert job_response.data.status == "pending"
+    assert job_response.data.status == "pending"  # type: ignore[union-attr]
     assert connections[0].closed is True
 
 
@@ -1313,7 +1324,7 @@ def test_profile_api_supports_summary_detail_etag_and_conflict(
     service = _incremental_service(repository)
     monkeypatch.setattr(profile_router, "nl2sql_service", service)
 
-    anon_request = SimpleNamespace(state=SimpleNamespace(principal=None))
+    anon_request = cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
     page_response = Response()
     page = profile_router.search_profiles(
         anon_request,
@@ -1353,14 +1364,14 @@ def test_profile_api_supports_summary_detail_etag_and_conflict(
             if_match='"stale"',
         )
 
-    assert page.data.items[0].id == stored.id
-    assert page_not_modified.status_code == 304
-    assert detail.data.id == stored.id
+    assert page.data.items[0].id == stored.id  # type: ignore[union-attr]
+    assert page_not_modified.status_code == 304  # type: ignore[union-attr]
+    assert detail.data.id == stored.id  # type: ignore[union-attr]
     assert detail_response.headers["etag"] == f'"{stored.etag}"'
-    assert not_modified.status_code == 304
+    assert not_modified.status_code == 304  # type: ignore[union-attr]
     assert missing_precondition.value.status_code == 428
     assert conflict.value.status_code == 409
-    assert conflict.value.headers["ETag"] == f'"{stored.etag}"'
+    assert conflict.value.headers["ETag"] == f'"{stored.etag}"'  # type: ignore[index]
 
 
 def test_schema_api_supports_page_and_detail_etag(
@@ -1388,7 +1399,7 @@ def test_schema_api_supports_page_and_detail_etag(
     )
     cursor_page = schema_router.search_objects(
         Response(),
-        cursor=page.data.next_cursor,
+        cursor=page.data.next_cursor,  # type: ignore[union-attr]
         limit=1,
         include_counts=False,
     )
@@ -1401,13 +1412,13 @@ def test_schema_api_supports_page_and_detail_etag(
         if_none_match=detail_response.headers["etag"],
     )
 
-    assert page.data.counts_included is True
+    assert page.data.counts_included is True  # type: ignore[union-attr]
     assert page_response.headers["etag"] == '"schema-1"'
-    assert page_304.status_code == 304
-    assert cursor_page.data.counts_included is False
-    assert cursor_page.data.total is None
-    assert detail.data.table.table_name == "ORDERS"
-    assert detail_304.status_code == 304
+    assert page_304.status_code == 304  # type: ignore[union-attr]
+    assert cursor_page.data.counts_included is False  # type: ignore[union-attr]
+    assert cursor_page.data.total is None  # type: ignore[union-attr]
+    assert detail.data.table.table_name == "ORDERS"  # type: ignore[union-attr]
+    assert detail_304.status_code == 304  # type: ignore[union-attr]
 
 
 def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
@@ -1832,7 +1843,7 @@ def test_schema_refresh_submission_wakes_coalesced_pending_job(
     monkeypatch.setattr(
         service,
         "_dispatch_schema_refresh_job",
-        lambda job_id: dispatched.append(job_id) or True,
+        lambda job_id: dispatched.append(job_id) or True,  # type: ignore[func-returns-value]
     )
 
     first = service.start_schema_refresh_job(dispatch=False)
@@ -1855,7 +1866,7 @@ def test_schema_refresh_poll_wakes_expired_running_job_only(
     monkeypatch.setattr(
         service,
         "_dispatch_schema_refresh_job",
-        lambda job_id: dispatched.append(job_id) or True,
+        lambda job_id: dispatched.append(job_id) or True,  # type: ignore[func-returns-value]
     )
     now = datetime.now(UTC)
     expired = SchemaRefreshJob(

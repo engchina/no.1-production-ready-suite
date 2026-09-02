@@ -300,7 +300,7 @@ def test_oracle_store_maps_bare_ora_00942_to_operation_security_object(
 
     for operation, expected_object in operations:
         with pytest.raises(SecurityMigrationRequired) as exc_info:
-            operation()
+            operation()  # type: ignore[operator]
         assert exc_info.value.object_name == expected_object
 
 
@@ -2028,7 +2028,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             current, csrf = await _login_api(client, "query.only", "QueryOnlyPass!123")
             assert current["role_codes"] == ["QUERY_ONLY"]
-            assert set(current["permissions"]) == {
+            assert set(current["permissions"]) == {  # type: ignore[call-overload]
                 "menu.query",
                 FEEDBACK_WRITE_PERMISSION,
                 PROFILE_READ_PERMISSION,
@@ -2673,7 +2673,7 @@ def test_deepsec_config_sync_password_endpoint_treats_ora28007_as_success_when_l
     def control_connection(_manager: object) -> SyncConnection:
         return SyncConnection()
 
-    def validate_data_user_login(manager) -> None:
+    def validate_data_user_login(manager) -> None:  # type: ignore[no-untyped-def]
         login_probes.append(manager.settings.oracle_deepsec_data_user_password)
 
     monkeypatch.setattr(
@@ -3736,7 +3736,7 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
                 "SubsetActivePass!456",
             )
             assert current["role_codes"] == ["QUERY_SUBSET"]
-            assert set(current["permissions"]) == {
+            assert set(current["permissions"]) == {  # type: ignore[call-overload]
                 "menu.query",
                 FEEDBACK_WRITE_PERMISSION,
                 PROFILE_READ_PERMISSION,

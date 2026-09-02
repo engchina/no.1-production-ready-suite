@@ -480,10 +480,10 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
     result = service.verify(_principal())
 
     assert status["configured"] is False
-    assert status["objects"]["predicate_user_roles_grant"] == 0
+    assert status["objects"]["predicate_user_roles_grant"] == 0  # type: ignore[index]
     assert result["passed"] is False
     predicate_check = next(
-        item for item in result["checks"] if item["key"] == "predicate_table_grants"
+        item for item in result["checks"] if item["key"] == "predicate_table_grants"  # type: ignore[attr-defined]
     )
     assert predicate_check["passed"] is False
     assert "NL2SQL_APP_USER_ROLES" in predicate_check["detail"]
@@ -572,7 +572,7 @@ def test_verify_requires_managed_data_grant_on_data_role(
 
     assert result["passed"] is expected_passed
     data_grant_check = next(
-        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"
+        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"  # type: ignore[attr-defined]
     )
     assert data_grant_check["passed"] is expected_passed
     assert f"data_role_rows={1 if expected_passed else 0}" in data_grant_check["detail"]
@@ -658,12 +658,12 @@ def test_verify_fails_when_target_has_enabled_vpd_policy(
 
     assert result["passed"] is False
     vpd_check = next(
-        item for item in result["checks"] if item["key"] == "vpd_policy:entitlement-sales"
+        item for item in result["checks"] if item["key"] == "vpd_policy:entitlement-sales"  # type: ignore[attr-defined]
     )
     assert vpd_check["passed"] is False
     assert "SQL_ASSIST_VPD_LEGACY_POL" in vpd_check["detail"]
     data_grant_check = next(
-        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"
+        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"  # type: ignore[attr-defined]
     )
     assert data_grant_check["passed"] is True
 
@@ -1307,7 +1307,7 @@ def test_data_entitlement_apply_requires_confirmation_before_oracle(
         )
 
     assert executed == []
-    assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"
+    assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"  # type: ignore[union-attr]
 
 
 def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
@@ -1323,7 +1323,7 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1343,7 +1343,7 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
         actor=_principal(),
     )
 
-    stored = store.get_role("role-sales").entitlements[0]
+    stored = store.get_role("role-sales").entitlements[0]  # type: ignore[union-attr]
     assert result["status"] == "APPLIED"
     assert stored.apply_status == "APPLIED"
     assert stored.data_grant_name.startswith("NL2SQL_DG_")
@@ -1411,7 +1411,7 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1434,7 +1434,7 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
     assert result["cleanup_count"] == 2
     assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
     assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
-    assert store.get_role("role-sales").entitlements == []
+    assert store.get_role("role-sales").entitlements == []  # type: ignore[union-attr]
 
 
 def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_target(
@@ -1455,7 +1455,7 @@ def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_ta
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1507,7 +1507,7 @@ def test_data_entitlement_preview_and_apply_cover_all_role_grants(
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1525,10 +1525,10 @@ def test_data_entitlement_preview_and_apply_cover_all_role_grants(
         actor=_principal(),
     )
 
-    assert len(preview["data_entitlements"]) == 2
+    assert len(preview["data_entitlements"]) == 2  # type: ignore[arg-type]
     assert preview["cleanup_sql"] == []
-    assert all(item["sql"] for item in preview["data_entitlements"])
-    assert len(preview["checksum"]) == 64
+    assert all(item["sql"] for item in preview["data_entitlements"])  # type: ignore[attr-defined]
+    assert len(preview["checksum"]) == 64  # type: ignore[arg-type]
 
     result = service.apply_data_entitlements(
         role.role_id,
@@ -1579,7 +1579,7 @@ def test_data_entitlement_preview_includes_role_scoped_deletion_without_other_ro
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1738,13 +1738,13 @@ def test_data_entitlement_preview_generates_sql_without_store_or_oracle_executio
         actor=_principal(),
     )
 
-    preview = result["data_entitlements"][0]
+    preview = result["data_entitlements"][0]  # type: ignore[index]
     assert result["role_id"] == "role-sales"
     assert preview["entitlement_id"]
     assert preview["data_grant_name"].startswith("NL2SQL_DG_")
     assert preview["checksum"]
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in "\n".join(preview["sql"])
-    assert store.get_role("role-sales").entitlements == []
+    assert store.get_role("role-sales").entitlements == []  # type: ignore[union-attr]
 
 
 def test_data_entitlement_preview_id_keeps_saved_apply_sql_stable(
@@ -1783,7 +1783,7 @@ def test_data_entitlement_preview_id_keeps_saved_apply_sql_stable(
     monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
     service = DeepSecService(settings, security, manager)
 
-    preview = service.preview_data_entitlements(
+    preview = service.preview_data_entitlements(  # type: ignore[index]
         "role-sales",
         expected_version=1,
         entitlements=[draft],
@@ -1796,7 +1796,7 @@ def test_data_entitlement_preview_id_keeps_saved_apply_sql_stable(
         entitlements=[saved],
         actor=_principal(),
     )
-    stored = store.get_role("role-sales").entitlements[0]
+    stored = store.get_role("role-sales").entitlements[0]  # type: ignore[union-attr]
     apply_sql = build_data_entitlement_statements(settings, stored)
 
     assert str(preview["data_grant_name"]) in "\n".join(apply_sql)
@@ -1843,7 +1843,7 @@ def test_data_entitlement_preview_rejects_invalid_columns() -> None:
         entitlements=[],
     )
     manager = OraclePoolManager(settings)
-    manager._control_pool = _FakePool(PreviewConnection())  # noqa: SLF001
+    manager._control_pool = _FakePool(PreviewConnection())  # type: ignore[arg-type]  # noqa: SLF001
     service = DeepSecService(settings, SecurityService(store, settings), manager)
 
     with pytest.raises(SecurityApiError, match="対象 object に存在しない列"):
@@ -1889,7 +1889,7 @@ def test_plan_ignores_stale_checksum_state() -> None:
     plan = service.plan()
 
     assert plan["has_data_user_password"] is True
-    assert plan["steps"][0]["status"] == "PENDING"
+    assert plan["steps"][0]["status"] == "PENDING"  # type: ignore[index]
 
 
 def test_plan_marks_stale_application_context_for_reapply() -> None:
@@ -1911,8 +1911,8 @@ def test_plan_marks_stale_application_context_for_reapply() -> None:
 
     plan = service.plan()
 
-    assert plan["steps"][1]["key"] == "application_context"
-    assert plan["steps"][1]["status"] == "PENDING"
+    assert plan["steps"][1]["key"] == "application_context"  # type: ignore[index]
+    assert plan["steps"][1]["status"] == "PENDING"  # type: ignore[index]
 
 
 def test_apply_application_context_after_stale_checksum_closes_pools(
@@ -1947,7 +1947,7 @@ def test_apply_application_context_after_stale_checksum_closes_pools(
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.append(list(statements))
+            executed.append(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -1979,7 +1979,7 @@ def test_apply_application_context_after_stale_checksum_closes_pools(
     assert any("DBMS_SESSION.CLEAR_IDENTIFIER" in statement for statement in executed[0])
     assert any("NL2SQL_DEEPSEC_CTX_PKG compile error" in statement for statement in executed[0])
     plan = service.plan()
-    assert plan["steps"][1]["status"] == "APPLIED"
+    assert plan["steps"][1]["status"] == "APPLIED"  # type: ignore[index]
 
 
 def test_apply_application_context_compile_error_marks_step_failed(
@@ -2028,8 +2028,8 @@ def test_apply_application_context_compile_error_marks_step_failed(
     assert exc_info.value.status_code == 409
     assert closed == []
     plan = service.plan()
-    assert plan["steps"][1]["status"] == "FAILED"
-    assert "compile error" in plan["steps"][1]["error_message"]
+    assert plan["steps"][1]["status"] == "FAILED"  # type: ignore[index]
+    assert "compile error" in plan["steps"][1]["error_message"]  # type: ignore[index]
 
 
 @pytest.mark.parametrize("confirmation", ["", "ADMIN_EXECUTE", "admin_reset"])
@@ -2094,7 +2094,7 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
     monkeypatch.setattr(
         "app.security.deepsec.oracle_statement_executor.execute",
         lambda _conn, statements, **_kwargs: (
-            executed.extend(list(statements))
+            executed.extend(list(statements))  # type: ignore[func-returns-value]
             or [
                 {"status": "success", "index": index}
                 for index, _statement in enumerate(statements, start=1)
@@ -2111,7 +2111,7 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
     assert result["step_numbers"] == [1, 2, 3, 4]
     assert closed == [True]
     assert len(executed) == len(
-        build_v001_reset_statements(settings, store.get_role("role-sales").entitlements)
+        build_v001_reset_statements(settings, store.get_role("role-sales").entitlements)  # type: ignore[union-attr]
     )
     assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
     assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_MANAGED"
@@ -2125,7 +2125,7 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
     assert executed[9] == "DROP DATA ROLE IF EXISTS NL2SQL_APP_DATA_ROLE"
     assert "DROP ROLE NL2SQL_APP_DB_ROLE" in executed[10]
     assert store.get_deepsec_states() == {}
-    assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"
+    assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"  # type: ignore[union-attr]
     assert settings.oracle_deepsec_enabled is True
     assert settings.oracle_deepsec_data_user_password == ""
     assert env_file.read_text(encoding="utf-8") == env_text

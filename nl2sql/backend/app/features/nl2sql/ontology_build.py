@@ -1013,7 +1013,7 @@ def _draft_nodes(draft: ProposalDraft) -> list[OntologyNode]:
     for value in draft.payload.values.get("node_upserts") or []:
         try:
             nodes.append(OntologyNode.model_validate(value))
-        except Exception:
+        except Exception:  # nosec B112
             continue
     return nodes
 
@@ -1023,7 +1023,7 @@ def _draft_edges(draft: ProposalDraft) -> list[OntologyEdge]:
     for value in draft.payload.values.get("edge_upserts") or []:
         try:
             edges.append(OntologyEdge.model_validate(value))
-        except Exception:
+        except Exception:  # nosec B112
             continue
     return edges
 

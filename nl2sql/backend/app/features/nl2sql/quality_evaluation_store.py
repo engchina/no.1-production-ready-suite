@@ -262,7 +262,7 @@ class OracleQualityEvaluationRepository:
             predicate += " AND JOB_ID = :job_id"
             select_binds["job_id"] = job_id
         sql = (
-            "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS WHERE "
+            "SELECT JOB_ID, PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS WHERE "  # nosec B608
             + predicate
             + " ORDER BY CREATED_AT, JOB_ID FOR UPDATE SKIP LOCKED"
         )

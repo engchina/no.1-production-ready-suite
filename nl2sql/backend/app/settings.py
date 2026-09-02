@@ -296,7 +296,7 @@ class Settings(BaseServiceSettings):
         self._legacy_model_secret_detected = detected
         if not self._environment_enterprise_ai_api_key and normalized:
             self.oci_enterprise_ai_api_key = normalized
-            self._model_secret_source = "legacy_json"
+            self._model_secret_source = "legacy_json"  # nosec B105
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:

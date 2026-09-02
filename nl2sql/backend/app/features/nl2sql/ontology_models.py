@@ -651,7 +651,7 @@ class SqlSemanticGraph(OntologyContract):
 
 
 class ValidationSeverity(StrEnum):
-    PASS = "pass"
+    PASS = "pass"  # nosec B105
     WARNING = "warning"
     BLOCKER = "blocker"
 

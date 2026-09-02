@@ -183,7 +183,9 @@ def _query_one(cursor: Any, sql: str, params: dict[str, Any] | None = None) -> A
     return row[0] if row else None
 
 
-def _fetch_dicts(cursor: Any, sql: str, params: dict[str, Any] | None = None) -> list[dict]:
+def _fetch_dicts(
+    cursor: Any, sql: str, params: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     cursor.execute(sql, params or {})
     columns = [str(item[0]).lower() for item in cursor.description]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -619,7 +621,7 @@ def _save_and_apply_entitlements(
     assert [item.apply_status for item in applied.entitlements] == ["APPLIED"] * 3
     assert all(item.data_grant_name.startswith("NL2SQL_DG_") for item in applied.entitlements)
     report.check("apply role policies", "APPLIED table/view/materialized view")
-    return applied
+    return applied  # type: ignore[no-any-return]
 
 
 def _assert_data_grants(real_service: Any, role: RoleRecord, report: IterationReport) -> None:

@@ -106,7 +106,7 @@ _DEEPSEC_INTERNAL_OBJECT_PREFIXES = (
 _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT = 5
 _DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
 _DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
-_DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"
+_DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"  # nosec B105
 _ORACLE_PASSWORD_REUSE_RE = re.compile(r"\bORA-28007\b", re.IGNORECASE)
 _REMOVED_DEEPSEC_KEYS = frozenset(
     {
@@ -620,19 +620,20 @@ def build_data_entitlement_statements(
     columns = ", ".join(_strict_identifier(column) for column in entitlement.column_names)
     entitlement_id_literal = _sql_literal(entitlement.entitlement_id)
     role_id_literal = _sql_literal(entitlement.role_id)
-    predicate = f"""
-        EXISTS (
-          SELECT 1
-            FROM {owner}.NL2SQL_APP_USER_ROLES ur
-            JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID
-            JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID
-           WHERE ur.USER_UUID = {_DEEPSEC_APP_USER_CONTEXT_EXPR}
-             AND r.ARCHIVED = 0
-             AND e.ENTITLEMENT_ID = {entitlement_id_literal}
-             AND e.ROLE_ID = {role_id_literal}
-             AND e.CAPABILITY = 'SELECT'
-             AND e.APPLY_STATUS = 'APPLIED'
-        """.rstrip()
+    # owner は Oracle identifier whitelist、entitlement/role は SQL literal escape 済み。
+    predicate = (
+        "EXISTS (\n"
+        "  SELECT 1\n"  # nosec B608
+        f"    FROM {owner}.NL2SQL_APP_USER_ROLES ur\n"
+        f"    JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID\n"
+        f"    JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID\n"
+        f"   WHERE ur.USER_UUID = {_DEEPSEC_APP_USER_CONTEXT_EXPR}\n"
+        "     AND r.ARCHIVED = 0\n"
+        f"     AND e.ENTITLEMENT_ID = {entitlement_id_literal}\n"
+        f"     AND e.ROLE_ID = {role_id_literal}\n"
+        "     AND e.CAPABILITY = 'SELECT'\n"
+        "     AND e.APPLY_STATUS = 'APPLIED'"
+    )
     scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
     if scope_mode == "COLUMN_EQUALS":
         scope_column = _strict_identifier(entitlement.scope_column)
@@ -948,7 +949,8 @@ def build_v001_reset_statements(
         """,
         owner=owner,
     )
-    drop_role = f"""
+    drop_role = _trusted_identifier_sql(
+        """
         DECLARE
           v_count NUMBER;
         BEGIN
@@ -958,7 +960,9 @@ def build_v001_reset_statements(
             EXECUTE IMMEDIATE 'DROP ROLE {role}';
           END IF;
         END;
-        """
+        """,
+        role=role,
+    )
     return (
         *managed_disable_statements,
         *managed_drop_statements,
@@ -1083,38 +1087,39 @@ class DeepSecService:
             binds["cursor_owner"] = cursor_owner
             binds["cursor_name"] = cursor_name
         binds["fetch_limit"] = normalized_limit + 1
-        sql = f"""
-            SELECT owner_name, object_name, object_type, row_count, comments
-              FROM (
-                SELECT o.owner AS owner_name,
-                       o.object_name,
-                       o.object_type,
-                       t.num_rows AS row_count,
-                       NVL(tc.comments, '') AS comments
-                  FROM ALL_OBJECTS o
-                  JOIN ALL_USERS u
-                    ON u.username = o.owner
-                  LEFT JOIN ALL_TABLES t
-                    ON t.owner = o.owner
-                   AND t.table_name = o.object_name
-                  LEFT JOIN ALL_TAB_COMMENTS tc
-                    ON tc.owner = o.owner
-                   AND tc.table_name = o.object_name
-                 WHERE {" AND ".join(page_filters)}
-                 ORDER BY o.owner, o.object_name
-              )
-             WHERE ROWNUM <= :fetch_limit
-        """
-        count_sql = f"""
-            SELECT COUNT(*)
-              FROM ALL_OBJECTS o
-              JOIN ALL_USERS u
-                ON u.username = o.owner
-              LEFT JOIN ALL_TAB_COMMENTS tc
-                ON tc.owner = o.owner
-               AND tc.table_name = o.object_name
-             WHERE {base_filter_sql}
-        """
+        # filter SQL は固定 fragment と bind だけで組み立てる。
+        sql = (
+            "SELECT owner_name, object_name, object_type, row_count, comments\n"  # nosec B608
+            "  FROM (\n"
+            "    SELECT o.owner AS owner_name,\n"
+            "           o.object_name,\n"
+            "           o.object_type,\n"
+            "           t.num_rows AS row_count,\n"
+            "           NVL(tc.comments, '') AS comments\n"
+            "      FROM ALL_OBJECTS o\n"
+            "      JOIN ALL_USERS u\n"
+            "        ON u.username = o.owner\n"
+            "      LEFT JOIN ALL_TABLES t\n"
+            "        ON t.owner = o.owner\n"
+            "       AND t.table_name = o.object_name\n"
+            "      LEFT JOIN ALL_TAB_COMMENTS tc\n"
+            "        ON tc.owner = o.owner\n"
+            "       AND tc.table_name = o.object_name\n"
+            f"     WHERE {' AND '.join(page_filters)}\n"
+            "     ORDER BY o.owner, o.object_name\n"
+            "  )\n"
+            " WHERE ROWNUM <= :fetch_limit"
+        )
+        count_sql = (
+            "SELECT COUNT(*)\n"  # nosec B608
+            "  FROM ALL_OBJECTS o\n"
+            "  JOIN ALL_USERS u\n"
+            "    ON u.username = o.owner\n"
+            "  LEFT JOIN ALL_TAB_COMMENTS tc\n"
+            "    ON tc.owner = o.owner\n"
+            "   AND tc.table_name = o.object_name\n"
+            f" WHERE {base_filter_sql}"
+        )
         with self.pools.control_connection() as conn, conn.cursor() as db_cursor:
             db_cursor.execute(sql, binds)
             rows = list(db_cursor.fetchall())
@@ -1206,31 +1211,30 @@ class DeepSecService:
             filters.append("o.object_type = :object_type")
             binds["object_type"] = requested_type
         with self.pools.control_connection() as conn, conn.cursor() as db_cursor:
-            db_cursor.execute(
-                f"""
-                SELECT o.owner,
-                       o.object_name,
-                       o.object_type,
-                       t.num_rows,
-                       NVL(tc.comments, '')
-                  FROM ALL_OBJECTS o
-                  JOIN ALL_USERS u
-                    ON u.username = o.owner
-                  LEFT JOIN ALL_TABLES t
-                    ON t.owner = o.owner
-                   AND t.table_name = o.object_name
-                  LEFT JOIN ALL_TAB_COMMENTS tc
-                    ON tc.owner = o.owner
-                   AND tc.table_name = o.object_name
-                 WHERE {" AND ".join(filters)}
-                 ORDER BY CASE o.object_type
-                            WHEN 'TABLE' THEN 1
-                            WHEN 'VIEW' THEN 2
-                            ELSE 3
-                          END
-                """,
-                binds,
+            # filter SQL は固定 fragment と bind だけで組み立てる。
+            detail_sql = (
+                "SELECT o.owner,\n"  # nosec B608
+                "       o.object_name,\n"
+                "       o.object_type,\n"
+                "       t.num_rows,\n"
+                "       NVL(tc.comments, '')\n"
+                "  FROM ALL_OBJECTS o\n"
+                "  JOIN ALL_USERS u\n"
+                "    ON u.username = o.owner\n"
+                "  LEFT JOIN ALL_TABLES t\n"
+                "    ON t.owner = o.owner\n"
+                "   AND t.table_name = o.object_name\n"
+                "  LEFT JOIN ALL_TAB_COMMENTS tc\n"
+                "    ON tc.owner = o.owner\n"
+                "   AND tc.table_name = o.object_name\n"
+                f" WHERE {' AND '.join(filters)}\n"
+                " ORDER BY CASE o.object_type\n"
+                "            WHEN 'TABLE' THEN 1\n"
+                "            WHEN 'VIEW' THEN 2\n"
+                "            ELSE 3\n"
+                "          END"
             )
+            db_cursor.execute(detail_sql, binds)
             object_row = db_cursor.fetchone()
             if object_row is None:
                 raise SecurityApiError(404, "対象 object が見つかりません。")

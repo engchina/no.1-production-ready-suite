@@ -5457,8 +5457,11 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
   await expect(page.locator("pre:visible")).toHaveCount(0);
   await expect(page.locator("textarea")).toHaveCount(0);
   await page.getByText("SQL とチェックサムを表示", { exact: true }).first().click();
-  await expect(page.locator("pre:visible")).toHaveCount(1);
-  await expect(page.getByText("<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>", { exact: false })).toBeVisible();
+  // SQL は 1 文ごとに <pre>(aria-label 付き)で描画される。開いたのは step 1 だけであること。
+  const step1SqlCount = deepSecPlan().steps[0].sql.length;
+  await expect(page.locator("pre:visible")).toHaveCount(step1SqlCount);
+  await expect(page.getByTestId("security-deepsec-step-1").locator("pre:visible")).toHaveCount(step1SqlCount);
+  await expect(page.getByTestId("security-deepsec-step-2").locator("pre:visible")).toHaveCount(0);
   await expect(page.getByTestId("security-deepsec-step-1").getByTestId("execution-confirmation-field")).toHaveCount(0);
   await expect(page.getByTestId("security-deepsec-step-2").getByTestId("execution-confirmation-field")).toHaveCount(0);
   const applySection = page.getByTestId("security-deepsec-foundation-apply-section");

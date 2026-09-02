@@ -105,7 +105,7 @@ def test_profile_create_update_and_restore_never_materialize_ontology_view(
     assert created.select_ai_config.profile_name == "INVOICE_PROFILE"
     updated = nl2sql_router.update_profile(
         created.id,
-        ProfileUpsertRequest(name="invoice_profile_v2", allowed_tables=["APP.INVOICES"]),
+        ProfileUpsertRequest(name="invoice_profile_v2", allowed_tables=["APP.INVOICES"]),  # type: ignore[arg-type]
         _anon_request(),
         Response(),
     ).data

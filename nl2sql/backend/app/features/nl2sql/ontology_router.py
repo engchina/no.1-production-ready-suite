@@ -1786,7 +1786,7 @@ class OntologyApiRuntime:
                     "question_hash": recommendation.question_hash,
                     "status": "pending",
                     "payload": recommendation.model_dump(mode="json"),
-                    "confirmation_token_hash": "",
+                    "confirmation_token_hash": "",  # nosec B105
                 },
             )
             record_profile_recommendation(

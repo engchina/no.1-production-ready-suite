@@ -392,7 +392,7 @@ def parse_oracle_sql(
         )
 
     root = statements[0]
-    assert root is not None
+    assert root is not None  # nosec B101
     if isinstance(root, exp.Subquery):
         root = root.this
     query_type = getattr(exp, "Query", None)

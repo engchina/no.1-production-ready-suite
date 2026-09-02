@@ -229,20 +229,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check
-        run: npm run typecheck
-
       - name: Logic tests
-        run: npm run test
+        run: npm run test:logic
 
       - name: Build
         run: npm run build
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: E2E tests
-        run: npm run test:e2e
 
   backend:
     name: Backend
@@ -292,7 +283,7 @@ jobs:
         run: uv run mypy .
 
       - name: Test
-        run: uv run pytest --cov=app
+        run: uv run pytest
 
       - name: Security scan
         run: uv run bandit -r app

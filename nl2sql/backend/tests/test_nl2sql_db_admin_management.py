@@ -83,6 +83,7 @@ class FakeEnterpriseAiClient:
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
@@ -2675,8 +2676,13 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
     ]
 
 
-def test_view_export_xlsx_contains_column_information_only() -> None:
+def test_view_export_xlsx_contains_column_information_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # 論理名はオントロジー業務名だけを正とする。共有 ontology_runtime(memory store)に
+    # 他テストが公開した revision が残っていても影響を受けないよう lookup を固定する。
+    monkeypatch.setattr(service, "_ontology_business_names", lambda **_kwargs: {})
     service._catalog = SchemaCatalog(
         refreshed_at="2026-07-10T00:00:00+00:00",
         tables=[
@@ -3148,7 +3154,7 @@ def test_import_tabular_rejects_oversized_existing_byte_column_before_mutation(
                 self._violation = (2, "NAME", 16, 6, "バイト")
 
         def fetchall(self) -> list[tuple[object, ...]]:
-            return self._metadata
+            return self._metadata  # type: ignore[return-value]
 
         def fetchone(self) -> tuple[object, ...] | None:
             return self._violation
@@ -3245,7 +3251,7 @@ def test_import_tabular_truncate_mode_uses_transactional_delete(
                 assert "LENGTHB(c0)" not in sql
 
         def fetchall(self) -> list[tuple[object, ...]]:
-            return self._metadata
+            return self._metadata  # type: ignore[return-value]
 
         def fetchone(self) -> None:
             return None

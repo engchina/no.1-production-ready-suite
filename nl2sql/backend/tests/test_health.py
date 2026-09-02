@@ -521,6 +521,7 @@ class _FakeEnterpriseAiClient:
         context: str,
         system_prompt: str,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> str:
         del timeout_seconds
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
@@ -766,11 +767,11 @@ def test_select_ai_job_failure_is_logged_with_stage_metadata(
     assert matching_records
     record = matching_records[-1]
     assert record.exc_info is not None
-    assert record.job_id == created.job_id
-    assert record.failure_stage == "generate_sql"
-    assert record.engine == "select_ai"
-    assert record.profile_id == profile.id
-    assert record.exception_type == "RuntimeError"
+    assert record.job_id == created.job_id  # type: ignore[attr-defined]
+    assert record.failure_stage == "generate_sql"  # type: ignore[attr-defined]
+    assert record.engine == "select_ai"  # type: ignore[attr-defined]
+    assert record.profile_id == profile.id  # type: ignore[attr-defined]
+    assert record.exception_type == "RuntimeError"  # type: ignore[attr-defined]
 
 
 def test_select_ai_job_blocks_where_when_filter_slot_is_empty() -> None:
@@ -2037,7 +2038,7 @@ def test_auto_job_supports_select_ai_agent_and_timing() -> None:
         assert data.result is not None
         assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
         assert data.result.engine_meta["team_name"].endswith("_TEAM")
-        assert data.result.timing.elapsed_ms >= 0
+        assert data.result.timing.elapsed_ms >= 0  # type: ignore[operator]
 
 
 def test_auto_falls_back_from_agent_to_select_ai() -> None:
@@ -2159,7 +2160,7 @@ def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.Monkey
 
     assert "profile_id" not in request.model_dump()
     assert fake_service.resolved_allowed == AllowedObjects(table_names=["EMPLOYEE"])
-    assert response.data.rows == [{"EMPLOYEE_ID": 1}]
+    assert response.data.rows == [{"EMPLOYEE_ID": 1}]  # type: ignore[union-attr]
 
 
 async def test_allowed_objects_rejects_unselected_columns() -> None:

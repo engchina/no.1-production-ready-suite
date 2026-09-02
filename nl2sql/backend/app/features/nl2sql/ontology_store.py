@@ -1198,7 +1198,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         id_sql = ", ".join(f":{name}" for name in id_binds)
         embedding_json = json.dumps([float(value) for value in query_embedding])
         sql = (
-            "SELECT NODE_ID, VECTOR_DISTANCE(EMBEDDING, TO_VECTOR(:query_embedding), COSINE) "
+            "SELECT NODE_ID, VECTOR_DISTANCE(EMBEDDING, TO_VECTOR(:query_embedding), COSINE) "  # nosec B608
             "AS DISTANCE FROM NL2SQL_ONTOLOGY_NODES "
             "WHERE REVISION_ID = :revision_id "
             "AND NODE_ID IN (" + id_sql + ") "
