@@ -1664,15 +1664,30 @@ def get_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSumma
 
 
 @router.post("/reverse", response_model=ApiResponse[ReverseSqlData])
-def reverse(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
-    """SQL から自然言語説明を生成する。"""
-    return ApiResponse(data=nl2sql_service.reverse_sql(req))
+def reverse(req: ReverseSqlRequest, request: Request) -> ApiResponse[ReverseSqlData]:
+    """SQL から自然言語説明を生成する。
+
+    profile の glossary / カタログ(論理名・コメント)を使うため、他ルートと同じく
+    principal に許可された profile だけを受け付ける。
+    """
+    _assert_profile_access(request, req.profile_id, default_profile=True)
+    try:
+        return ApiResponse(data=nl2sql_service.reverse_sql(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/reverse/deep", response_model=ApiResponse[ReverseSqlData])
-def reverse_deep(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
-    """SQL から Enterprise AI backed の自然言語説明を生成する。"""
-    return ApiResponse(data=nl2sql_service.reverse_sql_deep(req))
+def reverse_deep(req: ReverseSqlRequest, request: Request) -> ApiResponse[ReverseSqlData]:
+    """SQL から Enterprise AI backed の自然言語説明を生成する。
+
+    schema context を Enterprise AI へ送るため、許可 profile の検証は必須。
+    """
+    _assert_profile_access(request, req.profile_id, default_profile=True)
+    try:
+        return ApiResponse(data=nl2sql_service.reverse_sql_deep(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/comments/suggest", response_model=ApiResponse[CommentSuggestionData])
