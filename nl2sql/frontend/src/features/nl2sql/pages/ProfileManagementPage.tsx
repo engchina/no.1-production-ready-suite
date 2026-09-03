@@ -1375,6 +1375,7 @@ export function ProfileManagementPage() {
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
   const reportedOracleSyncJobId = useRef("");
+  const lastOracleConfirmationRef = useRef("");
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
   const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
@@ -1510,6 +1511,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    lastOracleConfirmationRef.current = "";
     reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: profile.id });
   };
@@ -1715,15 +1717,18 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    lastOracleConfirmationRef.current = "";
     reportedOracleSyncJobId.current = "";
     setSearchParams({ profile: "new" });
   };
 
   // dirty 判定: 読み込み時と同じ変換を再計算して比較する(追加 state 不要)
   const isDirty = useMemo(() => {
-    const baseline = selectedProfile ? profileToForm(selectedProfile) : emptyProfileForm();
+    const baseline = selectedProfile
+      ? profileToForm(selectedProfile)
+      : emptyProfileForm(selectAiCredentialQuery.data?.region);
     return JSON.stringify(form) !== JSON.stringify(baseline);
-  }, [form, selectedProfile]);
+  }, [form, selectedProfile, selectAiCredentialQuery.data?.region]);
 
   const backToList = async () => {
     if (isDirty) {
@@ -1825,10 +1830,12 @@ export function ProfileManagementPage() {
 
     try {
       setOracleSyncSubmissionError("");
+      const submittedOracleConfirmation = oracleConfirmation.trim();
+      lastOracleConfirmationRef.current = submittedOracleConfirmation;
       const job = await apiPost<ProfileSyncJobData>(
         `/api/nl2sql/profiles/${saved.id}/oracle-sync-jobs`,
         {
-          confirmation: oracleConfirmation,
+          confirmation: submittedOracleConfirmation,
           reason: "ui-profile-management-save",
           rebuild_agent_assets: rebuildAgentAssets,
         },
@@ -1856,6 +1863,8 @@ export function ProfileManagementPage() {
     if (!profileId) return;
     setLoading("retry-oracle-sync");
     try {
+      const retryConfirmation =
+        oracleConfirmation.trim() || lastOracleConfirmationRef.current.trim();
       const job = oracleSyncJob?.status === "failed"
         ? await apiPost<ProfileSyncJobData>(
             `/api/nl2sql/oracle-sync-jobs/${oracleSyncJob.job_id}/retry`
@@ -1863,12 +1872,13 @@ export function ProfileManagementPage() {
         : await apiPost<ProfileSyncJobData>(
             `/api/nl2sql/profiles/${profileId}/oracle-sync-jobs`,
             {
-              confirmation: oracleConfirmation,
+              confirmation: retryConfirmation,
               reason: "ui-profile-management-retry",
               rebuild_agent_assets: rebuildAgentAssets,
             },
             { headers: { "Idempotency-Key": `profile-retry-${profileId}-${Date.now()}` } }
           );
+      lastOracleConfirmationRef.current = retryConfirmation;
       setOracleSyncSubmissionError("");
       reportedOracleSyncJobId.current = "";
       setOracleSyncJobId(job.job_id);

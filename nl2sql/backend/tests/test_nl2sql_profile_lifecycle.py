@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -18,6 +19,8 @@ from app.features.nl2sql.models import (
     Nl2SqlEngine,
     Nl2SqlProfile,
     ProfilePatchRequest,
+    ProfileSelectAiProfileRequest,
+    ProfileSyncJobRequest,
     ProfileUpsertRequest,
 )
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
@@ -27,11 +30,36 @@ from app.features.nl2sql.service import (
     ProfileOracleCleanupFailed,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.security.domain import Principal
 
 
 def _anon_request() -> Request:
     """認証無効(principal なし)相当の request。router の RBAC 引数へ渡す。"""
     return cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
+
+
+def _profile_user_request(allowed_profile_ids: set[str]) -> Request:
+    """業務 profile 制限ユーザー相当の request。"""
+    principal = Principal(
+        user_uuid="user-1",
+        login_user_id="user1",
+        display_name="利用者",
+        status="ACTIVE",
+        force_password_change=False,
+        role_codes=["ANALYST"],
+        permissions=set(),
+        data_entitlements=[],
+        allowed_profile_ids=set(allowed_profile_ids),
+        session_id="session-1",
+        csrf_token_hash="csrf",
+    )
+    return cast(Request, SimpleNamespace(state=SimpleNamespace(principal=principal)))
+
+
+def _assert_raises_404(route_call: Callable[[], object]) -> None:
+    with pytest.raises(HTTPException) as exc:
+        route_call()
+    assert exc.value.status_code == 404
 
 
 class _FakeOracleCleanupAdapter:
@@ -294,6 +322,120 @@ def test_default_profile_delete_honors_incremental_preconditions_and_not_found(
     with pytest.raises(HTTPException) as missing:
         nl2sql_router.delete_profile("default", _anon_request(), if_match=current_etag)
     assert missing.value.status_code == 404
+
+
+def test_profile_not_found_routes_return_404_with_incremental_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._incremental_repository = MemoryIncrementalNl2SqlRepository()  # noqa: SLF001
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(
+        profile_sync,
+        "profile_sync_service",
+        profile_sync.ProfileSyncService(service=service),
+    )
+
+    request = _anon_request()
+    missing_id = "missing-profile"
+    cases: list[Callable[[], object]] = [
+        lambda: nl2sql_router.archive_profile(missing_id, request),
+        lambda: nl2sql_router.restore_profile(missing_id, request),
+        lambda: nl2sql_router.export_profile_learning_material(missing_id, request),
+        lambda: nl2sql_router.upsert_profile_select_ai_profile(
+            missing_id,
+            ProfileSelectAiProfileRequest(confirmation="ADMIN_EXECUTE"),
+            request,
+        ),
+        lambda: nl2sql_router.create_profile_oracle_sync_job(
+            missing_id,
+            ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+            "sync-missing-profile",
+            request,
+        ),
+        lambda: nl2sql_router.refresh_select_ai_profile(request, profile_id=missing_id),
+        lambda: nl2sql_router.refresh_select_ai_agent_assets(request, profile_id=missing_id),
+    ]
+
+    for route_call in cases:
+        _assert_raises_404(route_call)
+
+
+def test_archived_profile_active_only_routes_return_404_with_incremental_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._incremental_repository = MemoryIncrementalNl2SqlRepository()  # noqa: SLF001
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(
+        profile_sync,
+        "profile_sync_service",
+        profile_sync.ProfileSyncService(service=service),
+    )
+    request = _anon_request()
+
+    archived = nl2sql_router.archive_profile("default", request).data
+    assert archived is not None
+    assert archived.archived is True
+
+    cases: list[Callable[[], object]] = [
+        lambda: nl2sql_router.export_profile_learning_material("default", request),
+        lambda: nl2sql_router.upsert_profile_select_ai_profile(
+            "default",
+            ProfileSelectAiProfileRequest(confirmation="ADMIN_EXECUTE"),
+            request,
+        ),
+        lambda: nl2sql_router.create_profile_oracle_sync_job(
+            "default",
+            ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+            "sync-archived-profile",
+            request,
+        ),
+        lambda: nl2sql_router.refresh_select_ai_profile(request, profile_id="default"),
+        lambda: nl2sql_router.refresh_select_ai_agent_assets(request, profile_id="default"),
+    ]
+
+    for route_call in cases:
+        _assert_raises_404(route_call)
+
+
+def test_restricted_profile_search_uses_current_summary_etag_after_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._incremental_repository = MemoryIncrementalNl2SqlRepository()  # noqa: SLF001
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    request = _profile_user_request({"default"})
+
+    first_response = Response()
+    first_result = nl2sql_router.search_profiles(request, first_response)
+    assert not isinstance(first_result, Response)
+    first_page = first_result.data
+    assert first_page is not None
+    first_etag = first_response.headers["ETag"]
+    first_summary = first_page.items[0]
+
+    updated = service.update_profile(
+        "default",
+        lambda profile: profile.model_copy(update={"name": "RENAMED_PROFILE"}),
+        expected_etag=first_summary.etag,
+    )
+
+    second_response = Response()
+    second_result = nl2sql_router.search_profiles(
+        request,
+        second_response,
+        if_none_match=first_etag,
+    )
+
+    assert not isinstance(second_result, Response)
+    second_page = second_result.data
+    assert second_page is not None
+    assert second_response.headers["ETag"] != first_etag
+    assert second_page.items[0].name == "RENAMED_PROFILE"
+    assert second_page.items[0].etag == updated.etag
+    assert second_page.items[0].version == updated.version
+    assert second_page.items[0].etag != first_summary.etag
 
 
 def test_profile_delete_executes_oracle_agent_then_profile_cleanup(

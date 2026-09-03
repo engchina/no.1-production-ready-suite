@@ -1157,7 +1157,9 @@ def test_profile_learning_material_imports_xlsx_and_exports_xlsx() -> None:
     workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True)
     assert "terms" in workbook.sheetnames
     assert "few_shot" not in workbook.sheetnames
-    assert "rules" not in workbook.sheetnames
+    assert "rules" in workbook.sheetnames
+    assert workbook["rules"]["A1"].value == "RULE"
+    assert workbook["rules"]["A2"].value == "日付条件は TRUNC を使う"
 
 
 def test_profile_learning_material_rejects_invalid_mode_without_merge_fallback() -> None:

@@ -65,6 +65,8 @@ from .incremental_store import (
     MemoryIncrementalNl2SqlRepository,
     OracleIncrementalNl2SqlRepository,
     VersionedTtlCache,
+    _decode_cursor,
+    _encode_cursor,
 )
 from .logical_steps import (
     LabelResolver,
@@ -191,6 +193,7 @@ from .models import (
     ProfileRecommendationRequest,
     ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
+    ProfileSummary,
     ProfileSummaryPage,
     QueryResults,
     ReverseSqlData,
@@ -339,6 +342,17 @@ class ProfileNameConflict(ValueError):
         normalized = profile_name.strip().upper()
         super().__init__(f"業務 profile 名「{normalized}」は既に使用されています。")
         self.profile_name = normalized
+
+
+class ProfileNotFoundError(KeyError, ValueError):
+    """業務 profile が存在しない、または通常利用できない。"""
+
+    def __init__(self, profile_id: str | None = None) -> None:
+        self.profile_id = profile_id or "default"
+        super().__init__(self.profile_id)
+
+    def __str__(self) -> str:
+        return "指定された profile が見つからないか、利用できません。"
 
 
 class DbAdminOperationFailed(RuntimeError):
@@ -5050,26 +5064,24 @@ class Nl2SqlService:
                 for profile in self.list_profiles(include_archived=include_archived)
                 if profile.id in allowed_profile_ids
             ]
-            memory_repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
-            for profile in profiles:
-                memory_repository.save_profile(profile, expected_etag=None)
-            return memory_repository.search_profiles(
+            return self._profile_summary_page_from_profiles(
+                profiles,
                 cursor=cursor,
                 limit=limit,
                 query=query,
                 include_archived=include_archived,
+                change_token=self._profile_summary_change_token(profiles),
             )
         repository = self._incremental_repository
         if repository is None:
             profiles = self.list_profiles(include_archived=include_archived)
-            memory_repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
-            for profile in profiles:
-                memory_repository.save_profile(profile, expected_etag=None)
-            return memory_repository.search_profiles(
+            return self._profile_summary_page_from_profiles(
+                profiles,
                 cursor=cursor,
                 limit=limit,
                 query=query,
                 include_archived=include_archived,
+                change_token=self._profile_summary_change_token(profiles),
             )
         try:
             return repository.search_profiles(
@@ -5084,6 +5096,76 @@ class Nl2SqlService:
                 exc=exc,
                 operation_error_code="profile_search_query_failed",
             )
+
+    def _profile_summary_page_from_profiles(
+        self,
+        profiles: Sequence[Nl2SqlProfile],
+        *,
+        cursor: str | None,
+        limit: int,
+        query: str,
+        include_archived: bool,
+        change_token: int,
+    ) -> ProfileSummaryPage:
+        after = _decode_cursor(cursor, 2)
+        query_key = query.casefold().strip()
+        filtered = [
+            profile
+            for profile in profiles
+            if (include_archived or not profile.archived)
+            and (
+                not query_key
+                or query_key
+                in f"{profile.name} {profile.category} {profile.description}".casefold()
+            )
+        ]
+        filtered.sort(key=lambda profile: (profile.name.casefold(), profile.id))
+        total = len(filtered)
+        if after:
+            after_key = (after[0].casefold(), after[1])
+            filtered = [
+                profile for profile in filtered if (profile.name.casefold(), profile.id) > after_key
+            ]
+        selected = filtered[: limit + 1]
+        has_more = len(selected) > limit
+        selected = selected[:limit]
+        next_cursor = None
+        if has_more and selected:
+            last = selected[-1]
+            next_cursor = _encode_cursor(last.name.casefold(), last.id)
+        return ProfileSummaryPage(
+            items=[self._profile_summary(profile) for profile in selected],
+            next_cursor=next_cursor,
+            total=total,
+            change_token=change_token,
+        )
+
+    @staticmethod
+    def _profile_summary(profile: Nl2SqlProfile) -> ProfileSummary:
+        return ProfileSummary(
+            id=profile.id,
+            name=profile.name,
+            category=profile.category,
+            description=profile.description,
+            archived=profile.archived,
+            allowed_table_count=len(profile.allowed_tables),
+            allowed_view_count=len(profile.allowed_views),
+            glossary_count=len(profile.glossary),
+            few_shot_count=len(profile.few_shot_examples),
+            version=profile.version,
+            etag=profile.etag,
+            updated_at=profile.updated_at,
+        )
+
+    def _profile_summary_change_token(self, profiles: Sequence[Nl2SqlProfile]) -> int:
+        payload = [
+            self._profile_summary(profile).model_dump(mode="json")
+            for profile in sorted(profiles, key=lambda item: (item.name.casefold(), item.id))
+        ]
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return int(digest[:12], 16)
 
     def create_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
         profile = self._canonical_profile_scope(
@@ -5338,6 +5420,16 @@ class Nl2SqlService:
                     examples_sheet,
                     [example.get("question", ""), example.get("sql", "")],
                 )
+        rules = [
+            line.strip()
+            for line in profile.select_ai_config.additional_instructions.splitlines()
+            if line.strip()
+        ]
+        if rules:
+            rules_sheet = workbook.create_sheet("rules")
+            _append_excel_text_row(rules_sheet, ["RULE"])
+            for rule in rules:
+                _append_excel_text_row(rules_sheet, [rule])
         buffer = io.BytesIO()
         workbook.save(buffer)
         safe_profile = _csv_identifier(profile.id or profile.name, "PROFILE").lower()
@@ -5507,7 +5599,7 @@ class Nl2SqlService:
             cached = self._profile_cache.get(resolved_id)
             if isinstance(cached, Nl2SqlProfile):
                 if cached.archived and not include_archived:
-                    raise ValueError("指定された profile が見つからないか、利用できません。")
+                    raise ProfileNotFoundError(resolved_id)
                 return self._profile_scope_for_read(cached, persist_migration=True)
             try:
                 profile = self._incremental_repository.get_profile(resolved_id)
@@ -5518,7 +5610,7 @@ class Nl2SqlService:
                     operation_error_code="profile_query_failed",
                 )
             if profile is None or (profile.archived and not include_archived):
-                raise ValueError("指定された profile が見つからないか、利用できません。")
+                raise ProfileNotFoundError(resolved_id)
             profile = self._profile_scope_for_read(profile, persist_migration=True)
             self._profile_cache.put(resolved_id, profile)
             return profile
@@ -5526,7 +5618,7 @@ class Nl2SqlService:
             resolved_id = profile_id or "default"
             profile = self._profiles.get(resolved_id)
             if profile is None or (profile.archived and not include_archived):
-                raise ValueError("指定された profile が見つからないか、利用できません。")
+                raise ProfileNotFoundError(resolved_id)
             return self._profile_scope_for_read(profile, persist_migration=True)
 
     def _refresh_cache_token(

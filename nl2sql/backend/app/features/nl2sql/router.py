@@ -842,10 +842,12 @@ def create_profile_oracle_sync_job(
                 idempotency_key=idempotency_key,
             )
         )
-    except (KeyError, ValueError) as exc:
-        message = str(exc)
-        status_code = 404 if "見つかりません" in message else 400
-        raise HTTPException(status_code=status_code, detail=message) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(
@@ -903,7 +905,12 @@ def refresh_select_ai_profile(
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
     if profile_id:
         _assert_profile_access(request, profile_id)
-    return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
+    try:
+        return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
 
 
 @router.post("/select-ai-agent/assets/refresh", response_model=ApiResponse[AssetRefreshData])
@@ -914,7 +921,12 @@ def refresh_select_ai_agent_assets(
     """Oracle Select AI Agent assets を作成/更新する adapter boundary。"""
     if profile_id:
         _assert_profile_access(request, profile_id)
-    return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
+    try:
+        return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
 
 
 @router.post("/select-ai/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])

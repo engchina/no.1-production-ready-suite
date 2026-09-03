@@ -1226,6 +1226,143 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   expect(ontologyRequests).toBe(0);
 });
 
+test("新規保存直後の Oracle 反映再試行は保存時の確認語を再利用する", async ({ page }) => {
+  await mockProfileApi(page);
+  const savedProfile = {
+    ...profiles[0],
+    id: "sales-profile",
+    name: "SALES_PROFILE",
+    category: "販売",
+    allowed_tables: [],
+    allowed_views: [],
+    select_ai_config: {
+      ...selectAiConfig,
+      profile_name: "SALES_PROFILE",
+    },
+    etag: "etag-sales-profile",
+  };
+  const syncSubmissions: Record<string, unknown>[] = [];
+
+  await page.route("**/api/nl2sql/profiles", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    await fulfillJson(route, savedProfile);
+  });
+  await page.route("**/api/nl2sql/profiles/sales-profile", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await fulfillJson(route, savedProfile);
+  });
+  await page.route("**/api/nl2sql/profiles/sales-profile/oracle-sync-jobs", async (route) => {
+    syncSubmissions.push(route.request().postDataJSON() as Record<string, unknown>);
+    if (syncSubmissions.length === 1) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Oracle Profile 同期を受付できませんでした。" }),
+      });
+      return;
+    }
+    await fulfillJson(route, {
+      job_id: "profile-sync-sales-retry",
+      profile_id: "sales-profile",
+      profile_etag: "etag-sales-profile",
+      status: "queued",
+      phase: "queued",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      created_at: "2026-07-22T00:00:03Z",
+    });
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/profile-sync-sales-retry", async (route) => {
+    await fulfillJson(route, {
+      job_id: "profile-sync-sales-retry",
+      profile_id: "sales-profile",
+      profile_etag: "etag-sales-profile",
+      status: "succeeded",
+      phase: "succeeded",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      created_at: "2026-07-22T00:00:03Z",
+      finished_at: "2026-07-22T00:00:04Z",
+      oracle_result: {
+        runtime: "oracle",
+        executed: true,
+        status: "saved",
+        profile_name: "SALES_PROFILE",
+        original_name: "",
+        ddl: [],
+        profile: {
+          ...dbProfiles.profiles[0],
+          name: "SALES_PROFILE",
+        },
+        warnings: [],
+        engine_meta: {},
+      },
+    });
+  });
+
+  await page.goto("/profiles");
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+  await page.getByLabel("名称").fill("sales_profile");
+  await page.getByLabel("カテゴリ").fill("販売");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page).toHaveURL(/profile=sales-profile/);
+  const status = page.getByTestId("profile-save-progress");
+  await expect(status).toHaveAttribute("data-job-status", "submission_failed");
+  await expect(status).toContainText(
+    "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。"
+  );
+  await expect(page.getByLabel("実行確認語")).toHaveValue("");
+
+  await status.getByRole("button", { name: "Oracle 反映を再試行" }).click();
+
+  await expect(status).toHaveAttribute("data-job-status", "succeeded");
+  expect(syncSubmissions).toHaveLength(2);
+  expect(syncSubmissions[0]).toMatchObject({
+    confirmation: "ADMIN_EXECUTE",
+    reason: "ui-profile-management-save",
+  });
+  expect(syncSubmissions[1]).toMatchObject({
+    confirmation: "ADMIN_EXECUTE",
+    reason: "ui-profile-management-retry",
+  });
+});
+
+test("Credential region の新規フォームは未編集で一覧へ戻っても破棄確認を出さない", async ({
+  page,
+}) => {
+  await mockProfileApi(page);
+  await page.route("**/api/settings/database/select-ai-credential", (route) =>
+    fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: true,
+      region: "us-chicago-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: null,
+    })
+  );
+
+  await page.goto("/profiles?profile=new");
+
+  await expect(page.locator("#profile-select-ai-region")).toContainText("us-chicago-1");
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+
+  await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toHaveCount(0);
+  await expect(page.locator("#profile-management-panel-list")).toBeVisible();
+  await expect(page).toHaveURL(/\/profiles$/);
+});
+
 test("Credential 不足からデータベース設定で作成し、履歴 job を自動再試行しない", async ({
   page,
 }) => {
