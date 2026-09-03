@@ -30,6 +30,7 @@ from pr_backend_core import ApiResponse
 from starlette.responses import JSONResponse
 
 from app.api.concurrency import run_sync_io
+from app.api.problems import api_problem_response
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
     pem_file_is_encrypted,
@@ -269,7 +270,9 @@ def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
     "/database/select-ai-credential",
     response_model=ApiResponse[SelectAiCredentialData],
 )
-def get_select_ai_credential() -> ApiResponse[SelectAiCredentialData] | JSONResponse:
+def get_select_ai_credential(
+    request: Request,
+) -> ApiResponse[SelectAiCredentialData] | JSONResponse:
     """現 Oracle schema と OCI signing material の安全な readiness を返す。"""
     settings = get_settings()
     try:
@@ -283,6 +286,7 @@ def get_select_ai_credential() -> ApiResponse[SelectAiCredentialData] | JSONResp
             extra={"credential_name": SELECT_AI_CREDENTIAL_NAME},
         )
         return _select_ai_credential_error_response(
+            request,
             status_code=503,
             code="SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE",
             message=(
@@ -318,6 +322,7 @@ def create_select_ai_credential(
     """管理者の明示操作で OCI signing key Credential を作成または再作成する。"""
     if payload.confirmation != "ADMIN_EXECUTE":
         return _select_ai_credential_error_response(
+            request,
             status_code=422,
             code="SELECT_AI_CONFIRMATION_REQUIRED",
             message="実行するには確認語 ADMIN_EXECUTE を入力してください。",
@@ -338,6 +343,7 @@ def create_select_ai_credential(
             adapter=adapter,
         )
         return _select_ai_credential_error_response(
+            request,
             status_code=503,
             code="SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE",
             message=(
@@ -347,6 +353,7 @@ def create_select_ai_credential(
         )
     if already_exists and not payload.recreate:
         return _select_ai_credential_error_response(
+            request,
             status_code=409,
             code="SELECT_AI_CREDENTIAL_EXISTS",
             message=(
@@ -358,6 +365,7 @@ def create_select_ai_credential(
         material = _load_select_ai_signing_material(settings)
     except _SelectAiCredentialConfigurationError as exc:
         return _select_ai_credential_error_response(
+            request,
             status_code=422,
             code=exc.code,
             message=exc.public_message,
@@ -374,6 +382,7 @@ def create_select_ai_credential(
         )
     except SelectAiCredentialExistsError:
         return _select_ai_credential_error_response(
+            request,
             status_code=409,
             code="SELECT_AI_CREDENTIAL_EXISTS",
             message=(
@@ -390,6 +399,7 @@ def create_select_ai_credential(
             adapter=adapter,
         )
         return _select_ai_credential_error_response(
+            request,
             status_code=502,
             code="SELECT_AI_CREDENTIAL_CREATE_FAILED",
             message=(
@@ -412,6 +422,7 @@ def create_select_ai_credential(
             },
         )
         return _select_ai_credential_error_response(
+            request,
             status_code=500,
             code="SELECT_AI_CREDENTIAL_SETTINGS_PERSIST_FAILED",
             message=(
@@ -465,6 +476,7 @@ def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     response_model=ApiResponse[SystemTablesOperationData],
 )
 def initialize_system_tables(
+    request: Request,
     payload: SystemTablesInitializeRequest,
 ) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
     """明示操作として system table を作成・更新または全再作成する。"""
@@ -476,15 +488,13 @@ def initialize_system_tables(
         )
     except SystemSchemaError as exc:
         headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
-        return JSONResponse(
+        return api_problem_response(
+            request,
             status_code=exc.status_code,
+            detail=exc.public_message,
+            code=exc.code,
+            retryable=True if exc.code == "ORA-00054" else None,
             headers=headers,
-            content={
-                "data": None,
-                "error_messages": [exc.public_message],
-                "warning_messages": [],
-                "error_code": exc.code,
-            },
         )
     try:
         reset_system_schema_runtime(
@@ -2031,16 +2041,13 @@ def _persist_select_ai_credential_settings(settings: Settings, region: str) -> N
 
 
 def _select_ai_credential_error_response(
-    *, status_code: int, code: str, message: str
+    request: Request, *, status_code: int, code: str, message: str
 ) -> JSONResponse:
-    return JSONResponse(
+    return api_problem_response(
+        request,
         status_code=status_code,
-        content={
-            "data": None,
-            "error_messages": [message],
-            "warning_messages": [],
-            "error_code": code,
-        },
+        detail=message,
+        code=code,
     )
 
 

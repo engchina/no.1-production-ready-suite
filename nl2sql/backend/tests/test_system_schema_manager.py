@@ -810,7 +810,7 @@ def test_system_tables_api_contract_and_strict_permission(
 
     status = settings_router.get_system_tables_status()
     initialized = settings_router.initialize_system_tables(
-        SystemTablesInitializeRequest(recreate=False)
+        _system_tables_request(), SystemTablesInitializeRequest(recreate=False)
     )
 
     assert status.data is not None
@@ -832,18 +832,24 @@ def test_system_tables_api_exposes_retryable_ora_00054_contract(
     monkeypatch.setattr(settings_router, "system_schema_manager", _LockedApiManager())
 
     response = settings_router.initialize_system_tables(
-        SystemTablesInitializeRequest(recreate=False)
+        _system_tables_request(), SystemTablesInitializeRequest(recreate=False)
     )
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 409
     assert response.headers["Retry-After"] == "5"
-    assert json.loads(bytes(response.body)) == {
-        "data": None,
-        "error_messages": ["Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。"],
-        "warning_messages": [],
-        "error_code": "ORA-00054",
-    }
+    body = json.loads(bytes(response.body))
+    assert body["data"] is None
+    assert body["error_messages"] == [
+        "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。"
+    ]
+    assert body["warning_messages"] == []
+    assert body["error_code"] == "ORA-00054"
+    assert body["problem"]["code"] == "ORA-00054"
+    assert body["problem"]["type"] == "urn:nl2sql:problem:ora-00054"
+    assert body["problem"]["request_id"]
+    assert response.headers["X-Request-ID"] == body["problem"]["request_id"]
+    assert body["problem"]["retryable"] is True
 
 
 def test_schema_epoch_change_resets_each_runtime_once(

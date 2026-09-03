@@ -185,6 +185,35 @@ def test_select_ai_credential_create_and_recreate_persist_safe_settings(
     assert secret_body not in caplog.text
 
 
+def test_select_ai_credential_status_failure_returns_problem_contract(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class FailingAdapter(_FakeSelectAiCredentialAdapter):
+        def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
+            raise RuntimeError("raw Oracle target=ADMIN.OCI_CRED ocid1.tenancy.oc1..leaked")
+
+    monkeypatch.setattr(
+        settings_router,
+        "OracleNl2SqlAdapter",
+        lambda settings: FailingAdapter(),
+    )
+
+    response = client.get(
+        "/api/settings/database/select-ai-credential",
+        headers={"X-Request-ID": "select-ai-status-request"},
+    )
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error_code"] == "SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE"
+    assert body["problem"]["code"] == "SELECT_AI_CREDENTIAL_STATUS_UNAVAILABLE"
+    assert body["problem"]["request_id"] == "select-ai-status-request"
+    assert body["problem"]["retryable"] is True
+    assert response.headers["X-Request-ID"] == "select-ai-status-request"
+    assert "raw Oracle target" not in response.text
+    assert "ocid1.tenancy.oc1..leaked" not in response.text
+
+
 def test_select_ai_credential_existing_requires_explicit_recreate(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -199,6 +228,7 @@ def test_select_ai_credential_existing_requires_explicit_recreate(
 
     response = client.post(
         "/api/settings/database/select-ai-credential",
+        headers={"X-Request-ID": "select-ai-exists-request"},
         json={
             "region": "ap-osaka-1",
             "confirmation": "ADMIN_EXECUTE",
@@ -207,7 +237,11 @@ def test_select_ai_credential_existing_requires_explicit_recreate(
     )
 
     assert response.status_code == 409
-    assert response.json()["error_code"] == "SELECT_AI_CREDENTIAL_EXISTS"
+    body = response.json()
+    assert body["error_code"] == "SELECT_AI_CREDENTIAL_EXISTS"
+    assert body["problem"]["code"] == "SELECT_AI_CREDENTIAL_EXISTS"
+    assert body["problem"]["request_id"] == "select-ai-exists-request"
+    assert response.headers["X-Request-ID"] == "select-ai-exists-request"
     assert "private_key" not in response.text.lower()
 
 
@@ -224,6 +258,7 @@ def test_select_ai_credential_rejects_wrong_confirmation_before_reading_key(
     monkeypatch.setattr(settings_router, "OracleNl2SqlAdapter", unexpected_adapter)
     response = client.post(
         "/api/settings/database/select-ai-credential",
+        headers={"X-Request-ID": "select-ai-confirmation-request"},
         json={
             "region": "ap-osaka-1",
             "confirmation": "WRONG",
@@ -232,7 +267,11 @@ def test_select_ai_credential_rejects_wrong_confirmation_before_reading_key(
     )
 
     assert response.status_code == 422
-    assert response.json()["error_code"] == "SELECT_AI_CONFIRMATION_REQUIRED"
+    body = response.json()
+    assert body["error_code"] == "SELECT_AI_CONFIRMATION_REQUIRED"
+    assert body["problem"]["code"] == "SELECT_AI_CONFIRMATION_REQUIRED"
+    assert body["problem"]["request_id"] == "select-ai-confirmation-request"
+    assert body["problem"]["retryable"] is False
     assert called is False
 
 
@@ -287,6 +326,7 @@ def test_select_ai_credential_status_reports_missing_or_invalid_key_without_secr
 
     create_response = client.post(
         "/api/settings/database/select-ai-credential",
+        headers={"X-Request-ID": f"select-ai-key-{expected_field}"},
         json={
             "region": "ap-osaka-1",
             "confirmation": "ADMIN_EXECUTE",
@@ -294,7 +334,10 @@ def test_select_ai_credential_status_reports_missing_or_invalid_key_without_secr
         },
     )
     assert create_response.status_code == 422
-    assert create_response.json()["error_code"] == "SELECT_AI_PRIVATE_KEY_INVALID"
+    body = create_response.json()
+    assert body["error_code"] == "SELECT_AI_PRIVATE_KEY_INVALID"
+    assert body["problem"]["code"] == "SELECT_AI_PRIVATE_KEY_INVALID"
+    assert body["problem"]["request_id"] == f"select-ai-key-{expected_field}"
     assert fake_adapter.calls == []
 
 
@@ -332,6 +375,7 @@ def test_select_ai_credential_create_reports_incomplete_oci_config(
     )
     response = client.post(
         "/api/settings/database/select-ai-credential",
+        headers={"X-Request-ID": "select-ai-oci-config-request"},
         json={
             "region": "ap-osaka-1",
             "confirmation": "ADMIN_EXECUTE",
@@ -340,7 +384,10 @@ def test_select_ai_credential_create_reports_incomplete_oci_config(
     )
 
     assert response.status_code == 422
-    assert response.json()["error_code"] == "SELECT_AI_OCI_CONFIG_INCOMPLETE"
+    body = response.json()
+    assert body["error_code"] == "SELECT_AI_OCI_CONFIG_INCOMPLETE"
+    assert body["problem"]["code"] == "SELECT_AI_OCI_CONFIG_INCOMPLETE"
+    assert body["problem"]["request_id"] == "select-ai-oci-config-request"
 
 
 def test_select_ai_credential_routes_keep_sync_oracle_io_off_asgi_event_loop() -> None:
