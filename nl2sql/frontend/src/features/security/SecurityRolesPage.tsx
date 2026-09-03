@@ -85,6 +85,8 @@ const ROLE_POINTER_TO_FIELD = {
   "/display_name": "displayName",
 } as const satisfies Readonly<Record<string, RoleFormField>>;
 
+const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN";
+
 const EMPTY_DRAFT: RoleDraftState = {
   roleCode: "",
   displayName: "",
@@ -385,6 +387,14 @@ export function SecurityRolesPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || readOnly) return;
+    const normalizedRoleCode = draft.roleCode.trim().toUpperCase();
+    if (activeView === "create" && normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE) {
+      const nextErrors = { roleCode: t("security.roles.codeReserved") };
+      setFormError("");
+      setFieldErrors(nextErrors);
+      focusFirstFieldError(nextErrors);
+      return;
+    }
     setBusy(true);
     setFormError("");
     setFieldErrors({});
@@ -424,6 +434,9 @@ export function SecurityRolesPage() {
           apiError.errorCode === "SECURITY_ROLE_CODE_CONFLICT" &&
           problem.pointer === "/role_code"
             ? t("security.roles.codeConflict")
+            : apiError.errorCode === "SECURITY_ROLE_CODE_RESERVED" &&
+                problem.pointer === "/role_code"
+              ? t("security.roles.codeReserved")
             : problem.message
       );
       setFieldErrors(nextErrors);
