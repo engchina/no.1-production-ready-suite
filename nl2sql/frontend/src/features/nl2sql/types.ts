@@ -295,6 +295,7 @@ export interface ProfileRecommendationData {
   recommendation_source?: string;
   classifier_version?: string;
   category_scores?: Record<string, number>;
+  warnings?: string[];
 }
 
 export interface ClassifierTrainingExample {

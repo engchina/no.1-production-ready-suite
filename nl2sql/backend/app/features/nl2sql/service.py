@@ -283,6 +283,8 @@ logger = logging.getLogger(__name__)
 _SELECT_AI_DB_PROFILE_COLLECTION = "select_ai_db_profiles"
 _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION = "select_ai_db_profile_refresh_jobs"
 _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION = "select_ai_db_profile_refresh_meta"
+_CLASSIFIER_MODEL_FORMAT = "logistic_regression_coefficients_v1"
+_CLASSIFIER_VECTOR_DIMENSION = 1536
 
 
 class Nl2SqlPersistenceUnavailable(RuntimeError):
@@ -6662,17 +6664,22 @@ class Nl2SqlService:
             artifact = dict(self._classifier_artifact or {})
             examples = list(self._classifier_examples)
         categories = sorted({self._classifier_training_label(item) for item in examples})
-        ready = bool(artifact.get("model_base64") and artifact.get("categories"))
+        warnings: list[str] = []
+        artifact_payload: dict[str, Any] | None = None
+        if artifact.get("model_base64"):
+            try:
+                artifact_payload = self._classifier_model_payload_from_artifact(artifact)
+            except ValueError as exc:
+                warnings.append(f"{exc} classifier は deterministic recommendation に縮退します。")
+        ready = artifact_payload is not None
         current_fingerprint = self._classifier_training_fingerprint(examples)
         trained_fingerprint = str(artifact.get("training_data_fingerprint") or "")
         stale = bool(ready and trained_fingerprint != current_fingerprint)
-        trained_example_count = int(
-            artifact.get("metrics", {}).get("training_examples", 0)
-            if isinstance(artifact.get("metrics"), dict)
-            else 0
+        metrics = (
+            dict(artifact.get("metrics") or {}) if isinstance(artifact.get("metrics"), dict) else {}
         )
+        trained_example_count = int(metrics.get("training_examples", 0))
         pending_change_count = max(1, abs(len(examples) - trained_example_count)) if stale else 0
-        warnings: list[str] = []
         if not examples:
             warnings.append("分類器の training data が未登録です。")
         if not ready:
@@ -6680,6 +6687,11 @@ class Nl2SqlService:
         if stale:
             warnings.append(
                 "Training data に未学習の変更があります。現在のモデルは継続利用中です。"
+            )
+        if ready and metrics.get("embedding_fallback"):
+            warnings.append(
+                "分類器は deterministic fallback embedding で学習されています。"
+                "OCI GenAI embedding とは併用できません。"
             )
         return ClassifierStatusData(
             ready=ready,
@@ -6695,10 +6707,14 @@ class Nl2SqlService:
                 or get_settings().oci_genai_embed_model_id
                 or "deterministic-hash-1536"
             ),
-            vector_dimension=1536,
+            vector_dimension=int(
+                artifact_payload.get("feature_dim", _CLASSIFIER_VECTOR_DIMENSION)
+                if artifact_payload
+                else artifact.get("vector_dimension") or _CLASSIFIER_VECTOR_DIMENSION
+            ),
             persistence_mode=self._store.mode,
             recommendation_source="classifier" if ready else "deterministic",
-            metrics=dict(artifact.get("metrics") or {}),
+            metrics=metrics,
             trained_example_count=trained_example_count,
             pending_change_count=pending_change_count,
             warnings=warnings,
@@ -7056,6 +7072,197 @@ class Nl2SqlService:
             json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
+    def _classifier_float_matrix(self, value: Any, field_name: str) -> list[list[float]]:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise ValueError(f"{field_name} は数値配列の配列で指定してください。")
+        rows: list[list[float]] = []
+        for row in value:
+            if hasattr(row, "tolist"):
+                row = row.tolist()
+            if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
+                raise ValueError(f"{field_name} は数値配列の配列で指定してください。")
+            vector: list[float] = []
+            for item in row:
+                try:
+                    number = float(item)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{field_name} は数値のみ指定してください。") from exc
+                if not math.isfinite(number):
+                    raise ValueError(f"{field_name} に finite でない数値が含まれています。")
+                vector.append(number)
+            rows.append(vector)
+        if not rows:
+            raise ValueError(f"{field_name} が空です。")
+        return rows
+
+    def _classifier_float_vector(self, value: Any, field_name: str) -> list[float]:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise ValueError(f"{field_name} は数値配列で指定してください。")
+        vector: list[float] = []
+        for item in value:
+            try:
+                number = float(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field_name} は数値のみ指定してください。") from exc
+            if not math.isfinite(number):
+                raise ValueError(f"{field_name} に finite でない数値が含まれています。")
+            vector.append(number)
+        if not vector:
+            raise ValueError(f"{field_name} が空です。")
+        return vector
+
+    def _classifier_model_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        model_format = str(
+            payload.get("format") or payload.get("model_format") or _CLASSIFIER_MODEL_FORMAT
+        )
+        if model_format != _CLASSIFIER_MODEL_FORMAT:
+            raise ValueError(f"unsupported classifier model format: {model_format or 'unknown'}")
+        raw_classes = payload.get("classes", payload.get("classes_"))
+        if hasattr(raw_classes, "tolist"):
+            raw_classes = raw_classes.tolist()
+        if not isinstance(raw_classes, Sequence) or isinstance(
+            raw_classes, (str, bytes, bytearray)
+        ):
+            raise ValueError("classes は文字列配列で指定してください。")
+        classes = [str(item).strip() for item in raw_classes if str(item).strip()]
+        if len(classes) < 2:
+            raise ValueError("classes は 2 件以上必要です。")
+        if len(set(classes)) != len(classes):
+            raise ValueError("classes に重複があります。")
+
+        coef_value = payload.get("coef", payload.get("coef_"))
+        intercept_value = payload.get("intercept", payload.get("intercept_"))
+        coef = self._classifier_float_matrix(coef_value, "coef")
+        intercept = self._classifier_float_vector(intercept_value, "intercept")
+        feature_dim = int(
+            payload.get("feature_dim") or payload.get("vector_dimension") or len(coef[0])
+        )
+        if feature_dim != _CLASSIFIER_VECTOR_DIMENSION:
+            raise ValueError(
+                f"feature_dim は {_CLASSIFIER_VECTOR_DIMENSION} である必要があります。"
+            )
+        if any(len(row) != feature_dim for row in coef):
+            raise ValueError(f"coef の列数は {feature_dim} で統一してください。")
+        if len(classes) == 2:
+            if len(coef) not in {1, 2}:
+                raise ValueError("2 class model の coef 行数は 1 または 2 で指定してください。")
+        elif len(coef) != len(classes):
+            raise ValueError("multi-class model の coef 行数は classes 件数と一致させてください。")
+        if len(intercept) != len(coef):
+            raise ValueError("intercept 件数は coef 行数と一致させてください。")
+
+        normalized = {
+            "format": _CLASSIFIER_MODEL_FORMAT,
+            "classes": classes,
+            "coef": coef,
+            "intercept": intercept,
+            "feature_dim": feature_dim,
+        }
+        self._classifier_probabilities(normalized, [0.0] * feature_dim)
+        return normalized
+
+    def _classifier_model_payload_from_estimator(self, model: Any) -> dict[str, Any]:
+        return self._classifier_model_payload(
+            {
+                "classes": getattr(model, "classes_", []),
+                "coef": getattr(model, "coef_", []),
+                "intercept": getattr(model, "intercept_", []),
+                "feature_dim": _CLASSIFIER_VECTOR_DIMENSION,
+            }
+        )
+
+    def _classifier_model_payload_from_import(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        model = payload.get("model")
+        if isinstance(model, Mapping):
+            return self._classifier_model_payload(model)
+        if any(
+            key in payload
+            for key in ("classes", "classes_", "coef", "coef_", "intercept", "intercept_")
+        ):
+            return self._classifier_model_payload(payload)
+
+        raw_base64 = str(payload.get("model_base64") or "")
+        if not raw_base64:
+            raise ValueError("coef / intercept / classes を含む JSON artifact を指定してください。")
+        try:
+            raw = base64.b64decode(raw_base64, validate=True)
+            decoded = json.loads(raw.decode("utf-8"))
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("model_base64 は安全な JSON model payload ではありません。") from exc
+        if not isinstance(decoded, Mapping):
+            raise ValueError("model_base64 は JSON object である必要があります。")
+        return self._classifier_model_payload(decoded)
+
+    def _classifier_model_payload_from_artifact(
+        self, artifact: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        raw_base64 = str(artifact.get("model_base64") or "")
+        if not raw_base64:
+            raise ValueError("model_base64 がありません。")
+        try:
+            raw = base64.b64decode(raw_base64, validate=True)
+            decoded = json.loads(raw.decode("utf-8"))
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "保存済み classifier artifact は安全な JSON 形式ではありません。"
+            ) from exc
+        if not isinstance(decoded, Mapping):
+            raise ValueError("保存済み classifier artifact の model payload が不正です。")
+        return self._classifier_model_payload(decoded)
+
+    def _classifier_model_base64(self, payload: Mapping[str, Any]) -> str:
+        content = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.b64encode(content).decode("ascii")
+
+    def _classifier_import_warnings(self, classes: Sequence[str]) -> list[str]:
+        unresolved = [
+            label for label in classes if self._exact_profile_for_classifier_label(label) is None
+        ]
+        if not unresolved:
+            return []
+        return [
+            "classes に対応する active Profile を一意に解決できない値があります: "
+            + ", ".join(unresolved[:8])
+        ]
+
+    def _classifier_probabilities(
+        self, payload: Mapping[str, Any], vector: Sequence[float]
+    ) -> list[float]:
+        classes = [str(item) for item in payload.get("classes", [])]
+        coef = self._classifier_float_matrix(payload.get("coef"), "coef")
+        intercept = self._classifier_float_vector(payload.get("intercept"), "intercept")
+        if len(vector) != _CLASSIFIER_VECTOR_DIMENSION:
+            raise ValueError(
+                f"prediction vector は {_CLASSIFIER_VECTOR_DIMENSION} 次元である必要があります。"
+            )
+        if len(classes) == 2 and len(coef) == 1:
+            score = sum(left * right for left, right in zip(coef[0], vector, strict=True))
+            score += intercept[0]
+            if score >= 0:
+                scale = math.exp(-score)
+                positive = 1.0 / (1.0 + scale)
+            else:
+                scale = math.exp(score)
+                positive = scale / (1.0 + scale)
+            return [1.0 - positive, positive]
+
+        scores = [
+            sum(left * right for left, right in zip(row, vector, strict=True)) + bias
+            for row, bias in zip(coef, intercept, strict=True)
+        ]
+        max_score = max(scores)
+        exp_scores = [math.exp(score - max_score) for score in scores]
+        total = sum(exp_scores) or 1.0
+        return [score / total for score in exp_scores]
+
     def _replace_classifier_artifact(self, artifact: dict[str, Any]) -> None:
         """唯一の classifier artifact を永続化と一体で置き換える。"""
         with self._lock:
@@ -7103,13 +7310,11 @@ class Nl2SqlService:
             )
             warnings.extend(embedding_warnings)
             linear_model = importlib.import_module("sklearn.linear_model")
-            joblib = importlib.import_module("joblib")
             model = linear_model.LogisticRegression(max_iter=1000, random_state=42)
             labels = [self._classifier_training_label(item) for item in eligible]
             model.fit(vectors, labels)
             score = float(model.score(vectors, labels))
-            buffer = io.BytesIO()
-            joblib.dump(model, buffer)
+            model_payload = self._classifier_model_payload_from_estimator(model)
         except Exception as exc:
             return self.classifier_status().model_copy(
                 update={"warnings": [f"分類器の学習に失敗しました: {exc}"]}
@@ -7119,15 +7324,17 @@ class Nl2SqlService:
         artifact = {
             "version": str(uuid.uuid4()),
             "updated_at": now,
-            "model_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
-            "categories": categories,
+            "model_format": _CLASSIFIER_MODEL_FORMAT,
+            "model_base64": self._classifier_model_base64(model_payload),
+            "categories": model_payload["classes"],
             "embedding_model": embedding_model,
-            "vector_dimension": 1536,
+            "vector_dimension": _CLASSIFIER_VECTOR_DIMENSION,
             "training_data_fingerprint": self._classifier_training_fingerprint(examples),
             "metrics": {
                 "training_examples": len(eligible),
                 "category_count": len(categories),
                 "training_accuracy": round(score, 4),
+                "embedding_fallback": embedding_model == "deterministic-hash-1536",
             },
         }
         self._replace_classifier_artifact(artifact)
@@ -7136,53 +7343,48 @@ class Nl2SqlService:
     def import_classifier_model_artifact(
         self, *, filename: str, content: bytes
     ) -> ClassifierModelImportData:
-        warnings: list[str] = []
         suffix = Path(filename).suffix.lower()
-        raw_model: bytes
-        meta: dict[str, Any] = {}
-        try:
-            if suffix == ".json":
-                payload = json.loads(content.decode("utf-8-sig"))
-                if not isinstance(payload, dict):
-                    raise ValueError("JSON object ではありません。")
-                model_base64 = str(payload.get("model_base64") or "")
-                if not model_base64:
-                    raise ValueError("model_base64 がありません。")
-                raw_model = base64.b64decode(model_base64)
-                meta = dict(payload)
-            elif suffix == ".joblib":
-                raw_model = content
-            else:
-                raise ValueError("joblib または JSON artifact を指定してください。")
-            joblib = importlib.import_module("joblib")
-            model = joblib.load(io.BytesIO(raw_model))
-            categories = [str(item) for item in getattr(model, "classes_", [])]
-            if not categories:
-                warnings.append("model.classes_ が空です。legacy meta の category を使用します。")
-                categories = [str(item) for item in meta.get("categories", [])]
-            version = str(meta.get("version") or uuid.uuid4())
-            now = _utc_now()
-            artifact = {
-                "version": version,
-                "updated_at": str(meta.get("updated_at") or now),
-                "model_base64": base64.b64encode(raw_model).decode("ascii"),
-                "categories": categories,
-                "embedding_model": str(
-                    meta.get("embedding_model")
-                    or meta.get("embed_model")
-                    or get_settings().oci_genai_embed_model_id
-                    or "deterministic-hash-1536"
-                ),
-                "vector_dimension": int(meta.get("vector_dimension") or 1536),
-                "metrics": dict(meta.get("metrics") or {}),
-                "source": f"legacy:{filename}",
-            }
-        except Exception as exc:
-            return ClassifierModelImportData(
-                imported=False,
-                active_version=str((self._classifier_artifact or {}).get("version") or ""),
-                warnings=[f"classifier model artifact の import に失敗しました: {exc}"],
+        if suffix != ".json":
+            raise ValueError(
+                "pickle/joblib artifact は安全上の理由で import できません。"
+                "coef / intercept / classes を含む JSON artifact を指定してください。"
             )
+        try:
+            payload = json.loads(content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("JSON classifier artifact を読み取れません。") from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError("JSON classifier artifact は object で指定してください。")
+
+        meta = dict(payload)
+        model_payload = self._classifier_model_payload_from_import(meta)
+        version = str(meta.get("version") or uuid.uuid4())
+        embedding_model = str(
+            meta.get("embedding_model")
+            or meta.get("embed_model")
+            or get_settings().oci_genai_embed_model_id
+            or "deterministic-hash-1536"
+        )
+        metrics = dict(meta.get("metrics") or {}) if isinstance(meta.get("metrics"), dict) else {}
+        metrics.setdefault("category_count", len(model_payload["classes"]))
+        with self._lock:
+            examples = list(self._classifier_examples)
+        artifact = {
+            "version": version,
+            "updated_at": str(meta.get("updated_at") or _utc_now()),
+            "model_format": _CLASSIFIER_MODEL_FORMAT,
+            "model_base64": self._classifier_model_base64(model_payload),
+            "categories": model_payload["classes"],
+            "embedding_model": embedding_model,
+            "vector_dimension": model_payload["feature_dim"],
+            "training_data_fingerprint": str(
+                meta.get("training_data_fingerprint")
+                or self._classifier_training_fingerprint(examples)
+            ),
+            "metrics": metrics,
+            "source": f"json:{filename}",
+        }
+        warnings = self._classifier_import_warnings(model_payload["classes"])
         self._replace_classifier_artifact(artifact)
         return ClassifierModelImportData(
             imported=True,
@@ -7260,13 +7462,20 @@ class Nl2SqlService:
             return None, []
         warnings: list[str] = []
         try:
-            joblib = importlib.import_module("joblib")
-            raw = base64.b64decode(str(artifact["model_base64"]))
-            model = joblib.load(io.BytesIO(raw))
-            vectors, embedding_warnings, _embedding_model = self._classifier_vectors([question])
+            model_payload = self._classifier_model_payload_from_artifact(artifact)
+            vectors, embedding_warnings, embedding_model = self._classifier_vectors([question])
             warnings.extend(embedding_warnings)
-            probabilities = model.predict_proba(vectors)[0]
-            classes = [str(item) for item in model.classes_]
+            artifact_embedding_model = str(artifact.get("embedding_model") or "")
+            if artifact_embedding_model and artifact_embedding_model != embedding_model:
+                warnings.append(
+                    "分類器の embedding model "
+                    f"({artifact_embedding_model}) と現在の embedding model "
+                    f"({embedding_model}) が一致しないため deterministic recommendation "
+                    "に切り替えました。"
+                )
+                return None, warnings
+            probabilities = self._classifier_probabilities(model_payload, vectors[0])
+            classes = [str(item) for item in model_payload["classes"]]
         except Exception as exc:
             return None, [f"分類器の予測に失敗しました: {exc}"]
 
@@ -7906,6 +8115,7 @@ class Nl2SqlService:
                             candidate.category: candidate.score
                             for candidate in classifier_prediction.candidates
                         },
+                        "warnings": classifier_warnings,
                     }
                 )
 
@@ -7916,13 +8126,21 @@ class Nl2SqlService:
             profile = self.get_profile(request.current_profile_id)
             if allowed_profile_ids is not None and profile.id not in allowed_profile_ids:
                 raise ValueError("この業務プロファイルを利用する権限がありません。")
-            return self._recommendation_from_profile(
+            fallback = self._recommendation_from_profile(
                 profile=profile,
                 question=request.question,
                 confidence=0.0,
                 matched_terms=[],
                 candidates=[],
             )
+            if classifier_warnings:
+                fallback = fallback.model_copy(
+                    update={
+                        "reason": f"{fallback.reason} {' '.join(classifier_warnings)}",
+                        "warnings": classifier_warnings,
+                    }
+                )
+            return fallback
 
         # (rank=順序用 bias 込み, evidence=実マッチ由来, profile, matched_terms)
         scored: list[tuple[float, float, Nl2SqlProfile, list[str]]] = []
@@ -7951,13 +8169,21 @@ class Nl2SqlService:
             )
             for _, evidence, profile, terms in scored[:3]
         ]
-        return self._recommendation_from_profile(
+        fallback = self._recommendation_from_profile(
             profile=best_profile,
             question=request.question,
             confidence=confidence,
             matched_terms=best_terms,
             candidates=candidates,
         )
+        if classifier_warnings:
+            fallback = fallback.model_copy(
+                update={
+                    "reason": f"{fallback.reason} {' '.join(classifier_warnings)}",
+                    "warnings": classifier_warnings,
+                }
+            )
+        return fallback
 
     def rewrite(self, request: RewriteRequest) -> RewriteData:
         """用語・同義語の置換だけを行う(LLM による自由な書き換えはしない)。
