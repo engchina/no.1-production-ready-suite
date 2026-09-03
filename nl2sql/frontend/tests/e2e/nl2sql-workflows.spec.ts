@@ -8032,7 +8032,7 @@ test("Select AI feedback stacks its workspace and keeps controls usable at 375px
 
 test("app feedback uses the shared responsive pagination for cursor pages", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await mockNl2SqlApi(page);
+  const api = await mockNl2SqlApi(page);
   await page.unroute(/\/api\/nl2sql\/feedback(?:\?.*)?$/);
 
   const singlePageItems = Array.from({ length: 15 }, (_, index) => ({
@@ -8096,6 +8096,9 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await nextButton.click();
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText("ページング対象 21");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
+  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
   await expect(pagination).toContainText("21-21 / 21 件");
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(previousButton).toBeEnabled();
@@ -8105,6 +8108,12 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText("ページング対象 21");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
+  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
+  expect(api.adminFeedbackPayload).toMatchObject({
+    history_id: "cursor-feedback-21",
+  });
   await expect(pagination).toContainText("21-21 / 21 件");
   await expect(pagination).toContainText("2 / 2 ページ");
 

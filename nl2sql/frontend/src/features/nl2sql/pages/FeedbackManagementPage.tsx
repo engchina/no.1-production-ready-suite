@@ -1488,6 +1488,7 @@ function FeedbackHistoryRow({
     <button
       type="button"
       data-testid="feedback-history-row"
+      aria-current={selected ? "true" : undefined}
       className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-ring/40 ${
         selected ? "border-primary/40 bg-primary/10" : "border-border bg-card hover:bg-background"
       }`}

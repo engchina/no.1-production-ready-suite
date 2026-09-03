@@ -3254,8 +3254,33 @@ def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table()
     assert data.status == "ready"
     assert data.indexed_count == 1
     assert data.embedding_configured is True
-    assert any('CREATE TABLE "NL2SQL_FEEDBACK_VECTORS"' in sql for sql in fake_db.executed)
-    assert any('CREATE VECTOR INDEX "NL2SQL_FEEDBACK_VEC_IDX"' in sql for sql in fake_db.executed)
+    assert any(
+        re.search(r'CREATE TABLE "NL2SQL_FEEDBACK_VECTORS_STG_[A-F0-9]{16}"', sql)
+        for sql in fake_db.executed
+    )
+    assert any(
+        re.search(
+            r'CREATE VECTOR INDEX "NL2SQL_FEEDBACK_VEC_IDX_STG_[A-F0-9]{16}"',
+            sql,
+        )
+        for sql in fake_db.executed
+    )
+    assert any(
+        re.search(
+            r'ALTER TABLE "NL2SQL_FEEDBACK_VECTORS_STG_[A-F0-9]{16}" '
+            r'RENAME TO "NL2SQL_FEEDBACK_VECTORS"',
+            sql,
+        )
+        for sql in fake_db.executed
+    )
+    assert any(
+        re.search(
+            r'ALTER INDEX "NL2SQL_FEEDBACK_VEC_IDX_STG_[A-F0-9]{16}" '
+            r'RENAME TO "NL2SQL_FEEDBACK_VEC_IDX"',
+            sql,
+        )
+        for sql in fake_db.executed
+    )
     assert fake_db.insert_batches
     insert_sql, rows = fake_db.insert_batches[0]
     assert "TO_VECTOR(:embedding_json)" in insert_sql

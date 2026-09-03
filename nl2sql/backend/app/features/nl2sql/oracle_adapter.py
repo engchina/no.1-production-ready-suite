@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 import re
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.settings import Settings
 
@@ -43,6 +45,8 @@ from .object_visibility import (
     is_user_visible_owner_name,
     is_user_visible_schema_object,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OracleAdapterError(RuntimeError):
@@ -83,6 +87,10 @@ DEEPSEC_THIN_ONLY_ERROR = (
 THIN_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "ewallet.pem"})
 THICK_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso"})
 WALLET_MTLS_REQUIRED_FILES = THIN_WALLET_MTLS_REQUIRED_FILES
+FEEDBACK_VECTOR_DB_LOCK_ID = (
+    int(hashlib.sha256(b"nl2sql_feedback_vector_index").hexdigest()[:12], 16) % 1_073_741_823
+) + 1
+FEEDBACK_VECTOR_DB_LOCK_TIMEOUT_SECONDS = 60
 
 
 def ensure_deepsec_thin_mode(settings: Settings) -> None:
@@ -353,6 +361,11 @@ def _strict_sql_name(value: str) -> str:
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", normalized):
         raise OracleAdapterError(f"安全でない Oracle object name です: {value}")
     return normalized
+
+
+def _staging_sql_name(base_name: str) -> str:
+    suffix = f"_STG_{uuid4().hex[:16].upper()}"
+    return _strict_sql_name(f"{base_name[: 128 - len(suffix)]}{suffix}")
 
 
 def _select_ai_feedback_index_names(profile_name: str) -> tuple[str, str, str]:
@@ -2711,6 +2724,56 @@ class OracleNl2SqlAdapter:
             "ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE"
         )
 
+    @contextmanager
+    def _feedback_vector_operation_lock(self, cursor: Any) -> Iterator[None]:
+        """feedback VECTOR table の rebuild / publish / clear を DB session 間で直列化する。"""
+        binds = {
+            "lock_id": FEEDBACK_VECTOR_DB_LOCK_ID,
+            "lock_timeout": FEEDBACK_VECTOR_DB_LOCK_TIMEOUT_SECONDS,
+        }
+        try:
+            cursor.execute(
+                """
+                DECLARE
+                    lock_result PLS_INTEGER;
+                BEGIN
+                    lock_result := DBMS_LOCK.REQUEST(
+                        id => :lock_id,
+                        lockmode => DBMS_LOCK.X_MODE,
+                        timeout => :lock_timeout,
+                        release_on_commit => FALSE
+                    );
+                    IF lock_result NOT IN (0, 4) THEN
+                        RAISE_APPLICATION_ERROR(
+                            -20051,
+                            'Feedback vector index 操作 lock を取得できません。'
+                        );
+                    END IF;
+                END;
+                """,
+                binds,
+            )
+        except Exception as exc:
+            raise OracleAdapterError(
+                f"Feedback vector index 操作 lock を取得できません: {exc}"
+            ) from exc
+        try:
+            yield
+        finally:
+            try:
+                cursor.execute(
+                    """
+                    DECLARE
+                        lock_result PLS_INTEGER;
+                    BEGIN
+                        lock_result := DBMS_LOCK.RELEASE(id => :lock_id);
+                    END;
+                    """,
+                    {"lock_id": FEEDBACK_VECTOR_DB_LOCK_ID},
+                )
+            except Exception as exc:
+                logger.warning("feedback vector operation lock release failed: %s", exc)
+
     def rebuild_feedback_vector_index(
         self,
         *,
@@ -2723,17 +2786,21 @@ class OracleNl2SqlAdapter:
         safe_index = _strict_sql_name(index_name)
         quoted_table = _quote_identifier(safe_table)
         quoted_index = _quote_identifier(safe_index)
-        create_table = self._feedback_vector_create_table_sql(quoted_table)
+        stage_table = _staging_sql_name(safe_table)
+        stage_index = _staging_sql_name(safe_index)
+        quoted_stage_table = _quote_identifier(stage_table)
+        quoted_stage_index = _quote_identifier(stage_index)
+        create_table = self._feedback_vector_create_table_sql(quoted_stage_table)
         insert_sql = (
-            f"INSERT INTO {quoted_table} "  # nosec B608
+            f"INSERT INTO {quoted_stage_table} "  # nosec B608
             "(HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, "
             "FEEDBACK_RATING, EMBEDDING, CREATED_AT) "
             "VALUES (:history_id, :profile_id, :question, :generated_sql, :feedback_rating, "
             "TO_VECTOR(:embedding_json), SYSTIMESTAMP)"
         )
         create_index = self._feedback_vector_create_index_sql(
-            quoted_table=quoted_table,
-            quoted_index=quoted_index,
+            quoted_table=quoted_stage_table,
+            quoted_index=quoted_stage_index,
         )
         bind_rows = [
             {
@@ -2746,18 +2813,43 @@ class OracleNl2SqlAdapter:
             }
             for row in rows
         ]
+        old_replaced = False
         try:
             with self.connection() as conn, conn.cursor() as cursor:
-                self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
-                self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
-                self._execute_plsql_like(cursor, create_table, {})
-                if bind_rows:
-                    cursor.executemany(insert_sql, bind_rows)
-                self._execute_plsql_like(cursor, create_index, {})
+                with self._feedback_vector_operation_lock(cursor):
+                    self._drop_best_effort(cursor, f"DROP INDEX {quoted_stage_index}", {})
+                    self._drop_best_effort(cursor, f"DROP TABLE {quoted_stage_table} PURGE", {})
+                    self._execute_plsql_like(cursor, create_table, {})
+                    if bind_rows:
+                        cursor.executemany(insert_sql, bind_rows)
+                    self._execute_plsql_like(cursor, create_index, {})
+                    old_replaced = True
+                    self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
+                    self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+                    self._execute_plsql_like(
+                        cursor,
+                        f"ALTER TABLE {quoted_stage_table} RENAME TO {quoted_table}",  # nosec B608
+                        {},
+                    )
+                    self._execute_plsql_like(
+                        cursor,
+                        f"ALTER INDEX {quoted_stage_index} RENAME TO {quoted_index}",  # nosec B608
+                        {},
+                    )
                 conn.commit()
         except OracleAdapterError:
+            if not old_replaced:
+                with suppress(Exception), self.connection() as conn, conn.cursor() as cursor:
+                    self._drop_best_effort(cursor, f"DROP INDEX {quoted_stage_index}", {})
+                    self._drop_best_effort(cursor, f"DROP TABLE {quoted_stage_table} PURGE", {})
+                    conn.commit()
             raise
         except Exception as exc:
+            if not old_replaced:
+                with suppress(Exception), self.connection() as conn, conn.cursor() as cursor:
+                    self._drop_best_effort(cursor, f"DROP INDEX {quoted_stage_index}", {})
+                    self._drop_best_effort(cursor, f"DROP TABLE {quoted_stage_table} PURGE", {})
+                    conn.commit()
             raise OracleAdapterError(
                 f"Feedback vector index の rebuild に失敗しました: {exc}"
             ) from exc
@@ -2806,20 +2898,21 @@ class OracleNl2SqlAdapter:
             "embedding_json": json.dumps(row.get("embedding") or []),
         }
         with self.connection() as conn, conn.cursor() as cursor:
-            self._execute_ddl_allow_existing(
-                cursor,
-                self._feedback_vector_create_table_sql(quoted_table),
-                {},
-            )
-            self._execute_plsql_like(cursor, merge_sql, params)
-            self._execute_ddl_allow_existing(
-                cursor,
-                self._feedback_vector_create_index_sql(
-                    quoted_table=quoted_table,
-                    quoted_index=quoted_index,
-                ),
-                {},
-            )
+            with self._feedback_vector_operation_lock(cursor):
+                self._execute_ddl_allow_existing(
+                    cursor,
+                    self._feedback_vector_create_table_sql(quoted_table),
+                    {},
+                )
+                self._execute_plsql_like(cursor, merge_sql, params)
+                self._execute_ddl_allow_existing(
+                    cursor,
+                    self._feedback_vector_create_index_sql(
+                        quoted_table=quoted_table,
+                        quoted_index=quoted_index,
+                    ),
+                    {},
+                )
             conn.commit()
         return {
             "runtime": "oracle",
@@ -2836,7 +2929,8 @@ class OracleNl2SqlAdapter:
         delete_sql = f"DELETE FROM {quoted_table} WHERE HISTORY_ID = :history_id"  # nosec B608
         with self.connection() as conn, conn.cursor() as cursor:
             try:
-                cursor.execute(delete_sql, {"history_id": history_id})
+                with self._feedback_vector_operation_lock(cursor):
+                    cursor.execute(delete_sql, {"history_id": history_id})
                 conn.commit()
             except Exception as exc:
                 message = str(exc)
@@ -2864,8 +2958,9 @@ class OracleNl2SqlAdapter:
         quoted_table = _quote_identifier(safe_table)
         quoted_index = _quote_identifier(safe_index)
         with self.connection() as conn, conn.cursor() as cursor:
-            self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
-            self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+            with self._feedback_vector_operation_lock(cursor):
+                self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
+                self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
             conn.commit()
         return {
             "runtime": "oracle",

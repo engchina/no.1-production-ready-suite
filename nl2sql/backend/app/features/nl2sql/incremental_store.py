@@ -142,6 +142,49 @@ def _memory_document_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+_HISTORY_QUERY_FIELDS = ("question", "generated_sql", "feedback_comment")
+
+
+def _state_document_sort_value(collection: str, value: Mapping[str, Any]) -> str:
+    if collection == "history":
+        return str(value.get("created_at") or value.get("_updated_at") or "")
+    return str(value.get("_updated_at") or "")
+
+
+def _state_document_matches_query(
+    collection: str,
+    value: Mapping[str, Any],
+    query_key: str,
+) -> bool:
+    if not query_key:
+        return True
+    if collection == "history":
+        haystack = " ".join(str(value.get(field) or "") for field in _HISTORY_QUERY_FIELDS)
+        return query_key in haystack.casefold()
+    return query_key in _canonical_json(value).casefold()
+
+
+def _state_document_status_value(
+    collection: str,
+    payload: Mapping[str, Any],
+    fallback: str,
+) -> str:
+    if collection == "history":
+        return str(payload.get("feedback_rating") or "unrated")
+    return fallback
+
+
+def _state_document_sort_sql(collection: str) -> str:
+    updated_at_expr = "TO_CHAR(UPDATED_AT, 'SYYYY-MM-DD\"T\"HH24:MI:SS.FF6TZH:TZM')"
+    if collection != "history":
+        return updated_at_expr
+    return (
+        "COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.created_at' "
+        "RETURNING VARCHAR2(128) NULL ON ERROR), "
+        f"{updated_at_expr})"
+    )
+
+
 def _read_lob(value: Any) -> str:
     read = getattr(value, "read", None)
     raw = read() if callable(read) else value
@@ -334,6 +377,16 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_id: str = "",
         status: str = "",
     ) -> None: ...
+
+    def patch_document(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        profile_id: str = "",
+        status: str = "",
+    ) -> dict[str, Any] | None: ...
 
     def replace_documents(
         self,
@@ -795,6 +848,37 @@ class MemoryIncrementalNl2SqlRepository:
             }
             self._tokens[STATE_NAMESPACE] += 1
 
+    def patch_document(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        profile_id: str = "",
+        status: str = "",
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            key = (collection, entity_id)
+            current = self._documents.get(key)
+            if current is None:
+                return None
+            payload = _memory_document_payload(current)
+            payload.update(copy.deepcopy(dict(updates)))
+            self._documents[key] = {
+                **payload,
+                "_entity_id": entity_id,
+                "_profile_id": profile_id or str(current.get("_profile_id") or ""),
+                "_status": status
+                or _state_document_status_value(
+                    collection,
+                    payload,
+                    str(current.get("_status") or ""),
+                ),
+                "_updated_at": _utc_now(),
+            }
+            self._tokens[STATE_NAMESPACE] += 1
+            return copy.deepcopy(payload)
+
     def replace_documents(
         self,
         collection: str,
@@ -839,7 +923,13 @@ class MemoryIncrementalNl2SqlRepository:
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
             ]
-            values.sort(key=lambda item: str(item.get("_updated_at") or ""), reverse=True)
+            values.sort(
+                key=lambda item: (
+                    _state_document_sort_value(collection, item),
+                    str(item.get("_entity_id") or ""),
+                ),
+                reverse=True,
+            )
             return [_memory_document_payload(value) for value in values[:limit]]
 
     def list_documents_page(
@@ -863,12 +953,12 @@ class MemoryIncrementalNl2SqlRepository:
                 if item_collection == collection
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
-                and (not query_key or query_key in _canonical_json(value).casefold())
+                and _state_document_matches_query(collection, value, query_key)
                 and all(str(value.get(key) or "") == expected for key, expected in filters.items())
             ]
             values.sort(
                 key=lambda item: (
-                    str(item.get("_updated_at") or ""),
+                    _state_document_sort_value(collection, item),
                     str(item.get("_entity_id") or ""),
                 ),
                 reverse=True,
@@ -879,7 +969,7 @@ class MemoryIncrementalNl2SqlRepository:
                     value
                     for value in values
                     if (
-                        str(value.get("_updated_at") or ""),
+                        _state_document_sort_value(collection, value),
                         str(value.get("_entity_id") or ""),
                     )
                     < decoded
@@ -891,7 +981,7 @@ class MemoryIncrementalNl2SqlRepository:
         if has_more and selected:
             last = selected[-1]
             next_cursor = _encode_cursor(
-                str(last.get("_updated_at") or ""),
+                _state_document_sort_value(collection, last),
                 str(last.get("_entity_id") or ""),
             )
         return [_memory_document_payload(value) for value in selected], next_cursor, total
@@ -1732,6 +1822,57 @@ class OracleIncrementalNl2SqlRepository:
             self._bump_token(cursor, STATE_NAMESPACE)
             connection.commit()
 
+    def patch_document(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        profile_id: str = "",
+        status: str = "",
+    ) -> dict[str, Any] | None:
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "SELECT PAYLOAD_JSON, PROFILE_ID, STATUS FROM NL2SQL_STATE_DOCUMENTS "
+                    "WHERE COLLECTION = :collection AND ENTITY_ID = :entity_id FOR UPDATE",
+                    {"collection": collection, "entity_id": entity_id},
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    connection.rollback()
+                    return None
+                current_payload = cast(dict[str, Any], json.loads(_read_lob(row[0])))
+                current_payload.update(copy.deepcopy(dict(updates)))
+                payload_json = _canonical_json(current_payload)
+                etag = hashlib.sha256(payload_json.encode()).hexdigest()
+                _set_clob_bind(cursor, "payload")
+                cursor.execute(
+                    "UPDATE NL2SQL_STATE_DOCUMENTS SET PROFILE_ID = :profile_id, "
+                    "STATUS = :status, VERSION_NO = VERSION_NO + 1, ETAG = :etag, "
+                    "PAYLOAD_JSON = :payload, UPDATED_AT = SYSTIMESTAMP "
+                    "WHERE COLLECTION = :collection AND ENTITY_ID = :entity_id",
+                    {
+                        "collection": collection,
+                        "entity_id": entity_id,
+                        "profile_id": profile_id or str(row[1] or ""),
+                        "status": status
+                        or _state_document_status_value(
+                            collection,
+                            current_payload,
+                            str(row[2] or ""),
+                        ),
+                        "etag": etag,
+                        "payload": payload_json,
+                    },
+                )
+                self._bump_token(cursor, STATE_NAMESPACE)
+                connection.commit()
+                return current_payload
+            except Exception:
+                connection.rollback()
+                raise
+
     def replace_documents(
         self,
         collection: str,
@@ -1813,7 +1954,8 @@ class OracleIncrementalNl2SqlRepository:
         sql = (
             "SELECT PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
             + " AND ".join(where)
-            + " ORDER BY UPDATED_AT DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"
+            + f" ORDER BY {_state_document_sort_sql(collection)} DESC, "  # nosec B608
+            "ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(sql, binds)
@@ -1848,7 +1990,16 @@ class OracleIncrementalNl2SqlRepository:
             where.append("STATUS = :status")
             filter_binds["status"] = status
         if query.strip():
-            where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
+            if collection == "history":
+                query_predicates = [
+                    "INSTR(LOWER(JSON_VALUE(PAYLOAD_JSON, "
+                    f"'$.{field}' RETURNING VARCHAR2(4000) NULL ON ERROR)), "
+                    "LOWER(:query)) > 0"
+                    for field in _HISTORY_QUERY_FIELDS
+                ]
+                where.append("(" + " OR ".join(query_predicates) + ")")
+            else:
+                where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
             filter_binds["query"] = query.strip()
         for index, (key, value) in enumerate((payload_filters or {}).items()):
             if not value:
@@ -1866,18 +2017,20 @@ class OracleIncrementalNl2SqlRepository:
             f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         )
         page_binds = dict(filter_binds)
+        sort_expr = _state_document_sort_sql(collection)
         if decoded:
             where.append(
-                "(UPDATED_AT < :after_updated_at OR "
-                "(UPDATED_AT = :after_updated_at AND ENTITY_ID < :after_entity_id))"
+                f"({sort_expr} < :after_sort_key OR "  # nosec B608
+                f"({sort_expr} = :after_sort_key AND ENTITY_ID < :after_entity_id))"
             )
-            page_binds["after_updated_at"] = datetime.fromisoformat(decoded[0])
+            page_binds["after_sort_key"] = decoded[0]
             page_binds["after_entity_id"] = decoded[1]
         page_predicate = " AND ".join(where)
         page_sql = (
-            "SELECT PAYLOAD_JSON, UPDATED_AT, ENTITY_ID FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
+            f"SELECT PAYLOAD_JSON, {sort_expr} AS SORT_KEY, ENTITY_ID "  # nosec B608
+            "FROM NL2SQL_STATE_DOCUMENTS WHERE "
             + page_predicate
-            + " ORDER BY UPDATED_AT DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"
+            + f" ORDER BY {sort_expr} DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"  # nosec B608
         )
         with self._connection_factory() as connection, connection.cursor() as db_cursor:
             db_cursor.execute(count_sql, filter_binds)
@@ -1901,15 +2054,7 @@ class OracleIncrementalNl2SqlRepository:
         )
         next_cursor = None
         if has_more and rows:
-            last_updated_at = rows[-1][1]
-            next_cursor = _encode_cursor(
-                (
-                    last_updated_at.isoformat()
-                    if hasattr(last_updated_at, "isoformat")
-                    else str(last_updated_at)
-                ),
-                str(rows[-1][2]),
-            )
+            next_cursor = _encode_cursor(str(rows[-1][1]), str(rows[-1][2]))
         return items, next_cursor, total
 
     def _load_catalog_subset(self, owner: str, object_name: str) -> SchemaCatalog:

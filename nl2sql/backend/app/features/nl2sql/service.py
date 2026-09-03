@@ -706,6 +706,7 @@ _HISTORY_PAGE_DEFAULT_LIMIT = 50
 _HISTORY_PAGE_MAX_LIMIT = 200
 # 類似履歴 / few-shot の母集団上限(管理者 GOOD の履歴を新しい順にこの件数まで読む)。
 _SIMILAR_HISTORY_POOL_LIMIT = 1000
+_FEEDBACK_INDEX_OPERATION_LOCK = threading.RLock()
 # 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
 # owner の _persist_job が job 本体を丸ごと上書きしても失われない別ドキュメントにする。
 _JOB_CANCEL_COLLECTION = "job_cancel_requests"
@@ -2655,6 +2656,7 @@ class Nl2SqlService:
         self._history: list[HistoryItem] = []
         self._feedback: dict[str, FeedbackRating] = {}
         self._feedback_indexed_ids: set[str] = set()
+        self._feedback_index_lock = _FEEDBACK_INDEX_OPERATION_LOCK
         self._feedback_similarity_threshold = 0.0
         self._feedback_match_limit = 3
         self._classifier_examples: list[ClassifierTrainingExample] = []
@@ -6464,6 +6466,65 @@ class Nl2SqlService:
             item = next((entry for entry in self._history if entry.id == history_id), None)
             return item.model_copy(deep=True) if item else None
 
+    def _replace_history_cache_locked(self, item: HistoryItem) -> None:
+        replaced = False
+        updated_history: list[HistoryItem] = []
+        for entry in self._history:
+            if entry.id == item.id:
+                updated_history.append(item)
+                replaced = True
+            else:
+                updated_history.append(entry)
+        if not replaced:
+            updated_history.append(item)
+        self._history = updated_history
+        if item.feedback_rating is None:
+            self._feedback.pop(item.id, None)
+        else:
+            self._feedback[item.id] = item.feedback_rating
+
+    def _patch_history_item(
+        self,
+        current: HistoryItem,
+        updates: Mapping[str, Any],
+    ) -> HistoryItem:
+        preview = current.model_copy(update=dict(updates))
+        payload = preview.model_dump(mode="json")
+        patch_payload = {key: payload[key] for key in updates if key in payload}
+        repository = self._incremental_repository
+        if repository is not None:
+            try:
+                document = repository.patch_document("history", current.id, patch_payload)
+            except Exception as exc:
+                self._raise_incremental_repository_failure(
+                    operation="history_patch",
+                    exc=exc,
+                    operation_error_code="history_save_failed",
+                )
+            if document is None:
+                raise KeyError(current.id)
+            updated = HistoryItem.model_validate(document)
+            digest = hashlib.sha256(
+                json.dumps(
+                    updated.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest()
+            with self._lock:
+                self._replace_history_cache_locked(updated)
+                self._incremental_hashes[("history", updated.id)] = digest
+            return updated
+        with self._lock:
+            latest = next((entry for entry in self._history if entry.id == current.id), None)
+            if latest is None:
+                raise KeyError(current.id)
+            updated = latest.model_copy(update=dict(updates))
+            self._replace_history_cache_locked(updated)
+        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
+        return updated
+
     def _load_feedback_state(self) -> None:
         repository = self._incremental_repository
         if repository is None:
@@ -6623,17 +6684,14 @@ class Nl2SqlService:
             and current.actor_user_uuid != actor_user_uuid
         ):
             raise PermissionError(history_id)
-        updated = current.model_copy(
-            update={
+        updated = self._patch_history_item(
+            current,
+            {
                 "feedback_rating": rating,
                 "feedback_comment": comment.strip(),
                 "feedback_updated_at": _utc_now(),
-            }
+            },
         )
-        with self._lock:
-            self._feedback[history_id] = rating
-            self._history = [updated if item.id == history_id else item for item in self._history]
-        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
         return FeedbackData(
             history_id=history_id,
             rating=rating,
@@ -6654,18 +6712,14 @@ class Nl2SqlService:
         if not self._profile_in_allowed_profile_ids(current.profile_id, allowed_profile_ids):
             raise PermissionError(current.profile_id)
         feedback_content = request.feedback_content.strip()
-        updated = current.model_copy(
-            update={
+        updated = self._patch_history_item(
+            current,
+            {
                 "admin_feedback_rating": request.rating,
                 "admin_feedback_content": feedback_content,
                 "admin_feedback_updated_at": _utc_now(),
-            }
+            },
         )
-        with self._lock:
-            self._history = [
-                updated if item.id == request.history_id else item for item in self._history
-            ]
-        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
         similar_history_publish = self._publish_admin_feedback_to_similar_history(updated)
 
         select_ai_feedback: SelectAiFeedbackAddData | None = None
@@ -6715,9 +6769,10 @@ class Nl2SqlService:
         if item.admin_feedback_rating != FeedbackRating.GOOD:
             return self._unpublish_similar_history_entry(item.id, runtime=runtime)
         if not item.safety_is_safe:
-            with self._lock:
-                self._feedback_indexed_ids.discard(item.id)
-            self._persist_singletons("feedback_indexed_ids")
+            with self._feedback_index_lock:
+                with self._lock:
+                    self._feedback_indexed_ids.discard(item.id)
+                self._persist_singletons("feedback_indexed_ids")
             return SimilarHistoryPublishData(
                 history_id=item.id,
                 status="skipped",
@@ -6759,18 +6814,22 @@ class Nl2SqlService:
 
         try:
             embedding = self._embedding_client.embed_texts([self._feedback_embedding_text(item)])[0]
-            meta = self._oracle_adapter.upsert_feedback_vector_entry(
-                table_name=settings.nl2sql_feedback_vector_table,
-                index_name=settings.nl2sql_feedback_vector_index,
-                row={
-                    "history_id": item.id,
-                    "profile_id": item.profile_id,
-                    "question": item.question,
-                    "generated_sql": item.generated_sql,
-                    "feedback_rating": item.admin_feedback_rating.value,
-                    "embedding": embedding,
-                },
-            )
+            with self._feedback_index_lock:
+                meta = self._oracle_adapter.upsert_feedback_vector_entry(
+                    table_name=settings.nl2sql_feedback_vector_table,
+                    index_name=settings.nl2sql_feedback_vector_index,
+                    row={
+                        "history_id": item.id,
+                        "profile_id": item.profile_id,
+                        "question": item.question,
+                        "generated_sql": item.generated_sql,
+                        "feedback_rating": item.admin_feedback_rating.value,
+                        "embedding": embedding,
+                    },
+                )
+                with self._lock:
+                    self._feedback_indexed_ids.add(item.id)
+                self._persist_singletons("feedback_indexed_ids")
         except (EmbeddingClientError, OracleAdapterError, IndexError, ValueError) as exc:
             logger.warning("feedback similar-history publish warning: %s", exc)
             return SimilarHistoryPublishData(
@@ -6781,9 +6840,6 @@ class Nl2SqlService:
                 index_name=settings.nl2sql_feedback_vector_index,
                 warnings=[str(exc)],
             )
-        with self._lock:
-            self._feedback_indexed_ids.add(item.id)
-        self._persist_singletons("feedback_indexed_ids")
         return SimilarHistoryPublishData(
             history_id=item.id,
             status="published",
@@ -6800,19 +6856,20 @@ class Nl2SqlService:
         settings = get_settings()
         warnings: list[str] = []
         executed = False
-        if self._use_oracle_runtime():
-            try:
-                meta = self._oracle_adapter.delete_feedback_vector_entry(
-                    table_name=settings.nl2sql_feedback_vector_table,
-                    history_id=history_id,
-                )
-                executed = bool(meta.get("executed", True))
-            except OracleAdapterError as exc:
-                logger.warning("feedback similar-history unpublish warning: %s", exc)
-                warnings.append(str(exc))
-        with self._lock:
-            self._feedback_indexed_ids.discard(history_id)
-        self._persist_singletons("feedback_indexed_ids")
+        with self._feedback_index_lock:
+            if self._use_oracle_runtime():
+                try:
+                    meta = self._oracle_adapter.delete_feedback_vector_entry(
+                        table_name=settings.nl2sql_feedback_vector_table,
+                        history_id=history_id,
+                    )
+                    executed = bool(meta.get("executed", True))
+                except OracleAdapterError as exc:
+                    logger.warning("feedback similar-history unpublish warning: %s", exc)
+                    warnings.append(str(exc))
+            with self._lock:
+                self._feedback_indexed_ids.discard(history_id)
+            self._persist_singletons("feedback_indexed_ids")
         return SimilarHistoryPublishData(
             history_id=history_id,
             status="warning" if warnings else "unpublished",
@@ -6840,17 +6897,14 @@ class Nl2SqlService:
             and current.actor_user_uuid != actor_user_uuid
         ):
             raise PermissionError(history_id)
-        updated = current.model_copy(
-            update={
+        self._patch_history_item(
+            current,
+            {
                 "feedback_rating": None,
                 "feedback_comment": "",
                 "feedback_updated_at": _utc_now(),
-            }
+            },
         )
-        with self._lock:
-            self._feedback.pop(history_id, None)
-            self._history = [updated if item.id == history_id else item for item in self._history]
-        self._persist_entities([("history", updated.id, updated.model_dump(mode="json"))])
         return FeedbackClearData(history_id=history_id)
 
     def list_feedback(
@@ -7060,35 +7114,36 @@ class Nl2SqlService:
                 "Feedback vector index の clear 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
             )
         else:
-            try:
-                settings = get_settings()
-                if scoped_history_ids is None:
-                    self._oracle_adapter.clear_feedback_vector_index(
-                        table_name=settings.nl2sql_feedback_vector_table,
-                        index_name=settings.nl2sql_feedback_vector_index,
-                    )
-                    with self._lock:
-                        self._feedback_indexed_ids = set()
-                else:
-                    with self._lock:
-                        ids_to_delete = sorted(self._feedback_indexed_ids & scoped_history_ids)
-                    for history_id in ids_to_delete:
-                        self._oracle_adapter.delete_feedback_vector_entry(
+            with self._feedback_index_lock:
+                try:
+                    settings = get_settings()
+                    if scoped_history_ids is None:
+                        self._oracle_adapter.clear_feedback_vector_index(
                             table_name=settings.nl2sql_feedback_vector_table,
-                            history_id=history_id,
+                            index_name=settings.nl2sql_feedback_vector_index,
                         )
+                        with self._lock:
+                            self._feedback_indexed_ids = set()
+                    else:
+                        with self._lock:
+                            ids_to_delete = sorted(self._feedback_indexed_ids & scoped_history_ids)
+                        for history_id in ids_to_delete:
+                            self._oracle_adapter.delete_feedback_vector_entry(
+                                table_name=settings.nl2sql_feedback_vector_table,
+                                history_id=history_id,
+                            )
+                        with self._lock:
+                            self._feedback_indexed_ids.difference_update(scoped_history_ids)
                     with self._lock:
-                        self._feedback_indexed_ids.difference_update(scoped_history_ids)
-                with self._lock:
-                    current_indexed = (
-                        len(self._feedback_indexed_ids)
-                        if scoped_history_ids is None
-                        else len(self._feedback_indexed_ids & scoped_history_ids)
-                    )
-                executed = True
-                self._persist_singletons("feedback_indexed_ids")
-            except OracleAdapterError as exc:
-                warnings.append(str(exc))
+                        current_indexed = (
+                            len(self._feedback_indexed_ids)
+                            if scoped_history_ids is None
+                            else len(self._feedback_indexed_ids & scoped_history_ids)
+                        )
+                    executed = True
+                    self._persist_singletons("feedback_indexed_ids")
+                except OracleAdapterError as exc:
+                    warnings.append(str(exc))
         embedding_configured = self._embedding_client.is_configured()
         settings = get_settings()
         return FeedbackIndexData(
@@ -7165,6 +7220,7 @@ class Nl2SqlService:
         allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackEntriesData:
         self._load_feedback_state()
+        self._load_classifier_state()
         ids = {item.strip() for item in history_ids if item.strip()}
         if not ids:
             return self.list_feedback_entries(allowed_profile_ids=allowed_profile_ids)
@@ -7189,14 +7245,39 @@ class Nl2SqlService:
                     logger.warning("feedback vector delete warning: %s", exc)
                     warnings.append(str(exc))
         with self._lock:
+            classifier_example_ids = [
+                item.id for item in self._classifier_examples if item.source_history_id in ids
+            ]
+        if self._incremental_repository is not None:
+            try:
+                for item_id in ids:
+                    self._incremental_repository.delete_document("history", item_id)
+                    self._incremental_hashes.pop(("history", item_id), None)
+                for example_id in classifier_example_ids:
+                    self._incremental_repository.delete_document(
+                        "classifier_examples",
+                        example_id,
+                    )
+                    self._incremental_hashes.pop(("classifier_examples", example_id), None)
+            except Exception as exc:
+                self._raise_incremental_repository_failure(
+                    operation="feedback_delete",
+                    exc=exc,
+                    operation_error_code="feedback_delete_failed",
+                )
+        with self._lock:
             self._history = [item for item in self._history if item.id not in ids]
             for item_id in ids:
                 self._feedback.pop(item_id, None)
             self._feedback_indexed_ids.difference_update(ids)
+            if classifier_example_ids:
+                self._classifier_examples = [
+                    item
+                    for item in self._classifier_examples
+                    if item.id not in classifier_example_ids
+                ]
+                self._classifier_model_payload_cache = None
         if self._incremental_repository is not None:
-            for item_id in ids:
-                self._incremental_repository.delete_document("history", item_id)
-                self._incremental_hashes.pop(("history", item_id), None)
             self._persist_singletons("feedback_indexed_ids")
         else:
             self._persist_state()
@@ -8823,55 +8904,52 @@ class Nl2SqlService:
                         }
                         for item, vector in zip(indexable, vectors, strict=True)
                     ]
-                    if scoped_history_ids is None:
-                        self._oracle_adapter.rebuild_feedback_vector_index(
-                            table_name=settings.nl2sql_feedback_vector_table,
-                            index_name=settings.nl2sql_feedback_vector_index,
-                            rows=rows,
-                        )
-                    else:
-                        indexable_ids = {item.id for item in indexable}
-                        with self._lock:
-                            obsolete_ids = sorted(
-                                (self._feedback_indexed_ids & scoped_history_ids) - indexable_ids
-                            )
-                        for history_id in obsolete_ids:
-                            self._oracle_adapter.delete_feedback_vector_entry(
-                                table_name=settings.nl2sql_feedback_vector_table,
-                                history_id=history_id,
-                            )
-                        for row in rows:
-                            self._oracle_adapter.upsert_feedback_vector_entry(
+                    with self._feedback_index_lock:
+                        if scoped_history_ids is None:
+                            self._oracle_adapter.rebuild_feedback_vector_index(
                                 table_name=settings.nl2sql_feedback_vector_table,
                                 index_name=settings.nl2sql_feedback_vector_index,
-                                row=row,
+                                rows=rows,
                             )
-                    with self._lock:
-                        if scoped_history_ids is None:
-                            self._feedback_indexed_ids = {item.id for item in indexable}
                         else:
-                            self._feedback_indexed_ids.difference_update(scoped_history_ids)
-                            self._feedback_indexed_ids.update(item.id for item in indexable)
-                        indexed_count = (
-                            len(self._feedback_indexed_ids)
-                            if scoped_history_ids is None
-                            else len(self._feedback_indexed_ids & scoped_history_ids)
-                        )
-                    executed = True
-                    self._persist_singletons("feedback_indexed_ids")
+                            indexable_ids = {item.id for item in indexable}
+                            with self._lock:
+                                obsolete_ids = sorted(
+                                    (self._feedback_indexed_ids & scoped_history_ids)
+                                    - indexable_ids
+                                )
+                            for history_id in obsolete_ids:
+                                self._oracle_adapter.delete_feedback_vector_entry(
+                                    table_name=settings.nl2sql_feedback_vector_table,
+                                    history_id=history_id,
+                                )
+                            for row in rows:
+                                self._oracle_adapter.upsert_feedback_vector_entry(
+                                    table_name=settings.nl2sql_feedback_vector_table,
+                                    index_name=settings.nl2sql_feedback_vector_index,
+                                    row=row,
+                                )
+                        with self._lock:
+                            if scoped_history_ids is None:
+                                self._feedback_indexed_ids = {item.id for item in indexable}
+                            else:
+                                self._feedback_indexed_ids.difference_update(scoped_history_ids)
+                                self._feedback_indexed_ids.update(item.id for item in indexable)
+                            indexed_count = (
+                                len(self._feedback_indexed_ids)
+                                if scoped_history_ids is None
+                                else len(self._feedback_indexed_ids & scoped_history_ids)
+                            )
+                        executed = True
+                        self._persist_singletons("feedback_indexed_ids")
                 except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
                     warnings.append(str(exc))
                     with self._lock:
-                        if scoped_history_ids is None:
-                            self._feedback_indexed_ids = set()
-                        else:
-                            self._feedback_indexed_ids.difference_update(scoped_history_ids)
                         indexed_count = (
                             len(self._feedback_indexed_ids)
                             if scoped_history_ids is None
                             else len(self._feedback_indexed_ids & scoped_history_ids)
                         )
-                    self._persist_singletons("feedback_indexed_ids")
         settings = get_settings()
         return FeedbackIndexData(
             operation=operation,
@@ -8902,6 +8980,7 @@ class Nl2SqlService:
                     item.model_copy(deep=True)
                     for item in self._history
                     if item.admin_feedback_rating == FeedbackRating.GOOD
+                    and item.safety_is_safe
                     and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
                 ]
         indexable: list[HistoryItem] = []
@@ -8914,7 +8993,9 @@ class Nl2SqlService:
                 allowed_profile_ids=allowed_profile_ids,
             )
             indexable.extend(
-                item for item in page if item.admin_feedback_rating == FeedbackRating.GOOD
+                item
+                for item in page
+                if item.admin_feedback_rating == FeedbackRating.GOOD and item.safety_is_safe
             )
             if not cursor or not page:
                 return indexable

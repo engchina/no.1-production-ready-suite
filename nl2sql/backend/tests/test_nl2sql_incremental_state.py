@@ -35,6 +35,8 @@ from app.features.nl2sql.incremental_store import (
     _read_lob,
 )
 from app.features.nl2sql.models import (
+    AdminFeedbackReviewRequest,
+    ClassifierTrainingExample,
     FeedbackIndexRequest,
     FeedbackRating,
     FeedbackSearchConfigRequest,
@@ -145,6 +147,7 @@ class _FeedbackVectorAdapter:
         self.rebuild_rows: list[dict[str, Any]] = []
         self.clear_calls: list[tuple[str, str]] = []
         self.deleted_history_ids: list[str] = []
+        self.vector_history_ids: set[str] = set()
 
     def rebuild_feedback_vector_index(
         self,
@@ -155,7 +158,20 @@ class _FeedbackVectorAdapter:
     ) -> dict[str, Any]:
         del table_name, index_name
         self.rebuild_rows = list(rows)
+        self.vector_history_ids = {str(row["history_id"]) for row in rows}
         return {"runtime": "oracle", "row_count": len(rows)}
+
+    def upsert_feedback_vector_entry(
+        self,
+        *,
+        table_name: str,
+        index_name: str,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        del table_name, index_name
+        history_id = str(row["history_id"])
+        self.vector_history_ids.add(history_id)
+        return {"runtime": "oracle", "history_id": history_id, "executed": True}
 
     def clear_feedback_vector_index(
         self,
@@ -164,6 +180,7 @@ class _FeedbackVectorAdapter:
         index_name: str,
     ) -> dict[str, Any]:
         self.clear_calls.append((table_name, index_name))
+        self.vector_history_ids = set()
         return {"runtime": "oracle"}
 
     def delete_feedback_vector_entry(
@@ -174,6 +191,7 @@ class _FeedbackVectorAdapter:
     ) -> dict[str, Any]:
         del table_name
         self.deleted_history_ids.append(history_id)
+        self.vector_history_ids.discard(history_id)
         return {"runtime": "oracle", "history_id": history_id, "executed": True}
 
 
@@ -187,6 +205,29 @@ class _FailingFeedbackVectorAdapter(_FeedbackVectorAdapter):
     ) -> dict[str, Any]:
         del table_name, index_name, rows
         raise OracleAdapterError("rebuild failed")
+
+
+class _BlockingFeedbackVectorAdapter(_FeedbackVectorAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def rebuild_feedback_vector_index(
+        self,
+        *,
+        table_name: str,
+        index_name: str,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("blocking rebuild was not released")
+        return super().rebuild_feedback_vector_index(
+            table_name=table_name,
+            index_name=index_name,
+            rows=rows,
+        )
 
 
 class _FakeEnterpriseAiClient:
@@ -469,6 +510,105 @@ def test_incremental_feedback_rebuild_uses_repository_history_after_restart(
     assert len(indexed["value"]) == 200
 
 
+def test_incremental_feedback_rebuild_excludes_unsafe_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    safe = _history(1, admin=FeedbackRating.GOOD)
+    unsafe = _history(2, admin=FeedbackRating.GOOD).model_copy(update={"safety_is_safe": False})
+    _seed_history(repository, [safe, unsafe])
+    service = _incremental_service(repository)
+    cast(Any, service)._embedding_client = _FeedbackEmbeddingClient()
+    adapter = _FeedbackVectorAdapter()
+    cast(Any, service)._oracle_adapter = adapter
+
+    data = service.rebuild_feedback_index(FeedbackIndexRequest())
+
+    assert data.executed is True
+    assert data.indexable_count == 1
+    assert data.indexed_count == 1
+    assert {row["history_id"] for row in adapter.rebuild_rows} == {safe.id}
+    assert adapter.vector_history_ids == {safe.id}
+
+
+def test_incremental_feedback_publish_waits_for_rebuild_and_keeps_index_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    indexed = _history(1, admin=FeedbackRating.GOOD)
+    pending = _history(2).model_copy(
+        update={
+            "admin_feedback_rating": None,
+            "admin_feedback_content": "",
+            "admin_feedback_updated_at": "",
+        }
+    )
+    _seed_history(repository, [indexed, pending])
+    service = _incremental_service(repository)
+    cast(Any, service)._embedding_client = _FeedbackEmbeddingClient()
+    adapter = _BlockingFeedbackVectorAdapter()
+    cast(Any, service)._oracle_adapter = adapter
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        rebuild = executor.submit(service.rebuild_feedback_index, FeedbackIndexRequest())
+        assert adapter.entered.wait(timeout=5)
+        publish = executor.submit(
+            service.save_admin_feedback_review,
+            AdminFeedbackReviewRequest(
+                history_id=pending.id,
+                rating=FeedbackRating.GOOD,
+                feedback_content="管理者確認済み",
+            ),
+        )
+        time.sleep(0.05)
+        assert not publish.done()
+        adapter.release.set()
+        rebuild_data = rebuild.result(timeout=5)
+        publish_data = publish.result(timeout=5)
+
+    assert rebuild_data.executed is True
+    assert publish_data.similar_history_publish is not None
+    assert publish_data.similar_history_publish.status == "published"
+    assert adapter.vector_history_ids == {indexed.id, pending.id}
+    stored_index = repository.get_document("singletons", "feedback_indexed_ids")
+    assert stored_index == {"value": [indexed.id, pending.id]}
+
+
+def test_incremental_feedback_double_rebuild_keeps_index_state_consistent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    histories = [_history(1, admin=FeedbackRating.GOOD), _history(2, admin=FeedbackRating.GOOD)]
+    _seed_history(repository, histories)
+    first = _incremental_service(repository)
+    second = _incremental_service(repository)
+    adapter = _FeedbackVectorAdapter()
+    for service in [first, second]:
+        cast(Any, service)._embedding_client = _FeedbackEmbeddingClient()
+        cast(Any, service)._oracle_adapter = adapter
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda service: service.rebuild_feedback_index(FeedbackIndexRequest()),
+                [first, second],
+            )
+        )
+
+    assert all(result.executed for result in results)
+    expected_ids = {item.id for item in histories}
+    assert adapter.vector_history_ids == expected_ids
+    stored_index = repository.get_document("singletons", "feedback_indexed_ids")
+    assert stored_index == {"value": sorted(expected_ids)}
+
+
 def test_incremental_feedback_state_is_restored_lazily_after_restart() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     histories = [_history(1, admin=FeedbackRating.GOOD), _history(2, admin=FeedbackRating.GOOD)]
@@ -522,6 +662,100 @@ def test_incremental_feedback_search_config_patch_preserves_omitted_fields() -> 
     }
 
 
+def test_incremental_user_feedback_and_admin_review_preserve_each_other() -> None:
+    class _StaleHistoryReadRepository(MemoryIncrementalNl2SqlRepository):
+        def __init__(self, stale_document: dict[str, Any]) -> None:
+            super().__init__(seed_default=False)
+            self._stale_document = stale_document
+            self._return_stale_once = False
+
+        def return_stale_history_once(self) -> None:
+            self._return_stale_once = True
+
+        def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
+            if (
+                collection == "history"
+                and entity_id == self._stale_document["id"]
+                and self._return_stale_once
+            ):
+                self._return_stale_once = False
+                return dict(self._stale_document)
+            return super().get_document(collection, entity_id)
+
+    original = _history(1).model_copy(
+        update={
+            "feedback_rating": None,
+            "feedback_comment": "",
+            "feedback_updated_at": "",
+            "admin_feedback_rating": None,
+            "admin_feedback_content": "",
+            "admin_feedback_updated_at": "",
+        }
+    )
+    repository = _StaleHistoryReadRepository(original.model_dump(mode="json"))
+    _seed_history(repository, [original])
+    user_service = _incremental_service(repository)
+    admin_service = _incremental_service(repository)
+
+    user_service.save_feedback(original.id, FeedbackRating.BAD, "利用者の指摘")
+    repository.return_stale_history_once()
+    admin_service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id=original.id,
+            rating=FeedbackRating.GOOD,
+            feedback_content="管理者確認済み",
+        )
+    )
+
+    stored = HistoryItem.model_validate(repository.get_document("history", original.id))
+    assert stored.feedback_rating == FeedbackRating.BAD
+    assert stored.feedback_comment == "利用者の指摘"
+    assert stored.admin_feedback_rating == FeedbackRating.GOOD
+    assert stored.admin_feedback_content == "管理者確認済み"
+
+
+def test_incremental_feedback_review_keeps_created_at_order_and_cursor_page() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    histories = [
+        _history(0),
+        _history(1),
+        _history(2),
+    ]
+    _seed_history(repository, histories)
+    service = _incremental_service(repository)
+
+    first = service.list_feedback(cursor=None, limit=2, rating="", profile_id="", query="")
+    second = service.list_feedback(
+        cursor=first.next_cursor,
+        limit=2,
+        rating="",
+        profile_id="",
+        query="",
+    )
+    assert [item.id for item in first.items] == ["hist-002", "hist-001"]
+    assert [item.id for item in second.items] == ["hist-000"]
+
+    service.save_admin_feedback_review(
+        AdminFeedbackReviewRequest(
+            history_id="hist-000",
+            rating=FeedbackRating.GOOD,
+            feedback_content="2 ページ目で確認",
+        )
+    )
+
+    first_after = service.list_feedback(cursor=None, limit=2, rating="", profile_id="", query="")
+    second_after = service.list_feedback(
+        cursor=first.next_cursor,
+        limit=2,
+        rating="",
+        profile_id="",
+        query="",
+    )
+    assert [item.id for item in first_after.items] == ["hist-002", "hist-001"]
+    assert [item.id for item in second_after.items] == ["hist-000"]
+    assert second_after.items[0].admin_feedback_content == "2 ページ目で確認"
+
+
 def test_incremental_singleton_save_does_not_overwrite_feedback_config() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     feedback_config = {"value": {"similarity_threshold": 0.7, "match_limit": 8}}
@@ -564,7 +798,36 @@ def test_incremental_feedback_delete_removes_oracle_vector_entry(
     assert [item.history_id for item in data.items] == [keep.id]
 
 
-def test_incremental_feedback_rebuild_failure_clears_indexed_ids(
+def test_incremental_feedback_delete_removes_classifier_examples() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    history = _history(1)
+    _seed_history(repository, [history])
+    example = ClassifierTrainingExample(
+        id="classifier-example-feedback",
+        category="default",
+        text=history.question,
+        profile_id=history.profile_id,
+        source="feedback",
+        source_type="feedback",
+        source_history_id=history.id,
+    )
+    repository.put_document(
+        "classifier_examples",
+        example.id,
+        example.model_dump(mode="json"),
+        profile_id=example.profile_id,
+        status=example.source_type,
+    )
+    service = _incremental_service(repository)
+
+    service.delete_feedback_entries([history.id])
+
+    assert repository.get_document("history", history.id) is None
+    assert repository.get_document("classifier_examples", example.id) is None
+    assert service.classifier_training_data().examples == []
+
+
+def test_incremental_feedback_rebuild_failure_preserves_indexed_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
@@ -580,10 +843,10 @@ def test_incremental_feedback_rebuild_failure_clears_indexed_ids(
     data = service.rebuild_feedback_index(FeedbackIndexRequest())
 
     assert data.executed is False
-    assert data.status == "stale"
-    assert data.indexed_count == 0
+    assert data.status == "ready"
+    assert data.indexed_count == 1
     assert any("rebuild failed" in warning for warning in data.warnings)
-    assert repository.get_document("singletons", "feedback_indexed_ids") == {"value": []}
+    assert repository.get_document("singletons", "feedback_indexed_ids") == {"value": [history.id]}
 
 
 def test_incremental_generation_context_loads_global_material_without_page_read() -> None:
@@ -1603,6 +1866,43 @@ def test_memory_state_document_page_filters_payload_before_paging() -> None:
     assert [item["id"] for item in page] == ["history-own"]
     assert next_cursor is None
     assert total == 1
+
+
+def test_memory_history_keyword_search_uses_visible_feedback_fields() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "history",
+        "history-profile",
+        {
+            "id": "history-profile",
+            "question": "請求金額を確認したい",
+            "generated_sql": "SELECT TOTAL FROM APP.INVOICES",
+            "feedback_comment": "",
+            "profile_id": "default",
+            "feedback_rating": "good",
+            "actor_user_uuid": "user-1",
+        },
+        profile_id="default",
+        status="good",
+    )
+
+    visible, _cursor, visible_total = repository.list_documents_page(
+        "history",
+        cursor=None,
+        limit=10,
+        query="請求金額",
+    )
+    hidden, _cursor, hidden_total = repository.list_documents_page(
+        "history",
+        cursor=None,
+        limit=10,
+        query="default",
+    )
+
+    assert [item["id"] for item in visible] == ["history-profile"]
+    assert visible_total == 1
+    assert hidden == []
+    assert hidden_total == 0
 
 
 def test_two_services_converge_through_change_token() -> None:
