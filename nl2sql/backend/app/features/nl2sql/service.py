@@ -1073,7 +1073,7 @@ def _end_clause_keyword(masked_sql: str, index: int) -> str:
 def _split_sql_statements(sql: str) -> list[str]:
     """SQL を線形走査で分割し、literal/comment と PL/SQL block を壊さない。"""
 
-    text = str(sql or "")
+    text = _normalize_oracle_sql_text(sql)
     masked = _mask_sql_literals_and_comments(text)
     statements: list[str] = []
     statement_start = 0
@@ -1196,6 +1196,86 @@ def _strip_leading_sql_comments(sql: str) -> str:
 
 
 _Q_QUOTE_CLOSERS = {"[": "]", "(": ")", "{": "}", "<": ">"}
+_ORACLE_SQL_INVISIBLE_CHARS = frozenset({"\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"})
+_ORACLE_SQL_ASCII_WHITESPACE = frozenset({" ", "\t", "\n", "\f"})
+
+
+def _normalize_oracle_sql_plain_char(char: str) -> str:
+    if char in _ORACLE_SQL_INVISIBLE_CHARS:
+        return ""
+    if char == "\r":
+        return "\n"
+    if char in _ORACLE_SQL_ASCII_WHITESPACE:
+        return char
+    if char.isspace() or unicodedata.category(char) == "Zs":
+        return " "
+    return char
+
+
+def _normalize_oracle_sql_text(sql: str) -> str:
+    """貼り付け SQL の構文空白だけを Oracle が解釈できる ASCII 空白へ寄せる。"""
+
+    text = str(sql or "")
+    length = len(text)
+    out: list[str] = []
+    index = 0
+    while index < length:
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < length else ""
+        if char == "-" and next_char == "-":
+            end = text.find("\n", index)
+            end = length if end < 0 else end
+            out.append(text[index:end])
+            index = end
+            continue
+        if char == "/" and next_char == "*":
+            end = text.find("*/", index + 2)
+            if end < 0:
+                out.append(text[index:])
+                break
+            end += 2
+            out.append(text[index:end])
+            index = end
+            continue
+        previous = text[index - 1] if index > 0 else ""
+        if (
+            char in {"q", "Q"}
+            and next_char == "'"
+            and index + 2 < length
+            and not (previous.isalnum() or previous in {"_", "$", "#"})
+        ):
+            opener = text[index + 2]
+            closer = _Q_QUOTE_CLOSERS.get(opener, opener)
+            end = text.find(f"{closer}'", index + 3)
+            if end < 0:
+                out.append(text[index:])
+                break
+            end += 2
+            out.append(text[index:end])
+            index = end
+            continue
+        if char in {"'", '"'}:
+            end = index + 1
+            closed = False
+            while end < length:
+                if text[end] != char:
+                    end += 1
+                    continue
+                if char == "'" and end + 1 < length and text[end + 1] == "'":
+                    end += 2
+                    continue
+                closed = True
+                break
+            if not closed:
+                out.append(text[index:])
+                break
+            end += 1
+            out.append(text[index:end])
+            index = end
+            continue
+        out.append(_normalize_oracle_sql_plain_char(char))
+        index += 1
+    return "".join(out)
 
 
 def _mask_sql_literals_and_comments(sql: str) -> str:
@@ -1572,7 +1652,7 @@ def _admin_statement_hidden_object_names(
 
 
 def _normalize_admin_statement(sql: str) -> str:
-    stripped = str(sql or "").strip()
+    stripped = _normalize_oracle_sql_text(sql).strip()
     if re.match(r"^(exec|execute)\b", stripped, flags=re.IGNORECASE):
         body = re.sub(r"^(exec|execute)\s+", "", stripped, flags=re.IGNORECASE).strip()
         return f"BEGIN {body.rstrip(';')}; END;"
@@ -2296,7 +2376,7 @@ def normalize_executable_sql(sql: str) -> str:
     FETCH FIRST / LIMIT はそのまま保持する。行数上限は画面の「取得件数上限」
     (= 取得時の fetch 上限、OracleAdapter.execute_select の fetchmany)だけで効かせる。
     """
-    return sql.strip().rstrip(";")
+    return _normalize_oracle_sql_text(sql).strip().rstrip(";")
 
 
 _JOB_RESULT_PERSISTENCE_WARNING = (

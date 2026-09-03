@@ -62,6 +62,7 @@ from app.features.nl2sql.service import (
     SchemaRefreshMutationSync,
     _admin_statement_type,
     _db_admin_error,
+    _normalize_oracle_sql_text,
     _split_sql_statements,
     _statements_change_schema,
 )
@@ -176,6 +177,24 @@ class _FakeMetadataSamplesAdapter:
         if self.fail:
             raise OracleAdapterError("接続できません")
         return {"EMPLOYEE": {"EMPLOYEE_NAME": ["山田", "佐藤"]}}, []
+
+
+def _issue71_create_table_sql() -> str:
+    return (
+        'CREATE TABLE "ABC"\n'
+        '\u00a0\u00a0\u00a0(\t"EMPLID" VARCHAR2(11) COLLATE "USING_NLS_COMP" NOT NULL ENABLE,\n'
+        '\t"EMPL_RCD" NUMBER(3,0) NOT NULL ENABLE,\n'
+        '\t"EFFDT" DATE NOT NULL ENABLE,\n'
+        '\t"EFFSEQ" NUMBER(3,0) NOT NULL ENABLE,\n'
+        '\t"COMP_RATECD" VARCHAR2(20) COLLATE "USING_NLS_COMP" NOT NULL ENABLE,\n'
+        '\t"COMP_RATE" NUMBER(12,2),\n'
+        '\t"COMP_PERCENT" NUMBER(7,4),\n'
+        '\t"SAL_ADMIN_PLAN" VARCHAR2(20) COLLATE "USING_NLS_COMP" NOT NULL ENABLE,\n'
+        '\t"GRADE" VARCHAR2(10) COLLATE "USING_NLS_COMP" NOT NULL ENABLE,\n'
+        '\t"CURRENCY_CD" VARCHAR2(3) COLLATE "USING_NLS_COMP" NOT NULL ENABLE,\n'
+        '\t PRIMARY KEY ("EMPLID", "EMPL_RCD", "EFFDT", "EFFSEQ", "COMP_RATECD")\n'
+        "\u00a0\u00a0\u00a0)\u00a0 "
+    )
 
 
 class _OracleRuntimeService(Nl2SqlService):
@@ -1146,6 +1165,90 @@ def test_admin_sql_splitter_handles_comments_literals_and_plsql_blocks() -> None
     assert _split_sql_statements("BEGIN X := CASE WHEN 1 = 1 THEN 'END;' ELSE 'N' END; END;") == [
         "BEGIN X := CASE WHEN 1 = 1 THEN 'END;' ELSE 'N' END; END;"
     ]
+
+
+def test_admin_sql_normalizes_issue71_pasted_oracle_ddl_whitespace() -> None:
+    sql = _issue71_create_table_sql()
+
+    normalized = _normalize_oracle_sql_text(sql)
+    statements = _split_sql_statements(sql)
+
+    assert "\u00a0" not in normalized
+    assert 'COLLATE "USING_NLS_COMP"' in normalized
+    assert "NUMBER(3,0)" in normalized
+    assert statements == [normalized.strip()]
+    assert _admin_statement_type(statements[0]) == "CREATE"
+    assert _statements_change_schema(statements) is True
+    assert _normalize_oracle_sql_text("COMMENT ON TABLE T IS 'A\u00a0B'").endswith("'A\u00a0B'")
+
+
+def test_issue71_create_table_runs_through_admin_sql_and_table_management(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sql = _issue71_create_table_sql()
+    normalized = _split_sql_statements(sql)[0]
+    submit_sources: list[str] = []
+    submit_targets: list[list[tuple[str, str, str]]] = []
+
+    def submit(**kwargs: Any) -> SchemaRefreshMutationSync:
+        submit_sources.append(str(kwargs["source"]))
+        submit_targets.append(
+            [
+                (target.owner, target.object_name, target.expected_state)
+                for target in kwargs["target_objects"]
+            ]
+        )
+        return SchemaRefreshMutationSync(job_id=f"schema-job-{len(submit_sources)}")
+
+    admin_adapter = _FakeAdminSqlAdapter(
+        statement_results=[
+            {
+                "index": 1,
+                "statement_type": "CREATE",
+                "status": "success",
+                "sql": normalized,
+            }
+        ]
+    )
+    admin_service = _OracleRuntimeService(admin_adapter)
+    monkeypatch.setattr(admin_service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    admin_result = admin_service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql=sql,
+            confirmation="ADMIN_EXECUTE",
+            reason="admin-sql-admin",
+        )
+    )
+
+    table_adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "CREATE",
+                "status": "success",
+                "sql": normalized,
+            }
+        ]
+    )
+    table_service = _OracleRuntimeService(table_adapter)
+    monkeypatch.setattr(table_service, "_submit_schema_refresh_after_admin_mutation", submit)
+
+    table_result = table_service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql=sql,
+            policy="table_ddl",
+            confirmation="ADMIN_EXECUTE",
+            reason="ui-db-admin-table_ddl",
+        )
+    )
+
+    assert admin_result.executed is True
+    assert table_result.executed is True
+    assert admin_adapter.calls == [([normalized], True)]
+    assert table_adapter.calls == [([normalized], False)]
+    assert submit_sources == ["db_admin_execute", "db_admin_statements_table_ddl"]
+    assert submit_targets == [[("APP", "ABC", "present")], [("APP", "ABC", "present")]]
 
 
 @pytest.mark.parametrize(
