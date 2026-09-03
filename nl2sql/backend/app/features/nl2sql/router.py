@@ -159,6 +159,8 @@ from .quality_evaluation_models import (
     QualityEvaluationResultPage,
 )
 from .quality_evaluation_service import (
+    QualityEvaluationCursorError,
+    QualityEvaluationJobNotFoundError,
     QualityEvaluationJobStateError,
     QualityEvaluationValidationError,
     quality_evaluation_service,
@@ -277,7 +279,7 @@ def _quality_evaluation_job_for_access(
 ) -> QualityEvaluationJobSummary:
     try:
         job = quality_evaluation_service.get_job(job_id)
-    except ValueError as exc:
+    except QualityEvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     _assert_profile_access(request, job.profile_id)
     return job
@@ -1700,7 +1702,7 @@ def list_quality_evaluations(
     """最近の SQL生成評価 job をページ取得する。"""
     try:
         page = quality_evaluation_service.list_jobs(cursor=cursor, limit=limit)
-    except ValueError as exc:
+    except QualityEvaluationCursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     allowed_profile_ids = _allowed_profile_ids_for_request(request)
     if allowed_profile_ids is not None:
@@ -1725,7 +1727,9 @@ def quality_evaluation_results(
         return ApiResponse(
             data=quality_evaluation_service.list_results(job_id=job_id, cursor=cursor, limit=limit)
         )
-    except ValueError as exc:
+    except QualityEvaluationCursorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except QualityEvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -1735,7 +1739,9 @@ def quality_evaluation_results_xlsx(job_id: str, request: Request) -> Response:
     _quality_evaluation_job_for_access(job_id, request)
     try:
         filename, content = quality_evaluation_service.results_workbook(job_id)
-    except ValueError as exc:
+    except QualityEvaluationJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except QualityEvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(
         content=content,

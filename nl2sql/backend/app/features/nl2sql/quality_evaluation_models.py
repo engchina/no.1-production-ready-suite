@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .models import Nl2SqlEngine
 
@@ -45,6 +45,37 @@ class QualityEvaluationJudge(BaseModel):
     differences: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     correction_suggestion: str = ""
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _normalize_verdict(cls, value: Any) -> Any:
+        if isinstance(value, QualityEvaluationVerdict):
+            return value
+        normalized = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "correct": QualityEvaluationVerdict.CORRECT,
+            "incorrect": QualityEvaluationVerdict.INCORRECT,
+            "uncertain": QualityEvaluationVerdict.UNCERTAIN,
+        }
+        return aliases.get(normalized, value)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, value: Any) -> Any:
+        try:
+            if isinstance(value, str):
+                text = value.strip()
+                percent = text.endswith("%")
+                numeric = float(text.removesuffix("%").strip())
+                if percent:
+                    numeric /= 100
+            else:
+                numeric = float(value)
+        except (TypeError, ValueError):
+            return value
+        if numeric > 1.0:
+            numeric /= 100
+        return min(1.0, max(0.0, numeric))
 
 
 class QualityEvaluationDeterministicAnalysis(BaseModel):

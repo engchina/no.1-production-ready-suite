@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore[import-untyped]
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 
@@ -46,7 +47,7 @@ from .quality_evaluation_store import (
     OracleQualityEvaluationRepository,
     QualityEvaluationRepository,
 )
-from .service import GeneratedSql, Nl2SqlService, is_select_only, nl2sql_service, one_line_sql
+from .service import GeneratedSql, Nl2SqlService, is_select_only, nl2sql_service
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,12 @@ _TERMINAL_STATUSES = {
     QualityEvaluationStatus.FAILED,
     QualityEvaluationStatus.CANCELLED,
 }
+_EMPTY_ROW_STOP_THRESHOLD = 100
+_SQL_NO_SPACE_AROUND = frozenset("(),=<>+-*/")
+
+
+class QualityEvaluationCursorError(ValueError):
+    """SQL生成評価 API のページング cursor が不正な場合のエラー。"""
 
 
 def _utc_now() -> str:
@@ -84,25 +91,128 @@ def _decode_offset(cursor: str | None) -> int:
         padded = cursor + "=" * (-len(cursor) % 4)
         return max(0, int(base64.urlsafe_b64decode(padded).decode("ascii")))
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("カーソルが不正です。") from exc
+        raise QualityEvaluationCursorError("カーソルが不正です。") from exc
 
 
 def _safe_excel_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
-    if value.startswith(("=", "+", "-", "@")):
-        return "'" + value
-    return value
+    return ILLEGAL_CHARACTERS_RE.sub("", value)
+
+
+def _append_safe_excel_row(sheet: Any, values: list[Any]) -> None:
+    sanitized = [_safe_excel_value(value) for value in values]
+    sheet.append(sanitized)
+    row_number = sheet.max_row
+    for column, value in enumerate(sanitized, start=1):
+        if isinstance(value, str) and value.startswith("="):
+            sheet.cell(row_number, column).data_type = "s"
+
+
+def _quality_evaluation_limits() -> QualityEvaluationLimits:
+    settings = get_settings()
+    return QualityEvaluationLimits(
+        max_file_bytes=settings.nl2sql_quality_evaluation_max_file_bytes,
+        max_cases=settings.nl2sql_quality_evaluation_max_cases,
+        max_attempts=settings.nl2sql_quality_evaluation_max_attempts,
+        attempt_timeout_seconds=max(
+            1.0, settings.nl2sql_quality_evaluation_attempt_timeout_seconds
+        ),
+    )
 
 
 def _normalized_sql(sql: str) -> str:
-    return one_line_sql(sql).rstrip(";").upper()
+    text = str(sql or "")
+    out: list[str] = []
+    index = 0
+    in_single_quote = False
+    in_double_quote = False
+    previous_space = False
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if in_single_quote:
+            out.append(char)
+            if char == "'" and next_char == "'":
+                out.append(next_char)
+                index += 2
+                continue
+            if char == "'":
+                in_single_quote = False
+            previous_space = False
+            index += 1
+            continue
+        if in_double_quote:
+            out.append(char)
+            if char == '"' and next_char == '"':
+                out.append(next_char)
+                index += 2
+                continue
+            if char == '"':
+                in_double_quote = False
+            previous_space = False
+            index += 1
+            continue
+        if char == "-" and next_char == "-":
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                break
+            if out and not previous_space and out[-1] not in _SQL_NO_SPACE_AROUND:
+                out.append(" ")
+                previous_space = True
+            index = newline + 1
+            continue
+        if char == "/" and next_char == "*":
+            end = text.find("*/", index + 2)
+            if end < 0:
+                break
+            if out and not previous_space and out[-1] not in _SQL_NO_SPACE_AROUND:
+                out.append(" ")
+                previous_space = True
+            index = end + 2
+            continue
+        if char == "'":
+            out.append(char)
+            in_single_quote = True
+            previous_space = False
+            index += 1
+            continue
+        if char == '"':
+            out.append(char)
+            in_double_quote = True
+            previous_space = False
+            index += 1
+            continue
+        if char.isspace():
+            if out and not previous_space and out[-1] not in _SQL_NO_SPACE_AROUND:
+                out.append(" ")
+                previous_space = True
+            index += 1
+            continue
+        if char in _SQL_NO_SPACE_AROUND:
+            while out and out[-1] == " ":
+                out.pop()
+            out.append(char.upper())
+            previous_space = False
+            index += 1
+            continue
+        out.append(char.upper())
+        previous_space = False
+        index += 1
+    normalized = "".join(out).strip()
+    while normalized.endswith(";"):
+        normalized = normalized[:-1].rstrip()
+    return normalized
 
 
 class QualityEvaluationValidationError(ValueError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__("\n".join(errors))
+
+
+class QualityEvaluationJobNotFoundError(ValueError):
+    """SQL生成評価 job が見つからない場合のエラー。"""
 
 
 class QualityEvaluationJobStateError(ValueError):
@@ -152,7 +262,6 @@ class QualityEvaluationService:
         return self._repository.mode
 
     def capabilities(self, profile_id: str | None = None) -> QualityEvaluationCapabilities:
-        settings = get_settings()
         readiness = (
             self._readiness_provider(profile_id)
             if self._readiness_provider
@@ -177,14 +286,7 @@ class QualityEvaluationService:
                 available=judge_ready,
                 reason="" if judge_ready else "OCI Enterprise AI Judge が構成されていません。",
             ),
-            limits=QualityEvaluationLimits(
-                max_file_bytes=settings.nl2sql_quality_evaluation_max_file_bytes,
-                max_cases=settings.nl2sql_quality_evaluation_max_cases,
-                max_attempts=settings.nl2sql_quality_evaluation_max_attempts,
-                attempt_timeout_seconds=max(
-                    1.0, settings.nl2sql_quality_evaluation_attempt_timeout_seconds
-                ),
-            ),
+            limits=_quality_evaluation_limits(),
         )
 
     def template_workbook(self) -> bytes:
@@ -219,7 +321,7 @@ class QualityEvaluationService:
         return buffer.getvalue()
 
     def parse_cases(self, content: bytes, filename: str) -> list[QualityEvaluationCase]:
-        limits = self.capabilities().limits
+        limits = _quality_evaluation_limits()
         errors: list[str] = []
         if Path(filename).suffix.lower() != ".xlsx":
             errors.append(".xlsx ファイルのみアップロードできます。")
@@ -231,7 +333,7 @@ class QualityEvaluationService:
         if errors:
             raise QualityEvaluationValidationError(errors)
         try:
-            workbook = load_workbook(io.BytesIO(content), data_only=False, read_only=False)
+            workbook = load_workbook(io.BytesIO(content), data_only=False, read_only=True)
         except Exception as exc:
             raise QualityEvaluationValidationError(
                 ["ファイルを Excel ブックとして読み込めません。"]
@@ -241,7 +343,8 @@ class QualityEvaluationService:
             workbook.active,
         )
         header_map: dict[str, int] = {}
-        for index, cell in enumerate(sheet[1], start=1):
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1), ())
+        for index, cell in enumerate(header_row, start=1):
             if cell.data_type == "f":
                 errors.append("行 1: ヘッダーに数式は使用できません。")
                 continue
@@ -261,35 +364,56 @@ class QualityEvaluationService:
 
         cases: list[QualityEvaluationCase] = []
         seen_case_ids: set[str] = set()
-        input_case_count = 0
-        for row_number in range(2, sheet.max_row + 1):
-            tracked_columns = [header_map["question"], header_map["expected_sql"]]
-            if "case_id" in header_map:
-                tracked_columns.append(header_map["case_id"])
-            cells = [sheet.cell(row_number, column) for column in tracked_columns]
+        reserved_case_ids: set[str] = set()
+        case_rows: list[tuple[int, str, str, str, list[str]]] = []
+        tracked_columns = [header_map["question"], header_map["expected_sql"]]
+        if "case_id" in header_map:
+            tracked_columns.append(header_map["case_id"])
+        max_tracked_column = max(tracked_columns)
+        empty_row_streak = 0
+        for row_number, row in enumerate(
+            sheet.iter_rows(min_row=2, max_col=max_tracked_column),
+            start=2,
+        ):
+            cells = [row[column - 1] for column in tracked_columns if column <= len(row)]
             if all(cell.value is None or str(cell.value).strip() == "" for cell in cells):
+                empty_row_streak += 1
+                if empty_row_streak >= _EMPTY_ROW_STOP_THRESHOLD:
+                    break
                 continue
-            input_case_count += 1
+            empty_row_streak = 0
             formula_fields = [
                 name
                 for name, column in header_map.items()
-                if sheet.cell(row_number, column).data_type == "f"
+                if column <= len(row) and row[column - 1].data_type == "f"
             ]
+            question = str(row[header_map["question"] - 1].value or "").strip()
+            expected_sql = str(row[header_map["expected_sql"] - 1].value or "").strip()
+            case_id_value = (
+                str(row[header_map["case_id"] - 1].value or "").strip()
+                if "case_id" in header_map
+                else ""
+            )
+            if case_id_value:
+                reserved_case_ids.add(case_id_value)
+            case_rows.append((row_number, case_id_value, question, expected_sql, formula_fields))
+
+        auto_case_no = 1
+        for row_number, case_id_value, question, expected_sql, formula_fields in case_rows:
             if formula_fields:
                 errors.append(
                     f"行 {row_number}: 数式セルは使用できません（{', '.join(formula_fields)}）。"
                 )
                 continue
-            question = str(sheet.cell(row_number, header_map["question"]).value or "").strip()
-            expected_sql = str(
-                sheet.cell(row_number, header_map["expected_sql"]).value or ""
-            ).strip()
-            case_id_value = (
-                str(sheet.cell(row_number, header_map["case_id"]).value or "").strip()
-                if "case_id" in header_map
-                else ""
-            )
-            case_id = case_id_value or f"CASE-{input_case_count:04d}"
+            if case_id_value:
+                case_id = case_id_value
+            else:
+                while True:
+                    candidate = f"CASE-{auto_case_no:04d}"
+                    auto_case_no += 1
+                    if candidate not in reserved_case_ids and candidate not in seen_case_ids:
+                        case_id = candidate
+                        break
             if not question:
                 errors.append(f"行 {row_number}: 質問は必須です。")
             if not expected_sql:
@@ -409,7 +533,7 @@ class QualityEvaluationService:
     def get_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         self._wake_quality_evaluation_job_if_needed(job)
         return job_summary(job)
 
@@ -430,7 +554,7 @@ class QualityEvaluationService:
         self, *, job_id: str, cursor: str | None, limit: int
     ) -> QualityEvaluationResultPage:
         if self._repository.get_job(job_id) is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         offset = _decode_offset(cursor)
         page_size = min(max(limit, 1), 100)
         results, total = self._repository.list_results(
@@ -446,20 +570,20 @@ class QualityEvaluationService:
     def delete_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         if job.status not in _TERMINAL_STATUSES:
             raise QualityEvaluationJobStateError(
                 "実行中または待機中の SQL生成評価 job は削除できません。完了後に削除してください。"
             )
         deleted = self._repository.delete_job(job_id)
         if deleted is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         return job_summary(deleted)
 
     def cancel_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         if job.status == QualityEvaluationStatus.CANCELLED:
             return job_summary(job)
         if job.status in _TERMINAL_STATUSES:
@@ -486,7 +610,9 @@ class QualityEvaluationService:
         if saved is None:
             latest = self._repository.get_job(job_id)
             if latest is None:
-                raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+                raise QualityEvaluationJobNotFoundError(
+                    "指定されたSQL生成評価 job が見つかりません。"
+                )
             if latest.status == QualityEvaluationStatus.CANCELLED:
                 return job_summary(latest)
             if latest.status in _TERMINAL_STATUSES:
@@ -856,9 +982,14 @@ class QualityEvaluationService:
                                 attempt_no=attempt_no,
                                 operation="result_save",
                             )
-                        job = self._refresh_progress(
-                            latest, worker_id=worker_id, attempt_no=attempt_no
-                        )
+                            return
+                        if saved_job := self._refresh_progress_after_saved_result(
+                            latest,
+                            result,
+                            worker_id=worker_id,
+                            attempt_no=attempt_no,
+                        ):
+                            job = saved_job
             latest = self._repository.get_job(job.job_id)
             if latest is None or latest.status in _TERMINAL_STATUSES:
                 return
@@ -990,6 +1121,56 @@ class QualityEvaluationService:
                 return latest
             return saved
         return self._repository.save_job(refreshed)
+
+    def _refresh_progress_after_saved_result(
+        self,
+        job: QualityEvaluationJobRecord,
+        result: QualityEvaluationResult,
+        *,
+        worker_id: str,
+        attempt_no: int,
+    ) -> QualityEvaluationJobRecord | None:
+        latest = self._repository.get_job(job.job_id)
+        if latest is None or latest.status in _TERMINAL_STATUSES:
+            return latest
+        if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
+            self._log_worker_fence_lost(
+                job_id=latest.job_id,
+                profile_id=latest.profile_id,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                operation="progress",
+            )
+            return latest
+        now = datetime.now(UTC)
+        refreshed = latest.model_copy(
+            update={
+                "completed_attempts": min(latest.total_attempts, latest.completed_attempts + 1),
+                "success_count": latest.success_count + int(result.generation_succeeded),
+                "error_count": latest.error_count
+                + int(bool(result.generation_error or result.judge_error)),
+                "heartbeat_at": now.isoformat(),
+                "lease_expires_at": (
+                    now + timedelta(seconds=self._attempt_lease_seconds(latest))
+                ).isoformat(),
+                "updated_at": now.isoformat(),
+            },
+            deep=True,
+        )
+        saved = self._repository.save_job_if_worker_current(
+            refreshed,
+            worker_id=worker_id,
+            attempt_no=attempt_no,
+        )
+        if saved is None:
+            self._log_worker_fence_lost(
+                job_id=latest.job_id,
+                profile_id=latest.profile_id,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                operation="progress",
+            )
+        return saved
 
     def _evaluate_attempt(
         self,
@@ -1213,9 +1394,11 @@ class QualityEvaluationService:
     def results_workbook(self, job_id: str) -> tuple[str, bytes]:
         job = self._repository.get_job(job_id)
         if job is None:
-            raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
         if job.status not in _TERMINAL_STATUSES:
-            raise ValueError("評価が完了していないため Excel をダウンロードできません。")
+            raise QualityEvaluationJobStateError(
+                "評価が完了していないため Excel をダウンロードできません。"
+            )
         results = self._repository.all_results(job_id)
         workbook = Workbook()
         summary = workbook.active
@@ -1231,7 +1414,7 @@ class QualityEvaluationService:
             ["注記", "LLM 判定は補助意見であり、SQL のデータベース実行結果ではありません。"],
         ]
         for row in summary_rows:
-            summary.append([_safe_excel_value(value) for value in row])
+            _append_safe_excel_row(summary, row)
         summary.append([])
         summary.append(
             [
@@ -1320,7 +1503,7 @@ class QualityEvaluationService:
                 "",
                 "",
             ]
-            details.append([_safe_excel_value(value) for value in row])
+            _append_safe_excel_row(details, row)
         self._format_workbook(summary, details, len(headers))
         buffer = io.BytesIO()
         workbook.save(buffer)

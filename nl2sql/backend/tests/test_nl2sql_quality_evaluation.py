@@ -4,9 +4,11 @@ import io
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 
+import app.features.nl2sql.router as nl2sql_router_module
 from app.features.nl2sql.models import (
     AssetRefreshData,
     Nl2SqlEngine,
@@ -323,6 +325,33 @@ def test_parse_cases_ignores_empty_rows_and_assigns_case_id() -> None:
     assert len(cases) == 1
     assert cases[0].case_id == "CASE-0001"
     assert cases[0].excel_row == 3
+
+
+def test_parse_cases_auto_case_ids_skip_explicit_case_ids() -> None:
+    cases = _service().parse_cases(
+        _xlsx(
+            [
+                ["CASE-0003", "明示 ID", "SELECT 1 FROM dual"],
+                [None, "自動 ID 1", "SELECT 2 FROM dual"],
+                [None, "自動 ID 2", "SELECT 3 FROM dual"],
+            ]
+        ),
+        "cases.xlsx",
+    )
+
+    assert [case.case_id for case in cases] == ["CASE-0003", "CASE-0001", "CASE-0002"]
+
+
+def test_parse_cases_reads_limits_without_engine_readiness_probe() -> None:
+    def fail_readiness(_profile_id: str | None) -> dict[Nl2SqlEngine, tuple[bool, str]]:
+        raise AssertionError("parse_cases must not probe engine readiness")
+
+    cases = _service(readiness_provider=fail_readiness).parse_cases(
+        _xlsx([["A", "質問", "SELECT 1 FROM dual"]]),
+        "cases.xlsx",
+    )
+
+    assert cases[0].case_id == "A"
 
 
 @pytest.mark.parametrize(
@@ -1013,6 +1042,37 @@ def test_worker_aggregates_verdict_distribution_and_normalized_consistency(
     assert summary.normalized_sql_consistency == 0.5
 
 
+def test_normalized_sql_consistency_preserves_literal_case_and_ignores_comments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    call_count = 0
+
+    def engine(*_args: object) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "SELECT 1 FROM dual WHERE 'active' = 'active' -- generated comment"
+        return "SELECT 1 FROM dual WHERE 'ACTIVE' = 'ACTIVE'"
+
+    service = _service(engine_runner=engine, judge_runner=_judge)
+    submitted = service.submit(
+        profile_id="default",
+        engines=[Nl2SqlEngine.SELECT_AI],
+        repeat_count=2,
+        content=_xlsx([["A", "質問", "SELECT 1 FROM dual"]]),
+        filename="cases.xlsx",
+    )
+    service.run_job(job_id=submitted.job_id)
+
+    results = service.list_results(job_id=submitted.job_id, cursor=None, limit=10).items
+    normalized_values = [item.normalized_sql for item in results]
+    assert "COMMENT" not in normalized_values[0]
+    assert normalized_values[0] != normalized_values[1]
+    assert service.get_job(submitted.job_id).engine_summaries[0].normalized_sql_consistency == 0.5
+
+
 def test_worker_records_empty_engine_output_as_generation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1073,6 +1133,19 @@ def test_default_judge_uses_profile_schema_catalog_without_argument_error(
     assert fake_client.calls[0]["max_retries"] == 0
     assert "schema:" in fake_client.calls[0]["context"]
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
+
+
+def test_judge_accepts_case_variants_and_percent_confidence() -> None:
+    judge = QualityEvaluationJudge.model_validate(
+        {
+            "verdict": "Correct",
+            "confidence": 85,
+            "summary": "一致しています。",
+        }
+    )
+
+    assert judge.verdict == QualityEvaluationVerdict.CORRECT
+    assert judge.confidence == 0.85
 
 
 def test_strict_enterprise_ai_direct_generation_passes_timeout_override(
@@ -1312,20 +1385,29 @@ def test_oracle_repository_delete_job_rolls_back_on_delete_error() -> None:
     assert connection.rollbacks == 1
 
 
-def test_results_workbook_has_review_columns_format_and_formula_injection_guard(
+def test_results_workbook_preserves_sql_text_and_strips_illegal_characters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+
+    def judge(*_args: object) -> QualityEvaluationJudge:
+        return QualityEvaluationJudge(
+            verdict="Correct",
+            confidence=85,
+            summary="-judge\x0bsummary",
+            correction_suggestion="=1+1",
+        )
+
     service = _service(
-        engine_runner=lambda *_args: "SELECT 1 FROM dual",
-        judge_runner=_judge,
+        engine_runner=lambda *_args: "-- generated\x0b comment\nSELECT 1 FROM dual",
+        judge_runner=judge,
     )
     submitted = service.submit(
         profile_id="default",
         engines=[Nl2SqlEngine.ENTERPRISE_AI_DIRECT],
         repeat_count=1,
-        content=_xlsx([["+CASE", "+question", "SELECT 1 FROM dual"]]),
+        content=_xlsx([["+CASE", "+question", "-- expected comment\nSELECT 1 FROM dual"]]),
         filename="cases.xlsx",
     )
     service.run_job(job_id=submitted.job_id)
@@ -1338,8 +1420,45 @@ def test_results_workbook_has_review_columns_format_and_formula_injection_guard(
     assert headers[-2:] == ["人手判定", "人手コメント"]
     assert details.freeze_panes == "A2"
     assert details.auto_filter.ref is not None
-    assert str(details.cell(2, 2).value).startswith("'")
-    assert str(details.cell(2, 4).value).startswith("'")
+    assert details.cell(2, 2).value == "+CASE"
+    assert details.cell(2, 4).value == "+question"
+    assert details.cell(2, 5).value == "-- expected comment\nSELECT 1 FROM dual"
+    assert details.cell(2, 8).value == "-- generated comment\nSELECT 1 FROM dual"
+    assert details.cell(2, 20).value == "-judgesummary"
+    assert details.cell(2, 23).value == "=1+1"
+    assert details.cell(2, 23).data_type == "s"
+
+
+@pytest.mark.asyncio
+async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(_evaluation_job("completed-job", status=QualityEvaluationStatus.COMPLETED))
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()),
+        repository=repository,
+        engine_runner=lambda *_args: "SELECT 1 FROM dual",
+        judge_runner=_judge,
+    )
+    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(nl2sql_router_module, "quality_evaluation_service", service)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing_workbook = await client.get(
+            "/api/nl2sql/quality-evaluations/missing-job/results.xlsx"
+        )
+        bad_cursor = await client.get(
+            "/api/nl2sql/quality-evaluations/completed-job/results",
+            params={"cursor": "bm90LWludA"},
+        )
+        completed_workbook = await client.get(
+            "/api/nl2sql/quality-evaluations/completed-job/results.xlsx"
+        )
+
+    assert missing_workbook.status_code == 404
+    assert bad_cursor.status_code == 400
+    assert completed_workbook.status_code == 200
 
 
 def test_result_and_job_pagination_use_opaque_cursors(
