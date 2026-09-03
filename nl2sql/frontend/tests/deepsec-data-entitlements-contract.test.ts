@@ -215,11 +215,16 @@ test("DeepSec Data Grant editor は対象 object、許可列、行 scope の順�
 });
 
 test("DeepSec 条件 filter row は mobile/tablet で重ならない responsive grid を使う", () => {
+  assert.match(pageSource, /const INPUT_CLASS =\s*"h-11 min-w-0 w-full/u);
+  assert.match(pageSource, /const COMPACT_INPUT_CLASS =\s*"h-9 min-w-0 w-full/u);
   assert.match(
     entitlementsPanel,
-    /className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-\[minmax\(15rem,1\.25fr\)_minmax\(9rem,0\.75fr\)_minmax\(10rem,0\.8fr\)_minmax\(12rem,1fr\)_auto\]"/u
+    /className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-\[minmax\(0,1\.25fr\)_minmax\(0,0\.75fr\)_minmax\(0,0\.8fr\)_minmax\(0,1fr\)_auto\]"/u
   );
-  assert.match(entitlementsPanel, /className=\{cn\(COMPACT_INPUT_CLASS, "min-w-0"\)\}/u);
+  assert.doesNotMatch(
+    entitlementsPanel,
+    /2xl:grid-cols-\[minmax\(15rem,1\.25fr\)_minmax\(9rem,0\.75fr\)_minmax\(10rem,0\.8fr\)_minmax\(12rem,1fr\)_auto\]/u
+  );
   assert.match(entitlementsPanel, /className="justify-self-end self-end md:col-span-2 2xl:col-span-1"/u);
 });
 

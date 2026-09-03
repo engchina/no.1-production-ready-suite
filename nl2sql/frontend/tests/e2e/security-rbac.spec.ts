@@ -91,6 +91,27 @@ async function expectNoElementHorizontalOverflow(locator: Locator) {
     .toBeTruthy();
 }
 
+async function expectScopeFilterControlsInsideRow(locator: Locator) {
+  await expect
+    .poll(() =>
+      locator.evaluate((node) => {
+        const rowBox = node.getBoundingClientRect();
+        const controls = Array.from(node.querySelectorAll("select,input,button")).filter(
+          (control) => {
+            const style = window.getComputedStyle(control);
+            const box = control.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" && box.width > 0;
+          }
+        );
+        return controls.every((control) => {
+          const box = control.getBoundingClientRect();
+          return box.left >= rowBox.left - 1 && box.right <= rowBox.right + 1;
+        });
+      })
+    )
+    .toBeTruthy();
+}
+
 function expectedInformationRows(testInfo: TestInfo) {
   return testInfo.project.name === "mobile-375" ? 5 : 8;
 }
@@ -4369,7 +4390,7 @@ test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("DeepSec は構造化データ権限をロール別に編集する", async ({ page }) => {
+test("DeepSec は構造化データ権限をロール別に編集する", async ({ page }, testInfo) => {
   await mockDatabaseGateReady(page);
   const queryRole = {
     role_id: "role-query",
@@ -4930,6 +4951,15 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(
     numberFilterRow.getByTestId("security-deepsec-scope-filter-login-user-id-0-1")
   ).toBeVisible();
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({ width: 1088, height: 959 });
+    await expectNoPageHorizontalScroll(page);
+    await expectNoElementHorizontalOverflow(entitlementForm);
+    await expectNoElementHorizontalOverflow(filterRow);
+    await expectNoElementHorizontalOverflow(numberFilterRow);
+    await expectScopeFilterControlsInsideRow(filterRow);
+    await expectScopeFilterControlsInsideRow(numberFilterRow);
+  }
   await entitlementForm.getByRole("checkbox", { name: /CUSTOMER_NAME/ }).check();
   await entitlementForm.getByRole("checkbox", { name: /REGION_CODE/ }).check();
   await entitlementForm.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
