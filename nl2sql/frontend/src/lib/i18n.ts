@@ -1371,6 +1371,7 @@ const nl2sqlJa = {
   "profiles.error.nameRequired": "名称を入力してください。",
   "profiles.error.nameFormat":
     "名称は英字で開始し、英字・数字・アンダースコアのみ使用してください。",
+  "profiles.error.nameDuplicate": "同じ名称の業務プロファイルが既に存在します。",
   "profiles.error.categoryRequired": "カテゴリを入力してください。",
   "profiles.error.regionRequired": "Region を入力してください。",
   "profiles.error.modelRequired": "LLM Model を入力してください。",

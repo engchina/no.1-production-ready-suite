@@ -101,11 +101,13 @@ class ProfileSyncService:
         if request.confirmation.strip() != "ADMIN_EXECUTE":
             raise ValueError("実行には confirmation=ADMIN_EXECUTE が必要です。")
         profile = self._service.get_profile(profile_id)
+        original_name = self._profile_original_name(profile)
         request_hash = hashlib.sha256(
             canonical_json(
                 {
                     "profile_id": profile.id,
                     "profile_etag": profile.etag,
+                    "original_name": original_name,
                     "rebuild_agent_assets": request.rebuild_agent_assets,
                 }
             ).encode("utf-8")
@@ -118,6 +120,7 @@ class ProfileSyncService:
                 job_id=f"profile_sync_{uuid4().hex}",
                 profile_id=profile.id,
                 profile_etag=profile.etag,
+                original_name=original_name,
                 rebuild_agent_assets=request.rebuild_agent_assets,
                 created_at=_now(),
             )
@@ -199,6 +202,7 @@ class ProfileSyncService:
             job_id=f"profile_sync_{uuid4().hex}",
             profile_id=profile.id,
             profile_etag=profile.etag,
+            original_name=previous.original_name.strip() or self._profile_original_name(profile),
             rebuild_agent_assets=previous.rebuild_agent_assets,
             retry_of_job_id=previous.job_id,
             created_at=_now(),
@@ -265,6 +269,7 @@ class ProfileSyncService:
             ProfileSelectAiProfileRequest(
                 confirmation="ADMIN_EXECUTE",
                 reason="profile-sync-job",
+                original_name=running.original_name,
             ),
         )
         if not oracle_result.executed or oracle_result.status == "error":
@@ -347,6 +352,11 @@ class ProfileSyncService:
             raise RuntimeError(
                 "業務 Profile が同期受付後に更新されました。最新版から再試行してください。"
             )
+
+    @staticmethod
+    def _profile_original_name(profile: Any) -> str:
+        value = getattr(profile.select_ai_config, "previous_profile_name", "")
+        return value.strip() if isinstance(value, str) else ""
 
     def _assert_not_cancelled(self, job_id: str) -> None:
         current = self.get(job_id)

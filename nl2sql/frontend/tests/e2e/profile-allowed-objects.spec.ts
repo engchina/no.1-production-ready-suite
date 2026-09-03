@@ -1671,6 +1671,63 @@ test("業務プロファイル必須項目は空欄保存を止める", async ({
   await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toHaveCount(0);
 });
 
+test("業務プロファイル重複名称は名称欄のエラーとして表示する", async ({ page }) => {
+  await mockProfileApi(page);
+  let saveRequests = 0;
+  await page.route("**/api/nl2sql/profiles", async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).pathname !== "/api/nl2sql/profiles" || request.method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    saveRequests += 1;
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: ["業務 profile 名「SALES_PROFILE」は既に使用されています。"],
+        warning_messages: [],
+        error_code: "NL2SQL_PROFILE_NAME_CONFLICT",
+        problem: {
+          type: "urn:nl2sql:problem:nl2sql-profile-name-conflict",
+          title: "入力内容を確認してください",
+          status: 422,
+          detail: "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+          code: "NL2SQL_PROFILE_NAME_CONFLICT",
+          request_id: "req-duplicate-profile-name",
+          retryable: false,
+          field_errors: [
+            {
+              pointer: "/name",
+              code: "profile_name_conflict",
+              message: "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+            },
+          ],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/profiles");
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+  await page.getByLabel("名称").fill("sales_profile");
+  await page.getByLabel("カテゴリ").fill("販売");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const duplicateError = page
+    .getByRole("alert")
+    .filter({ hasText: "同じ名称の業務プロファイルが既に存在します。" });
+  await expect(duplicateError).toBeVisible();
+  await expect(page.locator("#profile-name-error")).toContainText(
+    "同じ名称の業務プロファイルが既に存在します。"
+  );
+  await expect(page.getByLabel("名称")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("名称")).toBeFocused();
+  expect(saveRequests).toBe(1);
+});
+
 test("名称は英字開始の識別子だけ保存でき小文字は自動大文字化する", async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles");

@@ -93,6 +93,7 @@ export interface AllowedObjects {
 
 export interface ProfileSelectAiConfig {
   profile_name: string;
+  previous_profile_name?: string;
   region: string;
   model: string;
   embedding_model: string;

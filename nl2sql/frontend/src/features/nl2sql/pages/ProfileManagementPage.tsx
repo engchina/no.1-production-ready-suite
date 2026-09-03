@@ -82,7 +82,7 @@ import type {
 } from "../types";
 
 type ActiveView = "list" | "editor";
-type ProfileNameError = "required" | "format" | null;
+type ProfileNameError = "required" | "format" | "duplicate" | null;
 type ProfileRequiredField = "category" | "region" | "model" | "maxTokens" | "embeddingModel";
 type ProfileRequiredErrors = Partial<Record<ProfileRequiredField, true>>;
 type DbProfileRefreshSignal = {
@@ -197,6 +197,21 @@ function profileNameError(value: string): ProfileNameError {
   const normalized = normalizeProfileName(value);
   if (!normalized) return "required";
   return PROFILE_NAME_PATTERN.test(normalized) ? null : "format";
+}
+
+function profileNameErrorMessage(error: Exclude<ProfileNameError, null>) {
+  if (error === "required") return t("profiles.error.nameRequired");
+  if (error === "duplicate") return t("profiles.error.nameDuplicate");
+  return t("profiles.error.nameFormat");
+}
+
+function isProfileNameConflictError(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 422) return false;
+  if (error.errorCode === "NL2SQL_PROFILE_NAME_CONFLICT") return true;
+  return error.fieldErrors.some(
+    (fieldError) =>
+      fieldError.pointer === "/name" && fieldError.code === "profile_name_conflict"
+  );
 }
 
 function profileRequiredErrors(form: ProfileFormState): ProfileRequiredErrors {
@@ -1141,11 +1156,7 @@ function ProfileEditor({
           {nameError && (
             <div className="order-4 md:order-none md:col-span-2">
               <RequiredFieldError id="profile-name-error">
-                {t(
-                  nameError === "required"
-                    ? "profiles.error.nameRequired"
-                    : "profiles.error.nameFormat"
-                )}
+                {profileNameErrorMessage(nameError)}
               </RequiredFieldError>
             </div>
           )}
@@ -1801,6 +1812,12 @@ export function ProfileManagementPage() {
       }
       toast.success(t("profiles.message.saved"));
     } catch (err) {
+      if (isProfileNameConflictError(err)) {
+        setNameError("duplicate");
+        window.requestAnimationFrame(() => document.getElementById("profile-name")?.focus());
+        setLoading("");
+        return;
+      }
       toastError(err instanceof Error ? err.message : t("profiles.error.save"));
       setLoading("");
       return;

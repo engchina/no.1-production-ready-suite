@@ -8,11 +8,16 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from app.api.problems import api_problem_response, validation_field_problems
 from app.features.nl2sql.service import DbAdminOperationFailed
-from app.main import db_admin_operation_failed_handler, unhandled_problem_handler
+from app.main import (
+    db_admin_operation_failed_handler,
+    http_exception_problem_handler,
+    unhandled_problem_handler,
+)
 
 
 def _request(request_id: str = "problem-test") -> Request:
@@ -86,6 +91,42 @@ def test_db_admin_problem_keeps_raw_oracle_detail_out_of_response() -> None:
     assert "ORA-01031 password" not in serialized
     assert "raw_message" not in serialized
     assert "この操作を実行する権限がありません。" in serialized
+
+
+def test_http_exception_problem_keeps_structured_field_errors() -> None:
+    response = asyncio.run(
+        http_exception_problem_handler(
+            _request(),
+            StarletteHTTPException(
+                status_code=422,
+                detail=cast(
+                    Any,
+                    {
+                        "code": "NL2SQL_PROFILE_NAME_CONFLICT",
+                        "message_ja": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+                        "field_errors": [
+                            {
+                                "pointer": "/name",
+                                "code": "profile_name_conflict",
+                                "message": "同じ名称の業務プロファイルが既に存在します。",
+                            }
+                        ],
+                    },
+                ),
+            ),
+        )
+    )
+    body = _body(response)
+
+    assert response.status_code == 422
+    assert body["error_code"] == "NL2SQL_PROFILE_NAME_CONFLICT"
+    assert body["problem"]["field_errors"] == [
+        {
+            "pointer": "/name",
+            "code": "profile_name_conflict",
+            "message": "同じ名称の業務プロファイルが既に存在します。",
+        }
+    ]
 
 
 def test_validation_error_uses_json_pointer_for_nested_array() -> None:

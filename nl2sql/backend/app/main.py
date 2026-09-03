@@ -2,7 +2,7 @@
 
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -286,6 +286,7 @@ async def http_exception_problem_handler(
     """汎用 HTTP error も同じ problem 契約へ正規化する。"""
 
     code: str | None = None
+    field_errors: list[Mapping[str, str]] = []
     if exc.status_code == 500:
         detail = "サーバー内部でエラーが発生しました。時間をおいて再試行してください。"
     elif isinstance(exc.detail, str) and exc.detail.strip():
@@ -295,6 +296,17 @@ async def http_exception_problem_handler(
     elif isinstance(exc.detail, dict):
         raw_code = exc.detail.get("code")
         code = raw_code if isinstance(raw_code, str) and raw_code else None
+        raw_field_errors = exc.detail.get("field_errors")
+        if isinstance(raw_field_errors, list):
+            field_errors = [
+                {
+                    "pointer": str(item.get("pointer") or ""),
+                    "code": str(item.get("code") or ""),
+                    "message": str(item.get("message") or ""),
+                }
+                for item in raw_field_errors
+                if isinstance(item, Mapping)
+            ]
         detail = next(
             (
                 value
@@ -312,6 +324,7 @@ async def http_exception_problem_handler(
         status_code=exc.status_code,
         detail=detail,
         code=code,
+        field_errors=field_errors,
         headers=exc.headers,
     )
 

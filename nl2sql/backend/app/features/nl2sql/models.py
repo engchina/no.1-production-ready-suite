@@ -248,6 +248,7 @@ class ProfileSelectAiConfig(BaseModel):
     """業務 profile から Oracle DBMS_CLOUD_AI profile を作るための設定。"""
 
     profile_name: str = ""
+    previous_profile_name: str = ""
     region: str = ""
     model: str = ""
     embedding_model: str = "cohere.embed-v4.0"
@@ -467,7 +468,9 @@ class ProfileUpsertRequest(BaseModel):
 
     @model_validator(mode="after")
     def align_select_ai_profile_name(self) -> ProfileUpsertRequest:
-        self.select_ai_config = self.select_ai_config.model_copy(update={"profile_name": self.name})
+        self.select_ai_config = self.select_ai_config.model_copy(
+            update={"profile_name": self.name, "previous_profile_name": ""}
+        )
         return self
 
 
@@ -521,6 +524,7 @@ class ProfileSelectAiProfileRequest(AdminExecutionConfirmation):
     """業務 profile から DBMS_CLOUD_AI profile を作成する request."""
 
     attributes_override: dict[str, Any] | None = None
+    original_name: str = ""
 
 
 class ProfileLearningMaterialImportData(BaseModel):
@@ -1822,6 +1826,7 @@ class ProfileSyncJobData(BaseModel):
     job_id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
     profile_etag: str = ""
+    original_name: str = ""
     status: ProfileSyncJobStatus = ProfileSyncJobStatus.QUEUED
     phase: ProfileSyncJobPhase = ProfileSyncJobPhase.QUEUED
     rebuild_agent_assets: bool = False

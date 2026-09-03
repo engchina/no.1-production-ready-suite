@@ -36,6 +36,7 @@ from app.features.nl2sql.models import (
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    ProfileSelectAiProfileRequest,
     QueryResults,
     SampleDataMutationRequest,
     SampleDataStep,
@@ -825,6 +826,50 @@ def test_select_ai_db_profile_rename_deletes_old_and_upserts_new(
     assert adapter.list_calls == 0
     assert adapter.name_fetch_calls[-1] == {"OLD_SELECT_AI", "NEW_SELECT_AI"}
     assert adapter.detail_calls == ["NEW_SELECT_AI"]
+
+
+def test_profile_select_ai_upsert_passes_previous_profile_name_to_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _MutableSelectAiProfileAdapter({"SALES_PROFILE": {"attributes": {}}})
+    service = _OracleRuntimeService(adapter)
+    monkeypatch.setattr(
+        service,
+        "_dispatch_select_ai_db_profile_refresh_job",
+        lambda _job_id: False,
+    )
+    created = service.create_profile(
+        Nl2SqlProfile(
+            id="sales-profile",
+            name="SALES_PROFILE",
+            category="販売",
+            allowed_tables=["APP.TABLE_01"],
+            select_ai_config={"profile_name": "SALES_PROFILE"},
+        )
+    )
+    renamed = service.update_profile(
+        created.id,
+        lambda profile: profile.model_copy(
+            update={
+                "name": "SALES_PROFILE_V2",
+                "select_ai_config": profile.select_ai_config.model_copy(
+                    update={"profile_name": "SALES_PROFILE_V2"}
+                ),
+            }
+        ),
+    )
+
+    result = service.upsert_profile_select_ai_profile(
+        renamed.id,
+        ProfileSelectAiProfileRequest(
+            confirmation="ADMIN_EXECUTE",
+            reason="pytest",
+        ),
+    )
+
+    assert result.executed is True
+    assert renamed.select_ai_config.previous_profile_name == "SALES_PROFILE"
+    assert adapter.upsert_calls[-1] == ("SALES_PROFILE_V2", "SALES_PROFILE")
 
 
 def test_select_ai_db_profile_target_mismatch_keeps_old_read_model() -> None:

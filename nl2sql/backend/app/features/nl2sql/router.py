@@ -165,6 +165,7 @@ from .quality_evaluation_service import (
 )
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
+    ProfileNameConflict,
     ProfileOracleCleanupFailed,
     SchemaCatalogEmptyError,
     nl2sql_service,
@@ -178,6 +179,23 @@ LEARNING_MATERIAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 _LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL = (
     "学習資材 .xlsx ファイルのサイズが上限 5 MB を超えています。"
 )
+
+
+def _profile_name_conflict_exception(exc: ProfileNameConflict) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": exc.code,
+            "message_ja": str(exc),
+            "field_errors": [
+                {
+                    "pointer": exc.field_pointer,
+                    "code": "profile_name_conflict",
+                    "message": str(exc),
+                }
+            ],
+        },
+    )
 
 
 async def _read_learning_material_upload(file: UploadFile) -> bytes:
@@ -516,6 +534,8 @@ def create_profile(req: ProfileUpsertRequest, response: Response) -> ApiResponse
     profile = Nl2SqlProfile(id=str(uuid.uuid4()), **req.model_dump())
     try:
         stored = nl2sql_service.create_profile(profile)
+    except ProfileNameConflict as exc:
+        raise _profile_name_conflict_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if stored.etag:
@@ -574,6 +594,8 @@ def update_profile(
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ProfileNameConflict as exc:
+        raise _profile_name_conflict_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if updated.etag:

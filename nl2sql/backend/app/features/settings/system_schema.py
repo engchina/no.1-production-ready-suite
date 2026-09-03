@@ -121,6 +121,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "017_quality_evaluation_cancelled_status.sql",
         "allow cancelled quality evaluation jobs",
     ),
+    MigrationArtifact(
+        18,
+        "018_unique_profile_names.sql",
+        "case-insensitive unique NL2SQL profile names",
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -178,6 +183,7 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "IX_NL2SQL_SCHEMA_REFRESH_LEASE",
     "IX_NL2SQL_EVAL_JOB_STATE",
     "IX_NL2SQL_EVAL_JOB_LEASE",
+    "UX_NL2SQL_PROFILES_NAME",
 )
 
 MANAGED_SEQUENCES: tuple[str, ...] = ("NL2SQL_MIGRATION_SNAPSHOT_SEQ",)

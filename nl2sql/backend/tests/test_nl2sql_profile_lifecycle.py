@@ -14,9 +14,18 @@ from app.features.nl2sql.incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
 )
-from app.features.nl2sql.models import Nl2SqlEngine, ProfilePatchRequest, ProfileUpsertRequest
+from app.features.nl2sql.models import (
+    Nl2SqlEngine,
+    Nl2SqlProfile,
+    ProfilePatchRequest,
+    ProfileUpsertRequest,
+)
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
-from app.features.nl2sql.service import Nl2SqlService, ProfileOracleCleanupFailed
+from app.features.nl2sql.service import (
+    Nl2SqlService,
+    ProfileNameConflict,
+    ProfileOracleCleanupFailed,
+)
 from app.features.nl2sql.store import MemoryNl2SqlStore
 
 
@@ -57,6 +66,58 @@ def test_profile_upsert_request_rejects_invalid_name() -> None:
 
     with pytest.raises(ValidationError):
         ProfileUpsertRequest(name="新プロファイル")
+
+
+def test_profile_name_uniqueness_rejects_case_variants_and_archived_profiles() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    created = service.create_profile(Nl2SqlProfile(id="profile-a", name="sales_profile"))
+
+    with pytest.raises(ProfileNameConflict):
+        service.create_profile(Nl2SqlProfile(id="profile-b", name="SALES_PROFILE"))
+
+    service.archive_profile(created.id)
+    with pytest.raises(ProfileNameConflict):
+        service.create_profile(Nl2SqlProfile(id="profile-c", name="sales_profile"))
+
+    other = service.create_profile(Nl2SqlProfile(id="profile-d", name="orders_profile"))
+    with pytest.raises(ProfileNameConflict):
+        service.update_profile(
+            other.id,
+            lambda profile: profile.model_copy(update={"name": "Sales_Profile"}),
+        )
+
+
+def test_profile_name_conflict_returns_422_field_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    created = nl2sql_router.create_profile(
+        ProfileUpsertRequest(name="sales_profile"),
+        Response(),
+    ).data
+    assert created is not None
+    archived = nl2sql_router.archive_profile(created.id, _anon_request()).data
+    assert archived is not None
+    assert archived.archived is True
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.create_profile(ProfileUpsertRequest(name="SALES_PROFILE"), Response())
+
+    assert exc_info.value.status_code == 422
+    detail = cast(dict[str, Any], exc_info.value.detail)
+    assert detail == {
+        "code": "NL2SQL_PROFILE_NAME_CONFLICT",
+        "message_ja": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+        "field_errors": [
+            {
+                "pointer": "/name",
+                "code": "profile_name_conflict",
+                "message": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+            }
+        ],
+    }
 
 
 def test_profile_requests_reject_blank_glossary_keys_and_control_characters() -> None:
@@ -139,6 +200,7 @@ def test_profile_create_update_and_restore_never_materialize_ontology_view(
     assert updated is not None
     assert updated.name == "INVOICE_PROFILE_V2"
     assert updated.select_ai_config.profile_name == "INVOICE_PROFILE_V2"
+    assert updated.select_ai_config.previous_profile_name == "INVOICE_PROFILE"
     archived = nl2sql_router.archive_profile(created.id, _anon_request()).data
     assert archived is not None
     assert archived.archived is True

@@ -329,6 +329,18 @@ class ProfileOracleCleanupFailed(RuntimeError):
         self.cleanup = cleanup
 
 
+class ProfileNameConflict(ValueError):
+    """業務 profile 名が既存 profile と衝突した。"""
+
+    code = "NL2SQL_PROFILE_NAME_CONFLICT"
+    field_pointer = "/name"
+
+    def __init__(self, profile_name: str) -> None:
+        normalized = profile_name.strip().upper()
+        super().__init__(f"業務 profile 名「{normalized}」は既に使用されています。")
+        self.profile_name = normalized
+
+
 class DbAdminOperationFailed(RuntimeError):
     """DB 管理画面向けに、復旧可能な情報を保持する公開例外。"""
 
@@ -5078,6 +5090,14 @@ class Nl2SqlService:
             self._profile_with_sql_rules_absorbed(profile),
             migrate_legacy_empty=False,
         ).model_copy(update={"object_scope_version": 2})
+        profile = profile.model_copy(
+            update={
+                "select_ai_config": profile.select_ai_config.model_copy(
+                    update={"previous_profile_name": ""}
+                )
+            }
+        )
+        self._assert_profile_name_available(profile.name, exclude_profile_id=profile.id)
         if self._incremental_repository is not None:
             try:
                 stored = self._incremental_repository.save_profile(profile, expected_etag=None)
@@ -5112,6 +5132,8 @@ class Nl2SqlService:
                 self._profile_with_sql_rules_absorbed(patcher(current)),
                 migrate_legacy_empty=False,
             ).model_copy(update={"object_scope_version": 2})
+            updated = self._profile_with_select_ai_rename_marker(current, updated)
+            self._assert_profile_name_available(updated.name, exclude_profile_id=profile_id)
             try:
                 stored = self._incremental_repository.save_profile(
                     updated,
@@ -5135,9 +5157,46 @@ class Nl2SqlService:
                 self._profile_with_sql_rules_absorbed(patcher(current)),
                 migrate_legacy_empty=False,
             ).model_copy(update={"object_scope_version": 2})
+            updated = self._profile_with_select_ai_rename_marker(current, updated)
+            self._assert_profile_name_available(updated.name, exclude_profile_id=profile_id)
             self._profiles[profile_id] = updated
             self._persist_state()
         return updated
+
+    def _assert_profile_name_available(
+        self,
+        profile_name: str,
+        *,
+        exclude_profile_id: str,
+    ) -> None:
+        name_key = profile_name.strip().upper()
+        for existing in self.list_profiles(include_archived=True):
+            if existing.id == exclude_profile_id:
+                continue
+            if existing.name.strip().upper() == name_key:
+                raise ProfileNameConflict(profile_name)
+
+    def _profile_with_select_ai_rename_marker(
+        self,
+        current: Nl2SqlProfile,
+        updated: Nl2SqlProfile,
+    ) -> Nl2SqlProfile:
+        old_name = (
+            current.select_ai_config.previous_profile_name.strip()
+            or self._select_ai_profile_name(current).strip()
+        )
+        new_name = self._select_ai_profile_name(updated).strip()
+        select_ai_config = updated.select_ai_config
+        if old_name and new_name and old_name.upper() != new_name.upper():
+            select_ai_config = select_ai_config.model_copy(
+                update={"previous_profile_name": old_name}
+            )
+        elif (
+            select_ai_config.previous_profile_name.strip()
+            and select_ai_config.previous_profile_name.strip().upper() == new_name.upper()
+        ):
+            select_ai_config = select_ai_config.model_copy(update={"previous_profile_name": ""})
+        return updated.model_copy(update={"select_ai_config": select_ai_config})
 
     def delete_profile(self, profile_id: str, *, expected_etag: str | None = None) -> Nl2SqlProfile:
         if self._incremental_repository is not None:
@@ -12706,6 +12765,9 @@ class Nl2SqlService:
         if request.attributes_override:
             attributes = {**attributes, **request.attributes_override}
         profile_name = self._select_ai_profile_name(profile)
+        original_name = (
+            request.original_name.strip() or profile.select_ai_config.previous_profile_name.strip()
+        )
         # Oracle profile 名は機械導出でありユーザーが入力しないため、この wrapper が
         # ユーザー境界として ADMIN_EXECUTE を受理し、内部委譲時に導出名へ変換する。
         confirmation = request.confirmation.strip()
@@ -12718,6 +12780,7 @@ class Nl2SqlService:
                 description="",
                 category=profile.category or profile.name,
                 confirmation=confirmation,
+                original_name=original_name,
                 reason=request.reason,
             )
         )

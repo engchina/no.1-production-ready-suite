@@ -27,6 +27,7 @@ class _FakeProfileService:
     def __init__(self) -> None:
         self.profile = Nl2SqlProfile(id="profile-1", name="請求分析", etag="etag-1")
         self.oracle_calls = 0
+        self.oracle_original_names: list[str] = []
         self.agent_calls = 0
         self.fail_oracle = False
 
@@ -38,10 +39,11 @@ class _FakeProfileService:
     def upsert_profile_select_ai_profile(
         self,
         profile_id: str,
-        _request: object,
+        request: object,
     ) -> SelectAiDbProfileMutationData:
         assert profile_id == self.profile.id
         self.oracle_calls += 1
+        self.oracle_original_names.append(str(getattr(request, "original_name", "")))
         if self.fail_oracle:
             raise TimeoutError("Oracle round-trip timeout")
         return SelectAiDbProfileMutationData(
@@ -141,6 +143,37 @@ def test_profile_sync_failure_is_persisted_and_retryable(
     assert completed.status == ProfileSyncJobStatus.SUCCEEDED
     assert completed.retry_of_job_id == failed.job_id
     assert service.oracle_calls == 2
+
+
+def test_profile_sync_passes_original_name_after_profile_rename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = _FakeProfileService()
+    service.profile = service.profile.model_copy(
+        update={
+            "name": "INVOICE_PROFILE_V2",
+            "select_ai_config": service.profile.select_ai_config.model_copy(
+                update={
+                    "profile_name": "INVOICE_PROFILE_V2",
+                    "previous_profile_name": "INVOICE_PROFILE",
+                }
+            ),
+        }
+    )
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="renamed-profile",
+    )
+    completed = sync.run_persisted(started.job_id)
+
+    assert started.original_name == "INVOICE_PROFILE"
+    assert completed.status == ProfileSyncJobStatus.SUCCEEDED
+    assert service.oracle_original_names == ["INVOICE_PROFILE"]
 
 
 def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_stack(
