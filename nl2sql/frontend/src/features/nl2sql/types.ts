@@ -289,6 +289,7 @@ export interface ProfileRecommendationData {
   recommended_profile_name: string;
   recommended_profile_category?: string;
   confidence: number;
+  confidence_threshold?: number;
   reason: string;
   rewritten_question: string;
   recommended_allowed_objects: AllowedObjects;

@@ -1368,6 +1368,7 @@ class ProfileRecommendationData(BaseModel):
     recommended_profile_name: str
     recommended_profile_category: str = ""
     confidence: float
+    confidence_threshold: float = 0.3
     reason: str
     rewritten_question: str
     recommended_allowed_objects: AllowedObjects

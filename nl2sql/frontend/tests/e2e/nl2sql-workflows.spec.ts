@@ -8509,6 +8509,34 @@ test("question classifier model management page trains classifier and finds lear
   await expectNoHorizontalScroll(page);
 });
 
+test("question classifier model management shows a failure toast when training is rejected", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  const trainingError = "LogisticRegression には 2 category 以上の training data が必要です。";
+  await page.unroute("**/api/nl2sql/classifier/train");
+  await page.route("**/api/nl2sql/classifier/train", (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: [trainingError],
+      }),
+    })
+  );
+
+  await page.goto("/question-classifier-models");
+  await page.getByRole("tab", { name: "モデル学習" }).click();
+  await page.getByRole("button", { name: "Classifier 学習" }).click();
+
+  await expect(page.locator("main").getByRole("alert")).toContainText(trainingError);
+  await expect(
+    page.getByRole("region", { name: "通知" }).getByRole("alert").filter({ hasText: trainingError })
+  ).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
 test("learning candidates keep long query text clear of selection controls", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop project covers desktop and 375px geometry");
   await page.setViewportSize({ width: 1440, height: 1000 });

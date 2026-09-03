@@ -60,6 +60,7 @@ from .incremental_observability import (
 from .incremental_store import (
     PROFILE_NAMESPACE,
     SCHEMA_NAMESPACE,
+    STATE_NAMESPACE,
     IncrementalNl2SqlRepository,
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
@@ -288,6 +289,9 @@ _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION = "select_ai_db_profile_refresh_job
 _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION = "select_ai_db_profile_refresh_meta"
 _CLASSIFIER_MODEL_FORMAT = "logistic_regression_coefficients_v1"
 _CLASSIFIER_VECTOR_DIMENSION = 1536
+_CLASSIFIER_TRAINING_MAX_ROWS = 10_000
+_CLASSIFIER_TRAINING_MAX_COLUMNS = 32
+_CLASSIFIER_RECOMMENDATION_CONFIDENCE_THRESHOLD = 0.3
 
 
 class Nl2SqlPersistenceUnavailable(RuntimeError):
@@ -478,7 +482,7 @@ def _require_xlsx_template_upload(filename: str) -> None:
 def _excel_safe_text(value: Any) -> str:
     """Excel 書き出し時に式評価と不正制御文字を避ける文字列へ寄せる。"""
 
-    return _EXCEL_ILLEGAL_CHARACTERS_RE.sub("", str(value or ""))
+    return _EXCEL_ILLEGAL_CHARACTERS_RE.sub("", str(value if value is not None else ""))
 
 
 def _append_excel_text_row(sheet: Any, values: Sequence[Any]) -> None:
@@ -2570,6 +2574,10 @@ class Nl2SqlService:
         self._feedback_match_limit = 3
         self._classifier_examples: list[ClassifierTrainingExample] = []
         self._classifier_artifact: dict[str, Any] | None = None
+        self._classifier_state_loaded = False
+        self._classifier_state_token = -1
+        self._classifier_state_checked_at = 0.0
+        self._classifier_model_payload_cache: tuple[str, str, dict[str, Any]] | None = None
         self._asset_meta: dict[Nl2SqlEngine, AssetRefreshData] = {}
         self._admin_audit: list[dict[str, Any]] = []
         self._legacy_learning_material = LegacyLearningMaterialData()
@@ -2769,6 +2777,10 @@ class Nl2SqlService:
             self._feedback_match_limit = int(feedback_config.get("match_limit", 3))
             self._classifier_examples = classifier_examples
             self._classifier_artifact = classifier_artifact
+            self._classifier_state_loaded = False
+            self._classifier_state_token = -1
+            self._classifier_state_checked_at = 0.0
+            self._classifier_model_payload_cache = None
             self._asset_meta = asset_meta
             self._admin_audit = admin_audit[-200:]
             self._legacy_learning_material = legacy_learning_material
@@ -6279,6 +6291,18 @@ class Nl2SqlService:
         repository = self._incremental_repository
         if repository is None:
             return
+        now = time.monotonic()
+        with self._lock:
+            if (
+                self._classifier_state_loaded
+                and now - self._classifier_state_checked_at < self._cache_token_poll_seconds
+            ):
+                return
+        token = repository.get_change_token(STATE_NAMESPACE)
+        with self._lock:
+            if self._classifier_state_loaded and token == self._classifier_state_token:
+                self._classifier_state_checked_at = now
+                return
         documents: list[dict[str, Any]] = []
         cursor = ""
         while True:
@@ -6298,6 +6322,10 @@ class Nl2SqlService:
         with self._lock:
             self._classifier_examples = examples
             self._classifier_artifact = artifact
+            self._classifier_state_loaded = True
+            self._classifier_state_token = token
+            self._classifier_state_checked_at = now
+            self._classifier_model_payload_cache = None
 
     def list_history(
         self,
@@ -6920,7 +6948,7 @@ class Nl2SqlService:
         artifact_payload: dict[str, Any] | None = None
         if artifact.get("model_base64"):
             try:
-                artifact_payload = self._classifier_model_payload_from_artifact(artifact)
+                artifact_payload = self._cached_classifier_model_payload_from_artifact(artifact)
             except ValueError as exc:
                 warnings.append(f"{exc} classifier は deterministic recommendation に縮退します。")
         ready = artifact_payload is not None
@@ -6931,7 +6959,8 @@ class Nl2SqlService:
             dict(artifact.get("metrics") or {}) if isinstance(artifact.get("metrics"), dict) else {}
         )
         trained_example_count = int(metrics.get("training_examples", 0))
-        pending_change_count = max(1, abs(len(examples) - trained_example_count)) if stale else 0
+        source_example_count = int(metrics.get("source_example_count", trained_example_count))
+        pending_change_count = max(1, abs(len(examples) - source_example_count)) if stale else 0
         if not examples:
             warnings.append("分類器の training data が未登録です。")
         if not ready:
@@ -7474,6 +7503,23 @@ class Nl2SqlService:
             raise ValueError("保存済み classifier artifact の model payload が不正です。")
         return self._classifier_model_payload(decoded)
 
+    def _cached_classifier_model_payload_from_artifact(
+        self, artifact: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        raw_base64 = str(artifact.get("model_base64") or "")
+        cache_key = (
+            str(artifact.get("version") or ""),
+            hashlib.sha256(raw_base64.encode("utf-8")).hexdigest(),
+        )
+        with self._lock:
+            cached = self._classifier_model_payload_cache
+            if cached is not None and cached[0] == cache_key[0] and cached[1] == cache_key[1]:
+                return copy.deepcopy(cached[2])
+        payload = self._classifier_model_payload_from_artifact(artifact)
+        with self._lock:
+            self._classifier_model_payload_cache = (cache_key[0], cache_key[1], payload)
+        return copy.deepcopy(payload)
+
     def _classifier_model_base64(self, payload: Mapping[str, Any]) -> str:
         content = json.dumps(
             payload,
@@ -7528,10 +7574,12 @@ class Nl2SqlService:
         with self._lock:
             previous_artifact = copy.deepcopy(self._classifier_artifact)
             self._classifier_artifact = artifact
+            self._classifier_model_payload_cache = None
             try:
                 self._persist_singletons("classifier_artifact")
             except Exception:
                 self._classifier_artifact = previous_artifact
+                self._classifier_model_payload_cache = None
                 raise
 
     def train_classifier(self, request: ClassifierTrainRequest) -> ClassifierStatusData:
@@ -7540,9 +7588,7 @@ class Nl2SqlService:
             examples = list(self._classifier_examples)
         warnings: list[str] = []
         if not examples:
-            return self.classifier_status().model_copy(
-                update={"warnings": ["分類器の training data が未登録です。"]}
-            )
+            raise ValueError("分類器の training data が未登録です。")
 
         counts: dict[str, int] = {}
         for item in examples:
@@ -7556,13 +7602,7 @@ class Nl2SqlService:
         ]
         categories = sorted({self._classifier_training_label(item) for item in eligible})
         if len(categories) < 2:
-            return self.classifier_status().model_copy(
-                update={
-                    "warnings": [
-                        "LogisticRegression には 2 category 以上の training data が必要です。"
-                    ]
-                }
-            )
+            raise ValueError("LogisticRegression には 2 category 以上の training data が必要です。")
 
         try:
             vectors, embedding_warnings, embedding_model = self._classifier_vectors(
@@ -7576,9 +7616,7 @@ class Nl2SqlService:
             score = float(model.score(vectors, labels))
             model_payload = self._classifier_model_payload_from_estimator(model)
         except Exception as exc:
-            return self.classifier_status().model_copy(
-                update={"warnings": [f"分類器の学習に失敗しました: {exc}"]}
-            )
+            raise ValueError(f"分類器の学習に失敗しました: {exc}") from exc
 
         now = _utc_now()
         artifact = {
@@ -7592,6 +7630,7 @@ class Nl2SqlService:
             "training_data_fingerprint": self._classifier_training_fingerprint(examples),
             "metrics": {
                 "training_examples": len(eligible),
+                "source_example_count": len(examples),
                 "category_count": len(categories),
                 "training_accuracy": round(score, 4),
                 "embedding_fallback": embedding_model == "deterministic-hash-1536",
@@ -7661,7 +7700,8 @@ class Nl2SqlService:
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "training_data"
-        sheet.append(
+        _append_excel_text_row(
+            sheet,
             [
                 "CATEGORY",
                 "TEXT",
@@ -7669,10 +7709,11 @@ class Nl2SqlService:
                 "SOURCE",
                 "SOURCE_TYPE",
                 "SOURCE_HISTORY_ID",
-            ]
+            ],
         )
         for item in examples:
-            sheet.append(
+            _append_excel_text_row(
+                sheet,
                 [
                     item.category,
                     item.text,
@@ -7680,7 +7721,7 @@ class Nl2SqlService:
                     item.source,
                     item.source_type,
                     item.source_history_id,
-                ]
+                ],
             )
         buffer = io.BytesIO()
         workbook.save(buffer)
@@ -7722,7 +7763,7 @@ class Nl2SqlService:
             return None, []
         warnings: list[str] = []
         try:
-            model_payload = self._classifier_model_payload_from_artifact(artifact)
+            model_payload = self._cached_classifier_model_payload_from_artifact(artifact)
             vectors, embedding_warnings, embedding_model = self._classifier_vectors([question])
             warnings.extend(embedding_warnings)
             artifact_embedding_model = str(artifact.get("embedding_model") or "")
@@ -7789,13 +7830,23 @@ class Nl2SqlService:
         if not reader.fieldnames:
             warnings.append("CSV header が見つかりません。")
             return [], 0
+        if len(reader.fieldnames) > _CLASSIFIER_TRAINING_MAX_COLUMNS:
+            raise ValueError(
+                "classifier training data は "
+                f"{_CLASSIFIER_TRAINING_MAX_COLUMNS} 列以内で指定してください。"
+            )
         category_key, text_key, profile_key = self._classifier_header_keys(reader.fieldnames)
         if (not category_key and not profile_key) or not text_key:
             warnings.append("CSV は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
             return [], 0
         rows: list[tuple[str, str, str]] = []
         skipped = 0
-        for row in reader:
+        for row_number, row in enumerate(reader, start=1):
+            if row_number > _CLASSIFIER_TRAINING_MAX_ROWS:
+                raise ValueError(
+                    "classifier training data は "
+                    f"{_CLASSIFIER_TRAINING_MAX_ROWS} 行以内で指定してください。"
+                )
             category = str(row.get(category_key) or "").strip() if category_key else ""
             value = str(row.get(text_key) or "").strip()
             row_profile_id = str(row.get(profile_key) or "").strip() if profile_key else ""
@@ -7810,8 +7861,22 @@ class Nl2SqlService:
     ) -> tuple[list[tuple[str, str, str]], int]:
         sheet, sheet_warnings = select_workbook_sheet(read_workbook_sheets(filename, content))
         warnings.extend(sheet_warnings)
-        rows_iter = iter(sheet.rows)
-        headers = [str(value or "").strip() for value in next(rows_iter, [])]
+        header_row_index = -1
+        headers: list[str] = []
+        for row_index, raw_row in enumerate(sheet.rows):
+            if len(raw_row) > _CLASSIFIER_TRAINING_MAX_COLUMNS:
+                raise ValueError(
+                    "classifier training data は "
+                    f"{_CLASSIFIER_TRAINING_MAX_COLUMNS} 列以内で指定してください。"
+                )
+            values = [self._normalize_classifier_workbook_scalar(value) for value in raw_row]
+            if any(values):
+                header_row_index = row_index
+                headers = values
+                break
+        if header_row_index < 0:
+            warnings.append("Excel header が見つかりません。")
+            return [], 0
         category_key, text_key, profile_key = self._classifier_header_keys(headers)
         if (not category_key and not profile_key) or not text_key:
             warnings.append("Excel は CATEGORY または PROFILE_ID と TEXT/QUESTION 列が必要です。")
@@ -7821,16 +7886,27 @@ class Nl2SqlService:
         profile_index = headers.index(profile_key) if profile_key else None
         rows: list[tuple[str, str, str]] = []
         skipped = 0
-        for raw_row in rows_iter:
+        for row_number, raw_row in enumerate(sheet.rows[header_row_index + 1 :], start=1):
+            if row_number > _CLASSIFIER_TRAINING_MAX_ROWS:
+                raise ValueError(
+                    "classifier training data は "
+                    f"{_CLASSIFIER_TRAINING_MAX_ROWS} 行以内で指定してください。"
+                )
+            if len(raw_row) > _CLASSIFIER_TRAINING_MAX_COLUMNS:
+                raise ValueError(
+                    "classifier training data は "
+                    f"{_CLASSIFIER_TRAINING_MAX_COLUMNS} 列以内で指定してください。"
+                )
+            values = [self._normalize_classifier_workbook_scalar(value) for value in raw_row]
             category = (
-                str(raw_row[category_index] or "").strip()
-                if category_index is not None and len(raw_row) > category_index
+                values[category_index]
+                if category_index is not None and len(values) > category_index
                 else ""
             )
-            value = str(raw_row[text_index] or "").strip() if len(raw_row) > text_index else ""
+            value = values[text_index] if len(values) > text_index else ""
             row_profile_id = (
-                str(raw_row[profile_index] or "").strip()
-                if profile_index is not None and len(raw_row) > profile_index
+                values[profile_index]
+                if profile_index is not None and len(values) > profile_index
                 else ""
             )
             if (not category and not row_profile_id) or not value:
@@ -7838,6 +7914,11 @@ class Nl2SqlService:
                 continue
             rows.append((category, value, row_profile_id))
         return rows, skipped
+
+    def _normalize_classifier_workbook_scalar(self, value: Any) -> str:
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return normalize_workbook_scalar(value).strip()
 
     def _classifier_header_keys(self, headers: Sequence[str]) -> tuple[str, str, str]:
         normalized = {
@@ -8362,6 +8443,7 @@ class Nl2SqlService:
         classifier_prediction, classifier_warnings = self._classifier_prediction(
             request.question, top_k=3
         )
+        classifier_category_scores: dict[str, float] = {}
         if classifier_prediction and classifier_prediction.candidates:
             mapped_candidates: list[ProfileRecommendationCandidate] = []
             for candidate in classifier_prediction.candidates:
@@ -8385,10 +8467,14 @@ class Nl2SqlService:
                 )
             if mapped_candidates:
                 best = mapped_candidates[0]
+                classifier_category_scores = {
+                    candidate.category: candidate.score for candidate in mapped_candidates
+                }
                 profile = self.get_profile(best.profile_id)
                 reason = (
                     f"LogisticRegression classifier が category "
-                    f"{best.category or classifier_prediction.predicted_category} を予測しました。"
+                    f"{best.category or classifier_prediction.predicted_category} を"
+                    "予測しました。"
                 )
                 if classifier_warnings:
                     reason = f"{reason} {' '.join(classifier_warnings)}"
@@ -8403,9 +8489,8 @@ class Nl2SqlService:
                         "reason": reason,
                         "recommendation_source": "classifier",
                         "classifier_version": classifier_prediction.classifier_version,
-                        "category_scores": {
-                            candidate.category: candidate.score for candidate in mapped_candidates
-                        },
+                        "confidence_threshold": _CLASSIFIER_RECOMMENDATION_CONFIDENCE_THRESHOLD,
+                        "category_scores": classifier_category_scores,
                         "warnings": classifier_warnings,
                     }
                 )
@@ -8424,14 +8509,15 @@ class Nl2SqlService:
                 matched_terms=[],
                 candidates=[],
             )
+            fallback_update: dict[str, Any] = {
+                "confidence_threshold": _CLASSIFIER_RECOMMENDATION_CONFIDENCE_THRESHOLD,
+            }
+            if classifier_category_scores:
+                fallback_update["category_scores"] = classifier_category_scores
             if classifier_warnings:
-                fallback = fallback.model_copy(
-                    update={
-                        "reason": f"{fallback.reason} {' '.join(classifier_warnings)}",
-                        "warnings": classifier_warnings,
-                    }
-                )
-            return fallback
+                fallback_update["reason"] = f"{fallback.reason} {' '.join(classifier_warnings)}"
+                fallback_update["warnings"] = classifier_warnings
+            return fallback.model_copy(update=fallback_update)
 
         # (rank=順序用 bias 込み, evidence=実マッチ由来, profile, matched_terms)
         scored: list[tuple[float, float, Nl2SqlProfile, list[str]]] = []
@@ -8474,7 +8560,12 @@ class Nl2SqlService:
                     "warnings": classifier_warnings,
                 }
             )
-        return fallback
+        deterministic_fallback_update: dict[str, Any] = {
+            "confidence_threshold": _CLASSIFIER_RECOMMENDATION_CONFIDENCE_THRESHOLD,
+        }
+        if classifier_category_scores:
+            deterministic_fallback_update["category_scores"] = classifier_category_scores
+        return fallback.model_copy(update=deterministic_fallback_update)
 
     def rewrite(self, request: RewriteRequest) -> RewriteData:
         """用語・同義語の置換だけを行う(LLM による自由な書き換えはしない)。

@@ -690,7 +690,9 @@ function ExecutableNl2SqlWorkbench() {
         name: data.recommended_profile_name,
         category: data.recommended_profile_category,
       });
-      if (data.confidence < PROFILE_RECOMMENDATION_APPLY_THRESHOLD) {
+      const applyThreshold =
+        data.confidence_threshold ?? PROFILE_RECOMMENDATION_APPLY_THRESHOLD;
+      if (data.confidence < applyThreshold) {
         // 継続的な状況提示なので固定面の warning Banner に一本化する
         // (同文の Toast と二重表示しない: messaging spec §0.6)。
         setAutoDetectLowConfidence(true);
@@ -975,7 +977,9 @@ function ExecutableNl2SqlWorkbench() {
                   )}
                 </div>
                 {recommendation &&
-                  recommendation.confidence >= PROFILE_RECOMMENDATION_APPLY_THRESHOLD &&
+                  recommendation.confidence >=
+                    (recommendation.confidence_threshold ??
+                      PROFILE_RECOMMENDATION_APPLY_THRESHOLD) &&
                   recommendation.recommended_profile_id !== profileId && (
                     <div
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm"
@@ -1006,7 +1010,9 @@ function ExecutableNl2SqlWorkbench() {
                   )}
                 {autoDetectLowConfidence &&
                   recommendation &&
-                  recommendation.confidence < PROFILE_RECOMMENDATION_APPLY_THRESHOLD && (
+                  recommendation.confidence <
+                    (recommendation.confidence_threshold ??
+                      PROFILE_RECOMMENDATION_APPLY_THRESHOLD) && (
                     <div data-testid="nl2sql-recommend-low-confidence">
                       <Banner severity="warning">
                         {t("nl2sql.recommend.autoDetectLowConfidence", {

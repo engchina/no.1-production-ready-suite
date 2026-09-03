@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from pathlib import Path
 from typing import Annotated, Literal, NamedTuple
 
 from fastapi import (
@@ -181,6 +182,20 @@ LEARNING_MATERIAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 _LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL = (
     "学習資材 .xlsx ファイルのサイズが上限 5 MB を超えています。"
 )
+CLASSIFIER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+_CLASSIFIER_TRAINING_UPLOAD_TOO_LARGE_DETAIL = (
+    "classifier training data .xlsx ファイルのサイズが上限 5 MB を超えています。"
+)
+_CLASSIFIER_MODEL_UPLOAD_TOO_LARGE_DETAIL = (
+    "classifier model artifact .json ファイルのサイズが上限 5 MB を超えています。"
+)
+_CLASSIFIER_TRAINING_UPLOAD_TYPE_DETAIL = (
+    "classifier training data は .xlsx テンプレートを指定してください。"
+)
+_CLASSIFIER_MODEL_UPLOAD_TYPE_DETAIL = (
+    "pickle/joblib artifact は安全上の理由で import できません。"
+    "coef / intercept / classes を含む JSON artifact を指定してください。"
+)
 
 
 def _profile_name_conflict_exception(exc: ProfileNameConflict) -> HTTPException:
@@ -200,21 +215,78 @@ def _profile_name_conflict_exception(exc: ProfileNameConflict) -> HTTPException:
     )
 
 
-async def _read_learning_material_upload(file: UploadFile) -> bytes:
+async def _read_bounded_upload(
+    file: UploadFile,
+    *,
+    maximum_bytes: int,
+    too_large_detail: str,
+) -> bytes:
     file_size = getattr(file, "size", None)
-    if isinstance(file_size, int) and file_size > LEARNING_MATERIAL_UPLOAD_MAX_BYTES:
-        raise HTTPException(status_code=413, detail=_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL)
+    if isinstance(file_size, int) and file_size > maximum_bytes:
+        raise HTTPException(status_code=413, detail=too_large_detail)
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await file.read(1024 * 1024)
+        try:
+            chunk = await file.read(1024 * 1024)
+        except TypeError:
+            content = await file.read()
+            if len(content) > maximum_bytes:
+                raise HTTPException(status_code=413, detail=too_large_detail) from None
+            return content
         if not chunk:
             break
         total += len(chunk)
-        if total > LEARNING_MATERIAL_UPLOAD_MAX_BYTES:
-            raise HTTPException(status_code=413, detail=_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL)
+        if total > maximum_bytes:
+            raise HTTPException(status_code=413, detail=too_large_detail)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _read_learning_material_upload(file: UploadFile) -> bytes:
+    return await _read_bounded_upload(
+        file,
+        maximum_bytes=LEARNING_MATERIAL_UPLOAD_MAX_BYTES,
+        too_large_detail=_LEARNING_MATERIAL_UPLOAD_TOO_LARGE_DETAIL,
+    )
+
+
+def _require_upload_suffix(
+    filename: str,
+    allowed_suffixes: set[str],
+    detail: str,
+    *,
+    status_code: int = 400,
+) -> None:
+    if Path(filename).suffix.lower() not in allowed_suffixes:
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
+async def _read_classifier_training_upload(file: UploadFile) -> bytes:
+    _require_upload_suffix(
+        file.filename or "",
+        {".xlsx"},
+        _CLASSIFIER_TRAINING_UPLOAD_TYPE_DETAIL,
+    )
+    return await _read_bounded_upload(
+        file,
+        maximum_bytes=CLASSIFIER_UPLOAD_MAX_BYTES,
+        too_large_detail=_CLASSIFIER_TRAINING_UPLOAD_TOO_LARGE_DETAIL,
+    )
+
+
+async def _read_classifier_model_upload(file: UploadFile) -> bytes:
+    _require_upload_suffix(
+        file.filename or "",
+        {".json"},
+        _CLASSIFIER_MODEL_UPLOAD_TYPE_DETAIL,
+        status_code=422,
+    )
+    return await _read_bounded_upload(
+        file,
+        maximum_bytes=CLASSIFIER_UPLOAD_MAX_BYTES,
+        too_large_detail=_CLASSIFIER_MODEL_UPLOAD_TOO_LARGE_DETAIL,
+    )
 
 
 def _require_persistence() -> None:
@@ -1502,7 +1574,7 @@ async def import_classifier_training_data(
     """CATEGORY/TEXT の .xlsx training data テンプレートを取り込む。"""
     if profile_id:
         _assert_profile_access(request, profile_id)
-    content = await file.read()
+    content = await _read_classifier_training_upload(file)
     try:
         return ApiResponse(
             data=await run_sync_io(
@@ -1532,7 +1604,10 @@ def export_classifier_training_data_xlsx() -> Response:
 @router.post("/classifier/train", response_model=ApiResponse[ClassifierStatusData])
 def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatusData]:
     """Imported training data から LogisticRegression classifier を学習する。"""
-    return ApiResponse(data=nl2sql_service.train_classifier(req))
+    try:
+        return ApiResponse(data=nl2sql_service.train_classifier(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/classifier/model/import", response_model=ApiResponse[ClassifierModelImportData])
@@ -1540,7 +1615,7 @@ async def import_classifier_model(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[ClassifierModelImportData]:
     """唯一の classifier model を安全な JSON artifact で置き換える。"""
-    content = await file.read()
+    content = await _read_classifier_model_upload(file)
     try:
         return ApiResponse(
             data=await run_sync_io(

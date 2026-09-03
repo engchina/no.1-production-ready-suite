@@ -42,6 +42,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
 import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_SCROLL_CLASS,
@@ -333,15 +334,24 @@ export function QuestionClassifierModelsPage() {
   const trainClassifier = async () => {
     setLoading("classifier-train");
     setMessage("");
+    const previousVersion = classifierStatus?.classifier_version ?? "";
     try {
       const data = await apiPost<ClassifierStatusData>("/api/nl2sql/classifier/train", {
         min_examples_per_category: 1,
       });
       setClassifierStatus(data);
-      if (data.ready) toast.success(t("learning.classifier.trained"));
-      else setMessage(data.warnings.join(" ") || t("learning.error.classifier"));
+      const versionChanged = Boolean(
+        data.classifier_version && data.classifier_version !== previousVersion
+      );
+      if (data.ready && data.warnings.length === 0 && versionChanged) {
+        toast.success(t("learning.classifier.trained"));
+      } else {
+        setMessage(data.warnings.join(" ") || t("learning.error.classifier"));
+      }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+      const message = err instanceof Error ? err.message : t("learning.error.classifier");
+      setMessage(message);
+      toastError(message);
     } finally {
       setLoading("");
     }

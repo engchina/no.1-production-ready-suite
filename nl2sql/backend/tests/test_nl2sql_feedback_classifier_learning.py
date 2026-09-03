@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request
@@ -14,6 +16,7 @@ from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlReposit
 from app.features.nl2sql.models import (
     ClassifierFeedbackImportRequest,
     ClassifierFeedbackSelection,
+    ClassifierPredictRequest,
     ClassifierTrainingExampleUpdateRequest,
     ClassifierTrainRequest,
     FeedbackRating,
@@ -32,6 +35,41 @@ class _DisabledEmbeddingClient:
 
     def embed_texts(self, _texts: list[str]) -> list[list[float]]:
         raise AssertionError("deterministic fallback should be used")
+
+
+class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
+    def __init__(self) -> None:
+        super().__init__(seed_default=True)
+        self.classifier_example_page_reads = 0
+        self.classifier_artifact_reads = 0
+
+    def list_documents_page(
+        self,
+        collection: str,
+        *,
+        cursor: str | None,
+        limit: int,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, int]:
+        if collection == "classifier_examples":
+            self.classifier_example_page_reads += 1
+        return super().list_documents_page(
+            collection,
+            cursor=cursor,
+            limit=limit,
+            profile_id=profile_id,
+            status=status,
+            query=query,
+            payload_filters=payload_filters,
+        )
+
+    def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
+        if collection == "singletons" and entity_id == "classifier_artifact":
+            self.classifier_artifact_reads += 1
+        return super().get_document(collection, entity_id)
 
 
 def _service() -> Nl2SqlService:
@@ -320,12 +358,136 @@ def test_failed_retraining_preserves_the_active_model(monkeypatch: pytest.Monkey
         raise RuntimeError("embedding failure")
 
     monkeypatch.setattr(service, "_classifier_vectors", fail_vectors)
-    failed = service.train_classifier(ClassifierTrainRequest())
+    with pytest.raises(ValueError, match="embedding failure"):
+        service.train_classifier(ClassifierTrainRequest())
 
+    failed = service.classifier_status()
     assert failed.ready is True
     assert failed.stale is True
     assert failed.classifier_version == trained.classifier_version
-    assert "embedding failure" in " ".join(failed.warnings)
+
+
+def test_classifier_train_requires_two_categories_returns_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    service = _service()
+    service.import_classifier_training_data(
+        filename="single_category.xlsx",
+        content=_training_xlsx(
+            [
+                ("default", "請求金額を確認したい"),
+                ("default", "請求件数を確認したい"),
+            ]
+        ),
+        replace=True,
+    )
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.train_classifier(ClassifierTrainRequest())
+
+    assert exc_info.value.status_code == 422
+    assert "2 category" in str(exc_info.value.detail)
+
+
+def test_classifier_train_failure_returns_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    service = _service()
+    service.create_profile(Nl2SqlProfile(id="sales", name="販売"))
+    service.import_classifier_training_data(
+        filename="base.xlsx",
+        content=_training_xlsx(
+            [
+                ("default", "請求金額を確認したい"),
+                ("sales", "販売金額を確認したい"),
+            ]
+        ),
+        replace=True,
+    )
+
+    def fail_vectors(_texts: list[str]) -> tuple[list[list[float]], list[str], str]:
+        raise RuntimeError("embedding failure")
+
+    monkeypatch.setattr(service, "_classifier_vectors", fail_vectors)
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.train_classifier(ClassifierTrainRequest())
+
+    assert exc_info.value.status_code == 422
+    assert "embedding failure" in str(exc_info.value.detail)
+
+
+def test_classifier_training_upload_rejects_large_file_before_read() -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    class TooLargeUpload:
+        filename = "training_data.xlsx"
+        size = nl2sql_router.CLASSIFIER_UPLOAD_MAX_BYTES + 1
+
+        async def read(self, _size: int = -1) -> bytes:
+            raise AssertionError("oversized classifier upload must be rejected before read")
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            nl2sql_router.import_classifier_training_data(
+                request,
+                cast(Any, TooLargeUpload()),
+            )
+        )
+
+    assert exc_info.value.status_code == 413
+
+
+def test_consecutive_classifier_predicts_reuse_incremental_state_cache() -> None:
+    trainer = _service()
+    trainer.create_profile(Nl2SqlProfile(id="sales", name="販売"))
+    trainer.import_classifier_training_data(
+        filename="base.xlsx",
+        content=_training_xlsx(
+            [
+                ("default", "請求金額を確認したい"),
+                ("default", "請求件数を確認したい"),
+                ("sales", "販売金額を確認したい"),
+                ("sales", "販売件数を確認したい"),
+            ]
+        ),
+        replace=True,
+    )
+    trainer.train_classifier(ClassifierTrainRequest())
+    with trainer._lock:  # noqa: SLF001 - incremental cache fixture
+        examples = list(trainer._classifier_examples)  # noqa: SLF001
+        artifact = dict(trainer._classifier_artifact or {})  # noqa: SLF001
+
+    repository = _CountingIncrementalRepository()
+    for example in examples:
+        repository.put_document(
+            "classifier_examples",
+            example.id,
+            example.model_dump(mode="json"),
+            profile_id=example.profile_id,
+        )
+    repository.put_document("singletons", "classifier_artifact", {"value": artifact})
+
+    service = _service()
+    service.create_profile(Nl2SqlProfile(id="sales", name="販売"))
+    service._incremental_repository = repository  # noqa: SLF001
+    service._persistence_ready = True  # noqa: SLF001
+    service._persistence_writable = True  # noqa: SLF001
+
+    first = service.predict_classifier(ClassifierPredictRequest(question="販売金額を確認したい"))
+    second = service.predict_classifier(ClassifierPredictRequest(question="販売件数を確認したい"))
+
+    assert first.recommendation_source == "classifier"
+    assert second.recommendation_source == "classifier"
+    assert repository.classifier_example_page_reads == 1
+    assert repository.classifier_artifact_reads == 1
 
 
 def test_feedback_and_training_candidate_api_contract(

@@ -16,6 +16,7 @@ from app.features.nl2sql.models import (
     AnnotationApplyRequest,
     AssetCleanupData,
     ClassifierPredictRequest,
+    ClassifierTrainingExample,
     ClassifierTrainRequest,
     CommentSuggestionRequest,
     DbAdminExecuteRequest,
@@ -768,6 +769,8 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "training_data"
+    sheet.append([])
+    sheet.append([None, None])
     sheet.append(["category", "QUESTION"])
     sheet.append(["標準業務プロファイル", "請求金額を確認したい"])
     sheet.append(["入金管理", "未入金の請求を確認したい"])
@@ -805,6 +808,26 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     assert replaced_listing.total_examples == 1
     assert replaced_listing.categories == ["監査"]
     assert replaced_listing.examples[0].text == "監査ログを確認したい"
+
+
+def test_classifier_training_data_xlsx_keeps_zero_text_value() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    imported = service.import_classifier_training_data(
+        filename="zero_text.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [
+                [],
+                ["CATEGORY", "TEXT"],
+                ["標準業務プロファイル", 0],
+            ],
+        ),
+        replace=True,
+    )
+
+    assert imported.imported_count == 1
+    assert service.classifier_training_data().examples[0].text == "0"
 
 
 def test_classifier_training_data_xlsx_export_contains_profile_and_source_metadata() -> None:
@@ -855,6 +878,42 @@ def test_classifier_training_data_xlsx_export_contains_profile_and_source_metada
             None,
         ),
     ]
+
+
+def test_classifier_training_data_xlsx_export_import_round_trips_safe_text() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    with service._lock:  # noqa: SLF001 - export fixture
+        service._classifier_examples = [  # noqa: SLF001
+            ClassifierTrainingExample(
+                id="formula-text",
+                category="標準業務プロファイル",
+                text="=SUM(A1:A2)\x01",
+                profile_id="default",
+                profile_name="標準プロファイル",
+                source="edge.xlsx",
+                source_type="file",
+                created_at="2026-07-19T00:00:00+00:00",
+                updated_at="2026-07-19T00:00:00+00:00",
+            )
+        ]
+
+    filename, content = service.export_classifier_training_data_xlsx()
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=False, data_only=False)
+    exported_text_cell = workbook["training_data"]["B2"]
+    assert exported_text_cell.value == "=SUM(A1:A2)"
+    assert exported_text_cell.data_type == "s"
+    workbook.close()
+
+    round_tripped = Nl2SqlService(store=MemoryNl2SqlStore())
+    imported = round_tripped.import_classifier_training_data(
+        filename=filename,
+        content=content,
+        replace=True,
+    )
+
+    assert imported.imported_count == 1
+    assert round_tripped.classifier_training_data().examples[0].text == "=SUM(A1:A2)"
 
 
 def test_classifier_training_data_jsonl_export_route_is_not_registered() -> None:
