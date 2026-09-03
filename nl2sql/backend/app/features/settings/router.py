@@ -43,6 +43,7 @@ from app.clients.oci_database import (
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.env_file import locked_env_file, replace_env_file
 from app.features.nl2sql.oracle_adapter import (
     OracleNl2SqlAdapter,
     SelectAiCredentialExistsError,
@@ -105,7 +106,6 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
 run_in_threadpool = run_sync_io
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
-ENV_FILE_MODE = 0o600
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 OCI_DIRECTORY_MODE = 0o700
 OCI_CONFIG_MAX_BYTES = 64 * 1024
@@ -2490,35 +2490,38 @@ def _write_env_values(
 ) -> None:
     """既存 .env のコメントや無関係な値を保ったまま指定 key だけ更新する。"""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        next_lines: list[str] = []
-        written: set[str] = set()
-        for line in lines:
-            key = _env_assignment_key(line)
-            if key is None or key not in values:
-                next_lines.append(line)
-                continue
-            if key in written:
-                continue
-            value = values[key]
-            if value is None:
-                written.add(key)
-                continue
-            next_lines.append(f"{key}={_format_env_value(value)}")
-            written.add(key)
-
-        missing = [key for key, value in values.items() if key not in written and value is not None]
-        if missing:
-            if next_lines and next_lines[-1].strip():
-                next_lines.append("")
-            next_lines.append(section_comment)
-            for key in missing:
+        with locked_env_file(path) as env_path:
+            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+            next_lines: list[str] = []
+            written: set[str] = set()
+            for line in lines:
+                key = _env_assignment_key(line)
+                if key is None or key not in values:
+                    next_lines.append(line)
+                    continue
+                if key in written:
+                    continue
                 value = values[key]
-                if value is not None:
-                    next_lines.append(f"{key}={_format_env_value(value)}")
+                if value is None:
+                    written.add(key)
+                    continue
+                next_lines.append(f"{key}={_format_env_value(value)}")
+                written.add(key)
 
-        content = "\n".join(next_lines).rstrip() + "\n"
-        _replace_env_file(path, content)
+            missing = [
+                key for key, value in values.items() if key not in written and value is not None
+            ]
+            if missing:
+                if next_lines and next_lines[-1].strip():
+                    next_lines.append("")
+                next_lines.append(section_comment)
+                for key in missing:
+                    value = values[key]
+                    if value is not None:
+                        next_lines.append(f"{key}={_format_env_value(value)}")
+
+            content = "\n".join(next_lines).rstrip() + "\n"
+            replace_env_file(env_path, content)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=error_detail) from exc
 
@@ -2539,20 +2542,6 @@ def _format_env_value(value: str) -> str:
     if re.search(r"[\s#\"']", normalized):
         return '"' + normalized.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return normalized
-
-
-def _replace_env_file(path: Path, content: str) -> None:
-    """同一ディレクトリ内の一時ファイルから atomic replace する。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else ENV_FILE_MODE
-    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-    try:
-        tmp_path.write_text(content, encoding="utf-8")
-        tmp_path.chmod(mode)
-        tmp_path.replace(path)
-        path.chmod(mode)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def _write_oci_config(settings: Settings, payload: OciSettingsUpdate) -> Path:

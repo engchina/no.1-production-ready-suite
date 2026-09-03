@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
+from app.env_file import locked_env_file, replace_env_file
 from app.settings import Settings, get_settings
 
 from .domain import (
@@ -209,15 +210,6 @@ def _read_backend_env_value(key: str) -> str | None:
     values = dotenv_values(_BACKEND_ENV_FILE)
     value = values.get(key)
     return str(value) if value is not None else None
-
-
-def _replace_backend_env_file(content: str) -> None:
-    _BACKEND_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    mode = _BACKEND_ENV_FILE.stat().st_mode & 0o777 if _BACKEND_ENV_FILE.exists() else 0o600
-    temporary_path = _BACKEND_ENV_FILE.with_name(f".{_BACKEND_ENV_FILE.name}.{uuid4().hex}.tmp")
-    temporary_path.write_text(content, encoding="utf-8")
-    temporary_path.chmod(mode)
-    temporary_path.replace(_BACKEND_ENV_FILE)
 
 
 class SecurityService:
@@ -978,40 +970,38 @@ class SecurityService:
             )
 
     def _write_configured_system_admin_password(self, password: str) -> None:
-        if _BACKEND_ENV_FILE.exists():
-            lines = _BACKEND_ENV_FILE.read_text(encoding="utf-8").splitlines()
-        else:
-            lines = []
-        next_lines = [
-            line
-            for line in lines
-            if _env_assignment_key(line)
-            not in {
-                _APP_ADMIN_LOGIN_USER_ID_KEY,
-                _LEGACY_APP_ADMIN_USERNAME_KEY,
-                _APP_ADMIN_LOGIN_USER_PASSWORD_KEY,
-                _LEGACY_APP_ADMIN_PASSWORD_KEY,
-            }
-        ]
-        admin_lines = [
-            f"{_APP_ADMIN_LOGIN_USER_ID_KEY}={_FIXED_APP_ADMIN_LOGIN_USER_ID}",
-            f"{_APP_ADMIN_LOGIN_USER_PASSWORD_KEY}={_format_env_value(password)}",
-        ]
-        insert_at = next(
-            (
-                index
-                for index, line in enumerate(next_lines)
-                if _env_assignment_key(line) == _APP_AUTH_ENABLED_KEY
-            ),
-            None,
-        )
-        if insert_at is None:
-            if next_lines and next_lines[-1].strip():
-                next_lines.append("")
-            next_lines.extend(admin_lines)
-        else:
-            next_lines[insert_at:insert_at] = admin_lines
-        _replace_backend_env_file("\n".join(next_lines).rstrip() + "\n")
+        with locked_env_file(_BACKEND_ENV_FILE) as env_path:
+            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+            next_lines = [
+                line
+                for line in lines
+                if _env_assignment_key(line)
+                not in {
+                    _APP_ADMIN_LOGIN_USER_ID_KEY,
+                    _LEGACY_APP_ADMIN_USERNAME_KEY,
+                    _APP_ADMIN_LOGIN_USER_PASSWORD_KEY,
+                    _LEGACY_APP_ADMIN_PASSWORD_KEY,
+                }
+            ]
+            admin_lines = [
+                f"{_APP_ADMIN_LOGIN_USER_ID_KEY}={_FIXED_APP_ADMIN_LOGIN_USER_ID}",
+                f"{_APP_ADMIN_LOGIN_USER_PASSWORD_KEY}={_format_env_value(password)}",
+            ]
+            insert_at = next(
+                (
+                    index
+                    for index, line in enumerate(next_lines)
+                    if _env_assignment_key(line) == _APP_AUTH_ENABLED_KEY
+                ),
+                None,
+            )
+            if insert_at is None:
+                if next_lines and next_lines[-1].strip():
+                    next_lines.append("")
+                next_lines.extend(admin_lines)
+            else:
+                next_lines[insert_at:insert_at] = admin_lines
+            replace_env_file(env_path, "\n".join(next_lines).rstrip() + "\n")
 
     def _configured_system_admin_principal(
         self,

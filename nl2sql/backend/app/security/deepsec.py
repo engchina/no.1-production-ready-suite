@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from app.clients.oracle_runtime import (
     OraclePoolManager,
@@ -22,6 +21,7 @@ from app.clients.oracle_runtime import (
     get_oracle_pool_manager,
 )
 from app.clients.oracle_statement_executor import oracle_statement_executor
+from app.env_file import locked_env_file, replace_env_file
 from app.features.nl2sql.object_visibility import is_user_visible_schema_object
 from app.settings import Settings, get_settings
 
@@ -164,57 +164,39 @@ def _looks_like_missing_scope_filters_column(exc: Exception) -> bool:
     return "ORA-00904" in message and "SCOPE_FILTERS" in message
 
 
-def _replace_deepsec_env_file(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
-    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        temporary_path.write_text(content, encoding="utf-8")
-        temporary_path.chmod(mode)
-        temporary_path.replace(path)
-    except OSError:
-        with suppress(OSError):
-            temporary_path.unlink()
-        raise
+def _write_deepsec_config_env_locked(settings: Settings, env_path: Path) -> None:
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    next_lines = [line for line in lines if _env_assignment_key(line) not in _DEEPSEC_CONFIG_KEYS]
+    deepsec_lines = [
+        f"{_DEEPSEC_ENABLED_KEY}=true",
+        f"{_DEEPSEC_DATA_USER_KEY}={_format_env_value(settings.oracle_deepsec_data_user)}",
+        (
+            f"{_DEEPSEC_DATA_USER_PASSWORD_KEY}="
+            f"{_format_env_value(settings.oracle_deepsec_data_user_password)}"
+        ),
+    ]
+    insert_at = next(
+        (
+            index
+            for index, line in enumerate(next_lines)
+            if _env_assignment_key(line) == "ORACLE_ADB_OCID"
+        ),
+        None,
+    )
+    if insert_at is None:
+        if next_lines and next_lines[-1].strip():
+            next_lines.append("")
+        next_lines.append("# Deep Data Security")
+        next_lines.extend(deepsec_lines)
+    else:
+        next_lines[insert_at:insert_at] = deepsec_lines
+    replace_env_file(env_path, "\n".join(next_lines).rstrip() + "\n")
 
 
 def _write_deepsec_config_env(settings: Settings) -> None:
     try:
-        lines = (
-            _BACKEND_ENV_FILE.read_text(encoding="utf-8").splitlines()
-            if _BACKEND_ENV_FILE.exists()
-            else []
-        )
-        next_lines = [
-            line for line in lines if _env_assignment_key(line) not in _DEEPSEC_CONFIG_KEYS
-        ]
-        deepsec_lines = [
-            f"{_DEEPSEC_ENABLED_KEY}=true",
-            f"{_DEEPSEC_DATA_USER_KEY}={_format_env_value(settings.oracle_deepsec_data_user)}",
-            (
-                f"{_DEEPSEC_DATA_USER_PASSWORD_KEY}="
-                f"{_format_env_value(settings.oracle_deepsec_data_user_password)}"
-            ),
-        ]
-        insert_at = next(
-            (
-                index
-                for index, line in enumerate(next_lines)
-                if _env_assignment_key(line) == "ORACLE_ADB_OCID"
-            ),
-            None,
-        )
-        if insert_at is None:
-            if next_lines and next_lines[-1].strip():
-                next_lines.append("")
-            next_lines.append("# Deep Data Security")
-            next_lines.extend(deepsec_lines)
-        else:
-            next_lines[insert_at:insert_at] = deepsec_lines
-        _replace_deepsec_env_file(
-            _BACKEND_ENV_FILE,
-            "\n".join(next_lines).rstrip() + "\n",
-        )
+        with locked_env_file(_BACKEND_ENV_FILE) as env_path:
+            _write_deepsec_config_env_locked(settings, env_path)
     except OSError as exc:
         raise SecurityApiError(
             500,
@@ -714,11 +696,16 @@ def _data_user_create_statement(settings: Settings) -> str:
     )
 
 
+def _deepsec_env_snapshot_locked(env_path: Path) -> tuple[bool, str]:
+    if not env_path.exists():
+        return False, ""
+    return True, env_path.read_text(encoding="utf-8")
+
+
 def _deepsec_env_snapshot() -> tuple[bool, str]:
     try:
-        if not _BACKEND_ENV_FILE.exists():
-            return False, ""
-        return True, _BACKEND_ENV_FILE.read_text(encoding="utf-8")
+        with locked_env_file(_BACKEND_ENV_FILE) as env_path:
+            return _deepsec_env_snapshot_locked(env_path)
     except OSError as exc:
         raise SecurityApiError(
             500,
@@ -726,14 +713,19 @@ def _deepsec_env_snapshot() -> tuple[bool, str]:
         ) from exc
 
 
-def _restore_deepsec_env_snapshot(snapshot: tuple[bool, str]) -> None:
+def _restore_deepsec_env_snapshot_locked(env_path: Path, snapshot: tuple[bool, str]) -> None:
     existed, content = snapshot
+    if existed:
+        replace_env_file(env_path, content)
+        return
+    with suppress(FileNotFoundError):
+        env_path.unlink()
+
+
+def _restore_deepsec_env_snapshot(snapshot: tuple[bool, str]) -> None:
     try:
-        if existed:
-            _replace_deepsec_env_file(_BACKEND_ENV_FILE, content)
-            return
-        with suppress(FileNotFoundError):
-            _BACKEND_ENV_FILE.unlink()
+        with locked_env_file(_BACKEND_ENV_FILE) as env_path:
+            _restore_deepsec_env_snapshot_locked(env_path, snapshot)
     except OSError as exc:
         raise SecurityApiError(
             500,
@@ -1726,9 +1718,15 @@ class DeepSecService:
         self.settings.oracle_deepsec_data_user_password = password
         try:
             self.pools.validate_deepsec_configuration()
-            env_snapshot = _deepsec_env_snapshot()
-            _write_deepsec_config_env(self.settings)
-            self._sync_existing_data_user_password()
+            with locked_env_file(_BACKEND_ENV_FILE) as env_path:
+                env_snapshot = _deepsec_env_snapshot_locked(env_path)
+                _write_deepsec_config_env_locked(self.settings, env_path)
+                try:
+                    self._sync_existing_data_user_password()
+                except Exception:
+                    _restore_deepsec_env_snapshot_locked(env_path, env_snapshot)
+                    env_snapshot = None
+                    raise
         except Exception as exc:
             safe_error = self._safe_error(exc)
             self.settings.oracle_deepsec_enabled = previous_enabled
