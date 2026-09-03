@@ -109,6 +109,10 @@ class QualityEvaluationJobStateError(ValueError):
     """SQL生成評価 job の状態が要求された操作に合わない場合のエラー。"""
 
 
+class _QualityEvaluationWorkerFenceLost(RuntimeError):
+    """別 worker への lease 移譲や cancel により、この worker の保存権限が失われた。"""
+
+
 EngineRunner = Callable[[str, Nl2SqlEngine, str], GeneratedSql | str]
 JudgeRunner = Callable[
     [str, str, str, str, QualityEvaluationDeterministicAnalysis], QualityEvaluationJudge
@@ -478,7 +482,20 @@ class QualityEvaluationService:
             },
             deep=True,
         )
-        saved = self._repository.save_job(cancelled)
+        saved = self._repository.save_job_if_active(cancelled)
+        if saved is None:
+            latest = self._repository.get_job(job_id)
+            if latest is None:
+                raise ValueError("指定されたSQL生成評価 job が見つかりません。")
+            if latest.status == QualityEvaluationStatus.CANCELLED:
+                return job_summary(latest)
+            if latest.status in _TERMINAL_STATUSES:
+                raise QualityEvaluationJobStateError(
+                    "このSQL生成評価 job は既に完了しているため中止できません。"
+                )
+            raise QualityEvaluationJobStateError(
+                "SQL生成評価 job の状態が更新されたため中止できませんでした。"
+            )
         logger.info(
             "quality_evaluation_cancelled",
             extra={"job_id": saved.job_id, "profile_id": saved.profile_id},
@@ -546,7 +563,85 @@ class QualityEvaluationService:
         return max(1.0, float(get_settings().nl2sql_quality_evaluation_attempt_timeout_seconds))
 
     def _attempt_lease_seconds(self, job: QualityEvaluationJobRecord | None = None) -> float:
-        return self._attempt_timeout_seconds(job) + 30.0
+        settings = get_settings()
+        attempt_timeout = self._attempt_timeout_seconds(job)
+        configured = max(30.0, float(settings.nl2sql_quality_evaluation_lease_seconds))
+        retry_attempts = max(1, max(int(settings.oci_enterprise_ai_max_retries), 0) + 1)
+        retry_floor = 2.0 * attempt_timeout * retry_attempts
+        return max(configured, retry_floor)
+
+    @staticmethod
+    def _worker_fence_matches(
+        job: QualityEvaluationJobRecord | None, *, worker_id: str, attempt_no: int
+    ) -> bool:
+        return bool(
+            job
+            and job.status == QualityEvaluationStatus.RUNNING
+            and job.worker_id == worker_id
+            and job.attempt_no == attempt_no
+        )
+
+    def _log_worker_fence_lost(
+        self,
+        *,
+        job_id: str,
+        profile_id: str,
+        worker_id: str,
+        attempt_no: int,
+        operation: str,
+    ) -> None:
+        logger.info(
+            "quality_evaluation_worker_fence_lost",
+            extra={
+                "job_id": job_id,
+                "profile_id": profile_id,
+                "worker_id": worker_id,
+                "attempt_no": attempt_no,
+                "operation": operation,
+            },
+        )
+
+    def _heartbeat_current_attempt(self, job: QualityEvaluationJobRecord) -> bool:
+        worker_id = job.worker_id
+        attempt_no = job.attempt_no
+        latest = self._repository.get_job(job.job_id)
+        if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
+            self._log_worker_fence_lost(
+                job_id=job.job_id,
+                profile_id=job.profile_id,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                operation="heartbeat",
+            )
+            return False
+        if latest is None:
+            return False
+        now = datetime.now(UTC)
+        refreshed = latest.model_copy(
+            update={
+                "heartbeat_at": now.isoformat(),
+                "lease_expires_at": (
+                    now + timedelta(seconds=self._attempt_lease_seconds(latest))
+                ).isoformat(),
+                "updated_at": now.isoformat(),
+            },
+            deep=True,
+        )
+        saved = self._repository.save_job_if_worker_current(
+            refreshed,
+            worker_id=worker_id,
+            attempt_no=attempt_no,
+        )
+        if saved is None:
+            self._log_worker_fence_lost(
+                job_id=job.job_id,
+                profile_id=job.profile_id,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                operation="heartbeat_save",
+            )
+            return False
+        return True
 
     @staticmethod
     def _parse_timestamp(value: str | None) -> datetime | None:
@@ -654,7 +749,7 @@ class QualityEvaluationService:
                 f"{timeout_seconds:.0f} 秒以内に完了しなかったため、"
                 "worker lease の再取得時にタイムアウト結果として記録しました。"
             )
-            self._repository.save_result(
+            self._repository.save_result_if_worker_current(
                 self._timeout_result(
                     job=job,
                     case=case,
@@ -662,7 +757,9 @@ class QualityEvaluationService:
                     repetition=job.current_repetition,
                     elapsed_ms=elapsed_ms,
                     message=message,
-                )
+                ),
+                worker_id=job.worker_id,
+                attempt_no=job.attempt_no,
             )
             logger.warning(
                 "quality_evaluation_attempt_timeout_recorded",
@@ -675,9 +772,11 @@ class QualityEvaluationService:
                     "timeout_seconds": timeout_seconds,
                 },
             )
-        return self._refresh_progress(job)
+        return self._refresh_progress(job, worker_id=job.worker_id, attempt_no=job.attempt_no)
 
     def _process_claimed_job(self, job: QualityEvaluationJobRecord) -> None:
+        worker_id = job.worker_id
+        attempt_no = job.attempt_no
         try:
             for case in job.cases:
                 for engine in job.engines:
@@ -691,6 +790,10 @@ class QualityEvaluationService:
                             continue
                         latest = self._repository.get_job(job.job_id)
                         if latest is None or latest.status in _TERMINAL_STATUSES:
+                            return
+                        if not self._worker_fence_matches(
+                            latest, worker_id=worker_id, attempt_no=attempt_no
+                        ):
                             return
                         now = datetime.now(UTC)
                         timeout_seconds = self._attempt_timeout_seconds(latest)
@@ -710,15 +813,56 @@ class QualityEvaluationService:
                             },
                             deep=True,
                         )
-                        self._repository.save_job(job)
+                        saved_job = self._repository.save_job_if_worker_current(
+                            job,
+                            worker_id=worker_id,
+                            attempt_no=attempt_no,
+                        )
+                        if saved_job is None:
+                            self._log_worker_fence_lost(
+                                job_id=job.job_id,
+                                profile_id=job.profile_id,
+                                worker_id=worker_id,
+                                attempt_no=attempt_no,
+                                operation="attempt_start",
+                            )
+                            return
+                        job = saved_job
                         result = self._evaluate_attempt(job, case, engine, repetition)
                         latest = self._repository.get_job(job.job_id)
                         if latest is None or latest.status in _TERMINAL_STATUSES:
                             return
-                        self._repository.save_result(result)
-                        job = self._refresh_progress(latest)
+                        if not self._worker_fence_matches(
+                            latest, worker_id=worker_id, attempt_no=attempt_no
+                        ):
+                            return
+                        result_saved = self._repository.save_result_if_worker_current(
+                            result,
+                            worker_id=worker_id,
+                            attempt_no=attempt_no,
+                        )
+                        latest = self._repository.get_job(job.job_id)
+                        if latest is None or latest.status in _TERMINAL_STATUSES:
+                            return
+                        if not self._worker_fence_matches(
+                            latest, worker_id=worker_id, attempt_no=attempt_no
+                        ):
+                            return
+                        if not result_saved:
+                            self._log_worker_fence_lost(
+                                job_id=job.job_id,
+                                profile_id=job.profile_id,
+                                worker_id=worker_id,
+                                attempt_no=attempt_no,
+                                operation="result_save",
+                            )
+                        job = self._refresh_progress(
+                            latest, worker_id=worker_id, attempt_no=attempt_no
+                        )
             latest = self._repository.get_job(job.job_id)
             if latest is None or latest.status in _TERMINAL_STATUSES:
+                return
+            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
                 return
             results = self._repository.all_results(job.job_id)
             errors = sum(1 for item in results if item.generation_error or item.judge_error)
@@ -745,7 +889,21 @@ class QualityEvaluationService:
                 },
                 deep=True,
             )
-            self._repository.save_job(job)
+            saved_job = self._repository.save_job_if_worker_current(
+                job,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
+            if saved_job is None:
+                self._log_worker_fence_lost(
+                    job_id=job.job_id,
+                    profile_id=job.profile_id,
+                    worker_id=worker_id,
+                    attempt_no=attempt_no,
+                    operation="completion",
+                )
+                return
+            job = saved_job
             logger.info(
                 "quality_evaluation_completed",
                 extra={
@@ -756,6 +914,8 @@ class QualityEvaluationService:
                     "status": job.status.value,
                 },
             )
+        except _QualityEvaluationWorkerFenceLost:
+            return
         except Exception as exc:
             logger.exception(
                 "quality_evaluation_failed",
@@ -763,6 +923,8 @@ class QualityEvaluationService:
             )
             latest = self._repository.get_job(job.job_id)
             if latest is None or latest.status in _TERMINAL_STATUSES:
+                return
+            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
                 return
             # 同メソッド上部の now(datetime)と束縛を分ける(ISO 文字列)。
             now_iso = _utc_now()
@@ -777,14 +939,24 @@ class QualityEvaluationService:
                 },
                 deep=True,
             )
-            self._repository.save_job(failed)
+            self._repository.save_job_if_worker_current(
+                failed,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
 
-    def _refresh_progress(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
+    def _refresh_progress(
+        self,
+        job: QualityEvaluationJobRecord,
+        *,
+        worker_id: str | None = None,
+        attempt_no: int | None = None,
+    ) -> QualityEvaluationJobRecord:
         latest = self._repository.get_job(job.job_id)
         if latest is None or latest.status in _TERMINAL_STATUSES:
             return latest or job
         results = self._repository.all_results(job.job_id)
-        now = _utc_now()
+        now = datetime.now(UTC)
         refreshed = latest.model_copy(
             update={
                 "completed_attempts": len(results),
@@ -793,11 +965,30 @@ class QualityEvaluationService:
                     bool(item.generation_error or item.judge_error) for item in results
                 ),
                 "engine_summaries": self._summaries(latest, results),
-                "heartbeat_at": now,
-                "updated_at": now,
+                "heartbeat_at": now.isoformat(),
+                "lease_expires_at": (
+                    now + timedelta(seconds=self._attempt_lease_seconds(latest))
+                ).isoformat(),
+                "updated_at": now.isoformat(),
             },
             deep=True,
         )
+        if worker_id is not None and attempt_no is not None:
+            saved = self._repository.save_job_if_worker_current(
+                refreshed,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
+            if saved is None:
+                self._log_worker_fence_lost(
+                    job_id=latest.job_id,
+                    profile_id=latest.profile_id,
+                    worker_id=worker_id,
+                    attempt_no=attempt_no,
+                    operation="progress",
+                )
+                return latest
+            return saved
         return self._repository.save_job(refreshed)
 
     def _evaluate_attempt(
@@ -824,6 +1015,7 @@ class QualityEvaluationService:
                     engine=engine,
                     profile_id=job.profile_id,
                     timeout_seconds=timeout_seconds,
+                    max_retries=0,
                 )
             )
             generated_sql = (
@@ -839,6 +1031,8 @@ class QualityEvaluationService:
                 timeout_seconds=timeout_seconds,
             )
         generation_elapsed_ms = round((time.perf_counter() - generation_started) * 1000)
+        if not self._heartbeat_current_attempt(job):
+            raise _QualityEvaluationWorkerFenceLost
         judge_elapsed_ms = 0
         if generated_sql:
             try:
@@ -860,6 +1054,8 @@ class QualityEvaluationService:
                 analysis = QualityEvaluationDeterministicAnalysis(
                     risk_findings=[f"決定論的 SQL 解析に失敗しました: {str(exc)[:500]}"]
                 )
+            if not self._heartbeat_current_attempt(job):
+                raise _QualityEvaluationWorkerFenceLost
             judge_started = time.perf_counter()
             try:
                 judge = (
@@ -878,6 +1074,7 @@ class QualityEvaluationService:
                         profile_id=job.profile_id,
                         analysis=analysis,
                         timeout_seconds=timeout_seconds,
+                        max_retries=0,
                     )
                 )
             except Exception as exc:
@@ -936,6 +1133,7 @@ class QualityEvaluationService:
         profile_id: str,
         analysis: QualityEvaluationDeterministicAnalysis,
         timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> QualityEvaluationJudge:
         profile = self._nl2sql.get_profile(profile_id)
         allowed = self._nl2sql.resolve_allowed_objects(profile_id, AllowedObjects())
@@ -967,6 +1165,7 @@ class QualityEvaluationService:
             context=schema_context,
             system_prompt=system_prompt,
             timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
         payload = self._nl2sql._json_object_from_text(raw)  # noqa: SLF001
         return QualityEvaluationJudge.model_validate(payload)

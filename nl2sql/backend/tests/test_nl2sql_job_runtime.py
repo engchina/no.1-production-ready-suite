@@ -57,8 +57,9 @@ class _FakeEnterpriseAiClient:
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
-        del prompt, context, system_prompt, timeout_seconds, max_output_tokens
+        del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         return self.text
 
 
@@ -78,9 +79,10 @@ class _BlockingEnterpriseAiClient(_FakeEnterpriseAiClient):
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
         self.entered.set()
-        del timeout_seconds, max_output_tokens
+        del timeout_seconds, max_output_tokens, max_retries
         assert self.release.wait(timeout=10), "テストが release しないまま timeout"
         return super().generate(prompt=prompt, context=context, system_prompt=system_prompt)
 

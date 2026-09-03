@@ -164,6 +164,7 @@ class _FakeEnterpriseAiClient:
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -171,6 +172,7 @@ class _FakeEnterpriseAiClient:
                 "context": context,
                 "system_prompt": system_prompt,
                 "timeout_seconds": timeout_seconds,
+                "max_retries": max_retries,
             }
         )
         return self.text
@@ -220,6 +222,7 @@ class _QualityEvaluationOracleCursor:
         self._current: _ResultSet = []
         self.prefetchrows: int | None = None
         self.arraysize: int | None = None
+        self.rowcount = 0
         self.executed: list[tuple[str, Any]] = []
 
     def __enter__(self) -> _QualityEvaluationOracleCursor:
@@ -230,8 +233,10 @@ class _QualityEvaluationOracleCursor:
 
     def execute(self, sql: str, binds: Any = None) -> None:
         self.executed.append((sql, binds))
+        self.rowcount = 0
         if not sql.lstrip().upper().startswith("SELECT"):
             self._current = []
+            self.rowcount = 1
             return
         if not self._result_sets:
             raise AssertionError("scripted result set is missing")
@@ -607,6 +612,22 @@ def test_quality_evaluation_capabilities_exposes_attempt_timeout(
     assert capabilities.limits.attempt_timeout_seconds == 300.0
 
 
+def test_quality_evaluation_worker_lease_uses_settings_and_retry_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    service = _service(engine_runner=lambda *_args: "SELECT 1 FROM dual", judge_runner=_judge)
+
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_attempt_timeout_seconds", 300.0)
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_lease_seconds", 900.0)
+    monkeypatch.setattr(settings, "oci_enterprise_ai_max_retries", 0)
+    assert service._attempt_lease_seconds() == 900.0  # noqa: SLF001
+
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_lease_seconds", 60.0)
+    monkeypatch.setattr(settings, "oci_enterprise_ai_max_retries", 3)
+    assert service._attempt_lease_seconds() == 2400.0  # noqa: SLF001
+
+
 def test_quality_evaluation_cancel_is_idempotent_and_rejects_completed_jobs() -> None:
     repository = MemoryQualityEvaluationRepository()
     repository.save_job(_evaluation_job("pending-job"))
@@ -655,6 +676,58 @@ def test_worker_records_select_ai_agent_timeout_as_error_result(
     assert "300 秒" in result.generation_error
     assert "タイムアウト" in result.generation_error
     assert service.get_job(submitted.job_id).status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
+
+
+def test_evaluation_worker_discards_result_after_expired_lease_is_reclaimed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    repository = MemoryQualityEvaluationRepository()
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()),
+        repository=repository,
+        engine_runner=lambda *_args: "SELECT 1 FROM dual",
+        judge_runner=_judge,
+    )
+    submitted = service.submit(
+        profile_id="default",
+        engines=[Nl2SqlEngine.SELECT_AI],
+        repeat_count=1,
+        content=_xlsx([["A", "質問", "SELECT 1 FROM dual"]]),
+        filename="cases.xlsx",
+    )
+
+    def engine(_question: str, _selected: Nl2SqlEngine, _profile: str) -> str:
+        current = repository.get_job(submitted.job_id)
+        assert current is not None
+        expired = current.model_copy(
+            update={"lease_expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()},
+            deep=True,
+        )
+        repository.save_job(expired)
+        reclaimed = repository.claim_job(
+            worker_id="new-worker",
+            lease_seconds=60,
+            job_id=submitted.job_id,
+        )
+        assert reclaimed is not None
+        assert reclaimed.worker_id == "new-worker"
+        assert reclaimed.attempt_no == 2
+        return "SELECT 1 FROM dual"
+
+    service._engine_runner = engine  # noqa: SLF001
+
+    service.run_job(job_id=submitted.job_id, worker_id="old-worker")
+
+    job = repository.get_job(submitted.job_id)
+    results, total = repository.list_results(job_id=submitted.job_id, offset=0, limit=10)
+    assert job is not None
+    assert job.status == QualityEvaluationStatus.RUNNING
+    assert job.worker_id == "new-worker"
+    assert job.attempt_no == 2
+    assert results == []
+    assert total == 0
 
 
 def test_expired_lease_reclaim_synthesizes_timeout_result(
@@ -744,6 +817,45 @@ def test_cancelled_job_is_not_overwritten_by_late_worker_return(
     assert job.status == QualityEvaluationStatus.CANCELLED
     assert job.completed_attempts == 0
     assert results.items == []
+
+
+def test_default_quality_evaluation_enterprise_ai_calls_disable_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
+    nl2sql.import_sample_data(
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+    )
+    _create_sample_profile(nl2sql)
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT EMPLOYEE_ID FROM EMPLOYEE","explanation":"社員IDを取得します。"}'
+    )
+    nl2sql._enterprise_ai_client = fake_client  # noqa: SLF001
+    monkeypatch.setattr(
+        nl2sql,
+        "quality_evaluation_engine_readiness",
+        lambda profile_id=None: {Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (True, "")},
+    )
+    monkeypatch.setattr(nl2sql, "_use_oracle_runtime", lambda: False)
+    service = QualityEvaluationService(
+        nl2sql,
+        repository=MemoryQualityEvaluationRepository(),
+        judge_runner=_judge,
+    )
+    submitted = service.submit(
+        profile_id="sql_assist_sample",
+        engines=[Nl2SqlEngine.ENTERPRISE_AI_DIRECT],
+        repeat_count=1,
+        content=_xlsx([["A", "社員IDを取得してください", "SELECT EMPLOYEE_ID FROM EMPLOYEE"]]),
+        filename="cases.xlsx",
+    )
+
+    service.run_job(job_id=submitted.job_id)
+
+    assert fake_client.calls[0]["timeout_seconds"] == 300.0
+    assert fake_client.calls[0]["max_retries"] == 0
 
 
 def test_quality_evaluation_readiness_allows_profile_engines_without_cached_asset_meta(
@@ -958,6 +1070,7 @@ def test_default_judge_uses_profile_schema_catalog_without_argument_error(
     assert result.verdict == QualityEvaluationVerdict.CORRECT
     assert fake_client.calls
     assert fake_client.calls[0]["timeout_seconds"] == 300.0
+    assert fake_client.calls[0]["max_retries"] == 0
     assert "schema:" in fake_client.calls[0]["context"]
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
 

@@ -38,6 +38,14 @@ class QualityEvaluationRepository(Protocol):
 
     def save_job(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord: ...
 
+    def save_job_if_active(
+        self, job: QualityEvaluationJobRecord
+    ) -> QualityEvaluationJobRecord | None: ...
+
+    def save_job_if_worker_current(
+        self, job: QualityEvaluationJobRecord, *, worker_id: str, attempt_no: int
+    ) -> QualityEvaluationJobRecord | None: ...
+
     def get_job(self, job_id: str) -> QualityEvaluationJobRecord | None: ...
 
     def list_jobs(
@@ -51,6 +59,10 @@ class QualityEvaluationRepository(Protocol):
     ) -> QualityEvaluationJobRecord | None: ...
 
     def save_result(self, result: QualityEvaluationResult) -> bool: ...
+
+    def save_result_if_worker_current(
+        self, result: QualityEvaluationResult, *, worker_id: str, attempt_no: int
+    ) -> bool: ...
 
     def has_result(self, *, job_id: str, case_no: int, engine: str, repetition_no: int) -> bool: ...
 
@@ -71,6 +83,34 @@ class MemoryQualityEvaluationRepository:
 
     def save_job(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
         with self._lock:
+            self._jobs[job.job_id] = job.model_copy(deep=True)
+            return job.model_copy(deep=True)
+
+    def save_job_if_active(
+        self, job: QualityEvaluationJobRecord
+    ) -> QualityEvaluationJobRecord | None:
+        with self._lock:
+            current = self._jobs.get(job.job_id)
+            if current is None or current.status not in {
+                QualityEvaluationStatus.PENDING,
+                QualityEvaluationStatus.RUNNING,
+            }:
+                return None
+            self._jobs[job.job_id] = job.model_copy(deep=True)
+            return job.model_copy(deep=True)
+
+    def save_job_if_worker_current(
+        self, job: QualityEvaluationJobRecord, *, worker_id: str, attempt_no: int
+    ) -> QualityEvaluationJobRecord | None:
+        with self._lock:
+            current = self._jobs.get(job.job_id)
+            if (
+                current is None
+                or current.status != QualityEvaluationStatus.RUNNING
+                or current.worker_id != worker_id
+                or current.attempt_no != attempt_no
+            ):
+                return None
             self._jobs[job.job_id] = job.model_copy(deep=True)
             return job.model_copy(deep=True)
 
@@ -142,6 +182,23 @@ class MemoryQualityEvaluationRepository:
             self._results[key] = result.model_copy(deep=True)
             return True
 
+    def save_result_if_worker_current(
+        self, result: QualityEvaluationResult, *, worker_id: str, attempt_no: int
+    ) -> bool:
+        key = (result.job_id, result.case_no, result.engine.value, result.repetition_no)
+        with self._lock:
+            current = self._jobs.get(result.job_id)
+            if (
+                current is None
+                or current.status != QualityEvaluationStatus.RUNNING
+                or current.worker_id != worker_id
+                or current.attempt_no != attempt_no
+                or key in self._results
+            ):
+                return False
+            self._results[key] = result.model_copy(deep=True)
+            return True
+
     def has_result(self, *, job_id: str, case_no: int, engine: str, repetition_no: int) -> bool:
         with self._lock:
             return (job_id, case_no, engine, repetition_no) in self._results
@@ -168,9 +225,10 @@ class OracleQualityEvaluationRepository:
     def __init__(self, *, connection_factory: Callable[[], AbstractContextManager[Any]]) -> None:
         self._connection_factory = connection_factory
 
-    def save_job(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
+    @staticmethod
+    def _job_binds(job: QualityEvaluationJobRecord) -> dict[str, Any]:
         payload = _canonical_json(job.model_dump(mode="json"))
-        binds = {
+        return {
             "job_id": job.job_id,
             "status": job.status.value,
             "profile_id": job.profile_id,
@@ -182,6 +240,9 @@ class OracleQualityEvaluationRepository:
             "attempt_no": job.attempt_no,
             "payload": payload,
         }
+
+    def save_job(self, job: QualityEvaluationJobRecord) -> QualityEvaluationJobRecord:
+        binds = self._job_binds(job)
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "MERGE INTO NL2SQL_EVALUATION_JOBS t USING (SELECT :job_id JOB_ID FROM DUAL) s "
@@ -197,6 +258,59 @@ class OracleQualityEvaluationRepository:
             )
             connection.commit()
         return job.model_copy(deep=True)
+
+    def save_job_if_active(
+        self, job: QualityEvaluationJobRecord
+    ) -> QualityEvaluationJobRecord | None:
+        binds = self._job_binds(job)
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "UPDATE NL2SQL_EVALUATION_JOBS SET STATUS = :status, "
+                    "PROFILE_ID = :profile_id, WORKER_ID = :worker_id, "
+                    "HEARTBEAT_AT = :heartbeat_at, LEASE_EXPIRES_AT = :lease_expires_at, "
+                    "ATTEMPT_NO = :attempt_no, PAYLOAD_JSON = :payload, "
+                    "UPDATED_AT = SYSTIMESTAMP WHERE JOB_ID = :job_id "
+                    "AND STATUS IN ('pending', 'running')",
+                    binds,
+                )
+                if getattr(cursor, "rowcount", 0) == 0:
+                    connection.commit()
+                    return None
+                connection.commit()
+                return job.model_copy(deep=True)
+            except Exception:
+                connection.rollback()
+                raise
+
+    def save_job_if_worker_current(
+        self, job: QualityEvaluationJobRecord, *, worker_id: str, attempt_no: int
+    ) -> QualityEvaluationJobRecord | None:
+        binds = {
+            **self._job_binds(job),
+            "expected_worker_id": worker_id,
+            "expected_attempt_no": attempt_no,
+        }
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "UPDATE NL2SQL_EVALUATION_JOBS SET STATUS = :status, "
+                    "PROFILE_ID = :profile_id, WORKER_ID = :worker_id, "
+                    "HEARTBEAT_AT = :heartbeat_at, LEASE_EXPIRES_AT = :lease_expires_at, "
+                    "ATTEMPT_NO = :attempt_no, PAYLOAD_JSON = :payload, "
+                    "UPDATED_AT = SYSTIMESTAMP WHERE JOB_ID = :job_id "
+                    "AND STATUS = 'running' AND WORKER_ID = :expected_worker_id "
+                    "AND ATTEMPT_NO = :expected_attempt_no",
+                    binds,
+                )
+                if getattr(cursor, "rowcount", 0) == 0:
+                    connection.commit()
+                    return None
+                connection.commit()
+                return job.model_copy(deep=True)
+            except Exception:
+                connection.rollback()
+                raise
 
     def get_job(self, job_id: str) -> QualityEvaluationJobRecord | None:
         with self._connection_factory() as connection, connection.cursor() as cursor:
@@ -336,6 +450,46 @@ class OracleQualityEvaluationRepository:
                 )
                 connection.commit()
                 return True
+            except Exception as exc:
+                connection.rollback()
+                if "ORA-00001" in str(exc).upper():
+                    return False
+                raise
+
+    def save_result_if_worker_current(
+        self, result: QualityEvaluationResult, *, worker_id: str, attempt_no: int
+    ) -> bool:
+        payload = _canonical_json(result.model_dump(mode="json"))
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "INSERT INTO NL2SQL_EVALUATION_RESULTS "
+                    "(RESULT_ID, JOB_ID, CASE_NO, ENGINE, REPETITION_NO, RESULT_STATUS, "
+                    "VERDICT, PAYLOAD_JSON) SELECT :result_id, :job_id, :case_no, :engine, "
+                    ":repetition_no, :result_status, :verdict, :payload FROM DUAL WHERE EXISTS "
+                    "(SELECT 1 FROM NL2SQL_EVALUATION_JOBS WHERE JOB_ID = :job_id "
+                    "AND STATUS = 'running' AND WORKER_ID = :worker_id "
+                    "AND ATTEMPT_NO = :attempt_no)",
+                    {
+                        "result_id": result.result_id,
+                        "job_id": result.job_id,
+                        "case_no": result.case_no,
+                        "engine": result.engine.value,
+                        "repetition_no": result.repetition_no,
+                        "result_status": (
+                            "error"
+                            if result.generation_error or result.judge_error
+                            else "completed"
+                        ),
+                        "verdict": result.verdict.value,
+                        "payload": payload,
+                        "worker_id": worker_id,
+                        "attempt_no": attempt_no,
+                    },
+                )
+                inserted = getattr(cursor, "rowcount", 0) > 0
+                connection.commit()
+                return inserted
             except Exception as exc:
                 connection.rollback()
                 if "ORA-00001" in str(exc).upper():

@@ -42,6 +42,7 @@ class EnterpriseAiDirectClient(Protocol):
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
@@ -75,6 +76,7 @@ class OciEnterpriseAiDirectClient:
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
@@ -90,6 +92,7 @@ class OciEnterpriseAiDirectClient:
             payload,
             path=self.settings.oci_enterprise_ai_llm_path,
             timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
         return _parse_generated_text(
             response,
@@ -134,6 +137,7 @@ class OciEnterpriseAiDirectClient:
         *,
         path: str,
         timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> Mapping[str, Any]:
         url = _join_endpoint_path(
             self.settings.oci_enterprise_ai_endpoint,
@@ -151,26 +155,33 @@ class OciEnterpriseAiDirectClient:
             if timeout_seconds is not None
             else self.settings.oci_enterprise_ai_timeout_seconds
         )
-        max_retries = max(int(self.settings.oci_enterprise_ai_max_retries), 0)
+        retry_count = max(
+            int(
+                max_retries
+                if max_retries is not None
+                else self.settings.oci_enterprise_ai_max_retries
+            ),
+            0,
+        )
         retryable = {429, 500, 502, 503, 504}
         last_error = ""
         with httpx.Client(timeout=timeout) as client:
-            for attempt in range(max_retries + 1):
+            for attempt in range(retry_count + 1):
                 try:
                     response = client.post(url, headers=headers, json=dict(payload))
                 except httpx.TimeoutException as exc:
                     last_error = f"timeout after {timeout:.1f}s"
-                    if attempt < max_retries:
+                    if attempt < retry_count:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
                     raise EnterpriseAiDirectError(last_error) from exc
                 except httpx.HTTPError as exc:
                     last_error = str(exc)
-                    if attempt < max_retries:
+                    if attempt < retry_count:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
                     raise EnterpriseAiDirectError(f"OCI Enterprise AI HTTP error: {exc}") from exc
-                if response.status_code in retryable and attempt < max_retries:
+                if response.status_code in retryable and attempt < retry_count:
                     last_error = f"HTTP {response.status_code}: {response.text[:300]}"
                     time.sleep(min(0.2 * (attempt + 1), 1.0))
                     continue

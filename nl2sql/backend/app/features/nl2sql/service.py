@@ -15764,6 +15764,7 @@ class Nl2SqlService:
         *,
         allow_deterministic_fallback: bool = True,
         runtime_timeout_seconds: float | None = None,
+        runtime_max_retries: int | None = None,
     ) -> GeneratedSql:
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
         # 本番(oracle runtime)ではユーザ入力に反応させない。
@@ -15871,6 +15872,7 @@ class Nl2SqlService:
                     ontology_context=ontology_context,
                     catalog=generation_catalog,
                     runtime_timeout_seconds=runtime_timeout_seconds,
+                    runtime_max_retries=runtime_max_retries,
                 )
             except EnterpriseAiDirectError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
@@ -16037,6 +16039,7 @@ class Nl2SqlService:
         engine: Nl2SqlEngine,
         profile_id: str,
         timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> GeneratedSql:
         """fallback を一切許さず、選択された engine だけで SQL を生成する。"""
 
@@ -16059,6 +16062,7 @@ class Nl2SqlService:
             [],
             allow_deterministic_fallback=False,
             runtime_timeout_seconds=timeout_seconds,
+            runtime_max_retries=max_retries,
         )
 
     def _generate_enterprise_ai_direct_sql(
@@ -16074,6 +16078,7 @@ class Nl2SqlService:
         catalog: SchemaCatalog,
         ontology_context: Any | None = None,
         runtime_timeout_seconds: float | None = None,
+        runtime_max_retries: int | None = None,
     ) -> GeneratedSql:
         context = self._enterprise_ai_schema_context(
             profile=profile,
@@ -16097,6 +16102,8 @@ class Nl2SqlService:
         }
         if runtime_timeout_seconds is not None:
             generate_kwargs["timeout_seconds"] = runtime_timeout_seconds
+        if runtime_max_retries is not None:
+            generate_kwargs["max_retries"] = runtime_max_retries
         raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
         sql, explanation = self._extract_enterprise_ai_sql(raw_text)
         if not sql:

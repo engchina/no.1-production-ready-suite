@@ -207,8 +207,9 @@ class _FakeEnterpriseAiClient:
         system_prompt: str,
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
+        max_retries: int | None = None,
     ) -> str:
-        del timeout_seconds, max_output_tokens
+        del timeout_seconds, max_output_tokens, max_retries
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         return self.text
 
